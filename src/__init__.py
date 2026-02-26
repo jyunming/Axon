@@ -1,0 +1,17 @@
+# Local RAG Brain source package
+from studio_brain_open.studio_brain_open import (
+    OpenStudioBrain,
+    OpenStudioConfig,
+    OpenEmbedding,
+    OpenLLM,
+    OpenVectorStore
+)
+
+__version__ = "2.0.0"
+__all__ = [
+    "OpenStudioBrain",
+    "OpenStudioConfig",
+    "OpenEmbedding",
+    "OpenLLM",
+    "OpenVectorStore"
+]

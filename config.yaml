@@ -1,0 +1,61 @@
+# Local RAG Brain Configuration
+# Copy to config.yaml and customize
+
+embedding:
+  # Provider: sentence_transformers, ollama, fastembed
+  provider: sentence_transformers
+  
+  # Model names by provider:
+  # sentence_transformers: all-MiniLM-L6-v2, BAAI/bge-large-en, etc.
+  # ollama: nomic-embed-text, mxbai-embed-large, etc.
+  # fastembed: BAAI/bge-small-en-v1.5, etc.
+  model: all-MiniLM-L6-v2
+  
+  # For Ollama provider:
+  # base_url: http://localhost:11434
+
+llm:
+  # Provider: ollama (vllm, llama_cpp coming soon)
+  provider: ollama
+  
+  # Model names:
+  # ollama: llama3.1, llama3.1:70b, qwen2.5:32b, mistral-nemo
+  model: llama3.1
+  
+  # Base URL for Ollama
+  base_url: http://localhost:11434
+  
+  # Generation parameters
+  temperature: 0.7
+  max_tokens: 2048
+
+vector_store:
+  # Provider: chroma, qdrant
+  provider: chroma
+  
+  # Storage path
+  path: ./chroma_data
+
+# BM25 Keyword Search
+bm25:
+  path: ./bm25_index
+
+rag:
+  # Number of documents to retrieve
+  top_k: 10
+  
+  # Minimum similarity score (0-1)
+  similarity_threshold: 0.5
+  
+  # Enable hybrid search (vector + keyword)
+  hybrid_search: true
+
+# Chunking Settings
+chunk:
+  size: 1000
+  overlap: 200
+
+# Re-ranking Settings
+rerank:
+  enabled: false
+  model: cross-encoder/ms-marco-MiniLM-L-6-v2

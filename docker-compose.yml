@@ -1,0 +1,26 @@
+# Docker Compose for Local RAG Brain
+services:
+  rag-brain-api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./chroma_data:/app/chroma_data
+      - ./bm25_index:/app/bm25_index
+      - ./config.yaml:/app/config.yaml
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  rag-brain-ui:
+    build: .
+    ports:
+      - "8501:8501"
+    command: ["rag-brain-ui"]
+    depends_on:
+      - rag-brain-api
+    environment:
+      - RAG_BRAIN_API_URL=http://rag-brain-api:8000
+    restart: unless-stopped

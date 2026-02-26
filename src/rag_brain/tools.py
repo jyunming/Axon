@@ -1,0 +1,80 @@
+"""
+Tool definitions for Agent Orchestration.
+These can be used to describe the Local RAG Brain to an LLM.
+"""
+
+from typing import Dict, Any, List
+
+def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List[Dict[str, Any]]:
+    """
+    Returns tool definitions compatible with OpenAI/Ollama/Anthropic tool calling.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "query_knowledge_base",
+                "description": "Query the local knowledge base for a synthesized answer. Best for general questions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The question to ask the knowledge base."
+                        },
+                        "filters": {
+                            "type": "object",
+                            "description": "Optional metadata filters (e.g. {'type': 'text'})"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_documents",
+                "description": "Retrieve raw document chunks from the knowledge base. Best for multi-step reasoning.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query."
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results to return.",
+                            "default": 5
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_knowledge",
+                "description": "Add new text information to the knowledge base. Useful for learning new facts.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "The information to save."
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Optional metadata like {'source': 'web', 'topic': 'finance'}"
+                        }
+                    },
+                    "required": ["text"]
+                }
+            }
+        }
+    ]
+
+# Implementation of tool logic for a simple agent framework could go here
+# or the user can just call the API.
