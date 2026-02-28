@@ -95,21 +95,38 @@ async def search_brain(request: SearchRequest):
 async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    
-    if not os.path.exists(request.path):
-        raise HTTPException(status_code=404, detail="Path does not exist")
+
+    # Security: Validate and sanitize path to prevent path traversal
+    from pathlib import Path
+    try:
+        requested_path = Path(request.path).resolve()
+        # Check if path exists
+        if not requested_path.exists():
+            raise HTTPException(status_code=404, detail="Path does not exist")
+
+        # Optional: Add whitelist check for allowed directories
+        # allowed_dirs = [Path("/allowed/dir1"), Path("/allowed/dir2")]
+        # if not any(requested_path.is_relative_to(allowed) for allowed in allowed_dirs):
+        #     raise HTTPException(status_code=403, detail="Access to this path is not allowed")
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
 
     def process_ingestion():
         import asyncio
-        if os.path.isdir(request.path):
-            asyncio.run(brain.load_directory(request.path))
-        else:
-            from rag_brain.loaders import DirectoryLoader
-            ext = os.path.splitext(request.path)[1].lower()
-            loader_mgr = DirectoryLoader()
-            if ext in loader_mgr.loaders:
-                docs = loader_mgr.loaders[ext].load(request.path)
-                brain.ingest(docs)
+        try:
+            if requested_path.is_dir():
+                asyncio.run(brain.load_directory(str(requested_path)))
+            else:
+                from rag_brain.loaders import DirectoryLoader
+                ext = requested_path.suffix.lower()
+                loader_mgr = DirectoryLoader()
+                if ext in loader_mgr.loaders:
+                    docs = loader_mgr.loaders[ext].load(str(requested_path))
+                    brain.ingest(docs)
+                else:
+                    logger.warning(f"Unsupported file type: {ext}")
+        except Exception as e:
+            logger.error(f"Error during ingestion: {e}")
 
     background_tasks.add_task(process_ingestion)
     return {"message": f"Ingestion started for {request.path}", "status": "processing"}
