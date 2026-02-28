@@ -1,5 +1,5 @@
 # Local RAG Brain source package
-from studio_brain_open.studio_brain_open import (
+from rag_brain.main import (
     OpenStudioBrain,
     OpenStudioConfig,
     OpenEmbedding,
