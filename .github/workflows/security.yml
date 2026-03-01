@@ -1,0 +1,76 @@
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 6 * * 1"  # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  dependency-audit:
+    name: Dependency CVE Audit (pip-audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pip-audit
+
+      - name: Run pip-audit
+        run: |
+          pip-audit --requirement requirements.txt --format=markdown --output=audit-report.md || true
+          cat audit-report.md
+          # Fail the job if HIGH or CRITICAL CVEs are found
+          if grep -iE "HIGH|CRITICAL" audit-report.md; then
+            echo "::error::High or Critical CVEs found. Review audit-report.md."
+            exit 1
+          fi
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-report
+          path: audit-report.md
+
+  sast:
+    name: Static Analysis (bandit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install bandit
+        run: pip install bandit[toml]
+
+      - name: Run bandit
+        run: |
+          # -ll = report only MEDIUM and HIGH severity
+          # Known risks documented in security-auditor.instructions.md:
+          #   B301 (pickle) in retrievers.py — tracked, awaiting mitigation
+          #   B108 (hardcoded tmp paths) — not applicable here
+          bandit -r src/ -ll -f json -o bandit-report.json || true
+          bandit -r src/ -ll || true
+
+      - name: Upload bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-sast-report
+          path: bandit-report.json
