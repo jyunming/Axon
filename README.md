@@ -1,8 +1,26 @@
 # Local RAG Brain
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/charliermarsh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 **A robust, general-purpose local RAG platform for humans and AI agents.**
 
 This project provides a fully open-source, local-first retrieval-augmented generation (RAG) system. It supports hybrid search (Vector + BM25), multimodal ingestion (BMP images), and is designed to serve as a central knowledge hub for both direct human interaction and automated agent orchestration.
+
+---
+
+## 📚 Documentation
+
+- **[Quick Reference](QUICKREF.md)** - Common commands and examples
+- **[Development Guide](DEVELOPMENT.md)** - Setup and development workflow
+- **[Contributing](CONTRIBUTING.md)** - How to contribute
+- **[Security Policy](SECURITY.md)** - Security best practices
+- **[Improvements Summary](IMPROVEMENTS.md)** - Recent enhancements
+- **[Model Guide](MODEL_GUIDE.md)** - Supported models and configuration
+
+---
 
 ## 🎯 Key Features
 
@@ -20,8 +38,14 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 ### 1. Install Dependencies
 
 ```bash
-pip install -r requirements.txt
+# Install package with dependencies
 pip install -e .
+
+# Or with development tools
+pip install -e ".[dev]"
+
+# Or with all optional features
+pip install -e ".[all]"
 ```
 
 ### 2. Setup Ollama (Local Models)
@@ -79,6 +103,8 @@ Customize behavior in `config.yaml`:
 - **Re-ranking:** Enable Cross-Encoders for second-stage accuracy.
 - **Chunking:** Adjust fragment size and overlap.
 
+See [Configuration Guide](QUICKREF.md#configuration) for details.
+
 ## 🔒 Security
 
 ### Path Traversal Protection
@@ -92,6 +118,8 @@ The `/ingest` endpoint and Streamlit UI validate file paths against a configurab
 - **Previous format:** Pickled index (`bm25_index.pkl`)
 - **New format:** JSON corpus (`bm25_corpus.json`) — safer and more portable
 - **Auto-migration:** On first run, any legacy pickle files are automatically converted to JSON format
+
+For security concerns, please also review our [Security Policy](SECURITY.md).
 
 ## 📊 Observability
 
@@ -119,6 +147,38 @@ pip install ragas langchain-community datasets
 ```
 
 Includes a sample test set in `examples/eval_testset.jsonl` with ground-truth QA pairs for benchmarking retrieval quality.
+
+## 🧪 Development
+
+### Running Tests
+```bash
+# Run all tests
+make test
+
+# With coverage
+make test-cov
+
+# Format and lint
+make format
+make lint
+```
+
+### Code Quality
+This project uses:
+- **Black** for code formatting
+- **Ruff** for linting
+- **MyPy** for type checking
+- **pytest** for testing
+- **pre-commit** hooks for automated checks
+
+See [Development Guide](DEVELOPMENT.md) for more details.
+
+## 🤝 Contributing
+
+We welcome contributions! Please see:
+- [Contributing Guide](CONTRIBUTING.md) for guidelines
+- [Development Guide](DEVELOPMENT.md) for setup instructions
+- [Security Policy](SECURITY.md) for security best practices
 
 ## 📄 License
 
