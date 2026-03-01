@@ -44,9 +44,17 @@ with st.sidebar:
     ingest_dir = st.text_input("Directory Path", placeholder="C:/my_documents")
     if st.button("Ingest Directory"):
         if os.path.isdir(ingest_dir):
-            with st.spinner(f"Ingesting {ingest_dir}..."):
+            allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
+            abs_path = os.path.abspath(ingest_dir)
+            if not abs_path.startswith(allowed_base):
+                st.error(
+                    f"Access denied: '{abs_path}' is outside the allowed base "
+                    f"directory '{allowed_base}'. Set RAG_INGEST_BASE to change it."
+                )
+                st.stop()
+            with st.spinner(f"Ingesting {abs_path}..."):
                 import asyncio
-                asyncio.run(st.session_state.brain.load_directory(ingest_dir))
+                asyncio.run(st.session_state.brain.load_directory(abs_path))
                 st.success("Ingestion complete!")
         else:
             st.error("Invalid directory path.")

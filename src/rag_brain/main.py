@@ -3,6 +3,7 @@ Core engine for Local RAG Brain - Open Source RAG Interface.
 """
 
 import os
+import time
 import yaml
 import logging
 import asyncio
@@ -316,44 +317,89 @@ Be concise, professional, and helpful."""
         
         logger.info("✅ Local RAG Brain ready!")
     
+    def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
+                            filtered_count: int, final_count: int, top_score: float,
+                            latency_ms: float):
+        """Log structured metrics for a query."""
+        logger.info({
+            "event": "query_complete",
+            "query_preview": query[:80],
+            "latency_ms": round(latency_ms, 1),
+            "results": {
+                "vector": vector_count,
+                "bm25": bm25_count,
+                "after_filter": filtered_count,
+                "final": final_count,
+            },
+            "top_score": round(top_score, 4) if top_score else None,
+            "hybrid": self.config.hybrid_search,
+            "rerank": self.config.rerank,
+        })
+
     def ingest(self, documents: List[Dict[str, Any]]):
         if not documents: return
+        t0 = time.time()
         from tqdm import tqdm
         logger.info(f"📥 Ingesting {len(documents)} documents...")
         if self.splitter: documents = self.splitter.transform_documents(documents)
+        n_chunks = len(documents)
         if self.bm25: self.bm25.add_documents(documents)
-            
-        ids, texts, metadatas = [d['id'] for d in documents], [d['text'] for d in documents], [d.get('metadata', {}) for d in documents]
-        
+
+        ids = [d['id'] for d in documents]
+        texts = [d['text'] for d in documents]
+        metadatas = [d.get('metadata', {}) for d in documents]
+
         logger.info("   Generating embeddings...")
         batch_size = 32
         all_embeddings = []
+        t_embed = time.time()
         for i in tqdm(range(0, len(texts), batch_size), desc="Embedding"):
             all_embeddings.extend(self.embedding.embed(texts[i:i + batch_size]))
-        
+        embed_ms = (time.time() - t_embed) * 1000
+
+        t_store = time.time()
         self.vector_store.add(ids, texts, all_embeddings, metadatas)
-        logger.info(f"✅ Ingested {len(documents)} chunks")
+        store_ms = (time.time() - t_store) * 1000
+
+        logger.info({
+            "event": "ingest_complete",
+            "chunks": n_chunks,
+            "embed_ms": round(embed_ms, 1),
+            "store_ms": round(store_ms, 1),
+            "total_ms": round((time.time() - t0) * 1000, 1),
+        })
 
     def query(self, query: str, filters: Dict = None) -> str:
+        t0 = time.time()
         query_embedding = self.embedding.embed_query(query)
         fetch_k = self.config.top_k * 3 if (self.config.rerank or self.config.hybrid_search) else self.config.top_k
         vector_results = self.vector_store.search(query_embedding, top_k=fetch_k, filter_dict=filters)
-        
+        vector_count = len(vector_results)
+
         if self.config.hybrid_search and self.bm25:
             bm25_results = self.bm25.search(query, top_k=fetch_k)
+            bm25_count = len(bm25_results)
             from rag_brain.retrievers import reciprocal_rank_fusion
             results = reciprocal_rank_fusion(vector_results, bm25_results)
         else:
+            bm25_count = 0
             results = vector_results
-        
+
         results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
-        if not results: return "I don't have any relevant information to answer that question."
+        filtered_count = len(results)
+        if not results:
+            self._log_query_metrics(query, vector_count, bm25_count, filtered_count, 0, 0.0, (time.time() - t0) * 1000)
+            return "I don't have any relevant information to answer that question."
         if self.config.rerank: results = self.reranker.rerank(query, results)
-        
+
         results = results[:self.config.top_k]
+        final_count = len(results)
+        top_score = results[0].get('score', 0) if results else 0
         context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
-        return self.llm.complete(prompt, self.SYSTEM_PROMPT)
+        response = self.llm.complete(prompt, self.SYSTEM_PROMPT)
+        self._log_query_metrics(query, vector_count, bm25_count, filtered_count, final_count, top_score, (time.time() - t0) * 1000)
+        return response
 
     def query_stream(self, query: str, filters: Dict = None):
         query_embedding = self.embedding.embed_query(query)

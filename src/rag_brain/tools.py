@@ -73,6 +73,52 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                     "required": ["text"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_documents",
+                "description": "Remove documents from the knowledge base by their IDs.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "doc_ids": {"type": "array", "items": {"type": "string"}, "description": "List of document IDs to delete."}
+                    },
+                    "required": ["doc_ids"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ingest_directory",
+                "description": "Ingest a local file or directory into the knowledge base. Triggers background processing. Path must be within the allowed base directory (RAG_INGEST_BASE).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute or relative path to a file or directory to ingest."
+                        }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "stream_query",
+                "description": "Stream a synthesized answer token by token from the knowledge base via Server-Sent Events. Use for interactive / real-time display.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The question to ask."},
+                        "filters": {"type": "object", "description": "Optional metadata filters."}
+                    },
+                    "required": ["query"]
+                }
+            }
         }
     ]
 

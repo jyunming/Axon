@@ -1,0 +1,3 @@
+{"question": "What is the core purpose of this system?", "ground_truth": "Local RAG Brain is a fully open-source, local-first retrieval-augmented generation system for humans and AI agents."}
+{"question": "What embedding models are supported?", "ground_truth": "The system supports sentence_transformers (e.g. all-MiniLM-L6-v2), ollama (e.g. nomic-embed-text), and fastembed providers."}
+{"question": "How does hybrid search work?", "ground_truth": "Hybrid search combines vector search with BM25 keyword search, merging results using Reciprocal Rank Fusion."}

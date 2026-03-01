@@ -26,8 +26,18 @@ fastembed>=0.1.0
 # LLM Providers
 ollama>=0.1.0
 
+# Document loaders
+python-docx>=1.0.0
+pymupdf>=1.24.0
+pypdf>=4.0.0
+
 # Optional: For future vLLM support
 # vllm>=0.2.0
 
 # Optional: For async support
 # aiohttp>=3.8.0
+
+# Optional: For RAGAS evaluation
+# ragas>=0.1.0
+# langchain-community>=0.0.20
+# datasets>=2.14.0

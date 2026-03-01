@@ -1,5 +1,5 @@
 import os
-import pickle
+import json
 from typing import List, Dict, Any
 from rank_bm25 import BM25Okapi
 import logging
@@ -14,6 +14,8 @@ class BM25Retriever:
     
     def __init__(self, storage_path: str = "./bm25_index"):
         self.storage_path = storage_path
+        self.corpus_file = os.path.join(storage_path, "bm25_corpus.json")
+        # Legacy alias — used only during pickle→JSON migration
         self.index_file = os.path.join(storage_path, "bm25_index.pkl")
         self.bm25 = None
         self.corpus = []  # List of dicts: {'id': id, 'text': text, 'metadata': meta}
@@ -27,12 +29,17 @@ class BM25Retriever:
         """Simple tokenizer."""
         return text.lower().split()
 
-    def add_documents(self, documents: List[Dict[str, Any]]):
-        """Add documents to the BM25 index."""
+    def add_documents(self, documents: List[Dict[str, Any]]) -> None:
+        """Add documents to the BM25 index. No-op if documents is empty."""
+        if not documents:
+            return
         self.corpus.extend(documents)
         tokenized_corpus = [self._tokenize(doc['text']) for doc in self.corpus]
         self.bm25 = BM25Okapi(tokenized_corpus)
         self.save()
+
+    # Explicit alias for callers that batch their writes; semantics are identical.
+    batch_add_documents = add_documents
 
     def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """Search the BM25 index."""
@@ -54,21 +61,50 @@ class BM25Retriever:
                 
         return results
 
+    def delete_documents(self, doc_ids: List[str]) -> None:
+        """Remove documents by ID and rebuild index."""
+        original_count = len(self.corpus)
+        self.corpus = [doc for doc in self.corpus if doc['id'] not in doc_ids]
+        if len(self.corpus) < original_count:
+            if self.corpus:
+                tokenized_corpus = [self._tokenize(doc['text']) for doc in self.corpus]
+                self.bm25 = BM25Okapi(tokenized_corpus)
+            else:
+                self.bm25 = None
+            self.save()
+
     def save(self):
-        """Save the index to disk."""
-        with open(self.index_file, 'wb') as f:
-            pickle.dump((self.corpus, self.bm25), f)
-        logger.info(f"💾 BM25 index saved to {self.index_file}")
+        """Save the corpus to disk as JSON."""
+        with open(self.corpus_file, 'w', encoding='utf-8') as f:
+            json.dump(self.corpus, f, ensure_ascii=False)
+        logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
 
     def load(self):
-        """Load the index from disk."""
-        if os.path.exists(self.index_file):
+        """Load corpus from JSON (or migrate from legacy pickle)."""
+        # Migrate legacy pickle if it exists
+        legacy_pkl = os.path.join(self.storage_path, "bm25_index.pkl")
+        if os.path.exists(legacy_pkl) and not os.path.exists(self.corpus_file):
             try:
-                with open(self.index_file, 'rb') as f:
-                    self.corpus, self.bm25 = pickle.load(f)
-                logger.info(f"📂 Loaded BM25 index with {len(self.corpus)} documents")
+                import pickle
+                with open(legacy_pkl, 'rb') as f:
+                    corpus, _ = pickle.load(f)
+                self.corpus = corpus
+                self.save()  # save as JSON
+                os.remove(legacy_pkl)
+                logger.info(f"✅ Migrated BM25 index from pickle to JSON")
             except Exception as e:
-                logger.error(f"Failed to load BM25 index: {e}")
+                logger.error(f"Failed to migrate BM25 pickle: {e}")
+                return
+        elif os.path.exists(self.corpus_file):
+            try:
+                with open(self.corpus_file, 'r', encoding='utf-8') as f:
+                    self.corpus = json.load(f)
+                if self.corpus:
+                    tokenized_corpus = [self._tokenize(doc['text']) for doc in self.corpus]
+                    self.bm25 = BM25Okapi(tokenized_corpus)
+                logger.info(f"📂 Loaded BM25 corpus with {len(self.corpus)} documents")
+            except Exception as e:
+                logger.error(f"Failed to load BM25 corpus: {e}")
                 self.corpus = []
                 self.bm25 = None
 
