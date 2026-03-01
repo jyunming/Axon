@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [develop]
+
+jobs:
+  test:
+    name: Test & Validate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Syntax check (py_compile)
+        run: |
+          python -m py_compile src/rag_brain/main.py
+          python -m py_compile src/rag_brain/api.py
+          python -m py_compile src/rag_brain/loaders.py
+          python -m py_compile src/rag_brain/retrievers.py
+          python -m py_compile src/rag_brain/splitters.py
+          python -m py_compile src/rag_brain/tools.py
+          python -m py_compile src/rag_brain/webapp.py
+
+      - name: Run tests
+        run: |
+          if [ -d tests ] && [ -n "$(find tests -name '*.py' -not -name '__init__.py')" ]; then
+            python -m pytest tests/ --tb=short -q
+          else
+            echo "No tests found — skipping pytest. Add tests to tests/ to enable this step."
+          fi
+
+      - name: Lint with ruff (if installed)
+        run: |
+          if pip show ruff &>/dev/null; then
+            ruff check src/
+          else
+            echo "ruff not installed — skipping lint."
+          fi
+
+      - name: Type check with mypy (if installed)
+        run: |
+          if pip show mypy &>/dev/null; then
+            mypy src/rag_brain/ --ignore-missing-imports --no-error-summary
+          else
+            echo "mypy not installed — skipping type check."
+          fi

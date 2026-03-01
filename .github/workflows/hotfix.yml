@@ -1,0 +1,75 @@
+name: Hotfix CI
+
+on:
+  push:
+    branches:
+      - "hotfix/**"
+  pull_request:
+    branches: [main]
+    # Only runs extra steps if the PR source branch is a hotfix branch
+    types: [opened, synchronize, reopened]
+
+jobs:
+  hotfix-validate:
+    name: Hotfix Validation (fail-fast)
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'hotfix/') || startsWith(github.ref_name, 'hotfix/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Syntax check
+        run: |
+          find src/rag_brain -name "*.py" | xargs python -m py_compile
+          echo "Syntax OK"
+
+      - name: Run tests (fail-fast)
+        run: |
+          if [ -d tests ] && [ -n "$(find tests -name '*.py' -not -name '__init__.py')" ]; then
+            python -m pytest tests/ --tb=short -q --failfast
+          else
+            echo "No tests found — syntax check passed. Add tests to tests/ to strengthen hotfix validation."
+          fi
+
+  remind-dual-pr:
+    name: Remind — Open PR to develop too
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'hotfix/')
+
+    steps:
+      - name: Post reminder comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              "## 🔥 Hotfix Checklist",
+              "",
+              "This PR merges a hotfix into `main`. Please confirm:",
+              "",
+              "- [ ] A **matching PR to `develop`** has been opened (to prevent the bug from reappearing in the next release).",
+              "- [ ] The fix is minimal — no refactoring mixed in.",
+              "- [ ] A regression test has been added (or a reason documented why it cannot be).",
+              "- [ ] Security Auditor sign-off obtained if `retrievers.py`, `api.py`, or `loaders.py` were changed.",
+              "- [ ] PATCH version bumped in `setup.py` and tag planned after merge.",
+              "",
+              "> This comment is posted automatically by the Hotfix CI workflow."
+            ].join("\n");
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
