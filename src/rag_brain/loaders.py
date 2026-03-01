@@ -77,6 +77,98 @@ class JSONLoader(BaseLoader):
                 "metadata": metadata
             }]
 
+class CSVLoader(BaseLoader):
+    """Loader for CSV files. Each row becomes a document."""
+    def load(self, path: str) -> List[Dict[str, Any]]:
+        import csv
+        documents = []
+        with open(path, 'r', encoding='utf-8', newline='') as f:
+            reader = csv.DictReader(f)
+            for i, row in enumerate(reader):
+                # Use 'text' or 'content' column if present, else join all values
+                text_col = next((c for c in ['text', 'content', 'body'] if c in row), None)
+                if text_col:
+                    text = row[text_col]
+                    metadata = {k: v for k, v in row.items() if k != text_col}
+                else:
+                    text = ' | '.join(f"{k}: {v}" for k, v in row.items())
+                    metadata = {}
+                metadata.update({"source": path, "type": "csv", "row": i})
+                documents.append({
+                    "id": f"{os.path.basename(path)}_row_{i}",
+                    "text": text,
+                    "metadata": metadata
+                })
+        return documents
+
+
+class HTMLLoader(BaseLoader):
+    """Loader for HTML files. Extracts visible text content."""
+    def load(self, path: str) -> List[Dict[str, Any]]:
+        from html.parser import HTMLParser
+
+        class _TextExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self._texts = []
+                self._skip_tags = {'script', 'style', 'head', 'meta', 'link'}
+                self._current_skip = False
+                self._skip_depth = 0
+
+            def handle_starttag(self, tag, attrs):
+                if tag.lower() in self._skip_tags:
+                    self._current_skip = True
+                    self._skip_depth += 1
+
+            def handle_endtag(self, tag):
+                if tag.lower() in self._skip_tags and self._skip_depth > 0:
+                    self._skip_depth -= 1
+                    if self._skip_depth == 0:
+                        self._current_skip = False
+
+            def handle_data(self, data):
+                if not self._current_skip:
+                    stripped = data.strip()
+                    if stripped:
+                        self._texts.append(stripped)
+
+            def get_text(self):
+                return ' '.join(self._texts)
+
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+
+        extractor = _TextExtractor()
+        extractor.feed(content)
+        text = extractor.get_text()
+
+        return [{
+            "id": os.path.basename(path),
+            "text": text,
+            "metadata": {"source": path, "type": "html"}
+        }]
+
+
+class DOCXLoader(BaseLoader):
+    """Loader for DOCX files using python-docx."""
+    def load(self, path: str) -> List[Dict[str, Any]]:
+        try:
+            from docx import Document
+        except ImportError:
+            logger.error("python-docx not installed. Install with: pip install python-docx")
+            return []
+
+        doc = Document(path)
+        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        text = '\n\n'.join(paragraphs)
+
+        return [{
+            "id": os.path.basename(path),
+            "text": text,
+            "metadata": {"source": path, "type": "docx"}
+        }]
+
+
 class BMPLoader(BaseLoader):
     """
     Loader for BMP files using Ollama VLM for captioning.
@@ -123,6 +215,63 @@ class BMPLoader(BaseLoader):
             logger.error(f"Error processing BMP {path}: {e}")
             return []
 
+class PDFLoader(BaseLoader):
+    """Loader for PDF files. Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback."""
+
+    def load(self, path: str) -> List[Dict[str, Any]]:
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open(path)
+            total = len(doc)
+            documents = []
+            for page_num in range(total):
+                page = doc[page_num]
+                text = page.get_text()
+                documents.append({
+                    "id": f"{os.path.basename(path)}_page_{page_num}",
+                    "text": text,
+                    "metadata": {
+                        "source": path,
+                        "type": "pdf",
+                        "page": page_num,
+                        "total_pages": total,
+                    },
+                })
+            doc.close()
+            return documents
+        except ImportError:
+            pass
+
+        try:
+            import pypdf
+
+            reader = pypdf.PdfReader(path)
+            total = len(reader.pages)
+            documents = []
+            for page_num in range(total):
+                text = reader.pages[page_num].extract_text() or ""
+                documents.append({
+                    "id": f"{os.path.basename(path)}_page_{page_num}",
+                    "text": text,
+                    "metadata": {
+                        "source": path,
+                        "type": "pdf",
+                        "page": page_num,
+                        "total_pages": total,
+                    },
+                })
+            return documents
+        except ImportError:
+            pass
+
+        logger.error(
+            "Neither PyMuPDF (fitz) nor pypdf is installed. "
+            "Install with: pip install pymupdf>=1.24.0 or pypdf>=4.0.0"
+        )
+        return []
+
+
 class DirectoryLoader:
     """Loader that crawls a directory and uses appropriate loaders for each file."""
     def __init__(self, vlm_model: str = "llava"):
@@ -131,7 +280,12 @@ class DirectoryLoader:
             ".md": TextLoader(),
             ".tsv": TSVLoader(),
             ".json": JSONLoader(),
-            ".bmp": BMPLoader(ollama_model=vlm_model)
+            ".csv": CSVLoader(),
+            ".html": HTMLLoader(),
+            ".htm": HTMLLoader(),
+            ".docx": DOCXLoader(),
+            ".bmp": BMPLoader(ollama_model=vlm_model),
+            ".pdf": PDFLoader(),
         }
     
     def load(self, directory: str) -> List[Dict[str, Any]]:

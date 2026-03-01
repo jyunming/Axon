@@ -36,6 +36,9 @@ setup(
         "pandas>=2.0.0",
         "Pillow>=10.0.0",
         "tqdm>=4.66.0",
+        "python-docx>=1.0.0",
+        "pymupdf>=1.24.0",
+        "pypdf>=4.0.0",
     ],
     extras_require={
         "qdrant": ["qdrant-client>=1.7.0"],

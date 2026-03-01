@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import os
+import pathlib
 import uvicorn
 import logging
 from rag_brain.main import OpenStudioBrain, OpenStudioConfig
@@ -9,6 +11,18 @@ from rag_brain.main import OpenStudioBrain, OpenStudioConfig
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("RAGBrainAPI")
+
+
+def _validate_ingest_path(path: str) -> str:
+    """Validate that path is within the allowed base directory."""
+    allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
+    abs_path = os.path.abspath(path)
+    if not abs_path.startswith(allowed_base):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Path '{path}' is outside the allowed ingest directory. Set RAG_INGEST_BASE to permit additional paths."
+        )
+    return abs_path
 
 app = FastAPI(
     title="Local RAG Brain API",
@@ -41,12 +55,15 @@ class SearchRequest(BaseModel):
     filters: Optional[Dict[str, Any]] = Field(None, description="Metadata filters")
 
 class IngestRequest(BaseModel):
-    path: str = Field(..., description="Path to a file or directory to ingest")
+    path: str = Field(..., description="Path to a file or directory to ingest. Must be within RAG_INGEST_BASE (default: current working directory).")
 
 class TextIngestRequest(BaseModel):
     text: str = Field(..., description="The content to ingest")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Metadata for the document")
     doc_id: Optional[str] = Field(None, description="Optional unique ID for the document")
+
+class DeleteRequest(BaseModel):
+    doc_ids: List[str] = Field(..., description="List of document IDs to delete")
 
 class SearchResult(BaseModel):
     id: str
@@ -69,6 +86,20 @@ async def query_brain(request: QueryRequest):
     except Exception as e:
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/query/stream")
+async def query_brain_stream(request: QueryRequest):
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    def generate():
+        try:
+            for chunk in brain.query_stream(request.query, filters=request.filters):
+                yield f"data: {chunk}\n\n"
+        except Exception as e:
+            yield f"data: [ERROR] {str(e)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.post("/search", response_model=List[SearchResult])
 async def search_brain(request: SearchRequest):
@@ -95,24 +126,26 @@ async def search_brain(request: SearchRequest):
 async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    
-    if not os.path.exists(request.path):
+
+    validated_path = _validate_ingest_path(request.path)
+
+    if not os.path.exists(validated_path):
         raise HTTPException(status_code=404, detail="Path does not exist")
 
     def process_ingestion():
         import asyncio
-        if os.path.isdir(request.path):
-            asyncio.run(brain.load_directory(request.path))
+        if os.path.isdir(validated_path):
+            asyncio.run(brain.load_directory(validated_path))
         else:
             from rag_brain.loaders import DirectoryLoader
-            ext = os.path.splitext(request.path)[1].lower()
+            ext = os.path.splitext(validated_path)[1].lower()
             loader_mgr = DirectoryLoader()
             if ext in loader_mgr.loaders:
-                docs = loader_mgr.loaders[ext].load(request.path)
+                docs = loader_mgr.loaders[ext].load(validated_path)
                 brain.ingest(docs)
 
     background_tasks.add_task(process_ingestion)
-    return {"message": f"Ingestion started for {request.path}", "status": "processing"}
+    return {"message": f"Ingestion started for {validated_path}", "status": "processing"}
 
 @app.post("/add_text")
 async def add_text(request: TextIngestRequest):
@@ -133,6 +166,22 @@ async def add_text(request: TextIngestRequest):
         return {"status": "success", "doc_id": doc_id}
     except Exception as e:
         logger.error(f"Error adding text: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/delete")
+async def delete_documents(request: DeleteRequest):
+    if brain is None:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        # Delete from ChromaDB if provider is chroma
+        if brain.vector_store.provider == "chroma":
+            brain.vector_store.collection.delete(ids=request.doc_ids)
+        # Delete from BM25
+        if brain.bm25 is not None:
+            brain.bm25.delete_documents(request.doc_ids)
+        return {"status": "success", "deleted": len(request.doc_ids), "doc_ids": request.doc_ids}
+    except Exception as e:
+        logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 def main():
