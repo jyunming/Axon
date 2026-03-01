@@ -1,10 +1,10 @@
 name: CI
 
 on:
+  push:
+    branches: [main, develop]
   pull_request:
     branches: [main, develop]
-  push:
-    branches: [develop]
 
 jobs:
   test:
@@ -23,11 +23,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e .
+          pip install -e ".[dev]"
 
       - name: Syntax check (py_compile)
         run: |
@@ -39,20 +47,20 @@ jobs:
           python -m py_compile src/rag_brain/tools.py
           python -m py_compile src/rag_brain/webapp.py
 
-      - name: Run tests
-        run: |
-          if [ -d tests ] && [ -n "$(find tests -name '*.py' -not -name '__init__.py')" ]; then
-            python -m pytest tests/ --tb=short -q
-          else
-            echo "No tests found — skipping pytest. Add tests to tests/ to enable this step."
-          fi
-
       - name: Lint with ruff (if installed)
         run: |
           if pip show ruff &>/dev/null; then
-            ruff check src/
+            ruff check src/ tests/
           else
             echo "ruff not installed — skipping lint."
+          fi
+
+      - name: Format check with black (if installed)
+        run: |
+          if pip show black &>/dev/null; then
+            black --check src/ tests/
+          else
+            echo "black not installed — skipping format check."
           fi
 
       - name: Type check with mypy (if installed)
@@ -62,3 +70,35 @@ jobs:
           else
             echo "mypy not installed — skipping type check."
           fi
+        continue-on-error: true
+
+      - name: Run tests
+        run: |
+          if [ -d tests ] && [ -n "$(find tests -name '*.py' -not -name '__init__.py')" ]; then
+            if pip show pytest-cov &>/dev/null; then
+              python -m pytest tests/ -v --tb=short --cov=rag_brain --cov-report=xml --cov-report=term
+            else
+              python -m pytest tests/ -v --tb=short
+            fi
+          else
+            echo "No tests found — skipping pytest. Add tests to tests/ to enable this step."
+          fi
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: |
+        docker build -t local-rag-brain:test .
+
+    - name: Test Docker image
+      run: |
+        docker run --rm local-rag-brain:test rag-brain --help

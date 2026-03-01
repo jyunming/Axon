@@ -129,20 +129,29 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
 
     validated_path = _validate_ingest_path(request.path)
 
-    if not os.path.exists(validated_path):
-        raise HTTPException(status_code=404, detail="Path does not exist")
+    try:
+        requested_path = pathlib.Path(validated_path).resolve()
+        if not requested_path.exists():
+            raise HTTPException(status_code=404, detail="Path does not exist")
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
 
     def process_ingestion():
         import asyncio
-        if os.path.isdir(validated_path):
-            asyncio.run(brain.load_directory(validated_path))
-        else:
-            from rag_brain.loaders import DirectoryLoader
-            ext = os.path.splitext(validated_path)[1].lower()
-            loader_mgr = DirectoryLoader()
-            if ext in loader_mgr.loaders:
-                docs = loader_mgr.loaders[ext].load(validated_path)
-                brain.ingest(docs)
+        try:
+            if requested_path.is_dir():
+                asyncio.run(brain.load_directory(str(requested_path)))
+            else:
+                from rag_brain.loaders import DirectoryLoader
+                ext = requested_path.suffix.lower()
+                loader_mgr = DirectoryLoader()
+                if ext in loader_mgr.loaders:
+                    docs = loader_mgr.loaders[ext].load(str(requested_path))
+                    brain.ingest(docs)
+                else:
+                    logger.warning(f"Unsupported file type: {ext}")
+        except Exception as e:
+            logger.error(f"Error during ingestion: {e}")
 
     background_tasks.add_task(process_ingestion)
     return {"message": f"Ingestion started for {validated_path}", "status": "processing"}
