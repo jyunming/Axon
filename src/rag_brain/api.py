@@ -195,7 +195,7 @@ async def delete_documents(request: DeleteRequest):
 
 def main():
     """Main entry point for rag-brain-api command."""
-    host = os.getenv("RAG_BRAIN_HOST", "127.0.0.1")
+    host = os.getenv("RAG_BRAIN_HOST", "0.0.0.0")
     port = int(os.getenv("RAG_BRAIN_PORT", "8000"))
     uvicorn.run(app, host=host, port=port)
 
