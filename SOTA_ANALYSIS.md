@@ -17,7 +17,7 @@ The following features are already implemented:
 | **Embedding providers** | sentence-transformers (`all-MiniLM-L6-v2`), Ollama (`nomic-embed-text`), FastEmbed (`BAAI/bge-small-en-v1.5`) |
 | **LLM** | Ollama-backed LLM with streaming (llama3.1, qwen2.5, phi3, mistral) |
 | **Vector stores** | ChromaDB (default), Qdrant |
-| **Document formats** | PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, BMP images |
+| **Document formats** | PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, BMP/PNG/TIF/TIFF/PGM images |
 | **Multimodal** | BMP image ingestion with VLM auto-captioning (llava) |
 | **Agent interface** | FastAPI with 6 OpenAI-compatible tools |
 | **Evaluation** | RAGAS evaluation script (`scripts/evaluate.py`) |
