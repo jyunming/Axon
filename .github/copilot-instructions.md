@@ -11,7 +11,7 @@ Requires Ollama running locally. Pull models before first use:
 ```bash
 ollama pull llama3.1        # default LLM
 ollama pull nomic-embed-text # optional, higher-quality embeddings
-ollama pull llava            # optional, for BMP image captioning
+ollama pull llava            # optional, for image captioning (BMP, PNG, TIF/TIFF, PGM)
 ```
 
 ## Running the Project
@@ -87,13 +87,13 @@ When adding new config fields, add to both `OpenStudioConfig` and the `load()` m
 Subclass `BaseLoader` (src/rag_brain/loaders.py), implement `load(path) -> List[Dict]`, then register the file extension in `DirectoryLoader.loaders`. Async support is free via `BaseLoader.aload()` which wraps `load()` with `asyncio.to_thread`.
 
 ### Supported file types (DirectoryLoader)
-`.txt`, `.md`, `.json`, `.tsv`, `.csv`, `.docx`, `.html`, `.pdf`, `.bmp`
+`.txt`, `.md`, `.json`, `.tsv`, `.csv`, `.docx`, `.html`, `.pdf`, `.bmp`, `.png`, `.tif`, `.tiff`, `.pgm`
 - **.txt, .md, .json, .tsv:** Text extraction via corresponding loaders
 - **.csv:** Each row becomes a document (uses text/content/body column if present)
 - **.docx:** Extracts paragraphs via `python-docx`
 - **.html:** Extracts visible text (skips script/style tags) via HTML parser
 - **.pdf:** Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback
-- **.bmp:** Uses Ollama VLM for visual captioning
+- **.bmp, .png, .tif, .tiff, .pgm:** Uses Ollama VLM for visual captioning (images normalised to PNG via Pillow before sending)
 
 ### Adding a new vector store
 Implement `_init_store()`, `add()`, and `search()` branches inside `OpenVectorStore` (src/rag_brain/main.py). Install the client as an optional extra in `setup.py`.
