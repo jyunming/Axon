@@ -13,10 +13,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rag_brain.loaders import (
+    BMPLoader,
     CSVLoader,
     DirectoryLoader,
     DOCXLoader,
     HTMLLoader,
+    ImageLoader,
     JSONLoader,
     PDFLoader,
     TextLoader,
@@ -325,6 +327,107 @@ class TestJSONLoader:
             assert len(docs) == 1
             assert docs[0]["text"] == "Single document"
             assert docs[0]["metadata"]["category"] == "test"
+
+
+class TestImageLoader:
+    """Tests for the ImageLoader (VLM-based image captioning) and BMPLoader alias."""
+
+    def test_bmp_loader_is_alias_for_image_loader(self):
+        assert BMPLoader is ImageLoader
+
+    def test_image_loader_returns_empty_when_ollama_missing(self, tmp_path):
+        """ImageLoader returns [] gracefully when ollama is not installed."""
+        loader = ImageLoader()
+        loader.ollama = None  # simulate missing package
+        img_path = tmp_path / "test.bmp"
+        img_path.write_bytes(b"fake")
+        result = loader.load(str(img_path))
+        assert result == []
+
+    def test_image_loader_calls_ollama_generate(self, tmp_path):
+        """ImageLoader calls ollama.generate and returns a captioned document."""
+        from PIL import Image as PILImage
+
+        # Create a minimal real BMP image so Pillow can open it
+        img = PILImage.new("RGB", (4, 4), color=(255, 0, 0))
+        img_path = tmp_path / "red.bmp"
+        img.save(str(img_path))
+
+        mock_ollama = MagicMock()
+        mock_ollama.generate.return_value = {"response": "A red square"}
+
+        loader = ImageLoader(ollama_model="llava")
+        loader.ollama = mock_ollama
+
+        docs = loader.load(str(img_path))
+
+        assert len(docs) == 1
+        assert "A red square" in docs[0]["text"]
+        assert docs[0]["metadata"]["type"] == "image"
+        assert docs[0]["metadata"]["format"] == "bmp"
+        assert docs[0]["metadata"]["model"] == "llava"
+        mock_ollama.generate.assert_called_once()
+        call_kwargs = mock_ollama.generate.call_args
+        assert call_kwargs[1]["model"] == "llava" or call_kwargs[0][0] == "llava"  # positional or kw
+
+    def test_image_loader_handles_png(self, tmp_path):
+        """ImageLoader correctly records 'png' as format in metadata."""
+        from PIL import Image as PILImage
+
+        img = PILImage.new("RGB", (4, 4), color=(0, 255, 0))
+        img_path = tmp_path / "green.png"
+        img.save(str(img_path))
+
+        mock_ollama = MagicMock()
+        mock_ollama.generate.return_value = {"response": "A green square"}
+
+        loader = ImageLoader()
+        loader.ollama = mock_ollama
+
+        docs = loader.load(str(img_path))
+        assert len(docs) == 1
+        assert docs[0]["metadata"]["format"] == "png"
+
+    def test_image_loader_handles_pgm(self, tmp_path):
+        """ImageLoader converts PGM (grayscale) via Pillow and calls ollama."""
+        from PIL import Image as PILImage
+
+        img = PILImage.new("L", (4, 4), color=128)  # grayscale
+        img_path = tmp_path / "gray.pgm"
+        img.save(str(img_path))
+
+        mock_ollama = MagicMock()
+        mock_ollama.generate.return_value = {"response": "A gray image"}
+
+        loader = ImageLoader()
+        loader.ollama = mock_ollama
+
+        docs = loader.load(str(img_path))
+        assert len(docs) == 1
+        assert docs[0]["metadata"]["format"] == "pgm"
+
+    def test_image_loader_returns_empty_on_ollama_error(self, tmp_path):
+        """ImageLoader returns [] and logs when ollama.generate raises."""
+        from PIL import Image as PILImage
+
+        img = PILImage.new("RGB", (4, 4))
+        img_path = tmp_path / "test.png"
+        img.save(str(img_path))
+
+        mock_ollama = MagicMock()
+        mock_ollama.generate.side_effect = RuntimeError("connection refused")
+
+        loader = ImageLoader()
+        loader.ollama = mock_ollama
+
+        result = loader.load(str(img_path))
+        assert result == []
+
+    def test_directory_loader_registers_image_formats(self):
+        """DirectoryLoader registers png, tif, tiff, pgm alongside bmp."""
+        dl = DirectoryLoader()
+        for ext in (".bmp", ".png", ".tif", ".tiff", ".pgm"):
+            assert ext in dl.loaders, f"Extension {ext} not registered in DirectoryLoader"
 
 
 class TestDirectoryLoader:

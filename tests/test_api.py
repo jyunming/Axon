@@ -141,3 +141,111 @@ def test_query_stream_success():
     resp = client.post("/query/stream", json={"query": "test"})
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers.get("content-type", "")
+
+
+def test_query_stream_error_yields_error_chunk():
+    api_module.brain = _make_brain()
+    api_module.brain.query_stream = MagicMock(side_effect=RuntimeError("llm down"))
+    resp = client.post("/query/stream", json={"query": "test"})
+    # StreamingResponse always returns 200; error appears in body
+    assert resp.status_code == 200
+    assert "[ERROR]" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# /query with filters
+# ---------------------------------------------------------------------------
+
+
+def test_query_passes_filters():
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Filtered answer"
+    filters = {"type": "text", "source": "manual"}
+    resp = client.post("/query", json={"query": "What?", "filters": filters})
+    assert resp.status_code == 200
+    api_module.brain.query.assert_called_once_with("What?", filters=filters)
+
+
+# ---------------------------------------------------------------------------
+# /add_text
+# ---------------------------------------------------------------------------
+
+
+def test_add_text_503_no_brain():
+    resp = client.post("/add_text", json={"text": "hello world"})
+    assert resp.status_code == 503
+
+
+def test_add_text_success():
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+    resp = client.post("/add_text", json={"text": "hello world", "doc_id": "myid"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["doc_id"] == "myid"
+    # Verify ingest was called with a doc containing the right text
+    call_args = api_module.brain.ingest.call_args[0][0]
+    assert len(call_args) == 1
+    assert call_args[0]["text"] == "hello world"
+    assert call_args[0]["id"] == "myid"
+
+
+def test_add_text_auto_generates_doc_id():
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+    resp = client.post("/add_text", json={"text": "some content"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["doc_id"].startswith("agent_doc_")
+
+
+def test_add_text_propagates_error():
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.side_effect = RuntimeError("vector store full")
+    resp = client.post("/add_text", json={"text": "hello"})
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# /search
+# ---------------------------------------------------------------------------
+
+
+def test_search_503_no_brain():
+    resp = client.post("/search", json={"query": "test"})
+    assert resp.status_code == 503
+
+
+def test_search_success():
+    api_module.brain = _make_brain()
+    api_module.brain.embedding = MagicMock()
+    api_module.brain.embedding.embed_query.return_value = [0.1] * 384
+    api_module.brain.vector_store.search.return_value = [
+        {"id": "doc1", "text": "result text", "score": 0.9, "metadata": {"source": "test"}}
+    ]
+    resp = client.post("/search", json={"query": "find me something"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["id"] == "doc1"
+    assert data[0]["score"] == 0.9
+
+
+def test_search_uses_custom_top_k():
+    api_module.brain = _make_brain()
+    api_module.brain.embedding = MagicMock()
+    api_module.brain.embedding.embed_query.return_value = [0.0] * 384
+    api_module.brain.vector_store.search.return_value = []
+    client.post("/search", json={"query": "q", "top_k": 3})
+    api_module.brain.vector_store.search.assert_called_once()
+    _, kwargs = api_module.brain.vector_store.search.call_args
+    assert kwargs.get("top_k") == 3
+
+
+def test_search_propagates_error():
+    api_module.brain = _make_brain()
+    api_module.brain.embedding = MagicMock()
+    api_module.brain.embedding.embed_query.side_effect = RuntimeError("embed fail")
+    resp = client.post("/search", json={"query": "test"})
+    assert resp.status_code == 500
