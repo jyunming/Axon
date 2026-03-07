@@ -235,7 +235,9 @@ def test_pdf_loader_pypdf_fallback(tmp_path):
         from rag_brain.loaders import PDFLoader as _PDFLoader
         docs = _PDFLoader().load(str(p))
 
-    assert len(docs) >= 1 or docs == []  # graceful even if both fail
+    assert len(docs) == 1
+    assert docs[0]["text"] == "Fallback text"
+    assert docs[0]["metadata"]["type"] == "pdf"
 
 
 def test_pdf_loader_no_deps(tmp_path):

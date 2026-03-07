@@ -7,8 +7,6 @@ from pathlib import Path
 import logging
 from PIL import Image
 import io
-import base64
-
 logger = logging.getLogger("StudioBrainOpen.Loaders")
 
 class BaseLoader:
@@ -230,6 +228,7 @@ class ImageLoader(BaseLoader):
 
 # Backward-compatible alias kept for existing code that imports BMPLoader directly.
 BMPLoader = ImageLoader
+
 
 class PDFLoader(BaseLoader):
     """Loader for PDF files. Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback."""
