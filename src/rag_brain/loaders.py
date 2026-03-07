@@ -182,14 +182,14 @@ class ImageLoader(BaseLoader):
             self._pil = Image
         except ImportError:
             self._pil = None
-            logger.error("Pillow not installed. Image loading will fail.")
+            logger.warning("Pillow not installed. Image loading will be skipped.")
         try:
             import ollama
 
             self.ollama = ollama
         except ImportError:
             self.ollama = None
-            logger.error("ollama package not installed. Image loading will fail.")
+            logger.warning("ollama package not installed. Image loading will be skipped.")
 
     def load(self, path: str) -> List[Dict[str, Any]]:
         if self._pil is None or self.ollama is None:
