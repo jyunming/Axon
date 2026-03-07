@@ -13,6 +13,8 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 ## 📚 Documentation
 
+- **[Setup Guide](SETUP.md)** - Detailed step-by-step setup for LLM and embedding models
+- **[SOTA Analysis](SOTA_ANALYSIS.md)** - Gap analysis vs. state-of-the-art RAG systems and roadmap
 - **[Quick Reference](QUICKREF.md)** - Common commands and examples
 - **[Development Guide](DEVELOPMENT.md)** - Setup and development workflow
 - **[Contributing](CONTRIBUTING.md)** - How to contribute
@@ -51,13 +53,27 @@ pip install -e ".[all]"
 ### 2. Setup Ollama (Local Models)
 
 ```bash
-# Pull standard models
-ollama pull llama3.1
+# Install Ollama (Linux)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Start the Ollama server (Linux; macOS/Windows start automatically)
+ollama serve
+
+# Verify Ollama is running
+curl http://localhost:11434/api/tags
+
+# Pull LLM (choose one based on your hardware)
+ollama pull llama3.1:8b       # Recommended (4.7 GB, ~6-8 GB RAM)
+ollama pull phi3:mini         # Minimal (2.3 GB, ~4-6 GB RAM)
+
+# Pull embedding model (optional; sentence-transformers is used by default)
 ollama pull nomic-embed-text
 
 # Pull Vision model (optional, for image support)
 ollama pull llava
 ```
+
+> For detailed setup instructions including embedding model options, configuration examples, and troubleshooting, see the **[Setup Guide](SETUP.md)**.
 
 ### 3. Deployment Options
 
