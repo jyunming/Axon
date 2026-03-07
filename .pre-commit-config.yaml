@@ -33,12 +33,12 @@ repos:
           - types-requests
         args: [--ignore-missing-imports, --no-strict-optional]
 
-- repo: local
-  hooks:
-    - id: pytest-check
-      name: pytest
-      entry: pytest tests/ -x -q --no-header --override-ini="addopts="
-      language: system
-      pass_filenames: false
-      always_run: true
-      stages: [commit]
+  - repo: local
+    hooks:
+      - id: pytest-check
+        name: pytest
+        entry: pytest tests/ -x -q --no-header --override-ini="addopts="
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]
