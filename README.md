@@ -7,7 +7,7 @@
 
 **A robust, general-purpose local RAG platform for humans and AI agents.**
 
-This project provides a fully open-source, local-first retrieval-augmented generation (RAG) system. It supports hybrid search (Vector + BM25), multimodal ingestion (BMP images), and is designed to serve as a central knowledge hub for both direct human interaction and automated agent orchestration.
+This project provides a fully open-source, local-first retrieval-augmented generation (RAG) system. It supports hybrid search (Vector + BM25), multimodal ingestion (BMP, PNG, TIF/TIFF, PGM images), and is designed to serve as a central knowledge hub for both direct human interaction and automated agent orchestration.
 
 ---
 
@@ -28,7 +28,7 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 - **Local First:** Runs entirely on your hardware using Ollama and Sentence Transformers.
 - **Hybrid Search:** Combines semantic vector search with keyword-based BM25 for maximum precision.
-- **Multimodal Support:** Automatically captions and indexes BMP images via local Vision-Language Models (VLM).
+- **Multimodal Support:** Automatically captions and indexes BMP, PNG, TIF/TIFF, and PGM images via local Vision-Language Models (VLM).
 - **Rich Document Support:** Ingest PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, and plain text files.
 - **Agent Orchestration Ready:** Standardized FastAPI service with specialized tools for agentic reasoning and self-learning.
 - **Secure Ingestion:** Path traversal protection with configurable base directory via `RAG_INGEST_BASE`.

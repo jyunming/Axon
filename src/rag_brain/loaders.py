@@ -5,7 +5,6 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import logging
-from PIL import Image
 import io
 logger = logging.getLogger("StudioBrainOpen.Loaders")
 
@@ -178,6 +177,13 @@ class ImageLoader(BaseLoader):
     def __init__(self, ollama_model: str = "llava"):
         self.ollama_model = ollama_model
         try:
+            from PIL import Image
+
+            self._pil = Image
+        except ImportError:
+            self._pil = None
+            logger.error("Pillow not installed. Image loading will fail.")
+        try:
             import ollama
 
             self.ollama = ollama
@@ -186,14 +192,14 @@ class ImageLoader(BaseLoader):
             logger.error("ollama package not installed. Image loading will fail.")
 
     def load(self, path: str) -> List[Dict[str, Any]]:
-        if self.ollama is None:
+        if self._pil is None or self.ollama is None:
             return []
 
         logger.info(f"🖼️ Processing image: {path} with {self.ollama_model}...")
 
         try:
             # Normalize to PNG bytes via Pillow for maximum VLM compatibility
-            img = Image.open(path).convert("RGB")
+            img = self._pil.open(path).convert("RGB")
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             image_data = buf.getvalue()
