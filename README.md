@@ -29,7 +29,7 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 - **Local First:** Runs entirely on your hardware using Ollama and Sentence Transformers.
 - **Hybrid Search:** Combines semantic vector search with keyword-based BM25 for maximum precision.
 - **Multimodal Support:** Automatically captions and indexes BMP images via local Vision-Language Models (VLM).
-- **Rich Document Support:** Ingest PDF, DOCX, HTML, CSV, Markdown, JSON, and plain text files.
+- **Rich Document Support:** Ingest PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, and plain text files.
 - **Agent Orchestration Ready:** Standardized FastAPI service with specialized tools for agentic reasoning and self-learning.
 - **Secure Ingestion:** Path traversal protection with configurable base directory via `RAG_INGEST_BASE`.
 - **Async Ingestion:** High-performance asynchronous processing for directories and files.
