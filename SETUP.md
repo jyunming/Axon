@@ -387,7 +387,7 @@ Copy the template and customize it:
 ```bash
 # config.yaml already exists in the repo root — edit it directly
 # Or copy it as a personal override
-cp config.yaml config.local.yaml
+cp config.yaml config.local.yaml  # pass --config config.local.yaml to the CLI
 ```
 
 Here are complete configurations for each tier:
@@ -464,8 +464,7 @@ rerank:
 ```yaml
 embedding:
   provider: ollama
-  model: nomic-embed-text
-  base_url: http://localhost:11434
+  model: nomic-embed-text  # Ollama uses the OLLAMA_HOST env var, not base_url
 
 llm:
   provider: ollama
@@ -518,7 +517,8 @@ OLLAMA_MODEL=llama3.1
 OLLAMA_EMBED_MODEL=nomic-embed-text
 
 # API server settings
-RAG_BRAIN_HOST=0.0.0.0
+# Bind to localhost by default; use 0.0.0.0 only for authenticated deployments behind network controls
+RAG_BRAIN_HOST=127.0.0.1
 RAG_BRAIN_PORT=8000
 
 # Where ChromaDB stores its data
@@ -568,7 +568,7 @@ curl http://localhost:8000/health
 
 Expected:
 ```json
-{"status": "ok"}
+{"status": "healthy", "brain_ready": true}
 ```
 
 ### Step 3: Ingest a test document
@@ -587,7 +587,7 @@ curl -X POST http://localhost:8000/ingest \
 
 Expected:
 ```json
-{"message": "Ingestion complete", "docs_added": 1}
+{"message": "Ingestion started for /tmp/test_doc.txt", "status": "processing"}
 ```
 
 ### Step 4: Run a test query
@@ -762,7 +762,7 @@ If the API service can't reach Ollama, check the `OLLAMA_HOST` environment varia
 | Start UI | `rag-brain-ui` or `make run-ui` |
 | Health check | `curl http://localhost:8000/health` |
 | Ingest a file | `rag-brain --ingest ./path/to/file` |
-| Run a query | `rag-brain --query "your question"` |
+| Run a query | `rag-brain "your question"` |
 
 ---
 
