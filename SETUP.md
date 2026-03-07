@@ -517,7 +517,7 @@ OLLAMA_MODEL=llama3.1
 OLLAMA_EMBED_MODEL=nomic-embed-text
 
 # API server settings
-# Bind to localhost by default; use 0.0.0.0 only for authenticated deployments behind network controls
+# Bind to localhost by default for local setups. For Docker/Compose deployments, set RAG_BRAIN_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
 RAG_BRAIN_HOST=127.0.0.1
 RAG_BRAIN_PORT=8000
 
