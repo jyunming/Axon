@@ -169,51 +169,67 @@ class DOCXLoader(BaseLoader):
         }]
 
 
-class BMPLoader(BaseLoader):
+class ImageLoader(BaseLoader):
     """
-    Loader for BMP files using Ollama VLM for captioning.
+    Loader for raster images (BMP, PNG, TIF/TIFF, PGM) using Ollama VLM for captioning.
+
+    Images are converted to PNG bytes via Pillow before being sent to the VLM so that
+    all formats — including exotic ones like PGM — are handled uniformly.
     """
+
     def __init__(self, ollama_model: str = "llava"):
         self.ollama_model = ollama_model
         try:
             import ollama
+
             self.ollama = ollama
         except ImportError:
             self.ollama = None
-            logger.error("ollama package not installed. BMP loading will fail.")
+            logger.error("ollama package not installed. Image loading will fail.")
 
     def load(self, path: str) -> List[Dict[str, Any]]:
         if self.ollama is None:
             return []
-            
+
         logger.info(f"🖼️ Processing image: {path} with {self.ollama_model}...")
-        
+
         try:
-            with open(path, 'rb') as f:
-                image_data = f.read()
-            
+            # Normalize to PNG bytes via Pillow for maximum VLM compatibility
+            img = Image.open(path).convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            image_data = buf.getvalue()
+
+            fmt = Path(path).suffix.lstrip(".").lower()
+
             # Call Ollama VLM
             response = self.ollama.generate(
                 model=self.ollama_model,
                 prompt="Describe this image in detail. Mention any text, objects, people, or patterns visible.",
-                images=[image_data]
+                images=[image_data],
             )
-            
-            description = response['response']
-            
-            return [{
-                "id": os.path.basename(path),
-                "text": f"Image Description: {description}",
-                "metadata": {
-                    "source": path,
-                    "type": "image",
-                    "format": "bmp",
-                    "model": self.ollama_model
+
+            description = response["response"]
+
+            return [
+                {
+                    "id": os.path.basename(path),
+                    "text": f"Image Description: {description}",
+                    "metadata": {
+                        "source": path,
+                        "type": "image",
+                        "format": fmt,
+                        "model": self.ollama_model,
+                    },
                 }
-            }]
+            ]
         except Exception as e:
-            logger.error(f"Error processing BMP {path}: {e}")
+            logger.error(f"Error processing image {path}: {e}")
             return []
+
+
+# Backward-compatible alias kept for existing code that imports BMPLoader directly.
+BMPLoader = ImageLoader
 
 class PDFLoader(BaseLoader):
     """Loader for PDF files. Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback."""
@@ -275,6 +291,7 @@ class PDFLoader(BaseLoader):
 class DirectoryLoader:
     """Loader that crawls a directory and uses appropriate loaders for each file."""
     def __init__(self, vlm_model: str = "llava"):
+        _image_loader = ImageLoader(ollama_model=vlm_model)
         self.loaders = {
             ".txt": TextLoader(),
             ".md": TextLoader(),
@@ -284,7 +301,11 @@ class DirectoryLoader:
             ".html": HTMLLoader(),
             ".htm": HTMLLoader(),
             ".docx": DOCXLoader(),
-            ".bmp": BMPLoader(ollama_model=vlm_model),
+            ".bmp": _image_loader,
+            ".png": _image_loader,
+            ".tif": _image_loader,
+            ".tiff": _image_loader,
+            ".pgm": _image_loader,
             ".pdf": PDFLoader(),
         }
     
