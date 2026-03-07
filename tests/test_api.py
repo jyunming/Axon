@@ -237,7 +237,8 @@ def test_search_uses_custom_top_k():
     api_module.brain.embedding = MagicMock()
     api_module.brain.embedding.embed_query.return_value = [0.0] * 384
     api_module.brain.vector_store.search.return_value = []
-    client.post("/search", json={"query": "q", "top_k": 3})
+    resp = client.post("/search", json={"query": "q", "top_k": 3})
+    assert resp.status_code == 200
     api_module.brain.vector_store.search.assert_called_once()
     _, kwargs = api_module.brain.vector_store.search.call_args
     assert kwargs.get("top_k") == 3

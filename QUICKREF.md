@@ -67,7 +67,7 @@ rag-brain-ui
 # CLI
 rag-brain "What is RAG?"
 rag-brain --ingest ./documents/
-rag-brain --query "test" --stream
+rag-brain "test" --stream
 ```
 
 ### Docker
@@ -123,7 +123,7 @@ nano .env
 ```bash
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=llama3.1
-RAG_BRAIN_HOST=0.0.0.0
+RAG_BRAIN_HOST=127.0.0.1
 RAG_BRAIN_PORT=8000
 LOG_LEVEL=INFO
 ```
