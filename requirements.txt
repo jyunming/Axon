@@ -25,7 +25,8 @@ qdrant-client>=1.7.0
 ollama>=0.1.0
 openai>=1.0.0
 google-generativeai>=0.4.0
-sentence-transformers>=2.2.0
+sentence-transformers>=3.0.0
+tf-keras>=2.0.0
 
 
 # Document loaders

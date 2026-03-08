@@ -2,7 +2,12 @@
 Core engine for Local RAG Brain - Open Source RAG Interface.
 """
 
+# Suppress TensorFlow/Keras noise before any imports that might trigger them
 import os
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("USE_TF", "0")  # tell transformers to skip TF backend
+
 import re
 import sys
 import time
