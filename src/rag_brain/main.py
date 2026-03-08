@@ -1946,7 +1946,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             d_val   = "discuss:on" if brain.config.discussion_fallback else "discuss:off"
             h_val   = "hybrid:on" if brain.config.hybrid_search      else "hybrid:off"
             sep = "  <bottom-toolbar.sep>│</bottom-toolbar.sep>  "
-            return HTML(
+            return _PThtml(
                 f"  <bottom-toolbar.key>🧠 LLM</bottom-toolbar.key> {m}"
                 f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key> {emb}"
                 f"{sep}<bottom-toolbar.key>Docs</bottom-toolbar.key> {doc_s}"
@@ -2000,24 +2000,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     # ── Session init ───────────────────────────────────────────────────────────
     session: dict = _new_session(brain)
     chat_history: list = session["history"]
-
-    # Offer to resume the most recent session (if within last 24 h and has turns)
-    recent = _list_sessions(limit=1)
-    if recent:
-        last = recent[0]
-        turns = len(last.get("history", [])) // 2
-        if turns > 0:
-            ts = last.get("started_at", "")[:16].replace("T", " ")
-            try:
-                ans = _read_input(
-                    f"  ↩️  Resume last session? ({turns} turns, {ts} UTC)  [y/N]: "
-                ).strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                ans = "n"
-            if ans == "y":
-                session = last
-                chat_history = session["history"]
-                print(f"  ✅ Resumed session {session['id']}  ({turns} turns loaded)\n")
 
     _last_sources: list = []
     _last_query: str = ""
