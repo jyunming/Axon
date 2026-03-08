@@ -788,15 +788,24 @@ Your primary goal is to help the user by answering questions based on the provid
             results = vector_results
 
         results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
-        
-        # Web Search (Truth Grounding) — only fires when local knowledge is insufficient
+
+        # Web Search (Truth Grounding)
+        # Trigger when the best cosine similarity from vector search is below the threshold,
+        # meaning local knowledge is genuinely insufficient (even if BM25 returned fused_only docs).
         web_count = 0
-        if self.config.truth_grounding and self.config.brave_api_key and not results:
-            logger.info("🌐 Local knowledge insufficient — falling back to Brave web search")
-            web_results = self._execute_web_search(query)
-            web_count = len(web_results)
-            results.extend(web_results)
-            transforms['web_search_applied'] = True
+        if self.config.truth_grounding and self.config.brave_api_key:
+            max_vector_score = max((r['score'] for r in vector_results), default=0.0)
+            local_sufficient = max_vector_score >= self.config.similarity_threshold
+            if not local_sufficient:
+                logger.info(
+                    f"🌐 Local knowledge insufficient (best vector score {max_vector_score:.3f} < "
+                    f"threshold {self.config.similarity_threshold}) — falling back to Brave web search"
+                )
+                web_results = self._execute_web_search(query)
+                web_count = len(web_results)
+                # Replace low-relevance local results with web results
+                results = web_results
+                transforms['web_search_applied'] = True
 
         return {
             "results": results,
