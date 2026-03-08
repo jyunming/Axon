@@ -7,6 +7,9 @@ import os
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("USE_TF", "0")  # tell transformers to skip TF backend
+# Disable ChromaDB / PostHog telemetry (avoids atexit noise on Ctrl+C)
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
 import re
 import sys
