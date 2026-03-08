@@ -62,7 +62,7 @@ class OpenStudioConfig:
     
     # RAG Settings
     top_k: int = 10
-    similarity_threshold: float = 0.5
+    similarity_threshold: float = 0.3
     hybrid_search: bool = True
     
     # Chunking
