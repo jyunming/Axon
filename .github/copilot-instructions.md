@@ -19,7 +19,7 @@ ollama pull llava            # optional, image captioning (BMP, PNG, TIF/TIFF, P
 |---|---|
 | `rag-brain "question"` | Single-shot query |
 | `rag-brain --stream "question"` | Stream response token-by-token |
-| `rag-brain` | **Interactive REPL** (no args = chat mode) |
+| `rag-brain` | **Interactive REPL** (no args = chat mode with session persistence) |
 | `rag-brain --model gemma:2b "question"` | Override model at runtime (auto-pulls if missing) |
 | `rag-brain --provider gemini --model gemini-1.5-flash "q"` | Use cloud LLM |
 | `rag-brain --pull gemma:2b` | Explicitly pull an Ollama model |
@@ -32,6 +32,30 @@ ollama pull llava            # optional, image captioning (BMP, PNG, TIF/TIFF, P
 | `pytest tests/ -v` | Run test suite (all tests must pass before merge) |
 | `make lint` / `make format` | Ruff + Black (100-char line length) |
 | `make ci` | lint + type-check + tests |
+
+### Interactive REPL Features
+
+When running `rag-brain` with no arguments, you get:
+- **Session Persistence:** Chat history auto-saves to `~/.rag_brain/sessions/session_<timestamp>.json`. Resume any past session on startup.
+- **Live Tab Completion:** Slash commands, filesystem paths, and Ollama model names auto-complete as you type (via prompt_toolkit or readline).
+- **Animated Init Spinner:** Braille spinner (⠋⠙⠹…) shows progress inside a box during initialization.
+- **Thinking Spinner:** Same spinner displays `Brain: ⠙ thinking…` while waiting for LLM response.
+- **REPL Slash Commands:**
+  - `/help [cmd]` – Show all commands or detailed help for specific commands (model, embed, ingest, rag, sessions)
+  - `/list` – List ingested documents with chunk counts
+  - `/ingest <path|glob>` – Ingest files/directories with glob pattern support
+  - `/model [provider/model]` – Switch LLM provider and model
+  - `/embed [provider/model]` – Switch embedding provider and model
+  - `/pull <name>` – Pull an Ollama model with progress
+  - `/search` – Toggle Brave web search (truth_grounding)
+  - `/discuss` – Toggle discussion_fallback mode
+  - `/rag [option]` – Show/modify RAG settings: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `hyde`, `multi`
+  - `/compact` – Summarize chat history via LLM to free context
+  - `/context` – Display token usage bar, model info, RAG settings, chat history, retrieved sources
+  - `/sessions` – List recent saved sessions
+  - `/resume <id>` – Load a previous session by timestamp ID
+  - `/clear` – Clear current chat history
+  - `/quit`, `/exit` – Exit the REPL
 
 ## Architecture
 
@@ -73,7 +97,49 @@ config.yaml
 All loaders, `ingest()`, and vector store calls use this schema. Duplicate IDs silently overwrite in ChromaDB.
 
 ### config.yaml → dataclass mapping
-`OpenStudioConfig.load()` flattens nested YAML: `embedding.provider` → `embedding_provider`, `llm.provider` → `llm_provider`, `chunk.size` → `chunk_size`, `rerank.enabled` → `rerank`. Add new fields to both the dataclass and `load()`.
+
+`OpenStudioConfig.load()` flattens nested YAML structure into flat fields:
+
+**Embedding:**
+- `embedding.provider` → `embedding_provider` (sentence_transformers, ollama, fastembed, openai)
+- `embedding.model` → `embedding_model`
+- `embedding.base_url` → `embedding_base_url` (optional, for Ollama)
+
+**LLM:**
+- `llm.provider` → `llm_provider` (ollama, gemini, ollama_cloud, openai)
+- `llm.model` → `llm_model` (default: gemma)
+- `llm.base_url` → `llm_base_url`
+- `llm.api_key` → `llm_api_key`
+- `llm.temperature` → `temperature`
+- `llm.max_tokens` → `max_tokens`
+
+**Vector Store:**
+- `vector_store.provider` → `vector_store` (chroma or qdrant)
+- `vector_store.path` → `vector_store_path`
+
+**RAG:**
+- `rag.top_k` → `top_k`
+- `rag.similarity_threshold` → `similarity_threshold`
+- `rag.hybrid_search` → `hybrid_search`
+
+**Chunking:**
+- `chunk.size` → `chunk_size`
+- `chunk.overlap` → `chunk_overlap`
+
+**Reranking:**
+- `rerank.enabled` → `rerank`
+- `rerank.provider` → `rerank_provider`
+- `rerank.model` → `rerank_model`
+
+**Query Transformations:**
+- `query_transformations.multi_query` → `multi_query`
+- `query_transformations.hyde` → `hyde`
+- `query_transformations.discussion_fallback` → `discussion_fallback` (default: true)
+
+**Web Search:**
+- `web_search.enabled` → `truth_grounding`
+
+When adding new config fields, update both the `OpenStudioConfig` dataclass and its `load()` method.
 
 ### Adding a new loader
 Subclass `BaseLoader` (src/rag_brain/loaders.py), implement `load(path) -> List[Dict]`, register extension in `DirectoryLoader.loaders`. Async via `aload()` is free.
