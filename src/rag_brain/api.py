@@ -94,8 +94,12 @@ async def query_brain_stream(request: QueryRequest):
 
     def generate():
         try:
+            import json
             for chunk in brain.query_stream(request.query, filters=request.filters):
-                yield f"data: {chunk}\n\n"
+                if isinstance(chunk, dict):
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                else:
+                    yield f"data: {chunk}\n\n"
         except Exception as e:
             yield f"data: [ERROR] {str(e)}\n\n"
 

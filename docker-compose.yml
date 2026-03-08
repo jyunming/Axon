@@ -12,7 +12,8 @@ services:
     environment:
       - OLLAMA_HOST=http://ollama:11434
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       - ollama
     extra_hosts:
@@ -33,7 +34,8 @@ services:
       - OLLAMA_HOST=http://ollama:11434
       - RAG_BRAIN_API_URL=http://rag-brain-api:8000
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       - ollama
       - rag-brain-api
