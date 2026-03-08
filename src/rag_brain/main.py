@@ -1203,14 +1203,17 @@ def main():
     try:
         _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
     except (KeyboardInterrupt, EOFError):
-        print("\n👋 Bye!")
-    finally:
-        # Ignore Ctrl+C during atexit/cleanup so colorama/posthog don't print tracebacks
-        import signal as _signal
-        try:
-            _signal.signal(_signal.SIGINT, _signal.SIG_IGN)
-        except Exception:
-            pass
+        pass
+    print("\n👋 Bye!")
+    # Manually flush readline history, then hard-exit to skip atexit handlers
+    # (colorama/posthog atexit callbacks raise tracebacks on double Ctrl+C)
+    try:
+        import readline as _rl
+        _hist = os.path.expanduser("~/.rag_brain_history")
+        _rl.write_history_file(_hist)
+    except Exception:
+        pass
+    os._exit(0)
 
 
 _SLASH_COMMANDS = [
