@@ -64,7 +64,10 @@ rag-brain-api
 make run-ui
 rag-brain-ui
 
-# CLI — ask a question
+# CLI — interactive REPL (default when no args)
+rag-brain
+
+# CLI — single-shot query
 rag-brain "What is RAG?"
 
 # CLI — stream response token-by-token
@@ -78,15 +81,19 @@ rag-brain --list
 
 # CLI — switch model at runtime (auto-pulls Ollama model if missing)
 rag-brain --model gemma:2b "Your question"
-rag-brain --model llama3.1 "Your question"
 
 # CLI — use a cloud provider
 rag-brain --provider gemini --model gemini-1.5-flash "Your question"
 rag-brain --provider openai --model gpt-4o "Your question"
 
+# CLI — pull a model explicitly
+rag-brain --pull gemma:2b
+
 # CLI — see all providers and locally available models
 rag-brain --list-models
 ```
+
+**REPL slash commands (interactive mode):** `/list`, `/ingest <path>`, `/model <name>`, `/pull <name>`, `/clear`, `/help`, `/quit`
 
 ### Docker
 ```bash
