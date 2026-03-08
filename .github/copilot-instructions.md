@@ -9,7 +9,7 @@ pip install -e .
 
 Requires Ollama running locally. Pull models before first use:
 ```bash
-ollama pull llama3.1        # default LLM
+ollama pull gemma            # default LLM
 ollama pull nomic-embed-text # optional, higher-quality embeddings
 ollama pull llava            # optional, for image captioning (BMP, PNG, TIF/TIFF, PGM)
 ```
@@ -25,12 +25,25 @@ ollama pull llava            # optional, for image captioning (BMP, PNG, TIF/TIF
 | `docker-compose up --build` | Launch both API + UI via Docker |
 | `python migrate.py import --dir ./docs/` | Bulk import from legacy system |
 | `pytest tests/ -v` | Run comprehensive test suite |
+| `pytest tests/test_main.py -v` | Run a single test file |
+| `pytest tests/ -v -m "not slow"` | Skip slow tests |
+| `make lint` | Ruff + Black check (100-char line length) |
+| `make format` | Auto-format with Black + Ruff |
+| `make type-check` | mypy on `src/rag_brain/` |
+| `make ci` | lint + type-check + tests (no auto-format) |
+| `make test-cov` | Tests with HTML coverage report (`htmlcov/`) |
 
 ## Test Suite
 
 Pytest tests are located in `tests/`:
-- **`test_main.py`:** Core RAG pipeline tests (ingestion, querying, document deletion)
-- **`test_retrievers.py`:** BM25 retriever and reciprocal rank fusion (RRF) tests
+- **`test_main.py`:** Core RAG pipeline (ingestion, querying, document deletion, config loading)
+- **`test_api.py`:** FastAPI endpoint tests
+- **`test_loaders.py`:** All file loader classes
+- **`test_retrievers.py`:** BM25 retriever and reciprocal rank fusion (RRF)
+- **`test_splitters.py`:** Text splitting
+- **`test_streaming.py`:** Streaming query responses
+- **`test_tools.py`:** Agent tool schema definitions
+- **`test_config.py`:** Config loading and YAML flattening
 
 Run with `pytest tests/ -v`. All tests must pass before merging; CI runs pytest automatically on PR.
 
@@ -42,19 +55,22 @@ The system is a fully local RAG pipeline with three entry points (CLI, FastAPI, 
 config.yaml
     └─► OpenStudioConfig (dataclass, loaded once at startup)
             └─► OpenStudioBrain (src/rag_brain/main.py)
-                    ├─ OpenEmbedding  → sentence_transformers / ollama / fastembed
-                    ├─ OpenLLM        → ollama (vllm/llama_cpp stubs exist)
+                    ├─ OpenEmbedding  → sentence_transformers / ollama / fastembed / openai
+                    ├─ OpenLLM        → ollama / gemini / ollama_cloud / openai
                     ├─ OpenVectorStore → chroma / qdrant
                     ├─ BM25Retriever  → rank_bm25 (keyword search)
-                    └─ OpenReranker   → cross-encoder (optional, off by default)
+                    └─ OpenReranker   → cross-encoder or LLM (optional, off by default)
 ```
 
 **Retrieval flow** (inside `OpenStudioBrain.query()`):
-1. Embed query → vector search (`OpenVectorStore`)
-2. If `hybrid_search=true`: also BM25 search, then merge with Reciprocal Rank Fusion (`retrievers.reciprocal_rank_fusion`)
-3. Filter by `similarity_threshold`
-4. Optionally rerank with cross-encoder
-5. Truncate to `top_k`, build context string, call `OpenLLM.complete()`
+1. Optional query transformations: HyDE (`hyde=true`) or multi-query expansion (`multi_query=true`)
+2. Embed query → vector search (`OpenVectorStore`)
+3. If `hybrid_search=true`: also BM25 search, then merge with Reciprocal Rank Fusion (`retrievers.reciprocal_rank_fusion`)
+4. If `truth_grounding=true`: also fetch live web results via Brave Search API (web docs have `is_web: True` in metadata)
+5. Filter by `similarity_threshold`
+6. Optionally rerank with cross-encoder or LLM reranker
+7. Truncate to `top_k`, build context string, call `OpenLLM.complete()`
+8. If no documents found and `discussion_fallback=true`: LLM answers from general knowledge
 
 **Agent API** (src/rag_brain/api.py – FastAPI):
 - `POST /query` – synthesized answer (calls `brain.query()`)
@@ -100,6 +116,21 @@ Implement `_init_store()`, `add()`, and `search()` branches inside `OpenVectorSt
 
 ### Agent tool definitions
 `src/rag_brain/tools.py` exports `get_rag_tool_definition(api_base_url)`, returning OpenAI-compatible tool schemas for 6 tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, and `stream_query`. Update this when adding new API endpoints that agents should use. See `examples/agent_simple.py` for a minimal agent integration and `examples/agent_orchestration.py` for a multi-step planner pattern.
+
+### Streaming protocol
+`query_stream()` is a generator that yields both `str` chunks and `dict` markers (e.g., `{"type": "sources"}`). All consumers (API SSE handler, CLI, Streamlit) must filter out `dict` items to avoid broken output — only forward `str` chunks to the user.
+
+### Gemma / Gemini system prompt workaround
+Gemma models do not support `system_instruction` in the Gemini SDK. `OpenLLM.complete()` detects Gemma model names and prepends the system prompt to the user message instead of passing it to the constructor.
+
+### Query transformation flags
+Three optional config flags (all off by default):
+- `multi_query: true` — generates multiple query reformulations and merges results
+- `hyde: true` — generates a hypothetical document then embeds that instead of the raw query
+- `discussion_fallback: true` — if no documents pass the similarity threshold, LLM answers from general knowledge
+
+### Truth grounding (web search)
+Set `web_search.enabled: true` in config (or `truth_grounding: true` in the dataclass) and provide `BRAVE_API_KEY` env var. Live web results are merged with local retrieval results. Web-sourced documents have `is_web: True` in their metadata.
 
 ### Environment variables for API server
 - `RAG_BRAIN_HOST` (default: `0.0.0.0`)
@@ -185,8 +216,14 @@ CI Workflow      → Auto-runs on PR: syntax check + pytest
 
 ### Branch Strategy
 
-- `main` — tagged releases only
-- `develop` — integration branch
-- `feature/<name>` → PR to `develop`
-- `fix/<name>` → PR to `develop`
-- `hotfix/<name>` → PR to **both** `main` and `develop`
+> ⚠️ **Never commit directly to `master`.** Always create a feature or fix branch first.
+> ```bash
+> git checkout master && git pull
+> git checkout -b feature/<name>   # or fix/, docs/, hotfix/
+> ```
+
+- `master` — protected; tagged releases only. Direct commits are forbidden.
+- `feature/<name>` → PR to `master`
+- `fix/<name>` → PR to `master`
+- `docs/<name>` → PR to `master`
+- `hotfix/<name>` → emergency fix; PR to `master`
