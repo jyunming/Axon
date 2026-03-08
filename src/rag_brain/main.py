@@ -650,6 +650,11 @@ Your primary goal is to help the user by answering questions based on the provid
         self.llm = OpenLLM(self.config)
         self.vector_store = OpenVectorStore(self.config)
         self.reranker = OpenReranker(self.config)
+
+        # Stash original (config.yaml) paths so we can restore them for "default"
+        self._base_vector_store_path: str = os.path.abspath(self.config.vector_store_path)
+        self._base_bm25_path: str = os.path.abspath(self.config.bm25_path)
+        self._active_project: str = "default"
         
         try:
             from rag_brain.retrievers import BM25Retriever
@@ -664,6 +669,47 @@ Your primary goal is to help the user by answering questions based on the provid
             self.splitter = None
         
         logger.info("✅ Local RAG Brain ready!")
+
+    def switch_project(self, name: str) -> None:
+        """Switch the active project, reinitializing vector store and BM25.
+
+        Embedding and LLM are kept (expensive to reload). The "default" sentinel
+        restores the paths from config.yaml.
+
+        Args:
+            name: Project name or "default".
+
+        Raises:
+            ValueError: If the project does not exist (use /project new first).
+        """
+        from rag_brain.projects import (
+            ensure_project, get_active_project, project_bm25_path,
+            project_dir, project_vector_path, set_active_project,
+        )
+
+        if name == "default":
+            self.config.vector_store_path = self._base_vector_store_path
+            self.config.bm25_path = self._base_bm25_path
+        else:
+            root = project_dir(name)
+            if not root.exists():
+                raise ValueError(
+                    f"Project '{name}' does not exist. Create it first with /project new {name}"
+                )
+            self.config.vector_store_path = project_vector_path(name)
+            self.config.bm25_path = project_bm25_path(name)
+
+        # Reinitialize stores with new paths
+        self.vector_store = OpenVectorStore(self.config)
+        try:
+            from rag_brain.retrievers import BM25Retriever
+            self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
+        except ImportError:
+            self.bm25 = None
+
+        self._active_project = name
+        set_active_project(name)
+        logger.info(f"📂 Switched to project '{name}'")
     
     def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
                             filtered_count: int, final_count: int, top_score: float,
@@ -1139,7 +1185,7 @@ _SLASH_COMMANDS = [
     "/help", "/list", "/ingest ", "/model ", "/embed ",
     "/pull ", "/search", "/discuss", "/rag ", "/compact",
     "/context", "/sessions", "/resume ", "/clear", "/retry",
-    "/quit", "/exit",
+    "/project", "/project ", "/quit", "/exit",
 ]
 
 
@@ -1768,13 +1814,34 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         disp = p + ("/" if os.path.isdir(p) else "")
                         yield Completion(p[len(prefix):], display=disp,
                                          display_meta="file context")
+                # ── /project <subcommand> ──────────────────────────────────
+                elif text.startswith("/project "):
+                    sub_opts = ["list", "new ", "switch ", "delete ", "folder"]
+                    prefix = text[len("/project "):]
+                    for o in sub_opts:
+                        if o.startswith(prefix):
+                            yield Completion(o[len(prefix):], display=o)
+                    # also complete project names for switch/delete
+                    if text.startswith(("/project switch ", "/project delete ")):
+                        cmd_len = len("/project switch ") if text.startswith("/project switch ") else len("/project delete ")
+                        pfx = text[cmd_len:]
+                        try:
+                            from rag_brain.projects import list_projects
+                            for p in list_projects():
+                                n = p["name"]
+                                if n.startswith(pfx):
+                                    yield Completion(n[len(pfx):], display=n)
+                        except Exception:
+                            pass
 
         def _toolbar():
             m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
             s = "🔍 search:ON" if brain.config.truth_grounding else "search:off"
             d = "discuss:on" if brain.config.discussion_fallback else "discuss:off"
             h = "hybrid:on" if brain.config.hybrid_search else "hybrid:off"
-            return f"  🧠 {m}   ·   {s}   ·   {d}   ·   {h}   ·   top-k:{brain.config.top_k}   ·   threshold:{brain.config.similarity_threshold}  "
+            proj = getattr(brain, "_active_project", "default")
+            proj_str = f"   ·   📂 {proj}" if proj != "default" else ""
+            return f"  🧠 {m}   ·   {s}   ·   {d}   ·   {h}   ·   top-k:{brain.config.top_k}   ·   threshold:{brain.config.similarity_threshold}{proj_str}  "
 
         _pt_session = PromptSession(
             completer=_PTCompleter(brain),
@@ -1900,6 +1967,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         "  Model:      /model [<prov/>model]   /embed [<prov/>model]   /pull <name>\n"
                         "  Mode:       /search   /discuss   /rag [option value]\n"
                         "  Session:    /sessions   /resume <id>   /compact   /context   /retry\n"
+                        "  Projects:   /project [list|new|switch|delete|folder]\n"
                         "  Other:      /help [cmd]   /quit\n"
                         "  Shell:      !<cmd>  run a shell command  ·  @<path>  attach file context\n"
                         "\n"
@@ -2107,6 +2175,109 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)
                 _save_session(session)
+
+            elif cmd == "/project":
+                from rag_brain.projects import (
+                    delete_project, ensure_project, get_active_project,
+                    list_projects, project_dir, set_active_project,
+                )
+                sub_parts = arg.split(maxsplit=1)
+                sub = sub_parts[0].lower() if sub_parts else ""
+                sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
+
+                if not sub or sub == "list":
+                    projects = list_projects()
+                    active = brain._active_project
+                    if not projects:
+                        print("  No projects yet. Use /project new <name> to create one.")
+                    else:
+                        print()
+                        for p in projects:
+                            marker = "●" if p["name"] == active else " "
+                            ts = p["created_at"][:10] if p["created_at"] else ""
+                            desc = f"  {p['description']}" if p["description"] else ""
+                            print(f"  {marker} {p['name']:<24} {ts}{desc}")
+                    print(f"\n  Active: {active}")
+                    print("  /project new <name>    create + switch")
+                    print("  /project switch <name> switch to existing")
+                    print("  /project folder        open active project folder\n")
+
+                elif sub == "new":
+                    if not sub_arg:
+                        print("  Usage: /project new <name>  [description]")
+                    else:
+                        name_parts = sub_arg.split(maxsplit=1)
+                        proj_name = name_parts[0].lower()
+                        proj_desc = name_parts[1] if len(name_parts) > 1 else ""
+                        try:
+                            ensure_project(proj_name, proj_desc)
+                            brain.switch_project(proj_name)
+                            print(f"  ✅ Created and switched to project '{proj_name}'")
+                            print(f"  📁 {project_dir(proj_name)}")
+                            print(f"  Use /ingest to add documents to this project.\n")
+                        except ValueError as e:
+                            print(f"  ❌ {e}")
+
+                elif sub == "switch":
+                    if not sub_arg:
+                        print("  Usage: /project switch <name>")
+                    else:
+                        proj_name = sub_arg.strip().lower()
+                        if proj_name == "default" or project_dir(proj_name).exists():
+                            try:
+                                brain.switch_project(proj_name)
+                                count = brain.vector_store.collection.count() if brain.vector_store.provider == "chroma" else "?"
+                                print(f"  ✅ Switched to project '{proj_name}'  ({count} chunks)\n")
+                            except Exception as e:
+                                print(f"  ❌ {e}")
+                        else:
+                            print(f"  ❌ Project '{proj_name}' not found. Use /project list or /project new {proj_name}")
+
+                elif sub == "delete":
+                    if not sub_arg:
+                        print("  Usage: /project delete <name>")
+                    else:
+                        proj_name = sub_arg.strip().lower()
+                        try:
+                            confirm = _read_input(
+                                f"  ⚠️  Delete project '{proj_name}' and ALL its data? [y/N]: "
+                            ).strip().lower()
+                        except (EOFError, KeyboardInterrupt):
+                            confirm = "n"
+                        if confirm == "y":
+                            try:
+                                if brain._active_project == proj_name:
+                                    brain.switch_project("default")
+                                    print(f"  ↩️  Switched back to default project.")
+                                delete_project(proj_name)
+                                print(f"  ✅ Deleted project '{proj_name}'.\n")
+                            except ValueError as e:
+                                print(f"  ❌ {e}")
+                        else:
+                            print("  Cancelled.")
+
+                elif sub == "folder":
+                    active = brain._active_project
+                    if active == "default":
+                        print(f"  Default project uses config paths:")
+                        print(f"    Vector store: {brain.config.vector_store_path}")
+                        print(f"    BM25 index:   {brain.config.bm25_path}\n")
+                    else:
+                        folder = str(project_dir(active))
+                        print(f"  📁 {folder}")
+                        import subprocess
+                        try:
+                            if os.name == "nt":
+                                subprocess.Popen(["explorer", folder])
+                            elif sys.platform == "darwin":
+                                subprocess.Popen(["open", folder])
+                            else:
+                                subprocess.Popen(["xdg-open", folder])
+                        except Exception:
+                            pass
+
+                else:
+                    print(f"  Unknown sub-command '{sub}'. Try: list, new, switch, delete, folder")
 
             elif cmd == "/retry":
                 if not _last_query:
