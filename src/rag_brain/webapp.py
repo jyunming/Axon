@@ -1,6 +1,9 @@
 import streamlit as st
 import os
 import sys
+import json
+import uuid
+from datetime import datetime
 from pathlib import Path
 import logging
 
@@ -18,16 +21,95 @@ st.set_page_config(
     layout="wide"
 )
 
+SESSIONS_FILE = "sessions.json"
+
+def load_sessions():
+    if os.path.exists(SESSIONS_FILE):
+        try:
+            with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_sessions(sessions_dict):
+    with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(sessions_dict, f, indent=4)
+
 # Initialize Session State
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "sessions" not in st.session_state:
+    st.session_state.sessions = load_sessions()
+    
+    if not st.session_state.sessions:
+        default_id = str(uuid.uuid4())
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        st.session_state.sessions = {
+            default_id: {
+                "name": f"Session {timestamp}",
+                "messages": [],
+                "created_at": timestamp
+            }
+        }
+        st.session_state.current_session_id = default_id
+    else:
+        st.session_state.current_session_id = list(st.session_state.sessions.keys())[-1]
+
+if "current_session_id" not in st.session_state:
+    if st.session_state.sessions:
+        st.session_state.current_session_id = list(st.session_state.sessions.keys())[-1]
 
 if "brain" not in st.session_state:
     with st.spinner("Initializing Brain..."):
         st.session_state.brain = OpenStudioBrain()
 
+current_session_id = st.session_state.current_session_id
+current_session = st.session_state.sessions[current_session_id]
+messages = current_session["messages"]
+
 # Sidebar
 with st.sidebar:
+    st.title("💬 Chat Sessions")
+    
+    # Session Management UI
+    session_options = {sid: sess["name"] for sid, sess in st.session_state.sessions.items()}
+    
+    selected_session = st.selectbox(
+        "Select Session",
+        options=list(session_options.keys()),
+        format_func=lambda x: session_options[x],
+        index=list(session_options.keys()).index(current_session_id)
+    )
+    
+    if selected_session != current_session_id:
+        st.session_state.current_session_id = selected_session
+        st.rerun()
+        
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("➕ New Session", use_container_width=True):
+            new_id = str(uuid.uuid4())
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            st.session_state.sessions[new_id] = {
+                "name": f"Session {timestamp}",
+                "messages": [],
+                "created_at": timestamp
+            }
+            save_sessions(st.session_state.sessions)
+            st.session_state.current_session_id = new_id
+            st.rerun()
+            
+    with col2:
+        if st.button("🗑️ Delete", use_container_width=True):
+            if len(st.session_state.sessions) > 1:
+                del st.session_state.sessions[current_session_id]
+                save_sessions(st.session_state.sessions)
+                st.session_state.current_session_id = list(st.session_state.sessions.keys())[-1]
+                st.rerun()
+            else:
+                st.warning("Cannot delete the last session.")
+                
+    st.divider()
+
     st.title("⚙️ Settings")
     
     config = st.session_state.brain.config
@@ -39,7 +121,8 @@ with st.sidebar:
     config.discussion_fallback = st.checkbox("Enable Discussion Fallback", config.discussion_fallback)
     
     st.subheader("LLM Parameters")
-    config.llm_provider = st.selectbox("LLM Provider", ["ollama", "gemini", "ollama_cloud"], index=["ollama", "gemini", "ollama_cloud"].index(config.llm_provider) if config.llm_provider in ["ollama", "gemini", "ollama_cloud"] else 0)
+    llm_providers = ["ollama", "gemini", "ollama_cloud", "openai"]
+    config.llm_provider = st.selectbox("LLM Provider", llm_providers, index=llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0)
     
     if config.llm_provider == "ollama":
         config.llm_model = st.text_input("Local Model", config.llm_model)
@@ -140,16 +223,17 @@ with st.sidebar:
             
     st.divider()
     
-    if st.button("Clear Chat History"):
-        st.session_state.messages = []
+    if st.button("Clear Chat History (Current Session)"):
+        st.session_state.sessions[current_session_id]["messages"] = []
+        save_sessions(st.session_state.sessions)
         st.rerun()
 
 # Main Chat Interface
 st.title("🧠 Local RAG Brain")
-st.caption("General purpose local RAG interface for private knowledge bases")
+st.caption(f"General purpose local RAG interface - **{current_session['name']}**")
 
 # Display chat messages
-for message in st.session_state.messages:
+for message in messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message.get("sources"):
@@ -161,8 +245,20 @@ for message in st.session_state.messages:
 
 # Chat input
 if prompt := st.chat_input("Ask me anything about your documents..."):
+    
+    # Store history snapshot (excluding the new prompt)
+    chat_history_snapshot = messages.copy()
+    
+    # Update Session Name based on first prompt
+    if len(messages) == 0:
+        session_title = prompt[:25] + "..." if len(prompt) > 25 else prompt
+        st.session_state.sessions[current_session_id]["name"] = session_title
+    
     # Add user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    new_user_msg = {"role": "user", "content": prompt}
+    st.session_state.sessions[current_session_id]["messages"].append(new_user_msg)
+    save_sessions(st.session_state.sessions)
+    
     with st.chat_message("user"):
         st.markdown(prompt)
         
@@ -174,8 +270,8 @@ if prompt := st.chat_input("Ask me anything about your documents..."):
         sources = []
         
         with st.spinner("Searching and synthesizing..."):
-            # Use query_stream for better UX
-            for chunk in st.session_state.brain.query_stream(prompt):
+            # Use query_stream with injected chat history
+            for chunk in st.session_state.brain.query_stream(prompt, chat_history=chat_history_snapshot):
                 if isinstance(chunk, dict) and chunk.get("type") == "sources":
                     sources = chunk.get("sources", [])
                     continue
@@ -191,8 +287,10 @@ if prompt := st.chat_input("Ask me anything about your documents..."):
                         st.text(doc['text'][:500] + ("..." if len(doc['text']) > 500 else ""))
                         st.divider()
             
-    # Add assistant message
-    st.session_state.messages.append({"role": "assistant", "content": full_response, "sources": sources})
+    # Add assistant message and save
+    new_asst_msg = {"role": "assistant", "content": full_response, "sources": sources}
+    st.session_state.sessions[current_session_id]["messages"].append(new_asst_msg)
+    save_sessions(st.session_state.sessions)
 
 def main_ui():
     """Entry point for studio-brain-ui command."""
@@ -203,5 +301,4 @@ def main_ui():
     subprocess.run(["streamlit", "run", app_path])
 
 if __name__ == "__main__":
-    # If running directly, we don't need main_ui() because streamlit run handles it
     pass

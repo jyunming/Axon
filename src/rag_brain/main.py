@@ -8,7 +8,6 @@ import yaml
 import logging
 import asyncio
 from typing import Literal, List, Optional, Dict, Any, Union
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
@@ -302,14 +301,21 @@ class OpenLLM:
             self._openai_client = OpenAI(**kwargs)
         return self._openai_client
     
-    def complete(self, prompt: str, system_prompt: str = None) -> str:
+    def complete(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None) -> str:
         provider = self.config.llm_provider
+        history = chat_history or []
         if provider == "ollama":
             from ollama import Client
             client = Client(host=self.config.ollama_base_url)
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
+            
+            # Add chat history
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+                    
             messages.append({"role": "user", "content": prompt})
             
             response = client.chat(
@@ -328,9 +334,15 @@ class OpenLLM:
             if system_prompt:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
+            
+            contents = []
+            for msg in history:
+                role = "model" if msg["role"] == "assistant" else "user"
+                contents.append({"role": role, "parts": [msg["content"]]})
+            contents.append({"role": "user", "parts": [prompt]})
                 
             response = model.generate_content(
-                prompt,
+                contents,
                 generation_config=genai.types.GenerationConfig(
                     temperature=self.config.llm_temperature,
                     max_output_tokens=self.config.llm_max_tokens
@@ -344,9 +356,19 @@ class OpenLLM:
                 "Authorization": f"Bearer {self.config.ollama_cloud_key}",
                 "Content-Type": "application/json"
             }
+            
+            history_str = ""
+            for msg in history:
+                role = "Assistant" if msg["role"] == "assistant" else "User"
+                history_str += f"{role}: {msg['content']}\n\n"
+                
+            full_prompt = f"{system_prompt}\n\n" if system_prompt else ""
+            full_prompt += history_str
+            full_prompt += f"User: {prompt}\n\nAssistant:"
+            
             payload = {
                 "model": self.config.llm_model,
-                "prompt": f"{system_prompt}\n\nUser: {prompt}\n\nAssistant:" if system_prompt else prompt,
+                "prompt": full_prompt,
                 "stream": False,
                 "options": {"temperature": self.config.llm_temperature}
             }
@@ -359,6 +381,11 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
+                
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+                    
             messages.append({"role": "user", "content": prompt})
             
             response = self._get_openai_client().chat.completions.create(
@@ -372,14 +399,20 @@ class OpenLLM:
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
     
-    def stream(self, prompt: str, system_prompt: str = None):
+    def stream(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None):
         provider = self.config.llm_provider
+        history = chat_history or []
         if provider == "ollama":
             from ollama import Client
             client = Client(host=self.config.ollama_base_url)
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
+            
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+                    
             messages.append({"role": "user", "content": prompt})
             
             stream_resp = client.chat(
@@ -400,9 +433,15 @@ class OpenLLM:
             if system_prompt:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
+            
+            contents = []
+            for msg in history:
+                role = "model" if msg["role"] == "assistant" else "user"
+                contents.append({"role": role, "parts": [msg["content"]]})
+            contents.append({"role": "user", "parts": [prompt]})
                 
             response = model.generate_content(
-                prompt,
+                contents,
                 stream=True,
                 generation_config=genai.types.GenerationConfig(
                     temperature=self.config.llm_temperature,
@@ -418,9 +457,19 @@ class OpenLLM:
                 "Authorization": f"Bearer {self.config.ollama_cloud_key}",
                 "Content-Type": "application/json"
             }
+            
+            history_str = ""
+            for msg in history:
+                role = "Assistant" if msg["role"] == "assistant" else "User"
+                history_str += f"{role}: {msg['content']}\n\n"
+                
+            full_prompt = f"{system_prompt}\n\n" if system_prompt else ""
+            full_prompt += history_str
+            full_prompt += f"User: {prompt}\n\nAssistant:"
+            
             payload = {
                 "model": self.config.llm_model,
-                "prompt": f"{system_prompt}\n\nUser: {prompt}\n\nAssistant:" if system_prompt else prompt,
+                "prompt": full_prompt,
                 "stream": True,
                 "options": {"temperature": self.config.llm_temperature}
             }
@@ -438,6 +487,11 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
+                
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+                    
             messages.append({"role": "user", "content": prompt})
             
             stream = self._get_openai_client().chat.completions.create(
@@ -677,7 +731,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "transforms": transforms
         }
 
-    def query(self, query: str, filters: Dict = None) -> str:
+    def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None) -> str:
         t0 = time.time()
         
         retrieval = self._execute_retrieval(query, filters)
@@ -689,7 +743,7 @@ Your primary goal is to help the user by answering questions based on the provid
             
             if self.config.discussion_fallback:
                 prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                return self.llm.complete(prompt_fallback, self.SYSTEM_PROMPT)
+                return self.llm.complete(prompt_fallback, self.SYSTEM_PROMPT, chat_history=chat_history)
             
             return "I don't have any relevant information to answer that question."
             
@@ -700,19 +754,19 @@ Your primary goal is to help the user by answering questions based on the provid
         top_score = results[0].get('score', 0) if results else 0
         context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
-        response = self.llm.complete(prompt, self.SYSTEM_PROMPT)
+        response = self.llm.complete(prompt, self.SYSTEM_PROMPT, chat_history=chat_history)
         self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
                                 retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
         return response
 
-    def query_stream(self, query: str, filters: Dict = None):
+    def query_stream(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None):
         retrieval = self._execute_retrieval(query, filters)
         results = retrieval['results']
         
         if not results:
             if self.config.discussion_fallback:
                 prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                yield from self.llm.stream(prompt_fallback, self.SYSTEM_PROMPT)
+                yield from self.llm.stream(prompt_fallback, self.SYSTEM_PROMPT, chat_history=chat_history)
                 return
             yield "I don't have any relevant information to answer that question."
             return
@@ -727,7 +781,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
         
-        yield from self.llm.stream(prompt, self.SYSTEM_PROMPT)
+        yield from self.llm.stream(prompt, self.SYSTEM_PROMPT, chat_history=chat_history)
 
     async def load_directory(self, directory: str):
         from rag_brain.loaders import DirectoryLoader
