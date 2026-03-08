@@ -806,6 +806,33 @@ Your primary goal is to help the user by answering questions based on the provid
             "transforms": transforms
         }
 
+    def _build_context(self, results: List[Dict]) -> tuple:
+        """Build context string from results, labelling web vs local sources distinctly.
+
+        Returns:
+            Tuple of (context_string, has_web_results).
+        """
+        parts = []
+        has_web = False
+        for i, r in enumerate(results):
+            if r.get("is_web"):
+                has_web = True
+                title = r.get("metadata", {}).get("title", r["id"])
+                parts.append(f"[Web Result {i+1} — {title} ({r['id']})]\n{r['text']}")
+            else:
+                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{r['text']}")
+        return "\n\n".join(parts), has_web
+
+    def _build_system_prompt(self, has_web: bool) -> str:
+        """Return the system prompt, extended with a web-search note when applicable."""
+        if not has_web:
+            return self.SYSTEM_PROMPT
+        return self.SYSTEM_PROMPT + (
+            "\n\n**Web Search Active**: Some context items above come from live Brave Search results "
+            "(marked as 'Web Result'). Use them to answer questions about current events or information "
+            "not found in local documents. Always cite the URL when referencing a web result."
+        )
+
     def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None) -> str:
         t0 = time.time()
         
@@ -827,9 +854,10 @@ Your primary goal is to help the user by answering questions based on the provid
         results = results[:self.config.top_k]
         final_count = len(results)
         top_score = results[0].get('score', 0) if results else 0
-        context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
+        context, has_web = self._build_context(results)
+        system_prompt = self._build_system_prompt(has_web)
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
-        response = self.llm.complete(prompt, self.SYSTEM_PROMPT, chat_history=chat_history)
+        response = self.llm.complete(prompt, system_prompt, chat_history=chat_history)
         self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
                                 retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
         return response
@@ -849,14 +877,15 @@ Your primary goal is to help the user by answering questions based on the provid
         if self.config.rerank: results = self.reranker.rerank(query, results)
         
         results = results[:self.config.top_k]
-        context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
+        context, has_web = self._build_context(results)
+        system_prompt = self._build_system_prompt(has_web)
         
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
 
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
         
-        yield from self.llm.stream(prompt, self.SYSTEM_PROMPT, chat_history=chat_history)
+        yield from self.llm.stream(prompt, system_prompt, chat_history=chat_history)
 
     async def load_directory(self, directory: str):
         from rag_brain.loaders import DirectoryLoader
