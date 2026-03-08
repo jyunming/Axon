@@ -116,3 +116,4 @@ tmp/
 temp/
 *.tmp
 test_*.py
+list_gemini_models.py
