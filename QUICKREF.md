@@ -463,4 +463,4 @@ MIT License - See [LICENSE](LICENSE) file.
 ---
 
 **Last Updated:** 2026-03-08
-**Version:** 2.1.0
+**Version:** 2.0.0

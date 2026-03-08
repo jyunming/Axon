@@ -206,9 +206,10 @@ The following were verified to be accurate and require NO changes:
 - ✅ IMPROVEMENTS.md — Historical improvements log
 
 **Source Code Changes:**
-- ✅ NO modifications to .py source files
-- ✅ ONLY Google-style docstrings added to public functions
-- ✅ No logic changes, no feature changes
+- ✅ Google-style docstrings added to public functions
+- ✅ REPL multi-turn conversation memory implemented in main.py
+- ✅ Provider auto-detection (`_infer_provider`) added to main.py
+- ✅ Project isolation module (projects.py) added
 
 ---
 

@@ -1,7 +1,6 @@
 """Tests for src/rag_brain/projects.py"""
 import json
 import pytest
-from pathlib import Path
 
 
 @pytest.fixture()
