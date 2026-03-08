@@ -1927,6 +1927,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                             pass
 
         def _toolbar():
+            def _t(s: str, w: int) -> str:
+                """Truncate s to w chars, appending … if clipped."""
+                return s if len(s) <= w else s[:w - 1] + "…"
+
             m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
             emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
             try:
@@ -1934,21 +1938,28 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 doc_s = f"{docs} chunks"
             except Exception:
                 doc_s = "?"
-            proj = getattr(brain, "_active_project", "default")
-            proj_s = f"  📂 {proj}" if proj != "default" else ""
             s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
             d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
             h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
             tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
-            sep = "  │  "
-            proj = getattr(brain, "_active_project", "default")
+            proj  = getattr(brain, "_active_project", "default")
             proj_s = f"  │  📂 {proj}" if proj != "default" else ""
+            sep = "  │  "
+            # Column value widths (same for both rows so │ aligns perfectly)
+            W1, W2 = 28, 30
             row1 = (
-                f"  <bottom-toolbar.key>LLM</bottom-toolbar.key>  {m}"
-                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key>  {emb}"
+                f"  <bottom-toolbar.key>LLM</bottom-toolbar.key>  {_t(m, W1):{W1}}"
+                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key>  {_t(emb, W2):{W2}}"
                 f"{sep}<bottom-toolbar.key>Docs</bottom-toolbar.key>  {doc_s}"
             )
-            row2 = f"  {s_val}{sep}{d_val}{sep}{h_val}{sep}{tk}{proj_s}"
+            # Row 2 labels are shorter; pad to same col widths so │ aligns
+            C1 = len("LLM  ") + W1   # = 5 + 28 = 33
+            C2 = len("Embed  ") + W2  # = 7 + 30 = 37
+            row2 = (
+                f"  {s_val:<{C1}}"
+                f"{sep}{d_val:<{C2}}"
+                f"{sep}{h_val}  {tk}{proj_s}"
+            )
             return _PThtml(f"{row1}\n{row2}")
 
         _pt_session = PromptSession(
