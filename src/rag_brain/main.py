@@ -8,7 +8,12 @@ import yaml
 import logging
 import asyncio
 from typing import Literal, List, Optional, Dict, Any, Union
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Setup logging
 logging.basicConfig(
@@ -27,9 +32,14 @@ class OpenStudioConfig:
     ollama_base_url: str = "http://localhost:11434"
     
     # LLM
-    llm_provider: Literal["ollama", "vllm", "llama_cpp"] = "ollama"
+    llm_provider: str = "ollama"
     llm_model: str = "llama3.1"
     llm_temperature: float = 0.7
+    llm_max_tokens: int = 2048
+    api_key: str = ""
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    ollama_cloud_key: str = os.getenv("OLLAMA_CLOUD_KEY", "")
+    ollama_cloud_url: str = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
     
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
@@ -49,7 +59,13 @@ class OpenStudioConfig:
     
     # Re-ranking
     rerank: bool = False
+    reranker_provider: Literal["cross-encoder", "llm"] = "cross-encoder"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+    # Query Transformations
+    multi_query: bool = False
+    hyde: bool = False
+    discussion_fallback: bool = True
 
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
@@ -81,13 +97,29 @@ class OpenStudioConfig:
         if 'rerank' in data:
             if 'enabled' in data['rerank']:
                 config_dict['rerank'] = data['rerank']['enabled']
+            if 'provider' in data['rerank']:
+                config_dict['reranker_provider'] = data['rerank']['provider']
             if 'model' in data['rerank']:
                 config_dict['reranker_model'] = data['rerank']['model']
+                
+        if 'query_transformations' in data:
+            if 'multi_query' in data['query_transformations']:
+                config_dict['multi_query'] = data['query_transformations']['multi_query']
+            if 'hyde' in data['query_transformations']:
+                config_dict['hyde'] = data['query_transformations']['hyde']
         
         # Map some specific names if they don't match exactly
         if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
             config_dict['ollama_base_url'] = config_dict['llm_base_url']
             
+        if 'api_key' not in config_dict and 'llm_api_key' in config_dict:
+            config_dict['api_key'] = config_dict['llm_api_key']
+            
+        # Environment Variable Overrides (High Priority for Docker)
+        env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
+        if env_ollama_host:
+            config_dict['ollama_base_url'] = env_ollama_host
+
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_dict = {k: v for k, v in config_dict.items() if k in valid_fields}
@@ -103,14 +135,19 @@ class OpenReranker:
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self.model = None
+        self.llm = None
         if self.config.rerank:
-            try:
-                from sentence_transformers import CrossEncoder
-                logger.info(f"📊 Loading Reranker: {self.config.reranker_model}")
-                self.model = CrossEncoder(self.config.reranker_model)
-            except ImportError:
-                logger.error("sentence-transformers not installed. Reranking disabled.")
-                self.config.rerank = False
+            if self.config.reranker_provider == "cross-encoder":
+                try:
+                    from sentence_transformers import CrossEncoder
+                    logger.info(f"📊 Loading Reranker: {self.config.reranker_model}")
+                    self.model = CrossEncoder(self.config.reranker_model)
+                except ImportError:
+                    logger.error("sentence-transformers not installed. Reranking disabled.")
+                    self.config.rerank = False
+            elif self.config.reranker_provider == "llm":
+                logger.info(f"📊 Using LLM for Re-ranking (RankGPT)")
+                self.llm = OpenLLM(self.config)
     
     def rerank(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -120,7 +157,11 @@ class OpenReranker:
             return documents
         
         logger.info(f"🔄 Reranking {len(documents)} documents...")
+
+        if self.config.reranker_provider == "llm" and self.llm:
+            return self._llm_rerank(query, documents)
         
+        # Cross-encoder pointwise scoring
         # Prepare pairs: (query, doc_text)
         pairs = [[query, doc['text']] for doc in documents]
         
@@ -134,6 +175,23 @@ class OpenReranker:
         # Sort by rerank score descending
         reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
         
+        return reranked_docs
+
+    def _llm_rerank(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """RankGPT pointwise scoring implementation."""
+        system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
+        
+        for doc in documents:
+            prompt = f"Query: {query}\n\nDocument: {doc['text']}\n\nScore (1-10):"
+            try:
+                response = self.llm.complete(prompt, system_prompt=system_prompt).strip()
+                # Parse integer from response, fallback to 0 if LLM disobeys
+                score = float(response) if response.replace('.','',1).isdigit() else 0.0
+            except Exception:
+                score = 0.0
+            doc['rerank_score'] = score
+            
+        reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
         return reranked_docs
 
 
@@ -165,7 +223,19 @@ class OpenEmbedding:
             from fastembed import TextEmbedding
             logger.info(f"📊 Loading FastEmbed: {self.config.embedding_model}")
             self.model = TextEmbedding(model_name=self.config.embedding_model)
-            self.dimension = 384
+            if "bge-m3" in self.config.embedding_model.lower():
+                self.dimension = 1024
+            else:
+                self.dimension = 384
+                
+        elif self.provider == "openai":
+            from openai import Client
+            logger.info(f"📊 Using OpenAI API Embedding: {self.config.embedding_model}")
+            kwargs = {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
+            if self.config.ollama_base_url and self.config.ollama_base_url != "http://localhost:11434":
+                kwargs["base_url"] = self.config.ollama_base_url
+            self.model = Client(**kwargs)
+            self.dimension = 1536
             
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
@@ -176,16 +246,21 @@ class OpenEmbedding:
             return embeddings
             
         elif self.provider == "ollama":
-            import ollama
+            from ollama import Client
+            client = Client(host=self.config.ollama_base_url)
             embeddings = []
             for text in texts:
-                response = ollama.embeddings(model=self.config.embedding_model, prompt=text)
+                response = client.embeddings(model=self.config.embedding_model, prompt=text)
                 embeddings.append(response['embedding'])
             return embeddings
             
         elif self.provider == "fastembed":
             embeddings = list(self.model.embed(texts))
             return [e.tolist() for e in embeddings]
+            
+        elif self.provider == "openai":
+            response = self.model.embeddings.create(input=texts, model=self.config.embedding_model)
+            return [data.embedding for data in response.data]
     
     def embed_query(self, query: str) -> List[float]:
         return self.embed([query])[0]
@@ -198,41 +273,165 @@ class OpenLLM:
     
     def __init__(self, config: OpenStudioConfig):
         self.config = config
-        self.provider = config.llm_provider
+        self._openai_client = None
+    
+    def _get_openai_client(self):
+        if self._openai_client is None:
+            from openai import Client
+            kwargs = {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
+            if self.config.ollama_base_url and self.config.ollama_base_url != "http://localhost:11434":
+                kwargs["base_url"] = self.config.ollama_base_url
+            self._openai_client = Client(**kwargs)
+        return self._openai_client
     
     def complete(self, prompt: str, system_prompt: str = None) -> str:
-        if self.provider == "ollama":
-            import ollama
+        provider = self.config.llm_provider
+        if provider == "ollama":
+            from ollama import Client
+            client = Client(host=self.config.ollama_base_url)
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             
-            response = ollama.chat(
+            response = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
                 options={"temperature": self.config.llm_temperature}
             )
             return response['message']['content']
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.provider}")
-    
-    def stream(self, prompt: str, system_prompt: str = None):
-        if self.provider == "ollama":
-            import ollama
+            
+        elif provider == "gemini":
+            import google.generativeai as genai
+            genai.configure(api_key=self.config.gemini_api_key)
+            model = genai.GenerativeModel(self.config.llm_model)
+            
+            if system_prompt:
+                full_prompt = f"{system_prompt}\n\nUser: {prompt}"
+            else:
+                full_prompt = prompt
+                
+            response = model.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=self.config.llm_temperature,
+                    max_output_tokens=self.config.llm_max_tokens
+                )
+            )
+            return response.text
+            
+        elif provider == "ollama_cloud":
+            import httpx
+            headers = {
+                "Authorization": f"Bearer {self.config.ollama_cloud_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": self.config.llm_model,
+                "prompt": f"{system_prompt}\n\nUser: {prompt}\n\nAssistant:" if system_prompt else prompt,
+                "stream": False,
+                "options": {"temperature": self.config.llm_temperature}
+            }
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(f"{self.config.ollama_cloud_url}/generate", json=payload, headers=headers)
+                response.raise_for_status()
+                return response.json()["response"]
+            
+        elif provider == "openai":
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             
-            stream = ollama.chat(
+            response = self._get_openai_client().chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens
+            )
+            return response.choices[0].message.content
+            
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider}")
+    
+    def stream(self, prompt: str, system_prompt: str = None):
+        provider = self.config.llm_provider
+        if provider == "ollama":
+            from ollama import Client
+            client = Client(host=self.config.ollama_base_url)
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
+            stream_resp = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
                 stream=True,
                 options={"temperature": self.config.llm_temperature}
             )
-            for chunk in stream:
+            for chunk in stream_resp:
                 yield chunk['message']['content']
+                
+        elif provider == "gemini":
+            import google.generativeai as genai
+            genai.configure(api_key=self.config.gemini_api_key)
+            model = genai.GenerativeModel(self.config.llm_model)
+            
+            if system_prompt:
+                full_prompt = f"{system_prompt}\n\nUser: {prompt}"
+            else:
+                full_prompt = prompt
+                
+            response = model.generate_content(
+                full_prompt,
+                stream=True,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=self.config.llm_temperature,
+                    max_output_tokens=self.config.llm_max_tokens
+                )
+            )
+            for chunk in response:
+                yield chunk.text
+                
+        elif provider == "ollama_cloud":
+            import httpx
+            headers = {
+                "Authorization": f"Bearer {self.config.ollama_cloud_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": self.config.llm_model,
+                "prompt": f"{system_prompt}\n\nUser: {prompt}\n\nAssistant:" if system_prompt else prompt,
+                "stream": True,
+                "options": {"temperature": self.config.llm_temperature}
+            }
+            import json
+            with httpx.Client(timeout=60.0) as client:
+                with client.stream("POST", f"{self.config.ollama_cloud_url}/generate", json=payload, headers=headers) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if line:
+                            data = json.loads(line)
+                            if "response" in data:
+                                yield data["response"]
+                
+        elif provider == "openai":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
+            stream = self._get_openai_client().chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                stream=True
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
 
 
 class OpenVectorStore:
@@ -290,10 +489,15 @@ class OpenStudioBrain:
     Main interface for Local RAG Brain.
     """
     
-    SYSTEM_PROMPT = """You are a helpful AI assistant.
-You help users by retrieving and synthesizing information from their local knowledge base.
-Answer based on the provided context. If the answer is not in the context, say you don't know.
-Be concise, professional, and helpful."""
+    SYSTEM_PROMPT = """You are the 'RAG Brain', a highly capable and friendly AI assistant. 
+Your primary goal is to help the user by answering questions based on the provided context from their private documents.
+
+**Guidelines:**
+1. **Prioritize Context**: If relevant information is found in the provided context, use it to answer the question accurately and cite the documents.
+2. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response. 
+3. **Be Transparent**: If you are using your general knowledge because no local documents matched the query, briefly mention it (e.g., 'I couldn't find specific details in your documents, but based on my general knowledge...').
+4. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
+"""
     
     def __init__(self, config: Optional[OpenStudioConfig] = None):
         self.config = config or OpenStudioConfig.load()
@@ -319,7 +523,7 @@ Be concise, professional, and helpful."""
     
     def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
                             filtered_count: int, final_count: int, top_score: float,
-                            latency_ms: float):
+                            latency_ms: float, transformations: Dict = None):
         """Log structured metrics for a query."""
         logger.info({
             "event": "query_complete",
@@ -334,6 +538,7 @@ Be concise, professional, and helpful."""
             "top_score": round(top_score, 4) if top_score else None,
             "hybrid": self.config.hybrid_search,
             "rerank": self.config.rerank,
+            "transformations": transformations or {}
         })
 
     def ingest(self, documents: List[Dict[str, Any]]):
@@ -369,27 +574,99 @@ Be concise, professional, and helpful."""
             "total_ms": round((time.time() - t0) * 1000, 1),
         })
 
-    def query(self, query: str, filters: Dict = None) -> str:
-        t0 = time.time()
-        query_embedding = self.embedding.embed_query(query)
+    def _get_hyde_document(self, query: str) -> str:
+        """Generate a Hypothetical Document Embedding (HyDE) passage."""
+        prompt = f"Please write a hypothetical, detailed passage that directly answers the following question. Use informative and factual language.\n\nQuestion: {query}"
+        return self.llm.complete(prompt, system_prompt="You are a helpful expert answering questions.")
+
+    def _get_multi_queries(self, query: str) -> List[str]:
+        """Generate alternative query phrasings for multi-query retrieval."""
+        prompt = f"Generate 3 alternative phrasings of the following question to help with retrieving documents from a vector database. Output each phrasing on a new line and DO NOT output anything else.\n\nQuestion: {query}"
+        response = self.llm.complete(prompt, system_prompt="You are an expert search engineer.")
+        queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
+        return [query] + queries[:3]  # Always include original query
+
+    def _execute_retrieval(self, query: str, filters: Dict = None) -> Dict:
+        """Central retrieval execution logic supporting HyDE and Multi-Query."""
+        transforms = {"hyde_applied": False, "multi_query_applied": False, "queries": [query]}
+        
+        search_queries = [query]
+        vector_query = query
+        
+        if self.config.multi_query:
+            search_queries = self._get_multi_queries(query)
+            transforms['multi_query_applied'] = True
+            transforms['queries'] = search_queries
+            
+        if self.config.hyde:
+            # We construct a single hypothetical document based on the primary query
+            vector_query = self._get_hyde_document(query)
+            transforms['hyde_applied'] = True
+
         fetch_k = self.config.top_k * 3 if (self.config.rerank or self.config.hybrid_search) else self.config.top_k
-        vector_results = self.vector_store.search(query_embedding, top_k=fetch_k, filter_dict=filters)
+        
+        all_vector_results = []
+        all_bm25_results = []
+        
+        # Vector Search
+        if self.config.hyde:
+             all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters))
+        else:
+             for sq in search_queries:
+                 all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(sq), top_k=fetch_k, filter_dict=filters))
+        
+        # Dedupe vector store results based on ID
+        dedup_vector = {}
+        for r in all_vector_results:
+            if r['id'] not in dedup_vector or r['score'] > dedup_vector[r['id']]['score']:
+                dedup_vector[r['id']] = r
+        vector_results = list(dedup_vector.values())
         vector_count = len(vector_results)
 
+        # Hybrid Search
+        bm25_count = 0
         if self.config.hybrid_search and self.bm25:
-            bm25_results = self.bm25.search(query, top_k=fetch_k)
+            for sq in search_queries:
+                all_bm25_results.extend(self.bm25.search(sq, top_k=fetch_k))
+                
+            dedup_bm25 = {}
+            for r in all_bm25_results:
+                if r['id'] not in dedup_bm25 or r['score'] > dedup_bm25[r['id']]['score']:
+                    dedup_bm25[r['id']] = r
+            bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
+            
             from rag_brain.retrievers import reciprocal_rank_fusion
             results = reciprocal_rank_fusion(vector_results, bm25_results)
         else:
-            bm25_count = 0
             results = vector_results
 
         results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
-        filtered_count = len(results)
+        
+        return {
+            "results": results,
+            "vector_count": vector_count,
+            "bm25_count": bm25_count,
+            "filtered_count": len(results),
+            "transforms": transforms
+        }
+
+    def query(self, query: str, filters: Dict = None) -> str:
+        t0 = time.time()
+        
+        retrieval = self._execute_retrieval(query, filters)
+        results = retrieval['results']
+        
         if not results:
-            self._log_query_metrics(query, vector_count, bm25_count, filtered_count, 0, 0.0, (time.time() - t0) * 1000)
+            self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
+                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'])
+            
+            if self.config.discussion_fallback:
+                prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
+                return self.llm.complete(prompt_fallback, self.SYSTEM_PROMPT)
+            
             return "I don't have any relevant information to answer that question."
+            
         if self.config.rerank: results = self.reranker.rerank(query, results)
 
         results = results[:self.config.top_k]
@@ -398,30 +675,32 @@ Be concise, professional, and helpful."""
         context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
         response = self.llm.complete(prompt, self.SYSTEM_PROMPT)
-        self._log_query_metrics(query, vector_count, bm25_count, filtered_count, final_count, top_score, (time.time() - t0) * 1000)
+        self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
+                                retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
         return response
 
     def query_stream(self, query: str, filters: Dict = None):
-        query_embedding = self.embedding.embed_query(query)
-        fetch_k = self.config.top_k * 3 if (self.config.rerank or self.config.hybrid_search) else self.config.top_k
-        vector_results = self.vector_store.search(query_embedding, top_k=fetch_k, filter_dict=filters)
+        retrieval = self._execute_retrieval(query, filters)
+        results = retrieval['results']
         
-        if self.config.hybrid_search and self.bm25:
-            bm25_results = self.bm25.search(query, top_k=fetch_k)
-            from rag_brain.retrievers import reciprocal_rank_fusion
-            results = reciprocal_rank_fusion(vector_results, bm25_results)
-        else:
-            results = vector_results
-            
-        results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
         if not results:
+            if self.config.discussion_fallback:
+                prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
+                yield from self.llm.stream(prompt_fallback, self.SYSTEM_PROMPT)
+                return
             yield "I don't have any relevant information to answer that question."
             return
+            
         if self.config.rerank: results = self.reranker.rerank(query, results)
         
         results = results[:self.config.top_k]
         context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
+        
+        # Yield a marker object so UI can optionally reconstruct sources
+        yield {"type": "sources", "sources": results}
+
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
+        
         yield from self.llm.stream(prompt, self.SYSTEM_PROMPT)
 
     async def load_directory(self, directory: str):
