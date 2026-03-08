@@ -26,13 +26,13 @@ logger = logging.getLogger("RAGBrain")
 class OpenStudioConfig:
     """Configuration for Local RAG Brain."""
     # Embedding
-    embedding_provider: str = "sentence_transformers"
+    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
     
     # LLM
-    llm_provider: str = "ollama"
-    llm_model: str = "llama3.1"
+    llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai"] = "ollama"
+    llm_model: str = "gemma"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
     api_key: str = ""
@@ -42,6 +42,8 @@ class OpenStudioConfig:
     
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
+        if not self.api_key:
+            self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
         if not self.gemini_api_key:
             self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         if not self.ollama_cloud_key:
