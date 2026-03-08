@@ -1397,7 +1397,7 @@ def _show_context(
     - RAG settings: top_k, similarity_threshold, hybrid_search, rerank, hyde, multi_query toggles
     - Chat history: Last 10 turns (user/assistant messages)
     - Last retrieved sources: Up to 8 chunks with similarity scores and source names
-    - System prompt: First 400 characters (preview)
+    - System prompt: Full text (word-wrapped)
 
     All content is wrapped in a box with section separators for readability.
 
@@ -1451,7 +1451,7 @@ def _show_context(
                 _MODEL_CTX.get(model_key, 8192))
     remaining = max(0, ctx_size - total_used)
     pct       = min(total_used / ctx_size, 1.0) if ctx_size > 0 else 0
-    bar_w     = W - 26
+    bar_w     = 40
     filled    = int(pct * bar_w)
     bar       = "█" * filled + "░" * (bar_w - filled)
     indicator = "🟢" if pct < 0.6 else ("🟡" if pct < 0.85 else "🔴")
@@ -1537,9 +1537,9 @@ def _show_context(
 
     # ── System prompt preview ──────────────────────────────────────────────────
     lines.append(SEP)
-    lines.append(section("System Prompt  (preview)"))
+    lines.append(section("System Prompt"))
     lines.append(BLANK)
-    lines.extend(wrap_row(system_text[:400].replace("\n", " "), indent=4, max_lines=4))
+    lines.extend(wrap_row(system_text.replace("\n", " "), indent=4))
     lines.append(BLANK)
     lines.append(BOTTOM)
 
