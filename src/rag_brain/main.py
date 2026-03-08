@@ -963,8 +963,8 @@ Your primary goal is to help the user by answering questions based on the provid
                                     retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'])
             
             if self.config.discussion_fallback:
-                prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                return self.llm.complete(prompt_fallback, self._build_system_prompt(False), chat_history=chat_history)
+                # Send plain query as user message so multi-turn history stays consistent
+                return self.llm.complete(query, self._build_system_prompt(False), chat_history=chat_history)
             
             return "I don't have any relevant information to answer that question."
             
@@ -974,9 +974,10 @@ Your primary goal is to help the user by answering questions based on the provid
         final_count = len(results)
         top_score = results[0].get('score', 0) if results else 0
         context, has_web = self._build_context(results)
-        system_prompt = self._build_system_prompt(has_web)
-        prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
-        response = self.llm.complete(prompt, system_prompt, chat_history=chat_history)
+        # Inject RAG context into system prompt so the user message stays as the plain
+        # question — this keeps multi-turn chat_history consistent across turns.
+        system_prompt = self._build_system_prompt(has_web) + f"\n\n**Relevant context from documents:**\n{context}"
+        response = self.llm.complete(query, system_prompt, chat_history=chat_history)
         self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
                                 retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
         return response
@@ -987,8 +988,8 @@ Your primary goal is to help the user by answering questions based on the provid
         
         if not results:
             if self.config.discussion_fallback:
-                prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                yield from self.llm.stream(prompt_fallback, self._build_system_prompt(False), chat_history=chat_history)
+                # Send plain query as user message so multi-turn history stays consistent
+                yield from self.llm.stream(query, self._build_system_prompt(False), chat_history=chat_history)
                 return
             yield "I don't have any relevant information to answer that question."
             return
@@ -997,14 +998,14 @@ Your primary goal is to help the user by answering questions based on the provid
         
         results = results[:self.config.top_k]
         context, has_web = self._build_context(results)
-        system_prompt = self._build_system_prompt(has_web)
+        # Inject RAG context into system prompt so the user message stays as the plain
+        # question — this keeps multi-turn chat_history consistent across turns.
+        system_prompt = self._build_system_prompt(has_web) + f"\n\n**Relevant context from documents:**\n{context}"
         
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
 
-        prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
-        
-        yield from self.llm.stream(prompt, system_prompt, chat_history=chat_history)
+        yield from self.llm.stream(query, system_prompt, chat_history=chat_history)
 
     async def load_directory(self, directory: str):
         from rag_brain.loaders import DirectoryLoader
@@ -1351,6 +1352,20 @@ _MODEL_CTX: Dict[str, int] = {
     "gemini-2.5-flash-lite": 1048576,
     "gpt-4o": 128000, "gpt-4o-mini": 128000, "gpt-3.5-turbo": 16385,
 }
+
+
+def _infer_provider(model: str) -> str:
+    """Guess LLM provider from model name.
+
+    Returns "gemini" for gemini-* models, "openai" for gpt-*/o1-*/o3-* models,
+    and "ollama" for everything else (local models).
+    """
+    m = model.lower()
+    if m.startswith("gemini-"):
+        return "gemini"
+    if m.startswith(("gpt-", "o1-", "o3-", "o4-")):
+        return "openai"
+    return "ollama"
 
 
 def _estimate_tokens(text: str) -> int:
@@ -2109,7 +2124,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 if not arg:
                     print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
                     print(f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}")
-                    print(f"  Usage:   /model <model>              (keep current provider)")
+                    print(f"  Usage:   /model <model>              (auto-detect provider)")
                     print(f"           /model <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_PROVIDERS)}")
                 elif "/" in arg:
@@ -2124,9 +2139,13 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         if provider != "ollama":
                             print(f"  ℹ️  Make sure the required API key env var is set.")
                 else:
+                    inferred = _infer_provider(arg)
+                    brain.config.llm_provider = inferred
                     brain.config.llm_model = arg
                     brain.llm = OpenLLM(brain.config)
-                    print(f"  ✅ Switched LLM to {brain.config.llm_provider}/{arg}")
+                    print(f"  ✅ Switched LLM to {inferred}/{arg}")
+                    if inferred != "ollama":
+                        print(f"  ℹ️  Make sure the required API key env var is set.")
 
             elif cmd == "/embed":
                 _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
