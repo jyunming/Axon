@@ -16,12 +16,13 @@ embedding:
   # base_url: http://localhost:11434
 
 llm:
-  # Provider: ollama, openai
-  # Use 'openai' for OpenAI, Anthropic, Gemini, vLLM, LocalAI, or Dockerized Ollama!
+  # Provider: ollama, gemini, ollama_cloud, openai
+  # Use 'openai' for OpenAI, Anthropic, vLLM, LocalAI, or Dockerized Ollama!
   provider: ollama
   
   # Model names:
   # ollama: llama3.1, gemma, llama3.1:70b, qwen2.5:32b, mistral-nemo
+  # gemini: gemini-1.5-pro, gemini-1.5-flash
   # openai: gpt-4o, gpt-4o-mini, local-model...
   model: gemma
   
@@ -30,6 +31,11 @@ llm:
   
   # API Key for cloud providers (or fake string for local open-source API engines)
   api_key: ""
+  
+  # Provider specific keys (can also be set via env vars)
+  gemini_api_key: ""
+  ollama_cloud_key: ""
+  ollama_cloud_url: "https://ollama.com/api"
   
   # Generation parameters
   temperature: 0.7
