@@ -1,0 +1,35 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+.pytest_cache/
+htmlcov/
+coverage.xml
+
+# Local packages and data
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Database mounts
+chroma_data/
+bm25_index/
+ollama_data/
+
+# IDEs
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore

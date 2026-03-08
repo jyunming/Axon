@@ -10,7 +10,8 @@ setup(
     description="General-purpose open-source RAG and embedding interface",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(),
+    package_dir={"": "src"},
+    packages=find_packages(where="src"),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -29,6 +30,8 @@ setup(
         "chromadb>=0.4.0",
         "sentence-transformers>=2.2.0",
         "ollama>=0.1.0",
+        "openai>=1.0.0",
+        "google-generativeai>=0.4.0",
         "rank_bm25>=0.2.2",
         "streamlit>=1.30.0",
         "httpx>=0.25.0",
