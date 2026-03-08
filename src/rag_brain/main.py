@@ -989,12 +989,15 @@ def main():
         print("  openai       (cloud)  — gpt-4o, gpt-4o-mini, gpt-3.5-turbo\n")
         try:
             import ollama as _ollama
-            local = _ollama.list()
-            models = local.get("models", [])
+            response = _ollama.list()
+            models = response.models if hasattr(response, 'models') else response.get("models", [])
             if models:
                 print("  📦 Locally available Ollama models:")
                 for m in models:
-                    print(f"     • {m['name']}")
+                    name = m.model if hasattr(m, 'model') else m.get('name', str(m))
+                    size_gb = (m.size / 1e9 if hasattr(m, 'size') and m.size else 0)
+                    size_str = f"  ({size_gb:.1f} GB)" if size_gb else ""
+                    print(f"     • {name}{size_str}")
         except Exception:
             print("  (Ollama not reachable — cannot list local models)")
         print()
@@ -1004,15 +1007,20 @@ def main():
     if config.llm_provider == "ollama" and config.llm_model:
         try:
             import ollama as _ollama
-            local_names = {m["name"] for m in _ollama.list().get("models", [])}
+            response = _ollama.list()
+            models = response.models if hasattr(response, 'models') else response.get("models", [])
+            local_names = set()
+            for m in models:
+                name = m.model if hasattr(m, 'model') else m.get('name', '')
+                local_names.add(name)
+                local_names.add(name.split(":")[0])  # also match without tag
             model_tag = config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
             if model_tag not in local_names and config.llm_model not in local_names:
                 print(f"⬇️  Model '{config.llm_model}' not found locally — pulling from Ollama...")
-                import sys
                 for chunk in _ollama.pull(config.llm_model, stream=True):
-                    status = chunk.get("status", "")
-                    total = chunk.get("total", 0)
-                    completed = chunk.get("completed", 0)
+                    status = chunk.get("status", "") if isinstance(chunk, dict) else getattr(chunk, 'status', '')
+                    total = chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, 'total', 0)
+                    completed = chunk.get("completed", 0) if isinstance(chunk, dict) else getattr(chunk, 'completed', 0)
                     if total and completed:
                         pct = int(completed / total * 100)
                         print(f"\r  {status}: {pct}%", end="", flush=True)
