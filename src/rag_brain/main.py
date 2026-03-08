@@ -259,8 +259,10 @@ class OpenEmbedding:
     
     def embed(self, texts: List[str]) -> List[List[float]]:
         if self.provider == "sentence_transformers":
-            embeddings = self.model.encode(texts, convert_to_list=True)
-            return embeddings
+            embeddings = self.model.encode(texts)
+            if hasattr(embeddings, 'tolist'):
+                return embeddings.tolist()
+            return list(embeddings)
             
         elif self.provider == "ollama":
             from ollama import Client
