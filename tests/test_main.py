@@ -162,3 +162,42 @@ class TestOpenLLM:
         
         llm.complete("hello", system_prompt="be helpful")
         MockGenerativeModel.assert_called_with(model_name="gemini-1.5-pro", system_instruction="be helpful")
+
+    @patch("google.generativeai.GenerativeModel")
+    @patch("google.generativeai.configure")
+    def test_gemini_flash_handling(self, MockGenaiConfigure, MockGenerativeModel):
+        from rag_brain.main import OpenLLM, OpenStudioConfig
+        # Test Flash (also supports system instructions)
+        config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-1.5-flash")
+        llm = OpenLLM(config)
+        
+        llm.complete("hello", system_prompt="be helpful")
+        MockGenerativeModel.assert_called_with(model_name="gemini-1.5-flash", system_instruction="be helpful")
+
+    @patch("httpx.Client")
+    def test_ollama_cloud_handling(self, MockHttpxClient):
+        from rag_brain.main import OpenLLM, OpenStudioConfig
+        config = OpenStudioConfig(llm_provider="ollama_cloud", ollama_cloud_key="test_key", llm_model="gemma")
+        llm = OpenLLM(config)
+        
+        mock_client = MockHttpxClient.return_value.__enter__.return_value
+        mock_client.post.return_value = MagicMock(json=lambda: {"response": "cloud resp"}, status_code=200)
+        
+        result = llm.complete("hello", system_prompt="be helpful")
+        assert result == "cloud resp"
+        assert mock_client.post.called
+
+    @patch("openai.resources.chat.Completions.create")
+    @patch("openai.OpenAI")
+    def test_openai_handling(self, MockOpenAI, MockCreate):
+        from rag_brain.main import OpenLLM, OpenStudioConfig
+        config = OpenStudioConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
+        llm = OpenLLM(config)
+        
+        # Setup mock client
+        mock_client = MockOpenAI.return_value
+        mock_client.chat.completions.create.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content="openai resp"))])
+        
+        result = llm.complete("hello", system_prompt="be helpful")
+        assert result == "openai resp"
+        assert mock_client.chat.completions.create.called
