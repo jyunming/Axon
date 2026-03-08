@@ -2456,110 +2456,130 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             at_files = re.findall(r'@(\S+)', user_input)
             print(f"  📎 Attached: {', '.join(at_files)}")
 
-        # --- Regular query — animated spinner while waiting for first token ---
-        _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        _spin_stop   = threading.Event()
-        _spin_idx    = [0]
-        _SPIN_CLEAR  = "\033[1A\033[2K"   # cursor up 1 + erase line (reliable on Windows Terminal)
-
-        def _spin():
-            first = True
-            while not _spin_stop.wait(0.1):
-                f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
-                if not first:
-                    sys.stdout.write(_SPIN_CLEAR)
-                sys.stdout.write(f"  Brain: {f} thinking…\n")
-                sys.stdout.flush()
-                first = False
-                _spin_idx[0] += 1
-
-        print()   # blank line between You: and Brain:
-        if not quiet:
-            _spin_thread = threading.Thread(target=_spin, daemon=True)
-            _spin_thread.start()
+        # --- Regular query — use Rich Live for spinner + streaming response ---
+        print()   # blank line after You:
+        response_parts: list = []
+        _cancelled = False
         try:
-            first_chunk = True
-            response_parts: list = []
-            _cancelled = False
-            if stream:
-                # Try rich Live rendering; fall back to plain streaming
-                try:
-                    from rich.console import Console as _RC
-                    from rich.live import Live as _RL
-                    from rich.markdown import Markdown as _RM
-                    _use_rich = True
-                except ImportError:
-                    _use_rich = False
+            from rich.console import Console as _RC
+            from rich.live import Live as _RL
+            from rich.markdown import Markdown as _RM
+            from rich.text import Text as _RT
+            _console = _RC()
 
-                try:
-                    if _use_rich:
-                        _live_console = _RC()
-                        with _RL(console=_live_console, refresh_per_second=12) as _live:
-                            for chunk in brain.query_stream(query_text, chat_history=chat_history):
-                                if isinstance(chunk, dict):
-                                    if chunk.get("type") == "sources":
-                                        _last_sources = chunk.get("sources", [])
-                                    continue
-                                if first_chunk:
-                                    if not quiet:
-                                        _spin_stop.set()
-                                        _spin_thread.join(timeout=0.3)
-                                    sys.stdout.write(_SPIN_CLEAR)
-                                    sys.stdout.flush()
-                                    first_chunk = False
-                                response_parts.append(chunk)
-                                _live.update(_RM("".join(response_parts)))
-                    else:
-                        for chunk in brain.query_stream(query_text, chat_history=chat_history):
+            # ── Spinner phase (transient=True removes it cleanly when stopped) ──
+            _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            _spin_stop  = threading.Event()
+            _spin_idx   = [0]
+
+            def _spin_update(live: '_RL') -> None:
+                while not _spin_stop.wait(0.1):
+                    f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
+                    live.update(_RT(f"  Brain: {f} thinking…"))
+                    _spin_idx[0] += 1
+
+            if stream:
+                token_gen = brain.query_stream(query_text, chat_history=chat_history)
+                first_tokens: list = []
+
+                # Show spinner until the first real token arrives
+                if not quiet:
+                    with _RL(_RT("  Brain: ⠋ thinking…"), console=_console,
+                             transient=True, refresh_per_second=10) as _spin_live:
+                        _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
+                        _st.start()
+                        for chunk in token_gen:
                             if isinstance(chunk, dict):
                                 if chunk.get("type") == "sources":
                                     _last_sources = chunk.get("sources", [])
                                 continue
-                            if first_chunk:
-                                if not quiet:
-                                    _spin_stop.set()
-                                    _spin_thread.join(timeout=0.3)
-                                sys.stdout.write(_SPIN_CLEAR)
-                                sys.stdout.flush()
-                                first_chunk = False
-                            print(chunk, end="", flush=True)
+                            first_tokens.append(chunk)
+                            break   # first token received — exit spinner Live context
+                        _spin_stop.set()
+                        _st.join(timeout=0.3)
+                    # spinner is now gone from terminal (transient)
+
+                # Stream remaining tokens with a live Markdown view
+                try:
+                    with _RL(console=_console, refresh_per_second=12) as _resp_live:
+                        for chunk in first_tokens:          # replay buffered token
                             response_parts.append(chunk)
-                        if not _cancelled:
-                            print()
+                            _resp_live.update(_RM("".join(response_parts)))
+                        for chunk in token_gen:             # continue generator
+                            if isinstance(chunk, dict):
+                                if chunk.get("type") == "sources":
+                                    _last_sources = chunk.get("sources", [])
+                                continue
+                            response_parts.append(chunk)
+                            _resp_live.update(_RM("".join(response_parts)))
                 except KeyboardInterrupt:
                     _cancelled = True
-                    if not quiet:
-                        _spin_stop.set()
-                    sys.stdout.write(_SPIN_CLEAR)
                     print("  ⚠️  Cancelled.\n")
-                response = "".join(response_parts)
             else:
-                response = brain.query(query_text, chat_history=chat_history)
-                if not quiet:
-                    _spin_stop.set()
-                    _spin_thread.join(timeout=0.3)
-                # Render with rich markdown if available, else plain print
-                try:
-                    from rich.console import Console as _RC
-                    from rich.markdown import Markdown as _RM
-                    sys.stdout.write(_SPIN_CLEAR)
-                    sys.stdout.flush()
-                    _RC().print(_RM(response))
-                    print()
-                except ImportError:
-                    print(f"\r  Brain: {response}\n")
+                # Non-streaming: spinner while brain.query() blocks
+                _spin_stop2 = threading.Event()
+                _result: list = []
+                _err: list = []
 
-            if not _cancelled:
-                # Append both turns so future queries have full context
-                chat_history.append({"role": "user", "content": user_input})
-                chat_history.append({"role": "assistant", "content": response})
-                _last_query = user_input
-                _save_session(session)   # persist after every turn
-        except Exception as e:
+                def _run_query() -> None:
+                    try:
+                        _result.append(brain.query(query_text, chat_history=chat_history))
+                    except Exception as exc:
+                        _err.append(exc)
+                    finally:
+                        _spin_stop2.set()
+
+                _qt = threading.Thread(target=_run_query, daemon=True)
+                _qt.start()
+
+                if not quiet:
+                    with _RL(_RT("  Brain: ⠋ thinking…"), console=_console,
+                             transient=True, refresh_per_second=10) as _spin_live2:
+                        _st2 = threading.Thread(target=_spin_update, args=(_spin_live2,), daemon=True)
+                        _st2.start()
+                        _spin_stop2.wait()
+                        _spin_stop.set()
+                        _st2.join(timeout=0.3)
+                else:
+                    _qt.join()
+
+                if _err:
+                    raise _err[0]
+                response = _result[0] if _result else ""
+                _console.print(_RM(response))
+                print()
+                response_parts = [response]
+
+        except ImportError:
+            # rich not available — plain fallback
+            _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            _spin_stop = threading.Event()
+            _spin_idx  = [0]
+
+            def _spin_plain() -> None:
+                while not _spin_stop.wait(0.1):
+                    f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
+                    sys.stdout.write(f"\r  Brain: {f} thinking…")
+                    sys.stdout.flush()
+                    _spin_idx[0] += 1
+
+            if not quiet:
+                _spt = threading.Thread(target=_spin_plain, daemon=True)
+                _spt.start()
+            response = brain.query(query_text, chat_history=chat_history)
             if not quiet:
                 _spin_stop.set()
-            sys.stdout.write(_SPIN_CLEAR)
-            print(f"  ❌ Error: {e}\n")
+            print(f"\r  Brain: {response}\n")
+            response_parts = [response]
+
+        response = "".join(response_parts)
+        if not _cancelled:
+            # Append both turns so future queries have full context
+            chat_history.append({"role": "user", "content": user_input})
+            chat_history.append({"role": "assistant", "content": response})
+            _last_query = user_input
+            _save_session(session)   # persist after every turn
+
 
 if __name__ == "__main__":
     main()
