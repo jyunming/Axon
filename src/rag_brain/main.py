@@ -1079,7 +1079,141 @@ def main():
                     continue
                 print(chunk, end="", flush=True)
             print()
-        else: print(f"\n📝 Response:\n{brain.query(args.query)}")
+        else:
+            print(f"\n📝 Response:\n{brain.query(args.query)}")
+        return
+
+    # No query supplied — enter interactive REPL (streaming on by default)
+    _interactive_repl(brain, stream=True)
+
+
+def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
+    """Interactive chat REPL — initializes brain once, maintains history across turns."""
+    try:
+        import readline  # enables up-arrow history on Linux/macOS
+        readline.set_history_length(200)
+    except ImportError:
+        pass
+
+    model_info = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+    print(f"\n🧠 Local RAG Brain  [{model_info}]")
+    print("   Type your question, or use a slash command.")
+    print("   /help  /list  /ingest <path>  /model <name>  /pull <name>  /clear  /quit\n")
+
+    chat_history: list = []
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\n👋 Bye!")
+            break
+
+        if not user_input:
+            continue
+
+        # --- Slash commands ---
+        if user_input.startswith("/"):
+            parts = user_input.split(maxsplit=1)
+            cmd = parts[0].lower()
+            arg = parts[1] if len(parts) > 1 else ""
+
+            if cmd in ("/quit", "/exit", "/q"):
+                print("👋 Bye!")
+                break
+
+            elif cmd == "/help":
+                print(
+                    "\n  /list              — list ingested documents\n"
+                    "  /ingest <path>     — ingest a file or directory\n"
+                    "  /model <name>      — switch Ollama model (auto-pulls if missing)\n"
+                    "  /pull <name>       — pull an Ollama model\n"
+                    "  /clear             — clear chat history\n"
+                    "  /quit              — exit\n"
+                )
+
+            elif cmd == "/list":
+                docs = brain.list_documents()
+                if not docs:
+                    print("📭 Knowledge base is empty.")
+                else:
+                    total = sum(d["chunks"] for d in docs)
+                    print(f"\n📚 {len(docs)} file(s), {total} chunk(s)\n")
+                    for d in docs:
+                        print(f"  {d['source']:<60} {d['chunks']:>6}")
+                    print()
+
+            elif cmd == "/ingest":
+                if not arg:
+                    print("  Usage: /ingest <path>")
+                elif os.path.isdir(arg):
+                    print(f"  Ingesting {arg} …")
+                    asyncio.run(brain.load_directory(arg))
+                    print("  ✅ Done.")
+                elif os.path.isfile(arg):
+                    from rag_brain.loaders import DirectoryLoader
+                    ext = os.path.splitext(arg)[1].lower()
+                    mgr = DirectoryLoader()
+                    if ext in mgr.loaders:
+                        brain.ingest(mgr.loaders[ext].load(arg))
+                        print("  ✅ Done.")
+                    else:
+                        print(f"  ❌ Unsupported file type: {ext}")
+                else:
+                    print(f"  ❌ Path not found: {arg}")
+
+            elif cmd == "/model":
+                if not arg:
+                    print(f"  Current model: {brain.config.llm_model}")
+                else:
+                    brain.config.llm_model = arg
+                    brain.llm = brain.llm.__class__(brain.config)
+                    print(f"  ✅ Switched to model: {arg}")
+
+            elif cmd == "/pull":
+                if not arg:
+                    print("  Usage: /pull <model-name>")
+                else:
+                    try:
+                        import ollama as _ollama
+                        print(f"  ⬇️  Pulling '{arg}' …")
+                        for chunk in _ollama.pull(arg, stream=True):
+                            status = chunk.get("status", "") if isinstance(chunk, dict) else getattr(chunk, 'status', '')
+                            total = chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, 'total', 0)
+                            completed = chunk.get("completed", 0) if isinstance(chunk, dict) else getattr(chunk, 'completed', 0)
+                            if total and completed:
+                                print(f"\r  {status}: {int(completed/total*100)}%  ", end="", flush=True)
+                            elif status:
+                                print(f"\r  {status}...  ", end="", flush=True)
+                        print(f"\n  ✅ '{arg}' ready.")
+                    except Exception as e:
+                        print(f"  ❌ Pull failed: {e}")
+
+            elif cmd == "/clear":
+                chat_history.clear()
+                print("  🗑️  Chat history cleared.")
+
+            else:
+                print(f"  Unknown command: {cmd}. Type /help for options.")
+
+            continue
+
+        # --- Regular query ---
+        print("\nBrain: ", end="", flush=True)
+        try:
+            if stream:
+                for chunk in brain.query_stream(user_input, chat_history=chat_history):
+                    if isinstance(chunk, dict):
+                        continue
+                    print(chunk, end="", flush=True)
+                print("\n")
+            else:
+                response = brain.query(user_input, chat_history=chat_history)
+                print(f"{response}\n")
+
+            chat_history.append({"role": "user", "content": user_input})
+        except Exception as e:
+            print(f"\n  ❌ Error: {e}\n")
 
 if __name__ == "__main__":
     main()

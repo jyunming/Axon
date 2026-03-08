@@ -91,16 +91,10 @@ docker-compose up --build
 
 #### Option B: Local CLI
 ```bash
-# Launch the Web UI
-rag-brain-ui
+# Interactive REPL (default — no args)
+rag-brain
 
-# Launch the Knowledge API (for Agents)
-rag-brain-api
-
-# Ingest data via CLI
-rag-brain --ingest ./my_documents/
-
-# Ask a question
+# Single-shot query
 rag-brain "What is the main topic?"
 
 # Stream response token-by-token
@@ -111,12 +105,29 @@ rag-brain --model gemma:2b "Your question"
 rag-brain --provider gemini --model gemini-1.5-flash "Your question"
 rag-brain --provider openai --model gpt-4o "Your question"
 
+# Pull a model explicitly
+rag-brain --pull gemma:2b
+
 # List available providers and locally installed Ollama models
 rag-brain --list-models
 
 # List all ingested documents in the knowledge base
 rag-brain --list
+
+# Ingest data
+rag-brain --ingest ./my_documents/
 ```
+
+**Interactive REPL slash commands:**
+| Command | Description |
+|---|---|
+| `/list` | List ingested documents |
+| `/ingest <path>` | Ingest a file or directory |
+| `/model <name>` | Switch model on the fly |
+| `/pull <name>` | Pull an Ollama model |
+| `/clear` | Clear chat history |
+| `/help` | Show all commands |
+| `/quit` | Exit |
 
 ## 🤖 AI Agent Integration
 
