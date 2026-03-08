@@ -2450,12 +2450,17 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         _spin_stop   = threading.Event()
         _spin_idx    = [0]
+        _SPIN_CLEAR  = "\033[1A\033[2K"   # cursor up 1 + erase line (reliable on Windows Terminal)
 
         def _spin():
+            first = True
             while not _spin_stop.wait(0.1):
                 f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
-                sys.stdout.write(f"\r  Brain: {f} thinking…")
+                if not first:
+                    sys.stdout.write(_SPIN_CLEAR)
+                sys.stdout.write(f"  Brain: {f} thinking…\n")
                 sys.stdout.flush()
+                first = False
                 _spin_idx[0] += 1
 
         print()   # blank line between You: and Brain:
@@ -2489,7 +2494,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     if not quiet:
                                         _spin_stop.set()
                                         _spin_thread.join(timeout=0.3)
-                                    sys.stdout.write("\r" + " " * 30 + "\r")
+                                    sys.stdout.write(_SPIN_CLEAR)
                                     sys.stdout.flush()
                                     first_chunk = False
                                 response_parts.append(chunk)
@@ -2504,7 +2509,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 if not quiet:
                                     _spin_stop.set()
                                     _spin_thread.join(timeout=0.3)
-                                sys.stdout.write(f"\r  Brain: " + " " * 20 + f"\r  Brain: ")
+                                sys.stdout.write(_SPIN_CLEAR)
                                 sys.stdout.flush()
                                 first_chunk = False
                             print(chunk, end="", flush=True)
@@ -2515,7 +2520,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     _cancelled = True
                     if not quiet:
                         _spin_stop.set()
-                    sys.stdout.write("\r" + " " * 40 + "\r")
+                    sys.stdout.write(_SPIN_CLEAR)
                     print("  ⚠️  Cancelled.\n")
                 response = "".join(response_parts)
             else:
@@ -2527,7 +2532,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 try:
                     from rich.console import Console as _RC
                     from rich.markdown import Markdown as _RM
-                    sys.stdout.write("\r" + " " * 30 + "\r")
+                    sys.stdout.write(_SPIN_CLEAR)
                     sys.stdout.flush()
                     _RC().print(_RM(response))
                     print()
@@ -2543,7 +2548,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         except Exception as e:
             if not quiet:
                 _spin_stop.set()
-            sys.stdout.write("\r" + " " * 30 + "\r")
+            sys.stdout.write(_SPIN_CLEAR)
             print(f"  ❌ Error: {e}\n")
 
 if __name__ == "__main__":
