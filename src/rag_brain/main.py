@@ -1000,6 +1000,28 @@ def main():
         print()
         return
 
+    # Auto-pull Ollama model if not available locally
+    if config.llm_provider == "ollama" and config.llm_model:
+        try:
+            import ollama as _ollama
+            local_names = {m["name"] for m in _ollama.list().get("models", [])}
+            model_tag = config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
+            if model_tag not in local_names and config.llm_model not in local_names:
+                print(f"⬇️  Model '{config.llm_model}' not found locally — pulling from Ollama...")
+                import sys
+                for chunk in _ollama.pull(config.llm_model, stream=True):
+                    status = chunk.get("status", "")
+                    total = chunk.get("total", 0)
+                    completed = chunk.get("completed", 0)
+                    if total and completed:
+                        pct = int(completed / total * 100)
+                        print(f"\r  {status}: {pct}%", end="", flush=True)
+                    elif status:
+                        print(f"\r  {status}...", end="", flush=True)
+                print(f"\n✅ Model '{config.llm_model}' ready.\n")
+        except Exception as e:
+            logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
+
     brain = OpenStudioBrain(config)
     
     if args.ingest:

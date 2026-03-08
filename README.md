@@ -30,7 +30,8 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 - **Local First:** Runs entirely on your hardware using Ollama and Sentence Transformers.
 - **Multi-LLM & Embedding Support:** Switch LLM provider (Ollama, Gemini, OpenAI, Ollama Cloud) and embedding provider (sentence-transformers, Ollama, FastEmbed) live from the UI sidebar.
 - **Hybrid Search:** Combines semantic vector search with keyword-based BM25 for maximum precision.
-- **Truth Grounding (Web Search):** Optionally augment answers with live web results via the Brave Search API.
+- **Truth Grounding (Web Search):** Agentic Brave Search fallback — fires automatically only when local knowledge is insufficient (max cosine score < similarity threshold).
+- **Knowledge Base Viewer:** Browse all ingested documents and chunk counts from the web UI sidebar or via `rag-brain --list`.
 - **Chat Sessions:** Create, switch, and delete independent conversation sessions with full history persistence.
 - **Conversational Memory:** The LLM remembers your previous messages within a session for natural follow-up questions.
 - **Multimodal Support:** Automatically captions and indexes BMP, PNG, TIF/TIFF, and PGM images via local Vision-Language Models (VLM).
@@ -98,6 +99,23 @@ rag-brain-api
 
 # Ingest data via CLI
 rag-brain --ingest ./my_documents/
+
+# Ask a question
+rag-brain "What is the main topic?"
+
+# Stream response token-by-token
+rag-brain --stream "Summarise my documents"
+
+# Switch model at runtime (auto-pulls if not available locally)
+rag-brain --model gemma:2b "Your question"
+rag-brain --provider gemini --model gemini-1.5-flash "Your question"
+rag-brain --provider openai --model gpt-4o "Your question"
+
+# List available providers and locally installed Ollama models
+rag-brain --list-models
+
+# List all ingested documents in the knowledge base
+rag-brain --list
 ```
 
 ## 🤖 AI Agent Integration
