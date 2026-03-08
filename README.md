@@ -21,13 +21,18 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 - **[Security Policy](SECURITY.md)** - Security best practices
 - **[Improvements Summary](IMPROVEMENTS.md)** - Recent enhancements
 - **[Model Guide](MODEL_GUIDE.md)** - Supported models and configuration
+- **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and fixes
 
 ---
 
 ## 🎯 Key Features
 
 - **Local First:** Runs entirely on your hardware using Ollama and Sentence Transformers.
+- **Multi-LLM Support:** Switch between Ollama (local), Gemini, OpenAI, and Ollama Cloud providers from the UI.
 - **Hybrid Search:** Combines semantic vector search with keyword-based BM25 for maximum precision.
+- **Truth Grounding (Web Search):** Optionally augment answers with live web results via the Brave Search API.
+- **Chat Sessions:** Create, switch, and delete independent conversation sessions with full history persistence.
+- **Conversational Memory:** The LLM remembers your previous messages within a session for natural follow-up questions.
 - **Multimodal Support:** Automatically captions and indexes BMP, PNG, TIF/TIFF, and PGM images via local Vision-Language Models (VLM).
 - **Rich Document Support:** Ingest PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, and plain text files.
 - **Agent Orchestration Ready:** Standardized FastAPI service with specialized tools for agentic reasoning and self-learning.
@@ -115,8 +120,12 @@ Standardized JSON schemas for tool-calling are provided in `src/rag_brain/tools.
 ## ⚙️ Configuration
 
 Customize behavior in `config.yaml`:
+- **LLM Provider:** Choose from `ollama`, `gemini`, `ollama_cloud`, or `openai`.
 - **Hybrid Search:** Toggle BM25 + Vector fusion.
-- **Re-ranking:** Enable Cross-Encoders for second-stage accuracy.
+- **Re-ranking:** Enable Cross-Encoders or LLM-based reranking for second-stage accuracy.
+- **Query Transformations:** Enable Multi-Query and HyDE for improved retrieval.
+- **Truth Grounding:** Enable live web search via Brave Search API.
+- **Discussion Fallback:** Allow the LLM to answer from general knowledge when no documents match.
 - **Chunking:** Adjust fragment size and overlap.
 
 See [Configuration Guide](QUICKREF.md#configuration) for details.

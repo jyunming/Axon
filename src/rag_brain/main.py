@@ -48,6 +48,8 @@ class OpenStudioConfig:
             self.ollama_cloud_key = os.getenv("OLLAMA_CLOUD_KEY", "")
         if not self.ollama_cloud_url:
             self.ollama_cloud_url = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
+        if not self.brave_api_key:
+            self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
     
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
@@ -74,6 +76,10 @@ class OpenStudioConfig:
     multi_query: bool = False
     hyde: bool = False
     discussion_fallback: bool = False
+
+    # Web Search / Truth Grounding
+    truth_grounding: bool = False
+    brave_api_key: str = ""
 
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
@@ -117,6 +123,11 @@ class OpenStudioConfig:
                 config_dict['hyde'] = data['query_transformations']['hyde']
             if 'discussion_fallback' in data['query_transformations']:
                 config_dict['discussion_fallback'] = data['query_transformations']['discussion_fallback']
+        if 'web_search' in data:
+            ws = data['web_search']
+            config_dict['truth_grounding'] = ws.get('enabled', False)
+            if ws.get('brave_api_key'):
+                config_dict['brave_api_key'] = ws['brave_api_key']
         
         # Map some specific names if they don't match exactly
         if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
@@ -666,9 +677,44 @@ Your primary goal is to help the user by answering questions based on the provid
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
 
+    def _execute_web_search(self, query: str, count: int = 5) -> List[Dict]:
+        """Execute a web search using the Brave Search API and return results."""
+        import httpx
+        try:
+            response = httpx.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": self.config.brave_api_key
+                },
+                params={"q": query, "count": count},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            web_results = []
+            for item in data.get("web", {}).get("results", [])[:count]:
+                snippet = item.get("description", "")
+                title = item.get("title", "")
+                url = item.get("url", "")
+                web_results.append({
+                    "id": url,
+                    "text": f"{title}\n{snippet}",
+                    "score": 1.0,
+                    "metadata": {"source": url, "title": title},
+                    "is_web": True
+                })
+            logger.info(f"🌐 Brave Search returned {len(web_results)} results for: {query[:60]}")
+            return web_results
+        except Exception as e:
+            logger.warning(f"🌐 Web search failed: {e}")
+            return []
+
     def _execute_retrieval(self, query: str, filters: Dict = None) -> Dict:
-        """Central retrieval execution logic supporting HyDE and Multi-Query."""
-        transforms = {"hyde_applied": False, "multi_query_applied": False, "queries": [query]}
+        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
+        transforms = {"hyde_applied": False, "multi_query_applied": False, "web_search_applied": False, "queries": [query]}
         
         search_queries = [query]
         vector_query = query
@@ -731,10 +777,19 @@ Your primary goal is to help the user by answering questions based on the provid
 
         results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
         
+        # Web Search (Truth Grounding)
+        web_count = 0
+        if self.config.truth_grounding and self.config.brave_api_key:
+            web_results = self._execute_web_search(query)
+            web_count = len(web_results)
+            results.extend(web_results)
+            transforms['web_search_applied'] = True
+
         return {
             "results": results,
             "vector_count": vector_count,
             "bm25_count": bm25_count,
+            "web_count": web_count,
             "filtered_count": len(results),
             "transforms": transforms
         }
