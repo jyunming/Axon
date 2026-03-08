@@ -26,13 +26,13 @@ logger = logging.getLogger("RAGBrain")
 class OpenStudioConfig:
     """Configuration for Local RAG Brain."""
     # Embedding
-    embedding_provider: str = "sentence_transformers"
+    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
     
     # LLM
-    llm_provider: str = "ollama"
-    llm_model: str = "llama3.1"
+    llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai"] = "ollama"
+    llm_model: str = "gemma"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
     api_key: str = ""
@@ -42,12 +42,16 @@ class OpenStudioConfig:
     
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
+        if not self.api_key:
+            self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
         if not self.gemini_api_key:
             self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         if not self.ollama_cloud_key:
             self.ollama_cloud_key = os.getenv("OLLAMA_CLOUD_KEY", "")
         if not self.ollama_cloud_url:
             self.ollama_cloud_url = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
+        if not self.brave_api_key:
+            self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
     
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
@@ -74,6 +78,10 @@ class OpenStudioConfig:
     multi_query: bool = False
     hyde: bool = False
     discussion_fallback: bool = False
+
+    # Web Search / Truth Grounding
+    truth_grounding: bool = False
+    brave_api_key: str = ""
 
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
@@ -117,6 +125,11 @@ class OpenStudioConfig:
                 config_dict['hyde'] = data['query_transformations']['hyde']
             if 'discussion_fallback' in data['query_transformations']:
                 config_dict['discussion_fallback'] = data['query_transformations']['discussion_fallback']
+        if 'web_search' in data:
+            ws = data['web_search']
+            config_dict['truth_grounding'] = ws.get('enabled', False)
+            if ws.get('brave_api_key'):
+                config_dict['brave_api_key'] = ws['brave_api_key']
         
         # Map some specific names if they don't match exactly
         if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
@@ -259,8 +272,10 @@ class OpenEmbedding:
     
     def embed(self, texts: List[str]) -> List[List[float]]:
         if self.provider == "sentence_transformers":
-            embeddings = self.model.encode(texts, convert_to_list=True)
-            return embeddings
+            embeddings = self.model.encode(texts)
+            if hasattr(embeddings, 'tolist'):
+                return embeddings.tolist()
+            return list(embeddings)
             
         elif self.provider == "ollama":
             from ollama import Client
@@ -321,7 +336,10 @@ class OpenLLM:
             response = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
-                options={"temperature": self.config.llm_temperature}
+                options={
+                    "temperature": self.config.llm_temperature,
+                    "num_ctx": 8192
+                }
             )
             return response['message']['content']
             
@@ -331,7 +349,8 @@ class OpenLLM:
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
             model_kwargs = {"model_name": self.config.llm_model}
-            if system_prompt:
+            is_gemma = "gemma" in self.config.llm_model.lower()
+            if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
             
@@ -339,7 +358,11 @@ class OpenLLM:
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            contents.append({"role": "user", "parts": [prompt]})
+            
+            user_text = prompt
+            if system_prompt and is_gemma:
+                user_text = f"{system_prompt}\n\n{prompt}"
+            contents.append({"role": "user", "parts": [user_text]})
                 
             response = model.generate_content(
                 contents,
@@ -419,7 +442,10 @@ class OpenLLM:
                 model=self.config.llm_model,
                 messages=messages,
                 stream=True,
-                options={"temperature": self.config.llm_temperature}
+                options={
+                    "temperature": self.config.llm_temperature,
+                    "num_ctx": 8192
+                }
             )
             for chunk in stream_resp:
                 yield chunk['message']['content']
@@ -430,7 +456,8 @@ class OpenLLM:
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
             model_kwargs = {"model_name": self.config.llm_model}
-            if system_prompt:
+            is_gemma = "gemma" in self.config.llm_model.lower()
+            if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
             
@@ -438,7 +465,11 @@ class OpenLLM:
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            contents.append({"role": "user", "parts": [prompt]})
+            
+            user_text = prompt
+            if system_prompt and is_gemma:
+                user_text = f"{system_prompt}\n\n{prompt}"
+            contents.append({"role": "user", "parts": [user_text]})
                 
             response = model.generate_content(
                 contents,
@@ -658,9 +689,44 @@ Your primary goal is to help the user by answering questions based on the provid
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
 
+    def _execute_web_search(self, query: str, count: int = 5) -> List[Dict]:
+        """Execute a web search using the Brave Search API and return results."""
+        import httpx
+        try:
+            response = httpx.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": self.config.brave_api_key
+                },
+                params={"q": query, "count": count},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            web_results = []
+            for item in data.get("web", {}).get("results", [])[:count]:
+                snippet = item.get("description", "")
+                title = item.get("title", "")
+                url = item.get("url", "")
+                web_results.append({
+                    "id": url,
+                    "text": f"{title}\n{snippet}",
+                    "score": 1.0,
+                    "metadata": {"source": url, "title": title},
+                    "is_web": True
+                })
+            logger.info(f"🌐 Brave Search returned {len(web_results)} results for: {query[:60]}")
+            return web_results
+        except Exception as e:
+            logger.warning(f"🌐 Web search failed: {e}")
+            return []
+
     def _execute_retrieval(self, query: str, filters: Dict = None) -> Dict:
-        """Central retrieval execution logic supporting HyDE and Multi-Query."""
-        transforms = {"hyde_applied": False, "multi_query_applied": False, "queries": [query]}
+        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
+        transforms = {"hyde_applied": False, "multi_query_applied": False, "web_search_applied": False, "queries": [query]}
         
         search_queries = [query]
         vector_query = query
@@ -723,10 +789,19 @@ Your primary goal is to help the user by answering questions based on the provid
 
         results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
         
+        # Web Search (Truth Grounding)
+        web_count = 0
+        if self.config.truth_grounding and self.config.brave_api_key:
+            web_results = self._execute_web_search(query)
+            web_count = len(web_results)
+            results.extend(web_results)
+            transforms['web_search_applied'] = True
+
         return {
             "results": results,
             "vector_count": vector_count,
             "bm25_count": bm25_count,
+            "web_count": web_count,
             "filtered_count": len(results),
             "transforms": transforms
         }
