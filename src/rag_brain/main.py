@@ -1200,7 +1200,17 @@ def main():
 
     # No query supplied — enter interactive REPL (streaming on by default)
     _quiet = args.quiet or not sys.stdin.isatty()
-    _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
+    try:
+        _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
+    except (KeyboardInterrupt, EOFError):
+        print("\n👋 Bye!")
+    finally:
+        # Ignore Ctrl+C during atexit/cleanup so colorama/posthog don't print tracebacks
+        import signal as _signal
+        try:
+            _signal.signal(_signal.SIGINT, _signal.SIG_IGN)
+        except Exception:
+            pass
 
 
 _SLASH_COMMANDS = [
