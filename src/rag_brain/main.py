@@ -3,10 +3,13 @@ Core engine for Local RAG Brain - Open Source RAG Interface.
 """
 
 import os
+import re
+import sys
 import time
 import yaml
 import logging
 import asyncio
+import threading
 from typing import Literal, List, Optional, Dict, Any, Union
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
@@ -344,7 +347,10 @@ class OpenLLM:
             return response['message']['content']
             
         elif provider == "gemini":
-            import google.generativeai as genai
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                import google.generativeai as genai
             if not getattr(self, '_gemini_configured', False):
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
@@ -451,7 +457,10 @@ class OpenLLM:
                 yield chunk['message']['content']
                 
         elif provider == "gemini":
-            import google.generativeai as genai
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                import google.generativeai as genai
             if not getattr(self, '_gemini_configured', False):
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
@@ -1049,7 +1058,38 @@ def main():
         except Exception as e:
             logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
 
+    # Animated init display — only when entering interactive REPL
+    _entering_repl = (
+        not args.query and not getattr(args, 'ingest', None)
+        and not args.list and not args.list_models
+        and not getattr(args, 'pull', None)
+        and sys.stdin.isatty()
+    )
+    _init_display: Optional[_InitDisplay] = None
+    _saved_propagate: dict = {}
+    _INIT_LOGGER_NAMES = [
+        "RAGBrain", "StudioBrainOpen.Retrievers",
+        "sentence_transformers.SentenceTransformer", "sentence_transformers",
+        "chromadb", "chromadb.telemetry.product.posthog", "httpx",
+    ]
+    if _entering_repl:
+        print()
+        _init_display = _InitDisplay()
+        for _n in _INIT_LOGGER_NAMES:
+            _lg = logging.getLogger(_n)
+            _saved_propagate[_n] = _lg.propagate
+            _lg.propagate = False           # suppress default stderr handler
+            _lg.setLevel(logging.INFO)
+            _lg.addHandler(_init_display)
+
     brain = OpenStudioBrain(config)
+
+    if _init_display:
+        _init_display.stop()
+        for _n in _INIT_LOGGER_NAMES:
+            _lg = logging.getLogger(_n)
+            _lg.removeHandler(_init_display)
+            _lg.propagate = _saved_propagate.get(_n, True)
     
     if args.ingest:
         if os.path.isdir(args.ingest): asyncio.run(brain.load_directory(args.ingest))
@@ -1131,9 +1171,69 @@ def _make_completer(brain: 'OpenStudioBrain'):
     return completer
 
 
+class _InitDisplay(logging.Handler):
+    """Logging handler that turns RAGBrain init messages into an animated status display."""
+
+    _FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._step: str = ""
+        self._idx: int = 0
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def _spin(self) -> None:
+        while not self._done.wait(0.1):
+            if self._step:
+                frame = self._FRAMES[self._idx % len(self._FRAMES)]
+                sys.stdout.write(f"\r  {frame} {self._step:<52}")
+                sys.stdout.flush()
+                self._idx += 1
+
+    def _tick(self, label: str) -> None:
+        """Complete the current spinner step and print a checkmark line."""
+        self._step = ""
+        sys.stdout.write(f"\r  ✓ {label:<52}\n")
+        sys.stdout.flush()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        if "Initializing Local RAG Brain" in msg:
+            self._step = "Starting up…"
+        elif "Loading Sentence Transformers" in msg:
+            m = re.search(r":\s*(.+)$", msg)
+            model = m.group(1).strip() if m else "model"
+            self._tick("Starting")
+            self._step = f"Loading {model}…"
+        elif "Use pytorch device_name" in msg:
+            m = re.search(r":\s*(.+)$", msg)
+            device = m.group(1).strip() if m else "cpu"
+            self._tick(f"Embedding model ready  [{device}]")
+        elif "Initializing ChromaDB" in msg:
+            self._step = "Connecting to vector store…"
+        elif "Loaded BM25 corpus" in msg:
+            m = re.search(r"(\d+) documents", msg)
+            count = m.group(1) if m else "?"
+            self._tick("Vector store ready")
+            sys.stdout.write(f"  ✓ {'BM25 index  · ' + count + ' documents':<52}\n")
+            sys.stdout.flush()
+        elif "Local RAG Brain ready" in msg:
+            self._done.set()
+            self._thread.join(timeout=0.3)
+            sys.stdout.write(f"\r  ✓ {'Ready!':<52}\n\n")
+            sys.stdout.flush()
+        # All other messages (telemetry, httpx, etc.) are silently suppressed
+
+    def stop(self) -> None:
+        self._done.set()
+        self._step = ""
+        self._thread.join(timeout=0.3)
+
+
 def _print_banner(brain: 'OpenStudioBrain') -> None:
     """Print an animated startup banner for the REPL."""
-    import sys as _sys
 
     try:
         docs = brain.list_documents()
@@ -1167,13 +1267,17 @@ def _print_banner(brain: 'OpenStudioBrain') -> None:
     ]
 
     for line in lines:
-        _sys.stdout.write(line + "\n")
-        _sys.stdout.flush()
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
         time.sleep(0.04)
 
 
 def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
     """Interactive chat REPL — initializes brain once, maintains history across turns."""
+    import warnings
+    # Suppress FutureWarnings from google-generativeai and google-api-core
+    warnings.filterwarnings("ignore", category=FutureWarning, module="google")
+
     # Silence INFO logs — they clutter the interactive UI
     import logging as _logging
     for _log in ("RAGBrain", "StudioBrainOpen.Retrievers", "httpx",
