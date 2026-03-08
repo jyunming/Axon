@@ -132,8 +132,8 @@ rag-brain --stream "Summarise my documents"
 
 # Switch model at runtime (auto-pulls if not available locally)
 rag-brain --model gemma:2b "Your question"
-rag-brain --provider gemini --model gemini-1.5-flash "Your question"
-rag-brain --provider openai --model gpt-4o "Your question"
+rag-brain --model gemini/gemini-2.5-flash-lite "Your question"
+rag-brain --model openai/gpt-4o "Your question"
 
 # Pull a model explicitly
 rag-brain --pull gemma:2b
@@ -146,6 +146,26 @@ rag-brain --list
 
 # Ingest data
 rag-brain --ingest ./my_documents/
+
+# Embedding model override
+rag-brain --embed ollama/nomic-embed-text "Your question"
+
+# RAG behaviour flags (all also settable live from REPL)
+rag-brain --no-discuss "Your question"   # refuse to answer outside documents
+rag-brain --discuss "Your question"      # allow general knowledge fallback (default)
+rag-brain --search "Your question"       # enable Brave web search (requires BRAVE_API_KEY)
+rag-brain --top-k 5 "Your question"      # retrieve 5 chunks (default: 10)
+rag-brain --threshold 0.5 "Your question" # stricter similarity cutoff (default: 0.3)
+rag-brain --no-hybrid "Your question"    # vector-only search (disable BM25)
+rag-brain --rerank "Your question"       # enable cross-encoder reranking
+rag-brain --hyde "Your question"         # enable HyDE query expansion
+rag-brain --multi-query "Your question"  # enable multi-query retrieval
+
+# Project management (all also available from REPL /project)
+rag-brain --project-list                 # list all projects
+rag-brain --project-new research --ingest ./papers/   # create project + ingest in one step
+rag-brain --project research "Your question"          # query within a project
+rag-brain --project-delete research                   # delete a project
 
 # Quiet mode (for pipes and CI)
 echo "What is X?" | rag-brain -q
@@ -161,7 +181,7 @@ echo "What is X?" | rag-brain -q
 | `/embed [provider/model]` | Switch embedding provider and model |
 | `/pull <name>` | Pull an Ollama model with progress indicator |
 | `/search` | Toggle Brave web search (truth_grounding) for knowledge grounding |
-| `/discuss` | Toggle discussion_fallback mode (answer from general knowledge when no documents match) |
+| `/discuss` | Toggle discussion fallback — when OFF the LLM refuses queries with no document match |
 | `/rag [option]` | Show or modify RAG settings: `topk`, `threshold`, `hybrid`, `rerank`, `hyde`, `multi` |
 | `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
 | `/compact` | Summarize chat history via LLM to free context window |
@@ -181,7 +201,7 @@ echo "What is X?" | rag-brain -q
 - **Session Persistence:** Chat history auto-saves to `~/.rag_brain/sessions/session_<timestamp>.json`; resume any past session on startup
 - **Input History Persistence:** ↑↓ arrows cycle through history across sessions (saved to `~/.rag_brain/repl_history`)
 - **Project-Based Knowledge Isolation:** Each project has its own vector store, BM25 index, and sessions under `~/.rag_brain/projects/<name>/`
-- **Pinned Status Bar:** Model, search, discuss, hybrid, and active project always visible at the terminal bottom
+- **Pinned Status Bar:** LLM model, embedding model, fallback, search, and hybrid settings always visible at the terminal bottom even during streaming
 - **Context Window Visibility:** `/context` shows exact token counts, model context limits, and retrieved sources with scores
 - **Keyboard shortcuts:** `Tab` complete · `↑↓` history · `Ctrl+C` cancel generation · `Ctrl+L` clear screen · `Ctrl+D` exit
 
