@@ -114,6 +114,7 @@ Agents can use this brain as a "Collective Memory."
 | `/add_text` | POST | Direct string ingestion (allows agents to "learn" new facts in real-time). |
 | `/delete` | POST | Delete documents by ID. Request body: `{"doc_ids": ["id1","id2"]}`. |
 | `/ingest` | POST | Background directory/file ingestion. Request body: `{"path": "/path/to/docs"}`. Path must be within `RAG_INGEST_BASE`. |
+| `/collection` | GET | List all ingested sources with chunk counts. Returns `{total_files, total_chunks, files:[{source,chunks}]}`. |
 
 ### Tool Definitions
 Standardized JSON schemas for tool-calling are provided in `src/rag_brain/tools.py`. The `get_rag_tool_definition()` function returns 6 OpenAI-compatible tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, and `stream_query`. See `examples/agent_simple.py` for a minimal integration, or `examples/agent_orchestration.py` for a richer multi-step planner-critic loop.
