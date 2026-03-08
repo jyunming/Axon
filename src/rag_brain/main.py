@@ -10,12 +10,16 @@ import yaml
 import logging
 import asyncio
 import threading
+from pathlib import Path
 from typing import Literal, List, Optional, Dict, Any, Union
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables — project .env first, then user-global ~/.rag_brain/.env
 load_dotenv()
+_user_env = Path.home() / ".rag_brain" / ".env"
+if _user_env.exists():
+    load_dotenv(_user_env)
 
 # Setup logging
 logging.basicConfig(
@@ -1185,7 +1189,7 @@ _SLASH_COMMANDS = [
     "/help", "/list", "/ingest ", "/model ", "/embed ",
     "/pull ", "/search", "/discuss", "/rag ", "/compact",
     "/context", "/sessions", "/resume ", "/clear", "/retry",
-    "/project", "/project ", "/quit", "/exit",
+    "/project", "/project ", "/keys", "/quit", "/exit",
 ]
 
 
@@ -1968,6 +1972,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         "sessions": "  /sessions                    list recent saved sessions\n"
                                     "  /resume <id>                 load a session by ID\n"
                                     "  Sessions auto-save after each turn.",
+                        "keys":     "  /keys                        show API key status for all providers\n"
+                                    "  /keys set <provider>         interactively set an API key\n"
+                                    "  providers: gemini, openai, brave, ollama_cloud\n"
+                                    "  Keys are saved to ~/.rag_brain/.env and loaded at startup.",
                     }
                     key = arg.lstrip("/")
                     if key in _detail:
@@ -1982,10 +1990,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         "  Mode:       /search   /discuss   /rag [option value]\n"
                         "  Session:    /sessions   /resume <id>   /compact   /context   /retry\n"
                         "  Projects:   /project [list|new|switch|delete|folder]\n"
+                        "  API Keys:   /keys   /keys set <provider>\n"
                         "  Other:      /help [cmd]   /quit\n"
                         "  Shell:      !<cmd>  run a shell command  ·  @<path>  attach file context\n"
                         "\n"
-                        "  /help <cmd>  for details (model, embed, ingest, rag, sessions)\n"
+                        "  /help <cmd>  for details (model, embed, ingest, rag, sessions, keys)\n"
                         "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
                     )
 
@@ -2319,6 +2328,65 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         chat_history.extend(session["history"])
                         turns = len(chat_history) // 2
                         print(f"  ✅ Loaded session {session['id']}  ({turns} turns)\n")
+
+            elif cmd == "/keys":
+                _env_file = Path.home() / ".rag_brain" / ".env"
+                _provider_keys = {
+                    "gemini":       ("GEMINI_API_KEY",   "https://aistudio.google.com/app/apikey"),
+                    "openai":       ("OPENAI_API_KEY",   "https://platform.openai.com/api-keys"),
+                    "brave":        ("BRAVE_API_KEY",    "https://api.search.brave.com/app/keys"),
+                    "ollama_cloud": ("OLLAMA_CLOUD_KEY", "https://ollama.com/settings"),
+                }
+                if arg.lower().startswith("set"):
+                    set_parts = arg.split(maxsplit=1)
+                    prov = set_parts[1].lower().strip() if len(set_parts) > 1 else ""
+                    if not prov or prov not in _provider_keys:
+                        print(f"  Usage: /keys set <provider>")
+                        print(f"  Providers: {', '.join(_provider_keys)}")
+                    else:
+                        env_name, url = _provider_keys[prov]
+                        print(f"  Get your key at: {url}")
+                        try:
+                            import getpass
+                            new_key = getpass.getpass(f"  Enter {env_name} (hidden): ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            print("\n  Cancelled.")
+                        else:
+                            if new_key:
+                                _env_file.parent.mkdir(parents=True, exist_ok=True)
+                                existing = _env_file.read_text(encoding="utf-8") if _env_file.exists() else ""
+                                lines = [l for l in existing.splitlines() if not l.startswith(f"{env_name}=")]
+                                lines.append(f"{env_name}={new_key}")
+                                _env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                                os.environ[env_name] = new_key
+                                if prov == "brave":
+                                    brain.config.brave_api_key = new_key
+                                elif prov == "gemini":
+                                    brain.config.gemini_api_key = new_key
+                                elif prov == "openai":
+                                    brain.config.openai_api_key = new_key
+                                elif prov == "ollama_cloud":
+                                    brain.config.ollama_cloud_key = new_key
+                                print(f"  ✅ {env_name} saved to {_env_file} and applied.")
+                                print(f"  Switch provider: /model {prov}/<model-name>")
+                            else:
+                                print("  No key entered — nothing saved.")
+                else:
+                    print("\n  API Key Status\n  " + "─" * 50)
+                    for prov, (env_name, url) in _provider_keys.items():
+                        val = os.environ.get(env_name, "")
+                        if val:
+                            masked = val[:4] + "****" + val[-2:] if len(val) > 6 else "****"
+                            status = f"✅ {masked}"
+                        else:
+                            status = "❌ not set"
+                        print(f"  {prov:<14} {env_name:<22} {status}")
+                    if _env_file.exists():
+                        print(f"\n  Keys file: {_env_file}")
+                    else:
+                        print(f"\n  No keys file yet. Use /keys set <provider> to add keys.")
+                    print(f"  /keys set <provider>  to set a key interactively")
+                    print(f"  /help keys            for provider URLs and usage\n")
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")

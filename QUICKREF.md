@@ -93,7 +93,25 @@ rag-brain --pull gemma:2b
 rag-brain --list-models
 ```
 
-**REPL slash commands (interactive mode):** `/list`, `/ingest <path>`, `/model <name>`, `/pull <name>`, `/clear`, `/help`, `/quit`
+**REPL slash commands (interactive mode):**
+
+| Command | Purpose |
+|---------|---------|
+| `/help [cmd]` | Show all commands or detailed help (try: `/help model`, `/help embed`, `/help ingest`, `/help rag`, `/help sessions`) |
+| `/list` | List all ingested documents with chunk counts |
+| `/ingest <path\|glob>` | Ingest a file or directory (supports glob patterns) |
+| `/model [provider/model]` | Switch LLM provider and model on the fly (auto-pulls from Ollama if needed) |
+| `/embed [provider/model]` | Switch embedding provider and model |
+| `/pull <name>` | Pull an Ollama model with progress indicator |
+| `/search` | Toggle Brave web search fallback (truth_grounding) |
+| `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match) |
+| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `hyde`, `multi` |
+| `/compact` | Summarize entire chat history via LLM to free context window space |
+| `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
+| `/sessions` | List recent saved sessions (up to 20 most recent) |
+| `/resume <id>` | Load a previous session by its timestamp ID |
+| `/clear` | Clear current chat history (does not delete saved session) |
+| `/quit`, `/exit` | Exit the REPL |
 
 ### Docker
 ```bash
