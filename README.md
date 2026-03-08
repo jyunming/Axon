@@ -157,7 +157,7 @@ echo "What is X?" | rag-brain -q
 | `/help [cmd]` | Show all commands or detailed help for a specific command (model, embed, ingest, rag, sessions) |
 | `/list` | List ingested documents with chunk counts |
 | `/ingest <path\|glob>` | Ingest files or directories using glob patterns |
-| `/model [provider/model]` | Switch LLM provider and model; auto-pulls if not available locally |
+| `/model [provider/model]` | Switch LLM provider and model on the fly; bare `/model <name>` auto-detects provider (auto-pulls from Ollama if needed) |
 | `/embed [provider/model]` | Switch embedding provider and model |
 | `/pull <name>` | Pull an Ollama model with progress indicator |
 | `/search` | Toggle Brave web search (truth_grounding) for knowledge grounding |

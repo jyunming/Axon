@@ -44,7 +44,7 @@ When running `rag-brain` with no arguments, you get:
   - `/help [cmd]` – Show all commands or detailed help for specific commands (model, embed, ingest, rag, sessions)
   - `/list` – List ingested documents with chunk counts
   - `/ingest <path|glob>` – Ingest files/directories with glob pattern support
-  - `/model [provider/model]` – Switch LLM provider and model
+  - `/model [provider/model]` – Switch LLM provider and model; bare `/model <name>` auto-detects provider (`gemini-*`→gemini, `gpt-*/o1-*/o3-*`→openai, else→ollama)
   - `/embed [provider/model]` – Switch embedding provider and model
   - `/pull <name>` – Pull an Ollama model with progress
   - `/search` – Toggle Brave web search (truth_grounding)
@@ -76,8 +76,9 @@ config.yaml
 3. If `hybrid_search=true`: BM25 search → merge via Reciprocal Rank Fusion
 4. If `truth_grounding=true` and max cosine score < `similarity_threshold`: Brave Search fires as fallback; web docs tagged `is_web: True`
 5. Filter by `similarity_threshold`, optionally rerank, truncate to `top_k`
-6. Build context (web results labeled `[Web Result N]`, local labeled `[Document N]`) → `OpenLLM.complete()`
-7. If no docs and `discussion_fallback=true`: LLM answers from general knowledge
+6. Build context (web results labeled `[Web Result N]`, local labeled `[Document N]`) → injected into **system prompt** (not user message) so `chat_history` stays as plain Q/A pairs for consistent multi-turn conversation
+7. `OpenLLM.complete(plain_query, system_prompt_with_context, chat_history)` — user message is always the raw query
+8. If no docs and `discussion_fallback=true`: LLM answers from general knowledge
 
 **Agent API** (src/rag_brain/api.py):
 - `POST /query` – synthesized answer
