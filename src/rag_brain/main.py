@@ -2488,6 +2488,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
                 # Show spinner until the first real token arrives
                 if not quiet:
+                    print()
                     with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
                              transient=True, refresh_per_second=10) as _spin_live:
                         _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
@@ -2540,6 +2541,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 _qt.start()
 
                 if not quiet:
+                    print()
                     with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
                              transient=True, refresh_per_second=10) as _spin_live2:
                         _st2 = threading.Thread(target=_spin_update, args=(_spin_live2,), daemon=True)
@@ -2573,6 +2575,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     _spin_idx[0] += 1
 
             if not quiet:
+                print()
                 _spt = threading.Thread(target=_spin_plain, daemon=True)
                 _spt.start()
             response = brain.query(query_text, chat_history=chat_history)
