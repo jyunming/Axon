@@ -1648,7 +1648,7 @@ def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> l
         _brow(f"    LLM    ·  {model_s}"),                                        # 5
         _brow(f"    Embed  ·  {embed_s}"),                                        # 6
         blank,                                                                     # 7
-        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),         # 8
+        _brow(f"    Search ·  {search_s:<26}  Fallback ·  {discuss_s}"),         # 8
         _brow(f"    Docs   ·  {doc_s:<26}  Hybrid   ·  {hybrid_s}   top-k · {topk_s}   threshold · {thr_s}"),  # 9
         blank,                                                                     # 10
         _brow(f"    {ticks_s}"),                                                   # 11
@@ -1945,7 +1945,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             except Exception:
                 doc_s = "?"
             s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
-            d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+            d_val = "fallback:ON" if brain.config.discussion_fallback else "fallback:off"
             h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
             tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
             proj  = getattr(brain, "_active_project", "default")
@@ -2548,7 +2548,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     # Print compact status so config info stays visible during thinking/streaming
                     m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
                     s_v = "search:ON" if brain.config.truth_grounding    else "search:off"
-                    d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+                    d_v = "fallback:ON" if brain.config.discussion_fallback else "fallback:off"
                     h_v = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
                     print(f"\033[2m  🧠 {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
                     print()
