@@ -1845,11 +1845,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         _PT_STYLE = Style.from_dict({
             "": "",
             "completion-menu.completion.current": "bg:#444466 #ffffff",
-            "bottom-toolbar":        "bg:#1a1a2e #c8c8e8",
-            "bottom-toolbar.key":    "bg:#1a1a2e #7070cc bold",
-            "bottom-toolbar.on":     "bg:#1a1a2e #66cc66",
-            "bottom-toolbar.off":    "bg:#1a1a2e #666688",
-            "bottom-toolbar.sep":    "bg:#1a1a2e #444466",
+            "bottom-toolbar":     "bg:#1a1a2e #a0a0c0",
+            "bottom-toolbar.key": "bg:#1a1a2e #ffffff bold",
         })
 
         class _PTCompleter(Completer):
@@ -1938,25 +1935,26 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             except Exception:
                 doc_s = "?"
             proj = getattr(brain, "_active_project", "default")
-            proj_s = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  <bottom-toolbar.key>📂</bottom-toolbar.key> {proj}" if proj != "default" else ""
-            s_color = "bottom-toolbar.on"  if brain.config.truth_grounding   else "bottom-toolbar.off"
-            d_color = "bottom-toolbar.on"  if brain.config.discussion_fallback else "bottom-toolbar.off"
-            h_color = "bottom-toolbar.on"  if brain.config.hybrid_search      else "bottom-toolbar.off"
-            s_val   = "search:ON" if brain.config.truth_grounding   else "search:off"
-            d_val   = "discuss:on" if brain.config.discussion_fallback else "discuss:off"
-            h_val   = "hybrid:on" if brain.config.hybrid_search      else "hybrid:off"
-            sep = "  <bottom-toolbar.sep>│</bottom-toolbar.sep>  "
-            return _PThtml(
-                f"  <bottom-toolbar.key>🧠 LLM</bottom-toolbar.key> {m}"
-                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key> {emb}"
-                f"{sep}<bottom-toolbar.key>Docs</bottom-toolbar.key> {doc_s}"
-                f"\n"
-                f"  <{s_color}>{s_val}</{s_color}>"
-                f"{sep}<{d_color}>{d_val}</{d_color}>"
-                f"{sep}<{h_color}>{h_val}</{h_color}>"
-                f"{sep}top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
-                f"{proj_s}  "
+            proj_s = f"  📂 {proj}" if proj != "default" else ""
+            s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
+            d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+            h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
+            tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
+            sep = "  │  "
+            # Fixed column widths so row1 and row2 labels align
+            col1 = 42
+            col2 = 42
+            row1 = (
+                f"  <bottom-toolbar.key>LLM</bottom-toolbar.key>  {m:{col1}}"
+                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key>  {emb:{col2}}"
+                f"{sep}<bottom-toolbar.key>Docs</bottom-toolbar.key>  {doc_s}"
             )
+            row2 = (
+                f"  {s_val:{col1 + 5}}"
+                f"{sep}{d_val:{col2 + 2}}"
+                f"{sep}{h_val}  {tk}{proj_s}"
+            )
+            return _PThtml(f"{row1}\n{row2}")
 
         _pt_session = PromptSession(
             completer=_PTCompleter(brain),
@@ -2537,6 +2535,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
                 # Show spinner until the first real token arrives
                 if not quiet:
+                    # Print compact status so config info stays visible during thinking/streaming
+                    m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+                    s_v = "search:ON" if brain.config.truth_grounding    else "search:off"
+                    d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+                    h_v = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
+                    print(f"\033[2m  🧠 {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
                     print()
                     with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
                              transient=True, refresh_per_second=10) as _spin_live:
