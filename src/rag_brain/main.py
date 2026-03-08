@@ -1941,19 +1941,14 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
             tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
             sep = "  │  "
-            # Fixed column widths so row1 and row2 labels align
-            col1 = 42
-            col2 = 42
+            proj = getattr(brain, "_active_project", "default")
+            proj_s = f"  │  📂 {proj}" if proj != "default" else ""
             row1 = (
-                f"  <bottom-toolbar.key>LLM</bottom-toolbar.key>  {m:{col1}}"
-                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key>  {emb:{col2}}"
+                f"  <bottom-toolbar.key>LLM</bottom-toolbar.key>  {m}"
+                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key>  {emb}"
                 f"{sep}<bottom-toolbar.key>Docs</bottom-toolbar.key>  {doc_s}"
             )
-            row2 = (
-                f"  {s_val:{col1 + 5}}"
-                f"{sep}{d_val:{col2 + 2}}"
-                f"{sep}{h_val}  {tk}{proj_s}"
-            )
+            row2 = f"  {s_val}{sep}{d_val}{sep}{h_val}{sep}{tk}{proj_s}"
             return _PThtml(f"{row1}\n{row2}")
 
         _pt_session = PromptSession(
