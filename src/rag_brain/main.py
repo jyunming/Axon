@@ -1558,7 +1558,7 @@ def _do_compact(brain: 'OpenStudioBrain', chat_history: list) -> None:
 
 
 # ── Banner constants ───────────────────────────────────────────────────────────
-_BW = 96          # inner box width in terminal columns
+_BW = 112         # inner box width in terminal columns
 _HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete"
 _SEP  = "  " + "─" * (_BW + 2)   # separator line matching box outer width
 _HEADER_ROWS = 16  # box(12) + blank(1) + hint(1) + sep(1) + blank(1)
@@ -1575,7 +1575,7 @@ def _brow(content: str, emoji_extra: int = 0) -> str:
 
 
 def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> list:
-    """Return lines of the pinned header box (12 lines, airy layout)."""
+    """Return lines of the pinned header box (airy layout)."""
     model_s   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
     embed_s   = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
     search_s  = "ON  (Brave Search)" if brain.config.truth_grounding  else "OFF"
@@ -1589,23 +1589,36 @@ def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> l
     except Exception:
         doc_s = "unknown"
 
-    ticks_s = "   ".join(f"✓ {t}" for t in tick_lines) if tick_lines else "✓ Ready"
-    blank   = f"  │{' ' * _BW}│"
+    # Build tick status — wrap onto a second row if too wide
+    tick_items = [f"✓ {t}" for t in tick_lines] if tick_lines else ["✓ Ready"]
+    ticks_s = "   ".join(tick_items)
+    inner_w = _BW - 4  # 4-char left indent "    "
+    if len(ticks_s) > inner_w:
+        # Split into two roughly equal halves at a separator boundary
+        mid = len(tick_items) // 2
+        ticks_s  = "   ".join(tick_items[:mid])
+        ticks_s2 = "   ".join(tick_items[mid:])
+    else:
+        ticks_s2 = None
 
-    return [
-        f"  ╭{'─' * _BW}╮",                                                     # 1
-        blank,                                                                    # 2
-        _brow("    🧠  Local RAG Brain", emoji_extra=1),                         # 3
-        blank,                                                                    # 4
-        _brow(f"    LLM    ·  {model_s}"),                                       # 5
-        _brow(f"    Embed  ·  {embed_s}"),                                       # 6
-        blank,                                                                    # 7
-        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),        # 8
+    blank = f"  │{' ' * _BW}│"
+    rows = [
+        f"  ╭{'─' * _BW}╮",                                                      # 1
+        blank,                                                                     # 2
+        _brow("    🧠  Local RAG Brain", emoji_extra=1),                          # 3
+        blank,                                                                     # 4
+        _brow(f"    LLM    ·  {model_s}"),                                        # 5
+        _brow(f"    Embed  ·  {embed_s}"),                                        # 6
+        blank,                                                                     # 7
+        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),         # 8
         _brow(f"    Docs   ·  {doc_s:<26}  Hybrid   ·  {hybrid_s}   top-k · {topk_s}   threshold · {thr_s}"),  # 9
-        blank,                                                                    # 10
-        _brow(f"    {ticks_s}"),                                                  # 11
-        f"  ╰{'─' * _BW}╯",                                                     # 12
+        blank,                                                                     # 10
+        _brow(f"    {ticks_s}"),                                                   # 11
     ]
+    if ticks_s2:
+        rows.append(_brow(f"    {ticks_s2}"))                                     # 11b (overflow)
+    rows.append(f"  ╰{'─' * _BW}╯")                                              # 12
+    return rows
 
 
 def _draw_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> None:
