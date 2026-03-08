@@ -1845,8 +1845,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         _PT_STYLE = Style.from_dict({
             "": "",
             "completion-menu.completion.current": "bg:#444466 #ffffff",
-            "bottom-toolbar":     "bg:#1a1a2e #a0a0c0",
-            "bottom-toolbar.key": "bg:#1a1a2e #ffffff bold",
+            "bottom-toolbar":     "bg:#2b2b2b #b0b0b0",
+            "bottom-toolbar.key": "bg:#2b2b2b #ffffff bold",
         })
 
         class _PTCompleter(Completer):
@@ -2013,7 +2013,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         try:
             user_input = _read_input().strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n👋 Bye!")
             break
 
         if not user_input:
@@ -2038,7 +2037,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 arg = cmd.lstrip("/")
                 cmd = "/help"
             if cmd in ("/quit", "/exit", "/q"):
-                print("👋 Bye!")
                 break
 
             elif cmd == "/help":
