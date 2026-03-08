@@ -623,8 +623,9 @@ for message in messages:
                         title = doc.get("metadata", {}).get("title", doc["id"])
                         st.markdown(f"**🌐 [{i+1}] [{title}]({doc['id']})**")
                     else:
+                        display_score = doc.get("vector_score", doc.get("score", 0))
                         st.markdown(
-                            f"**📄 [{i+1}] `{doc['id']}`** — score: `{doc.get('score', 0):.3f}`"
+                            f"**📄 [{i+1}] `{doc['id']}`** — similarity: `{display_score:.3f}`"
                         )
                     st.code(
                         doc["text"][:500] + ("…" if len(doc["text"]) > 500 else ""),
@@ -673,8 +674,9 @@ if prompt := st.chat_input("Ask me anything about your documents…"):
                             title = doc.get("metadata", {}).get("title", doc["id"])
                             st.markdown(f"**🌐 [{i+1}] [{title}]({doc['id']})**")
                         else:
+                            display_score = doc.get("vector_score", doc.get("score", 0))
                             st.markdown(
-                                f"**📄 [{i+1}] `{doc['id']}`** — score: `{doc.get('score', 0):.3f}`"
+                                f"**📄 [{i+1}] `{doc['id']}`** — similarity: `{display_score:.3f}`"
                             )
                         st.code(
                             doc["text"][:500] + ("…" if len(doc["text"]) > 500 else ""),

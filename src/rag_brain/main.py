@@ -62,7 +62,7 @@ class OpenStudioConfig:
     
     # RAG Settings
     top_k: int = 10
-    similarity_threshold: float = 0.5
+    similarity_threshold: float = 0.3
     hybrid_search: bool = True
     
     # Chunking
@@ -820,14 +820,24 @@ Your primary goal is to help the user by answering questions based on the provid
             results = vector_results
 
         results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
-        
+
         # Web Search (Truth Grounding)
+        # Trigger when the best cosine similarity from vector search is below the threshold,
+        # meaning local knowledge is genuinely insufficient (even if BM25 returned fused_only docs).
         web_count = 0
         if self.config.truth_grounding and self.config.brave_api_key:
-            web_results = self._execute_web_search(query)
-            web_count = len(web_results)
-            results.extend(web_results)
-            transforms['web_search_applied'] = True
+            max_vector_score = max((r['score'] for r in vector_results), default=0.0)
+            local_sufficient = max_vector_score >= self.config.similarity_threshold
+            if not local_sufficient:
+                logger.info(
+                    f"🌐 Local knowledge insufficient (best vector score {max_vector_score:.3f} < "
+                    f"threshold {self.config.similarity_threshold}) — falling back to Brave web search"
+                )
+                web_results = self._execute_web_search(query)
+                web_count = len(web_results)
+                # Replace low-relevance local results with web results
+                results = web_results
+                transforms['web_search_applied'] = True
 
         return {
             "results": results,
@@ -837,6 +847,43 @@ Your primary goal is to help the user by answering questions based on the provid
             "filtered_count": len(results),
             "transforms": transforms
         }
+
+    def _build_context(self, results: List[Dict]) -> tuple:
+        """Build context string from results, labelling web vs local sources distinctly.
+
+        Returns:
+            Tuple of (context_string, has_web_results).
+        """
+        parts = []
+        has_web = False
+        for i, r in enumerate(results):
+            if r.get("is_web"):
+                has_web = True
+                title = r.get("metadata", {}).get("title", r["id"])
+                parts.append(f"[Web Result {i+1} — {title} ({r['id']})]\n{r['text']}")
+            else:
+                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{r['text']}")
+        return "\n\n".join(parts), has_web
+
+    def _build_system_prompt(self, has_web: bool) -> str:
+        """Return the system prompt, extended based on web search state.
+
+        When truth_grounding is enabled but local docs answered the question,
+        the LLM is told web search is available as a fallback (sets expectations).
+        When web results are actually in the context, the LLM is told to use and cite them.
+        """
+        if not self.config.truth_grounding:
+            return self.SYSTEM_PROMPT
+        if has_web:
+            return self.SYSTEM_PROMPT + (
+                "\n\n**Web Search Used**: Local documents did not contain sufficient information, "
+                "so live Brave Search results have been added to your context (marked as '[Web Result]'). "
+                "Use these web results to answer the question and always cite the source URL."
+            )
+        return self.SYSTEM_PROMPT + (
+            "\n\n**Web Search Available**: If the local documents above are insufficient, "
+            "you have access to live Brave Search as a fallback tool. It was not needed for this query."
+        )
 
     def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None) -> str:
         t0 = time.time()
@@ -850,7 +897,7 @@ Your primary goal is to help the user by answering questions based on the provid
             
             if self.config.discussion_fallback:
                 prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                return self.llm.complete(prompt_fallback, self.SYSTEM_PROMPT, chat_history=chat_history)
+                return self.llm.complete(prompt_fallback, self._build_system_prompt(False), chat_history=chat_history)
             
             return "I don't have any relevant information to answer that question."
             
@@ -859,9 +906,10 @@ Your primary goal is to help the user by answering questions based on the provid
         results = results[:self.config.top_k]
         final_count = len(results)
         top_score = results[0].get('score', 0) if results else 0
-        context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
+        context, has_web = self._build_context(results)
+        system_prompt = self._build_system_prompt(has_web)
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
-        response = self.llm.complete(prompt, self.SYSTEM_PROMPT, chat_history=chat_history)
+        response = self.llm.complete(prompt, system_prompt, chat_history=chat_history)
         self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
                                 retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
         return response
@@ -873,7 +921,7 @@ Your primary goal is to help the user by answering questions based on the provid
         if not results:
             if self.config.discussion_fallback:
                 prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                yield from self.llm.stream(prompt_fallback, self.SYSTEM_PROMPT, chat_history=chat_history)
+                yield from self.llm.stream(prompt_fallback, self._build_system_prompt(False), chat_history=chat_history)
                 return
             yield "I don't have any relevant information to answer that question."
             return
@@ -881,14 +929,15 @@ Your primary goal is to help the user by answering questions based on the provid
         if self.config.rerank: results = self.reranker.rerank(query, results)
         
         results = results[:self.config.top_k]
-        context = "\n\n".join([f"[Document {i+1} (ID: {r['id']})]\n{r['text']}" for i, r in enumerate(results)])
+        context, has_web = self._build_context(results)
+        system_prompt = self._build_system_prompt(has_web)
         
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
 
         prompt = f"Based on the following context, answer the question: '{query}'\n\nContext:\n{context}\n\nProvide a comprehensive but concise answer."
         
-        yield from self.llm.stream(prompt, self.SYSTEM_PROMPT, chat_history=chat_history)
+        yield from self.llm.stream(prompt, system_prompt, chat_history=chat_history)
 
     async def load_directory(self, directory: str):
         from rag_brain.loaders import DirectoryLoader

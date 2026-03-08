@@ -56,8 +56,12 @@ rag:
   # Number of documents to retrieve
   top_k: 10
   
-  # Minimum similarity score (0-1)
-  similarity_threshold: 0.5
+  # Minimum similarity score (0-1).
+  # Calibrated for all-MiniLM-L6-v2 (typical relevant scores: 0.30–0.60).
+  # Raise to 0.5+ for stricter matching; lower to 0.2 for broader recall.
+  # Also used as the web-search fallback trigger: if best cosine score < this
+  # value, Brave Search fires (when truth_grounding is enabled).
+  similarity_threshold: 0.3
   
   # Enable hybrid search (vector + keyword)
   hybrid_search: true
