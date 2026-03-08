@@ -16,12 +16,217 @@ from rag_brain.main import OpenStudioBrain, OpenStudioConfig
 logging.basicConfig(level=logging.INFO)
 
 st.set_page_config(
-    page_title="Local RAG Brain",
+    page_title="Studio Brain",
     page_icon="🧠",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
+# ---------------------------------------------------------------------------
+# Custom CSS — supplements .streamlit/config.toml theme
+# The theme handles: backgrounds, text, inputs, sliders, checkboxes, buttons.
+# Here we only add what the theme system cannot express.
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    /* ── Hide Streamlit chrome ── */
+    #MainMenu,
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"] { display: none !important; }
+
+    /* ── Sidebar: fixed width, pinned, no collapse ── */
+    [data-testid="stSidebar"] {
+        min-width: 272px !important;
+        max-width: 272px !important;
+        border-right: 1px solid rgba(255,255,255,0.08) !important;
+    }
+    /* Tighten the default top padding */
+    [data-testid="stSidebar"] > div:first-child {
+        padding: 0.75rem 0.85rem 0.75rem !important;
+    }
+    /* Collapse vertical gaps between all sidebar elements */
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.15rem !important;
+    }
+
+    /* ── Sidebar section headers ── */
+    .sb-section {
+        font-size: 0.63rem;
+        font-weight: 700;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.28);
+        margin: 10px 0 4px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255,255,255,0.07);
+    }
+
+    /* ── All sidebar buttons: list-row style ── */
+    [data-testid="stSidebar"] .stButton > button {
+        text-align: left !important;
+        justify-content: flex-start !important;
+        background: transparent !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 4px 8px !important;
+        min-height: 32px !important;
+        font-size: 0.83rem !important;
+        color: rgba(228,228,231,0.60) !important;
+        width: 100% !important;
+        transition: background 0.12s, color 0.12s !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(255,255,255,0.06) !important;
+        color: rgba(228,228,231,0.92) !important;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+
+    /* ── Active session: primary button styled as highlighted row ── */
+    [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+        background: rgba(139,92,246,0.18) !important;
+        border-left: 2px solid #a78bfa !important;
+        border-radius: 0 6px 6px 0 !important;
+        color: #e4e4e7 !important;
+        font-weight: 500 !important;
+        padding-left: 6px !important;
+    }
+    [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+        background: rgba(139,92,246,0.25) !important;
+    }
+
+    /* ── New Chat: secondary button gets a subtle outline ── */
+    [data-testid="stSidebar"] .stButton > button[kind="secondary"] {
+        background: rgba(139,92,246,0.12) !important;
+        border: 1px solid rgba(139,92,246,0.35) !important;
+        border-radius: 7px !important;
+        color: #c4b5fd !important;
+        font-weight: 600 !important;
+        justify-content: center !important;
+        font-size: 0.83rem !important;
+        min-height: 34px !important;
+    }
+    [data-testid="stSidebar"] .stButton > button[kind="secondary"]:hover {
+        background: rgba(139,92,246,0.22) !important;
+        border-color: rgba(139,92,246,0.55) !important;
+        color: #ddd6fe !important;
+    }
+
+    /* ── Small action buttons (Clear, Delete) ── */
+    [data-testid="stSidebar"] .stButton > button[kind="tertiary"] {
+        font-size: 0.75rem !important;
+        color: rgba(228,228,231,0.40) !important;
+        padding: 2px 6px !important;
+        min-height: 26px !important;
+        justify-content: center !important;
+    }
+    [data-testid="stSidebar"] .stButton > button[kind="tertiary"]:hover {
+        color: rgba(228,228,231,0.80) !important;
+        background: rgba(255,255,255,0.05) !important;
+    }
+
+    /* ── Sidebar widget labels — compact, muted ── */
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stWidgetLabel p {
+        font-size: 0.77rem !important;
+        color: rgba(228,228,231,0.50) !important;
+        margin-bottom: 2px !important;
+    }
+
+    /* ── Sidebar expanders ── */
+    [data-testid="stSidebar"] [data-testid="stExpander"] {
+        border: none !important;
+        background: transparent !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        font-size: 0.75rem !important;
+        font-weight: 600 !important;
+        color: rgba(228,228,231,0.45) !important;
+        padding: 3px 0 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+        color: rgba(228,228,231,0.85) !important;
+    }
+
+    /* ── Chat messages — card style ── */
+    [data-testid="stChatMessage"] {
+        border: 1px solid rgba(255,255,255,0.06) !important;
+        border-radius: 10px !important;
+        padding: 12px 16px !important;
+        margin-bottom: 8px !important;
+        background: rgba(255,255,255,0.02) !important;
+    }
+    [data-testid="stChatMessage"] p { line-height: 1.7 !important; }
+
+    /* ── Code colour ── */
+    code { color: #a78bfa !important; }
+
+    /* ── Custom scrollbar ── */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #71717a; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------------------------
+# Fallback model lists
+# ---------------------------------------------------------------------------
+_FALLBACK_GEMINI_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemma-3-27b-it",
+    "gemma-3-12b-it",
+    "gemma-3-4b-it",
+]
+
+
+@st.cache_data(ttl=3600)
+def _list_gemini_models(api_key: str) -> list:
+    """Fetch available Gemini/Gemma models via google.generativeai. Cached 1 h."""
+    if not api_key:
+        return _FALLBACK_GEMINI_MODELS
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=api_key)
+        models = [
+            m.name.replace("models/", "")
+            for m in genai.list_models()
+            if "generateContent" in m.supported_generation_methods
+        ]
+        return sorted(models) if models else _FALLBACK_GEMINI_MODELS
+    except Exception:
+        return _FALLBACK_GEMINI_MODELS
+
+
+def _list_ollama_cloud_models(cloud_key: str, cloud_url: str) -> list:
+    """Fetch models from the Ollama Cloud endpoint."""
+    try:
+        import httpx
+
+        headers = {"Authorization": f"Bearer {cloud_key}"}
+        resp = httpx.get(f"{cloud_url}/tags", headers=headers, timeout=8.0)
+        resp.raise_for_status()
+        data = resp.json()
+        return [m["name"] for m in data.get("models", [])]
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Session persistence
+# ---------------------------------------------------------------------------
 SESSIONS_FILE = "sessions.json"
+
 
 def load_sessions():
     if os.path.exists(SESSIONS_FILE):
@@ -32,14 +237,18 @@ def load_sessions():
             return {}
     return {}
 
+
 def save_sessions(sessions_dict):
     with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
         json.dump(sessions_dict, f, indent=4)
 
-# Initialize Session State
+
+# ---------------------------------------------------------------------------
+# Initialize session state
+# ---------------------------------------------------------------------------
 if "sessions" not in st.session_state:
     st.session_state.sessions = load_sessions()
-    
+
     if not st.session_state.sessions:
         default_id = str(uuid.uuid4())
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -47,7 +256,7 @@ if "sessions" not in st.session_state:
             default_id: {
                 "name": f"Session {timestamp}",
                 "messages": [],
-                "created_at": timestamp
+                "created_at": timestamp,
             }
         }
         st.session_state.current_session_id = default_id
@@ -59,264 +268,311 @@ if "current_session_id" not in st.session_state:
         st.session_state.current_session_id = list(st.session_state.sessions.keys())[-1]
 
 if "brain" not in st.session_state:
-    with st.spinner("Initializing Brain..."):
+    with st.spinner("Initializing Brain…"):
         st.session_state.brain = OpenStudioBrain()
+
+if "confirm_clear" not in st.session_state:
+    st.session_state.confirm_clear = False
 
 current_session_id = st.session_state.current_session_id
 current_session = st.session_state.sessions[current_session_id]
 messages = current_session["messages"]
 
+# ---------------------------------------------------------------------------
 # Sidebar
+# ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("💬 Chat Sessions")
-    
-    # Session Management UI
-    session_options = {sid: sess["name"] for sid, sess in st.session_state.sessions.items()}
-    
-    selected_session = st.selectbox(
-        "Select Session",
-        options=list(session_options.keys()),
-        format_func=lambda x: session_options[x],
-        index=list(session_options.keys()).index(current_session_id)
-    )
-    
-    if selected_session != current_session_id:
-        st.session_state.current_session_id = selected_session
-        st.rerun()
-        
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("➕ New Session", use_container_width=True):
-            new_id = str(uuid.uuid4())
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            st.session_state.sessions[new_id] = {
-                "name": f"Session {timestamp}",
-                "messages": [],
-                "created_at": timestamp
-            }
-            save_sessions(st.session_state.sessions)
-            st.session_state.current_session_id = new_id
-            st.rerun()
-            
-    with col2:
-        if st.button("🗑️ Delete", use_container_width=True):
-            if len(st.session_state.sessions) > 1:
-                del st.session_state.sessions[current_session_id]
-                save_sessions(st.session_state.sessions)
-                st.session_state.current_session_id = list(st.session_state.sessions.keys())[-1]
-                st.rerun()
-            else:
-                st.warning("Cannot delete the last session.")
-                
-    st.divider()
-
-    st.title("⚙️ Settings")
-    
     config = st.session_state.brain.config
-    
-    st.subheader("RAG Parameters")
-    config.top_k = st.slider("Top K", 1, 20, config.top_k)
-    config.similarity_threshold = st.slider("Similarity Threshold", 0.0, 1.0, config.similarity_threshold)
-    config.hybrid_search = st.checkbox("Enable Hybrid Search", config.hybrid_search)
-    config.discussion_fallback = st.checkbox("Enable Discussion Fallback", config.discussion_fallback)
-    
-    st.subheader("LLM Parameters")
-    llm_providers = ["ollama", "gemini", "ollama_cloud", "openai"]
-    config.llm_provider = st.selectbox("LLM Provider", llm_providers, index=llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0)
-    
+
+    # ── App title ──
+    st.markdown(
+        '<div style="font-size:1rem;font-weight:700;color:#e4e4e7;margin-bottom:8px;">🧠 Studio Brain</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── CONVERSATIONS ──
+    st.markdown('<div class="sb-section">Conversations</div>', unsafe_allow_html=True)
+    if st.button("＋  New Chat", use_container_width=True, type="secondary", key="new_chat"):
+        new_id = str(uuid.uuid4())
+        st.session_state.sessions[new_id] = {
+            "name": "New Chat",
+            "messages": [],
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        save_sessions(st.session_state.sessions)
+        st.session_state.current_session_id = new_id
+        st.rerun()
+
+    # Session list — newest first, one button per session
+    for sid, sess in reversed(list(st.session_state.sessions.items())):
+        label = sess["name"] if len(sess["name"]) <= 27 else sess["name"][:24] + "…"
+        is_active = sid == current_session_id
+        btn_type = "primary" if is_active else "tertiary"
+        if st.button(label, use_container_width=True, type=btn_type, key=f"sess_{sid}"):
+            if not is_active:
+                st.session_state.current_session_id = sid
+                st.rerun()
+
+    # Active session actions (always below session list, compact)
+    if st.session_state.confirm_clear:
+        st.caption("Clear all messages?")
+        ca, cb = st.columns(2)
+        if ca.button("Yes", use_container_width=True, type="tertiary", key="confirm_yes"):
+            st.session_state.sessions[current_session_id]["messages"] = []
+            save_sessions(st.session_state.sessions)
+            st.session_state.confirm_clear = False
+            st.rerun()
+        if cb.button("No", use_container_width=True, type="tertiary", key="confirm_no"):
+            st.session_state.confirm_clear = False
+            st.rerun()
+    else:
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            if st.button("🧹 Clear", use_container_width=True, type="tertiary", key="clear_chat"):
+                st.session_state.confirm_clear = True
+                st.rerun()
+        with ac2:
+            if st.button("🗑 Delete", use_container_width=True, type="tertiary", key="delete_sess"):
+                if len(st.session_state.sessions) > 1:
+                    del st.session_state.sessions[current_session_id]
+                    save_sessions(st.session_state.sessions)
+                    st.session_state.current_session_id = list(st.session_state.sessions.keys())[-1]
+                    st.rerun()
+                else:
+                    st.warning("Cannot delete the only session.")
+
+    # ── MODEL ──
+    st.markdown('<div class="sb-section">Model</div>', unsafe_allow_html=True)
+
+    provider_labels = {
+        "ollama": "🤖 Ollama (local)",
+        "gemini": "✨ Gemini",
+        "ollama_cloud": "☁️ Ollama Cloud",
+        "openai": "🔑 OpenAI-compatible",
+    }
+    llm_providers = list(provider_labels.keys())
+    current_provider_idx = llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0
+    config.llm_provider = st.selectbox(
+        "Provider",
+        options=llm_providers,
+        format_func=lambda x: provider_labels[x],
+        index=current_provider_idx,
+        label_visibility="collapsed",
+    )
+
     if config.llm_provider == "ollama":
-        # Dynamically fetch available Ollama models
         ollama_models = []
         try:
             from ollama import Client
             client = Client(host=config.ollama_base_url)
-            models_resp = client.list()
-            ollama_models = [m.model for m in models_resp.models if not m.model.startswith("embeddinggemma")]
+            ollama_models = [m.model for m in client.list().models if not m.model.startswith("embeddinggemma")]
         except Exception:
-            ollama_models = []
-        
+            pass
         if ollama_models:
             current_idx = ollama_models.index(config.llm_model) if config.llm_model in ollama_models else 0
-            config.llm_model = st.selectbox("Local Model", ollama_models, index=current_idx)
+            config.llm_model = st.selectbox("Model", ollama_models, index=current_idx, label_visibility="collapsed")
         else:
-            config.llm_model = st.text_input("Local Model (no models found — pull one with `ollama pull`)", config.llm_model)
-            st.warning("No Ollama models detected. Pull a model first: `docker exec <ollama-container> ollama pull gemma`")
+            config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="model name")
+            st.caption("No models found — run `ollama pull <model>`")
+
     elif config.llm_provider == "gemini":
-        config.gemini_api_key = st.text_input("Gemini API Key", value=config.gemini_api_key, type="password")
-        gemini_models = [
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemma-3-27b-it",
-            "gemma-3-12b-it",
-            "gemma-3-4b-it"
-        ]
-        config.llm_model = st.selectbox("Gemini Model", gemini_models, index=0 if config.llm_model not in gemini_models else gemini_models.index(config.llm_model))
+        config.gemini_api_key = st.text_input("API Key", value=config.gemini_api_key, type="password", label_visibility="collapsed", placeholder="Gemini API key")
+        gemini_models = _list_gemini_models(config.gemini_api_key)
+        config.llm_model = st.selectbox(
+            "Model", gemini_models, label_visibility="collapsed",
+            index=0 if config.llm_model not in gemini_models else gemini_models.index(config.llm_model),
+        )
+
     elif config.llm_provider == "ollama_cloud":
-        config.ollama_cloud_key = st.text_input("Ollama Cloud Key", value=config.ollama_cloud_key, type="password")
-        config.llm_model = st.text_input("Ollama Cloud Model", config.llm_model)
-        
-    config.llm_temperature = st.slider("Temperature", 0.0, 1.0, config.llm_temperature)
-    
-    st.subheader("Re-ranking")
-    config.rerank = st.checkbox("Enable Re-ranking", config.rerank)
-    config.reranker_provider = st.selectbox("Re-ranking Provider", ["cross-encoder", "llm"], index=0 if config.reranker_provider == "cross-encoder" else 1)
-    
-    st.subheader("🌐 Web Search")
-    config.truth_grounding = st.checkbox("Enable Truth Grounding", config.truth_grounding,
-                                          help="Augment answers with live web results from Brave Search")
+        config.ollama_cloud_key = st.text_input("API Key", value=config.ollama_cloud_key, type="password", label_visibility="collapsed", placeholder="Ollama Cloud key")
+        col_m, col_f = st.columns([4, 1])
+        with col_m:
+            config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="model name")
+        with col_f:
+            if st.button("↻", type="tertiary", help="Fetch models from Ollama Cloud"):
+                fetched = _list_ollama_cloud_models(config.ollama_cloud_key, config.ollama_cloud_url)
+                if fetched:
+                    st.session_state["_ollama_cloud_models"] = fetched
+                    st.rerun()
+                else:
+                    st.warning("Could not fetch models.")
+        if st.session_state.get("_ollama_cloud_models"):
+            config.llm_model = st.selectbox("Available", st.session_state["_ollama_cloud_models"], label_visibility="collapsed")
+
+    elif config.llm_provider == "openai":
+        config.api_key = st.text_input("API Key", value=config.api_key, type="password", label_visibility="collapsed", placeholder="OpenAI API key")
+        config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. gpt-4o")
+
+    # ── SETTINGS ──
+    st.markdown('<div class="sb-section">Settings</div>', unsafe_allow_html=True)
+
+    # Temperature on one row with its value
+    config.llm_temperature = st.slider("Temperature", 0.0, 1.0, config.llm_temperature, step=0.05, label_visibility="collapsed")
+    st.caption(f"Temperature: {config.llm_temperature:.2f}")
+
+    # Hybrid + Web on same row
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        config.hybrid_search = st.checkbox("Hybrid search", config.hybrid_search)
+    with tc2:
+        config.truth_grounding = st.checkbox("Web search", config.truth_grounding)
+
     if config.truth_grounding:
-        config.brave_api_key = st.text_input("Brave API Key", value=config.brave_api_key, type="password",
-                                              help="Get your key at https://brave.com/search/api/")
-    
-    if "ingested_files" not in st.session_state:
-        st.session_state.ingested_files = []
-        
-    st.subheader("📥 Ingest Data")
-    
-    # Show recently ingested files
-    if st.session_state.ingested_files:
-        with st.expander("Recently Ingested Files"):
-            for file_name in st.session_state.ingested_files:
-                st.text(f"✅ {file_name}")
-                
-    uploaded_file = st.file_uploader("Upload a Single File", type=["txt", "md", "pdf", "csv", "json"])
-    if uploaded_file is not None:
-        if st.button("Ingest Uploaded File"):
-            import tempfile
-            with st.spinner(f"Ingesting {uploaded_file.name}..."):
-                # Save uploaded file to a temporary location
-                with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{uploaded_file.name}") as tmp_file:
-                    tmp_file.write(uploaded_file.getvalue())
-                    tmp_path = tmp_file.name
-                
-                try:
-                    from rag_brain.loaders import DirectoryLoader
-                    ext = os.path.splitext(uploaded_file.name)[1].lower()
-                    loader_mgr = DirectoryLoader()
-                    if ext in loader_mgr.loaders:
-                        docs = loader_mgr.loaders[ext].load(tmp_path)
-                        # Fix metadata source to show original filename instead of tmp path
-                        for d in docs:
-                            d["metadata"]["source"] = uploaded_file.name
-                        st.session_state.brain.ingest(docs)
-                        st.session_state.ingested_files.append(uploaded_file.name)
-                        st.success(f"Successfully ingested {uploaded_file.name}!")
-                    else:
-                        st.error(f"Unsupported file type: {ext}")
-                except Exception as e:
-                    st.error(f"Error during ingestion: {e}")
-                finally:
-                    # Clean up temp file
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                        
-    st.markdown("---")
-    st.markdown("**Batch Upload**")
-    
-    ingest_dir = st.text_input("Directory Path", placeholder="C:/my_documents")
-    if st.button("Ingest Directory"):
-        if os.path.isdir(ingest_dir):
-            allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
-            abs_path = os.path.abspath(ingest_dir)
-            if not abs_path.startswith(allowed_base):
-                st.error(
-                    f"Access denied: '{abs_path}' is outside the allowed base "
-                    f"directory '{allowed_base}'. Set RAG_INGEST_BASE to change it."
-                )
-                st.stop()
-            with st.spinner(f"Ingesting {abs_path}..."):
-                import asyncio
-                asyncio.run(st.session_state.brain.load_directory(abs_path))
-                st.success("Ingestion complete!")
-        else:
-            st.error("Invalid directory path.")
-            
-    st.divider()
-    
-    if st.button("Clear Chat History (Current Session)"):
-        st.session_state.sessions[current_session_id]["messages"] = []
-        save_sessions(st.session_state.sessions)
-        st.rerun()
+        config.brave_api_key = st.text_input("Brave API Key", value=config.brave_api_key, type="password", label_visibility="collapsed", placeholder="Brave API key")
 
-# Main Chat Interface
-st.title("🧠 Local RAG Brain")
-st.caption(f"General purpose local RAG interface - **{current_session['name']}**")
+    # ── ADVANCED (collapsed) ──
+    with st.expander("⚙ Advanced"):
+        config.top_k = st.slider("Top K results", 1, 20, config.top_k)
+        config.similarity_threshold = st.slider("Similarity threshold", 0.0, 1.0, config.similarity_threshold, step=0.05)
+        config.discussion_fallback = st.checkbox("Discussion fallback", config.discussion_fallback)
+        config.rerank = st.checkbox("Re-ranking", config.rerank)
+        if config.rerank:
+            config.reranker_provider = st.selectbox(
+                "Re-ranker", ["cross-encoder", "llm"],
+                index=0 if config.reranker_provider == "cross-encoder" else 1,
+            )
 
-# Display chat messages
+    # ── DOCUMENTS (collapsed) ──
+    with st.expander("📥 Documents"):
+        if "ingested_files" not in st.session_state:
+            st.session_state.ingested_files = []
+        if st.session_state.ingested_files:
+            st.caption("Recent: " + ", ".join(f"`{f}`" for f in st.session_state.ingested_files[-3:]))
+
+        uploaded_file = st.file_uploader("File", type=["txt", "md", "pdf", "csv", "json"], label_visibility="collapsed")
+        if uploaded_file is not None:
+            if st.button("⬆ Ingest", use_container_width=True, type="tertiary"):
+                import tempfile
+                with st.spinner(f"Ingesting {uploaded_file.name}…"):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{uploaded_file.name}") as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                        tmp_path = tmp_file.name
+                    try:
+                        from rag_brain.loaders import DirectoryLoader
+                        ext = os.path.splitext(uploaded_file.name)[1].lower()
+                        loader_mgr = DirectoryLoader()
+                        if ext in loader_mgr.loaders:
+                            docs = loader_mgr.loaders[ext].load(tmp_path)
+                            for d in docs:
+                                d["metadata"]["source"] = uploaded_file.name
+                            st.session_state.brain.ingest(docs)
+                            st.caption(f"✅ {len(docs)} chunk(s) ingested")
+                            st.session_state.ingested_files.append(uploaded_file.name)
+                        else:
+                            st.error(f"Unsupported file type: {ext}")
+                    except Exception as e:
+                        st.error(f"Ingestion error: {e}")
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+
+        ingest_dir = st.text_input("Directory", placeholder="/my/docs", label_visibility="collapsed")
+        if st.button("📂 Ingest Directory", use_container_width=True, type="tertiary"):
+            if os.path.isdir(ingest_dir):
+                allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
+                abs_path = os.path.abspath(ingest_dir)
+                if not abs_path.startswith(allowed_base):
+                    st.error(f"Access denied: path outside allowed base '{allowed_base}'.")
+                    st.stop()
+                with st.spinner(f"Ingesting {abs_path}…"):
+                    import asyncio
+                    asyncio.run(st.session_state.brain.load_directory(abs_path))
+                    st.success("Done!")
+            else:
+                st.error("Invalid directory path.")
+
+# ---------------------------------------------------------------------------
+# Main chat area
+# ---------------------------------------------------------------------------
+st.markdown(
+    f'<h3 style="margin:0 0 1rem;font-size:1.1rem;color:rgba(228,228,231,0.85);">'
+    f'{current_session["name"]}</h3>',
+    unsafe_allow_html=True,
+)
+
+# Display existing messages
 for message in messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message.get("sources"):
-             with st.expander(f"📚 Sources ({len(message['sources'])})"):
-                 for i, doc in enumerate(message['sources']):
-                     if doc.get('is_web'):
-                         st.markdown(f"**🌐 [{i+1}] [{doc.get('metadata', {}).get('title', doc['id'])}]({doc['id']})**")
-                     else:
-                         st.markdown(f"**📄 [{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
-                     st.text(doc['text'][:500] + ("..." if len(doc['text']) > 500 else ""))
-                     st.divider()
+            with st.expander(f"📚 Sources ({len(message['sources'])})"):
+                for i, doc in enumerate(message["sources"]):
+                    if doc.get("is_web"):
+                        title = doc.get("metadata", {}).get("title", doc["id"])
+                        st.markdown(f"**🌐 [{i+1}] [{title}]({doc['id']})**")
+                    else:
+                        st.markdown(
+                            f"**📄 [{i+1}] `{doc['id']}`** — score: `{doc.get('score', 0):.3f}`"
+                        )
+                    st.code(
+                        doc["text"][:500] + ("…" if len(doc["text"]) > 500 else ""),
+                        language=None,
+                    )
+                    st.divider()
 
 # Chat input
-if prompt := st.chat_input("Ask me anything about your documents..."):
-    
-    # Store history snapshot (excluding the new prompt)
+if prompt := st.chat_input("Ask me anything about your documents…"):
     chat_history_snapshot = messages.copy()
-    
-    # Update Session Name based on first prompt
+
     if len(messages) == 0:
-        session_title = prompt[:25] + "..." if len(prompt) > 25 else prompt
+        session_title = prompt[:30] + ("…" if len(prompt) > 30 else "")
         st.session_state.sessions[current_session_id]["name"] = session_title
-    
-    # Add user message
-    new_user_msg = {"role": "user", "content": prompt}
-    st.session_state.sessions[current_session_id]["messages"].append(new_user_msg)
+
+    st.session_state.sessions[current_session_id]["messages"].append(
+        {"role": "user", "content": prompt}
+    )
     save_sessions(st.session_state.sessions)
-    
+
     with st.chat_message("user"):
         st.markdown(prompt)
-        
-    # Generate response
+
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
         sources_placeholder = st.empty()
         full_response = ""
         sources = []
-        
-        with st.spinner("Searching and synthesizing..."):
-            # Use query_stream with injected chat history
-            for chunk in st.session_state.brain.query_stream(prompt, chat_history=chat_history_snapshot):
+
+        with st.spinner("Thinking…"):
+            for chunk in st.session_state.brain.query_stream(
+                prompt, chat_history=chat_history_snapshot
+            ):
                 if isinstance(chunk, dict) and chunk.get("type") == "sources":
                     sources = chunk.get("sources", [])
                     continue
                 full_response += chunk
                 response_placeholder.markdown(full_response + "▌")
-            
+
             response_placeholder.markdown(full_response)
-            
+
             if sources:
                 with sources_placeholder.expander(f"📚 Sources ({len(sources)})"):
                     for i, doc in enumerate(sources):
-                        if doc.get('is_web'):
-                            st.markdown(f"**🌐 [{i+1}] [{doc.get('metadata', {}).get('title', doc['id'])}]({doc['id']})**")
+                        if doc.get("is_web"):
+                            title = doc.get("metadata", {}).get("title", doc["id"])
+                            st.markdown(f"**🌐 [{i+1}] [{title}]({doc['id']})**")
                         else:
-                            st.markdown(f"**📄 [{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
-                        st.text(doc['text'][:500] + ("..." if len(doc['text']) > 500 else ""))
+                            st.markdown(
+                                f"**📄 [{i+1}] `{doc['id']}`** — score: `{doc.get('score', 0):.3f}`"
+                            )
+                        st.code(
+                            doc["text"][:500] + ("…" if len(doc["text"]) > 500 else ""),
+                            language=None,
+                        )
                         st.divider()
-            
-    # Add assistant message and save
-    new_asst_msg = {"role": "assistant", "content": full_response, "sources": sources}
-    st.session_state.sessions[current_session_id]["messages"].append(new_asst_msg)
+
+    st.session_state.sessions[current_session_id]["messages"].append(
+        {"role": "assistant", "content": full_response, "sources": sources}
+    )
     save_sessions(st.session_state.sessions)
+
 
 def main_ui():
     """Entry point for studio-brain-ui command."""
     import subprocess
-    import sys
-    
+
     app_path = os.path.abspath(__file__)
     subprocess.run(["streamlit", "run", app_path])
+
 
 if __name__ == "__main__":
     pass

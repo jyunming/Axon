@@ -449,3 +449,51 @@ class TestDirectoryLoader:
             texts = [doc["text"] for doc in docs]
             assert "Text file content" in texts
             assert "JSON content" in texts
+
+
+# ---------------------------------------------------------------------------
+# New test: DirectoryLoader.aload()
+# ---------------------------------------------------------------------------
+
+class TestDirectoryLoaderAload:
+    """Test the async aload() method of DirectoryLoader."""
+
+    def test_aload_returns_same_as_load(self, tmp_path):
+        """aload() should return the same documents as load() for the same directory."""
+        import asyncio
+
+        (tmp_path / "hello.txt").write_text("Hello async world", encoding="utf-8")
+
+        loader = DirectoryLoader()
+        sync_docs = loader.load(str(tmp_path))
+        async_docs = asyncio.run(loader.aload(str(tmp_path)))
+
+        assert len(async_docs) == len(sync_docs)
+        sync_texts = sorted(d["text"] for d in sync_docs)
+        async_texts = sorted(d["text"] for d in async_docs)
+        assert sync_texts == async_texts
+
+    def test_aload_returns_empty_for_unknown_extensions(self, tmp_path):
+        """aload() should return [] when no supported files are found."""
+        import asyncio
+
+        (tmp_path / "ignored.xyz").write_bytes(b"binary")
+
+        loader = DirectoryLoader()
+        docs = asyncio.run(loader.aload(str(tmp_path)))
+        assert docs == []
+
+    def test_aload_multiple_files(self, tmp_path):
+        """aload() correctly gathers results from multiple files concurrently."""
+        import asyncio
+
+        (tmp_path / "a.txt").write_text("file A content", encoding="utf-8")
+        (tmp_path / "b.txt").write_text("file B content", encoding="utf-8")
+
+        loader = DirectoryLoader()
+        docs = asyncio.run(loader.aload(str(tmp_path)))
+
+        assert len(docs) == 2
+        texts = {d["text"] for d in docs}
+        assert "file A content" in texts
+        assert "file B content" in texts

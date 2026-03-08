@@ -147,3 +147,114 @@ class TestReciprocalRankFusion:
         fused = reciprocal_rank_fusion(vector_results, bm25_results)
         assert len(fused) == 1
         assert fused[0]["id"] == "doc1"
+
+
+# ---------------------------------------------------------------------------
+# New tests: delete_documents, save/load
+# ---------------------------------------------------------------------------
+
+class TestBM25RetrieverDelete:
+    def test_delete_removes_document_from_search(self, tmp_path):
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [
+            {"id": "keep", "text": "python programming language", "metadata": {}},
+            {"id": "remove", "text": "javascript web development", "metadata": {}},
+        ]
+        r.add_documents(docs)
+
+        r.delete_documents(["remove"])
+
+        results = r.search("javascript web", top_k=5)
+        ids = [res["id"] for res in results]
+        assert "remove" not in ids
+
+    def test_delete_keeps_other_documents(self, tmp_path):
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [
+            {"id": "d1", "text": "alpha beta gamma", "metadata": {}},
+            {"id": "d2", "text": "delta epsilon zeta", "metadata": {}},
+            {"id": "d3", "text": "alpha delta omega", "metadata": {}},
+        ]
+        r.add_documents(docs)
+        r.delete_documents(["d2"])
+
+        assert len(r.corpus) == 2
+        remaining_ids = [d["id"] for d in r.corpus]
+        assert "d1" in remaining_ids
+        assert "d3" in remaining_ids
+        assert "d2" not in remaining_ids
+
+    def test_delete_all_documents_results_in_empty_index(self, tmp_path):
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [{"id": "only", "text": "some content", "metadata": {}}]
+        r.add_documents(docs)
+        r.delete_documents(["only"])
+
+        assert r.corpus == []
+        assert r.bm25 is None
+        assert r.search("some content") == []
+
+    def test_delete_nonexistent_id_is_noop(self, tmp_path):
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [{"id": "real", "text": "hello world", "metadata": {}}]
+        r.add_documents(docs)
+
+        r.delete_documents(["ghost_id"])
+
+        assert len(r.corpus) == 1
+        assert r.corpus[0]["id"] == "real"
+
+    def test_delete_persists_to_disk(self, tmp_path):
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [
+            {"id": "a", "text": "aardvark", "metadata": {}},
+            {"id": "b", "text": "baboon", "metadata": {}},
+        ]
+        r.add_documents(docs)
+        r.delete_documents(["a"])
+
+        # Reload from disk
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        assert len(r2.corpus) == 1
+        assert r2.corpus[0]["id"] == "b"
+
+
+class TestBM25RetrieverSaveLoad:
+    def test_save_and_load_preserves_corpus(self, tmp_path):
+        r1 = BM25Retriever(storage_path=str(tmp_path))
+        docs = [
+            {"id": "x1", "text": "machine learning basics", "metadata": {"src": "a"}},
+            {"id": "x2", "text": "deep neural networks", "metadata": {"src": "b"}},
+        ]
+        r1.add_documents(docs)
+        r1.save()
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        assert len(r2.corpus) == 2
+        loaded_ids = {d["id"] for d in r2.corpus}
+        assert loaded_ids == {"x1", "x2"}
+
+    def test_loaded_retriever_can_search(self, tmp_path):
+        # BM25Okapi IDF = log(N-df+0.5) - log(df+0.5).
+        # With only 2 docs and the term in 1, IDF = 0 → score = 0 → filtered out.
+        # Use 3 docs so the unique term gets positive IDF.
+        r1 = BM25Retriever(storage_path=str(tmp_path))
+        docs = [
+            {"id": "q1", "text": "quantum computing qubits superposition", "metadata": {}},
+            {"id": "q2", "text": "classical computing transistors", "metadata": {}},
+            {"id": "q3", "text": "classical computing binary gates", "metadata": {}},
+        ]
+        r1.add_documents(docs)
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        results = r2.search("quantum", top_k=1)
+        assert len(results) == 1
+        assert results[0]["id"] == "q1"
+
+    def test_empty_corpus_saves_and_loads(self, tmp_path):
+        r1 = BM25Retriever(storage_path=str(tmp_path))
+        r1.save()
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        assert r2.corpus == []
+        assert r2.bm25 is None
