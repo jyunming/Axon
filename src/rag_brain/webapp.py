@@ -270,6 +270,9 @@ if "current_session_id" not in st.session_state:
 if "brain" not in st.session_state:
     with st.spinner("Initializing Brain…"):
         st.session_state.brain = OpenStudioBrain()
+    # Seed embedding baseline so the hot-swap warning only fires on user changes
+    st.session_state["_emb_provider"] = st.session_state.brain.config.embedding_provider
+    st.session_state["_emb_model"] = st.session_state.brain.config.embedding_model
 
 if "confirm_clear" not in st.session_state:
     st.session_state.confirm_clear = False
@@ -361,6 +364,10 @@ with st.sidebar:
     )
 
     if config.llm_provider == "ollama":
+        config.ollama_base_url = st.text_input(
+            "Ollama URL", value=config.ollama_base_url, label_visibility="collapsed",
+            placeholder="http://localhost:11434",
+        )
         ollama_models = []
         try:
             from ollama import Client
@@ -403,6 +410,77 @@ with st.sidebar:
         config.api_key = st.text_input("API Key", value=config.api_key, type="password", label_visibility="collapsed", placeholder="OpenAI API key")
         config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. gpt-4o")
 
+    # ── EMBEDDING ──
+    st.markdown('<div class="sb-section">Embedding</div>', unsafe_allow_html=True)
+
+    _EMB_PROVIDER_LABELS = {
+        "sentence_transformers": "🤗 Sentence Transformers",
+        "ollama": "🤖 Ollama (local)",
+        "fastembed": "⚡ FastEmbed",
+        "openai": "🔑 OpenAI-compatible",
+    }
+    _EMB_MODELS: dict = {
+        "sentence_transformers": ["all-MiniLM-L6-v2", "BAAI/bge-large-en", "all-mpnet-base-v2"],
+        "ollama": ["nomic-embed-text", "mxbai-embed-large"],
+        "fastembed": ["BAAI/bge-small-en-v1.5", "BAAI/bge-m3"],
+        "openai": ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
+    }
+
+    emb_providers = list(_EMB_PROVIDER_LABELS.keys())
+    config.embedding_provider = st.selectbox(
+        "Embedding provider",
+        options=emb_providers,
+        format_func=lambda x: _EMB_PROVIDER_LABELS[x],
+        index=emb_providers.index(config.embedding_provider) if config.embedding_provider in emb_providers else 0,
+        label_visibility="collapsed",
+    )
+
+    # Ollama base URL (shared with LLM when embedding also uses Ollama)
+    if config.embedding_provider == "ollama" and config.llm_provider != "ollama":
+        config.ollama_base_url = st.text_input(
+            "Ollama URL (embed)", value=config.ollama_base_url, label_visibility="collapsed",
+            placeholder="http://localhost:11434",
+        )
+
+    suggestions = _EMB_MODELS.get(config.embedding_provider, [])
+    # If current model isn't in the suggestion list, reset to the first suggestion
+    if suggestions and config.embedding_model not in suggestions:
+        config.embedding_model = suggestions[0]
+
+    if suggestions:
+        config.embedding_model = st.selectbox(
+            "Embedding model",
+            options=suggestions,
+            index=suggestions.index(config.embedding_model),
+            label_visibility="collapsed",
+        )
+    else:
+        config.embedding_model = st.text_input(
+            "Embedding model", value=config.embedding_model, label_visibility="collapsed"
+        )
+
+    # Hot-swap brain.embedding when provider or model changes
+    _prev_emb_provider = st.session_state.get("_emb_provider", config.embedding_provider)
+    _prev_emb_model = st.session_state.get("_emb_model", config.embedding_model)
+    if config.embedding_provider != _prev_emb_provider or config.embedding_model != _prev_emb_model:
+        # Warn about potential ChromaDB dimension mismatch when docs already ingested
+        if st.session_state.get("ingested_files"):
+            st.caption(
+                "⚠️ Changing embedding model after ingestion may cause dimension errors. "
+                "Clear ChromaDB data or start fresh if queries fail."
+            )
+        with st.spinner("Loading embedding model…"):
+            try:
+                from rag_brain.main import OpenEmbedding
+                st.session_state.brain.embedding = OpenEmbedding(config)
+                st.session_state["_emb_provider"] = config.embedding_provider
+                st.session_state["_emb_model"] = config.embedding_model
+            except Exception as e:
+                st.error(f"Failed to load embedding model: {e}")
+                # Revert to previous working values
+                config.embedding_provider = _prev_emb_provider
+                config.embedding_model = _prev_emb_model
+
     # ── SETTINGS ──
     st.markdown('<div class="sb-section">Settings</div>', unsafe_allow_html=True)
 
@@ -425,6 +503,16 @@ with st.sidebar:
         config.top_k = st.slider("Top K results", 1, 20, config.top_k)
         config.similarity_threshold = st.slider("Similarity threshold", 0.0, 1.0, config.similarity_threshold, step=0.05)
         config.discussion_fallback = st.checkbox("Discussion fallback", config.discussion_fallback)
+        config.multi_query = st.checkbox(
+            "Multi-query",
+            config.multi_query,
+            help="Generate 3 rephrased queries and merge their results for broader recall",
+        )
+        config.hyde = st.checkbox(
+            "HyDE",
+            config.hyde,
+            help="Generate a hypothetical answer document and embed that instead of the raw query",
+        )
         config.rerank = st.checkbox("Re-ranking", config.rerank)
         if config.rerank:
             config.reranker_provider = st.selectbox(
