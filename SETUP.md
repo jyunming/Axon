@@ -368,7 +368,11 @@ print(f"Embedding dimension: {len(embeddings[0])}")  # Should print 384
 
 ## 6. Vision / Multimodal Setup (Optional)
 
-Only needed if you want to ingest BMP images. The system uses a Vision-Language Model (VLM) to auto-caption images.
+Only needed if you want to ingest image files. The system uses a Vision-Language Model (VLM) to auto-caption images before indexing.
+
+**Supported image formats:** `.bmp`, `.png`, `.tif`, `.tiff`, `.pgm`
+
+All image formats are normalised to PNG via Pillow before being sent to the VLM.
 
 ```bash
 ollama pull llava
@@ -376,7 +380,7 @@ ollama pull llava
 
 > Note: LLaVA requires ~5 GB disk and ~8 GB RAM/VRAM.
 
-No additional config changes are needed — the system automatically uses `llava` for image captioning when it encounters a `.bmp` file during ingestion.
+No additional config changes are needed — the system automatically uses `llava` for image captioning when it encounters any supported image file during ingestion.
 
 ---
 
