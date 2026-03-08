@@ -72,10 +72,36 @@ class TestOpenStudioBrain:
 
         result = brain.query("fallback question")
         assert result == "Fallback answer"
-        # Check that it was called with correctly formatted fallback prompt
+        # The plain query should be sent as the user message (not a 3rd-person wrapper)
         args, kwargs = brain.llm.complete.call_args
-        assert "found no relevant documents" in args[0]
+        assert args[0] == "fallback question"
         assert kwargs['chat_history'] is None
+
+    def test_multi_turn_history_passed_as_plain_query(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """User message sent to LLM must be the plain query so chat_history stays consistent."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "some context", "score": 0.9, "metadata": {}}
+        ])
+        brain.llm.complete = MagicMock(return_value="Turn 2 answer")
+
+        history = [
+            {"role": "user", "content": "turn 1 question"},
+            {"role": "assistant", "content": "turn 1 answer"},
+        ]
+        brain.query("turn 2 question", chat_history=history)
+
+        args, kwargs = brain.llm.complete.call_args
+        # User message must be the plain query (not a RAG-wrapped prompt)
+        assert args[0] == "turn 2 question"
+        # RAG context should be in the system prompt, not the user message
+        assert "turn 2 question" not in args[1] or "Relevant context" in args[1]
+        # History must be forwarded
+        assert kwargs['chat_history'] == history
 
     def test_ingest_flow(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         from rag_brain.main import OpenStudioBrain, OpenStudioConfig
@@ -511,4 +537,34 @@ class TestReadInput:
         fn("Confirm? [y/N]: ")
 
         assert received["p"] == "Confirm? [y/N]: "
+
+
+# ---------------------------------------------------------------------------
+# _infer_provider — auto-detect LLM provider from model name
+# ---------------------------------------------------------------------------
+
+class TestInferProvider:
+    def test_gemini_prefix(self):
+        from rag_brain.main import _infer_provider
+        assert _infer_provider("gemini-2.5-flash-lite") == "gemini"
+        assert _infer_provider("gemini-1.5-pro") == "gemini"
+
+    def test_openai_gpt_prefix(self):
+        from rag_brain.main import _infer_provider
+        assert _infer_provider("gpt-4o") == "openai"
+        assert _infer_provider("gpt-4o-mini") == "openai"
+        assert _infer_provider("o1-mini") == "openai"
+        assert _infer_provider("o3-mini") == "openai"
+
+    def test_ollama_default(self):
+        from rag_brain.main import _infer_provider
+        assert _infer_provider("mistral-nemo") == "ollama"
+        assert _infer_provider("llama3.1") == "ollama"
+        assert _infer_provider("gemma") == "ollama"
+        assert _infer_provider("phi3") == "ollama"
+
+    def test_case_insensitive(self):
+        from rag_brain.main import _infer_provider
+        assert _infer_provider("GEMINI-2.0-FLASH") == "gemini"
+        assert _infer_provider("GPT-4O") == "openai"
 
