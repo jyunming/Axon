@@ -1673,8 +1673,28 @@ def _draw_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> No
     sys.stdout.flush()
 
 
-def _update_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> None:
-    """No-op: status kept live via prompt_toolkit bottom_toolbar."""
+def _print_recent_turns(history: list, n_turns: int = 2) -> None:
+    """Print the last n_turns of Q&A below the header so context is visible.
+
+    Args:
+        history: chat_history list of {"role": ..., "content": ...} dicts.
+        n_turns: Number of complete Q&A turns to show (each turn = 1 user + 1 assistant message).
+    """
+    if not history:
+        return
+    recent = history[-(n_turns * 2):]
+    for msg in recent:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "user":
+            sys.stdout.write(f"  \033[1;32mYou\033[0m: {content}\n")
+        elif role == "assistant":
+            # Cap very long responses so they don't flood the screen
+            if len(content) > 600:
+                content = content[:600] + "…"
+            sys.stdout.write(f"\n  \033[1;33mBrain\033[0m:\n  {content}\n")
+        sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 class _InitDisplay(logging.Handler):
@@ -1976,7 +1996,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     _last_sources: list = []
     _last_query: str = ""
 
+    _should_redraw = False
     while True:
+        if not quiet and _should_redraw:
+            _draw_header(brain, _tick_lines)
+            _print_recent_turns(chat_history)
+        _should_redraw = False
         try:
             user_input = _read_input().strip()
         except (EOFError, KeyboardInterrupt):
@@ -2611,6 +2636,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
             _save_session(session)   # persist after every turn
+            _should_redraw = True    # redraw header before next prompt
 
 
 if __name__ == "__main__":
