@@ -19,6 +19,7 @@ ollama pull llava            # optional, for image captioning (BMP, PNG, TIF/TIF
 | Command | Description |
 |---|---|
 | `rag-brain --ingest ./docs/` | Ingest a directory via CLI |
+| `rag-brain --list` | List all ingested sources and chunk counts |
 | `rag-brain "your question"` | Query from CLI |
 | `rag-brain-api` | Start FastAPI server (port 8000) |
 | `rag-brain-ui` | Launch Streamlit web UI (port 8501) |
@@ -79,6 +80,7 @@ config.yaml
 - `POST /add_text` – real-time knowledge injection (auto-generates doc ID: `agent_doc_<uuid8>`)
 - `POST /delete` – delete documents by ID (body: `{"doc_ids": ["id1","id2"]}`, returns `{"status":"success","deleted":N,"doc_ids":[...]}`)
 - `POST /ingest` – background directory/file ingestion via `BackgroundTasks`
+- `GET /collection` – list all ingested sources with chunk counts (returns `{total_files, total_chunks, files:[{source,chunks}]}`)
 
 ## Key Conventions
 

@@ -481,6 +481,40 @@ with st.sidebar:
             else:
                 st.error("Invalid directory path.")
 
+    # ── KNOWLEDGE BASE VIEWER (collapsed) ──
+    with st.expander("📚 Knowledge Base"):
+        brain_obj = st.session_state.get("brain")
+        if brain_obj is None:
+            st.caption("Brain not initialised yet.")
+        else:
+            if st.button("🔄 Refresh", use_container_width=True, type="tertiary", key="kb_refresh"):
+                st.session_state.pop("kb_docs_cache", None)
+
+            if "kb_docs_cache" not in st.session_state:
+                with st.spinner("Loading…"):
+                    try:
+                        st.session_state.kb_docs_cache = brain_obj.list_documents()
+                    except Exception as e:
+                        st.error(f"Could not load knowledge base: {e}")
+                        st.session_state.kb_docs_cache = []
+
+            docs_cache = st.session_state.get("kb_docs_cache", [])
+            total_chunks = sum(d["chunks"] for d in docs_cache)
+
+            if not docs_cache:
+                st.caption("📭 Knowledge base is empty.")
+            else:
+                st.caption(f"{len(docs_cache)} file(s) · {total_chunks} chunk(s)")
+                for d in docs_cache:
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"font-size:0.78rem;padding:2px 0;'>"
+                        f"<span>📄 {d['source']}</span>"
+                        f"<span style='color:rgba(200,200,200,0.6);'>{d['chunks']} chunks</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
 # ---------------------------------------------------------------------------
 # Main chat area
 # ---------------------------------------------------------------------------
