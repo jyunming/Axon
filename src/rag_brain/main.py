@@ -1133,6 +1133,12 @@ def _make_completer(brain: 'OpenStudioBrain'):
 
 def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
     """Interactive chat REPL — initializes brain once, maintains history across turns."""
+    # Silence INFO logs — they clutter the interactive UI
+    import logging as _logging
+    for _log in ("RAGBrain", "StudioBrainOpen.Retrievers", "httpx",
+                 "sentence_transformers", "chromadb", "httpcore"):
+        _logging.getLogger(_log).setLevel(_logging.WARNING)
+
     try:
         import readline
         readline.set_history_length(200)
