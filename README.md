@@ -115,6 +115,10 @@ make run-all                # starts both API and UI
 
 No ports, no containers, no compose file — just `pip install` and go.
 
+> **Windows users:** For correct rendering of box-drawing characters and emoji, use
+> [Windows Terminal](https://aka.ms/terminal) (recommended) or add `$env:PYTHONUTF8=1`
+> to your PowerShell profile (`notepad $PROFILE`).
+
 #### Option C: CLI Commands
 ```bash
 # Interactive REPL (default — no args)
