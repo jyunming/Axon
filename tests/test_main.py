@@ -562,6 +562,9 @@ class TestInferProvider:
         assert _infer_provider("llama3.1") == "ollama"
         assert _infer_provider("gemma") == "ollama"
         assert _infer_provider("phi3") == "ollama"
+        # Ollama models with name:tag format must NOT be misclassified as openai
+        assert _infer_provider("gpt-oss:120b-cloud") == "ollama"
+        assert _infer_provider("o1-tuned:latest") == "ollama"
 
     def test_case_insensitive(self):
         from rag_brain.main import _infer_provider
