@@ -30,6 +30,7 @@ services:
       - ./chroma_data:/app/chroma_data
       - ./bm25_index:/app/bm25_index
       - ./config.yaml:/app/config.yaml
+      - ./.streamlit:/app/.streamlit
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - RAG_BRAIN_API_URL=http://rag-brain-api:8000

@@ -115,5 +115,14 @@ poetry.lock
 tmp/
 temp/
 *.tmp
-test_*.py
 list_gemini_models.py
+
+# Root-level ad-hoc test scripts (not part of test suite)
+/test_*.py
+/src/test_*.py
+
+# Claude Code session data
+.claude/
+
+# Runtime data
+sessions.json
