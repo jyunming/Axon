@@ -973,6 +973,7 @@ def main():
     )
     parser.add_argument('--model', help='Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o')
     parser.add_argument('--list-models', action='store_true', help='List available Ollama models and supported cloud providers')
+    parser.add_argument('--pull', metavar='MODEL', help='Pull an Ollama model by name, e.g. --pull gemma:2b')
     args = parser.parse_args()
 
     config = OpenStudioConfig.load(args.config)
@@ -1001,6 +1002,24 @@ def main():
         except Exception:
             print("  (Ollama not reachable — cannot list local models)")
         print()
+        return
+
+    if args.pull:
+        try:
+            import ollama as _ollama
+            print(f"⬇️  Pulling '{args.pull}'...")
+            for chunk in _ollama.pull(args.pull, stream=True):
+                status = chunk.get("status", "") if isinstance(chunk, dict) else getattr(chunk, 'status', '')
+                total = chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, 'total', 0)
+                completed = chunk.get("completed", 0) if isinstance(chunk, dict) else getattr(chunk, 'completed', 0)
+                if total and completed:
+                    pct = int(completed / total * 100)
+                    print(f"\r  {status}: {pct}%  ", end="", flush=True)
+                elif status:
+                    print(f"\r  {status}...    ", end="", flush=True)
+            print(f"\n✅ '{args.pull}' is ready.\n")
+        except Exception as e:
+            print(f"\n❌ Failed to pull '{args.pull}': {e}")
         return
 
     # Auto-pull Ollama model if not available locally
