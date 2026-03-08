@@ -23,7 +23,7 @@ llm:
   # Model names:
   # ollama: llama3.1, gemma, llama3.1:70b, qwen2.5:32b, mistral-nemo
   # openai: gpt-4o, gpt-4o-mini, local-model...
-  model: llama3.1
+  model: gemma
   
   # Base URL for API connections. Useful to point the 'openai' client to an Open Source Docker Engine like vLLM.
   base_url: http://localhost:11434
