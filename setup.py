@@ -42,6 +42,8 @@ setup(
         "python-docx>=1.0.0",
         "pymupdf>=1.24.0",
         "pypdf>=4.0.0",
+        "prompt_toolkit>=3.0.0",
+        "rich>=13.0.0",
     ],
     extras_require={
         "qdrant": ["qdrant-client>=1.7.0"],
