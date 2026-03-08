@@ -1087,7 +1087,7 @@ def main():
     _interactive_repl(brain, stream=True)
 
 
-_SLASH_COMMANDS = ["/help", "/list", "/ingest ", "/model ", "/pull ", "/clear", "/quit", "/exit"]
+_SLASH_COMMANDS = ["/help", "/list", "/ingest ", "/model ", "/pull ", "/search", "/clear", "/quit", "/exit"]
 
 
 def _make_completer(brain: 'OpenStudioBrain'):
@@ -1143,9 +1143,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
         pass
 
     model_info = f"{brain.config.llm_provider}/{brain.config.llm_model}"
-    print(f"\n🧠 Local RAG Brain  [{model_info}]")
+    search_status = "🔍 web search ON" if brain.config.truth_grounding else "🔍 web search OFF"
+    print(f"\n🧠 Local RAG Brain  [{model_info}]  [{search_status}]")
     print("   Type your question, or use a slash command.")
-    print("   /help  /list  /ingest <path>  /model <name>  /pull <name>  /clear  /quit\n")
+    print("   /help  /list  /ingest <path>  /model <provider>/<model>  /search  /pull <name>  /clear  /quit\n")
 
     chat_history: list = []
 
@@ -1171,12 +1172,18 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
 
             elif cmd == "/help":
                 print(
-                    "\n  /list              — list ingested documents\n"
-                    "  /ingest <path>     — ingest a file or directory\n"
-                    "  /model <name>      — switch Ollama model (auto-pulls if missing)\n"
-                    "  /pull <name>       — pull an Ollama model\n"
-                    "  /clear             — clear chat history\n"
-                    "  /quit              — exit\n"
+                    "\n  /list                        — list ingested documents\n"
+                    "  /ingest <path>               — ingest a file or directory\n"
+                    "  /model <model>               — switch model (keep provider)\n"
+                    "  /model <provider>/<model>    — switch provider and model\n"
+                    "    providers: ollama, gemini, openai, ollama_cloud\n"
+                    "    e.g. /model gemini/gemini-1.5-flash\n"
+                    "         /model openai/gpt-4o\n"
+                    "         /model ollama/gemma:2b\n"
+                    "  /search                      — toggle web search (Brave API) on/off\n"
+                    "  /pull <name>                 — pull an Ollama model\n"
+                    "  /clear                       — clear chat history\n"
+                    "  /quit                        — exit\n"
                 )
 
             elif cmd == "/list":
@@ -1210,12 +1217,27 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
                     print(f"  ❌ Path not found: {arg}")
 
             elif cmd == "/model":
+                _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
                 if not arg:
-                    print(f"  Current model: {brain.config.llm_model}")
+                    print(f"  Current: {brain.config.llm_provider}/{brain.config.llm_model}")
+                    print(f"  Usage:   /model <model>              (keep current provider)")
+                    print(f"           /model <provider>/<model>   (switch provider too)")
+                    print(f"  Providers: {', '.join(_PROVIDERS)}")
+                elif "/" in arg:
+                    provider, model = arg.split("/", 1)
+                    if provider not in _PROVIDERS:
+                        print(f"  ❌ Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}")
+                    else:
+                        brain.config.llm_provider = provider
+                        brain.config.llm_model = model
+                        brain.llm = OpenLLM(brain.config)
+                        print(f"  ✅ Switched to {provider}/{model}")
+                        if provider != "ollama":
+                            print(f"  ℹ️  Make sure the required API key env var is set.")
                 else:
                     brain.config.llm_model = arg
-                    brain.llm = brain.llm.__class__(brain.config)
-                    print(f"  ✅ Switched to model: {arg}")
+                    brain.llm = OpenLLM(brain.config)
+                    print(f"  ✅ Switched to {brain.config.llm_provider}/{arg}")
 
             elif cmd == "/pull":
                 if not arg:
@@ -1245,6 +1267,18 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
             elif cmd == "/clear":
                 chat_history.clear()
                 print("  🗑️  Chat history cleared.")
+
+            elif cmd == "/search":
+                if brain.config.truth_grounding:
+                    brain.config.truth_grounding = False
+                    print("  🔍 Web search OFF — answers from local knowledge only.")
+                else:
+                    if not brain.config.brave_api_key:
+                        print("  ❌ BRAVE_API_KEY is not set. Export it and restart, or set it with:")
+                        print("     export BRAVE_API_KEY=your_key")
+                    else:
+                        brain.config.truth_grounding = True
+                        print("  🔍 Web search ON — Brave Search will be used as fallback when local knowledge is insufficient.")
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")
