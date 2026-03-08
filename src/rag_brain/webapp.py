@@ -158,6 +158,13 @@ with st.sidebar:
     config.rerank = st.checkbox("Enable Re-ranking", config.rerank)
     config.reranker_provider = st.selectbox("Re-ranking Provider", ["cross-encoder", "llm"], index=0 if config.reranker_provider == "cross-encoder" else 1)
     
+    st.subheader("🌐 Web Search")
+    config.truth_grounding = st.checkbox("Enable Truth Grounding", config.truth_grounding,
+                                          help="Augment answers with live web results from Brave Search")
+    if config.truth_grounding:
+        config.brave_api_key = st.text_input("Brave API Key", value=config.brave_api_key, type="password",
+                                              help="Get your key at https://brave.com/search/api/")
+    
     if "ingested_files" not in st.session_state:
         st.session_state.ingested_files = []
         
@@ -239,7 +246,10 @@ for message in messages:
         if message.get("sources"):
              with st.expander(f"📚 Sources ({len(message['sources'])})"):
                  for i, doc in enumerate(message['sources']):
-                     st.markdown(f"**[{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
+                     if doc.get('is_web'):
+                         st.markdown(f"**🌐 [{i+1}] [{doc.get('metadata', {}).get('title', doc['id'])}]({doc['id']})**")
+                     else:
+                         st.markdown(f"**📄 [{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
                      st.text(doc['text'][:500] + ("..." if len(doc['text']) > 500 else ""))
                      st.divider()
 
@@ -283,7 +293,10 @@ if prompt := st.chat_input("Ask me anything about your documents..."):
             if sources:
                 with sources_placeholder.expander(f"📚 Sources ({len(sources)})"):
                     for i, doc in enumerate(sources):
-                        st.markdown(f"**[{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
+                        if doc.get('is_web'):
+                            st.markdown(f"**🌐 [{i+1}] [{doc.get('metadata', {}).get('title', doc['id'])}]({doc['id']})**")
+                        else:
+                            st.markdown(f"**📄 [{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
                         st.text(doc['text'][:500] + ("..." if len(doc['text']) > 500 else ""))
                         st.divider()
             

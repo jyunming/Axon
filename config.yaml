@@ -72,3 +72,9 @@ query_transformations:
   multi_query: false
   hyde: false
   discussion_fallback: false
+
+# Web Search / Truth Grounding
+# Uses Brave Search API to ground answers with live web results
+web_search:
+  enabled: false
+  # brave_api_key: "your-brave-api-key-here"  # or set BRAVE_API_KEY env var
