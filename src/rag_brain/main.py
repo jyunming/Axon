@@ -323,7 +323,10 @@ class OpenLLM:
             response = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
-                options={"temperature": self.config.llm_temperature}
+                options={
+                    "temperature": self.config.llm_temperature,
+                    "num_ctx": 8192
+                }
             )
             return response['message']['content']
             
@@ -421,7 +424,10 @@ class OpenLLM:
                 model=self.config.llm_model,
                 messages=messages,
                 stream=True,
-                options={"temperature": self.config.llm_temperature}
+                options={
+                    "temperature": self.config.llm_temperature,
+                    "num_ctx": 8192
+                }
             )
             for chunk in stream_resp:
                 yield chunk['message']['content']
