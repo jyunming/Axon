@@ -193,11 +193,164 @@ class TestOpenLLM:
         from rag_brain.main import OpenLLM, OpenStudioConfig
         config = OpenStudioConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
         llm = OpenLLM(config)
-        
+
         # Setup mock client
         mock_client = MockOpenAI.return_value
         mock_client.chat.completions.create.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content="openai resp"))])
-        
+
         result = llm.complete("hello", system_prompt="be helpful")
         assert result == "openai resp"
         assert mock_client.chat.completions.create.called
+
+
+# ---------------------------------------------------------------------------
+# New tests: HyDE, multi-query, load_directory, metrics
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestQueryTransformations:
+    def test_hyde_document_calls_llm(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(hyde=False, hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain.llm.complete = MagicMock(return_value="Hypothetical passage about X.")
+
+        result = brain._get_hyde_document("What is X?")
+
+        assert result == "Hypothetical passage about X."
+        brain.llm.complete.assert_called_once()
+        call_prompt = brain.llm.complete.call_args[0][0]
+        assert "What is X?" in call_prompt
+
+    def test_multi_queries_returns_original_plus_alternatives(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(multi_query=True, hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain.llm.complete = MagicMock(
+            return_value="Alt query one\nAlt query two\nAlt query three"
+        )
+
+        queries = brain._get_multi_queries("original question")
+
+        # Original must always be first
+        assert queries[0] == "original question"
+        # 3 alternatives + original = 4
+        assert len(queries) == 4
+        # Whitespace stripped
+        assert all(q == q.strip() for q in queries)
+
+    def test_multi_queries_strips_numbering(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(multi_query=True, hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain.llm.complete = MagicMock(
+            return_value="1. How does X work\n2. Explain X\n3. X overview"
+        )
+
+        queries = brain._get_multi_queries("original")
+        # Numbering should be stripped
+        assert not any(q[0].isdigit() for q in queries[1:])
+
+    def test_load_directory_calls_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain.ingest = MagicMock()
+
+        docs = [{"id": "f1.txt", "text": "hello", "metadata": {}}]
+
+        with patch("rag_brain.loaders.DirectoryLoader") as MockLoader:
+            mock_loader_instance = MockLoader.return_value
+            mock_loader_instance.aload = AsyncMock(return_value=docs)
+
+            asyncio.run(brain.load_directory(str(tmp_path)))
+
+        brain.ingest.assert_called_once_with(docs)
+
+    def test_load_directory_skips_ingest_when_empty(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain.ingest = MagicMock()
+
+        with patch("rag_brain.loaders.DirectoryLoader") as MockLoader:
+            mock_loader_instance = MockLoader.return_value
+            mock_loader_instance.aload = AsyncMock(return_value=[])
+
+            asyncio.run(brain.load_directory(str(tmp_path)))
+
+        brain.ingest.assert_not_called()
+
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestLogQueryMetrics:
+    def test_metrics_logged_without_exception(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        import logging
+        from unittest.mock import patch as _patch
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+
+        with _patch("rag_brain.main.logger") as mock_logger:
+            brain._log_query_metrics(
+                query="test query that is fairly long",
+                vector_count=5,
+                bm25_count=3,
+                filtered_count=4,
+                final_count=3,
+                top_score=0.87,
+                latency_ms=123.4,
+                transformations={"hyde_applied": False},
+            )
+            mock_logger.info.assert_called_once()
+            logged_data = mock_logger.info.call_args[0][0]
+            assert logged_data["event"] == "query_complete"
+            assert logged_data["latency_ms"] == 123.4
+            assert logged_data["results"]["vector"] == 5
+            assert "test query" in logged_data["query_preview"]
+
+    def test_metrics_handles_zero_top_score(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        from unittest.mock import patch as _patch
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+
+        with _patch("rag_brain.main.logger") as mock_logger:
+            brain._log_query_metrics(
+                query="q", vector_count=0, bm25_count=0,
+                filtered_count=0, final_count=0, top_score=0.0, latency_ms=10.0
+            )
+            logged_data = mock_logger.info.call_args[0][0]
+            # top_score=0 treated as falsy → logged as None
+            assert logged_data["top_score"] is None
