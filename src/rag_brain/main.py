@@ -1356,13 +1356,15 @@ _MODEL_CTX: Dict[str, int] = {
 def _infer_provider(model: str) -> str:
     """Guess LLM provider from model name.
 
-    Returns "gemini" for gemini-* models, "openai" for gpt-*/o1-*/o3-* models,
-    and "ollama" for everything else (local models).
+    Returns "gemini" for gemini-* models, "openai" for gpt-*/o1-*/o3-*/o4-*
+    models (without a colon, since Ollama uses name:tag format), and "ollama"
+    for everything else (local models, including gpt-oss:tag Ollama models).
     """
     m = model.lower()
     if m.startswith("gemini-"):
         return "gemini"
-    if m.startswith(("gpt-", "o1-", "o3-", "o4-")):
+    # OpenAI model names never contain ':'; Ollama uses name:tag format.
+    if ":" not in m and m.startswith(("gpt-", "o1-", "o3-", "o4-")):
         return "openai"
     return "ollama"
 
