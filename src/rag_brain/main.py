@@ -2462,7 +2462,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             print(f"  📎 Attached: {', '.join(at_files)}")
 
         # --- Regular query — use Rich Live for spinner + streaming response ---
-        print()   # blank line after You:
         response_parts: list = []
         _cancelled = False
         try:
@@ -2506,6 +2505,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
                 # Stream remaining tokens with a live Markdown view
                 try:
+                    print()   # blank line between You: and Brain:
                     _console.print("[bold yellow]Brain:[/bold yellow]")
                     with _RL(console=_console, refresh_per_second=12) as _resp_live:
                         for chunk in first_tokens:          # replay buffered token
@@ -2518,6 +2518,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 continue
                             response_parts.append(chunk)
                             _resp_live.update(_RM("".join(response_parts)))
+                    print()   # blank line after Brain response, before next You:
                 except KeyboardInterrupt:
                     _cancelled = True
                     print("  ⚠️  Cancelled.\n")
@@ -2552,9 +2553,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 if _err:
                     raise _err[0]
                 response = _result[0] if _result else ""
+                print()   # blank line between You: and Brain:
                 _console.print("[bold yellow]Brain:[/bold yellow]")
                 _console.print(_RM(response))
-                print()
+                print()   # blank line after Brain response, before next You:
                 response_parts = [response]
 
         except ImportError:
@@ -2576,7 +2578,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             response = brain.query(query_text, chat_history=chat_history)
             if not quiet:
                 _spin_stop.set()
-            print(f"\r\033[1;33mBrain:\033[0m {response}\n")
+            print(f"\n\033[1;33mBrain:\033[0m {response}\n")
             response_parts = [response]
 
         response = "".join(response_parts)
