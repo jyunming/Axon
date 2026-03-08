@@ -111,7 +111,31 @@ ollama pull nomic-embed-text
 
 ## Large Language Models (LLMs)
 
-### 🏆 Recommended: Llama 3.1 8B Instruct
+> **Default model:** `gemma` (via Ollama). Change with `llm.model` in `config.yaml` or live from the UI sidebar.
+
+### Cloud LLM Providers
+
+The system supports cloud providers in addition to local Ollama models. Set `llm.provider` in `config.yaml`:
+
+| Provider | `llm.provider` value | Example models | Notes |
+|---|---|---|---|
+| **Ollama (local)** | `ollama` | `gemma`, `llama3.1:8b`, `phi3:mini` | Default; fully offline |
+| **Google Gemini** | `gemini` | `gemini-2.0-flash`, `gemini-1.5-pro` | Requires `GOOGLE_API_KEY` |
+| **OpenAI** | `openai` | `gpt-4o`, `gpt-3.5-turbo` | Requires `OPENAI_API_KEY` |
+| **Ollama Cloud** | `ollama_cloud` | Any Ollama-hosted model | Requires `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` |
+
+Example `config.yaml` for Gemini:
+```yaml
+llm:
+  provider: gemini
+  model: gemini-2.0-flash
+```
+
+> **Note:** Gemma models (Google) do not support `system_instruction` in the Gemini SDK. The system automatically prepends the system prompt to the user message for Gemma model names.
+
+---
+
+### 🏆 Recommended Local: Llama 3.1 8B Instruct
 
 | Metric | Value |
 |--------|-------|

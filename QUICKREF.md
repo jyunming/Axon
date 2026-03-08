@@ -103,9 +103,9 @@ git commit -m "feat: add new feature"
 # Push
 git push origin feature/new-feature
 
-# Update from main
+# Update from master
 git fetch origin
-git rebase origin/main
+git rebase origin/master
 ```
 
 ## Configuration
@@ -122,7 +122,7 @@ nano .env
 **Key Variables:**
 ```bash
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=llama3.1
+OLLAMA_MODEL=gemma
 RAG_BRAIN_HOST=127.0.0.1
 RAG_BRAIN_PORT=8000
 LOG_LEVEL=INFO
@@ -137,7 +137,7 @@ embedding:
 
 llm:
   provider: ollama
-  model: llama3.1
+  model: gemma
   temperature: 0.7
 
 rag:
