@@ -789,9 +789,10 @@ Your primary goal is to help the user by answering questions based on the provid
 
         results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
         
-        # Web Search (Truth Grounding)
+        # Web Search (Truth Grounding) — only fires when local knowledge is insufficient
         web_count = 0
-        if self.config.truth_grounding and self.config.brave_api_key:
+        if self.config.truth_grounding and self.config.brave_api_key and not results:
+            logger.info("🌐 Local knowledge insufficient — falling back to Brave web search")
             web_results = self._execute_web_search(query)
             web_count = len(web_results)
             results.extend(web_results)
@@ -824,13 +825,23 @@ Your primary goal is to help the user by answering questions based on the provid
         return "\n\n".join(parts), has_web
 
     def _build_system_prompt(self, has_web: bool) -> str:
-        """Return the system prompt, extended with a web-search note when applicable."""
-        if not has_web:
+        """Return the system prompt, extended based on web search state.
+
+        When truth_grounding is enabled but local docs answered the question,
+        the LLM is told web search is available as a fallback (sets expectations).
+        When web results are actually in the context, the LLM is told to use and cite them.
+        """
+        if not self.config.truth_grounding:
             return self.SYSTEM_PROMPT
+        if has_web:
+            return self.SYSTEM_PROMPT + (
+                "\n\n**Web Search Used**: Local documents did not contain sufficient information, "
+                "so live Brave Search results have been added to your context (marked as '[Web Result]'). "
+                "Use these web results to answer the question and always cite the source URL."
+            )
         return self.SYSTEM_PROMPT + (
-            "\n\n**Web Search Active**: Some context items above come from live Brave Search results "
-            "(marked as 'Web Result'). Use them to answer questions about current events or information "
-            "not found in local documents. Always cite the URL when referencing a web result."
+            "\n\n**Web Search Available**: If the local documents above are insufficient, "
+            "you have access to live Brave Search as a fallback tool. It was not needed for this query."
         )
 
     def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None) -> str:
@@ -845,7 +856,7 @@ Your primary goal is to help the user by answering questions based on the provid
             
             if self.config.discussion_fallback:
                 prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                return self.llm.complete(prompt_fallback, self.SYSTEM_PROMPT, chat_history=chat_history)
+                return self.llm.complete(prompt_fallback, self._build_system_prompt(False), chat_history=chat_history)
             
             return "I don't have any relevant information to answer that question."
             
@@ -869,7 +880,7 @@ Your primary goal is to help the user by answering questions based on the provid
         if not results:
             if self.config.discussion_fallback:
                 prompt_fallback = f"The user asked: '{query}'. I found no relevant documents in the local knowledge base. Please provide a helpful response based on your general knowledge, while noting the lack of specific local context."
-                yield from self.llm.stream(prompt_fallback, self.SYSTEM_PROMPT, chat_history=chat_history)
+                yield from self.llm.stream(prompt_fallback, self._build_system_prompt(False), chat_history=chat_history)
                 return
             yield "I don't have any relevant information to answer that question."
             return
