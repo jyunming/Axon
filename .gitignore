@@ -115,5 +115,10 @@ poetry.lock
 tmp/
 temp/
 *.tmp
-test_*.py
 list_gemini_models.py
+
+# Claude Code session data
+.claude/
+
+# Runtime data
+sessions.json
