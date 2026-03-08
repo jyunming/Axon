@@ -110,40 +110,43 @@ class BM25Retriever:
 
 
 def reciprocal_rank_fusion(vector_results: List[Dict], bm25_results: List[Dict], k: int = 60) -> List[Dict]:
-    """
-    Merge results from multiple retrievers using Reciprocal Rank Fusion.
+    """Merge results from multiple retrievers using Reciprocal Rank Fusion.
+
+    The original cosine similarity score from vector search is preserved in the
+    ``vector_score`` field so the UI can display a meaningful relevance value.
+    The RRF-fused score (used only for ranking) is stored in ``score``.
     """
     fused_scores = {}
-    
-    # Process vector results
+
+    # Preserve original cosine scores keyed by doc_id
+    vector_scores = {doc['id']: doc.get('score', 0.0) for doc in vector_results}
+
     for rank, doc in enumerate(vector_results):
         doc_id = doc['id']
         fused_scores[doc_id] = fused_scores.get(doc_id, 0) + 1 / (rank + k)
-        
-    # Process BM25 results
+
     for rank, doc in enumerate(bm25_results):
         doc_id = doc['id']
         if doc_id not in fused_scores:
-            # We need to keep the full doc data if it wasn't in vector results
             fused_scores[doc_id] = 1 / (rank + k)
-            # Store the doc structure for later
-            doc['fused_only'] = True 
+            doc['fused_only'] = True
         else:
             fused_scores[doc_id] += 1 / (rank + k)
 
-    # Combine all docs
     all_docs = {doc['id']: doc for doc in vector_results}
     for doc in bm25_results:
         if doc['id'] not in all_docs:
             all_docs[doc['id']] = doc
 
-    # Sort by fused score
     sorted_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
-    
+
     final_results = []
     for doc_id in sorted_ids:
         doc = all_docs[doc_id]
         doc['score'] = fused_scores[doc_id]
+        # Expose the original cosine similarity for display purposes
+        if doc_id in vector_scores:
+            doc['vector_score'] = vector_scores[doc_id]
         final_results.append(doc)
-        
+
     return final_results
