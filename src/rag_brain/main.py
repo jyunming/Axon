@@ -347,7 +347,8 @@ class OpenLLM:
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
             model_kwargs = {"model_name": self.config.llm_model}
-            if system_prompt:
+            is_gemma = "gemma" in self.config.llm_model.lower()
+            if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
             
@@ -355,7 +356,11 @@ class OpenLLM:
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            contents.append({"role": "user", "parts": [prompt]})
+            
+            user_text = prompt
+            if system_prompt and is_gemma:
+                user_text = f"{system_prompt}\n\n{prompt}"
+            contents.append({"role": "user", "parts": [user_text]})
                 
             response = model.generate_content(
                 contents,
@@ -449,7 +454,8 @@ class OpenLLM:
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
             model_kwargs = {"model_name": self.config.llm_model}
-            if system_prompt:
+            is_gemma = "gemma" in self.config.llm_model.lower()
+            if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
             
@@ -457,7 +463,11 @@ class OpenLLM:
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            contents.append({"role": "user", "parts": [prompt]})
+            
+            user_text = prompt
+            if system_prompt and is_gemma:
+                user_text = f"{system_prompt}\n\n{prompt}"
+            contents.append({"role": "user", "parts": [user_text]})
                 
             response = model.generate_content(
                 contents,
