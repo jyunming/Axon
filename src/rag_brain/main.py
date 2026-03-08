@@ -1423,8 +1423,8 @@ def _show_context(
         content = f"  ▸  {title}"
         return f"  │{content:<{W}}│"
 
-    def wrap_row(text: str, indent: int = 4, max_lines: int = 3) -> list:
-        """Word-wrap text into multiple box rows."""
+    def wrap_row(text: str, indent: int = 4, max_lines: int = 0) -> list:
+        """Word-wrap text into multiple box rows. 0 = no limit."""
         avail = W - indent
         words = text.split()
         lines_out, current = [], ""
@@ -1437,7 +1437,7 @@ def _show_context(
                 current = w
         if current:
             lines_out.append(row(current, indent))
-        return lines_out[:max_lines]
+        return lines_out if not max_lines else lines_out[:max_lines]
 
     # ── Token estimates ────────────────────────────────────────────────────────
     system_text = brain._build_system_prompt(False)
@@ -1463,6 +1463,7 @@ def _show_context(
     # ── Model section ──────────────────────────────────────────────────────────
     lines.append(SEP)
     lines.append(section("Model"))
+    lines.append(SEP)
     lines.append(BLANK)
     lines.append(row(f"LLM    ·  {brain.config.llm_provider}/{brain.config.llm_model}"
                      f"   ({ctx_size:,} token context window)"))
@@ -1472,6 +1473,7 @@ def _show_context(
     # ── Token usage ───────────────────────────────────────────────────────────
     lines.append(SEP)
     lines.append(section("Token Usage  (rough estimate — ~4 chars/token)"))
+    lines.append(SEP)
     lines.append(BLANK)
     lines.append(row(f"{indicator} {bar}  {total_used:,} / {ctx_size:,}  ({int(pct*100)}%)", indent=4))
     lines.append(BLANK)
@@ -1485,6 +1487,7 @@ def _show_context(
     # ── RAG settings ──────────────────────────────────────────────────────────
     lines.append(SEP)
     lines.append(section("RAG Settings"))
+    lines.append(SEP)
     lines.append(BLANK)
     lines.append(row(
         f"top-k · {brain.config.top_k}    "
@@ -1500,6 +1503,7 @@ def _show_context(
     lines.append(SEP)
     turns = len(chat_history) // 2
     lines.append(section(f"Chat History  ({turns} turns)"))
+    lines.append(SEP)
     lines.append(BLANK)
     if not chat_history:
         lines.append(row("(empty)"))
@@ -1519,6 +1523,7 @@ def _show_context(
     # ── Last retrieved sources ─────────────────────────────────────────────────
     lines.append(SEP)
     lines.append(section(f"Last Retrieved Sources  ({len(last_sources)} chunks)"))
+    lines.append(SEP)
     lines.append(BLANK)
     if last_query:
         lines.append(row(f'query · "{last_query[:W - 14]}"'))
@@ -1535,9 +1540,10 @@ def _show_context(
             lines.append(row(f"{i:>2}. {kind} {score_bar} {score:.3f}   {name}"))
     lines.append(BLANK)
 
-    # ── System prompt preview ──────────────────────────────────────────────────
+    # ── System prompt ──────────────────────────────────────────────────────────
     lines.append(SEP)
     lines.append(section("System Prompt"))
+    lines.append(SEP)
     lines.append(BLANK)
     lines.extend(wrap_row(system_text.replace("\n", " "), indent=4))
     lines.append(BLANK)
