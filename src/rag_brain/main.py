@@ -1798,6 +1798,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         from prompt_toolkit.completion import Completer, Completion
         from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
         from prompt_toolkit.styles import Style
+        from prompt_toolkit.formatted_text import HTML as _PThtml
         from prompt_toolkit.history import FileHistory as _FileHistory
         import glob as _pglob
 
@@ -1922,10 +1923,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         except ImportError:
             pass
 
-    def _read_input(prompt: str) -> str:
+    def _read_input() -> str:
         if _pt_session:
-            return _pt_session.prompt(prompt)
-        return input(prompt)
+            return _pt_session.prompt(_PThtml('<ansigreen><b>You</b></ansigreen>: '))
+        return input('\033[1;32mYou\033[0m: ')
 
     # REPL is conversational — always let the LLM answer even with no RAG hits
     brain.config.discussion_fallback = True
@@ -1960,7 +1961,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
     while True:
         try:
-            user_input = _read_input("You: ").strip()
+            user_input = _read_input().strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 Bye!")
             break
@@ -2478,7 +2479,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             def _spin_update(live: '_RL') -> None:
                 while not _spin_stop.wait(0.1):
                     f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
-                    live.update(_RT(f"  Brain: {f} thinking…"))
+                    live.update(_RT.from_markup(f"[bold yellow]Brain:[/bold yellow] {f} thinking…"))
                     _spin_idx[0] += 1
 
             if stream:
@@ -2487,7 +2488,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
                 # Show spinner until the first real token arrives
                 if not quiet:
-                    with _RL(_RT("  Brain: ⠋ thinking…"), console=_console,
+                    with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
                              transient=True, refresh_per_second=10) as _spin_live:
                         _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
                         _st.start()
@@ -2504,6 +2505,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
                 # Stream remaining tokens with a live Markdown view
                 try:
+                    _console.print("[bold yellow]Brain:[/bold yellow]")
                     with _RL(console=_console, refresh_per_second=12) as _resp_live:
                         for chunk in first_tokens:          # replay buffered token
                             response_parts.append(chunk)
@@ -2536,7 +2538,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 _qt.start()
 
                 if not quiet:
-                    with _RL(_RT("  Brain: ⠋ thinking…"), console=_console,
+                    with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
                              transient=True, refresh_per_second=10) as _spin_live2:
                         _st2 = threading.Thread(target=_spin_update, args=(_spin_live2,), daemon=True)
                         _st2.start()
@@ -2549,6 +2551,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 if _err:
                     raise _err[0]
                 response = _result[0] if _result else ""
+                _console.print("[bold yellow]Brain:[/bold yellow]")
                 _console.print(_RM(response))
                 print()
                 response_parts = [response]
@@ -2572,7 +2575,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             response = brain.query(query_text, chat_history=chat_history)
             if not quiet:
                 _spin_stop.set()
-            print(f"\r  Brain: {response}\n")
+            print(f"\r\033[1;33mBrain:\033[0m {response}\n")
             response_parts = [response]
 
         response = "".join(response_parts)
