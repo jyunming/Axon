@@ -1923,10 +1923,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         except ImportError:
             pass
 
-    def _read_input() -> str:
+    def _read_input(prompt: str = "") -> str:
         if _pt_session:
-            return _pt_session.prompt(_PThtml('<ansigreen><b>You</b></ansigreen>: '))
-        return input('\033[1;32mYou\033[0m: ')
+            _p = _PThtml('<ansigreen><b>You</b></ansigreen>: ') if not prompt else prompt
+            return _pt_session.prompt(_p)
+        return input(prompt if prompt else '\033[1;32mYou\033[0m: ')
 
     # REPL is conversational — always let the LLM answer even with no RAG hits
     brain.config.discussion_fallback = True

@@ -443,3 +443,72 @@ class TestOpenVectorStoreListDocuments:
 
         assert len(result) == 1
         assert result[0]["source"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _read_input (REPL prompt helper)
+# ---------------------------------------------------------------------------
+
+class TestReadInput:
+    """_read_input must accept an optional custom prompt without raising."""
+
+    def _make_read_input(self, pt_session=None, pt_html=None):
+        """Replicate the closure produced inside _interactive_repl."""
+        _pt_session = pt_session
+        _PThtml = pt_html
+
+        def _read_input(prompt: str = "") -> str:
+            if _pt_session:
+                _p = _PThtml('<ansigreen><b>You</b></ansigreen>: ') if not prompt else prompt
+                return _pt_session.prompt(_p)
+            return input(prompt if prompt else '\033[1;32mYou\033[0m: ')
+
+        return _read_input
+
+    def test_no_args_uses_styled_you_prompt_with_pt(self):
+        """No-arg call uses the coloured 'You:' HTML prompt."""
+        mock_session = MagicMock()
+        mock_session.prompt.return_value = "hello"
+        mock_html = MagicMock(side_effect=lambda s: f"HTML({s})")
+
+        fn = self._make_read_input(pt_session=mock_session, pt_html=mock_html)
+        result = fn()
+
+        assert result == "hello"
+        mock_session.prompt.assert_called_once()
+        # First positional arg should be the HTML-wrapped You: prompt
+        called_arg = mock_session.prompt.call_args[0][0]
+        assert "You" in str(called_arg)
+
+    def test_custom_prompt_passed_through_with_pt(self):
+        """A custom prompt string (e.g. confirmation question) is passed as-is."""
+        mock_session = MagicMock()
+        mock_session.prompt.return_value = "y"
+        mock_html = MagicMock()
+
+        fn = self._make_read_input(pt_session=mock_session, pt_html=mock_html)
+        result = fn("  Resume session? [y/N]: ")
+
+        assert result == "y"
+        mock_session.prompt.assert_called_once_with("  Resume session? [y/N]: ")
+
+    def test_no_pt_no_args_uses_ansi_you(self, monkeypatch):
+        """Without prompt_toolkit, plain input() is called with ANSI-coloured 'You:'."""
+        inputs = iter(["my answer"])
+        monkeypatch.setattr("builtins.input", lambda p: (next(inputs)))
+
+        fn = self._make_read_input(pt_session=None)
+        result = fn()
+
+        assert result == "my answer"
+
+    def test_no_pt_custom_prompt_used(self, monkeypatch):
+        """Without prompt_toolkit, a custom prompt is forwarded to input()."""
+        received = {}
+        monkeypatch.setattr("builtins.input", lambda p: received.update({"p": p}) or "n")
+
+        fn = self._make_read_input(pt_session=None)
+        fn("Confirm? [y/N]: ")
+
+        assert received["p"] == "Confirm? [y/N]: "
+
