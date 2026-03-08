@@ -1710,7 +1710,6 @@ class _InitDisplay(logging.Handler):
                 self._step = "Starting…"
         elif "Loading Sentence Transformers" in msg:
             m = re.search(r":\s*(.+)$", msg)
-            self._tick("Starting")
             with self._lock:
                 self._step = f"Loading {m.group(1).strip() if m else 'model'}…"
         elif "Use pytorch device_name" in msg:
@@ -1724,7 +1723,6 @@ class _InitDisplay(logging.Handler):
             self._tick("Vector store ready")
             self._tick(f"BM25  ·  {m.group(1) if m else '?'} docs")
         elif "Local RAG Brain ready" in msg:
-            self._tick("Ready!")
             self._done.set()
 
     def stop(self) -> None:
