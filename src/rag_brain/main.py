@@ -1969,6 +1969,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             cmd = parts[0].lower()
             arg = parts[1] if len(parts) > 1 else ""
 
+            # Allow "/<cmd> help" as alias for "/help <cmd>"
+            if arg.strip().lower() == "help" and cmd not in ("/help",):
+                arg = cmd.lstrip("/")
+                cmd = "/help"
             if cmd in ("/quit", "/exit", "/q"):
                 print("👋 Bye!")
                 break
@@ -2005,6 +2009,18 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     "  /keys set <provider>         interactively set an API key\n"
                                     "  providers: gemini, openai, brave, ollama_cloud\n"
                                     "  Keys are saved to ~/.rag_brain/.env and loaded at startup.",
+                        "project":  "  /project                     show active project + list all\n"
+                                    "  /project list                 list all projects\n"
+                                    "  /project new <name>           create a new project and switch to it\n"
+                                    "  /project new <name> <desc>    create with description\n"
+                                    "  /project switch <name>        switch to an existing project\n"
+                                    "  /project switch default       return to the global knowledge base\n"
+                                    "  /project delete <name>        delete a project and all its data\n"
+                                    "  /project folder               open the active project folder\n"
+                                    "\n"
+                                    "  Projects are stored in ~/.rag_brain/projects/<name>/\n"
+                                    "  Each project has its own vector store and BM25 index.\n"
+                                    "  Use /ingest after switching to add documents to a project.",
                     }
                     key = arg.lstrip("/")
                     if key in _detail:
@@ -2023,7 +2039,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         "  Other:      /help [cmd]   /quit\n"
                         "  Shell:      !<cmd>  run a shell command  ·  @<path>  attach file context\n"
                         "\n"
-                        "  /help <cmd>  for details (model, embed, ingest, rag, sessions, keys)\n"
+                        "  /help <cmd>  for details (model, embed, ingest, rag, sessions, keys, project)\n"
+                        "  /<cmd> help  also works  ·  e.g. /project help   /rag help\n"
                         "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
                     )
 
