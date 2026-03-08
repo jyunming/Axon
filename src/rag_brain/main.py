@@ -654,6 +654,15 @@ Your primary goal is to help the user by answering questions based on the provid
 3. **Be Transparent**: If you are using your general knowledge because no local documents matched the query, briefly mention it (e.g., 'I couldn't find specific details in your documents, but based on my general knowledge...').
 4. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
 """
+
+    SYSTEM_PROMPT_STRICT = """You are the 'RAG Brain', a focused AI assistant that answers ONLY from the provided document context.
+
+**Guidelines:**
+1. **Context Only**: Answer exclusively from the provided context. Do NOT use general knowledge or information outside the documents.
+2. **No Match — Say So**: If the context does not contain relevant information to answer the question, respond with: "I don't have relevant information in my documents to answer that."
+3. **Cite Sources**: When answering, reference the relevant document or section.
+4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
+"""
     
     def __init__(self, config: Optional[OpenStudioConfig] = None):
         self.config = config or OpenStudioConfig.load()
@@ -932,21 +941,23 @@ Your primary goal is to help the user by answering questions based on the provid
         return "\n\n".join(parts), has_web
 
     def _build_system_prompt(self, has_web: bool) -> str:
-        """Return the system prompt, extended based on web search state.
+        """Return the system prompt based on discussion_fallback and web search state.
 
-        When truth_grounding is enabled but local docs answered the question,
-        the LLM is told web search is available as a fallback (sets expectations).
-        When web results are actually in the context, the LLM is told to use and cite them.
+        When discussion_fallback is False, uses a strict context-only prompt so
+        the LLM will not answer from general knowledge even if retrieved docs are
+        irrelevant. When True, uses the permissive prompt that encourages general
+        knowledge fallback when context is insufficient.
         """
+        base = self.SYSTEM_PROMPT if self.config.discussion_fallback else self.SYSTEM_PROMPT_STRICT
         if not self.config.truth_grounding:
-            return self.SYSTEM_PROMPT
+            return base
         if has_web:
-            return self.SYSTEM_PROMPT + (
+            return base + (
                 "\n\n**Web Search Used**: Local documents did not contain sufficient information, "
                 "so live Brave Search results have been added to your context (marked as '[Web Result]'). "
                 "Use these web results to answer the question and always cite the source URL."
             )
-        return self.SYSTEM_PROMPT + (
+        return base + (
             "\n\n**Web Search Available**: If the local documents above are insufficient, "
             "you have access to live Brave Search as a fallback tool. It was not needed for this query."
         )
@@ -1064,7 +1075,19 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        config.llm_model = args.model
+        _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
+        if "/" in args.model:
+            _prov, _mdl = args.model.split("/", 1)
+            if _prov in _PROVIDERS:
+                config.llm_provider = _prov
+                config.llm_model    = _mdl
+            else:
+                # Not a provider prefix — treat whole string as model name
+                config.llm_provider = _infer_provider(args.model)
+                config.llm_model    = args.model
+        else:
+            config.llm_provider = _infer_provider(args.model)
+            config.llm_model    = args.model
 
     if args.list_models:
         print("\n🤖 Supported LLM providers and example models:\n")
