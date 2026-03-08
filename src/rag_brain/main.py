@@ -983,7 +983,14 @@ def main():
     parser.add_argument('--model', help='Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o')
     parser.add_argument('--list-models', action='store_true', help='List available Ollama models and supported cloud providers')
     parser.add_argument('--pull', metavar='MODEL', help='Pull an Ollama model by name, e.g. --pull gemma:2b')
+    parser.add_argument('--quiet', '-q', action='store_true',
+                        help='Suppress spinners and progress (auto-enabled when stdin is not a TTY)')
     args = parser.parse_args()
+
+    # Suppress httpx INFO noise before _InitDisplay is active (ollama.list fires early)
+    if sys.stdin.isatty():
+        logging.getLogger("httpx").propagate = False
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
     config = OpenStudioConfig.load(args.config)
     if args.provider:
@@ -1124,10 +1131,16 @@ def main():
         return
 
     # No query supplied — enter interactive REPL (streaming on by default)
-    _interactive_repl(brain, stream=True)
+    _quiet = args.quiet or not sys.stdin.isatty()
+    _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
 
 
-_SLASH_COMMANDS = ["/help", "/list", "/ingest ", "/model ", "/pull ", "/search", "/discuss", "/clear", "/quit", "/exit"]
+_SLASH_COMMANDS = [
+    "/help", "/list", "/ingest ", "/model ", "/embed ",
+    "/pull ", "/search", "/discuss", "/rag ", "/compact",
+    "/context", "/sessions", "/resume ", "/clear", "/retry",
+    "/quit", "/exit",
+]
 
 
 def _make_completer(brain: 'OpenStudioBrain'):
@@ -1171,144 +1184,669 @@ def _make_completer(brain: 'OpenStudioBrain'):
     return completer
 
 
+# ── Session persistence ────────────────────────────────────────────────────────
+import json as _json
+from datetime import datetime as _dt, timezone as _tz
+
+_SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".rag_brain", "sessions")
+
+
+def _sessions_dir() -> str:
+    os.makedirs(_SESSIONS_DIR, exist_ok=True)
+    return _SESSIONS_DIR
+
+
+def _new_session(brain: 'OpenStudioBrain') -> dict:
+    return {
+        "id": _dt.now(_tz.utc).strftime("%Y%m%dT%H%M%S"),
+        "started_at": _dt.now(_tz.utc).isoformat(),
+        "provider": brain.config.llm_provider,
+        "model": brain.config.llm_model,
+        "history": [],
+    }
+
+
+def _session_path(session_id: str) -> str:
+    return os.path.join(_sessions_dir(), f"session_{session_id}.json")
+
+
+def _save_session(session: dict) -> None:
+    try:
+        with open(_session_path(session["id"]), "w", encoding="utf-8") as f:
+            _json.dump(session, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _list_sessions(limit: int = 20) -> list:
+    d = _sessions_dir()
+    files = sorted(
+        [f for f in os.listdir(d) if f.startswith("session_") and f.endswith(".json")],
+        reverse=True,
+    )[:limit]
+    sessions = []
+    for fn in files:
+        try:
+            with open(os.path.join(d, fn), encoding="utf-8") as f:
+                s = _json.load(f)
+            sessions.append(s)
+        except Exception:
+            pass
+    return sessions
+
+
+def _load_session(session_id: str) -> dict | None:
+    p = _session_path(session_id)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return None
+
+
+def _print_sessions(sessions: list) -> None:
+    if not sessions:
+        print("  (no saved sessions)")
+        return
+    print(f"\n  {'ID':<18}  {'Model':<30}  {'Turns':<6}  Started")
+    print(f"  {'─'*18}  {'─'*30}  {'─'*6}  {'─'*20}")
+    for s in sessions:
+        turns = len(s.get("history", [])) // 2
+        ts    = s.get("started_at", "")[:16].replace("T", " ")
+        model = f"{s.get('provider','?')}/{s.get('model','?')}"
+        print(f"  {s['id']:<18}  {model:<30}  {turns:<6}  {ts}")
+    print()
+
+
+_MODEL_CTX: Dict[str, int] = {
+    "gemma": 8192, "gemma:2b": 8192, "gemma:7b": 8192,
+    "llama3.1": 131072, "llama3.1:8b": 131072, "llama3.1:70b": 131072,
+    "mistral": 32768, "mistral:7b": 32768,
+    "phi3": 131072, "phi3:mini": 131072,
+    "gemini-1.5-flash": 1048576, "gemini-1.5-pro": 2097152,
+    "gemini-2.0-flash": 1048576, "gemini-2.5-flash": 1048576,
+    "gemini-2.5-flash-lite": 1048576,
+    "gpt-4o": 128000, "gpt-4o-mini": 128000, "gpt-3.5-turbo": 16385,
+}
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars per token for English text)."""
+    return max(1, len(text) // 4)
+
+
+def _token_bar(used: int, total: int, width: int = 20) -> str:
+    """Return a visual fill bar: ████░░░░ 2,340 / 8,192 (28%)."""
+    pct = min(used / total, 1.0) if total > 0 else 0
+    filled = int(pct * width)
+    bar = "█" * filled + "░" * (width - filled)
+    color = "🟢" if pct < 0.6 else ("🟡" if pct < 0.85 else "🔴")
+    return f"{color} {bar}  {used:,} / {total:,} ({int(pct*100)}%)"
+
+
+def _show_context(
+    brain: 'OpenStudioBrain',
+    chat_history: list,
+    last_sources: list,
+    last_query: str,
+) -> None:
+    """Display a formatted context window panel with token usage, model info, and chat history.
+
+    Shows:
+    - Model info: LLM provider/model and context window size; embedding provider/model
+    - Token usage: Rough estimates (4 chars/token) with visual bar and color indicator
+    - RAG settings: top_k, similarity_threshold, hybrid_search, rerank, hyde, multi_query toggles
+    - Chat history: Last 10 turns (user/assistant messages)
+    - Last retrieved sources: Up to 8 chunks with similarity scores and source names
+    - System prompt: First 400 characters (preview)
+
+    All content is wrapped in a box with section separators for readability.
+
+    Args:
+        brain: OpenStudioBrain instance to extract model and config info.
+        chat_history: List of message dicts {"role": "user"|"assistant", "content": str}.
+        last_sources: List of document dicts from last retrieval (with "vector_score", "metadata", "text").
+        last_query: The user query that was used for the last retrieval.
+    """
+    W      = _BW        # match main header box width
+    TOP    = f"  ╭{'─' * W}╮"
+    BOTTOM = f"  ╰{'─' * W}╯"
+    SEP    = f"  ├{'─' * W}┤"
+    BLANK  = f"  │{' ' * W}│"
+
+    def row(text: str = "", indent: int = 4) -> str:
+        content = " " * indent + text
+        if len(content) > W:
+            content = content[:W - 1] + "…"
+        return f"  │{content:<{W}}│"
+
+    def section(title: str) -> str:
+        content = f"  ▸  {title}"
+        return f"  │{content:<{W}}│"
+
+    def wrap_row(text: str, indent: int = 4, max_lines: int = 3) -> list:
+        """Word-wrap text into multiple box rows."""
+        avail = W - indent
+        words = text.split()
+        lines_out, current = [], ""
+        for w in words:
+            if len(current) + len(w) + (1 if current else 0) <= avail:
+                current = f"{current} {w}" if current else w
+            else:
+                if current:
+                    lines_out.append(row(current, indent))
+                current = w
+        if current:
+            lines_out.append(row(current, indent))
+        return lines_out[:max_lines]
+
+    # ── Token estimates ────────────────────────────────────────────────────────
+    system_text = brain._build_system_prompt(False)
+    sys_tokens  = _estimate_tokens(system_text)
+    hist_tokens = sum(_estimate_tokens(m["content"]) for m in chat_history)
+    src_tokens  = sum(_estimate_tokens(s.get("text", "")) for s in last_sources)
+    total_used  = sys_tokens + hist_tokens + src_tokens
+
+    model_key = brain.config.llm_model.split(":")[0].lower()
+    ctx_size  = _MODEL_CTX.get(brain.config.llm_model,
+                _MODEL_CTX.get(model_key, 8192))
+    remaining = max(0, ctx_size - total_used)
+    pct       = min(total_used / ctx_size, 1.0) if ctx_size > 0 else 0
+    bar_w     = W - 26
+    filled    = int(pct * bar_w)
+    bar       = "█" * filled + "░" * (bar_w - filled)
+    indicator = "🟢" if pct < 0.6 else ("🟡" if pct < 0.85 else "🔴")
+
+    lines = [TOP, BLANK]
+    lines.append(row("📋  Context Window", indent=4))
+    lines.append(BLANK)
+
+    # ── Model section ──────────────────────────────────────────────────────────
+    lines.append(SEP)
+    lines.append(section("Model"))
+    lines.append(BLANK)
+    lines.append(row(f"LLM    ·  {brain.config.llm_provider}/{brain.config.llm_model}"
+                     f"   ({ctx_size:,} token context window)"))
+    lines.append(row(f"Embed  ·  {brain.config.embedding_provider}/{brain.config.embedding_model}"))
+    lines.append(BLANK)
+
+    # ── Token usage ───────────────────────────────────────────────────────────
+    lines.append(SEP)
+    lines.append(section("Token Usage  (rough estimate — ~4 chars/token)"))
+    lines.append(BLANK)
+    lines.append(row(f"{indicator} {bar}  {total_used:,} / {ctx_size:,}  ({int(pct*100)}%)", indent=4))
+    lines.append(BLANK)
+    lines.append(row(f"{'System prompt':<22}{sys_tokens:>7,} tokens"))
+    lines.append(row(f"{'Chat history':<22}{hist_tokens:>7,} tokens    ({len(chat_history) // 2} turns)"))
+    lines.append(row(f"{'Retrieved context':<22}{src_tokens:>7,} tokens    ({len(last_sources)} chunks)"))
+    lines.append(row("─" * 40))
+    lines.append(row(f"{'Total':<22}{total_used:>7,} tokens    ({remaining:,} remaining)"))
+    lines.append(BLANK)
+
+    # ── RAG settings ──────────────────────────────────────────────────────────
+    lines.append(SEP)
+    lines.append(section("RAG Settings"))
+    lines.append(BLANK)
+    lines.append(row(
+        f"top-k · {brain.config.top_k}    "
+        f"threshold · {brain.config.similarity_threshold}    "
+        f"hybrid · {'ON' if brain.config.hybrid_search else 'OFF'}    "
+        f"rerank · {'ON' if brain.config.rerank else 'OFF'}    "
+        f"hyde · {'ON' if brain.config.hyde else 'OFF'}    "
+        f"multi-query · {'ON' if brain.config.multi_query else 'OFF'}"
+    ))
+    lines.append(BLANK)
+
+    # ── Chat history ───────────────────────────────────────────────────────────
+    lines.append(SEP)
+    turns = len(chat_history) // 2
+    lines.append(section(f"Chat History  ({turns} turns)"))
+    lines.append(BLANK)
+    if not chat_history:
+        lines.append(row("(empty)"))
+    else:
+        shown = chat_history[-10:]
+        for msg in shown:
+            tag  = "You   " if msg["role"] == "user" else "Brain "
+            snip = msg["content"].replace("\n", " ")
+            avail = W - 14
+            if len(snip) > avail:
+                snip = snip[:avail] + "…"
+            lines.append(row(f"{tag}  {snip}"))
+        if len(chat_history) > 10:
+            lines.append(row(f"… {len(chat_history) - 10} earlier messages not shown"))
+    lines.append(BLANK)
+
+    # ── Last retrieved sources ─────────────────────────────────────────────────
+    lines.append(SEP)
+    lines.append(section(f"Last Retrieved Sources  ({len(last_sources)} chunks)"))
+    lines.append(BLANK)
+    if last_query:
+        lines.append(row(f'query · "{last_query[:W - 14]}"'))
+        lines.append(BLANK)
+    if not last_sources:
+        lines.append(row("(no retrieval yet)"))
+    else:
+        for i, src in enumerate(last_sources[:8], 1):
+            meta  = src.get("metadata", {})
+            name  = os.path.basename(meta.get("source", src.get("id", "?")))
+            score = src.get("vector_score", src.get("score", 0))
+            kind  = "🌐" if src.get("is_web") else "📄"
+            score_bar = "█" * int(score * 10) + "░" * (10 - int(score * 10))
+            lines.append(row(f"{i:>2}. {kind} {score_bar} {score:.3f}   {name}"))
+    lines.append(BLANK)
+
+    # ── System prompt preview ──────────────────────────────────────────────────
+    lines.append(SEP)
+    lines.append(section("System Prompt  (preview)"))
+    lines.append(BLANK)
+    lines.extend(wrap_row(system_text[:400].replace("\n", " "), indent=4, max_lines=4))
+    lines.append(BLANK)
+    lines.append(BOTTOM)
+
+    for line in lines:
+        print(line)
+    print()
+
+
+def _do_compact(brain: 'OpenStudioBrain', chat_history: list) -> None:
+    """Summarize chat history via LLM and replace it with a single summary turn.
+
+    Condenses all messages in chat_history into a 4-6 sentence summary using the configured LLM.
+    The original conversation is replaced with a single message prefixed with
+    "[Conversation summary]: " to preserve context while freeing up token space.
+
+    If chat_history is empty, prints a message and returns without action.
+
+    Args:
+        brain: OpenStudioBrain instance used to call the LLM for summarization.
+        chat_history: List of message dicts to summarize (modified in-place; emptied and refilled with summary).
+    """
+    if not chat_history:
+        print("  Nothing to compact — chat history is empty.")
+        return
+
+    turns_before = len(chat_history)
+    print(f"  ⠿ Compacting {turns_before} turns…", end="", flush=True)
+
+    conversation = "\n".join(
+        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+        for m in chat_history
+    )
+    summary_prompt = (
+        "Summarize the following conversation in 4-6 concise sentences. "
+        "Preserve all key facts, decisions, and topics discussed. "
+        "Write in third person ('The user asked…'). "
+        "Output only the summary, no preamble.\n\n"
+        f"{conversation}"
+    )
+    try:
+        summary = brain.llm.complete(summary_prompt, system_prompt=None, chat_history=[])
+        chat_history.clear()
+        chat_history.append({"role": "assistant", "content": f"[Conversation summary]: {summary}"})
+        tokens_saved = _estimate_tokens(conversation) - _estimate_tokens(summary)
+        print(f"\r  ✅ Compacted {turns_before} turns → 1 summary  (~{tokens_saved:,} tokens freed)")
+    except Exception as e:
+        print(f"\r  ❌ Compact failed: {e}")
+
+
+# ── Banner constants ───────────────────────────────────────────────────────────
+_BW = 96          # inner box width in terminal columns
+_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete"
+_SEP  = "  " + "─" * (_BW + 2)   # separator line matching box outer width
+_HEADER_ROWS = 16  # box(12) + blank(1) + hint(1) + sep(1) + blank(1)
+
+
+def _brow(content: str, emoji_extra: int = 0) -> str:
+    """One box row: pads/truncates content to exactly _BW terminal columns."""
+    vis = len(content) + emoji_extra
+    if vis > _BW:
+        content = content[:_BW - emoji_extra - 1] + "…"
+        vis = _BW
+    pad = _BW - vis
+    return f"  │{content}{' ' * pad}│"
+
+
+def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> list:
+    """Return lines of the pinned header box (12 lines, airy layout)."""
+    model_s   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+    embed_s   = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
+    search_s  = "ON  (Brave Search)" if brain.config.truth_grounding  else "OFF"
+    discuss_s = "ON" if brain.config.discussion_fallback else "OFF"
+    hybrid_s  = "ON" if brain.config.hybrid_search else "OFF"
+    topk_s    = str(brain.config.top_k)
+    thr_s     = str(brain.config.similarity_threshold)
+    try:
+        docs  = brain.list_documents()
+        doc_s = f"{sum(d['chunks'] for d in docs)} chunks  ({len(docs)} files)"
+    except Exception:
+        doc_s = "unknown"
+
+    ticks_s = "   ".join(f"✓ {t}" for t in tick_lines) if tick_lines else "✓ Ready"
+    blank   = f"  │{' ' * _BW}│"
+
+    return [
+        f"  ╭{'─' * _BW}╮",                                                     # 1
+        blank,                                                                    # 2
+        _brow("    🧠  Local RAG Brain", emoji_extra=1),                         # 3
+        blank,                                                                    # 4
+        _brow(f"    LLM    ·  {model_s}"),                                       # 5
+        _brow(f"    Embed  ·  {embed_s}"),                                       # 6
+        blank,                                                                    # 7
+        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),        # 8
+        _brow(f"    Docs   ·  {doc_s:<26}  Hybrid   ·  {hybrid_s}   top-k · {topk_s}   threshold · {thr_s}"),  # 9
+        blank,                                                                    # 10
+        _brow(f"    {ticks_s}"),                                                  # 11
+        f"  ╰{'─' * _BW}╯",                                                     # 12
+    ]
+
+
+def _draw_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> None:
+    """Clear screen and draw the welcome header box with LLM and embedding model info.
+
+    Displays initialization status lines (e.g., "✓ Embedding ready [CPU]", "✓ BM25 · 42 docs").
+    Clears the entire screen and redraws the header with hints for available REPL commands.
+    Uses ANSI codes to clear and position the cursor — no scroll region (natural terminal scrollback).
+
+    Args:
+        brain: OpenStudioBrain instance to extract model and provider information.
+        tick_lines: Optional list of status messages (e.g., ["Starting", "Embedding ready [CPU]"])
+                   to display in the header box.
+    """
+    lines = _build_header(brain, tick_lines)
+    sys.stdout.write("\033[2J\033[H")          # clear screen, cursor to top-left
+    for line in lines:
+        sys.stdout.write(line + "\n")
+    sys.stdout.write("\n" + _HINT + "\n" + _SEP + "\n\n")
+    sys.stdout.flush()
+
+
+def _update_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> None:
+    """No-op: status kept live via prompt_toolkit bottom_toolbar."""
+
+
 class _InitDisplay(logging.Handler):
-    """Logging handler that turns RAGBrain init messages into an animated status display."""
+    """Intercepts initialization log messages and renders animated status in a box.
+
+    Displays a 7-line box with title and status line updated in-place using ANSI cursor positioning.
+    Uses a braille spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) that rotates every 0.08 seconds.
+    Collects completed steps as checkmarks (✓) for the final banner display.
+
+    The box is printed once at initialization, then the step line (line 5) is updated in-place
+    as different initialization phases complete (Starting, Loading models, Vector store ready, etc.).
+    """
 
     _FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def __init__(self) -> None:
         super().__init__()
         self._step: str = ""
-        self._idx: int = 0
-        self._done = threading.Event()
-        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._idx:  int = 0
+        self._lock  = threading.Lock()
+        self._done  = threading.Event()
+        self.tick_lines: list = []    # collected for the final banner
+        # Print CLOSED 7-line box immediately — step line updated in-place
+        sys.stdout.write(
+            f"\n  ╭{'─' * _BW}╮\n"
+            f"  │{' ' * _BW}│\n"
+            f"  │{'    🧠  Local RAG Brain'.ljust(_BW - 1)}│\n"
+            f"  │{' ' * _BW}│\n"
+            f"  │{'    ⠿  Initializing…'.ljust(_BW)}│\n"   # step line (line 5)
+            f"  │{' ' * _BW}│\n"
+            f"  ╰{'─' * _BW}╯\n"
+        )
+        sys.stdout.flush()
+        self._thread = threading.Thread(target=self._spin_loop, daemon=True)
         self._thread.start()
 
-    def _spin(self) -> None:
-        while not self._done.wait(0.1):
-            if self._step:
-                frame = self._FRAMES[self._idx % len(self._FRAMES)]
-                sys.stdout.write(f"\r  {frame} {self._step:<52}")
-                sys.stdout.flush()
-                self._idx += 1
+    def _spin_loop(self) -> None:
+        while not self._done.wait(0.08):
+            with self._lock:
+                if self._step:
+                    frame = self._FRAMES[self._idx % len(self._FRAMES)]
+                    content = f"    {frame}  {self._step}"
+                    line = _brow(content)
+                    # Box is 7 lines; step is line 5; cursor after ╰╯ is at line 8.
+                    # Up 3 → line 5; write; newline → line 6; down 2 → line 8.
+                    sys.stdout.write(f"\033[3A\r{line}\n\033[2B")
+                    sys.stdout.flush()
+                    self._idx += 1
 
     def _tick(self, label: str) -> None:
-        """Complete the current spinner step and print a checkmark line."""
-        self._step = ""
-        sys.stdout.write(f"\r  ✓ {label:<52}\n")
-        sys.stdout.flush()
+        with self._lock:
+            self._step = ""
+            self.tick_lines.append(label)
+            line = _brow(f"    ✓  {label}")
+            sys.stdout.write(f"\033[3A\r{line}\n\033[2B")
+            sys.stdout.flush()
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
         if "Initializing Local RAG Brain" in msg:
-            self._step = "Starting up…"
+            with self._lock:
+                self._step = "Starting…"
         elif "Loading Sentence Transformers" in msg:
             m = re.search(r":\s*(.+)$", msg)
-            model = m.group(1).strip() if m else "model"
             self._tick("Starting")
-            self._step = f"Loading {model}…"
+            with self._lock:
+                self._step = f"Loading {m.group(1).strip() if m else 'model'}…"
         elif "Use pytorch device_name" in msg:
             m = re.search(r":\s*(.+)$", msg)
-            device = m.group(1).strip() if m else "cpu"
-            self._tick(f"Embedding model ready  [{device}]")
+            self._tick(f"Embedding ready  [{m.group(1).strip() if m else 'cpu'}]")
         elif "Initializing ChromaDB" in msg:
-            self._step = "Connecting to vector store…"
+            with self._lock:
+                self._step = "Vector store…"
         elif "Loaded BM25 corpus" in msg:
             m = re.search(r"(\d+) documents", msg)
-            count = m.group(1) if m else "?"
             self._tick("Vector store ready")
-            sys.stdout.write(f"  ✓ {'BM25 index  · ' + count + ' documents':<52}\n")
-            sys.stdout.flush()
+            self._tick(f"BM25  ·  {m.group(1) if m else '?'} docs")
         elif "Local RAG Brain ready" in msg:
+            self._tick("Ready!")
             self._done.set()
-            self._thread.join(timeout=0.3)
-            sys.stdout.write(f"\r  ✓ {'Ready!':<52}\n\n")
-            sys.stdout.flush()
-        # All other messages (telemetry, httpx, etc.) are silently suppressed
 
     def stop(self) -> None:
         self._done.set()
-        self._step = ""
-        self._thread.join(timeout=0.3)
+        with self._lock:
+            self._step = ""
+        self._thread.join(timeout=0.5)
 
 
-def _print_banner(brain: 'OpenStudioBrain') -> None:
-    """Print an animated startup banner for the REPL."""
-
-    try:
-        docs = brain.list_documents()
-        doc_info = f"{sum(d['chunks'] for d in docs)} chunks" if docs else "empty"
-    except Exception:
-        doc_info = "unknown"
-
-    model_str = f"{brain.config.llm_provider}/{brain.config.llm_model}"
-    search_str = "ON  (Brave)" if brain.config.truth_grounding else "OFF"
-    discuss_str = "ON  (answers without RAG context)" if brain.config.discussion_fallback else "OFF"
-
-    width = 44
-    def _row(label: str, value: str) -> str:
-        content = f"  {label:<8}{value}"
-        pad = width - len(content) - 1
-        return f"  │{content}{' ' * max(pad, 1)}│"
-
-    lines = [
-        "",
-        "  ╭" + "─" * width + "╮",
-        "  │" + "  🧠  Local RAG Brain".ljust(width) + "│",
-        "  │" + " " * width + "│",
-        _row("model  ·", model_str[:32]),
-        _row("search ·", search_str),
-        _row("discuss·", discuss_str[:32]),
-        _row("docs   ·", doc_info),
-        "  ╰" + "─" * width + "╯",
-        "",
-        "  Type your question  ·  /help for commands",
-        "",
-    ]
-
-    for line in lines:
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
-        time.sleep(0.04)
+def _expand_at_files(text: str) -> str:
+    """Expand @filepath references in user input with file contents."""
+    def _replace(m: re.Match) -> str:
+        path = m.group(1)
+        if os.path.isfile(path):
+            try:
+                content = open(path, encoding="utf-8", errors="ignore").read()
+                return f"\n\n--- @{path} ---\n{content}\n--- end ---\n"
+            except OSError:
+                pass
+        return m.group(0)  # leave unchanged if file not found/readable
+    return re.sub(r'@(\S+)', _replace, text)
 
 
-def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
-    """Interactive chat REPL — initializes brain once, maintains history across turns."""
+def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
+                      init_display: '_InitDisplay | None' = None,
+                      quiet: bool = False) -> None:
+    """Interactive REPL chat session with session persistence and live tab completion.
+
+    Features:
+    - Session persistence: auto-saves to ~/.rag_brain/sessions/session_<timestamp>.json
+    - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
+    - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
+    - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
+      /compact, /context, /sessions, /resume, /retry, /clear, /quit, /exit
+    - @file context: type @path to inline file contents into your query
+    - Shell passthrough: !command runs a shell command without leaving the REPL
+    - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
+
+    Args:
+        brain: OpenStudioBrain instance to use for queries.
+        stream: If True, streams LLM response token-by-token; if False, waits for full response.
+        init_display: Optional _InitDisplay handler to stop after initialization.
+        quiet: Suppress spinners and progress bars (auto-enabled for non-TTY stdin).
+    """
     import warnings
-    # Suppress FutureWarnings from google-generativeai and google-api-core
     warnings.filterwarnings("ignore", category=FutureWarning, module="google")
 
     # Silence INFO logs — they clutter the interactive UI
     import logging as _logging
     for _log in ("RAGBrain", "StudioBrainOpen.Retrievers", "httpx",
                  "sentence_transformers", "chromadb", "httpcore"):
-        _logging.getLogger(_log).setLevel(_logging.WARNING)
+        _lg = _logging.getLogger(_log)
+        _lg.setLevel(_logging.WARNING)
+        _lg.propagate = False   # prevent bubbling to root logger
 
+    # ── Input: prefer prompt_toolkit (live completions), fall back to readline ──
+    _pt_session = None
     try:
-        import readline
-        readline.set_history_length(500)
-        readline.set_completer(_make_completer(brain))
-        readline.set_completer_delims("")   # treat full line as one token
-        readline.parse_and_bind("tab: complete")
-        readline.parse_and_bind(r'"\C-l": clear-screen')
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.styles import Style
+        import glob as _pglob
+
+        _PT_STYLE = Style.from_dict({"": "", "completion-menu.completion.current": "bg:#444466 #ffffff",
+                                      "bottom-toolbar": "bg:#222233 #aaaacc"})
+
+        class _PTCompleter(Completer):
+            def __init__(self, brain_ref):
+                self._brain = brain_ref
+
+            def get_completions(self, document, complete_event):
+                text = document.text_before_cursor
+                # ── slash command name ─────────────────────────────────────
+                if text.startswith("/") and " " not in text:
+                    for cmd in _SLASH_COMMANDS:
+                        c = cmd.rstrip()
+                        if c.startswith(text):
+                            yield Completion(c[len(text):], display=c,
+                                             display_meta="command")
+                # ── /ingest path / glob ───────────────────────────────────
+                elif text.startswith("/ingest "):
+                    prefix = text[len("/ingest "):]
+                    for p in _pglob.glob(prefix + "*"):
+                        disp = p + ("/" if os.path.isdir(p) else "")
+                        yield Completion(p[len(prefix):], display=disp)
+                # ── /model <provider/model> ───────────────────────────────
+                elif text.startswith("/model ") or text.startswith("/embed "):
+                    cmd_len = len("/model ") if text.startswith("/model ") else len("/embed ")
+                    prefix  = text[cmd_len:]
+                    try:
+                        import ollama as _ol
+                        resp = _ol.list()
+                        mods = resp.models if hasattr(resp, "models") else resp.get("models", [])
+                        for m in mods:
+                            name = m.model if hasattr(m, "model") else m.get("name", "")
+                            if name.startswith(prefix):
+                                yield Completion(name[len(prefix):], display=name)
+                    except Exception:
+                        pass
+                # ── /resume <session-id> ──────────────────────────────────
+                elif text.startswith("/resume "):
+                    prefix = text[len("/resume "):]
+                    for s in _list_sessions():
+                        sid = s["id"]
+                        if sid.startswith(prefix):
+                            turns = len(s.get("history", [])) // 2
+                            yield Completion(sid[len(prefix):], display=sid,
+                                             display_meta=f"{turns} turns")
+                # ── /rag <option> ─────────────────────────────────────────
+                elif text.startswith("/rag "):
+                    opts = ["topk ", "threshold ", "hybrid", "rerank", "hyde", "multi"]
+                    prefix = text[len("/rag "):]
+                    for o in opts:
+                        if o.startswith(prefix):
+                            yield Completion(o[len(prefix):], display=o)
+                # ── @file context attachment ──────────────────────────────
+                elif "@" in text:
+                    at_pos = text.rfind("@")
+                    prefix = text[at_pos + 1:]
+                    for p in _pglob.glob(prefix + "*"):
+                        disp = p + ("/" if os.path.isdir(p) else "")
+                        yield Completion(p[len(prefix):], display=disp,
+                                         display_meta="file context")
+
+        def _toolbar():
+            m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+            s = "🔍 search:ON" if brain.config.truth_grounding else "search:off"
+            d = "discuss:on" if brain.config.discussion_fallback else "discuss:off"
+            h = "hybrid:on" if brain.config.hybrid_search else "hybrid:off"
+            return f"  🧠 {m}   ·   {s}   ·   {d}   ·   {h}   ·   top-k:{brain.config.top_k}   ·   threshold:{brain.config.similarity_threshold}  "
+
+        _pt_session = PromptSession(
+            completer=_PTCompleter(brain),
+            auto_suggest=AutoSuggestFromHistory(),
+            style=_PT_STYLE,
+            complete_while_typing=True,
+            bottom_toolbar=_toolbar,
+        )
     except ImportError:
-        pass
+        # Fall back to readline
+        try:
+            import readline
+            readline.set_history_length(500)
+            readline.set_completer(_make_completer(brain))
+            readline.set_completer_delims("")
+            readline.parse_and_bind("tab: complete")
+            readline.parse_and_bind(r'"\C-l": clear-screen')
+        except ImportError:
+            pass
+
+    def _read_input(prompt: str) -> str:
+        if _pt_session:
+            return _pt_session.prompt(prompt)
+        return input(prompt)
 
     # REPL is conversational — always let the LLM answer even with no RAG hits
     brain.config.discussion_fallback = True
 
-    _print_banner(brain)
+    _tick_lines = init_display.tick_lines if init_display else []
+    _draw_header(brain, _tick_lines)
 
-    chat_history: list = []
+    # ── Session init ───────────────────────────────────────────────────────────
+    session: dict = _new_session(brain)
+    chat_history: list = session["history"]
+
+    # Offer to resume the most recent session (if within last 24 h and has turns)
+    recent = _list_sessions(limit=1)
+    if recent:
+        last = recent[0]
+        turns = len(last.get("history", [])) // 2
+        if turns > 0:
+            ts = last.get("started_at", "")[:16].replace("T", " ")
+            try:
+                ans = _read_input(
+                    f"  ↩️  Resume last session? ({turns} turns, {ts} UTC)  [y/N]: "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                ans = "n"
+            if ans == "y":
+                session = last
+                chat_history = session["history"]
+                print(f"  ✅ Resumed session {session['id']}  ({turns} turns loaded)\n")
+
+    _last_sources: list = []
+    _last_query: str = ""
 
     while True:
         try:
-            user_input = input("You: ").strip()
+            user_input = _read_input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n\n👋 Bye!")
+            print("\n👋 Bye!")
             break
 
         if not user_input:
+            continue
+
+        # --- Shell passthrough: !command ---
+        if user_input.startswith("!"):
+            shell_cmd = user_input[1:].strip()
+            if shell_cmd:
+                import subprocess
+                subprocess.run(shell_cmd, shell=True)
             continue
 
         # --- Slash commands ---
@@ -1322,29 +1860,52 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
                 break
 
             elif cmd == "/help":
-                print(
-                    "\n  /list                        — list ingested documents\n"
-                    "  /ingest <path|glob>          — ingest files or directory\n"
-                    "    e.g. /ingest ./docs/        (whole directory)\n"
-                    "         /ingest ./src/*.py     (glob pattern)\n"
-                    "         /ingest ./notes/**/*.md (recursive glob)\n"
-                    "  /model <model>               — switch model (keep provider)\n"
-                    "  /model <provider>/<model>    — switch provider and model\n"
-                    "    providers: ollama, gemini, openai, ollama_cloud\n"
-                    "    e.g. /model gemini/gemini-1.5-flash\n"
-                    "         /model openai/gpt-4o\n"
-                    "         /model ollama/gemma:2b\n"
-                    "  /search                      — toggle web search (Brave API) on/off\n"
-                    "  /discuss                     — toggle discussion mode (LLM answers even without RAG context)\n"
-                    "  /pull <name>                 — pull an Ollama model\n"
-                    "  /clear                       — clear chat history\n"
-                    "  /quit                        — exit\n"
-                    "\n  Keyboard shortcuts:\n"
-                    "    Tab       complete commands / paths\n"
-                    "    Ctrl+L    clear screen\n"
-                    "    Ctrl+C    cancel in-progress reply\n"
-                    "    Ctrl+D    exit\n"
-                )
+                if arg:
+                    # Per-command detail
+                    _detail = {
+                        "model":    "  /model <model>              keep current provider\n"
+                                    "  /model <provider>/<model>   switch provider + model\n"
+                                    "  providers: ollama, gemini, openai, ollama_cloud\n"
+                                    "  e.g.  /model gemini/gemini-2.0-flash\n"
+                                    "        /model ollama/gemma:2b\n"
+                                    "        /model openai/gpt-4o",
+                        "embed":    "  /embed <model>              keep current provider\n"
+                                    "  /embed <provider>/<model>   switch provider + model\n"
+                                    "  /embed /path/to/local        local HuggingFace folder\n"
+                                    "  providers: sentence_transformers, ollama, fastembed, openai\n"
+                                    "  ⚠️  Re-ingest after changing embedding model.",
+                        "ingest":   "  /ingest <path>              ingest a directory\n"
+                                    "  /ingest ./src/*.py           glob pattern\n"
+                                    "  /ingest ./notes/**/*.md      recursive glob",
+                        "rag":      "  /rag                         show all RAG settings\n"
+                                    "  /rag topk <n>                results to retrieve (1–20)\n"
+                                    "  /rag threshold <0.0–1.0>     min similarity score\n"
+                                    "  /rag hybrid                  toggle hybrid BM25+vector\n"
+                                    "  /rag rerank                  toggle cross-encoder reranker\n"
+                                    "  /rag hyde                    toggle HyDE query expansion\n"
+                                    "  /rag multi                   toggle multi-query expansion",
+                        "sessions": "  /sessions                    list recent saved sessions\n"
+                                    "  /resume <id>                 load a session by ID\n"
+                                    "  Sessions auto-save after each turn.",
+                    }
+                    key = arg.lstrip("/")
+                    if key in _detail:
+                        print(f"\n{_detail[key]}\n")
+                    else:
+                        print(f"  No detail for '{arg}'. Available: {', '.join(_detail)}")
+                else:
+                    print(
+                        "\n"
+                        "  Knowledge:  /list   /ingest <path>   /clear\n"
+                        "  Model:      /model [<prov/>model]   /embed [<prov/>model]   /pull <name>\n"
+                        "  Mode:       /search   /discuss   /rag [option value]\n"
+                        "  Session:    /sessions   /resume <id>   /compact   /context   /retry\n"
+                        "  Other:      /help [cmd]   /quit\n"
+                        "  Shell:      !<cmd>  run a shell command  ·  @<path>  attach file context\n"
+                        "\n"
+                        "  /help <cmd>  for details (model, embed, ingest, rag, sessions)\n"
+                        "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
+                    )
 
             elif cmd == "/list":
                 docs = brain.list_documents()
@@ -1394,7 +1955,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
             elif cmd == "/model":
                 _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
                 if not arg:
-                    print(f"  Current: {brain.config.llm_provider}/{brain.config.llm_model}")
+                    print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
+                    print(f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}")
                     print(f"  Usage:   /model <model>              (keep current provider)")
                     print(f"           /model <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_PROVIDERS)}")
@@ -1406,13 +1968,48 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
                         brain.config.llm_provider = provider
                         brain.config.llm_model = model
                         brain.llm = OpenLLM(brain.config)
-                        print(f"  ✅ Switched to {provider}/{model}")
+                        print(f"  ✅ Switched LLM to {provider}/{model}")
                         if provider != "ollama":
                             print(f"  ℹ️  Make sure the required API key env var is set.")
                 else:
                     brain.config.llm_model = arg
                     brain.llm = OpenLLM(brain.config)
-                    print(f"  ✅ Switched to {brain.config.llm_provider}/{arg}")
+                    print(f"  ✅ Switched LLM to {brain.config.llm_provider}/{arg}")
+
+            elif cmd == "/embed":
+                _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
+                if not arg:
+                    print(f"  Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}")
+                    print(f"  Usage:   /embed <model>              (keep current provider)")
+                    print(f"           /embed <provider>/<model>   (switch provider too)")
+                    print(f"  Providers: {', '.join(_EMBED_PROVIDERS)}")
+                    print(f"  Examples:")
+                    print(f"    /embed all-MiniLM-L6-v2                    (sentence_transformers)")
+                    print(f"    /embed /path/to/local/model                (local folder)")
+                    print(f"    /embed ollama/nomic-embed-text")
+                    print(f"    /embed fastembed/BAAI/bge-small-en")
+                    print(f"  ⚠️  Changing embedding model invalidates existing indexed documents.")
+                else:
+                    if "/" in arg:
+                        provider, model = arg.split("/", 1)
+                        if provider not in _EMBED_PROVIDERS:
+                            # Could be a path like /home/user/model — treat as local st path
+                            provider = brain.config.embedding_provider
+                            model = arg
+                        else:
+                            brain.config.embedding_provider = provider
+                            brain.config.embedding_model = model
+                    else:
+                        provider = brain.config.embedding_provider
+                        model = arg
+                        brain.config.embedding_model = model
+                    try:
+                        print(f"  ⠿ Loading embedding model…", end="", flush=True)
+                        brain.embedding = OpenEmbedding(brain.config)
+                        print(f"\r  ✅ Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}")
+                        print(f"  ⚠️  Re-ingest your documents so they use the new embedding model.")
+                    except Exception as e:
+                        print(f"\r  ❌ Failed to load embedding: {e}")
 
             elif cmd == "/pull":
                 if not arg:
@@ -1458,34 +2055,170 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
             elif cmd == "/discuss":
                 brain.config.discussion_fallback = not brain.config.discussion_fallback
                 state = "ON" if brain.config.discussion_fallback else "OFF"
-                print(f"  💬 Discussion mode {state} — LLM {'will' if brain.config.discussion_fallback else 'will not'} answer when no RAG context is found.")
+                print(f"  💬 Discussion mode {state}.")
+
+            elif cmd == "/rag":
+                _RAG_TOGGLES = {"hybrid", "rerank", "hyde", "multi"}
+                if not arg:
+                    print(
+                        f"\n  top-k        · {brain.config.top_k}\n"
+                        f"  threshold    · {brain.config.similarity_threshold}\n"
+                        f"  hybrid       · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
+                        f"  rerank       · {'ON' if brain.config.rerank else 'OFF'}\n"
+                        f"  hyde         · {'ON' if brain.config.hyde else 'OFF'}\n"
+                        f"  multi-query  · {'ON' if brain.config.multi_query else 'OFF'}\n"
+                        f"\n  /help rag   for usage details\n"
+                    )
+                else:
+                    rag_parts = arg.split(maxsplit=1)
+                    rag_opt = rag_parts[0].lower()
+                    rag_val = rag_parts[1] if len(rag_parts) > 1 else ""
+                    if rag_opt == "topk":
+                        try:
+                            n = int(rag_val)
+                            assert 1 <= n <= 50
+                            brain.config.top_k = n
+                            print(f"  ✅ top-k set to {n}")
+                        except Exception:
+                            print("  Usage: /rag topk <integer 1–50>")
+                    elif rag_opt == "threshold":
+                        try:
+                            v = float(rag_val)
+                            assert 0.0 <= v <= 1.0
+                            brain.config.similarity_threshold = v
+                            print(f"  ✅ threshold set to {v}")
+                        except Exception:
+                            print("  Usage: /rag threshold <float 0.0–1.0>")
+                    elif rag_opt == "hybrid":
+                        brain.config.hybrid_search = not brain.config.hybrid_search
+                        print(f"  ✅ Hybrid search {'ON' if brain.config.hybrid_search else 'OFF'}")
+                    elif rag_opt == "rerank":
+                        brain.config.rerank = not brain.config.rerank
+                        print(f"  ✅ Reranker {'ON' if brain.config.rerank else 'OFF'}")
+                    elif rag_opt == "hyde":
+                        brain.config.hyde = not brain.config.hyde
+                        print(f"  ✅ HyDE {'ON' if brain.config.hyde else 'OFF'}")
+                    elif rag_opt == "multi":
+                        brain.config.multi_query = not brain.config.multi_query
+                        print(f"  ✅ Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
+                    else:
+                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, hyde, multi")
+
+            elif cmd == "/compact":
+                _do_compact(brain, chat_history)
+                _save_session(session)
+
+            elif cmd == "/retry":
+                if not _last_query:
+                    print("  Nothing to retry — no previous query.")
+                else:
+                    user_input = _last_query
+                    print(f"  ↩️  Retrying: {user_input}")
+
+            elif cmd == "/context":
+                _show_context(brain, chat_history, _last_sources, _last_query)
+
+            elif cmd == "/sessions":
+                _print_sessions(_list_sessions())
+
+            elif cmd == "/resume":
+                if not arg:
+                    print("  Usage: /resume <session-id>")
+                else:
+                    loaded = _load_session(arg)
+                    if loaded is None:
+                        print(f"  ❌ Session '{arg}' not found. Use /sessions to list.")
+                    else:
+                        session = loaded
+                        chat_history.clear()
+                        chat_history.extend(session["history"])
+                        turns = len(chat_history) // 2
+                        print(f"  ✅ Loaded session {session['id']}  ({turns} turns)\n")
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")
 
-            continue
+            if cmd != "/retry":
+                continue
 
-        # --- Regular query ---
-        print("\nBrain: ⏳ thinking…", end="", flush=True)
+        # --- @file expansion: replace @path references with file contents ---
+        query_text = _expand_at_files(user_input)
+        if query_text != user_input:
+            at_files = re.findall(r'@(\S+)', user_input)
+            print(f"  📎 Attached: {', '.join(at_files)}")
+
+        # --- Regular query — animated spinner while waiting for first token ---
+        _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        _spin_stop   = threading.Event()
+        _spin_idx    = [0]
+
+        def _spin():
+            while not _spin_stop.wait(0.1):
+                f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
+                sys.stdout.write(f"\r  Brain: {f} thinking…")
+                sys.stdout.flush()
+                _spin_idx[0] += 1
+
+        print()   # blank line between You: and Brain:
+        if not quiet:
+            _spin_thread = threading.Thread(target=_spin, daemon=True)
+            _spin_thread.start()
         try:
             first_chunk = True
+            response_parts: list = []
+            _cancelled = False
             if stream:
-                for chunk in brain.query_stream(user_input, chat_history=chat_history):
-                    if isinstance(chunk, dict):
-                        continue
-                    if first_chunk:
-                        # Clear "thinking…" and start response on same line
-                        print("\rBrain: " + " " * 15 + "\rBrain: ", end="", flush=True)
-                        first_chunk = False
-                    print(chunk, end="", flush=True)
-                print("\n")
+                try:
+                    for chunk in brain.query_stream(query_text, chat_history=chat_history):
+                        if isinstance(chunk, dict):
+                            if chunk.get("type") == "sources":
+                                _last_sources = chunk.get("sources", [])
+                            continue
+                        if first_chunk:
+                            if not quiet:
+                                _spin_stop.set()
+                                _spin_thread.join(timeout=0.3)
+                            sys.stdout.write(f"\r  Brain: " + " " * 20 + f"\r  Brain: ")
+                            sys.stdout.flush()
+                            first_chunk = False
+                        print(chunk, end="", flush=True)
+                        response_parts.append(chunk)
+                except KeyboardInterrupt:
+                    _cancelled = True
+                    if not quiet:
+                        _spin_stop.set()
+                    sys.stdout.write("\r" + " " * 40 + "\r")
+                    print("  ⚠️  Cancelled.\n")
+                if not _cancelled:
+                    print("\n")
+                response = "".join(response_parts)
             else:
-                response = brain.query(user_input, chat_history=chat_history)
-                print(f"\rBrain: {response}\n")
+                response = brain.query(query_text, chat_history=chat_history)
+                if not quiet:
+                    _spin_stop.set()
+                    _spin_thread.join(timeout=0.3)
+                # Render with rich markdown if available, else plain print
+                try:
+                    from rich.console import Console as _RC
+                    from rich.markdown import Markdown as _RM
+                    sys.stdout.write("\r  Brain: \n")
+                    sys.stdout.flush()
+                    _RC().print(_RM(response))
+                    print()
+                except ImportError:
+                    print(f"\r  Brain: {response}\n")
 
-            chat_history.append({"role": "user", "content": user_input})
+            if not _cancelled:
+                # Append both turns so future queries have full context
+                chat_history.append({"role": "user", "content": user_input})
+                chat_history.append({"role": "assistant", "content": response})
+                _last_query = user_input
+                _save_session(session)   # persist after every turn
         except Exception as e:
-            print(f"\n  ❌ Error: {e}\n")
+            if not quiet:
+                _spin_stop.set()
+            sys.stdout.write("\r" + " " * 30 + "\r")
+            print(f"  ❌ Error: {e}\n")
 
 if __name__ == "__main__":
     main()
