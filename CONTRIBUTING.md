@@ -112,6 +112,7 @@ studio_brain_open/
 - Use Google-style docstrings
 - Include examples in docstrings where helpful
 - Update README.md if adding major features
+- **Keep docs in sync:** whenever a function, API endpoint, or config option is added or changed, update the relevant docs (README, SETUP.md, QUICKREF.md, copilot-instructions.md) in the same PR.
 
 ### Example Docstring:
 ```python
@@ -158,8 +159,10 @@ def test_add_and_search():
 
 ## Pull Request Process
 
-1. **Create a feature branch**
+1. **Create a feature branch from `master`**
+   > ⚠️ **Never commit directly to `master`.** All changes go through PRs.
    ```bash
+   git checkout master && git pull
    git checkout -b feature/your-feature-name
    ```
 
@@ -181,7 +184,7 @@ def test_add_and_search():
    git commit -m "Add feature: description"
    ```
 
-5. **Push to your fork**
+5. **Push to your fork and open a PR targeting `master`**
    ```bash
    git push origin feature/your-feature-name
    ```

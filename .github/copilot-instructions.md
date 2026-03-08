@@ -111,6 +111,15 @@ Subclass `BaseLoader` (src/rag_brain/loaders.py), implement `load(path) -> List[
 - **.pdf:** Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback
 - **.bmp, .png, .tif, .tiff, .pgm:** Uses Ollama VLM for visual captioning (images normalised to PNG via Pillow before sending)
 
+### Documentation must stay in sync
+**Whenever you add or modify a function, API endpoint, config option, or loader, update the relevant docs in the same PR:**
+- `README.md` — user-facing features and API table
+- `SETUP.md` — setup steps affected by the change
+- `QUICKREF.md` — config examples and environment variables
+- `CONTRIBUTING.md` — workflow or coding standard changes
+- `.github/copilot-instructions.md` — architectural or convention changes
+- Docstrings — use Google-style for all public functions
+
 ### Adding a new vector store
 Implement `_init_store()`, `add()`, and `search()` branches inside `OpenVectorStore` (src/rag_brain/main.py). Install the client as an optional extra in `setup.py`.
 
@@ -221,6 +230,10 @@ CI Workflow      → Auto-runs on PR: syntax check + pytest
 > git checkout master && git pull
 > git checkout -b feature/<name>   # or fix/, docs/, hotfix/
 > ```
+
+> 🎯 **One branch at a time.** Each branch must have a single, clearly scoped purpose.
+> Complete and merge (or explicitly abandon) the current branch before creating a new one.
+> Mixing unrelated changes across a branch makes PRs hard to review and increases risk.
 
 - `master` — protected; tagged releases only. Direct commits are forbidden.
 - `feature/<name>` → PR to `master`
