@@ -64,10 +64,28 @@ rag-brain-api
 make run-ui
 rag-brain-ui
 
-# CLI
+# CLI — ask a question
 rag-brain "What is RAG?"
+
+# CLI — stream response token-by-token
+rag-brain --stream "Summarise my documents"
+
+# CLI — ingest a directory
 rag-brain --ingest ./documents/
-rag-brain "test" --stream
+
+# CLI — list all ingested documents
+rag-brain --list
+
+# CLI — switch model at runtime (auto-pulls Ollama model if missing)
+rag-brain --model gemma:2b "Your question"
+rag-brain --model llama3.1 "Your question"
+
+# CLI — use a cloud provider
+rag-brain --provider gemini --model gemini-1.5-flash "Your question"
+rag-brain --provider openai --model gpt-4o "Your question"
+
+# CLI — see all providers and locally available models
+rag-brain --list-models
 ```
 
 ### Docker
