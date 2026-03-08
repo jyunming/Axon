@@ -5,19 +5,18 @@ Each project gets its own isolated vector store and BM25 index under:
     ~/.rag_brain/projects/<name>/
         chroma_data/   — ChromaDB collection
         bm25_index/    — BM25 JSON corpus
-        sessions/      — REPL sessions for this project
         meta.json      — project metadata (name, description, created_at)
 
+REPL sessions are stored globally at ~/.rag_brain/sessions/ (not per-project).
 The special name "default" is a sentinel that uses the paths from config.yaml.
 """
 
 import json
-import os
 import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 PROJECTS_ROOT: Path = Path.home() / ".rag_brain" / "projects"
 _ACTIVE_FILE: Path = Path.home() / ".rag_brain" / ".active_project"
@@ -106,6 +105,7 @@ def list_projects() -> List[dict]:
             "created_at": meta.get("created_at", ""),
             "path": str(entry),
         })
+    result.sort(key=lambda p: p["created_at"], reverse=True)
     return result
 
 
@@ -139,6 +139,7 @@ def delete_project(name: str) -> None:
     """
     if name == "default":
         raise ValueError("Cannot delete the 'default' project.")
+    _validate_name(name)
     root = project_dir(name)
     if not root.exists():
         raise ValueError(f"Project '{name}' does not exist.")

@@ -695,8 +695,7 @@ Your primary goal is to help the user by answering questions based on the provid
             ValueError: If the project does not exist (use /project new first).
         """
         from rag_brain.projects import (
-            ensure_project, get_active_project, project_bm25_path,
-            project_dir, project_vector_path, set_active_project,
+            project_bm25_path, project_dir, project_vector_path, set_active_project,
         )
 
         if name == "default":
@@ -1280,7 +1279,7 @@ def _sessions_dir() -> str:
 
 def _new_session(brain: 'OpenStudioBrain') -> dict:
     return {
-        "id": _dt.now(_tz.utc).strftime("%Y%m%dT%H%M%S"),
+        "id": _dt.now(_tz.utc).strftime("%Y%m%dT%H%M%S%f")[:-3],
         "started_at": _dt.now(_tz.utc).isoformat(),
         "provider": brain.config.llm_provider,
         "model": brain.config.llm_model,
@@ -2281,8 +2280,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
             elif cmd == "/project":
                 from rag_brain.projects import (
-                    delete_project, ensure_project, get_active_project,
-                    list_projects, project_dir, set_active_project,
+                    delete_project, ensure_project,
+                    list_projects, project_dir,
                 )
                 sub_parts = arg.split(maxsplit=1)
                 sub = sub_parts[0].lower() if sub_parts else ""
