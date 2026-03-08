@@ -100,7 +100,7 @@ rag-brain --list-models
 | `/help [cmd]` | Show all commands or detailed help (try: `/help model`, `/help embed`, `/help ingest`, `/help rag`, `/help sessions`) |
 | `/list` | List all ingested documents with chunk counts |
 | `/ingest <path\|glob>` | Ingest a file or directory (supports glob patterns) |
-| `/model [provider/model]` | Switch LLM provider and model on the fly (auto-pulls from Ollama if needed) |
+| `/model [provider/model]` | Switch LLM provider and model on the fly; bare `/model <name>` auto-detects provider (`gemini-*`→gemini, `gpt-*`→openai, else→ollama); auto-pulls from Ollama if needed |
 | `/embed [provider/model]` | Switch embedding provider and model |
 | `/pull <name>` | Pull an Ollama model with progress indicator |
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
@@ -462,5 +462,5 @@ MIT License - See [LICENSE](LICENSE) file.
 
 ---
 
-**Last Updated:** 2026-02-28
-**Version:** 2.0.0
+**Last Updated:** 2026-03-08
+**Version:** 2.1.0
