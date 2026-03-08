@@ -272,7 +272,7 @@ class OpenEmbedding:
     
     def embed(self, texts: List[str]) -> List[List[float]]:
         if self.provider == "sentence_transformers":
-            embeddings = self.model.encode(texts)
+            embeddings = self.model.encode(texts, show_progress_bar=False)
             if hasattr(embeddings, 'tolist'):
                 return embeddings.tolist()
             return list(embeddings)
@@ -1224,15 +1224,21 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
                     try:
                         import ollama as _ollama
                         print(f"  ⬇️  Pulling '{arg}' …")
+                        last_status = ""
                         for chunk in _ollama.pull(arg, stream=True):
                             status = chunk.get("status", "") if isinstance(chunk, dict) else getattr(chunk, 'status', '')
                             total = chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, 'total', 0)
                             completed = chunk.get("completed", 0) if isinstance(chunk, dict) else getattr(chunk, 'completed', 0)
                             if total and completed:
-                                print(f"\r  {status}: {int(completed/total*100)}%  ", end="", flush=True)
+                                line = f"  {status}: {int(completed/total*100)}%"
                             elif status:
-                                print(f"\r  {status}...  ", end="", flush=True)
-                        print(f"\n  ✅ '{arg}' ready.")
+                                line = f"  {status}"
+                            else:
+                                continue
+                            # Pad to clear previous longer line
+                            print(f"\r{line:<60}", end="", flush=True)
+                            last_status = line
+                        print(f"\r  ✅ '{arg}' ready.{' ' * 50}")
                     except Exception as e:
                         print(f"  ❌ Pull failed: {e}")
 
@@ -1246,17 +1252,22 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
             continue
 
         # --- Regular query ---
-        print("\nBrain: ", end="", flush=True)
+        print("\nBrain: ⏳ thinking…", end="", flush=True)
         try:
+            first_chunk = True
             if stream:
                 for chunk in brain.query_stream(user_input, chat_history=chat_history):
                     if isinstance(chunk, dict):
                         continue
+                    if first_chunk:
+                        # Clear "thinking…" and start response on same line
+                        print("\rBrain: " + " " * 15 + "\rBrain: ", end="", flush=True)
+                        first_chunk = False
                     print(chunk, end="", flush=True)
                 print("\n")
             else:
                 response = brain.query(user_input, chat_history=chat_history)
-                print(f"{response}\n")
+                print(f"\rBrain: {response}\n")
 
             chat_history.append({"role": "user", "content": user_input})
         except Exception as e:
