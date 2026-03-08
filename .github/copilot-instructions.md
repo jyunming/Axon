@@ -185,6 +185,11 @@ API logs `query_complete` (query, latency_ms, num_results, scores) and `ingest_c
 
 > 🎯 **One branch at a time.** Each branch has a single scoped purpose. Complete and merge before starting the next.
 
+> 🧪 **Golden Rule: every bug fix and every new feature must include at least one test.**
+> Bug fix → add a regression test that would have caught the bug.
+> New feature → add tests covering the happy path and key edge cases.
+> No PR is complete without the accompanying test(s).
+
 - `master` — protected; tagged releases only
 - `feature/<name>` / `fix/<name>` / `docs/<name>` → PR to `master`
 - `hotfix/<name>` → emergency fix; PR to `master`
