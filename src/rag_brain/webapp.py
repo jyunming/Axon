@@ -125,7 +125,22 @@ with st.sidebar:
     config.llm_provider = st.selectbox("LLM Provider", llm_providers, index=llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0)
     
     if config.llm_provider == "ollama":
-        config.llm_model = st.text_input("Local Model", config.llm_model)
+        # Dynamically fetch available Ollama models
+        ollama_models = []
+        try:
+            from ollama import Client
+            client = Client(host=config.ollama_base_url)
+            models_resp = client.list()
+            ollama_models = [m.model for m in models_resp.models if not m.model.startswith("embeddinggemma")]
+        except Exception:
+            ollama_models = []
+        
+        if ollama_models:
+            current_idx = ollama_models.index(config.llm_model) if config.llm_model in ollama_models else 0
+            config.llm_model = st.selectbox("Local Model", ollama_models, index=current_idx)
+        else:
+            config.llm_model = st.text_input("Local Model (no models found — pull one with `ollama pull`)", config.llm_model)
+            st.warning("No Ollama models detected. Pull a model first: `docker exec <ollama-container> ollama pull gemma`")
     elif config.llm_provider == "gemini":
         config.gemini_api_key = st.text_input("Gemini API Key", value=config.gemini_api_key, type="password")
         gemini_models = [
@@ -140,23 +155,20 @@ with st.sidebar:
         config.llm_model = st.selectbox("Gemini Model", gemini_models, index=0 if config.llm_model not in gemini_models else gemini_models.index(config.llm_model))
     elif config.llm_provider == "ollama_cloud":
         config.ollama_cloud_key = st.text_input("Ollama Cloud Key", value=config.ollama_cloud_key, type="password")
-        ollama_cloud_models = [
-            "gpt-oss:120b",
-            "kimi-k2.5",
-            "cogito-2.1:671b",
-            "mistral-large-3:675b",
-            "gpt-oss:20b",
-            "deepseek-v3.2",
-            "qwen3-coder:480b",
-            "gemini-3-flash-preview"
-        ]
-        config.llm_model = st.selectbox("Ollama Cloud Model", ollama_cloud_models, index=0 if config.llm_model not in ollama_cloud_models else ollama_cloud_models.index(config.llm_model))
+        config.llm_model = st.text_input("Ollama Cloud Model", config.llm_model)
         
     config.llm_temperature = st.slider("Temperature", 0.0, 1.0, config.llm_temperature)
     
     st.subheader("Re-ranking")
     config.rerank = st.checkbox("Enable Re-ranking", config.rerank)
     config.reranker_provider = st.selectbox("Re-ranking Provider", ["cross-encoder", "llm"], index=0 if config.reranker_provider == "cross-encoder" else 1)
+    
+    st.subheader("🌐 Web Search")
+    config.truth_grounding = st.checkbox("Enable Truth Grounding", config.truth_grounding,
+                                          help="Augment answers with live web results from Brave Search")
+    if config.truth_grounding:
+        config.brave_api_key = st.text_input("Brave API Key", value=config.brave_api_key, type="password",
+                                              help="Get your key at https://brave.com/search/api/")
     
     if "ingested_files" not in st.session_state:
         st.session_state.ingested_files = []
@@ -239,7 +251,10 @@ for message in messages:
         if message.get("sources"):
              with st.expander(f"📚 Sources ({len(message['sources'])})"):
                  for i, doc in enumerate(message['sources']):
-                     st.markdown(f"**[{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
+                     if doc.get('is_web'):
+                         st.markdown(f"**🌐 [{i+1}] [{doc.get('metadata', {}).get('title', doc['id'])}]({doc['id']})**")
+                     else:
+                         st.markdown(f"**📄 [{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
                      st.text(doc['text'][:500] + ("..." if len(doc['text']) > 500 else ""))
                      st.divider()
 
@@ -283,7 +298,10 @@ if prompt := st.chat_input("Ask me anything about your documents..."):
             if sources:
                 with sources_placeholder.expander(f"📚 Sources ({len(sources)})"):
                     for i, doc in enumerate(sources):
-                        st.markdown(f"**[{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
+                        if doc.get('is_web'):
+                            st.markdown(f"**🌐 [{i+1}] [{doc.get('metadata', {}).get('title', doc['id'])}]({doc['id']})**")
+                        else:
+                            st.markdown(f"**📄 [{i+1}] ID: {doc['id']}** (Score: {doc.get('score', 0):.3f})")
                         st.text(doc['text'][:500] + ("..." if len(doc['text']) > 500 else ""))
                         st.divider()
             
