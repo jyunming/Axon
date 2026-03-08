@@ -1087,11 +1087,58 @@ def main():
     _interactive_repl(brain, stream=True)
 
 
+_SLASH_COMMANDS = ["/help", "/list", "/ingest ", "/model ", "/pull ", "/clear", "/quit", "/exit"]
+
+
+def _make_completer(brain: 'OpenStudioBrain'):
+    """Return a readline completer for slash commands, paths, and model names."""
+    def completer(text: str, state: int):
+        try:
+            import readline
+            full_line = readline.get_line_buffer()
+
+            # Completing a slash command name
+            if full_line.startswith("/") and " " not in full_line:
+                matches = [c for c in _SLASH_COMMANDS if c.startswith(full_line)]
+                return matches[state] if state < len(matches) else None
+
+            # /ingest <path> — complete filesystem paths
+            if full_line.startswith("/ingest "):
+                path_prefix = full_line[len("/ingest "):]
+                import glob as _glob
+                matches = _glob.glob(path_prefix + "*")
+                # Append / to directories
+                matches = [m + "/" if os.path.isdir(m) else m for m in matches]
+                return matches[state] if state < len(matches) else None
+
+            # /model or /pull — complete Ollama model names
+            if full_line.startswith("/model ") or full_line.startswith("/pull "):
+                model_prefix = full_line.split(" ", 1)[1]
+                try:
+                    import ollama as _ollama
+                    response = _ollama.list()
+                    all_models = response.models if hasattr(response, 'models') else response.get("models", [])
+                    names = [m.model if hasattr(m, 'model') else m.get('name', '') for m in all_models]
+                    matches = [n for n in names if n.startswith(model_prefix)]
+                    return matches[state] if state < len(matches) else None
+                except Exception:
+                    return None
+
+        except Exception:
+            return None
+        return None
+
+    return completer
+
+
 def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
     """Interactive chat REPL — initializes brain once, maintains history across turns."""
     try:
-        import readline  # enables up-arrow history on Linux/macOS
+        import readline
         readline.set_history_length(200)
+        readline.set_completer(_make_completer(brain))
+        readline.set_completer_delims("")   # treat full line as one token
+        readline.parse_and_bind("tab: complete")
     except ImportError:
         pass
 
