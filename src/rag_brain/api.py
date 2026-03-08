@@ -181,6 +181,22 @@ async def add_text(request: TextIngestRequest):
         logger.error(f"Error adding text: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/collection")
+async def get_collection():
+    """List all unique sources in the knowledge base with chunk counts."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        docs = brain.list_documents()
+        return {
+            "total_files": len(docs),
+            "total_chunks": sum(d["chunks"] for d in docs),
+            "files": [{"source": d["source"], "chunks": d["chunks"]} for d in docs],
+        }
+    except Exception as e:
+        logger.error(f"Error listing collection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/delete")
 async def delete_documents(request: DeleteRequest):
     if brain is None:
