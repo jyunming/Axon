@@ -127,8 +127,14 @@ class TestOpenStudioBrainQuery:
         assert retrieval['transforms']['multi_query_applied'] is True
         assert len(retrieval['transforms']['queries']) == 2
 
-    def test_llm_reranker_path(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        assert results[1]['rerank_score'] == 5.0
+        assert results[2]['id'] == "doc2"
+        assert results[2]['rerank_score'] == 0.0
+
+class TestOpenReranker:
+    def test_llm_reranker_path(self):
         from rag_brain.main import OpenReranker, OpenStudioConfig
+        from unittest.mock import MagicMock
         config = OpenStudioConfig(rerank=True, reranker_provider="llm")
         reranker = OpenReranker(config)
         reranker.llm = MagicMock()
