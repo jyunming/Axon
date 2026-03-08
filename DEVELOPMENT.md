@@ -60,10 +60,15 @@ studio_brain_open/
 │   ├── splitters.py        # Text chunking
 │   └── tools.py            # Agent tool definitions
 ├── tests/                  # Test suite
+│   ├── conftest.py         # Shared fixtures (overrides tmp_path for Windows compat)
+│   ├── test_api.py         # FastAPI endpoint tests
 │   ├── test_config.py      # Configuration tests
 │   ├── test_loaders.py     # Loader tests
-│   ├── test_retrievers.py  # Retriever tests
-│   └── test_splitters.py   # Splitter tests
+│   ├── test_main.py        # Core RAG pipeline tests
+│   ├── test_retrievers.py  # BM25 and RRF tests
+│   ├── test_splitters.py   # Splitter tests
+│   ├── test_streaming.py   # Streaming response tests
+│   └── test_tools.py       # Agent tool definition tests
 ├── examples/               # Example scripts
 ├── .github/workflows/      # CI/CD pipelines
 ├── config.yaml             # Configuration template
@@ -74,8 +79,10 @@ studio_brain_open/
 
 ### 4. Development Workflow
 
-1. **Create a feature branch:**
+1. **Create a feature branch from `master`:**
+   > ⚠️ **Never commit directly to `master`.** Always branch first.
    ```bash
+   git checkout master && git pull
    git checkout -b feature/your-feature
    ```
 
@@ -93,10 +100,10 @@ studio_brain_open/
    # Pre-commit hooks will run automatically
    ```
 
-4. **Push and create PR:**
+4. **Push and create PR targeting `master`:**
    ```bash
    git push origin feature/your-feature
-   # Create pull request on GitHub
+   # Create pull request on GitHub targeting master
    ```
 
 ### 5. Testing Guidelines
@@ -232,20 +239,16 @@ make lint
 
 ### 10. Release Process
 
-1. Update version in `pyproject.toml`
-2. Update CHANGELOG.md
-3. Run all tests: `make ci`
-4. Create git tag: `git tag v2.0.0`
-5. Push tag: `git push --tags`
-6. GitHub Actions will build and publish
+1. Update version in `setup.py`
+2. Run all tests: `make ci`
+3. Create git tag: `git tag v2.0.0`
+4. Push tag: `git push --tags`
+5. GitHub Actions will build and publish
 
 ## Resources
 
 - [Contributing Guide](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [API Documentation](docs/api.md)
-- [Architecture Overview](docs/architecture.md)
 
 ## Getting Help
 
