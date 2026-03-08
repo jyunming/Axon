@@ -5,11 +5,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - ./src:/app/src
       - ./chroma_data:/app/chroma_data
       - ./bm25_index:/app/bm25_index
       - ./config.yaml:/app/config.yaml
     environment:
-      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OLLAMA_HOST=http://ollama:11434
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - ollama
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -19,8 +25,30 @@ services:
     ports:
       - "8501:8501"
     command: ["rag-brain-ui"]
-    depends_on:
-      - rag-brain-api
+    volumes:
+      - ./src:/app/src
+      - ./chroma_data:/app/chroma_data
+      - ./bm25_index:/app/bm25_index
+      - ./config.yaml:/app/config.yaml
     environment:
+      - OLLAMA_HOST=http://ollama:11434
       - RAG_BRAIN_API_URL=http://rag-brain-api:8000
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - ollama
+      - rag-brain-api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+  # Local Dockerized Ollama Engine
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    restart: unless-stopped
+

@@ -18,7 +18,7 @@ The following features are already implemented:
 | **LLM** | Ollama-backed LLM with streaming (llama3.1, qwen2.5, phi3, mistral) |
 | **Vector stores** | ChromaDB (default), Qdrant |
 | **Document formats** | PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, BMP/PNG/TIF/TIFF/PGM images |
-| **Multimodal** | BMP image ingestion with VLM auto-captioning (llava) |
+| **Multimodal** | Raster image ingestion (BMP/PNG/TIF/PGM) with VLM auto-captioning (llava) |
 | **Agent interface** | FastAPI with 6 OpenAI-compatible tools |
 | **Evaluation** | RAGAS evaluation script (`scripts/evaluate.py`) |
 | **Chunking** | Recursive character text splitter with configurable size/overlap |
@@ -190,7 +190,6 @@ Current gap: No evaluation runs in CI. No hallucination/groundedness metric is t
 | No query result caching | Every identical query hits the LLM | Low — add `functools.lru_cache` or Redis |
 | No metadata filtering in vector search | Can't filter by date, source, tag | Medium — ChromaDB/Qdrant support `where` filters |
 | No document deduplication | Re-ingesting same doc creates duplicates | Low — hash-based dedup on ingest |
-| Only BMP images supported | JPG/PNG not indexed | Low — expand loaders.py |
 | No async streaming for hybrid path | BM25 runs sync, blocks | Medium |
 | No chunk-level source citations | Answers don't show which chunk they came from | Medium |
 
