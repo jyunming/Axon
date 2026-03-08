@@ -1102,7 +1102,7 @@ def _make_completer(brain: 'OpenStudioBrain'):
                 matches = [c for c in _SLASH_COMMANDS if c.startswith(full_line)]
                 return matches[state] if state < len(matches) else None
 
-            # /ingest <path> — complete filesystem paths
+            # /ingest <path|glob> — complete filesystem paths
             if full_line.startswith("/ingest "):
                 path_prefix = full_line[len("/ingest "):]
                 import glob as _glob
@@ -1131,6 +1131,45 @@ def _make_completer(brain: 'OpenStudioBrain'):
     return completer
 
 
+def _print_banner(brain: 'OpenStudioBrain') -> None:
+    """Print an animated startup banner for the REPL."""
+    import sys as _sys
+
+    try:
+        docs = brain.list_documents()
+        doc_info = f"{sum(d['chunks'] for d in docs)} chunks" if docs else "empty"
+    except Exception:
+        doc_info = "unknown"
+
+    model_str = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+    search_str = "ON  (Brave)" if brain.config.truth_grounding else "OFF"
+
+    width = 44
+    def _row(label: str, value: str) -> str:
+        content = f"  {label:<8}{value}"
+        pad = width - len(content) - 1
+        return f"  │{content}{' ' * max(pad, 1)}│"
+
+    lines = [
+        "",
+        "  ╭" + "─" * width + "╮",
+        "  │" + "  🧠  Local RAG Brain".ljust(width) + "│",
+        "  │" + " " * width + "│",
+        _row("model  ·", model_str[:32]),
+        _row("search ·", search_str),
+        _row("docs   ·", doc_info),
+        "  ╰" + "─" * width + "╯",
+        "",
+        "  Type your question  ·  /help for commands",
+        "",
+    ]
+
+    for line in lines:
+        _sys.stdout.write(line + "\n")
+        _sys.stdout.flush()
+        time.sleep(0.04)
+
+
 def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
     """Interactive chat REPL — initializes brain once, maintains history across turns."""
     # Silence INFO logs — they clutter the interactive UI
@@ -1141,18 +1180,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
 
     try:
         import readline
-        readline.set_history_length(200)
+        readline.set_history_length(500)
         readline.set_completer(_make_completer(brain))
         readline.set_completer_delims("")   # treat full line as one token
         readline.parse_and_bind("tab: complete")
+        readline.parse_and_bind(r'"\C-l": clear-screen')
     except ImportError:
         pass
 
-    model_info = f"{brain.config.llm_provider}/{brain.config.llm_model}"
-    search_status = "🔍 web search ON" if brain.config.truth_grounding else "🔍 web search OFF"
-    print(f"\n🧠 Local RAG Brain  [{model_info}]  [{search_status}]")
-    print("   Type your question, or use a slash command.")
-    print("   /help  /list  /ingest <path>  /model <provider>/<model>  /search  /pull <name>  /clear  /quit\n")
+    _print_banner(brain)
 
     chat_history: list = []
 
@@ -1179,7 +1215,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
             elif cmd == "/help":
                 print(
                     "\n  /list                        — list ingested documents\n"
-                    "  /ingest <path>               — ingest a file or directory\n"
+                    "  /ingest <path|glob>          — ingest files or directory\n"
+                    "    e.g. /ingest ./docs/        (whole directory)\n"
+                    "         /ingest ./src/*.py     (glob pattern)\n"
+                    "         /ingest ./notes/**/*.md (recursive glob)\n"
                     "  /model <model>               — switch model (keep provider)\n"
                     "  /model <provider>/<model>    — switch provider and model\n"
                     "    providers: ollama, gemini, openai, ollama_cloud\n"
@@ -1190,6 +1229,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
                     "  /pull <name>                 — pull an Ollama model\n"
                     "  /clear                       — clear chat history\n"
                     "  /quit                        — exit\n"
+                    "\n  Keyboard shortcuts:\n"
+                    "    Tab       complete commands / paths\n"
+                    "    Ctrl+L    clear screen\n"
+                    "    Ctrl+C    cancel in-progress reply\n"
+                    "    Ctrl+D    exit\n"
                 )
 
             elif cmd == "/list":
@@ -1205,22 +1249,37 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
 
             elif cmd == "/ingest":
                 if not arg:
-                    print("  Usage: /ingest <path>")
-                elif os.path.isdir(arg):
-                    print(f"  Ingesting {arg} …")
-                    asyncio.run(brain.load_directory(arg))
-                    print("  ✅ Done.")
-                elif os.path.isfile(arg):
-                    from rag_brain.loaders import DirectoryLoader
-                    ext = os.path.splitext(arg)[1].lower()
-                    mgr = DirectoryLoader()
-                    if ext in mgr.loaders:
-                        brain.ingest(mgr.loaders[ext].load(arg))
-                        print("  ✅ Done.")
-                    else:
-                        print(f"  ❌ Unsupported file type: {ext}")
+                    print("  Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
                 else:
-                    print(f"  ❌ Path not found: {arg}")
+                    import glob as _glob
+                    from rag_brain.loaders import DirectoryLoader
+                    # Expand glob pattern; fallback to literal path
+                    matched = sorted(_glob.glob(arg, recursive=True))
+                    if not matched:
+                        # No glob match — try as plain directory
+                        if os.path.isdir(arg):
+                            matched = [arg]
+                        else:
+                            print(f"  ❌ No files matched: {arg}")
+                    if matched:
+                        loader_mgr = DirectoryLoader()
+                        ingested, skipped = 0, 0
+                        for path in matched:
+                            if os.path.isdir(path):
+                                print(f"  📁 {path} …", end="", flush=True)
+                                asyncio.run(brain.load_directory(path))
+                                print("  ✅")
+                                ingested += 1
+                            elif os.path.isfile(path):
+                                ext = os.path.splitext(path)[1].lower()
+                                if ext in loader_mgr.loaders:
+                                    brain.ingest(loader_mgr.loaders[ext].load(path))
+                                    print(f"  ✅ {path}")
+                                    ingested += 1
+                                else:
+                                    print(f"  ⚠️  Skipped (unsupported type): {path}")
+                                    skipped += 1
+                        print(f"  Done — {ingested} ingested, {skipped} skipped.")
 
             elif cmd == "/model":
                 _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
