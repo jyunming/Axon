@@ -966,9 +966,40 @@ def main():
     parser.add_argument('--list', action='store_true', help='List all ingested sources in the knowledge base')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
     parser.add_argument('--stream', action='store_true', help='Stream the response')
+    parser.add_argument(
+        '--provider',
+        choices=['ollama', 'gemini', 'ollama_cloud', 'openai'],
+        help='LLM provider to use (overrides config)',
+    )
+    parser.add_argument('--model', help='Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o')
+    parser.add_argument('--list-models', action='store_true', help='List available Ollama models and supported cloud providers')
     args = parser.parse_args()
-    
+
     config = OpenStudioConfig.load(args.config)
+    if args.provider:
+        config.llm_provider = args.provider
+    if args.model:
+        config.llm_model = args.model
+
+    if args.list_models:
+        print("\n🤖 Supported LLM providers and example models:\n")
+        print("  ollama       (local)  — gemma:2b, gemma, llama3.1, mistral, phi3")
+        print("  gemini       (cloud)  — gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash")
+        print("  ollama_cloud (cloud)  — any model hosted at your OLLAMA_CLOUD_URL")
+        print("  openai       (cloud)  — gpt-4o, gpt-4o-mini, gpt-3.5-turbo\n")
+        try:
+            import ollama as _ollama
+            local = _ollama.list()
+            models = local.get("models", [])
+            if models:
+                print("  📦 Locally available Ollama models:")
+                for m in models:
+                    print(f"     • {m['name']}")
+        except Exception:
+            print("  (Ollama not reachable — cannot list local models)")
+        print()
+        return
+
     brain = OpenStudioBrain(config)
     
     if args.ingest:
