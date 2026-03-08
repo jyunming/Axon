@@ -27,7 +27,7 @@ logger = logging.getLogger("RAGBrain")
 class OpenStudioConfig:
     """Configuration for Local RAG Brain."""
     # Embedding
-    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed"] = "sentence_transformers"
+    embedding_provider: str = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
     
@@ -37,9 +37,18 @@ class OpenStudioConfig:
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
     api_key: str = ""
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    ollama_cloud_key: str = os.getenv("OLLAMA_CLOUD_KEY", "")
-    ollama_cloud_url: str = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
+    gemini_api_key: str = ""
+    ollama_cloud_key: str = ""
+    ollama_cloud_url: str = ""
+    
+    def __post_init__(self) -> None:
+        """Populate API-related fields from environment variables when not set."""
+        if not self.gemini_api_key:
+            self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+        if not self.ollama_cloud_key:
+            self.ollama_cloud_key = os.getenv("OLLAMA_CLOUD_KEY", "")
+        if not self.ollama_cloud_url:
+            self.ollama_cloud_url = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
     
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
@@ -65,7 +74,7 @@ class OpenStudioConfig:
     # Query Transformations
     multi_query: bool = False
     hyde: bool = False
-    discussion_fallback: bool = True
+    discussion_fallback: bool = False
 
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
@@ -107,6 +116,8 @@ class OpenStudioConfig:
                 config_dict['multi_query'] = data['query_transformations']['multi_query']
             if 'hyde' in data['query_transformations']:
                 config_dict['hyde'] = data['query_transformations']['hyde']
+            if 'discussion_fallback' in data['query_transformations']:
+                config_dict['discussion_fallback'] = data['query_transformations']['discussion_fallback']
         
         # Map some specific names if they don't match exactly
         if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
@@ -153,7 +164,7 @@ class OpenReranker:
         """
         Rerank a list of documents based on a query.
         """
-        if not self.config.rerank or not self.model or not documents:
+        if not self.config.rerank or (not self.model and not self.llm) or not documents:
             return documents
         
         logger.info(f"🔄 Reranking {len(documents)} documents...")
@@ -181,14 +192,21 @@ class OpenReranker:
         """RankGPT pointwise scoring implementation."""
         system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
         
-        for doc in documents:
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def score_doc(doc):
             prompt = f"Query: {query}\n\nDocument: {doc['text']}\n\nScore (1-10):"
             try:
                 response = self.llm.complete(prompt, system_prompt=system_prompt).strip()
-                # Parse integer from response, fallback to 0 if LLM disobeys
-                score = float(response) if response.replace('.','',1).isdigit() else 0.0
+                return float(response) if response.replace('.','',1).isdigit() else 0.0
             except Exception:
-                score = 0.0
+                return 0.0
+                
+        # Batch concurrent requests to reduce overall latency
+        with ThreadPoolExecutor(max_workers=min(10, len(documents))) as executor:
+            scores = list(executor.map(score_doc, documents))
+            
+        for doc, score in zip(documents, scores):
             doc['rerank_score'] = score
             
         reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
@@ -229,12 +247,12 @@ class OpenEmbedding:
                 self.dimension = 384
                 
         elif self.provider == "openai":
-            from openai import Client
+            from openai import OpenAI
             logger.info(f"📊 Using OpenAI API Embedding: {self.config.embedding_model}")
             kwargs = {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
             if self.config.ollama_base_url and self.config.ollama_base_url != "http://localhost:11434":
                 kwargs["base_url"] = self.config.ollama_base_url
-            self.model = Client(**kwargs)
+            self.model = OpenAI(**kwargs)
             self.dimension = 1536
             
         else:
@@ -277,11 +295,11 @@ class OpenLLM:
     
     def _get_openai_client(self):
         if self._openai_client is None:
-            from openai import Client
+            from openai import OpenAI
             kwargs = {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
             if self.config.ollama_base_url and self.config.ollama_base_url != "http://localhost:11434":
                 kwargs["base_url"] = self.config.ollama_base_url
-            self._openai_client = Client(**kwargs)
+            self._openai_client = OpenAI(**kwargs)
         return self._openai_client
     
     def complete(self, prompt: str, system_prompt: str = None) -> str:
@@ -303,16 +321,16 @@ class OpenLLM:
             
         elif provider == "gemini":
             import google.generativeai as genai
-            genai.configure(api_key=self.config.gemini_api_key)
-            model = genai.GenerativeModel(self.config.llm_model)
-            
+            if not getattr(self, '_gemini_configured', False):
+                genai.configure(api_key=self.config.gemini_api_key)
+                self._gemini_configured = True
+            model_kwargs = {"model_name": self.config.llm_model}
             if system_prompt:
-                full_prompt = f"{system_prompt}\n\nUser: {prompt}"
-            else:
-                full_prompt = prompt
+                model_kwargs["system_instruction"] = system_prompt
+            model = genai.GenerativeModel(**model_kwargs)
                 
             response = model.generate_content(
-                full_prompt,
+                prompt,
                 generation_config=genai.types.GenerationConfig(
                     temperature=self.config.llm_temperature,
                     max_output_tokens=self.config.llm_max_tokens
@@ -375,16 +393,16 @@ class OpenLLM:
                 
         elif provider == "gemini":
             import google.generativeai as genai
-            genai.configure(api_key=self.config.gemini_api_key)
-            model = genai.GenerativeModel(self.config.llm_model)
-            
+            if not getattr(self, '_gemini_configured', False):
+                genai.configure(api_key=self.config.gemini_api_key)
+                self._gemini_configured = True
+            model_kwargs = {"model_name": self.config.llm_model}
             if system_prompt:
-                full_prompt = f"{system_prompt}\n\nUser: {prompt}"
-            else:
-                full_prompt = prompt
+                model_kwargs["system_instruction"] = system_prompt
+            model = genai.GenerativeModel(**model_kwargs)
                 
             response = model.generate_content(
-                full_prompt,
+                prompt,
                 stream=True,
                 generation_config=genai.types.GenerationConfig(
                     temperature=self.config.llm_temperature,
@@ -610,10 +628,18 @@ Your primary goal is to help the user by answering questions based on the provid
         
         # Vector Search
         if self.config.hyde:
+             # HyDE uses a single hypothetical document as the vector query
              all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters))
         else:
-             for sq in search_queries:
+             # When multi_query is enabled, batch embed all queries to avoid
+             # multiple sequential embedding calls (latency/cost optimization).
+             if len(search_queries) == 1:
+                 sq = search_queries[0]
                  all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(sq), top_k=fetch_k, filter_dict=filters))
+             else:
+                 embeddings = self.embedding.embed(search_queries)
+                 for emb in embeddings:
+                     all_vector_results.extend(self.vector_store.search(emb, top_k=fetch_k, filter_dict=filters))
         
         # Dedupe vector store results based on ID
         dedup_vector = {}
@@ -733,7 +759,10 @@ def main():
     
     if args.query:
         if args.stream:
-            for chunk in brain.query_stream(args.query): print(chunk, end="", flush=True)
+            for chunk in brain.query_stream(args.query):
+                if isinstance(chunk, dict):
+                    continue
+                print(chunk, end="", flush=True)
             print()
         else: print(f"\n📝 Response:\n{brain.query(args.query)}")
 

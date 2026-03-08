@@ -30,6 +30,7 @@ setup(
         "chromadb>=0.4.0",
         "sentence-transformers>=2.2.0",
         "ollama>=0.1.0",
+        "openai>=1.0.0",
         "rank_bm25>=0.2.2",
         "streamlit>=1.30.0",
         "httpx>=0.25.0",
