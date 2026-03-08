@@ -1752,7 +1752,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         from prompt_toolkit.completion import Completer, Completion
         from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
         from prompt_toolkit.styles import Style
+        from prompt_toolkit.history import FileHistory as _FileHistory
         import glob as _pglob
+
+        _HIST_DIR = os.path.expanduser("~/.rag_brain")
+        os.makedirs(_HIST_DIR, exist_ok=True)
+        _HIST_FILE = os.path.join(_HIST_DIR, "repl_history")
 
         _PT_STYLE = Style.from_dict({"": "", "completion-menu.completion.current": "bg:#444466 #ffffff",
                                       "bottom-toolbar": "bg:#222233 #aaaacc"})
@@ -1849,12 +1854,21 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             style=_PT_STYLE,
             complete_while_typing=True,
             bottom_toolbar=_toolbar,
+            history=_FileHistory(_HIST_FILE),
         )
     except ImportError:
-        # Fall back to readline
+        # Fall back to readline with history persistence
         try:
             import readline
-            readline.set_history_length(500)
+            import atexit
+            _hist_file = os.path.expanduser("~/.rag_brain/repl_history")
+            os.makedirs(os.path.dirname(_hist_file), exist_ok=True)
+            try:
+                readline.read_history_file(_hist_file)
+            except FileNotFoundError:
+                pass
+            readline.set_history_length(2000)
+            atexit.register(readline.write_history_file, _hist_file)
             readline.set_completer(_make_completer(brain))
             readline.set_completer_delims("")
             readline.parse_and_bind("tab: complete")
@@ -2339,29 +2353,56 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             response_parts: list = []
             _cancelled = False
             if stream:
+                # Try rich Live rendering; fall back to plain streaming
                 try:
-                    for chunk in brain.query_stream(query_text, chat_history=chat_history):
-                        if isinstance(chunk, dict):
-                            if chunk.get("type") == "sources":
-                                _last_sources = chunk.get("sources", [])
-                            continue
-                        if first_chunk:
-                            if not quiet:
-                                _spin_stop.set()
-                                _spin_thread.join(timeout=0.3)
-                            sys.stdout.write(f"\r  Brain: " + " " * 20 + f"\r  Brain: ")
-                            sys.stdout.flush()
-                            first_chunk = False
-                        print(chunk, end="", flush=True)
-                        response_parts.append(chunk)
+                    from rich.console import Console as _RC
+                    from rich.live import Live as _RL
+                    from rich.markdown import Markdown as _RM
+                    _use_rich = True
+                except ImportError:
+                    _use_rich = False
+
+                try:
+                    if _use_rich:
+                        _live_console = _RC()
+                        with _RL(console=_live_console, refresh_per_second=12) as _live:
+                            for chunk in brain.query_stream(query_text, chat_history=chat_history):
+                                if isinstance(chunk, dict):
+                                    if chunk.get("type") == "sources":
+                                        _last_sources = chunk.get("sources", [])
+                                    continue
+                                if first_chunk:
+                                    if not quiet:
+                                        _spin_stop.set()
+                                        _spin_thread.join(timeout=0.3)
+                                    sys.stdout.write("\r" + " " * 30 + "\r")
+                                    sys.stdout.flush()
+                                    first_chunk = False
+                                response_parts.append(chunk)
+                                _live.update(_RM("".join(response_parts)))
+                    else:
+                        for chunk in brain.query_stream(query_text, chat_history=chat_history):
+                            if isinstance(chunk, dict):
+                                if chunk.get("type") == "sources":
+                                    _last_sources = chunk.get("sources", [])
+                                continue
+                            if first_chunk:
+                                if not quiet:
+                                    _spin_stop.set()
+                                    _spin_thread.join(timeout=0.3)
+                                sys.stdout.write(f"\r  Brain: " + " " * 20 + f"\r  Brain: ")
+                                sys.stdout.flush()
+                                first_chunk = False
+                            print(chunk, end="", flush=True)
+                            response_parts.append(chunk)
+                        if not _cancelled:
+                            print()
                 except KeyboardInterrupt:
                     _cancelled = True
                     if not quiet:
                         _spin_stop.set()
                     sys.stdout.write("\r" + " " * 40 + "\r")
                     print("  ⚠️  Cancelled.\n")
-                if not _cancelled:
-                    print("\n")
                 response = "".join(response_parts)
             else:
                 response = brain.query(query_text, chat_history=chat_history)
@@ -2372,7 +2413,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 try:
                     from rich.console import Console as _RC
                     from rich.markdown import Markdown as _RM
-                    sys.stdout.write("\r  Brain: \n")
+                    sys.stdout.write("\r" + " " * 30 + "\r")
                     sys.stdout.flush()
                     _RC().print(_RM(response))
                     print()
