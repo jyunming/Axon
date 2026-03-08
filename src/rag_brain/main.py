@@ -1842,8 +1842,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         os.makedirs(_HIST_DIR, exist_ok=True)
         _HIST_FILE = os.path.join(_HIST_DIR, "repl_history")
 
-        _PT_STYLE = Style.from_dict({"": "", "completion-menu.completion.current": "bg:#444466 #ffffff",
-                                      "bottom-toolbar": "bg:#222233 #aaaacc"})
+        _PT_STYLE = Style.from_dict({
+            "": "",
+            "completion-menu.completion.current": "bg:#444466 #ffffff",
+            "bottom-toolbar":        "bg:#1a1a2e #c8c8e8",
+            "bottom-toolbar.key":    "bg:#1a1a2e #7070cc bold",
+            "bottom-toolbar.on":     "bg:#1a1a2e #66cc66",
+            "bottom-toolbar.off":    "bg:#1a1a2e #666688",
+            "bottom-toolbar.sep":    "bg:#1a1a2e #444466",
+        })
 
         class _PTCompleter(Completer):
             def __init__(self, brain_ref):
@@ -1923,13 +1930,32 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                             pass
 
         def _toolbar():
-            m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
-            s = "🔍 search:ON" if brain.config.truth_grounding else "search:off"
-            d = "discuss:on" if brain.config.discussion_fallback else "discuss:off"
-            h = "hybrid:on" if brain.config.hybrid_search else "hybrid:off"
+            m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+            emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
+            try:
+                docs = brain.vector_store.collection.count()
+                doc_s = f"{docs} chunks"
+            except Exception:
+                doc_s = "?"
             proj = getattr(brain, "_active_project", "default")
-            proj_str = f"   ·   📂 {proj}" if proj != "default" else ""
-            return f"  🧠 {m}   ·   {s}   ·   {d}   ·   {h}   ·   top-k:{brain.config.top_k}   ·   threshold:{brain.config.similarity_threshold}{proj_str}  "
+            proj_s = f"  <bottom-toolbar.sep>│</bottom-toolbar.sep>  <bottom-toolbar.key>📂</bottom-toolbar.key> {proj}" if proj != "default" else ""
+            s_color = "bottom-toolbar.on"  if brain.config.truth_grounding   else "bottom-toolbar.off"
+            d_color = "bottom-toolbar.on"  if brain.config.discussion_fallback else "bottom-toolbar.off"
+            h_color = "bottom-toolbar.on"  if brain.config.hybrid_search      else "bottom-toolbar.off"
+            s_val   = "search:ON" if brain.config.truth_grounding   else "search:off"
+            d_val   = "discuss:on" if brain.config.discussion_fallback else "discuss:off"
+            h_val   = "hybrid:on" if brain.config.hybrid_search      else "hybrid:off"
+            sep = "  <bottom-toolbar.sep>│</bottom-toolbar.sep>  "
+            return HTML(
+                f"  <bottom-toolbar.key>🧠 LLM</bottom-toolbar.key> {m}"
+                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key> {emb}"
+                f"{sep}<bottom-toolbar.key>Docs</bottom-toolbar.key> {doc_s}"
+                f"{sep}<{s_color}>{s_val}</{s_color}>"
+                f"{sep}<{d_color}>{d_val}</{d_color}>"
+                f"{sep}<{h_color}>{h_val}</{h_color}>"
+                f"{sep}top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
+                f"{proj_s}  "
+            )
 
         _pt_session = PromptSession(
             completer=_PTCompleter(brain),
@@ -1996,12 +2022,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     _last_sources: list = []
     _last_query: str = ""
 
-    _should_redraw = False
     while True:
-        if not quiet and _should_redraw:
-            _draw_header(brain, _tick_lines)
-            _print_recent_turns(chat_history)
-        _should_redraw = False
         try:
             user_input = _read_input().strip()
         except (EOFError, KeyboardInterrupt):
@@ -2636,7 +2657,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
             _save_session(session)   # persist after every turn
-            _should_redraw = True    # redraw header before next prompt
 
 
 if __name__ == "__main__":
