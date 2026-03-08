@@ -13,7 +13,7 @@ class TestOpenStudioConfig:
         assert config.vector_store == "chroma"
         assert config.hybrid_search is True
         assert config.top_k == 10
-        assert config.discussion_fallback is False
+        assert config.discussion_fallback is True
 
     def test_load_from_yaml(self, tmp_path):
         from rag_brain.main import OpenStudioConfig

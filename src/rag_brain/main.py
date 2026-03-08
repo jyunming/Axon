@@ -77,7 +77,7 @@ class OpenStudioConfig:
     # Query Transformations
     multi_query: bool = False
     hyde: bool = False
-    discussion_fallback: bool = False
+    discussion_fallback: bool = True
 
     # Web Search / Truth Grounding
     truth_grounding: bool = False
