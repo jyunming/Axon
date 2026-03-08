@@ -1087,7 +1087,7 @@ def main():
     _interactive_repl(brain, stream=True)
 
 
-_SLASH_COMMANDS = ["/help", "/list", "/ingest ", "/model ", "/pull ", "/search", "/clear", "/quit", "/exit"]
+_SLASH_COMMANDS = ["/help", "/list", "/ingest ", "/model ", "/pull ", "/search", "/discuss", "/clear", "/quit", "/exit"]
 
 
 def _make_completer(brain: 'OpenStudioBrain'):
@@ -1143,6 +1143,7 @@ def _print_banner(brain: 'OpenStudioBrain') -> None:
 
     model_str = f"{brain.config.llm_provider}/{brain.config.llm_model}"
     search_str = "ON  (Brave)" if brain.config.truth_grounding else "OFF"
+    discuss_str = "ON  (answers without RAG context)" if brain.config.discussion_fallback else "OFF"
 
     width = 44
     def _row(label: str, value: str) -> str:
@@ -1157,6 +1158,7 @@ def _print_banner(brain: 'OpenStudioBrain') -> None:
         "  │" + " " * width + "│",
         _row("model  ·", model_str[:32]),
         _row("search ·", search_str),
+        _row("discuss·", discuss_str[:32]),
         _row("docs   ·", doc_info),
         "  ╰" + "─" * width + "╯",
         "",
@@ -1187,6 +1189,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
         readline.parse_and_bind(r'"\C-l": clear-screen')
     except ImportError:
         pass
+
+    # REPL is conversational — always let the LLM answer even with no RAG hits
+    brain.config.discussion_fallback = True
 
     _print_banner(brain)
 
@@ -1226,6 +1231,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
                     "         /model openai/gpt-4o\n"
                     "         /model ollama/gemma:2b\n"
                     "  /search                      — toggle web search (Brave API) on/off\n"
+                    "  /discuss                     — toggle discussion mode (LLM answers even without RAG context)\n"
                     "  /pull <name>                 — pull an Ollama model\n"
                     "  /clear                       — clear chat history\n"
                     "  /quit                        — exit\n"
@@ -1344,6 +1350,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True) -> None:
                     else:
                         brain.config.truth_grounding = True
                         print("  🔍 Web search ON — Brave Search will be used as fallback when local knowledge is insufficient.")
+
+            elif cmd == "/discuss":
+                brain.config.discussion_fallback = not brain.config.discussion_fallback
+                state = "ON" if brain.config.discussion_fallback else "OFF"
+                print(f"  💬 Discussion mode {state} — LLM {'will' if brain.config.discussion_fallback else 'will not'} answer when no RAG context is found.")
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")
