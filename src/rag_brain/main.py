@@ -575,6 +575,38 @@ class OpenVectorStore:
                 points.append(PointStruct(id=id, vector=embedding, payload=payload))
             self.client.upsert(collection_name="rag_brain", points=points)
     
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """Return all unique source files stored in the knowledge base with chunk counts.
+
+        Returns:
+            List of dicts sorted by source name, each with keys:
+                - source (str): The metadata 'source' value, or 'unknown' if not set.
+                - chunks (int): Number of chunks stored for that source.
+                - doc_ids (List[str]): All chunk IDs belonging to this source.
+        """
+        if self.provider == "chroma":
+            result = self.collection.get(include=["metadatas"])
+            sources: Dict[str, Dict[str, Any]] = {}
+            for doc_id, meta in zip(result["ids"], result["metadatas"] or [{}] * len(result["ids"])):
+                source = (meta or {}).get("source", "unknown")
+                if source not in sources:
+                    sources[source] = {"source": source, "chunks": 0, "doc_ids": []}
+                sources[source]["chunks"] += 1
+                sources[source]["doc_ids"].append(doc_id)
+            return sorted(sources.values(), key=lambda x: x["source"])
+        elif self.provider == "qdrant":
+            from qdrant_client.models import ScrollRequest
+            results, _ = self.client.scroll(collection_name="rag_brain", limit=10000, with_payload=True)
+            sources: Dict[str, Dict[str, Any]] = {}
+            for point in results:
+                source = point.payload.get("source", "unknown")
+                if source not in sources:
+                    sources[source] = {"source": source, "chunks": 0, "doc_ids": []}
+                sources[source]["chunks"] += 1
+                sources[source]["doc_ids"].append(str(point.id))
+            return sorted(sources.values(), key=lambda x: x["source"])
+        return []
+
     def search(self, query_embedding: List[float], top_k: int = 10, filter_dict: Dict = None) -> List[Dict]:
         if self.provider == "chroma":
             results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
@@ -914,12 +946,24 @@ Your primary goal is to help the user by answering questions based on the provid
         documents = await loader.aload(directory)
         if documents: self.ingest(documents)
 
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """Return all unique source files in the knowledge base with chunk counts.
+
+        Returns:
+            List of dicts sorted by source name, each with keys:
+                - source (str): File name / source identifier.
+                - chunks (int): Number of stored chunks for this source.
+                - doc_ids (List[str]): All chunk IDs for this source.
+        """
+        return self.vector_store.list_documents()
+
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Local RAG Brain CLI")
     parser.add_argument('query', nargs='?', help='Question to ask')
     parser.add_argument('--ingest', help='Path to file or directory to ingest')
+    parser.add_argument('--list', action='store_true', help='List all ingested sources in the knowledge base')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
     parser.add_argument('--stream', action='store_true', help='Stream the response')
     args = parser.parse_args()
@@ -934,6 +978,19 @@ def main():
             ext = os.path.splitext(args.ingest)[1].lower()
             loader_mgr = DirectoryLoader()
             if ext in loader_mgr.loaders: brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
+
+    if args.list:
+        docs = brain.list_documents()
+        if not docs:
+            print("📭 Knowledge base is empty.")
+        else:
+            total_chunks = sum(d["chunks"] for d in docs)
+            print(f"\n📚 Knowledge Base — {len(docs)} file(s), {total_chunks} chunk(s)\n")
+            print(f"  {'Source':<60} {'Chunks':>6}")
+            print(f"  {'-'*60} {'-'*6}")
+            for d in docs:
+                print(f"  {d['source']:<60} {d['chunks']:>6}")
+        return
     
     if args.query:
         if args.stream:

@@ -250,3 +250,49 @@ def test_search_propagates_error():
     api_module.brain.embedding.embed_query.side_effect = RuntimeError("embed fail")
     resp = client.post("/search", json={"query": "test"})
     assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# GET /collection
+# ---------------------------------------------------------------------------
+
+def test_collection_503_no_brain():
+    resp = client.get("/collection")
+    assert resp.status_code == 503
+
+
+def test_collection_empty():
+    api_module.brain = _make_brain()
+    api_module.brain.list_documents.return_value = []
+    resp = client.get("/collection")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_files"] == 0
+    assert data["total_chunks"] == 0
+    assert data["files"] == []
+
+
+def test_collection_returns_sources():
+    api_module.brain = _make_brain()
+    api_module.brain.list_documents.return_value = [
+        {"source": "notes.txt", "chunks": 4, "doc_ids": ["a", "b", "c", "d"]},
+        {"source": "report.pdf", "chunks": 12, "doc_ids": [f"r{i}" for i in range(12)]},
+    ]
+    resp = client.get("/collection")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_files"] == 2
+    assert data["total_chunks"] == 16
+    sources = [f["source"] for f in data["files"]]
+    assert "notes.txt" in sources
+    assert "report.pdf" in sources
+    # doc_ids should NOT be exposed by this endpoint (internal detail)
+    for f in data["files"]:
+        assert "doc_ids" not in f
+
+
+def test_collection_propagates_error():
+    api_module.brain = _make_brain()
+    api_module.brain.list_documents.side_effect = RuntimeError("chroma down")
+    resp = client.get("/collection")
+    assert resp.status_code == 500

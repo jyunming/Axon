@@ -354,3 +354,92 @@ class TestLogQueryMetrics:
             logged_data = mock_logger.info.call_args[0][0]
             # top_score=0 treated as falsy → logged as None
             assert logged_data["top_score"] is None
+
+
+# ---------------------------------------------------------------------------
+# list_documents
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestListDocuments:
+    def test_list_documents_delegates_to_vector_store(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain.vector_store.list_documents = MagicMock(return_value=[
+            {"source": "a.txt", "chunks": 3, "doc_ids": ["1", "2", "3"]},
+            {"source": "b.pdf", "chunks": 7, "doc_ids": [str(i) for i in range(7)]},
+        ])
+
+        result = brain.list_documents()
+
+        brain.vector_store.list_documents.assert_called_once()
+        assert len(result) == 2
+        assert result[0]["source"] == "a.txt"
+        assert result[0]["chunks"] == 3
+        assert result[1]["source"] == "b.pdf"
+
+    def test_list_documents_empty_kb(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain.vector_store.list_documents = MagicMock(return_value=[])
+
+        result = brain.list_documents()
+        assert result == []
+
+
+class TestOpenVectorStoreListDocuments:
+    def test_chroma_groups_by_source(self):
+        from rag_brain.main import OpenVectorStore, OpenStudioConfig
+        from unittest.mock import MagicMock, patch
+
+        config = OpenStudioConfig(vector_store="chroma")
+        with patch("chromadb.PersistentClient") as MockClient:
+            mock_col = MagicMock()
+            MockClient.return_value.get_or_create_collection.return_value = mock_col
+            mock_col.get.return_value = {
+                "ids": ["c1", "c2", "c3", "c4"],
+                "metadatas": [
+                    {"source": "notes.txt"},
+                    {"source": "notes.txt"},
+                    {"source": "report.pdf"},
+                    {"source": "report.pdf"},
+                ],
+            }
+            store = OpenVectorStore(config)
+            result = store.list_documents()
+
+        assert len(result) == 2
+        by_source = {d["source"]: d for d in result}
+        assert by_source["notes.txt"]["chunks"] == 2
+        assert by_source["report.pdf"]["chunks"] == 2
+        assert set(by_source["notes.txt"]["doc_ids"]) == {"c1", "c2"}
+
+    def test_chroma_handles_missing_source_metadata(self):
+        from rag_brain.main import OpenVectorStore, OpenStudioConfig
+        from unittest.mock import MagicMock, patch
+
+        config = OpenStudioConfig(vector_store="chroma")
+        with patch("chromadb.PersistentClient") as MockClient:
+            mock_col = MagicMock()
+            MockClient.return_value.get_or_create_collection.return_value = mock_col
+            mock_col.get.return_value = {
+                "ids": ["x1"],
+                "metadatas": [{}],  # no 'source' key
+            }
+            store = OpenVectorStore(config)
+            result = store.list_documents()
+
+        assert len(result) == 1
+        assert result[0]["source"] == "unknown"
