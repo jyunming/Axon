@@ -181,7 +181,7 @@ echo "What is X?" | rag-brain -q
 | `/embed [provider/model]` | Switch embedding provider and model |
 | `/pull <name>` | Pull an Ollama model with progress indicator |
 | `/search` | Toggle Brave web search (truth_grounding) for knowledge grounding |
-| `/discuss` | Toggle discussion fallback — when OFF the LLM refuses queries with no document match |
+| `/discuss` | Toggle discuss mode — when OFF the LLM refuses queries with no document match |
 | `/rag [option]` | Show or modify RAG settings: `topk`, `threshold`, `hybrid`, `rerank`, `hyde`, `multi` |
 | `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
 | `/compact` | Summarize chat history via LLM to free context window |
@@ -201,7 +201,7 @@ echo "What is X?" | rag-brain -q
 - **Session Persistence:** Chat history auto-saves to `~/.rag_brain/sessions/session_<timestamp>.json`; resume any past session on startup
 - **Input History Persistence:** ↑↓ arrows cycle through history across sessions (saved to `~/.rag_brain/repl_history`)
 - **Project-Based Knowledge Isolation:** Each project has its own vector store, BM25 index, and sessions under `~/.rag_brain/projects/<name>/`
-- **Pinned Status Bar:** LLM model, embedding model, fallback, search, and hybrid settings always visible at the terminal bottom even during streaming
+- **Pinned Status Bar:** LLM model, embedding model, discuss, search, and hybrid settings always visible at the terminal bottom even during streaming
 - **Context Window Visibility:** `/context` shows exact token counts, model context limits, and retrieved sources with scores
 - **Keyboard shortcuts:** `Tab` complete · `↑↓` history · `Ctrl+C` cancel generation · `Ctrl+L` clear screen · `Ctrl+D` exit
 
