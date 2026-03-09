@@ -124,5 +124,9 @@ list_gemini_models.py
 # Claude Code session data
 .claude/
 
+# AI assistant instruction files (kept locally, not versioned)
+CLAUDE.md
+.github/copilot-instructions.md
+
 # Runtime data
 sessions.json

@@ -112,7 +112,7 @@ studio_brain_open/
 - Use Google-style docstrings
 - Include examples in docstrings where helpful
 - Update README.md if adding major features
-- **Keep docs in sync:** whenever a function, API endpoint, or config option is added or changed, update the relevant docs (README, SETUP.md, QUICKREF.md, copilot-instructions.md) in the same PR.
+- **Keep docs in sync:** whenever a function, API endpoint, or config option is added or changed, update the relevant docs (README, SETUP.md, QUICKREF.md) in the same PR.
 
 ### Example Docstring:
 ```python
