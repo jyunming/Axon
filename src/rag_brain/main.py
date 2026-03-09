@@ -1398,7 +1398,7 @@ _SLASH_COMMANDS = [
     "/help", "/list", "/ingest ", "/model ", "/embed ",
     "/pull ", "/search", "/discuss", "/rag ", "/compact",
     "/context", "/sessions", "/resume ", "/clear", "/retry",
-    "/project", "/project ", "/keys", "/vllm-url", "/vllm-url ",
+    "/project ", "/keys", "/vllm-url ",
     "/quit", "/exit",
 ]
 
