@@ -251,7 +251,7 @@ class TestOpenLLM:
     def test_vllm_default_base_url(self):
         from rag_brain.main import OpenStudioConfig
         config = OpenStudioConfig()
-        assert config.vllm_base_url == "http://localhost:8000"
+        assert config.vllm_base_url == "http://localhost:8000/v1"
 
     def test_vllm_base_url_from_yaml(self, tmp_path):
         from rag_brain.main import OpenStudioConfig
