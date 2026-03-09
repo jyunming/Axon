@@ -9,7 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pip install -e ".[dev]"
 
 # Run services
-rag-brain "your question"          # CLI query
+rag-brain "your question"          # CLI single-shot query
+rag-brain                          # CLI interactive REPL (default — no args)
 rag-brain --ingest ./docs/         # CLI ingest
 rag-brain-api                      # FastAPI on :8000
 rag-brain-ui                       # Streamlit on :8501
@@ -27,6 +28,41 @@ make format      # black (100-char line length)
 make type-check  # mypy
 make ci          # all of the above + tests
 ```
+
+## Interactive REPL
+
+When you run `rag-brain` with no arguments, you enter an interactive REPL with these features:
+
+**Session Persistence:** Chat history auto-saves to `~/.rag_brain/sessions/session_<timestamp>.json`. On startup, the REPL prompts you to resume a previous session.
+
+**Live Tab Completion:** As you type slash commands, it auto-completes:
+- Slash commands (e.g., `/model`, `/ingest`, `/rag`)
+- Filesystem paths (for `/ingest <path>` and `/resume` commands)
+- Ollama model names (for `/model` and `/pull` commands)
+
+**Animated Spinners:**
+- During init: Braille spinner (⠋⠙⠹…) shows initialization progress inside a box
+- During LLM generation: Same spinner shows `Brain: ⠙ thinking…` while waiting for the first token
+
+**Slash Commands:**
+```
+/help [cmd]         — Show all commands or detailed help for a specific command
+/list               — List all ingested documents with chunk counts
+/ingest <path>      — Ingest files or directories (glob patterns supported)
+/model [name]       — Switch LLM provider and model
+/embed [name]       — Switch embedding provider and model
+/pull <name>        — Pull an Ollama model with progress
+/search             — Toggle Brave web search (truth_grounding)
+/discuss            — Toggle discussion_fallback mode
+/rag [option]       — Show/modify RAG settings (topk, threshold, hybrid, rerank, hyde, multi)
+/compact            — Summarize chat history via LLM to free context
+/context            — Show token usage bar, model info, RAG settings, history, sources
+/sessions           — List recent saved sessions
+/resume <id>        — Load a previous session
+/clear              — Clear current chat history
+/quit, /exit        — Exit the REPL
+```
+
 
 ## Architecture
 

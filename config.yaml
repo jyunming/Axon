@@ -81,7 +81,7 @@ rerank:
 query_transformations:
   multi_query: false
   hyde: false
-  discussion_fallback: false
+  discussion_fallback: true
 
 # Web Search / Truth Grounding
 # Uses Brave Search API to ground answers with live web results

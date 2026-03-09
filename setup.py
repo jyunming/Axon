@@ -28,7 +28,8 @@ setup(
         "pydantic>=2.0.0",
         "python-dotenv>=1.0.0",
         "chromadb>=0.4.0",
-        "sentence-transformers>=2.2.0",
+        "sentence-transformers>=3.0.0",
+        "tf-keras>=2.0.0",
         "ollama>=0.1.0",
         "openai>=1.0.0",
         "google-generativeai>=0.4.0",
@@ -42,6 +43,8 @@ setup(
         "python-docx>=1.0.0",
         "pymupdf>=1.24.0",
         "pypdf>=4.0.0",
+        "prompt_toolkit>=3.0.0",
+        "rich>=13.0.0",
     ],
     extras_require={
         "qdrant": ["qdrant-client>=1.7.0"],
