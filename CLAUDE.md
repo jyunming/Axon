@@ -49,7 +49,8 @@ When you run `rag-brain` with no arguments, you enter an interactive REPL with t
 /help [cmd]         — Show all commands or detailed help for a specific command
 /list               — List all ingested documents with chunk counts
 /ingest <path>      — Ingest files or directories (glob patterns supported)
-/model [name]       — Switch LLM provider and model
+/model [name]       — Switch LLM provider and model (vllm/model-name for vLLM)
+/vllm-url [url]     — Show or set vLLM server base URL at runtime
 /embed [name]       — Switch embedding provider and model
 /pull <name>        — Pull an Ollama model with progress
 /search             — Toggle Brave web search (truth_grounding)
@@ -73,7 +74,7 @@ config.yaml
   └─► OpenStudioConfig.load()   (flattens nested YAML → dataclass fields)
         └─► OpenStudioBrain     (src/rag_brain/main.py)
                 ├─ OpenEmbedding    → sentence_transformers / ollama / fastembed / openai
-                ├─ OpenLLM         → ollama / gemini / ollama_cloud / openai
+                ├─ OpenLLM         → ollama / gemini / ollama_cloud / openai / vllm
                 ├─ OpenVectorStore → chroma (default) / qdrant
                 ├─ BM25Retriever   → rank_bm25 keyword search (src/rag_brain/retrievers.py)
                 └─ OpenReranker    → cross-encoder or LLM (optional, off by default)

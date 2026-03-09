@@ -46,7 +46,7 @@ class OpenStudioConfig:
     ollama_base_url: str = "http://localhost:11434"
     
     # LLM
-    llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai"] = "ollama"
+    llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai", "vllm"] = "ollama"
     llm_model: str = "gemma"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
@@ -54,6 +54,7 @@ class OpenStudioConfig:
     gemini_api_key: str = ""
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
+    vllm_base_url: str = "http://localhost:8000"
     
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
@@ -65,6 +66,10 @@ class OpenStudioConfig:
             self.ollama_cloud_key = os.getenv("OLLAMA_CLOUD_KEY", "")
         if not self.ollama_cloud_url:
             self.ollama_cloud_url = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
+        if self.vllm_base_url == "http://localhost:8000":
+            env_val = os.getenv("VLLM_BASE_URL")
+            if env_val:
+                self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
     
@@ -152,6 +157,9 @@ class OpenStudioConfig:
             
         if 'api_key' not in config_dict and 'llm_api_key' in config_dict:
             config_dict['api_key'] = config_dict['llm_api_key']
+
+        if 'llm_vllm_base_url' in config_dict:
+            config_dict['vllm_base_url'] = config_dict['llm_vllm_base_url']
             
         # Environment Variable Overrides (High Priority for Docker)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
@@ -320,16 +328,19 @@ class OpenLLM:
     
     def __init__(self, config: OpenStudioConfig):
         self.config = config
-        self._openai_client = None
-    
-    def _get_openai_client(self):
-        if self._openai_client is None:
+        self._openai_clients: dict = {}
+
+    def _get_openai_client(self, base_url: str = None):
+        """Return a cached OpenAI client. Pass base_url for vLLM or custom endpoints."""
+        cache_key = base_url or "default"
+        if cache_key not in self._openai_clients:
             from openai import OpenAI
-            kwargs = {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
-            if self.config.ollama_base_url and self.config.ollama_base_url != "http://localhost:11434":
-                kwargs["base_url"] = self.config.ollama_base_url
-            self._openai_client = OpenAI(**kwargs)
-        return self._openai_client
+            api_key = self.config.api_key if self.config.api_key else "sk-dummy"
+            kwargs = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._openai_clients[cache_key] = OpenAI(**kwargs)
+        return self._openai_clients[cache_key]
     
     def complete(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None) -> str:
         provider = self.config.llm_provider
@@ -436,7 +447,24 @@ class OpenLLM:
                 max_tokens=self.config.llm_max_tokens
             )
             return response.choices[0].message.content
-            
+
+        elif provider == "vllm":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+
+            response = self._get_openai_client(base_url=self.config.vllm_base_url).chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+            )
+            return response.choices[0].message.content
+
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
     
@@ -552,6 +580,26 @@ class OpenLLM:
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+
+        elif provider == "vllm":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+
+            stream = self._get_openai_client(base_url=self.config.vllm_base_url).chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                stream=True,
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -1066,7 +1114,7 @@ def main():
     parser.add_argument('--stream', action='store_true', help='Stream the response')
     parser.add_argument(
         '--provider',
-        choices=['ollama', 'gemini', 'ollama_cloud', 'openai'],
+        choices=['ollama', 'gemini', 'ollama_cloud', 'openai', 'vllm'],
         help='LLM provider to use (overrides config)',
     )
     parser.add_argument('--model', help='Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o')
@@ -1105,7 +1153,7 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
+        _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud', 'vllm')
         if "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
             if _prov in _PROVIDERS:
@@ -2346,13 +2394,14 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         print(f"  Done — {ingested} ingested, {skipped} skipped.")
 
             elif cmd == "/model":
-                _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
+                _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud', 'vllm')
                 if not arg:
                     print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
                     print(f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}")
                     print(f"  Usage:   /model <model>              (auto-detect provider)")
                     print(f"           /model <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_PROVIDERS)}")
+                    print(f"  vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
                 elif "/" in arg:
                     provider, model = arg.split("/", 1)
                     if provider not in _PROVIDERS:
@@ -2362,7 +2411,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         brain.config.llm_model = model
                         brain.llm = OpenLLM(brain.config)
                         print(f"  ✅ Switched LLM to {provider}/{model}")
-                        if provider != "ollama":
+                        if provider == "vllm":
+                            print(f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
+                        elif provider != "ollama":
                             print(f"  ℹ️  Make sure the required API key env var is set.")
                 else:
                     inferred = _infer_provider(arg)
@@ -2372,6 +2423,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     print(f"  ✅ Switched LLM to {inferred}/{arg}")
                     if inferred != "ollama":
                         print(f"  ℹ️  Make sure the required API key env var is set.")
+
+            elif cmd == "/vllm-url":
+                if not arg:
+                    print(f"  Current vLLM base URL: {brain.config.vllm_base_url}")
+                    print(f"  Usage: /vllm-url http://host:port/v1")
+                else:
+                    brain.config.vllm_base_url = arg
+                    brain.llm._openai_clients = {}   # invalidate cached client
+                    print(f"  ✅ vLLM base URL set to {arg}")
 
             elif cmd == "/embed":
                 _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
