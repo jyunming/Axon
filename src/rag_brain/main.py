@@ -103,6 +103,10 @@ class OpenStudioConfig:
     truth_grounding: bool = False
     brave_api_key: str = ""
 
+    # Offline Mode
+    offline_mode: bool = False
+    local_models_dir: str = ""
+
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
         """Load configuration from a YAML file."""
@@ -150,6 +154,11 @@ class OpenStudioConfig:
             config_dict['truth_grounding'] = ws.get('enabled', False)
             if ws.get('brave_api_key'):
                 config_dict['brave_api_key'] = ws['brave_api_key']
+        if 'offline' in data:
+            ol = data['offline']
+            config_dict['offline_mode'] = ol.get('enabled', False)
+            if ol.get('local_models_dir'):
+                config_dict['local_models_dir'] = ol['local_models_dir']
         
         # Map some specific names if they don't match exactly
         if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
@@ -712,8 +721,53 @@ Your primary goal is to help the user by answering questions based on the provid
 4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
 """
     
+    def _resolve_model_path(self, model_name: str) -> str:
+        """Resolve a HuggingFace model ID to a local path when offline_mode is on.
+
+        If the name is already an absolute path or starts with '.' it is returned
+        unchanged.  Otherwise the last path component (after the optional org/)
+        is looked up under local_models_dir, then the full name with '/' → '--'.
+        A warning is logged when the directory cannot be found.
+        """
+        if not self.config.offline_mode or not self.config.local_models_dir:
+            return model_name
+        if os.path.isabs(model_name) or model_name.startswith('.'):
+            return model_name
+        base = self.config.local_models_dir
+        # Try bare name: "BAAI/bge-reranker-base" → "<dir>/bge-reranker-base"
+        short_name = model_name.split('/')[-1]
+        candidate = os.path.join(base, short_name)
+        if os.path.isdir(candidate):
+            return candidate
+        # Try HF cache style: "BAAI/bge-reranker-base" → "<dir>/BAAI--bge-reranker-base"
+        hf_name = model_name.replace('/', '--')
+        candidate2 = os.path.join(base, hf_name)
+        if os.path.isdir(candidate2):
+            return candidate2
+        logger.warning(
+            f"Offline mode: '{model_name}' not found in {base} "
+            f"(tried '{short_name}' and '{hf_name}')"
+        )
+        return model_name
+
     def __init__(self, config: Optional[OpenStudioConfig] = None):
         self.config = config or OpenStudioConfig.load()
+
+        # ── Offline mode: lock down all network access before any model loads ──
+        if self.config.offline_mode:
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            if self.config.truth_grounding:
+                logger.info("Offline mode: disabling web search (truth_grounding → OFF)")
+                self.config.truth_grounding = False
+            # Resolve bare HF model IDs to local paths
+            self.config.embedding_model = self._resolve_model_path(self.config.embedding_model)
+            self.config.reranker_model  = self._resolve_model_path(self.config.reranker_model)
+            logger.info(
+                f"🔒 Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
+            )
+
         logger.info("🧠 Initializing Local RAG Brain...")
         self.embedding = OpenEmbedding(self.config)
         self.llm = OpenLLM(self.config)
@@ -2503,7 +2557,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 print("  🗑️  Chat history cleared.")
 
             elif cmd == "/search":
-                if brain.config.truth_grounding:
+                if brain.config.offline_mode:
+                    print("  🔒 Offline mode is ON — web search is disabled.")
+                elif brain.config.truth_grounding:
                     brain.config.truth_grounding = False
                     print("  🔍 Web search OFF — answers from local knowledge only.")
                 else:
@@ -2571,12 +2627,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                             print(f"  e.g.  /rag rerank-model BAAI/bge-reranker-base")
                             print(f"        /rag rerank-model ./models/bge-reranker-base")
                         else:
-                            brain.config.reranker_model = rag_val
+                            resolved = brain._resolve_model_path(rag_val)
+                            if resolved != rag_val:
+                                print(f"  → Resolved to local path: {resolved}")
+                            brain.config.reranker_model = resolved
                             brain.config.rerank = True   # auto-enable when setting a model
-                            print(f"  ⏳ Loading reranker '{rag_val}'…")
+                            print(f"  ⏳ Loading reranker '{resolved}'…")
                             try:
                                 brain.reranker = OpenReranker(brain.config)
-                                print(f"  ✅ Reranker → {rag_val}  (rerank: ON)")
+                                print(f"  ✅ Reranker → {resolved}  (rerank: ON)")
                             except Exception as e:
                                 brain.config.rerank = False
                                 print(f"  ❌ Failed to load reranker: {e}")

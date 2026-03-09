@@ -94,3 +94,14 @@ query_transformations:
 web_search:
   enabled: false
   # brave_api_key: "your-brave-api-key-here"  # or set BRAVE_API_KEY env var
+
+# Offline Mode
+# Enable this on air-gapped / confined machines with no internet access.
+# All model references (embedding, reranker) are resolved to local paths
+# under local_models_dir. Web search is automatically disabled.
+# Use scripts/prefetch_models.py on an internet machine first to download models.
+offline:
+  enabled: false
+  # Absolute path to the directory containing pre-fetched model folders.
+  # e.g. Windows: C:/models   Linux: /srv/models
+  local_models_dir: ""

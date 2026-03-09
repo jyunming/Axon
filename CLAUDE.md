@@ -133,6 +133,23 @@ Path security: `RAG_INGEST_BASE` env var (default: cwd) restricts `/ingest` to p
 
 `src/rag_brain/tools.py` exports `get_rag_tool_definition(api_base_url)` — 6 OpenAI-compatible tool schemas: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, `stream_query`. See `examples/agent_simple.py` and `examples/agent_orchestration.py`.
 
+## Offline / Air-gapped Deployment
+
+Set `offline.enabled: true` and `offline.local_models_dir: <absolute path>` in `config.yaml`.
+
+**Effect:**
+- `TRANSFORMERS_OFFLINE=1`, `HF_DATASETS_OFFLINE=1`, `HF_HUB_OFFLINE=1` set before any model loads
+- Bare HF model IDs (`all-MiniLM-L6-v2`, `bge-reranker-base`) auto-resolved to `<local_models_dir>/<short-name>/`
+- Web search permanently disabled; `/search` toggle shows a lock message
+- `/rag rerank-model <id>` auto-resolves to local path before loading
+
+**Pre-fetch models** (run once on internet machine):
+```bash
+python scripts/prefetch_models.py --dir C:/models
+```
+
+**Ollama models:** copy `~/.ollama/models/` directory to the same path on confined machine. See `scripts/README.md`.
+
 ## Branch Strategy
 
 - `main` — tagged releases only
