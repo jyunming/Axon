@@ -5,7 +5,7 @@
 ### 1. Setup Environment
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/studio_brain_open.git
+git clone https://github.com/jyunming/studio_brain_open.git
 cd studio_brain_open
 
 # Create virtual environment
@@ -252,8 +252,8 @@ make lint
 
 ## Getting Help
 
-- 🐛 **Bug Reports:** [GitHub Issues](https://github.com/yourusername/studio_brain_open/issues)
-- 💡 **Feature Requests:** [GitHub Discussions](https://github.com/yourusername/studio_brain_open/discussions)
+- 🐛 **Bug Reports:** [GitHub Issues](https://github.com/jyunming/studio_brain_open/issues)
+- 💡 **Feature Requests:** [GitHub Discussions](https://github.com/jyunming/studio_brain_open/discussions)
 - 💬 **Questions:** [Discord/Slack Community](#)
 
 Happy coding! 🚀

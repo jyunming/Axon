@@ -13,7 +13,7 @@ Thank you for your interest in contributing to Local RAG Brain! This document pr
 
 1. **Fork and clone the repository**
    ```bash
-   git clone https://github.com/yourusername/studio_brain_open.git
+   git clone https://github.com/jyunming/studio_brain_open.git
    cd studio_brain_open
    ```
 

@@ -442,9 +442,9 @@ chunk:
 
 ## Useful Links
 
-- **Repository:** https://github.com/yourusername/studio_brain_open
-- **Issues:** https://github.com/yourusername/studio_brain_open/issues
-- **Discussions:** https://github.com/yourusername/studio_brain_open/discussions
+- **Repository:** https://github.com/jyunming/studio_brain_open
+- **Issues:** https://github.com/jyunming/studio_brain_open/issues
+- **Discussions:** https://github.com/jyunming/studio_brain_open/discussions
 - **Ollama:** https://ollama.ai/
 - **ChromaDB:** https://www.trychroma.com/
 - **FastAPI:** https://fastapi.tiangolo.com/
