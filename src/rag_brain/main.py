@@ -54,8 +54,8 @@ class OpenStudioConfig:
     gemini_api_key: str = ""
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
-    vllm_base_url: str = "http://localhost:8000"
-    
+    vllm_base_url: str = "http://localhost:8000/v1"
+
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
         if not self.api_key:
@@ -66,7 +66,7 @@ class OpenStudioConfig:
             self.ollama_cloud_key = os.getenv("OLLAMA_CLOUD_KEY", "")
         if not self.ollama_cloud_url:
             self.ollama_cloud_url = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
-        if self.vllm_base_url == "http://localhost:8000":
+        if self.vllm_base_url == "http://localhost:8000/v1":
             env_val = os.getenv("VLLM_BASE_URL")
             if env_val:
                 self.vllm_base_url = env_val
@@ -170,10 +170,13 @@ class OpenStudioConfig:
         if 'llm_vllm_base_url' in config_dict:
             config_dict['vllm_base_url'] = config_dict['llm_vllm_base_url']
             
-        # Environment Variable Overrides (High Priority for Docker)
+        # Environment Variable Overrides (High Priority — wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
             config_dict['ollama_base_url'] = env_ollama_host
+        env_vllm = os.getenv("VLLM_BASE_URL")
+        if env_vllm:
+            config_dict['vllm_base_url'] = env_vllm
 
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
@@ -442,14 +445,16 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-                
+
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
-            response = self._get_openai_client().chat.completions.create(
+
+            # Pass base_url when pointing at an OpenAI-compatible local endpoint
+            _openai_base = self.config.ollama_base_url if self.config.ollama_base_url != "http://localhost:11434" else None
+            response = self._get_openai_client(base_url=_openai_base).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -576,14 +581,16 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-                
+
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
-            stream = self._get_openai_client().chat.completions.create(
+
+            # Pass base_url when pointing at an OpenAI-compatible local endpoint
+            _openai_base = self.config.ollama_base_url if self.config.ollama_base_url != "http://localhost:11434" else None
+            stream = self._get_openai_client(base_url=_openai_base).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
