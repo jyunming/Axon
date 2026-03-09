@@ -2793,52 +2793,51 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
             if stream:
                 token_gen = brain.query_stream(query_text, chat_history=chat_history)
-                first_tokens: list = []
 
-                # Show spinner until the first real token arrives
+                # Collect all tokens under the spinner, then render once as Markdown.
+                # This avoids Rich Live / prompt_toolkit cursor-position conflicts that
+                # caused every accumulated partial text to be reprinted on each update.
                 if not quiet:
-                    # Print compact status so config info stays visible during thinking/streaming
                     m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
                     s_v = "search:ON" if brain.config.truth_grounding    else "search:off"
                     d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
                     h_v = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
                     print(f"\033[2m  🧠 {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
                     print()
-                    with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
-                             transient=True, refresh_per_second=10) as _spin_live:
-                        _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
-                        _st.start()
+                    try:
+                        with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ generating…"),
+                                 console=_console, transient=True, refresh_per_second=10) as _spin_live:
+                            _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
+                            _st.start()
+                            for chunk in token_gen:
+                                if isinstance(chunk, dict):
+                                    if chunk.get("type") == "sources":
+                                        _last_sources = chunk.get("sources", [])
+                                    continue
+                                response_parts.append(chunk)
+                    except KeyboardInterrupt:
+                        _cancelled = True
+                    finally:
+                        _spin_stop.set()
+                        _st.join(timeout=0.3)
+                else:
+                    try:
                         for chunk in token_gen:
                             if isinstance(chunk, dict):
                                 if chunk.get("type") == "sources":
                                     _last_sources = chunk.get("sources", [])
                                 continue
-                            first_tokens.append(chunk)
-                            break   # first token received — exit spinner Live context
-                        _spin_stop.set()
-                        _st.join(timeout=0.3)
-                    # spinner is now gone from terminal (transient)
+                            response_parts.append(chunk)
+                    except KeyboardInterrupt:
+                        _cancelled = True
 
-                # Stream remaining tokens — plain write avoids Rich Live cursor conflicts
-                try:
-                    print()   # blank line between You: and Brain:
-                    _console.print("[bold yellow]Brain:[/bold yellow]")
-                    for chunk in first_tokens:          # replay buffered first token
-                        response_parts.append(chunk)
-                        sys.stdout.write(chunk)
-                        sys.stdout.flush()
-                    for chunk in token_gen:             # continue generator
-                        if isinstance(chunk, dict):
-                            if chunk.get("type") == "sources":
-                                _last_sources = chunk.get("sources", [])
-                            continue
-                        response_parts.append(chunk)
-                        sys.stdout.write(chunk)
-                        sys.stdout.flush()
-                    print("\n")   # blank line after Brain response, before next You:
-                except KeyboardInterrupt:
-                    _cancelled = True
+                if _cancelled:
                     print("  ⚠️  Cancelled.\n")
+                else:
+                    print()
+                    _console.print("[bold yellow]Brain:[/bold yellow]")
+                    _console.print(_RM("".join(response_parts)))
+                    print()
             else:
                 # Non-streaming: spinner while brain.query() blocks
                 _spin_stop2 = threading.Event()
