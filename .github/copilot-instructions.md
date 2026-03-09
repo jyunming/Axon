@@ -50,10 +50,14 @@ When running `rag-brain` with no arguments, you get:
   - `/search` – Toggle Brave web search (truth_grounding)
   - `/discuss` – Toggle discussion_fallback mode
   - `/rag [option]` – Show/modify RAG settings: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `hyde`, `multi`
+  - `/vllm-url [url]` – Show or set the vLLM server base URL at runtime
   - `/compact` – Summarize chat history via LLM to free context
   - `/context` – Display token usage bar, model info, RAG settings, chat history, retrieved sources
   - `/sessions` – List recent saved sessions
   - `/resume <id>` – Load a previous session by timestamp ID
+  - `/retry` – Re-send the last query (useful after switching model or settings)
+  - `/project [list|new|switch|delete|folder]` – Manage named projects with isolated knowledge bases
+  - `/keys [set provider]` – Show API key status or interactively set a key (saved to `~/.rag_brain/.env`)
   - `/clear` – Clear current chat history
   - `/quit`, `/exit` – Exit the REPL
 
@@ -64,7 +68,7 @@ config.yaml
     └─► OpenStudioConfig (dataclass, loaded once at startup)
             └─► OpenStudioBrain (src/rag_brain/main.py)
                     ├─ OpenEmbedding  → sentence_transformers / ollama / fastembed / openai
-                    ├─ OpenLLM        → ollama / gemini / ollama_cloud / openai
+                    ├─ OpenLLM        → ollama / gemini / ollama_cloud / openai / vllm
                     ├─ OpenVectorStore → chroma / qdrant
                     ├─ BM25Retriever  → rank_bm25 (keyword search)
                     └─ OpenReranker   → cross-encoder or LLM (optional, off by default)
@@ -107,12 +111,13 @@ All loaders, `ingest()`, and vector store calls use this schema. Duplicate IDs s
 - `embedding.base_url` → `embedding_base_url` (optional, for Ollama)
 
 **LLM:**
-- `llm.provider` → `llm_provider` (ollama, gemini, ollama_cloud, openai)
+- `llm.provider` → `llm_provider` (ollama, gemini, ollama_cloud, openai, vllm)
 - `llm.model` → `llm_model` (default: gemma)
 - `llm.base_url` → `llm_base_url`
 - `llm.api_key` → `llm_api_key`
 - `llm.temperature` → `temperature`
 - `llm.max_tokens` → `max_tokens`
+- `llm.vllm_base_url` → `vllm_base_url` (default: `http://localhost:8000`; also read from `VLLM_BASE_URL` env)
 
 **Vector Store:**
 - `vector_store.provider` → `vector_store` (chroma or qdrant)

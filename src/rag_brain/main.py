@@ -1201,7 +1201,9 @@ def main():
         print("  ollama       (local)  — gemma:2b, gemma, llama3.1, mistral, phi3")
         print("  gemini       (cloud)  — gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash")
         print("  ollama_cloud (cloud)  — any model hosted at your OLLAMA_CLOUD_URL")
-        print("  openai       (cloud)  — gpt-4o, gpt-4o-mini, gpt-3.5-turbo\n")
+        print("  openai       (cloud)  — gpt-4o, gpt-4o-mini, gpt-3.5-turbo")
+        print("  vllm         (local)  — any model served by vLLM (e.g., meta-llama/Llama-3.1-8B-Instruct)")
+        print(f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)\n")
         try:
             import ollama as _ollama
             response = _ollama.list()
@@ -1396,7 +1398,8 @@ _SLASH_COMMANDS = [
     "/help", "/list", "/ingest ", "/model ", "/embed ",
     "/pull ", "/search", "/discuss", "/rag ", "/compact",
     "/context", "/sessions", "/resume ", "/clear", "/retry",
-    "/project", "/project ", "/keys", "/quit", "/exit",
+    "/project", "/project ", "/keys", "/vllm-url", "/vllm-url ",
+    "/quit", "/exit",
 ]
 
 
@@ -2012,7 +2015,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
     - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
-      /compact, /context, /sessions, /resume, /retry, /clear, /quit, /exit
+      /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
     - @file context: type @path to inline file contents into your query
     - Shell passthrough: !command runs a shell command without leaving the REPL
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
@@ -2287,10 +2290,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     _detail = {
                         "model":    "  /model <model>              keep current provider\n"
                                     "  /model <provider>/<model>   switch provider + model\n"
-                                    "  providers: ollama, gemini, openai, ollama_cloud\n"
+                                    "  providers: ollama, gemini, openai, ollama_cloud, vllm\n"
                                     "  e.g.  /model gemini/gemini-2.0-flash\n"
                                     "        /model ollama/gemma:2b\n"
-                                    "        /model openai/gpt-4o",
+                                    "        /model openai/gpt-4o\n"
+                                    "        /model vllm/meta-llama/Llama-3.1-8B-Instruct",
                         "embed":    "  /embed <model>              keep current provider\n"
                                     "  /embed <provider>/<model>   switch provider + model\n"
                                     "  /embed /path/to/local        local HuggingFace folder\n"

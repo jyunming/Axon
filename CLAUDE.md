@@ -60,6 +60,9 @@ When you run `rag-brain` with no arguments, you enter an interactive REPL with t
 /context            — Show token usage bar, model info, RAG settings, history, sources
 /sessions           — List recent saved sessions
 /resume <id>        — Load a previous session
+/retry              — Re-send the last query (useful after switching model or settings)
+/project [...]      — Manage named projects with isolated knowledge bases
+/keys [set prov]    — Show API key status or interactively set a key
 /clear              — Clear current chat history
 /quit, /exit        — Exit the REPL
 ```
