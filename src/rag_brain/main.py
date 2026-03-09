@@ -2149,6 +2149,41 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         except ImportError:
             pass
 
+    def _print_status_bar() -> None:
+        """Reprint the 2-row status bar to stdout after each response."""
+        def _t(s: str, w: int) -> str:
+            return s if len(s) <= w else s[:w - 1] + "…"
+
+        m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+        emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
+        try:
+            docs = brain.vector_store.collection.count()
+            doc_s = f"{docs} chunks"
+        except Exception:
+            doc_s = "?"
+        s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
+        d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+        h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
+        tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
+        proj  = getattr(brain, "_active_project", "default")
+        proj_s = f"  │  📂 {proj}" if proj != "default" else ""
+        sep = "  │  "
+        W1, W2 = 28, 30
+        C1 = len("LLM  ") + W1   # 33
+        C2 = len("Embed  ") + W2  # 37
+        row1 = (
+            f"  \033[1mLLM\033[0m\033[2m  {_t(m, W1):{W1}}"
+            f"{sep}\033[0m\033[1mEmbed\033[0m\033[2m  {_t(emb, W2):{W2}}"
+            f"{sep}\033[0m\033[1mDocs\033[0m\033[2m  {doc_s}\033[0m"
+        )
+        row2 = (
+            f"\033[2m  {s_val:<{C1}}"
+            f"{sep}{d_val:<{C2}}"
+            f"{sep}{h_val}  {tk}{proj_s}\033[0m"
+        )
+        print(row1)
+        print(row2)
+
     def _read_input(prompt: str = "") -> str:
         if _pt_session:
             _p = _PThtml('<ansigreen><b>You</b></ansigreen>: ') if not prompt else prompt
@@ -2807,6 +2842,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
             _save_session(session)   # persist after every turn
+            _print_status_bar()      # reprint status below each response
 
 
 if __name__ == "__main__":
