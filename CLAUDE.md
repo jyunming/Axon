@@ -55,7 +55,7 @@ When you run `rag-brain` with no arguments, you enter an interactive REPL with t
 /pull <name>        — Pull an Ollama model with progress
 /search             — Toggle Brave web search (truth_grounding)
 /discuss            — Toggle discussion_fallback mode
-/rag [option]       — Show/modify RAG settings (topk, threshold, hybrid, rerank, hyde, multi)
+/rag [option]       — Show/modify RAG settings (topk, threshold, hybrid, rerank, rerank-model, hyde, multi)
 /compact            — Summarize chat history via LLM to free context
 /context            — Show token usage bar, model info, RAG settings, history, sources
 /sessions           — List recent saved sessions
