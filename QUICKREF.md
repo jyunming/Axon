@@ -64,11 +64,54 @@ rag-brain-api
 make run-ui
 rag-brain-ui
 
-# CLI
+# CLI — interactive REPL (default when no args)
+rag-brain
+
+# CLI — single-shot query
 rag-brain "What is RAG?"
+
+# CLI — stream response token-by-token
+rag-brain --stream "Summarise my documents"
+
+# CLI — ingest a directory
 rag-brain --ingest ./documents/
-rag-brain "test" --stream
+
+# CLI — list all ingested documents
+rag-brain --list
+
+# CLI — switch model at runtime (auto-pulls Ollama model if missing)
+rag-brain --model gemma:2b "Your question"
+
+# CLI — use a cloud provider
+rag-brain --provider gemini --model gemini-1.5-flash "Your question"
+rag-brain --provider openai --model gpt-4o "Your question"
+
+# CLI — pull a model explicitly
+rag-brain --pull gemma:2b
+
+# CLI — see all providers and locally available models
+rag-brain --list-models
 ```
+
+**REPL slash commands (interactive mode):**
+
+| Command | Purpose |
+|---------|---------|
+| `/help [cmd]` | Show all commands or detailed help (try: `/help model`, `/help embed`, `/help ingest`, `/help rag`, `/help sessions`) |
+| `/list` | List all ingested documents with chunk counts |
+| `/ingest <path\|glob>` | Ingest a file or directory (supports glob patterns) |
+| `/model [provider/model]` | Switch LLM provider and model on the fly; bare `/model <name>` auto-detects provider (`gemini-*`→gemini, `gpt-*`→openai, else→ollama); auto-pulls from Ollama if needed |
+| `/embed [provider/model]` | Switch embedding provider and model |
+| `/pull <name>` | Pull an Ollama model with progress indicator |
+| `/search` | Toggle Brave web search fallback (truth_grounding) |
+| `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match) |
+| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `hyde`, `multi` |
+| `/compact` | Summarize entire chat history via LLM to free context window space |
+| `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
+| `/sessions` | List recent saved sessions (up to 20 most recent) |
+| `/resume <id>` | Load a previous session by its timestamp ID |
+| `/clear` | Clear current chat history (does not delete saved session) |
+| `/quit`, `/exit` | Exit the REPL |
 
 ### Docker
 ```bash
@@ -419,5 +462,5 @@ MIT License - See [LICENSE](LICENSE) file.
 
 ---
 
-**Last Updated:** 2026-02-28
+**Last Updated:** 2026-03-08
 **Version:** 2.0.0

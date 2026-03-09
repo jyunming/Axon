@@ -41,11 +41,18 @@ clean:  ## Clean build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
 
+run-cli:  ## Run the interactive REPL CLI (local, no Docker needed)
+	rag-brain
+
 run-api:  ## Run the FastAPI server
 	rag-brain-api
 
 run-ui:  ## Run the Streamlit UI
 	rag-brain-ui
+
+run-all:  ## Run API + UI together (local, no Docker)
+	@echo "Starting API on :8000 and UI on :8501 ..."
+	rag-brain-api & rag-brain-ui
 
 docker-build:  ## Build Docker image
 	docker build -t local-rag-brain:latest .
