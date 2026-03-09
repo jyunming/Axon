@@ -103,13 +103,17 @@ rag-brain --list-models
 | `/model [provider/model]` | Switch LLM provider and model on the fly; bare `/model <name>` auto-detects provider (`gemini-*`→gemini, `gpt-*`→openai, else→ollama); auto-pulls from Ollama if needed |
 | `/embed [provider/model]` | Switch embedding provider and model |
 | `/pull <name>` | Pull an Ollama model with progress indicator |
+| `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
 | `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match) |
 | `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `hyde`, `multi` |
+| `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
+| `/keys [set provider]` | Show API key status for all providers; `/keys set <provider>` saves a key interactively |
 | `/compact` | Summarize entire chat history via LLM to free context window space |
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
+| `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
 | `/quit`, `/exit` | Exit the REPL |
 

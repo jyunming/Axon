@@ -352,6 +352,7 @@ with st.sidebar:
         "gemini": "✨ Gemini",
         "ollama_cloud": "☁️ Ollama Cloud",
         "openai": "🔑 OpenAI-compatible",
+        "vllm": "⚡ vLLM (local)",
     }
     llm_providers = list(provider_labels.keys())
     current_provider_idx = llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0
