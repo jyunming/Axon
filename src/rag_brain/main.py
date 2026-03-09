@@ -1052,6 +1052,16 @@ def main():
     parser.add_argument('query', nargs='?', help='Question to ask')
     parser.add_argument('--ingest', help='Path to file or directory to ingest')
     parser.add_argument('--list', action='store_true', help='List all ingested sources in the knowledge base')
+    parser.add_argument('--project', metavar='NAME',
+                        help='Project to use (must exist; use --project-new to create). '
+                             'Use "default" for the global knowledge base.')
+    parser.add_argument('--project-new', metavar='NAME',
+                        help='Create a new project (if it does not exist) and use it. '
+                             'Combine with --ingest to populate in one step.')
+    parser.add_argument('--project-list', action='store_true',
+                        help='List all projects and exit')
+    parser.add_argument('--project-delete', metavar='NAME',
+                        help='Delete a project and all its data, then exit')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
     parser.add_argument('--stream', action='store_true', help='Stream the response')
     parser.add_argument(
@@ -1062,6 +1072,26 @@ def main():
     parser.add_argument('--model', help='Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o')
     parser.add_argument('--list-models', action='store_true', help='List available Ollama models and supported cloud providers')
     parser.add_argument('--pull', metavar='MODEL', help='Pull an Ollama model by name, e.g. --pull gemma:2b')
+    parser.add_argument('--embed', metavar='MODEL',
+                        help='Embedding model to use, e.g. all-MiniLM-L6-v2 or ollama/nomic-embed-text')
+    parser.add_argument('--discuss', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable discussion fallback (answer from general knowledge when no docs match). '
+                             'Use --discuss to enable, --no-discuss to disable.')
+    parser.add_argument('--search', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable Brave web search fallback (requires BRAVE_API_KEY). '
+                             'Use --search to enable, --no-search to disable.')
+    parser.add_argument('--top-k', type=int, metavar='N',
+                        help='Number of chunks to retrieve (default: from config, usually 10)')
+    parser.add_argument('--threshold', type=float, metavar='F',
+                        help='Similarity threshold for retrieval, 0.0–1.0 (default: from config, usually 0.3)')
+    parser.add_argument('--hybrid', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable hybrid BM25+vector search')
+    parser.add_argument('--rerank', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable cross-encoder reranking')
+    parser.add_argument('--hyde', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable HyDE (hypothetical document embedding)')
+    parser.add_argument('--multi-query', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable multi-query retrieval')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress spinners and progress (auto-enabled when stdin is not a TTY)')
     args = parser.parse_args()
@@ -1088,6 +1118,35 @@ def main():
         else:
             config.llm_provider = _infer_provider(args.model)
             config.llm_model    = args.model
+
+    if args.embed:
+        _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
+        if "/" in args.embed:
+            _eprov, _emdl = args.embed.split("/", 1)
+            if _eprov in _EMBED_PROVIDERS:
+                config.embedding_provider = _eprov
+                config.embedding_model    = _emdl
+            else:
+                config.embedding_model = args.embed
+        else:
+            config.embedding_model = args.embed
+
+    if args.discuss is not None:
+        config.discussion_fallback = args.discuss
+    if args.search is not None:
+        config.truth_grounding = args.search
+    if args.top_k is not None:
+        config.top_k = args.top_k
+    if args.threshold is not None:
+        config.similarity_threshold = args.threshold
+    if args.hybrid is not None:
+        config.hybrid_search = args.hybrid
+    if args.rerank is not None:
+        config.rerank = args.rerank
+    if args.hyde is not None:
+        config.hyde = args.hyde
+    if args.multi_query is not None:
+        config.multi_query = args.multi_query
 
     if args.list_models:
         print("\n🤖 Supported LLM providers and example models:\n")
@@ -1188,8 +1247,54 @@ def main():
             _lg = logging.getLogger(_n)
             _lg.removeHandler(_init_display)
             _lg.propagate = _saved_propagate.get(_n, True)
-    
-    if args.ingest:
+
+    # --- Project CLI handling ---
+    from rag_brain.projects import delete_project, ensure_project, list_projects, project_dir
+
+    if args.project_list:
+        projects = list_projects()
+        if not projects:
+            print("  No projects yet. Use --project-new <name> to create one.")
+        else:
+            print()
+            active = brain._active_project
+            for p in projects:
+                marker = "●" if p["name"] == active else " "
+                ts = p["created_at"][:10] if p["created_at"] else ""
+                desc = f"  {p['description']}" if p.get("description") else ""
+                print(f"  {marker} {p['name']:<24} {ts}{desc}")
+            print(f"\n  Active: {active}")
+        return
+
+    if args.project_delete:
+        proj_name = args.project_delete.lower()
+        try:
+            if brain._active_project == proj_name:
+                brain.switch_project("default")
+            delete_project(proj_name)
+            print(f"  ✅ Deleted project '{proj_name}'.")
+        except ValueError as e:
+            print(f"  ❌ {e}")
+            sys.exit(1)
+        return
+
+    # Switch to an existing project
+    if args.project:
+        proj_name = args.project.lower()
+        try:
+            brain.switch_project(proj_name)
+        except ValueError as e:
+            print(f"  ❌ {e}")
+            sys.exit(1)
+
+    # Create (if needed) and switch to new project
+    if args.project_new:
+        proj_name = args.project_new.lower()
+        ensure_project(proj_name)
+        brain.switch_project(proj_name)
+        print(f"  ✅ Using project '{proj_name}'  ({project_dir(proj_name)})")
+
+
         if os.path.isdir(args.ingest): asyncio.run(brain.load_directory(args.ingest))
         else:
             from rag_brain.loaders import DirectoryLoader
@@ -1436,15 +1541,40 @@ def _show_context(
     SEP    = f"  ├{'─' * W}┤"
     BLANK  = f"  │{' ' * W}│"
 
+    def _wlen(s: str) -> int:
+        """Terminal display width: wide Unicode chars (emoji, CJK) count as 2 columns."""
+        extra = sum(
+            1 for c in s
+            if '\U00001100' <= c <= '\U00001FFF'
+            or '\U00002E80' <= c <= '\U00002EFF'
+            or '\U00002F00' <= c <= '\U00002FDF'
+            or '\U00003000' <= c <= '\U00003FFF'
+            or '\U00004E00' <= c <= '\U00009FFF'
+            or '\U0000A000' <= c <= '\U0000ABFF'
+            or '\U0000AC00' <= c <= '\U0000D7FF'
+            or '\U0000F900' <= c <= '\U0000FAFF'
+            or '\U0000FE10' <= c <= '\U0000FE1F'
+            or '\U0000FE30' <= c <= '\U0000FE4F'
+            or '\U0000FF00' <= c <= '\U0000FF60'
+            or '\U0000FFE0' <= c <= '\U0000FFE6'
+            or '\U0001F000' <= c <= '\U0001FFFF'
+            or '\U00020000' <= c <= '\U0002FFFF'
+        )
+        return len(s) + extra
+
     def row(text: str = "", indent: int = 4) -> str:
         content = " " * indent + text
-        if len(content) > W:
+        display_w = _wlen(content)
+        if display_w > W:
             content = content[:W - 1] + "…"
-        return f"  │{content:<{W}}│"
+            display_w = _wlen(content)
+        pad = W - display_w
+        return f"  │{content}{' ' * pad}│"
 
     def section(title: str) -> str:
         content = f"  ▸  {title}"
-        return f"  │{content:<{W}}│"
+        pad = W - _wlen(content)
+        return f"  │{content}{' ' * pad}│"
 
     def wrap_row(text: str, indent: int = 4, max_lines: int = 0) -> list:
         """Word-wrap text into multiple box rows. 0 = no limit."""
@@ -1671,7 +1801,7 @@ def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> l
         _brow(f"    LLM    ·  {model_s}"),                                        # 5
         _brow(f"    Embed  ·  {embed_s}"),                                        # 6
         blank,                                                                     # 7
-        _brow(f"    Search ·  {search_s:<26}  Fallback ·  {discuss_s}"),         # 8
+        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),         # 8
         _brow(f"    Docs   ·  {doc_s:<26}  Hybrid   ·  {hybrid_s}   top-k · {topk_s}   threshold · {thr_s}"),  # 9
         blank,                                                                     # 10
         _brow(f"    {ticks_s}"),                                                   # 11
@@ -1968,7 +2098,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             except Exception:
                 doc_s = "?"
             s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
-            d_val = "fallback:ON" if brain.config.discussion_fallback else "fallback:off"
+            d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
             h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
             tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
             proj  = getattr(brain, "_active_project", "default")
@@ -2018,6 +2148,41 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             readline.parse_and_bind(r'"\C-l": clear-screen')
         except ImportError:
             pass
+
+    def _print_status_bar() -> None:
+        """Reprint the 2-row status bar to stdout after each response."""
+        def _t(s: str, w: int) -> str:
+            return s if len(s) <= w else s[:w - 1] + "…"
+
+        m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+        emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
+        try:
+            docs = brain.vector_store.collection.count()
+            doc_s = f"{docs} chunks"
+        except Exception:
+            doc_s = "?"
+        s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
+        d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+        h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
+        tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
+        proj  = getattr(brain, "_active_project", "default")
+        proj_s = f"  │  📂 {proj}" if proj != "default" else ""
+        sep = "  │  "
+        W1, W2 = 28, 30
+        C1 = len("LLM  ") + W1   # 33
+        C2 = len("Embed  ") + W2  # 37
+        row1 = (
+            f"  \033[1mLLM\033[0m\033[2m  {_t(m, W1):{W1}}"
+            f"{sep}\033[0m\033[1mEmbed\033[0m\033[2m  {_t(emb, W2):{W2}}"
+            f"{sep}\033[0m\033[1mDocs\033[0m\033[2m  {doc_s}\033[0m"
+        )
+        row2 = (
+            f"\033[2m  {s_val:<{C1}}"
+            f"{sep}{d_val:<{C2}}"
+            f"{sep}{h_val}  {tk}{proj_s}\033[0m"
+        )
+        print(row1)
+        print(row2)
 
     def _read_input(prompt: str = "") -> str:
         if _pt_session:
@@ -2571,7 +2736,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     # Print compact status so config info stays visible during thinking/streaming
                     m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
                     s_v = "search:ON" if brain.config.truth_grounding    else "search:off"
-                    d_v = "fallback:ON" if brain.config.discussion_fallback else "fallback:off"
+                    d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
                     h_v = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
                     print(f"\033[2m  🧠 {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
                     print()
@@ -2677,6 +2842,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
             _save_session(session)   # persist after every turn
+            _print_status_bar()      # reprint status below each response
 
 
 if __name__ == "__main__":
