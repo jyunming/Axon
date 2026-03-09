@@ -47,7 +47,7 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 ![Local RAG Brain REPL](docs/assets/repl-demo.png)
 
-*The interactive REPL — always-visible header box with model, search and discuss settings; full conversation history; pinned status toolbar.*
+*The interactive REPL — always-visible header box with model, search and discuss settings; live Tab autocomplete for all slash commands; pinned two-line status toolbar.*
 
 
 
