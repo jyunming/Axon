@@ -211,17 +211,14 @@
 3. Update tab-completion in `_PTCompleter.get_completions()` (lines 1636-1681)
 4. Update README.md "Interactive REPL slash commands" table
 5. Update QUICKREF.md "REPL slash commands (interactive mode)" table
-6. Update CLAUDE.md "Slash Commands" section
-7. Update .github/copilot-instructions.md "Interactive REPL Features"
-8. Add Google-style docstring to handler function
+6. Add Google-style docstring to handler function
 
 ### When Changing Config Fields
 1. Update `OpenStudioConfig` dataclass (lines 28-87)
 2. Update `OpenStudioConfig.load()` method (lines 89-153)
 3. Update config.yaml with new field
-4. Update .github/copilot-instructions.md "config.yaml → dataclass mapping"
-5. Update README.md "Configuration" section if user-facing
-6. Update CLAUDE.md Architecture section if structural
+4. Update README.md "Configuration" section if user-facing
+5. Update QUICKREF.md "Config File" section if it follows a new naming pattern
 
 ### When Changing Default Models
 1. Update `OpenStudioConfig` dataclass defaults
