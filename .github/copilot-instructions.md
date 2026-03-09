@@ -49,7 +49,7 @@ When running `rag-brain` with no arguments, you get:
   - `/pull <name>` – Pull an Ollama model with progress
   - `/search` – Toggle Brave web search (truth_grounding)
   - `/discuss` – Toggle discussion_fallback mode
-  - `/rag [option]` – Show/modify RAG settings: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `hyde`, `multi`
+  - `/rag [option]` – Show/modify RAG settings: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`
   - `/vllm-url [url]` – Show or set the vLLM server base URL at runtime
   - `/compact` – Summarize chat history via LLM to free context
   - `/context` – Display token usage bar, model info, RAG settings, chat history, retrieved sources

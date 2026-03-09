@@ -189,7 +189,7 @@ echo "What is X?" | rag-brain -q
 | `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
 | `/search` | Toggle Brave web search (truth_grounding) for knowledge grounding |
 | `/discuss` | Toggle discuss mode — when OFF the LLM refuses queries with no document match |
-| `/rag [option]` | Show or modify RAG settings: `topk`, `threshold`, `hybrid`, `rerank`, `hyde`, `multi` |
+| `/rag [option]` | Show or modify RAG settings: `topk`, `threshold`, `hybrid`, `rerank`, `rerank-model`, `hyde`, `multi` |
 | `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
 | `/keys [set provider]` | Show API key status for all providers, or interactively set a key |
 | `/compact` | Summarize chat history via LLM to free context window |

@@ -2308,6 +2308,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     "  /rag threshold <0.0–1.0>     min similarity score\n"
                                     "  /rag hybrid                  toggle hybrid BM25+vector\n"
                                     "  /rag rerank                  toggle cross-encoder reranker\n"
+                                    "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
                                     "  /rag hyde                    toggle HyDE query expansion\n"
                                     "  /rag multi                   toggle multi-query expansion",
                         "sessions": "  /sessions                    list recent saved sessions\n"
@@ -2525,7 +2526,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         f"\n  top-k        · {brain.config.top_k}\n"
                         f"  threshold    · {brain.config.similarity_threshold}\n"
                         f"  hybrid       · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
-                        f"  rerank       · {'ON' if brain.config.rerank else 'OFF'}\n"
+                        f"  rerank       · {'ON' if brain.config.rerank else 'OFF'}"
+                        + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "") + "\n"
                         f"  hyde         · {'ON' if brain.config.hyde else 'OFF'}\n"
                         f"  multi-query  · {'ON' if brain.config.multi_query else 'OFF'}\n"
                         f"\n  /help rag   for usage details\n"
@@ -2562,8 +2564,24 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     elif rag_opt == "multi":
                         brain.config.multi_query = not brain.config.multi_query
                         print(f"  ✅ Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
+                    elif rag_opt == "rerank-model":
+                        if not rag_val:
+                            print(f"  Current reranker: {brain.config.reranker_model}")
+                            print(f"  Usage: /rag rerank-model <HuggingFace ID or local path>")
+                            print(f"  e.g.  /rag rerank-model BAAI/bge-reranker-base")
+                            print(f"        /rag rerank-model ./models/bge-reranker-base")
+                        else:
+                            brain.config.reranker_model = rag_val
+                            brain.config.rerank = True   # auto-enable when setting a model
+                            print(f"  ⏳ Loading reranker '{rag_val}'…")
+                            try:
+                                brain.reranker = OpenReranker(brain.config)
+                                print(f"  ✅ Reranker → {rag_val}  (rerank: ON)")
+                            except Exception as e:
+                                brain.config.rerank = False
+                                print(f"  ❌ Failed to load reranker: {e}")
                     else:
-                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, hyde, multi")
+                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)
