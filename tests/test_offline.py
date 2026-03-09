@@ -2,7 +2,6 @@
 
 import os
 import yaml
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -157,7 +156,10 @@ class TestResolveModelPath:
 # ---------------------------------------------------------------------------
 
 class TestBrainOfflineInit:
-    def test_env_vars_set_when_offline(self, tmp_path):
+    def test_env_vars_set_when_offline(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+        monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
         from rag_brain.main import OpenStudioConfig
         config = OpenStudioConfig(offline_mode=True, local_models_dir=str(tmp_path))
         _make_brain(config)
@@ -165,10 +167,10 @@ class TestBrainOfflineInit:
         assert os.environ.get("HF_DATASETS_OFFLINE") == "1"
         assert os.environ.get("HF_HUB_OFFLINE") == "1"
 
-    def test_env_vars_not_forced_when_online(self, tmp_path):
-        # Remove any leftover from previous test
-        for var in ("TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE", "HF_HUB_OFFLINE"):
-            os.environ.pop(var, None)
+    def test_env_vars_not_forced_when_online(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+        monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
         from rag_brain.main import OpenStudioConfig
         config = OpenStudioConfig(offline_mode=False)
         _make_brain(config)
