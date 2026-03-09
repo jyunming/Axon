@@ -92,7 +92,15 @@ class OpenStudioConfig:
     # Re-ranking
     rerank: bool = False
     reranker_provider: Literal["cross-encoder", "llm"] = "cross-encoder"
+    # Default: fast ms-marco model (small, already commonly cached).
+    # Upgrade to "BAAI/bge-reranker-v2-m3" for SOTA multilingual accuracy.
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+    # Parent-Document / Small-to-Big Retrieval
+    # Set parent_chunk_size > chunk_size to enable. Child chunks (chunk_size)
+    # are indexed for precise retrieval; parent chunks are returned as context.
+    # 0 = disabled (use retrieval chunks directly).
+    parent_chunk_size: int = 0
 
     # Query Transformations
     multi_query: bool = False
@@ -151,12 +159,9 @@ class OpenStudioConfig:
                 config_dict['reranker_model'] = data['rerank']['model']
                 
         if 'query_transformations' in data:
-            if 'multi_query' in data['query_transformations']:
-                config_dict['multi_query'] = data['query_transformations']['multi_query']
-            if 'hyde' in data['query_transformations']:
-                config_dict['hyde'] = data['query_transformations']['hyde']
-            if 'discussion_fallback' in data['query_transformations']:
-                config_dict['discussion_fallback'] = data['query_transformations']['discussion_fallback']
+            for key in ('multi_query', 'hyde', 'step_back', 'discussion_fallback'):
+                if key in data['query_transformations']:
+                    config_dict[key] = data['query_transformations'][key]
         if 'web_search' in data:
             ws = data['web_search']
             config_dict['truth_grounding'] = ws.get('enabled', False)
@@ -911,12 +916,44 @@ Your primary goal is to help the user by answering questions based on the provid
             "transformations": transformations or {}
         })
 
+    def _split_with_parents(self, documents: List[Dict]) -> List[Dict]:
+        """Split documents using parent-document (small-to-big) strategy.
+
+        1. Split each raw document into large parent chunks (parent_chunk_size).
+        2. Split each parent into small child chunks (chunk_size) for indexing.
+        3. Store the parent text in every child's metadata so that at generation
+           time _build_context() can return the richer parent passage instead of
+           the small retrieval chunk.
+        """
+        from rag_brain.splitters import RecursiveCharacterTextSplitter
+        parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.config.parent_chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
+        )
+        all_chunks = []
+        for doc in documents:
+            parent_texts = parent_splitter.split(doc["text"])
+            for p_idx, parent_text in enumerate(parent_texts):
+                p_doc = {
+                    "id": f"{doc['id']}_p{p_idx}",
+                    "text": parent_text,
+                    "metadata": doc.get("metadata", {}).copy(),
+                }
+                child_chunks = self.splitter.transform_documents([p_doc])
+                for child in child_chunks:
+                    child["metadata"]["parent_text"] = parent_text
+                all_chunks.extend(child_chunks)
+        return all_chunks
+
     def ingest(self, documents: List[Dict[str, Any]]):
         if not documents: return
         t0 = time.time()
         from tqdm import tqdm
         logger.info(f"📥 Ingesting {len(documents)} documents...")
-        if self.splitter: documents = self.splitter.transform_documents(documents)
+        if self.splitter and self.config.parent_chunk_size > 0:
+            documents = self._split_with_parents(documents)
+        elif self.splitter:
+            documents = self.splitter.transform_documents(documents)
 
         if self.config.dedup_on_ingest:
             before = len(documents)
@@ -1133,7 +1170,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 title = r.get("metadata", {}).get("title", r["id"])
                 parts.append(f"[Web Result {i+1} — {title} ({r['id']})]\n{r['text']}")
             else:
-                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{r['text']}")
+                # Small-to-big: prefer parent passage for richer LLM context
+                context_text = r.get("metadata", {}).get("parent_text") or r["text"]
+                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{context_text}")
         return "\n\n".join(parts), has_web
 
     def _build_system_prompt(self, has_web: bool, cfg=None) -> str:
@@ -1313,6 +1352,9 @@ def main():
                         help='Enable/disable hybrid BM25+vector search')
     parser.add_argument('--rerank', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable cross-encoder reranking')
+    parser.add_argument('--reranker-model', metavar='MODEL',
+                        help='Re-ranker model to use (e.g. BAAI/bge-reranker-v2-m3 for SOTA accuracy, '
+                             'default: cross-encoder/ms-marco-MiniLM-L-6-v2)')
     parser.add_argument('--hyde', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable HyDE (hypothetical document embedding)')
     parser.add_argument('--multi-query', action=argparse.BooleanOptionalAction, default=None,
@@ -1323,6 +1365,9 @@ def main():
                         help='Enable/disable in-memory query result caching')
     parser.add_argument('--no-dedup', action='store_true',
                         help='Disable ingest deduplication (allow re-ingesting identical content)')
+    parser.add_argument('--parent-chunk-size', type=int, metavar='N',
+                        help='Enable small-to-big retrieval: index child chunks of --chunk-size tokens '
+                             'but return parent passages of N tokens as LLM context. 0 = disabled.')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress spinners and progress (auto-enabled when stdin is not a TTY)')
     args = parser.parse_args()
@@ -1374,6 +1419,10 @@ def main():
         config.hybrid_search = args.hybrid
     if args.rerank is not None:
         config.rerank = args.rerank
+    if args.reranker_model:
+        config.reranker_model = args.reranker_model
+    if args.parent_chunk_size is not None:
+        config.parent_chunk_size = args.parent_chunk_size
     if args.hyde is not None:
         config.hyde = args.hyde
     if args.multi_query is not None:

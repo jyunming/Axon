@@ -68,10 +68,10 @@ Current system indexes fixed-size chunks. SOTA systems use more sophisticated in
 - **Why it matters:** Enables both fine-grained chunk retrieval (leaf level) and broad thematic retrieval (summary level). Especially effective for long documents and thematic questions.
 - **Papers:** Sarthi et al., 2024 — "RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval"
 
-#### 2.2 Parent-Document / Small-to-Big Retrieval
-- **What it does:** Indexes small, granular chunks (sentences or short passages) for precise semantic matching, but when retrieved, returns the full parent paragraph or section as context.
-- **Why it matters:** Small chunks = precise retrieval; large context = better answer generation. Best of both worlds.
-- **Implementation note:** Requires storing chunk-to-parent mapping in metadata.
+#### 2.2 Parent-Document / Small-to-Big Retrieval ✅ DONE
+- **Status:** Implemented. Set `parent_chunk_size: 2000` (or any value > `chunk_size`) in `config.yaml` under `rag:`, or use `--parent-chunk-size 2000` CLI flag.
+- **What it does:** Indexes small child chunks (`chunk_size`) for precise semantic matching. At generation time, returns the full parent passage (`parent_chunk_size`) as LLM context. Parent text stored in chunk metadata — no separate store needed.
+- **Typical config:** `chunk_size: 256`, `parent_chunk_size: 1500` gives precise retrieval with rich context windows.
 
 #### 2.3 Sentence-Window Retrieval
 - **What it does:** Embeds individual sentences for retrieval, but returns a sliding window of ±2–3 surrounding sentences as the actual context.
@@ -90,10 +90,10 @@ Current system indexes fixed-size chunks. SOTA systems use more sophisticated in
 - **Status:** Implemented. Set `reranker_provider: llm` in config or pass `"rerank": true` to the API. Uses the configured LLM to score each document with a ThreadPoolExecutor for speed.
 - **Papers:** Sun et al., 2023 — "Is ChatGPT Good at Search? Investigating Large Language Models as Re-Ranking Agents"
 
-#### 3.2 BGE Reranker v2-m3 — ⚙️ AVAILABLE (config only)
-- **Status:** Usable today — set `reranker_model: "BAAI/bge-reranker-v2-m3"` in `config.yaml`. No code changes needed; `sentence-transformers` CrossEncoder loads it automatically.
+#### 3.2 BGE Reranker v2-m3 ✅ DONE
+- **Status:** Fully accessible. Use `--reranker-model BAAI/bge-reranker-v2-m3` (CLI) or set `reranker_model: "BAAI/bge-reranker-v2-m3"` in `config.yaml` under `rerank:`. No code changes needed; `sentence-transformers` CrossEncoder loads it automatically.
 - **Why it matters:** Significantly outperforms the default `ms-marco-MiniLM-L-6-v2` on BEIR benchmarks; supports 100+ languages.
-- **Effort to surface:** Low — add it as a documented preset or default recommendation.
+- **Default kept as** `ms-marco-MiniLM-L-6-v2` (smaller, faster, already commonly cached). Upgrade when accuracy matters more than speed.
 
 #### 3.3 Contextual Compression — ⬜ MISSING
 - **What it does:** After retrieval, uses an LLM to extract only the specific sentences directly relevant to the query, discarding surrounding noise.
@@ -212,14 +212,14 @@ Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 | ~~6~~ | ~~Ingest deduplication~~ | Low | Medium | ✅ Shipped (default on) |
 | ~~7~~ | ~~API parity with CLI~~ | Low | High | ✅ Shipped |
 | ~~8~~ | ~~Step-back prompting~~ | Low | Medium | ✅ Shipped |
-| 1 | **BGE Reranker v2-m3** (default model swap) | Low | Medium | ⬜ Config only — needs docs/default change |
-| 2 | **Parent-document / small-to-big retrieval** | Medium | High | ⬜ Not implemented |
-| 3 | **Query decomposition** | Medium | Medium | ⬜ Not implemented |
-| 4 | **Context compression (LLMLingua)** | Medium | Medium | ⬜ Not implemented |
-| 5 | **Inline chunk-level citations in answers** | Medium | Medium | ⬜ Partial — sources in stream but not in text |
-| 6 | **RAPTOR hierarchical indexing** | High | High | ⬜ Not implemented |
-| 7 | **GraphRAG integration** | High | High | ⬜ Not implemented |
-| 8 | **Evaluation in CI** | Medium | Medium | ⬜ Script exists; not in CI pipeline |
+| ~~9~~ | ~~BGE Reranker v2-m3~~ | Low | Medium | ✅ Shipped — `--reranker-model BAAI/bge-reranker-v2-m3` or config |
+| ~~10~~ | ~~Parent-document / small-to-big retrieval~~ | Medium | High | ✅ Shipped — `parent_chunk_size` config / `--parent-chunk-size` CLI |
+| 1 | **Query decomposition** | Medium | Medium | ⬜ Not implemented |
+| 2 | **Context compression (LLMLingua)** | Medium | Medium | ⬜ Not implemented |
+| 3 | **Inline chunk-level citations in answers** | Medium | Medium | ⬜ Partial — sources in stream but not in text |
+| 4 | **RAPTOR hierarchical indexing** | High | High | ⬜ Not implemented |
+| 5 | **GraphRAG integration** | High | High | ⬜ Not implemented |
+| 6 | **Evaluation in CI** | Medium | Medium | ⬜ Script exists; not in CI pipeline |
 
 ---
 
@@ -241,4 +241,4 @@ Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 
 ---
 
-*Last updated: March 2026 — Sprint 2 (API parity + caching + dedup + step-back)*
+*Last updated: March 2026 — Sprint 3 (BGE reranker flag + parent-document retrieval)*

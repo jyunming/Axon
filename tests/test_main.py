@@ -281,6 +281,92 @@ class TestOpenStudioBrain:
         brain._execute_retrieval("any question")
         brain._get_step_back_query.assert_not_called()
 
+    # ------------------------------------------------------------------
+    # Parent-document / small-to-big retrieval
+    # ------------------------------------------------------------------
+
+    def test_parent_chunk_size_zero_uses_standard_split(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """parent_chunk_size=0 (default) uses the normal splitter path."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(parent_chunk_size=0)
+        brain = OpenStudioBrain(config)
+        brain._save_hash_store = MagicMock()
+        brain._ingested_hashes = set()
+        brain.vector_store.add = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]])
+
+        docs = [{"id": "d1", "text": "short text"}]
+        brain.ingest(docs)
+        # Standard split: no parent_text in metadata
+        call_args = brain.vector_store.add.call_args
+        metadatas = call_args[0][3]
+        assert all("parent_text" not in m for m in metadatas)
+
+    def test_parent_chunk_creates_child_chunks_with_parent_text(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """parent_chunk_size > chunk_size embeds child chunks that carry parent_text in metadata."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(chunk_size=50, chunk_overlap=10, parent_chunk_size=200)
+        brain = OpenStudioBrain(config)
+        brain._save_hash_store = MagicMock()
+        brain._ingested_hashes = set()
+        brain.vector_store.add = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]] * 20)
+
+        # Create a document long enough to produce multiple child chunks
+        long_text = "word " * 80  # ~400 chars, will split into multiple 50-char child chunks
+        docs = [{"id": "d1", "text": long_text}]
+        brain.ingest(docs)
+
+        assert brain.vector_store.add.called
+        metadatas = brain.vector_store.add.call_args[0][3]
+        # Every indexed child chunk must carry parent_text
+        assert all("parent_text" in m for m in metadatas)
+
+    def test_build_context_uses_parent_text_when_present(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """_build_context returns parent_text (not chunk text) for small-to-big results."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig()
+        brain = OpenStudioBrain(config)
+
+        results = [{
+            "id": "d1_p0_chunk_0",
+            "text": "small retrieval chunk",
+            "score": 0.9,
+            "metadata": {"parent_text": "large parent passage with much more context"},
+        }]
+        context, _ = brain._build_context(results)
+        assert "large parent passage with much more context" in context
+        assert "small retrieval chunk" not in context
+
+    def test_build_context_falls_back_to_chunk_text_without_parent(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """_build_context falls back to chunk text when parent_text is absent."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig()
+        brain = OpenStudioBrain(config)
+
+        results = [{"id": "d1", "text": "normal chunk text", "score": 0.9, "metadata": {}}]
+        context, _ = brain._build_context(results)
+        assert "normal chunk text" in context
+
+    def test_reranker_model_cli_sets_config(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """--reranker-model CLI arg updates config.reranker_model before brain init."""
+        from rag_brain.main import OpenStudioConfig
+        config = OpenStudioConfig()
+        config.reranker_model = "BAAI/bge-reranker-v2-m3"
+        assert config.reranker_model == "BAAI/bge-reranker-v2-m3"
+
+    def test_reranker_default_model(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Default reranker model is the lightweight ms-marco cross-encoder."""
+        from rag_brain.main import OpenStudioConfig
+        config = OpenStudioConfig()
+        assert config.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+    def test_parent_chunk_size_config_defaults_zero(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """parent_chunk_size defaults to 0 (feature disabled by default)."""
+        from rag_brain.main import OpenStudioConfig
+        config = OpenStudioConfig()
+        assert config.parent_chunk_size == 0
+
 
 class TestOpenReranker:
     def test_llm_reranker(self):

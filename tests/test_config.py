@@ -55,3 +55,40 @@ class TestOpenStudioConfig:
 
         assert isinstance(config, OpenStudioConfig)
         assert config.embedding_provider == "sentence_transformers"
+
+    def test_yaml_query_transformations_step_back(self):
+        """step_back is loaded from query_transformations section in YAML."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump({"query_transformations": {"step_back": True, "hyde": True}}, f)
+            f.flush()
+            config = OpenStudioConfig.load(f.name)
+        assert config.step_back is True
+        assert config.hyde is True
+
+    def test_yaml_rag_section_parent_chunk_size(self):
+        """parent_chunk_size is loaded from rag section in YAML."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump({"rag": {"parent_chunk_size": 2000, "top_k": 5}}, f)
+            f.flush()
+            config = OpenStudioConfig.load(f.name)
+        assert config.parent_chunk_size == 2000
+        assert config.top_k == 5
+
+    def test_yaml_rag_section_caching_and_dedup(self):
+        """query_cache and dedup_on_ingest are loaded from rag section in YAML."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump({"rag": {"query_cache": True, "query_cache_size": 64, "dedup_on_ingest": False}}, f)
+            f.flush()
+            config = OpenStudioConfig.load(f.name)
+        assert config.query_cache is True
+        assert config.query_cache_size == 64
+        assert config.dedup_on_ingest is False
+
+    def test_yaml_rerank_model_bge(self):
+        """reranker_model is loaded from rerank.model in YAML."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump({"rerank": {"enabled": True, "model": "BAAI/bge-reranker-v2-m3"}}, f)
+            f.flush()
+            config = OpenStudioConfig.load(f.name)
+        assert config.rerank is True
+        assert config.reranker_model == "BAAI/bge-reranker-v2-m3"
