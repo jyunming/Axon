@@ -13,43 +13,49 @@ The following features are already implemented:
 | Category | What We Have |
 |----------|-------------|
 | **Retrieval** | Hybrid search: dense vector + BM25 keyword, fused via Reciprocal Rank Fusion (RRF) |
-| **Re-ranking** | Optional cross-encoder re-ranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`) |
-| **Embedding providers** | sentence-transformers (`all-MiniLM-L6-v2`), Ollama (`nomic-embed-text`), FastEmbed (`BAAI/bge-small-en-v1.5`) |
-| **LLM** | Ollama-backed LLM with streaming (llama3.1, qwen2.5, phi3, mistral) |
-| **Vector stores** | ChromaDB (default), Qdrant |
+| **Re-ranking** | Cross-encoder re-ranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`) **and** LLM-based pointwise re-ranking via `reranker_provider: llm` |
+| **Query transformations** | HyDE, Multi-Query, **Step-Back prompting** — all available via CLI flags, REPL slash commands, and REST API overrides |
+| **Embedding providers** | sentence-transformers (`all-MiniLM-L6-v2`), Ollama (`nomic-embed-text`), FastEmbed (`BAAI/bge-small-en-v1.5`, BGE-M3 via fastembed), OpenAI |
+| **LLM** | Ollama (local), Gemini, OpenAI, Ollama Cloud, vLLM — all with streaming |
+| **Vector stores** | ChromaDB (default), Qdrant, LanceDB |
 | **Document formats** | PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, BMP/PNG/TIF/TIFF/PGM images |
 | **Multimodal** | Raster image ingestion (BMP/PNG/TIF/PGM) with VLM auto-captioning (llava) |
-| **Agent interface** | FastAPI with 6 OpenAI-compatible tools |
+| **Agent interface** | FastAPI with per-request RAG flag overrides (full CLI parity); 8+ REST endpoints |
+| **Ingest quality** | Hash-based content deduplication on ingest (skips re-ingesting identical chunks) |
+| **Performance** | In-memory query result cache (`query_cache: true`) with LRU eviction |
+| **Web search** | Brave Search fallback when local KB is insufficient (truth grounding) |
 | **Evaluation** | RAGAS evaluation script (`scripts/evaluate.py`) |
 | **Chunking** | Recursive character text splitter with configurable size/overlap |
+| **Projects** | Named knowledge base namespaces with isolated vector/BM25 stores |
 
 ---
 
 ## Gaps vs. State of the Art
 
-### 1. Query Transformation — Not Implemented
+### 1. Query Transformation — ✅ Mostly Implemented
 
 Standard RAG sends the raw user query directly to the retriever. SOTA systems transform the query first.
 
-#### 1.1 HyDE — Hypothetical Document Embeddings
-- **What it does:** Generates a hypothetical "ideal" answer to the query using the LLM, then embeds that answer (not the original query) for retrieval. The hypothesis is semantically closer to relevant documents than a short question.
-- **Why it matters:** Short questions and long document chunks exist in very different embedding spaces. HyDE bridges this gap.
+#### 1.1 HyDE — Hypothetical Document Embeddings ✅ DONE
+- **Status:** Fully implemented. Enable with `--hyde` (CLI), `/rag hyde on` (REPL), or `"hyde": true` (API).
+- **What it does:** Generates a hypothetical "ideal" answer to the query using the LLM, then embeds that answer (not the original query) for retrieval.
 - **Impact:** ~5–15% recall improvement on knowledge-intensive tasks.
 - **Papers:** Gao et al., 2022 — "Precise Zero-Shot Dense Retrieval without Relevance Labels"
 
-#### 1.2 Multi-Query Retrieval
-- **What it does:** Generates N alternative phrasings of the user query (via LLM), runs retrieval for each, then deduplicates and merges results.
-- **Why it matters:** Eliminates single-phrasing bias; catches documents that use different vocabulary.
+#### 1.2 Multi-Query Retrieval ✅ DONE
+- **Status:** Fully implemented. Enable with `--multi-query` (CLI) or `"multi_query": true` (API).
+- **What it does:** Generates 3 alternative phrasings of the user query, runs retrieval for each, deduplicates and merges with the original.
 - **Impact:** Consistently improves recall with minimal added latency.
 
-#### 1.3 Step-Back Prompting
-- **What it does:** Prompts the LLM to first identify a higher-level concept or principle behind the user's question, then retrieves context for both the abstract and specific questions.
-- **Why it matters:** Useful when the question is highly specific and the KB has general background information.
+#### 1.3 Step-Back Prompting ✅ DONE
+- **Status:** Fully implemented. Enable with `--step-back` (CLI) or `"step_back": true` (API).
+- **What it does:** Generates an abstract, higher-level version of the query and runs retrieval for both the specific and abstract queries. Useful when KB has general background but query is highly specific.
 - **Papers:** Zheng et al., 2023 — "Take a Step Back: Evoking Reasoning via Abstraction in Large Language Models"
 
-#### 1.4 Query Decomposition
+#### 1.4 Query Decomposition — ⬜ MISSING
 - **What it does:** Breaks multi-part or complex questions into atomic sub-questions, retrieves independently, and synthesizes a combined answer.
 - **Why it matters:** Without decomposition, the retriever tries to satisfy multiple requirements with a single search — often poorly.
+- **Effort:** Medium — similar pattern to multi-query; needs a synthesis step.
 
 ---
 
@@ -78,24 +84,21 @@ Current system indexes fixed-size chunks. SOTA systems use more sophisticated in
 
 ---
 
-### 3. Advanced Re-ranking — Partially Implemented
+### 3. Advanced Re-ranking — ✅ Partially Implemented
 
-We have a single cross-encoder re-ranker. SOTA systems have multiple re-ranking options.
-
-#### 3.1 LLM-Based Listwise / Pointwise Re-ranking (RankGPT)
-- **What it does:** Uses the generation LLM itself to score or sort retrieved documents by relevance to the query.
-- **Why it matters:** LLMs have strong natural language understanding that cross-encoders lack. Can leverage existing Ollama infrastructure — no new model needed.
-- **Implementation note:** Pointwise scoring is simpler; listwise (permutation-based) is more accurate.
+#### 3.1 LLM-Based Pointwise Re-ranking (RankGPT) ✅ DONE
+- **Status:** Implemented. Set `reranker_provider: llm` in config or pass `"rerank": true` to the API. Uses the configured LLM to score each document with a ThreadPoolExecutor for speed.
 - **Papers:** Sun et al., 2023 — "Is ChatGPT Good at Search? Investigating Large Language Models as Re-Ranking Agents"
 
-#### 3.2 BGE Reranker v2-m3
-- **What it does:** A multilingual cross-encoder trained for retrieval re-ranking, significantly outperforming `ms-marco-MiniLM-L-6-v2` on BEIR benchmarks.
-- **Why it matters:** Drop-in replacement for the current re-ranker with substantially better accuracy; supports 100+ languages.
-- **Model:** `BAAI/bge-reranker-v2-m3` from HuggingFace
+#### 3.2 BGE Reranker v2-m3 — ⚙️ AVAILABLE (config only)
+- **Status:** Usable today — set `reranker_model: "BAAI/bge-reranker-v2-m3"` in `config.yaml`. No code changes needed; `sentence-transformers` CrossEncoder loads it automatically.
+- **Why it matters:** Significantly outperforms the default `ms-marco-MiniLM-L-6-v2` on BEIR benchmarks; supports 100+ languages.
+- **Effort to surface:** Low — add it as a documented preset or default recommendation.
 
-#### 3.3 Contextual Compression
-- **What it does:** After retrieval, uses an LLM to extract only the specific sentences or passages from each retrieved chunk that are directly relevant to the query. Discards irrelevant surrounding text.
+#### 3.3 Contextual Compression — ⬜ MISSING
+- **What it does:** After retrieval, uses an LLM to extract only the specific sentences directly relevant to the query, discarding surrounding noise.
 - **Why it matters:** Reduces context noise; allows fitting more unique sources into the LLM context window.
+- **Effort:** Medium.
 
 ---
 
@@ -185,34 +188,38 @@ Current gap: No evaluation runs in CI. No hallucination/groundedness metric is t
 
 ### 9. Infrastructure Gaps
 
-| Gap | Impact | Effort |
-|-----|--------|--------|
-| No query result caching | Every identical query hits the LLM | Low — add `functools.lru_cache` or Redis |
-| No metadata filtering in vector search | Can't filter by date, source, tag | Medium — ChromaDB/Qdrant support `where` filters |
-| No document deduplication | Re-ingesting same doc creates duplicates | Low — hash-based dedup on ingest |
-| No async streaming for hybrid path | BM25 runs sync, blocks | Medium |
-| No chunk-level source citations | Answers don't show which chunk they came from | Medium |
+| Gap | Impact | Effort | Status |
+|-----|--------|--------|--------|
+| Query result caching | Every identical query hits the LLM | Low | ✅ DONE — `query_cache: true` in config or `--cache` CLI |
+| Metadata filtering in vector search | Can't filter by date, source, tag | Medium | ✅ DONE — `filters` field on `/query` and `/search` endpoints |
+| Document deduplication on ingest | Re-ingesting same doc creates duplicates | Low | ✅ DONE — hash-based, enabled by default (`dedup_on_ingest: true`) |
+| Async streaming for hybrid path | BM25 runs sync, blocks | Medium | ⬜ Missing |
+| Chunk-level source citations in answers | Answers don't show which chunk they came from | Medium | ⚙️ Partial — sources returned in stream (`type: sources`); not yet inline in text |
 
 ---
 
 ## Priority Roadmap
 
-Ordered by **impact / effort** ratio:
+Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 
-| Priority | Feature | Effort | Impact |
-|----------|---------|--------|--------|
-| 1 | **Multi-query retrieval** | Low | High — recall improvement |
-| 2 | **BGE-M3 embedding support** | Low | High — SOTA local embeddings |
-| 3 | **HyDE query transformation** | Medium | High — precision improvement |
-| 4 | **Parent-document / small-to-big retrieval** | Medium | High — context quality |
-| 5 | **LLM-based re-ranking (RankGPT)** | Medium | High — uses existing Ollama |
-| 6 | **Query result caching** | Low | Medium — latency/cost |
-| 7 | **Metadata filtering** | Medium | Medium — precision queries |
-| 8 | **BGE Reranker v2-m3** | Low | Medium — better re-ranking |
-| 9 | **Context compression (LLMLingua)** | Medium | Medium — context efficiency |
-| 10 | **RAPTOR hierarchical indexing** | High | High — thematic queries |
-| 11 | **GraphRAG integration** | High | High — new query types |
-| 12 | **CRAG (web fallback)** | High | Medium — KB gap handling |
+| Priority | Feature | Effort | Impact | Status |
+|----------|---------|--------|--------|--------|
+| ~~1~~ | ~~Multi-query retrieval~~ | Low | High | ✅ Shipped |
+| ~~2~~ | ~~BGE-M3 embedding support~~ | Low | High | ✅ Via FastEmbed |
+| ~~3~~ | ~~HyDE query transformation~~ | Medium | High | ✅ Shipped |
+| ~~4~~ | ~~LLM-based re-ranking (RankGPT)~~ | Medium | High | ✅ Shipped |
+| ~~5~~ | ~~Query result caching~~ | Low | Medium | ✅ Shipped |
+| ~~6~~ | ~~Ingest deduplication~~ | Low | Medium | ✅ Shipped (default on) |
+| ~~7~~ | ~~API parity with CLI~~ | Low | High | ✅ Shipped |
+| ~~8~~ | ~~Step-back prompting~~ | Low | Medium | ✅ Shipped |
+| 1 | **BGE Reranker v2-m3** (default model swap) | Low | Medium | ⬜ Config only — needs docs/default change |
+| 2 | **Parent-document / small-to-big retrieval** | Medium | High | ⬜ Not implemented |
+| 3 | **Query decomposition** | Medium | Medium | ⬜ Not implemented |
+| 4 | **Context compression (LLMLingua)** | Medium | Medium | ⬜ Not implemented |
+| 5 | **Inline chunk-level citations in answers** | Medium | Medium | ⬜ Partial — sources in stream but not in text |
+| 6 | **RAPTOR hierarchical indexing** | High | High | ⬜ Not implemented |
+| 7 | **GraphRAG integration** | High | High | ⬜ Not implemented |
+| 8 | **Evaluation in CI** | Medium | Medium | ⬜ Script exists; not in CI pipeline |
 
 ---
 
@@ -234,4 +241,4 @@ Ordered by **impact / effort** ratio:
 
 ---
 
-*Last updated: March 2026*
+*Last updated: March 2026 — Sprint 2 (API parity + caching + dedup + step-back)*

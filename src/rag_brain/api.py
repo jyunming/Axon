@@ -48,6 +48,15 @@ class QueryRequest(BaseModel):
     query: str = Field(..., description="The question or prompt to ask the brain")
     filters: Optional[Dict[str, Any]] = Field(None, description="Metadata filters for retrieval")
     stream: bool = Field(False, description="Whether to stream the response (not fully implemented in REST yet)")
+    # Per-request RAG overrides (match CLI flags exactly)
+    top_k: Optional[int] = Field(None, description="Override number of chunks to retrieve")
+    threshold: Optional[float] = Field(None, description="Override similarity threshold (0.0–1.0)")
+    hybrid: Optional[bool] = Field(None, description="Override hybrid BM25+vector search toggle")
+    rerank: Optional[bool] = Field(None, description="Override cross-encoder re-ranking toggle")
+    hyde: Optional[bool] = Field(None, description="Override HyDE query transformation toggle")
+    multi_query: Optional[bool] = Field(None, description="Override multi-query retrieval toggle")
+    step_back: Optional[bool] = Field(None, description="Override step-back prompting toggle")
+    discuss: Optional[bool] = Field(None, description="Override discussion fallback toggle")
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="The query string for semantic search")
@@ -81,8 +90,28 @@ async def query_brain(request: QueryRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        response = brain.query(request.query, filters=request.filters)
-        return {"query": request.query, "response": response}
+        overrides = {
+            "top_k": request.top_k,
+            "similarity_threshold": request.threshold,
+            "hybrid_search": request.hybrid,
+            "rerank": request.rerank,
+            "hyde": request.hyde,
+            "multi_query": request.multi_query,
+            "step_back": request.step_back,
+            "discussion_fallback": request.discuss,
+        }
+        response = brain.query(request.query, filters=request.filters, overrides=overrides)
+        cfg = brain._apply_overrides(overrides)
+        settings = {
+            "top_k": cfg.top_k,
+            "hybrid": cfg.hybrid_search,
+            "rerank": cfg.rerank,
+            "hyde": cfg.hyde,
+            "multi_query": cfg.multi_query,
+            "step_back": cfg.step_back,
+            "discuss": cfg.discussion_fallback,
+        }
+        return {"query": request.query, "response": response, "settings": settings}
     except Exception as e:
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -92,10 +121,21 @@ async def query_brain_stream(request: QueryRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
+    overrides = {
+        "top_k": request.top_k,
+        "similarity_threshold": request.threshold,
+        "hybrid_search": request.hybrid,
+        "rerank": request.rerank,
+        "hyde": request.hyde,
+        "multi_query": request.multi_query,
+        "step_back": request.step_back,
+        "discussion_fallback": request.discuss,
+    }
+
     def generate():
         try:
             import json
-            for chunk in brain.query_stream(request.query, filters=request.filters):
+            for chunk in brain.query_stream(request.query, filters=request.filters, overrides=overrides):
                 if isinstance(chunk, dict):
                     yield f"data: {json.dumps(chunk)}\n\n"
                 else:

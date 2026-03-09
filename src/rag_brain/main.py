@@ -97,11 +97,19 @@ class OpenStudioConfig:
     # Query Transformations
     multi_query: bool = False
     hyde: bool = False
+    step_back: bool = False
     discussion_fallback: bool = True
 
     # Web Search / Truth Grounding
     truth_grounding: bool = False
     brave_api_key: str = ""
+
+    # Query Result Caching
+    query_cache: bool = False
+    query_cache_size: int = 128
+
+    # Ingest Deduplication
+    dedup_on_ingest: bool = True
 
     # Offline Mode
     offline_mode: bool = False
@@ -797,7 +805,13 @@ Your primary goal is to help the user by answering questions based on the provid
             self.splitter = RecursiveCharacterTextSplitter(chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap)
         except ImportError:
             self.splitter = None
-        
+
+        # In-memory query result cache (keyed by hash of query + filters + active flags)
+        self._query_cache: Dict[str, str] = {}
+
+        # Content hash store for ingest deduplication
+        self._ingested_hashes: set = self._load_hash_store()
+
         logger.info("✅ Local RAG Brain ready!")
 
     def switch_project(self, name: str) -> None:
@@ -840,6 +854,43 @@ Your primary goal is to help the user by answering questions based on the provid
         set_active_project(name)
         logger.info(f"📂 Switched to project '{name}'")
     
+    def _load_hash_store(self) -> set:
+        """Load persisted content hashes for ingest deduplication."""
+        import pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".content_hashes"
+        if path.exists():
+            return set(path.read_text(encoding="utf-8").splitlines())
+        return set()
+
+    def _save_hash_store(self) -> None:
+        """Persist content hashes to disk."""
+        import pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".content_hashes"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(self._ingested_hashes), encoding="utf-8")
+
+    def _doc_hash(self, doc: Dict) -> str:
+        """Return an MD5 hex digest of the document's text content."""
+        import hashlib
+        return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
+
+    def _make_cache_key(self, query: str, filters, cfg) -> str:
+        """Return a stable cache key for the given query + active config."""
+        import hashlib, json
+        key_data = {
+            "q": query,
+            "f": filters or {},
+            "top_k": cfg.top_k,
+            "hybrid": cfg.hybrid_search,
+            "rerank": cfg.rerank,
+            "hyde": cfg.hyde,
+            "multi_query": cfg.multi_query,
+            "step_back": cfg.step_back,
+            "threshold": cfg.similarity_threshold,
+            "discuss": cfg.discussion_fallback,
+        }
+        return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
+
     def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
                             filtered_count: int, final_count: int, top_score: float,
                             latency_ms: float, transformations: Dict = None):
@@ -866,6 +917,24 @@ Your primary goal is to help the user by answering questions based on the provid
         from tqdm import tqdm
         logger.info(f"📥 Ingesting {len(documents)} documents...")
         if self.splitter: documents = self.splitter.transform_documents(documents)
+
+        if self.config.dedup_on_ingest:
+            before = len(documents)
+            new_docs = []
+            new_hashes = []
+            for doc in documents:
+                h = self._doc_hash(doc)
+                if h not in self._ingested_hashes:
+                    new_docs.append(doc)
+                    new_hashes.append(h)
+            skipped = before - len(new_docs)
+            if skipped:
+                logger.info(f"   Dedup: skipped {skipped} already-seen chunk(s), ingesting {len(new_docs)} new.")
+            documents = new_docs
+            if not documents:
+                return
+            self._ingested_hashes.update(new_hashes)
+            self._save_hash_store()
         n_chunks = len(documents)
         if self.bm25: self.bm25.add_documents(documents)
 
@@ -892,6 +961,15 @@ Your primary goal is to help the user by answering questions based on the provid
             "store_ms": round(store_ms, 1),
             "total_ms": round((time.time() - t0) * 1000, 1),
         })
+
+    def _get_step_back_query(self, query: str) -> str:
+        """Generate a more abstract, step-back version of the query for retrieval."""
+        prompt = (
+            "Given the following specific question, generate a more general, abstract version "
+            "of it that would help retrieve relevant background knowledge. Output only the "
+            "abstract question, nothing else.\n\nSpecific question: " + query
+        )
+        return self.llm.complete(prompt, system_prompt="You are an expert at abstracting questions to their core concepts.")
 
     def _get_hyde_document(self, query: str) -> str:
         """Generate a Hypothetical Document Embedding (HyDE) passage."""
@@ -940,30 +1018,39 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.warning(f"🌐 Web search failed: {e}")
             return []
 
-    def _execute_retrieval(self, query: str, filters: Dict = None) -> Dict:
+    def _execute_retrieval(self, query: str, filters: Dict = None, cfg=None) -> Dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
-        transforms = {"hyde_applied": False, "multi_query_applied": False, "web_search_applied": False, "queries": [query]}
-        
+        if cfg is None:
+            cfg = self.config
+        transforms = {"hyde_applied": False, "multi_query_applied": False, "step_back_applied": False, "web_search_applied": False, "queries": [query]}
+
         search_queries = [query]
         vector_query = query
-        
-        if self.config.multi_query:
+
+        if cfg.multi_query:
             search_queries = self._get_multi_queries(query)
             transforms['multi_query_applied'] = True
             transforms['queries'] = search_queries
-            
-        if self.config.hyde:
+
+        if cfg.step_back:
+            abstract_query = self._get_step_back_query(query)
+            if abstract_query not in search_queries:
+                search_queries = search_queries + [abstract_query]
+            transforms['step_back_applied'] = True
+            transforms['queries'] = search_queries
+
+        if cfg.hyde:
             # We construct a single hypothetical document based on the primary query
             vector_query = self._get_hyde_document(query)
             transforms['hyde_applied'] = True
 
-        fetch_k = self.config.top_k * 3 if (self.config.rerank or self.config.hybrid_search) else self.config.top_k
-        
+        fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
+
         all_vector_results = []
         all_bm25_results = []
-        
+
         # Vector Search
-        if self.config.hyde:
+        if cfg.hyde:
              # HyDE uses a single hypothetical document as the vector query
              all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters))
         else:
@@ -976,7 +1063,7 @@ Your primary goal is to help the user by answering questions based on the provid
                  embeddings = self.embedding.embed(search_queries)
                  for emb in embeddings:
                      all_vector_results.extend(self.vector_store.search(emb, top_k=fetch_k, filter_dict=filters))
-        
+
         # Dedupe vector store results based on ID
         dedup_vector = {}
         for r in all_vector_results:
@@ -987,35 +1074,35 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # Hybrid Search
         bm25_count = 0
-        if self.config.hybrid_search and self.bm25:
+        if cfg.hybrid_search and self.bm25:
             for sq in search_queries:
                 all_bm25_results.extend(self.bm25.search(sq, top_k=fetch_k))
-                
+
             dedup_bm25 = {}
             for r in all_bm25_results:
                 if r['id'] not in dedup_bm25 or r['score'] > dedup_bm25[r['id']]['score']:
                     dedup_bm25[r['id']] = r
             bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
-            
+
             from rag_brain.retrievers import reciprocal_rank_fusion
             results = reciprocal_rank_fusion(vector_results, bm25_results)
         else:
             results = vector_results
 
-        results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
+        results = [r for r in results if r.get('score', 1.0) >= cfg.similarity_threshold or 'fused_only' in r]
 
         # Web Search (Truth Grounding)
         # Trigger when the best cosine similarity from vector search is below the threshold,
         # meaning local knowledge is genuinely insufficient (even if BM25 returned fused_only docs).
         web_count = 0
-        if self.config.truth_grounding and self.config.brave_api_key:
+        if cfg.truth_grounding and cfg.brave_api_key:
             max_vector_score = max((r['score'] for r in vector_results), default=0.0)
-            local_sufficient = max_vector_score >= self.config.similarity_threshold
+            local_sufficient = max_vector_score >= cfg.similarity_threshold
             if not local_sufficient:
                 logger.info(
                     f"🌐 Local knowledge insufficient (best vector score {max_vector_score:.3f} < "
-                    f"threshold {self.config.similarity_threshold}) — falling back to Brave web search"
+                    f"threshold {cfg.similarity_threshold}) — falling back to Brave web search"
                 )
                 web_results = self._execute_web_search(query)
                 web_count = len(web_results)
@@ -1049,7 +1136,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 parts.append(f"[Document {i+1} (ID: {r['id']})]\n{r['text']}")
         return "\n\n".join(parts), has_web
 
-    def _build_system_prompt(self, has_web: bool) -> str:
+    def _build_system_prompt(self, has_web: bool, cfg=None) -> str:
         """Return the system prompt based on discussion_fallback and web search state.
 
         When discussion_fallback is False, uses a strict context-only prompt so
@@ -1057,8 +1144,10 @@ Your primary goal is to help the user by answering questions based on the provid
         irrelevant. When True, uses the permissive prompt that encourages general
         knowledge fallback when context is insufficient.
         """
-        base = self.SYSTEM_PROMPT if self.config.discussion_fallback else self.SYSTEM_PROMPT_STRICT
-        if not self.config.truth_grounding:
+        if cfg is None:
+            cfg = self.config
+        base = self.SYSTEM_PROMPT if cfg.discussion_fallback else self.SYSTEM_PROMPT_STRICT
+        if not cfg.truth_grounding:
             return base
         if has_web:
             return base + (
@@ -1071,56 +1160,83 @@ Your primary goal is to help the user by answering questions based on the provid
             "you have access to live Brave Search as a fallback tool. It was not needed for this query."
         )
 
-    def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None) -> str:
-        t0 = time.time()
-        
-        retrieval = self._execute_retrieval(query, filters)
-        results = retrieval['results']
-        
-        if not results:
-            self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
-                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'])
-            
-            if self.config.discussion_fallback:
-                # Send plain query as user message so multi-turn history stays consistent
-                return self.llm.complete(query, self._build_system_prompt(False), chat_history=chat_history)
-            
-            return "I don't have any relevant information to answer that question."
-            
-        if self.config.rerank: results = self.reranker.rerank(query, results)
+    def _apply_overrides(self, overrides: Optional[Dict]) -> 'OpenStudioConfig':
+        """Return a config copy with per-request overrides applied (thread-safe)."""
+        if not overrides:
+            return self.config
+        import copy
+        cfg = copy.copy(self.config)
+        for k, v in overrides.items():
+            if v is not None and hasattr(cfg, k):
+                setattr(cfg, k, v)
+        return cfg
 
-        results = results[:self.config.top_k]
+    def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None) -> str:
+        t0 = time.time()
+        cfg = self._apply_overrides(overrides)
+
+        # Cache lookup (only when chat_history is empty — cached responses don't track turns)
+        if cfg.query_cache and not chat_history:
+            cache_key = self._make_cache_key(query, filters, cfg)
+            if cache_key in self._query_cache:
+                logger.info(f"💾 Cache hit for query: {query[:60]}")
+                return self._query_cache[cache_key]
+
+        retrieval = self._execute_retrieval(query, filters, cfg=cfg)
+        results = retrieval['results']
+
+        if not results:
+            self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
+                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'])
+
+            if cfg.discussion_fallback:
+                # Send plain query as user message so multi-turn history stays consistent
+                return self.llm.complete(query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history)
+
+            return "I don't have any relevant information to answer that question."
+
+        if cfg.rerank: results = self.reranker.rerank(query, results)
+
+        results = results[:cfg.top_k]
         final_count = len(results)
         top_score = results[0].get('score', 0) if results else 0
         context, has_web = self._build_context(results)
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
-        system_prompt = self._build_system_prompt(has_web) + f"\n\n**Relevant context from documents:**\n{context}"
+        system_prompt = self._build_system_prompt(has_web, cfg=cfg) + f"\n\n**Relevant context from documents:**\n{context}"
         response = self.llm.complete(query, system_prompt, chat_history=chat_history)
-        self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
+        self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
                                 retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
+
+        if cfg.query_cache and not chat_history:
+            # Evict oldest entry if cache is full
+            if len(self._query_cache) >= cfg.query_cache_size:
+                self._query_cache.pop(next(iter(self._query_cache)))
+            self._query_cache[cache_key] = response
+
         return response
 
-    def query_stream(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None):
-        retrieval = self._execute_retrieval(query, filters)
+    def query_stream(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None):
+        cfg = self._apply_overrides(overrides)
+        retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval['results']
-        
+
         if not results:
-            if self.config.discussion_fallback:
+            if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
-                yield from self.llm.stream(query, self._build_system_prompt(False), chat_history=chat_history)
+                yield from self.llm.stream(query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history)
                 return
             yield "I don't have any relevant information to answer that question."
             return
-            
-        if self.config.rerank: results = self.reranker.rerank(query, results)
-        
-        results = results[:self.config.top_k]
+
+        if cfg.rerank: results = self.reranker.rerank(query, results)
+
+        results = results[:cfg.top_k]
         context, has_web = self._build_context(results)
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
-        system_prompt = self._build_system_prompt(has_web) + f"\n\n**Relevant context from documents:**\n{context}"
-        
+        system_prompt = self._build_system_prompt(has_web, cfg=cfg) + f"\n\n**Relevant context from documents:**\n{context}"
+
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
 
@@ -1201,6 +1317,12 @@ def main():
                         help='Enable/disable HyDE (hypothetical document embedding)')
     parser.add_argument('--multi-query', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable multi-query retrieval')
+    parser.add_argument('--step-back', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable step-back prompting (abstracts query before retrieval)')
+    parser.add_argument('--cache', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable in-memory query result caching')
+    parser.add_argument('--no-dedup', action='store_true',
+                        help='Disable ingest deduplication (allow re-ingesting identical content)')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress spinners and progress (auto-enabled when stdin is not a TTY)')
     args = parser.parse_args()
@@ -1256,6 +1378,12 @@ def main():
         config.hyde = args.hyde
     if args.multi_query is not None:
         config.multi_query = args.multi_query
+    if args.step_back is not None:
+        config.step_back = args.step_back
+    if args.cache is not None:
+        config.query_cache = args.cache
+    if args.no_dedup:
+        config.dedup_on_ingest = False
 
     if args.list_models:
         print("\n🤖 Supported LLM providers and example models:\n")
