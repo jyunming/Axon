@@ -43,7 +43,13 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 - **Async Ingestion:** High-performance asynchronous processing for directories and files.
 - **Modern UI:** Interactive Streamlit interface for chat, ingestion, and parameter tuning.
 
-## 🚀 Quick Start
+## 🖥️ Preview
+
+![Local RAG Brain REPL](docs/assets/repl-demo.png)
+
+*The interactive REPL — always-visible header box with model, search and discuss settings; full conversation history; pinned status toolbar.*
+
+
 
 ### 1. Install Dependencies
 
