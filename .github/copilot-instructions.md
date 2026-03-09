@@ -145,6 +145,11 @@ All loaders, `ingest()`, and vector store calls use this schema. Duplicate IDs s
 **Web Search:**
 - `web_search.enabled` → `truth_grounding`
 
+**Offline Mode:**
+- `offline.enabled` → `offline_mode`
+- `offline.local_models_dir` → `local_models_dir`
+- When `offline_mode=True`: sets `TRANSFORMERS_OFFLINE=1`, `HF_HUB_OFFLINE=1`, `HF_DATASETS_OFFLINE=1`; forces `truth_grounding=False`; resolves bare HF model IDs to local paths via `_resolve_model_path()`
+
 When adding new config fields, update both the `OpenStudioConfig` dataclass and its `load()` method.
 
 ### Adding a new loader

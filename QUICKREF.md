@@ -192,6 +192,26 @@ rag:
   hybrid_search: true
 ```
 
+### Offline / Air-gapped Mode
+Pre-fetch models on an internet machine, then copy them to the confined workspace:
+```bash
+python scripts/prefetch_models.py --dir C:/models
+```
+
+Enable in `config.yaml`:
+```yaml
+offline:
+  enabled: true
+  local_models_dir: C:/models   # absolute path
+```
+
+Effects when enabled:
+- Bare model names (`all-MiniLM-L6-v2`, `bge-reranker-base`) auto-resolved to `<local_models_dir>/<name>/`
+- `TRANSFORMERS_OFFLINE=1`, `HF_HUB_OFFLINE=1` set before any model loads
+- Web search permanently disabled (`/search` toggle is blocked)
+
+For Ollama models (gemma3, gpt-oss, etc.) copy `~/.ollama/models/` to the same path on the confined machine. See `scripts/README.md`.
+
 ## API Endpoints
 
 ### Health Check

@@ -244,6 +244,7 @@ Customize behavior in `config.yaml`:
 - **Truth Grounding:** Enable Brave Search API fallback when local knowledge is insufficient.
 - **Discussion Fallback:** Allow the LLM to answer from general knowledge when no documents match (default: enabled).
 - **Chunking:** Adjust document fragment size and overlap (default: 1000 chars, 200 overlap).
+- **Offline / Air-gapped Mode:** Run fully without internet — all models resolved from a local directory, web search disabled automatically.
 
 See [Configuration Guide](QUICKREF.md#configuration) for details.
 
