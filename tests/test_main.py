@@ -228,6 +228,44 @@ class TestOpenLLM:
         assert result == "openai resp"
         assert mock_client.chat.completions.create.called
 
+    @patch("openai.OpenAI")
+    def test_vllm_complete(self, MockOpenAI):
+        from rag_brain.main import OpenLLM, OpenStudioConfig
+        config = OpenStudioConfig(
+            llm_provider="vllm",
+            llm_model="meta-llama/Llama-3.1-8B-Instruct",
+            vllm_base_url="http://localhost:8000/v1",
+        )
+        llm = OpenLLM(config)
+
+        mock_client = MockOpenAI.return_value
+        mock_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="vllm resp"))]
+        )
+
+        result = llm.complete("hello", system_prompt="be helpful")
+        assert result == "vllm resp"
+        # Verify base_url was passed to OpenAI constructor
+        assert MockOpenAI.call_args[1].get("base_url") == "http://localhost:8000/v1"
+
+    def test_vllm_default_base_url(self, monkeypatch):
+        monkeypatch.delenv("VLLM_BASE_URL", raising=False)
+        from rag_brain.main import OpenStudioConfig
+        config = OpenStudioConfig()
+        assert config.vllm_base_url == "http://localhost:8000/v1"
+
+    def test_vllm_base_url_from_yaml(self, tmp_path):
+        from rag_brain.main import OpenStudioConfig
+        cfg = {"llm": {"provider": "vllm", "model": "meta-llama/Llama-3.1-8B-Instruct",
+                       "vllm_base_url": "http://192.168.1.10:8000/v1"}}
+        cfg_path = tmp_path / "config.yaml"
+        import yaml
+        with open(cfg_path, "w") as f:
+            yaml.dump(cfg, f)
+        config = OpenStudioConfig.load(str(cfg_path))
+        assert config.llm_provider == "vllm"
+        assert config.vllm_base_url == "http://192.168.1.10:8000/v1"
+
 
 # ---------------------------------------------------------------------------
 # New tests: HyDE, multi-query, load_directory, metrics
@@ -565,6 +603,12 @@ class TestInferProvider:
         # Ollama models with name:tag format must NOT be misclassified as openai
         assert _infer_provider("gpt-oss:120b-cloud") == "ollama"
         assert _infer_provider("o1-tuned:latest") == "ollama"
+
+    def test_vllm_path_style_falls_through_to_ollama(self):
+        # vLLM model names look like HuggingFace paths; no auto-detection — falls to ollama
+        from rag_brain.main import _infer_provider
+        assert _infer_provider("meta-llama/Llama-3.1-8B-Instruct") == "ollama"
+        assert _infer_provider("mistralai/Mistral-7B-Instruct-v0.3") == "ollama"
 
     def test_case_insensitive(self):
         from rag_brain.main import _infer_provider

@@ -11,20 +11,19 @@ You are the **documentation writer** for the Local RAG Brain repository. You kee
 | File | Purpose |
 |---|---|
 | `README.md` | User-facing quickstart and feature overview |
+| `QUICKREF.md` | CLI examples and config reference |
 | `MODEL_GUIDE.md` | Model selection guidance and hardware requirements |
-| `.github/copilot-instructions.md` | Copilot/agent context for this repo |
 | Docstrings in `src/rag_brain/` | Developer reference |
 
 ## When to Update What
 
 ### After adding a new loader
-- Add the file extension to the "Supported file types" list in `.github/copilot-instructions.md`.
 - Update `README.md` features section if the format is user-facing (e.g., PDF, DOCX).
 
 ### After adding a new config option
 - Add a commented example line to `config.yaml`.
 - Document the option in `README.md` under "⚙️ Configuration" if it affects user behavior.
-- Update `.github/copilot-instructions.md` under "config.yaml → dataclass mapping" if it follows a new naming pattern.
+- Update `QUICKREF.md` under "Config File" if it follows a new naming pattern.
 
 ### After adding a new API endpoint
 - Document the endpoint in `README.md` under "🤖 AI Agent Integration".

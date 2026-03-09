@@ -36,7 +36,7 @@ Before starting, ensure you have:
 Clone the repository if you haven't already:
 
 ```bash
-git clone https://github.com/yourusername/studio_brain_open.git
+git clone https://github.com/jyunming/studio_brain_open.git
 cd studio_brain_open
 ```
 

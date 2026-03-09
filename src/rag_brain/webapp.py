@@ -352,6 +352,7 @@ with st.sidebar:
         "gemini": "✨ Gemini",
         "ollama_cloud": "☁️ Ollama Cloud",
         "openai": "🔑 OpenAI-compatible",
+        "vllm": "⚡ vLLM (local)",
     }
     llm_providers = list(provider_labels.keys())
     current_provider_idx = llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0
@@ -409,6 +410,10 @@ with st.sidebar:
     elif config.llm_provider == "openai":
         config.api_key = st.text_input("API Key", value=config.api_key, type="password", label_visibility="collapsed", placeholder="OpenAI API key")
         config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. gpt-4o")
+
+    elif config.llm_provider == "vllm":
+        config.vllm_base_url = st.text_input("Base URL", value=config.vllm_base_url, label_visibility="collapsed", placeholder="http://localhost:8000/v1")
+        config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. mistralai/Mistral-7B-Instruct-v0.2")
 
     # ── EMBEDDING ──
     st.markdown('<div class="sb-section">Embedding</div>', unsafe_allow_html=True)

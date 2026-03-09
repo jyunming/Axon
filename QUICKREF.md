@@ -103,13 +103,17 @@ rag-brain --list-models
 | `/model [provider/model]` | Switch LLM provider and model on the fly; bare `/model <name>` auto-detects provider (`gemini-*`→gemini, `gpt-*`→openai, else→ollama); auto-pulls from Ollama if needed |
 | `/embed [provider/model]` | Switch embedding provider and model |
 | `/pull <name>` | Pull an Ollama model with progress indicator |
+| `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
 | `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match) |
-| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `hyde`, `multi` |
+| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi` |
+| `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
+| `/keys [set provider]` | Show API key status for all providers; `/keys set <provider>` saves a key interactively |
 | `/compact` | Summarize entire chat history via LLM to free context window space |
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
+| `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
 | `/quit`, `/exit` | Exit the REPL |
 
@@ -187,6 +191,26 @@ rag:
   top_k: 10
   hybrid_search: true
 ```
+
+### Offline / Air-gapped Mode
+Pre-fetch models on an internet machine, then copy them to the confined workspace:
+```bash
+python scripts/prefetch_models.py --dir C:/models
+```
+
+Enable in `config.yaml`:
+```yaml
+offline:
+  enabled: true
+  local_models_dir: C:/models   # absolute path
+```
+
+Effects when enabled:
+- Bare model names (`all-MiniLM-L6-v2`, `bge-reranker-base`) auto-resolved to `<local_models_dir>/<name>/`
+- `TRANSFORMERS_OFFLINE=1`, `HF_HUB_OFFLINE=1` set before any model loads
+- Web search permanently disabled (`/search` toggle is blocked)
+
+For Ollama models (gemma3, gpt-oss, etc.) copy `~/.ollama/models/` to the same path on the confined machine. See `scripts/README.md`.
 
 ## API Endpoints
 
@@ -418,9 +442,9 @@ chunk:
 
 ## Useful Links
 
-- **Repository:** https://github.com/yourusername/studio_brain_open
-- **Issues:** https://github.com/yourusername/studio_brain_open/issues
-- **Discussions:** https://github.com/yourusername/studio_brain_open/discussions
+- **Repository:** https://github.com/jyunming/studio_brain_open
+- **Issues:** https://github.com/jyunming/studio_brain_open/issues
+- **Discussions:** https://github.com/jyunming/studio_brain_open/discussions
 - **Ollama:** https://ollama.ai/
 - **ChromaDB:** https://www.trychroma.com/
 - **FastAPI:** https://fastapi.tiangolo.com/

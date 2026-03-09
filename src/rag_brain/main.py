@@ -46,7 +46,7 @@ class OpenStudioConfig:
     ollama_base_url: str = "http://localhost:11434"
     
     # LLM
-    llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai"] = "ollama"
+    llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai", "vllm"] = "ollama"
     llm_model: str = "gemma"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
@@ -54,7 +54,8 @@ class OpenStudioConfig:
     gemini_api_key: str = ""
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
-    
+    vllm_base_url: str = "http://localhost:8000/v1"
+
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
         if not self.api_key:
@@ -65,6 +66,10 @@ class OpenStudioConfig:
             self.ollama_cloud_key = os.getenv("OLLAMA_CLOUD_KEY", "")
         if not self.ollama_cloud_url:
             self.ollama_cloud_url = os.getenv("OLLAMA_CLOUD_URL", "https://ollama.com/api")
+        if self.vllm_base_url == "http://localhost:8000/v1":
+            env_val = os.getenv("VLLM_BASE_URL")
+            if env_val:
+                self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
     
@@ -98,6 +103,10 @@ class OpenStudioConfig:
     truth_grounding: bool = False
     brave_api_key: str = ""
 
+    # Offline Mode
+    offline_mode: bool = False
+    local_models_dir: str = ""
+
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
         """Load configuration from a YAML file."""
@@ -106,8 +115,8 @@ class OpenStudioConfig:
             return cls()
         
         with open(path, 'r') as f:
-            data = yaml.safe_load(f)
-        
+            data = yaml.safe_load(f) or {}
+
         # Flatten the YAML structure to match dataclass fields
         config_dict = {}
         if 'embedding' in data:
@@ -145,6 +154,11 @@ class OpenStudioConfig:
             config_dict['truth_grounding'] = ws.get('enabled', False)
             if ws.get('brave_api_key'):
                 config_dict['brave_api_key'] = ws['brave_api_key']
+        if 'offline' in data:
+            ol = data['offline']
+            config_dict['offline_mode'] = ol.get('enabled', False)
+            if ol.get('local_models_dir'):
+                config_dict['local_models_dir'] = ol['local_models_dir']
         
         # Map some specific names if they don't match exactly
         if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
@@ -152,11 +166,17 @@ class OpenStudioConfig:
             
         if 'api_key' not in config_dict and 'llm_api_key' in config_dict:
             config_dict['api_key'] = config_dict['llm_api_key']
+
+        if 'llm_vllm_base_url' in config_dict:
+            config_dict['vllm_base_url'] = config_dict['llm_vllm_base_url']
             
-        # Environment Variable Overrides (High Priority for Docker)
+        # Environment Variable Overrides (High Priority — wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
             config_dict['ollama_base_url'] = env_ollama_host
+        env_vllm = os.getenv("VLLM_BASE_URL")
+        if env_vllm:
+            config_dict['vllm_base_url'] = env_vllm
 
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
@@ -320,16 +340,19 @@ class OpenLLM:
     
     def __init__(self, config: OpenStudioConfig):
         self.config = config
-        self._openai_client = None
-    
-    def _get_openai_client(self):
-        if self._openai_client is None:
+        self._openai_clients: dict = {}
+
+    def _get_openai_client(self, base_url: str = None):
+        """Return a cached OpenAI client. Pass base_url for vLLM or custom endpoints."""
+        cache_key = base_url or "default"
+        if cache_key not in self._openai_clients:
             from openai import OpenAI
-            kwargs = {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
-            if self.config.ollama_base_url and self.config.ollama_base_url != "http://localhost:11434":
-                kwargs["base_url"] = self.config.ollama_base_url
-            self._openai_client = OpenAI(**kwargs)
-        return self._openai_client
+            api_key = self.config.api_key if self.config.api_key else "sk-dummy"
+            kwargs = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._openai_clients[cache_key] = OpenAI(**kwargs)
+        return self._openai_clients[cache_key]
     
     def complete(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None) -> str:
         provider = self.config.llm_provider
@@ -422,21 +445,40 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-                
+
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
-            response = self._get_openai_client().chat.completions.create(
+
+            # Pass base_url when pointing at an OpenAI-compatible local endpoint
+            _openai_base = self.config.ollama_base_url if self.config.ollama_base_url != "http://localhost:11434" else None
+            response = self._get_openai_client(base_url=_openai_base).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens
             )
             return response.choices[0].message.content
-            
+
+        elif provider == "vllm":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+
+            response = self._get_openai_client(base_url=self.config.vllm_base_url).chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+            )
+            return response.choices[0].message.content
+
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
     
@@ -539,19 +581,41 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-                
+
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
-            stream = self._get_openai_client().chat.completions.create(
+
+            # Pass base_url when pointing at an OpenAI-compatible local endpoint
+            _openai_base = self.config.ollama_base_url if self.config.ollama_base_url != "http://localhost:11434" else None
+            stream = self._get_openai_client(base_url=_openai_base).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+
+        elif provider == "vllm":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ["user", "assistant"]:
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+
+            stream = self._get_openai_client(base_url=self.config.vllm_base_url).chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                stream=True,
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -664,8 +728,53 @@ Your primary goal is to help the user by answering questions based on the provid
 4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
 """
     
+    def _resolve_model_path(self, model_name: str) -> str:
+        """Resolve a HuggingFace model ID to a local path when offline_mode is on.
+
+        If the name is already an absolute path or starts with '.' it is returned
+        unchanged.  Otherwise the last path component (after the optional org/)
+        is looked up under local_models_dir, then the full name with '/' → '--'.
+        A warning is logged when the directory cannot be found.
+        """
+        if not self.config.offline_mode or not self.config.local_models_dir:
+            return model_name
+        if os.path.isabs(model_name) or model_name.startswith('.'):
+            return model_name
+        base = self.config.local_models_dir
+        # Try bare name: "BAAI/bge-reranker-base" → "<dir>/bge-reranker-base"
+        short_name = model_name.split('/')[-1]
+        candidate = os.path.join(base, short_name)
+        if os.path.isdir(candidate):
+            return candidate
+        # Try HF cache style: "BAAI/bge-reranker-base" → "<dir>/BAAI--bge-reranker-base"
+        hf_name = model_name.replace('/', '--')
+        candidate2 = os.path.join(base, hf_name)
+        if os.path.isdir(candidate2):
+            return candidate2
+        logger.warning(
+            f"Offline mode: '{model_name}' not found in {base} "
+            f"(tried '{short_name}' and '{hf_name}')"
+        )
+        return model_name
+
     def __init__(self, config: Optional[OpenStudioConfig] = None):
         self.config = config or OpenStudioConfig.load()
+
+        # ── Offline mode: lock down all network access before any model loads ──
+        if self.config.offline_mode:
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            if self.config.truth_grounding:
+                logger.info("Offline mode: disabling web search (truth_grounding → OFF)")
+                self.config.truth_grounding = False
+            # Resolve bare HF model IDs to local paths
+            self.config.embedding_model = self._resolve_model_path(self.config.embedding_model)
+            self.config.reranker_model  = self._resolve_model_path(self.config.reranker_model)
+            logger.info(
+                f"🔒 Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
+            )
+
         logger.info("🧠 Initializing Local RAG Brain...")
         self.embedding = OpenEmbedding(self.config)
         self.llm = OpenLLM(self.config)
@@ -1066,7 +1175,7 @@ def main():
     parser.add_argument('--stream', action='store_true', help='Stream the response')
     parser.add_argument(
         '--provider',
-        choices=['ollama', 'gemini', 'ollama_cloud', 'openai'],
+        choices=['ollama', 'gemini', 'ollama_cloud', 'openai', 'vllm'],
         help='LLM provider to use (overrides config)',
     )
     parser.add_argument('--model', help='Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o')
@@ -1105,7 +1214,7 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
+        _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud', 'vllm')
         if "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
             if _prov in _PROVIDERS:
@@ -1153,7 +1262,9 @@ def main():
         print("  ollama       (local)  — gemma:2b, gemma, llama3.1, mistral, phi3")
         print("  gemini       (cloud)  — gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash")
         print("  ollama_cloud (cloud)  — any model hosted at your OLLAMA_CLOUD_URL")
-        print("  openai       (cloud)  — gpt-4o, gpt-4o-mini, gpt-3.5-turbo\n")
+        print("  openai       (cloud)  — gpt-4o, gpt-4o-mini, gpt-3.5-turbo")
+        print("  vllm         (local)  — any model served by vLLM (e.g., meta-llama/Llama-3.1-8B-Instruct)")
+        print(f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)\n")
         try:
             import ollama as _ollama
             response = _ollama.list()
@@ -1348,7 +1459,8 @@ _SLASH_COMMANDS = [
     "/help", "/list", "/ingest ", "/model ", "/embed ",
     "/pull ", "/search", "/discuss", "/rag ", "/compact",
     "/context", "/sessions", "/resume ", "/clear", "/retry",
-    "/project", "/project ", "/keys", "/quit", "/exit",
+    "/project ", "/keys", "/vllm-url ",
+    "/quit", "/exit",
 ]
 
 
@@ -1964,7 +2076,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
     - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
-      /compact, /context, /sessions, /resume, /retry, /clear, /quit, /exit
+      /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
     - @file context: type @path to inline file contents into your query
     - Shell passthrough: !command runs a shell command without leaving the REPL
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
@@ -2239,10 +2351,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     _detail = {
                         "model":    "  /model <model>              keep current provider\n"
                                     "  /model <provider>/<model>   switch provider + model\n"
-                                    "  providers: ollama, gemini, openai, ollama_cloud\n"
+                                    "  providers: ollama, gemini, openai, ollama_cloud, vllm\n"
                                     "  e.g.  /model gemini/gemini-2.0-flash\n"
                                     "        /model ollama/gemma:2b\n"
-                                    "        /model openai/gpt-4o",
+                                    "        /model openai/gpt-4o\n"
+                                    "        /model vllm/meta-llama/Llama-3.1-8B-Instruct",
                         "embed":    "  /embed <model>              keep current provider\n"
                                     "  /embed <provider>/<model>   switch provider + model\n"
                                     "  /embed /path/to/local        local HuggingFace folder\n"
@@ -2256,6 +2369,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     "  /rag threshold <0.0–1.0>     min similarity score\n"
                                     "  /rag hybrid                  toggle hybrid BM25+vector\n"
                                     "  /rag rerank                  toggle cross-encoder reranker\n"
+                                    "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
                                     "  /rag hyde                    toggle HyDE query expansion\n"
                                     "  /rag multi                   toggle multi-query expansion",
                         "sessions": "  /sessions                    list recent saved sessions\n"
@@ -2346,13 +2460,14 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         print(f"  Done — {ingested} ingested, {skipped} skipped.")
 
             elif cmd == "/model":
-                _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud')
+                _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud', 'vllm')
                 if not arg:
                     print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
                     print(f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}")
                     print(f"  Usage:   /model <model>              (auto-detect provider)")
                     print(f"           /model <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_PROVIDERS)}")
+                    print(f"  vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
                 elif "/" in arg:
                     provider, model = arg.split("/", 1)
                     if provider not in _PROVIDERS:
@@ -2362,7 +2477,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         brain.config.llm_model = model
                         brain.llm = OpenLLM(brain.config)
                         print(f"  ✅ Switched LLM to {provider}/{model}")
-                        if provider != "ollama":
+                        if provider == "vllm":
+                            print(f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
+                        elif provider != "ollama":
                             print(f"  ℹ️  Make sure the required API key env var is set.")
                 else:
                     inferred = _infer_provider(arg)
@@ -2372,6 +2489,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     print(f"  ✅ Switched LLM to {inferred}/{arg}")
                     if inferred != "ollama":
                         print(f"  ℹ️  Make sure the required API key env var is set.")
+
+            elif cmd == "/vllm-url":
+                if not arg:
+                    print(f"  Current vLLM base URL: {brain.config.vllm_base_url}")
+                    print(f"  Usage: /vllm-url http://host:port/v1")
+                else:
+                    brain.config.vllm_base_url = arg
+                    brain.llm._openai_clients = {}   # invalidate cached client
+                    print(f"  ✅ vLLM base URL set to {arg}")
 
             elif cmd == "/embed":
                 _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
@@ -2438,7 +2564,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 print("  🗑️  Chat history cleared.")
 
             elif cmd == "/search":
-                if brain.config.truth_grounding:
+                if brain.config.offline_mode:
+                    print("  🔒 Offline mode is ON — web search is disabled.")
+                elif brain.config.truth_grounding:
                     brain.config.truth_grounding = False
                     print("  🔍 Web search OFF — answers from local knowledge only.")
                 else:
@@ -2461,7 +2589,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         f"\n  top-k        · {brain.config.top_k}\n"
                         f"  threshold    · {brain.config.similarity_threshold}\n"
                         f"  hybrid       · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
-                        f"  rerank       · {'ON' if brain.config.rerank else 'OFF'}\n"
+                        f"  rerank       · {'ON' if brain.config.rerank else 'OFF'}"
+                        + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "") + "\n"
                         f"  hyde         · {'ON' if brain.config.hyde else 'OFF'}\n"
                         f"  multi-query  · {'ON' if brain.config.multi_query else 'OFF'}\n"
                         f"\n  /help rag   for usage details\n"
@@ -2498,8 +2627,27 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     elif rag_opt == "multi":
                         brain.config.multi_query = not brain.config.multi_query
                         print(f"  ✅ Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
+                    elif rag_opt == "rerank-model":
+                        if not rag_val:
+                            print(f"  Current reranker: {brain.config.reranker_model}")
+                            print(f"  Usage: /rag rerank-model <HuggingFace ID or local path>")
+                            print(f"  e.g.  /rag rerank-model BAAI/bge-reranker-base")
+                            print(f"        /rag rerank-model ./models/bge-reranker-base")
+                        else:
+                            resolved = brain._resolve_model_path(rag_val)
+                            if resolved != rag_val:
+                                print(f"  → Resolved to local path: {resolved}")
+                            brain.config.reranker_model = resolved
+                            brain.config.rerank = True   # auto-enable when setting a model
+                            print(f"  ⏳ Loading reranker '{resolved}'…")
+                            try:
+                                brain.reranker = OpenReranker(brain.config)
+                                print(f"  ✅ Reranker → {resolved}  (rerank: ON)")
+                            except Exception as e:
+                                brain.config.rerank = False
+                                print(f"  ❌ Failed to load reranker: {e}")
                     else:
-                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, hyde, multi")
+                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)
@@ -2729,19 +2877,17 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
             if stream:
                 token_gen = brain.query_stream(query_text, chat_history=chat_history)
-                first_tokens: list = []
 
-                # Show spinner until the first real token arrives
                 if not quiet:
-                    # Print compact status so config info stays visible during thinking/streaming
                     m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
                     s_v = "search:ON" if brain.config.truth_grounding    else "search:off"
                     d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
                     h_v = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
                     print(f"\033[2m  🧠 {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
                     print()
-                    with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
-                             transient=True, refresh_per_second=10) as _spin_live:
+                    # Spinner until first real token arrives
+                    with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"),
+                             console=_console, transient=True, refresh_per_second=10) as _spin_live:
                         _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
                         _st.start()
                         for chunk in token_gen:
@@ -2749,31 +2895,38 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 if chunk.get("type") == "sources":
                                     _last_sources = chunk.get("sources", [])
                                 continue
-                            first_tokens.append(chunk)
-                            break   # first token received — exit spinner Live context
+                            response_parts.append(chunk)
+                            break   # first token → exit spinner
                         _spin_stop.set()
                         _st.join(timeout=0.3)
-                    # spinner is now gone from terminal (transient)
+                    # spinner gone (transient); cursor is at a clean line
 
-                # Stream remaining tokens with a live Markdown view
+                # Stream remaining tokens as plain text (human-like typing feel).
+                # Save cursor position here so we can restore + re-render as Markdown
+                # once all tokens have arrived.
                 try:
-                    print()   # blank line between You: and Brain:
+                    sys.stdout.write("\033[s")   # ANSI save cursor
                     _console.print("[bold yellow]Brain:[/bold yellow]")
-                    with _RL(console=_console, refresh_per_second=12) as _resp_live:
-                        for chunk in first_tokens:          # replay buffered token
-                            response_parts.append(chunk)
-                            _resp_live.update(_RM("".join(response_parts)))
-                        for chunk in token_gen:             # continue generator
-                            if isinstance(chunk, dict):
-                                if chunk.get("type") == "sources":
-                                    _last_sources = chunk.get("sources", [])
-                                continue
-                            response_parts.append(chunk)
-                            _resp_live.update(_RM("".join(response_parts)))
-                    print()   # blank line after Brain response, before next You:
+                    for chunk in response_parts:  # replay first token
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+                    for chunk in token_gen:
+                        if isinstance(chunk, dict):
+                            if chunk.get("type") == "sources":
+                                _last_sources = chunk.get("sources", [])
+                            continue
+                        response_parts.append(chunk)
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+                    # All tokens received — jump back and re-render as Rich Markdown
+                    sys.stdout.write("\033[u\033[J")  # restore cursor, clear to end
+                    sys.stdout.flush()
+                    _console.print("[bold yellow]Brain:[/bold yellow]")
+                    _console.print(_RM("".join(response_parts)))
+                    print()
                 except KeyboardInterrupt:
                     _cancelled = True
-                    print("  ⚠️  Cancelled.\n")
+                    print("\n  ⚠️  Cancelled.\n")
             else:
                 # Non-streaming: spinner while brain.query() blocks
                 _spin_stop2 = threading.Event()

@@ -99,6 +99,30 @@ class TestOpenLLMStream:
         result = list(llm.stream("hello"))
         assert result == ["A", "B", "C"]
 
+    @patch("openai.OpenAI")
+    def test_vllm_stream_yields_strings(self, MockOpenAI):
+        from rag_brain.main import OpenLLM, OpenStudioConfig
+
+        config = OpenStudioConfig(
+            llm_provider="vllm",
+            llm_model="meta-llama/Llama-3.1-8B-Instruct",
+            vllm_base_url="http://localhost:8000/v1",
+        )
+        llm = OpenLLM(config)
+
+        def _make_chunk(text):
+            c = MagicMock()
+            c.choices[0].delta.content = text
+            return c
+
+        stream_chunks = [_make_chunk(t) for t in ["Hello", " from", " vLLM"]]
+        MockOpenAI.return_value.chat.completions.create.return_value = iter(stream_chunks)
+
+        result = list(llm.stream("hi"))
+        assert result == ["Hello", " from", " vLLM"]
+        # Verify base_url was passed to OpenAI constructor
+        assert MockOpenAI.call_args[1].get("base_url") == "http://localhost:8000/v1"
+
 
 # ---------------------------------------------------------------------------
 # OpenStudioBrain.query_stream()
