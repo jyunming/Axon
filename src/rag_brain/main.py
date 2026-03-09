@@ -2819,22 +2819,23 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         _st.join(timeout=0.3)
                     # spinner is now gone from terminal (transient)
 
-                # Stream remaining tokens with a live Markdown view
+                # Stream remaining tokens — plain write avoids Rich Live cursor conflicts
                 try:
                     print()   # blank line between You: and Brain:
                     _console.print("[bold yellow]Brain:[/bold yellow]")
-                    with _RL(console=_console, refresh_per_second=12) as _resp_live:
-                        for chunk in first_tokens:          # replay buffered token
-                            response_parts.append(chunk)
-                            _resp_live.update(_RM("".join(response_parts)))
-                        for chunk in token_gen:             # continue generator
-                            if isinstance(chunk, dict):
-                                if chunk.get("type") == "sources":
-                                    _last_sources = chunk.get("sources", [])
-                                continue
-                            response_parts.append(chunk)
-                            _resp_live.update(_RM("".join(response_parts)))
-                    print()   # blank line after Brain response, before next You:
+                    for chunk in first_tokens:          # replay buffered first token
+                        response_parts.append(chunk)
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+                    for chunk in token_gen:             # continue generator
+                        if isinstance(chunk, dict):
+                            if chunk.get("type") == "sources":
+                                _last_sources = chunk.get("sources", [])
+                            continue
+                        response_parts.append(chunk)
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+                    print("\n")   # blank line after Brain response, before next You:
                 except KeyboardInterrupt:
                     _cancelled = True
                     print("  ⚠️  Cancelled.\n")
