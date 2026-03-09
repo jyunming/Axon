@@ -115,8 +115,8 @@ class OpenStudioConfig:
             return cls()
         
         with open(path, 'r') as f:
-            data = yaml.safe_load(f)
-        
+            data = yaml.safe_load(f) or {}
+
         # Flatten the YAML structure to match dataclass fields
         config_dict = {}
         if 'embedding' in data:

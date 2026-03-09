@@ -248,7 +248,8 @@ class TestOpenLLM:
         # Verify base_url was passed to OpenAI constructor
         assert MockOpenAI.call_args[1].get("base_url") == "http://localhost:8000/v1"
 
-    def test_vllm_default_base_url(self):
+    def test_vllm_default_base_url(self, monkeypatch):
+        monkeypatch.delenv("VLLM_BASE_URL", raising=False)
         from rag_brain.main import OpenStudioConfig
         config = OpenStudioConfig()
         assert config.vllm_base_url == "http://localhost:8000/v1"
