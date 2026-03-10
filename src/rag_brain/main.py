@@ -2798,8 +2798,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         _PT_STYLE = Style.from_dict({
             "": "",
             "completion-menu.completion.current": "bg:#444466 #ffffff",
-            "bottom-toolbar":     "bg:#2b2b2b #b0b0b0",
-            "bottom-toolbar.key": "bg:#2b2b2b #ffffff bold",
+            "bottom-toolbar":    "bg:#2b2b2b #b0b0b0",
+            "tblbl":             "bg:#2b2b2b #ffffff bold",
         })
 
         class _PTCompleter(Completer):
@@ -2901,9 +2901,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             # Column value widths (same for both rows so │ aligns perfectly)
             W1, W2 = 28, 30
             row1 = (
-                f"  <bottom-toolbar.key>LLM</bottom-toolbar.key>  {_t(m, W1):{W1}}"
-                f"{sep}<bottom-toolbar.key>Embed</bottom-toolbar.key>  {_t(emb, W2):{W2}}"
-                f"{sep}<bottom-toolbar.key>Docs</bottom-toolbar.key>  {doc_s}"
+                f"  <tblbl>LLM</tblbl>  {_t(m, W1):{W1}}"
+                f"{sep}<tblbl>Embed</tblbl>  {_t(emb, W2):{W2}}"
+                f"{sep}<tblbl>Docs</tblbl>  {doc_s}"
             )
             # Row 2 labels are shorter; pad to same col widths so │ aligns
             C1 = len("LLM  ") + W1   # = 5 + 28 = 33
