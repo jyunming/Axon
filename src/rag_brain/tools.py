@@ -119,6 +119,18 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                     "required": ["query"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_knowledge_base",
+                "description": "List all unique source files ingested into the knowledge base, with chunk counts. Calls GET /collection.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
         }
     ]
 

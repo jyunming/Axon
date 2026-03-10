@@ -1,5 +1,6 @@
 import os
 import json
+import heapq
 from typing import List, Dict, Any
 from rank_bm25 import BM25Okapi
 import logging
@@ -48,9 +49,9 @@ class BM25Retriever:
             
         tokenized_query = self._tokenize(query)
         scores = self.bm25.get_scores(tokenized_query)
-        
-        # Get top-k indices
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+
+        # Get top-k indices efficiently using a heap
+        top_indices = heapq.nlargest(top_k, range(len(scores)), key=lambda i: scores[i])
         
         results = []
         for i in top_indices:
@@ -74,9 +75,11 @@ class BM25Retriever:
             self.save()
 
     def save(self):
-        """Save the corpus to disk as JSON."""
-        with open(self.corpus_file, 'w', encoding='utf-8') as f:
+        """Save the corpus to disk as JSON (atomic write via temp file)."""
+        tmp_file = self.corpus_file + ".tmp"
+        with open(tmp_file, 'w', encoding='utf-8') as f:
             json.dump(self.corpus, f, ensure_ascii=False)
+        os.replace(tmp_file, self.corpus_file)
         logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
 
     def load(self):

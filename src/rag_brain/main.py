@@ -2544,7 +2544,7 @@ def _do_compact(brain: 'OpenStudioBrain', chat_history: list) -> None:
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 _BW = 112         # inner box width in terminal columns
-_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete"
+_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
 _SEP  = "  " + "─" * (_BW + 2)   # separator line matching box outer width
 _HEADER_ROWS = 16  # box(12) + blank(1) + hint(1) + sep(1) + blank(1)
 
@@ -2734,17 +2734,86 @@ class _InitDisplay(logging.Handler):
         self._thread.join(timeout=0.5)
 
 
+_AT_TEXT_EXTS = {
+    ".txt", ".md", ".rst", ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".json", ".yaml", ".yml", ".toml", ".csv", ".html", ".htm",
+    ".css", ".java", ".c", ".cpp", ".h", ".hpp", ".rs", ".go",
+    ".rb", ".sh", ".bash", ".zsh", ".fish", ".sql", ".xml",
+    ".ini", ".cfg", ".env", ".tf", ".proto", ".graphql",
+}
+# Extensions handled by dedicated loaders (extract clean text from binary formats)
+_AT_LOADER_EXTS = {".docx", ".pdf"}
+_AT_DIR_MAX_BYTES  = 120_000   # ~120 KB total across all files in a folder
+_AT_FILE_MAX_BYTES =  40_000   # ~40 KB per single file
+
+
 def _expand_at_files(text: str) -> str:
-    """Expand @filepath references in user input with file contents."""
+    """Expand @path references in user input with file/folder contents (read-only).
+
+    - @file.txt / @file.docx / @file.pdf → inlines extracted text
+    - @folder/   → recursively reads all supported files in the folder (capped at
+                   _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
+    """
+    def _read_text_file(path: str, max_bytes: int = _AT_FILE_MAX_BYTES) -> str:
+        try:
+            raw = open(path, encoding="utf-8", errors="ignore").read(max_bytes)
+            truncated = os.path.getsize(path) > max_bytes
+            return raw + ("\n… (truncated)" if truncated else "")
+        except OSError:
+            return ""
+
+    def _read_via_loader(path: str) -> str:
+        try:
+            from rag_brain.loaders import DOCXLoader, PDFLoader
+            ext = os.path.splitext(path)[1].lower()
+            loader = DOCXLoader() if ext == ".docx" else PDFLoader()
+            docs = loader.load(path)
+            chunks = [d.get("text", "") for d in docs if d.get("text")]
+            joined = "\n\n".join(chunks)
+            if len(joined) > _AT_FILE_MAX_BYTES:
+                joined = joined[:_AT_FILE_MAX_BYTES] + "\n… (truncated)"
+            return joined
+        except Exception as e:
+            return f"(could not extract text: {e})"
+
+    def _read_file(path: str) -> str:
+        ext = os.path.splitext(path)[1].lower()
+        if ext in _AT_LOADER_EXTS:
+            return _read_via_loader(path)
+        return _read_text_file(path)
+
+    def _expand_dir(dirpath: str) -> str:
+        supported = _AT_TEXT_EXTS | _AT_LOADER_EXTS
+        parts: list[str] = []
+        total = 0
+        for root, dirs, files in os.walk(dirpath):
+            dirs.sort()
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fname in sorted(files):
+                if os.path.splitext(fname)[1].lower() not in supported:
+                    continue
+                fpath = os.path.join(root, fname)
+                rel   = os.path.relpath(fpath, dirpath)
+                if total >= _AT_DIR_MAX_BYTES:
+                    parts.append(f"\n--- @{rel} (skipped: context limit reached) ---")
+                    continue
+                content = _read_file(fpath)
+                if not content:
+                    continue
+                parts.append(f"\n--- @{rel} ---\n{content}\n--- end ---")
+                total += len(content.encode("utf-8", errors="ignore"))
+        return "\n".join(parts) if parts else f"\n(no readable files found in {dirpath})"
+
     def _replace(m: re.Match) -> str:
-        path = m.group(1)
+        path = m.group(1).rstrip("/\\")
+        if os.path.isdir(path):
+            return f"\n\n=== folder: {path} ===\n{_expand_dir(path)}\n=== end folder ===\n"
         if os.path.isfile(path):
-            try:
-                content = open(path, encoding="utf-8", errors="ignore").read()
+            content = _read_file(path)
+            if content:
                 return f"\n\n--- @{path} ---\n{content}\n--- end ---\n"
-            except OSError:
-                pass
-        return m.group(0)  # leave unchanged if file not found/readable
+        return m.group(0)
+
     return re.sub(r'@(\S+)', _replace, text)
 
 
@@ -2759,7 +2828,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
       /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
-    - @file context: type @path to inline file contents into your query
+    - @file/folder context: type @path/file.txt or @path/folder/ to inline contents into your query (read-only)
     - Shell passthrough: !command runs a shell command without leaving the REPL
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
 
@@ -2787,7 +2856,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         from prompt_toolkit.completion import Completer, Completion
         from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
         from prompt_toolkit.styles import Style
-        from prompt_toolkit.formatted_text import HTML as _PThtml
+        from prompt_toolkit.formatted_text import HTML as _PThtml, FormattedText as _PTFT, ANSI as _PTANSI
         from prompt_toolkit.history import FileHistory as _FileHistory
         import glob as _pglob
 
@@ -2798,8 +2867,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         _PT_STYLE = Style.from_dict({
             "": "",
             "completion-menu.completion.current": "bg:#444466 #ffffff",
-            "bottom-toolbar":    "bg:#2b2b2b #b0b0b0",
-            "tblbl":             "#ffffff bold",
+            "bottom-toolbar": "bg:#2b2b2b #b0b0b0",
         })
 
         class _PTCompleter(Completer):
@@ -2881,13 +2949,22 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
         def _toolbar():
             def _t(s: str, w: int) -> str:
-                """Truncate s to w chars, appending … if clipped."""
                 return s if len(s) <= w else s[:w - 1] + "…"
 
-            def _lv(label: str, val: str, width: int = 0) -> str:
-                """Bold label, append :val, right-pad to width visible chars."""
-                pad = " " * max(0, width - len(label) - 1 - len(str(val)))
-                return f"<tblbl>{label}</tblbl>:{val}{pad}"
+            # No explicit background codes — the bottom-toolbar class paints
+            # bg:#2b2b2b for every cell uniformly.  Bold labels only change
+            # font weight and foreground; the class background is never overridden.
+            _BON = "\x1b[1m"                 # bold on
+            _BOF = "\x1b[22m"                # bold off
+            _FGN = "\x1b[39m"                # default foreground (toolbar class handles colour)
+            _FGL = "\x1b[97m"                # bright white for labels
+            _RST = "\x1b[0m"
+
+            def _lbl(text: str) -> str:
+                return f"{_BON}{_FGL}{text}{_BOF}{_FGN}"
+
+            def _pad(label: str, val: str, width: int) -> str:
+                return " " * max(0, width - len(label) - 1 - len(str(val)))
 
             m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
             emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
@@ -2898,29 +2975,28 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 doc_s = "?"
             proj  = getattr(brain, "_active_project", "default")
             proj_s = f"  │  📂 {proj}" if proj != "default" else ""
-            sep = "  │  "
-            # Column value widths (same for both rows so │ aligns perfectly)
+            sep   = "  │  "
             W1, W2 = 28, 30
+            C1 = len("LLM  ") + W1    # 33
+            C2 = len("Embed  ") + W2  # 37
+            s_state = "ON"  if brain.config.truth_grounding    else "off"
+            d_state = "ON"  if brain.config.discussion_fallback else "off"
+            h_state = "ON"  if brain.config.hybrid_search      else "off"
+
             row1 = (
-                f"  <tblbl>LLM</tblbl>  {_t(m, W1):{W1}}"
-                f"{sep}<tblbl>Embed</tblbl>  {_t(emb, W2):{W2}}"
-                f"{sep}<tblbl>Docs</tblbl>  {doc_s}"
+                f"  {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
+                f"{_lbl('Embed')}  {_t(emb, W2):{W2}}{sep}"
+                f"{_lbl('Docs')}  {doc_s}"
             )
-            # Row 2 — bold each label, pad visible width to keep │ aligned
-            C1 = len("LLM  ") + W1   # = 5 + 28 = 33
-            C2 = len("Embed  ") + W2  # = 7 + 30 = 37
-            s_state = "ON" if brain.config.truth_grounding    else "off"
-            d_state = "ON" if brain.config.discussion_fallback else "off"
-            h_state = "ON" if brain.config.hybrid_search      else "off"
             row2 = (
-                f"  {_lv('search',  s_state, C1)}"
-                f"{sep}{_lv('discuss', d_state, C2)}"
-                f"{sep}{_lv('hybrid', h_state)}"
-                f"  {_lv('top-k', brain.config.top_k)}"
-                f"  {_lv('thr', brain.config.similarity_threshold)}"
+                f"  {_lbl('search')}:{s_state}{_pad('search', s_state, C1)}{sep}"
+                f"{_lbl('discuss')}:{d_state}{_pad('discuss', d_state, C2)}{sep}"
+                f"{_lbl('hybrid')}:{h_state}  "
+                f"{_lbl('top-k')}:{brain.config.top_k}  "
+                f"{_lbl('thr')}:{brain.config.similarity_threshold}"
                 f"{proj_s}"
             )
-            return _PThtml(f"{row1}\n{row2}")
+            return _PTANSI(f"{row1}\n{row2}{_RST}")
 
         _pt_session = PromptSession(
             completer=_PTCompleter(brain),
@@ -3102,7 +3178,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         "  Projects:   /project [list|new|switch|delete|folder]\n"
                         "  API Keys:   /keys   /keys set <provider>\n"
                         "  Other:      /help [cmd]   /quit\n"
-                        "  Shell:      !<cmd>  run a shell command  ·  @<path>  attach file context\n"
+                        "  Shell:      !<cmd>  run a shell command  ·  @<file>  attach file  ·  @<folder>/  attach all text files in folder\n"
                         "\n"
                         "  /help <cmd>  for details (model, embed, ingest, rag, sessions, keys, project)\n"
                         "  /<cmd> help  also works  ·  e.g. /project help   /rag help\n"
@@ -3619,31 +3695,31 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         _st.join(timeout=0.3)
                     # spinner gone (transient); cursor is at a clean line
 
-                # Stream remaining tokens as plain text (human-like typing feel).
-                # Save cursor position here so we can restore + re-render as Markdown
-                # once all tokens have arrived.
+                # Stream remaining tokens via Rich Live (plain text + cursor),
+                # then swap to full Markdown on completion — no raw cursor
+                # save/restore so the terminal scrollback is never corrupted.
                 try:
-                    sys.stdout.write("\033[s")   # ANSI save cursor
+                    accumulated = "".join(response_parts)
                     _console.print("[bold yellow]Brain:[/bold yellow]")
-                    for chunk in response_parts:  # replay first token
-                        sys.stdout.write(chunk)
-                        sys.stdout.flush()
-                    for chunk in token_gen:
-                        if isinstance(chunk, dict):
-                            if chunk.get("type") == "sources":
-                                _last_sources = chunk.get("sources", [])
-                            continue
-                        response_parts.append(chunk)
-                        sys.stdout.write(chunk)
-                        sys.stdout.flush()
-                    # All tokens received — jump back and re-render as Rich Markdown
-                    sys.stdout.write("\033[u\033[J")  # restore cursor, clear to end
-                    sys.stdout.flush()
-                    _console.print("[bold yellow]Brain:[/bold yellow]")
-                    _console.print(_RM("".join(response_parts)))
+                    with _RL(_RT(accumulated + " ▋"),
+                             console=_console, transient=False,
+                             refresh_per_second=15) as live:
+                        for chunk in token_gen:
+                            if isinstance(chunk, dict):
+                                if chunk.get("type") == "sources":
+                                    _last_sources = chunk.get("sources", [])
+                                continue
+                            response_parts.append(chunk)
+                            accumulated += chunk
+                            live.update(_RT(accumulated + " ▋"))
+                        # All tokens received — swap plain text for Markdown
+                        live.update(_RM(accumulated))
                     print()
                 except KeyboardInterrupt:
                     _cancelled = True
+                    if response_parts:
+                        _console.print("[bold yellow]Brain:[/bold yellow]")
+                        _console.print(_RM("".join(response_parts)))
                     print("\n  ⚠️  Cancelled.\n")
             else:
                 # Non-streaming: spinner while brain.query() blocks

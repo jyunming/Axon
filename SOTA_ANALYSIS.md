@@ -27,6 +27,8 @@ The following features are already implemented:
 | **Evaluation** | RAGAS evaluation script (`scripts/evaluate.py`) |
 | **Chunking** | Recursive character text splitter with configurable size/overlap |
 | **Projects** | Named knowledge base namespaces with isolated vector/BM25 stores |
+| **REPL @file/@folder** | Inline file/folder context attachment in REPL: `@file.txt`, `@file.docx`, `@file.pdf`, `@folder/` — reads plain text, extracts text from DOCX/PDF via loaders, recursively reads folders (capped at 120 KB total; hidden dirs skipped; unsupported extensions skipped) |
+| **REPL streaming** | Spinner collects first token, then Rich `Live` streams remaining tokens with ▋ cursor; final swap to Markdown render on completion (no scrollback corruption) |
 
 ---
 
@@ -242,4 +244,4 @@ Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 
 ---
 
-*Last updated: March 2026 — Sprint 4 (query decomposition + LLM context compression)*
+*Last updated: March 2026 — Sprint 5 (@file/@folder REPL context attachment + streaming Markdown render)*

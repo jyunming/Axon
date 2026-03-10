@@ -29,7 +29,7 @@ jobs:
 
       - name: Run pip-audit
         run: |
-          pip-audit --requirement requirements.txt --format=markdown --output=audit-report.md || true
+          pip-audit --requirement requirements.txt --format=markdown --output=audit-report.md
           cat audit-report.md
           # Fail the job if HIGH or CRITICAL CVEs are found
           if grep -iE "HIGH|CRITICAL" audit-report.md; then

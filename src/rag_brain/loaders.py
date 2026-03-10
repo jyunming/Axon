@@ -8,6 +8,18 @@ import logging
 import io
 logger = logging.getLogger("StudioBrainOpen.Loaders")
 
+_MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+def _check_file_size(path: str) -> None:
+    """Raise ValueError if the file exceeds _MAX_FILE_BYTES."""
+    size = os.path.getsize(path)
+    if size > _MAX_FILE_BYTES:
+        raise ValueError(
+            f"File '{path}' is {size / (1024 * 1024):.1f} MB, "
+            f"which exceeds the 100 MB limit."
+        )
+
 class BaseLoader:
     """Base class for document loaders."""
     def load(self, path: str) -> List[Dict[str, Any]]:
@@ -20,6 +32,7 @@ class BaseLoader:
 class TextLoader(BaseLoader):
     """Loader for plain text files."""
     def load(self, path: str) -> List[Dict[str, Any]]:
+        _check_file_size(path)
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
         return [{
@@ -31,6 +44,7 @@ class TextLoader(BaseLoader):
 class TSVLoader(BaseLoader):
     """Loader for tab-delimited files."""
     def load(self, path: str) -> List[Dict[str, Any]]:
+        _check_file_size(path)
         df = pd.read_csv(path, sep='	')
         documents = []
         for i, row in df.iterrows():
@@ -49,8 +63,13 @@ class TSVLoader(BaseLoader):
 class JSONLoader(BaseLoader):
     """Loader for JSON files."""
     def load(self, path: str) -> List[Dict[str, Any]]:
+        _check_file_size(path)
         with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as exc:
+                logger.warning(f"Skipping malformed JSON file {path}: {exc}")
+                return []
         
         if isinstance(data, list):
             documents = []
@@ -77,6 +96,7 @@ class JSONLoader(BaseLoader):
 class CSVLoader(BaseLoader):
     """Loader for CSV files. Each row becomes a document."""
     def load(self, path: str) -> List[Dict[str, Any]]:
+        _check_file_size(path)
         import csv
         documents = []
         with open(path, 'r', encoding='utf-8', newline='') as f:
@@ -102,6 +122,7 @@ class CSVLoader(BaseLoader):
 class HTMLLoader(BaseLoader):
     """Loader for HTML files. Extracts visible text content."""
     def load(self, path: str) -> List[Dict[str, Any]]:
+        _check_file_size(path)
         from html.parser import HTMLParser
 
         class _TextExtractor(HTMLParser):
@@ -149,6 +170,7 @@ class HTMLLoader(BaseLoader):
 class DOCXLoader(BaseLoader):
     """Loader for DOCX files using python-docx."""
     def load(self, path: str) -> List[Dict[str, Any]]:
+        _check_file_size(path)
         try:
             from docx import Document
         except ImportError:
@@ -240,6 +262,7 @@ class PDFLoader(BaseLoader):
     """Loader for PDF files. Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback."""
 
     def load(self, path: str) -> List[Dict[str, Any]]:
+        _check_file_size(path)
         try:
             import fitz  # PyMuPDF
 
@@ -330,22 +353,27 @@ class DirectoryLoader:
         return all_documents
 
     async def aload(self, directory: str) -> List[Dict[str, Any]]:
-        """Async version of load_directory."""
+        """Async version of load_directory — caps concurrency at 32 tasks."""
         path = Path(directory)
+        semaphore = asyncio.Semaphore(32)
+
+        async def _load_with_semaphore(loader, file_path: str):
+            async with semaphore:
+                return await loader.aload(file_path)
+
         tasks = []
-        
         for file_path in path.rglob("*"):
             suffix = file_path.suffix.lower()
             if suffix in self.loaders:
                 loader = self.loaders[suffix]
-                tasks.append(loader.aload(str(file_path)))
-        
+                tasks.append(_load_with_semaphore(loader, str(file_path)))
+
         if not tasks:
             return []
-            
+
         results = await asyncio.gather(*tasks)
         all_documents = []
         for docs in results:
             all_documents.extend(docs)
-            
+
         return all_documents
