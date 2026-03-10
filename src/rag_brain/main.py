@@ -2884,6 +2884,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 """Truncate s to w chars, appending … if clipped."""
                 return s if len(s) <= w else s[:w - 1] + "…"
 
+            def _lv(label: str, val: str, width: int = 0) -> str:
+                """Bold label, append :val, right-pad to width visible chars."""
+                pad = " " * max(0, width - len(label) - 1 - len(str(val)))
+                return f"<tblbl>{label}</tblbl>:{val}{pad}"
+
             m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
             emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
             try:
@@ -2891,10 +2896,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 doc_s = f"{docs} chunks"
             except Exception:
                 doc_s = "?"
-            s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
-            d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
-            h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
-            tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
             proj  = getattr(brain, "_active_project", "default")
             proj_s = f"  │  📂 {proj}" if proj != "default" else ""
             sep = "  │  "
@@ -2905,13 +2906,19 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 f"{sep}<tblbl>Embed</tblbl>  {_t(emb, W2):{W2}}"
                 f"{sep}<tblbl>Docs</tblbl>  {doc_s}"
             )
-            # Row 2 labels are shorter; pad to same col widths so │ aligns
+            # Row 2 — bold each label, pad visible width to keep │ aligned
             C1 = len("LLM  ") + W1   # = 5 + 28 = 33
             C2 = len("Embed  ") + W2  # = 7 + 30 = 37
+            s_state = "ON" if brain.config.truth_grounding    else "off"
+            d_state = "ON" if brain.config.discussion_fallback else "off"
+            h_state = "ON" if brain.config.hybrid_search      else "off"
             row2 = (
-                f"  {s_val:<{C1}}"
-                f"{sep}{d_val:<{C2}}"
-                f"{sep}{h_val}  {tk}{proj_s}"
+                f"  {_lv('search',  s_state, C1)}"
+                f"{sep}{_lv('discuss', d_state, C2)}"
+                f"{sep}{_lv('hybrid', h_state)}"
+                f"  {_lv('top-k', brain.config.top_k)}"
+                f"  {_lv('thr', brain.config.similarity_threshold)}"
+                f"{proj_s}"
             )
             return _PThtml(f"{row1}\n{row2}")
 
