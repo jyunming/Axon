@@ -1425,3 +1425,93 @@ class TestSwitchProjectState:
         assert brain._ingested_hashes == {"newhash1", "newhash2", "newhash3"}
         assert "oldhash1" not in brain._ingested_hashes
 
+
+# ---------------------------------------------------------------------------
+# LanceDB vector store
+# ---------------------------------------------------------------------------
+
+import sys
+import types as _types
+
+
+def _make_lancedb_mock():
+    """Create and register a minimal lancedb mock module in sys.modules."""
+    mock_lancedb = _types.ModuleType("lancedb")
+    mock_lancedb.connect = MagicMock()
+    sys.modules["lancedb"] = mock_lancedb
+    return mock_lancedb
+
+
+class TestOpenVectorStoreLanceDB:
+    def _make_store(self, mock_lancedb):
+        """Helper: returns (store, mock_table) with lancedb already mocked."""
+        from rag_brain.main import OpenVectorStore, OpenStudioConfig
+        config = OpenStudioConfig(vector_store="lancedb", vector_store_path="./lancedb_test")
+        mock_table = MagicMock()
+        mock_lancedb.connect.return_value.open_table.side_effect = Exception("not found")
+        mock_lancedb.connect.return_value.create_table.return_value = mock_table
+        store = OpenVectorStore(config)
+        return store, mock_table
+
+    def test_init_no_existing_table(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, _ = self._make_store(mock_lancedb)
+        assert store.collection is None   # lazy until first add
+
+    def test_add_creates_table_on_first_call(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.add(["id1"], ["hello"], [[0.1, 0.2]], [{"source": "a.txt"}])
+        mock_lancedb.connect.return_value.create_table.assert_called_once()
+        assert store.collection is mock_table
+
+    def test_search_returns_empty_when_no_table(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, _ = self._make_store(mock_lancedb)
+        results = store.search([0.1, 0.2], top_k=5)
+        assert results == []
+
+    def test_search_converts_distance_to_score(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table   # simulate existing table
+        mock_table.search.return_value.limit.return_value.to_list.return_value = [
+            {"id": "d1", "text": "foo", "_distance": 0.2, "metadata_json": "{}"}
+        ]
+        results = store.search([0.1, 0.2], top_k=5)
+        assert len(results) == 1
+        assert abs(results[0]["score"] - 0.8) < 1e-6
+
+    def test_list_documents_groups_by_source(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table
+        mock_table.to_arrow.return_value.to_pydict.return_value = {
+            "id": ["c1", "c2", "c3"],
+            "source": ["notes.txt", "notes.txt", "report.pdf"],
+        }
+        result = store.list_documents()
+        assert len(result) == 2
+        by_src = {d["source"]: d for d in result}
+        assert by_src["notes.txt"]["chunks"] == 2
+
+    def test_get_by_ids(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table
+        mock_table.search.return_value.where.return_value.to_list.return_value = [
+            {"id": "id1", "text": "hello", "metadata_json": '{"source": "x.txt"}'}
+        ]
+        results = store.get_by_ids(["id1"])
+        assert results[0]["id"] == "id1"
+        assert results[0]["metadata"]["source"] == "x.txt"
+
+    def test_delete_by_ids(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table
+        store.delete_by_ids(["id1", "id2"])
+        mock_table.delete.assert_called_once()
+        call_arg = mock_table.delete.call_args[0][0]
+        assert "id1" in call_arg and "id2" in call_arg
+

@@ -148,6 +148,9 @@ class OpenStudioConfig:
     # query are used to expand the result set with graph-connected documents.
     graph_rag: bool = False
 
+    # LLM request timeout in seconds (applied where the provider client supports it)
+    llm_timeout: int = 60
+
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
         """Load configuration from a YAML file."""
@@ -498,7 +501,8 @@ class OpenLLM:
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
-                max_tokens=self.config.llm_max_tokens
+                max_tokens=self.config.llm_max_tokens,
+                timeout=self.config.llm_timeout,
             )
             return response.choices[0].message.content
 
@@ -516,6 +520,7 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
+                timeout=self.config.llm_timeout,
             )
             return response.choices[0].message.content
 
@@ -635,7 +640,8 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
-                stream=True
+                stream=True,
+                timeout=self.config.llm_timeout,
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -656,6 +662,7 @@ class OpenLLM:
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True,
+                timeout=self.config.llm_timeout,
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -687,7 +694,15 @@ class OpenVectorStore:
             from qdrant_client import QdrantClient
             logger.info(f"💾 Initializing Qdrant: {self.config.vector_store_path}")
             self.client = QdrantClient(path=self.config.vector_store_path)
-    
+        elif self.provider == "lancedb":
+            import lancedb
+            logger.info(f"💾 Initializing LanceDB: {self.config.vector_store_path}")
+            self.client = lancedb.connect(self.config.vector_store_path)
+            try:
+                self.collection = self.client.open_table("rag_brain")
+            except Exception:
+                self.collection = None   # created lazily on first add()
+
     def add(self, ids: List[str], texts: List[str], embeddings: List[List[float]], metadatas: List[Dict] = None):
         if self.provider == "chroma":
             self.collection.add(ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas)
@@ -699,7 +714,25 @@ class OpenVectorStore:
                 if metadatas: payload.update(metadatas[i])
                 points.append(PointStruct(id=id, vector=embedding, payload=payload))
             self.client.upsert(collection_name="rag_brain", points=points)
-    
+        elif self.provider == "lancedb":
+            import json
+            rows = []
+            for i, (doc_id, emb, text) in enumerate(zip(ids, embeddings, texts)):
+                meta = metadatas[i] if metadatas else {}
+                rows.append({
+                    "id": doc_id,
+                    "vector": emb,
+                    "text": text,
+                    "source": meta.get("source", ""),
+                    "metadata_json": json.dumps(meta),
+                })
+            if self.collection is None:
+                self.collection = self.client.create_table(
+                    "rag_brain", data=rows, mode="overwrite", metric="cosine"
+                )
+            else:
+                self.collection.add(rows)
+
     def list_documents(self) -> List[Dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
 
@@ -730,6 +763,19 @@ class OpenVectorStore:
                 sources[source]["chunks"] += 1
                 sources[source]["doc_ids"].append(str(point.id))
             return sorted(sources.values(), key=lambda x: x["source"])
+        elif self.provider == "lancedb":
+            import json
+            if self.collection is None:
+                return []
+            rows = self.collection.to_arrow().to_pydict()
+            sources: Dict[str, Dict[str, Any]] = {}
+            for doc_id, source in zip(rows.get("id", []), rows.get("source", [])):
+                src = source or "unknown"
+                if src not in sources:
+                    sources[src] = {"source": src, "chunks": 0, "doc_ids": []}
+                sources[src]["chunks"] += 1
+                sources[src]["doc_ids"].append(doc_id)
+            return sorted(sources.values(), key=lambda x: x["source"])
         return []
 
     def search(self, query_embedding: List[float], top_k: int = 10, filter_dict: Dict = None) -> List[Dict]:
@@ -742,6 +788,20 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             results = self.client.search(collection_name="rag_brain", query_vector=query_embedding, limit=top_k)
             return [{"id": str(r.id), "text": r.payload.get("text", ""), "score": r.score, "metadata": {k: v for k, v in r.payload.items() if k != "text"}} for r in results]
+        elif self.provider == "lancedb":
+            import json
+            if self.collection is None:
+                return []
+            results = self.collection.search(query_embedding).limit(top_k).to_list()
+            return [
+                {
+                    "id": r["id"],
+                    "text": r["text"],
+                    "score": max(0.0, 1.0 - r.get("_distance", 1.0)),
+                    "metadata": json.loads(r.get("metadata_json", "{}")),
+                }
+                for r in results
+            ]
 
     def get_by_ids(self, ids: List[str]) -> List[Dict]:
         """Fetch stored documents by their IDs (used by GraphRAG expansion).
@@ -753,13 +813,22 @@ class OpenVectorStore:
             return []
         if self.provider == "chroma":
             result = self.collection.get(ids=ids, include=["documents", "metadatas"])
+            result_ids = result.get("ids") or []
+            result_docs = result.get("documents") or []
+            result_metas = result.get("metadatas") or []
+            num_ids = len(result_ids)
+            if len(result_docs) < num_ids:
+                result_docs = list(result_docs) + [""] * (num_ids - len(result_docs))
+            if len(result_metas) < num_ids:
+                result_metas = list(result_metas) + [{}] * (num_ids - len(result_metas))
             docs = []
-            for doc_id, text, meta in zip(
-                result.get("ids", []),
-                result.get("documents", []),
-                result.get("metadatas", []) or [],
-            ):
-                docs.append({"id": doc_id, "text": text or "", "score": 1.0, "metadata": meta or {}})
+            for i in range(num_ids):
+                docs.append({
+                    "id": result_ids[i],
+                    "text": result_docs[i] or "",
+                    "score": 1.0,
+                    "metadata": result_metas[i] or {},
+                })
             return docs
         if self.provider == "qdrant":
             try:
@@ -780,7 +849,44 @@ class OpenVectorStore:
             except Exception as e:
                 logger.debug(f"GraphRAG get_by_ids (Qdrant) failed: {e}")
                 return []
+        if self.provider == "lancedb":
+            import json
+            if self.collection is None:
+                return []
+            try:
+                id_str = ", ".join(f"'{i}'" for i in ids)
+                rows = self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
+                return [
+                    {
+                        "id": r["id"],
+                        "text": r["text"],
+                        "score": 1.0,
+                        "metadata": json.loads(r.get("metadata_json", "{}")),
+                    }
+                    for r in rows
+                ]
+            except Exception as e:
+                logger.debug(f"GraphRAG get_by_ids (LanceDB) failed: {e}")
+                return []
         return []
+
+    def delete_by_ids(self, ids: List[str]) -> None:
+        """Delete documents by ID from the vector store."""
+        if not ids:
+            return
+        if self.provider == "chroma":
+            self.collection.delete(ids=ids)
+        elif self.provider == "qdrant":
+            from qdrant_client.models import PointIdsList
+            self.client.delete(
+                collection_name="rag_brain",
+                points_selector=PointIdsList(points=ids),
+            )
+        elif self.provider == "lancedb":
+            if self.collection is None:
+                return
+            id_str = ", ".join(f"'{i}'" for i in ids)
+            self.collection.delete(f"id IN ({id_str})")
 
 
 class OpenStudioBrain:
@@ -847,6 +953,18 @@ Your primary goal is to help the user by answering questions based on the provid
             if self.config.truth_grounding:
                 logger.info("Offline mode: disabling web search (truth_grounding → OFF)")
                 self.config.truth_grounding = False
+            if self.config.raptor:
+                logger.warning(
+                    "Offline mode: RAPTOR requires LLM calls and is not supported offline. "
+                    "Disabling raptor for this session."
+                )
+                self.config.raptor = False
+            if self.config.graph_rag:
+                logger.warning(
+                    "Offline mode: GraphRAG requires LLM calls and is not supported offline. "
+                    "Disabling graph_rag for this session."
+                )
+                self.config.graph_rag = False
             # Resolve bare HF model IDs to local paths
             self.config.embedding_model = self._resolve_model_path(self.config.embedding_model)
             self.config.reranker_model  = self._resolve_model_path(self.config.reranker_model)
@@ -882,6 +1000,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # least-recently-used entry is always at the front and evicted first.
         from collections import OrderedDict
         self._query_cache: "OrderedDict[str, str]" = OrderedDict()
+        self._cache_lock = threading.Lock()
 
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
@@ -930,7 +1049,8 @@ Your primary goal is to help the user by answering questions based on the provid
         # Reload project-scoped state so dedup/GraphRAG use the new project's data
         # and cached answers from the previous project cannot bleed across.
         from collections import OrderedDict
-        self._query_cache = OrderedDict()
+        with self._cache_lock:
+            self._query_cache = OrderedDict()
         self._ingested_hashes = self._load_hash_store()
         self._entity_graph = self._load_entity_graph()
 
@@ -959,7 +1079,15 @@ Your primary goal is to help the user by answering questions based on the provid
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
         if path.exists():
             try:
-                return json.loads(path.read_text(encoding="utf-8"))
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict):
+                    return {}
+                cleaned: Dict[str, List[str]] = {}
+                for key, value in raw.items():
+                    if not isinstance(key, str) or not isinstance(value, list):
+                        continue
+                    cleaned[key] = [v for v in value if isinstance(v, str)]
+                return cleaned
             except Exception:
                 pass
         return {}
@@ -1001,6 +1129,9 @@ Your primary goal is to help the user by answering questions based on the provid
         from itertools import groupby
 
         n = self.config.raptor_chunk_group_size
+        if n < 1:
+            logger.warning("raptor_chunk_group_size must be >= 1, skipping RAPTOR")
+            return []
         summaries = []
 
         # Group chunks by their source file so we only summarise within one document
@@ -1119,13 +1250,20 @@ Your primary goal is to help the user by answering questions based on the provid
             "cite_sources": cfg.cite_sources,
             "truth_grounding": cfg.truth_grounding,
             "graph_rag": cfg.graph_rag,
+            "llm_provider": cfg.llm_provider,
+            "llm_model": cfg.llm_model,
+            "embedding_provider": cfg.embedding_provider,
+            "embedding_model": cfg.embedding_model,
+            "reranker_model": cfg.reranker_model,
         }
         return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
     def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
                             filtered_count: int, final_count: int, top_score: float,
-                            latency_ms: float, transformations: Dict = None):
+                            latency_ms: float, transformations: Dict = None,
+                            cfg=None):
         """Log structured metrics for a query."""
+        active = cfg if cfg is not None else self.config
         logger.info({
             "event": "query_complete",
             "query_preview": query[:80],
@@ -1137,8 +1275,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 "final": final_count,
             },
             "top_score": round(top_score, 4) if top_score else None,
-            "hybrid": self.config.hybrid_search,
-            "rerank": self.config.rerank,
+            "hybrid": active.hybrid_search,
+            "rerank": active.rerank,
             "transformations": transformations or {}
         })
 
@@ -1515,7 +1653,8 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.cite_sources:
             base = base + (
                 "\n\n**Citation requirement**: When using information from the context, "
-                "cite it inline using the document label from the context block, e.g. [Doc 1], [Doc 2]. "
+                "cite it inline using the document label from the context block exactly as shown, "
+                "e.g. [Document 1 (ID: ...)], [Document 2 (ID: ...)]. "
                 "Place the citation immediately after the relevant sentence or fact."
             )
         if not cfg.truth_grounding:
@@ -1550,18 +1689,19 @@ Your primary goal is to help the user by answering questions based on the provid
         cache_key = None
         if cfg.query_cache and not chat_history and cfg.query_cache_size >= 1:
             cache_key = self._make_cache_key(query, filters, cfg)
-            if cache_key in self._query_cache:
-                logger.info(f"💾 Cache hit for query: {query[:60]}")
-                # Move to end so this entry is treated as most-recently-used (LRU)
-                self._query_cache.move_to_end(cache_key)
-                return self._query_cache[cache_key]
+            with self._cache_lock:
+                if cache_key in self._query_cache:
+                    logger.info(f"💾 Cache hit for query: {query[:60]}")
+                    # Move to end so this entry is treated as most-recently-used (LRU)
+                    self._query_cache.move_to_end(cache_key)
+                    return self._query_cache[cache_key]
 
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval['results']
 
         if not results:
             self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
-                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'])
+                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'], cfg=cfg)
 
             if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
@@ -1582,14 +1722,15 @@ Your primary goal is to help the user by answering questions based on the provid
         system_prompt = self._build_system_prompt(has_web, cfg=cfg) + f"\n\n**Relevant context from documents:**\n{context}"
         response = self.llm.complete(query, system_prompt, chat_history=chat_history)
         self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
-                                retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
+                                retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'], cfg=cfg)
 
         if cache_key is not None:
-            # Evict least-recently-used entry when cache is at capacity
-            if len(self._query_cache) >= cfg.query_cache_size:
-                self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
-            self._query_cache[cache_key] = response
-            self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
+            with self._cache_lock:
+                # Evict least-recently-used entry when cache is at capacity
+                if len(self._query_cache) >= cfg.query_cache_size and self._query_cache:
+                    self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
+                self._query_cache[cache_key] = response
+                self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
 
         return response
 
@@ -2705,7 +2846,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                              display_meta=f"{turns} turns")
                 # ── /rag <option> ─────────────────────────────────────────
                 elif text.startswith("/rag "):
-                    opts = ["topk ", "threshold ", "hybrid", "rerank", "rerank-model ", "hyde", "multi", "step-back", "decompose", "compress", "cite"]
+                    opts = ["topk ", "threshold ", "hybrid", "rerank", "rerank-model ", "hyde", "multi", "step-back", "decompose", "compress", "cite", "raptor", "graph-rag"]
                     prefix = text[len("/rag "):]
                     for o in opts:
                         if o.startswith(prefix):
@@ -2916,7 +3057,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     "  /rag step-back               toggle step-back prompting\n"
                                     "  /rag decompose               toggle query decomposition\n"
                                     "  /rag compress                toggle LLM context compression\n"
-                                    "  /rag cite                    toggle inline [Doc N] citations",
+                                    "  /rag cite                    toggle inline [Document N] citations\n"
+                                    "  /rag raptor                  toggle RAPTOR hierarchical indexing\n"
+                                    "  /rag graph-rag               toggle GraphRAG entity retrieval",
                         "sessions": "  /sessions                    list recent saved sessions\n"
                                     "  /resume <id>                 load a session by ID\n"
                                     "  Sessions auto-save after each turn.",
@@ -3141,6 +3284,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         f"  decompose    · {'ON' if brain.config.query_decompose else 'OFF'}\n"
                         f"  compress     · {'ON' if brain.config.compress_context else 'OFF'}\n"
                         f"  cite         · {'ON' if brain.config.cite_sources else 'OFF'}\n"
+                        f"  raptor       · {'ON' if brain.config.raptor else 'OFF'}\n"
+                        f"  graph-rag    · {'ON' if brain.config.graph_rag else 'OFF'}\n"
                         f"\n  /help rag   for usage details\n"
                     )
                 else:
@@ -3187,6 +3332,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     elif rag_opt == "cite":
                         brain.config.cite_sources = not brain.config.cite_sources
                         print(f"  ✅ Inline citations {'ON' if brain.config.cite_sources else 'OFF'}")
+                    elif rag_opt == "raptor":
+                        brain.config.raptor = not brain.config.raptor
+                        print(f"  ✅ RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}")
+                    elif rag_opt in ("graph-rag", "graph_rag", "graphrag"):
+                        brain.config.graph_rag = not brain.config.graph_rag
+                        print(f"  ✅ GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}")
                     elif rag_opt == "rerank-model":
                         if not rag_val:
                             print(f"  Current reranker: {brain.config.reranker_model}")
@@ -3207,7 +3358,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 brain.config.rerank = False
                                 print(f"  ❌ Failed to load reranker: {e}")
                     else:
-                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite")
+                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)

@@ -124,17 +124,27 @@ def test_delete_success():
     assert data["status"] == "success"
     assert data["deleted"] == 2
     assert set(data["doc_ids"]) == {"doc1", "doc2"}
-    # Verify ChromaDB delete was called
-    api_module.brain.vector_store.collection.delete.assert_called_once_with(ids=["doc1", "doc2"])
+    # Verify delete_by_ids was called on the vector store
+    api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["doc1", "doc2"])
     # Verify BM25 delete was called
     api_module.brain.bm25.delete_documents.assert_called_once_with(["doc1", "doc2"])
 
 
 def test_delete_propagates_error():
     api_module.brain = _make_brain()
-    api_module.brain.vector_store.collection.delete.side_effect = RuntimeError("chroma down")
+    api_module.brain.vector_store.delete_by_ids.side_effect = RuntimeError("store down")
     resp = client.post("/delete", json={"doc_ids": ["x"]})
     assert resp.status_code == 500
+
+
+def test_delete_calls_delete_by_ids_not_collection_delete():
+    """Endpoint must use delete_by_ids (works for all providers) not collection.delete."""
+    api_module.brain = _make_brain()
+    resp = client.post("/delete", json={"doc_ids": ["id1"]})
+    assert resp.status_code == 200
+    api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["id1"])
+    # collection.delete should NOT be called directly by the endpoint
+    api_module.brain.vector_store.collection.delete.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +184,8 @@ def test_query_passes_filters():
     filters = {"type": "text", "source": "manual"}
     resp = client.post("/query", json={"query": "What?", "filters": filters})
     assert resp.status_code == 200
-    call_kwargs = api_module.brain.query.call_args
-    assert call_kwargs[1]["filters"] == filters or call_kwargs[0][1] == filters
+    call = api_module.brain.query.call_args
+    assert call.kwargs.get("filters") == filters or (call.args and call.args[1] == filters)
 
 
 # ---------------------------------------------------------------------------

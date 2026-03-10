@@ -17,7 +17,7 @@ The following features are already implemented:
 | **Query transformations** | HyDE, Multi-Query, Step-Back, Query Decomposition — all available via CLI flags, REPL slash commands (`/rag hyde`, `/rag multi`, `/rag step-back`, `/rag decompose`, `/rag compress`, `/rag cite`), and REST API overrides |
 | **Embedding providers** | sentence-transformers (`all-MiniLM-L6-v2`), Ollama (`nomic-embed-text`), FastEmbed (`BAAI/bge-small-en-v1.5`, BGE-M3 via fastembed), OpenAI |
 | **LLM** | Ollama (local), Gemini, OpenAI, Ollama Cloud, vLLM — all with streaming |
-| **Vector stores** | ChromaDB (default), Qdrant |
+| **Vector stores** | ChromaDB (default), Qdrant, LanceDB |
 | **Document formats** | PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, BMP/PNG/TIF/TIFF/PGM images |
 | **Multimodal** | Raster image ingestion (BMP/PNG/TIF/PGM) with VLM auto-captioning (llava) |
 | **Agent interface** | FastAPI with per-request RAG flag overrides (full CLI parity); 8+ REST endpoints |
@@ -87,7 +87,8 @@ Current system indexes fixed-size chunks. SOTA systems use more sophisticated in
 ### 3. Advanced Re-ranking — ✅ Partially Implemented
 
 #### 3.1 LLM-Based Pointwise Re-ranking (RankGPT) ✅ DONE
-- **Status:** Implemented. Set `reranker_provider: llm` in config or pass `"rerank": true` to the API. Uses the configured LLM to score each document with a ThreadPoolExecutor for speed.
+- **Status:** Implemented. Set `reranker_provider: llm` in config and pass `"rerank": true` to the API (or CLI). Uses the configured LLM to score each document with a ThreadPoolExecutor for speed.
+- **Note:** The `"rerank": true` API/CLI flag enables or disables re-ranking but does **not** change the `reranker_provider`. LLM-based RankGPT requires `reranker_provider: llm` set in `config.yaml`; the default provider is `cross-encoder`.
 - **Papers:** Sun et al., 2023 — "Is ChatGPT Good at Search? Investigating Large Language Models as Re-Ranking Agents"
 
 #### 3.2 BGE Reranker v2-m3 ✅ DONE

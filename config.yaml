@@ -47,8 +47,11 @@ llm:
   temperature: 0.7
   max_tokens: 2048
 
+  # LLM request timeout in seconds (for openai/vllm providers that support it)
+  # llm_timeout: 60
+
 vector_store:
-  # Provider: chroma, qdrant
+  # Provider: chroma, qdrant, lancedb
   provider: chroma
   
   # Storage path
@@ -79,9 +82,20 @@ rag:
   # parent_chunk_size: 0
 
   # Inline source citations in LLM answers.
-  # When enabled the LLM is instructed to cite [Doc N] inline in its response.
+  # When enabled the LLM is instructed to cite [Document N (ID: ...)] inline in its response.
   # Also: --cite CLI flag, "cite": true API override.
   # cite_sources: false
+
+  # Query decomposition — break complex multi-part questions into 2–4 atomic sub-questions,
+  # run retrieval for each, and merge results before generation.
+  # Also: --decompose CLI flag, "decompose": true API override.
+  # query_decompose: false
+
+  # LLM context compression — after retrieval, use the generation LLM to extract only
+  # query-relevant sentences from each chunk before passing context to the answer step.
+  # Falls back to the original chunk if compression would expand the text.
+  # Also: --compress CLI flag, "compress": true API override.
+  # compress_context: false
 
   # RAPTOR hierarchical indexing (requires LLM during ingest — adds latency).
   # Groups consecutive chunks per source and generates LLM summary nodes
