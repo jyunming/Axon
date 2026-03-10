@@ -410,6 +410,26 @@ def test_query_override_compress():
     assert call_kwargs["overrides"]["compress_context"] is True
 
 
+def test_query_override_cite():
+    """cite=true override is forwarded to brain.query overrides dict as cite_sources."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Cited answer [Doc 1]"
+    resp = client.post("/query", json={"query": "test", "cite": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["cite_sources"] is True
+
+
+def test_query_response_includes_cite_in_settings():
+    """Response settings dict includes 'cite' key reflecting applied config."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer"
+    resp = client.post("/query", json={"query": "test", "cite": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "cite" in data["settings"]
+
+
 def test_concurrent_requests_no_cross_contamination():
     """Different override values in concurrent requests do not bleed into each other."""
     import threading

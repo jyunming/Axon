@@ -84,6 +84,10 @@ jobs:
             echo "No tests found — skipping pytest. Add tests to tests/ to enable this step."
           fi
 
+      - name: Run RAG evaluation smoke tests
+        run: |
+          python -m pytest tests/test_eval_smoke.py -m eval -v --tb=short --no-header
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:

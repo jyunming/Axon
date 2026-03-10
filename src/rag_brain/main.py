@@ -129,6 +129,25 @@ class OpenStudioConfig:
     offline_mode: bool = False
     local_models_dir: str = ""
 
+    # Inline Source Citations
+    # When enabled, the LLM is instructed to cite [Doc N] inline in its answer
+    # matching the document labels injected into the context block.
+    cite_sources: bool = False
+
+    # RAPTOR Hierarchical Indexing
+    # During ingest, groups every raptor_chunk_group_size consecutive chunks per source
+    # and generates a summarisation node that is indexed alongside the leaf chunks.
+    # At retrieval time these summary nodes surface high-level context for multi-hop
+    # questions that no single leaf chunk can answer.
+    raptor: bool = False
+    raptor_chunk_group_size: int = 5
+
+    # GraphRAG Entity-Centric Retrieval
+    # During ingest, named entities are extracted from each chunk via the LLM and
+    # stored in an entity→doc_id map.  At retrieval time, entities found in the
+    # query are used to expand the result set with graph-connected documents.
+    graph_rag: bool = False
+
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
         """Load configuration from a YAML file."""
@@ -724,6 +743,26 @@ class OpenVectorStore:
             results = self.client.search(collection_name="rag_brain", query_vector=query_embedding, limit=top_k)
             return [{"id": str(r.id), "text": r.payload.get("text", ""), "score": r.score, "metadata": {k: v for k, v in r.payload.items() if k != "text"}} for r in results]
 
+    def get_by_ids(self, ids: List[str]) -> List[Dict]:
+        """Fetch stored documents by their IDs (used by GraphRAG expansion).
+
+        Returns a list of result dicts in the same format as search(), with score=1.0
+        since these docs are fetched by exact ID (not scored).
+        """
+        if not ids:
+            return []
+        if self.provider == "chroma":
+            result = self.collection.get(ids=ids, include=["documents", "metadatas"])
+            docs = []
+            for doc_id, text, meta in zip(
+                result.get("ids", []),
+                result.get("documents", []),
+                result.get("metadatas", []) or [],
+            ):
+                docs.append({"id": doc_id, "text": text or "", "score": 1.0, "metadata": meta or {}})
+            return docs
+        return []
+
 
 class OpenStudioBrain:
     """
@@ -825,6 +864,9 @@ Your primary goal is to help the user by answering questions based on the provid
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
 
+        # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
+        self._entity_graph: Dict[str, List[str]] = self._load_entity_graph()
+
         logger.info("✅ Local RAG Brain ready!")
 
     def switch_project(self, name: str) -> None:
@@ -881,6 +923,133 @@ Your primary goal is to help the user by answering questions based on the provid
         path = pathlib.Path(self.config.bm25_path) / ".content_hashes"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(self._ingested_hashes), encoding="utf-8")
+
+    def _load_entity_graph(self) -> Dict[str, List[str]]:
+        """Load persisted entity→doc_id graph from disk."""
+        import json, pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def _save_entity_graph(self) -> None:
+        """Persist entity graph to disk."""
+        import json, pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
+
+    def _extract_entities(self, text: str) -> List[str]:
+        """Extract named entities from text using the LLM.
+
+        Returns a list of entity strings (people, organisations, places, concepts).
+        Returns an empty list on failure.
+        """
+        prompt = (
+            "Extract the key named entities (people, organisations, places, products, "
+            "technical concepts) from the following text. "
+            "Output one entity per line, no bullets or numbering. "
+            "If there are no entities, output nothing.\n\n"
+            + text[:1500]  # cap to avoid huge prompts
+        )
+        try:
+            raw = self.llm.complete(prompt, system_prompt="You are a named entity extraction specialist.")
+            return [e.strip() for e in raw.splitlines() if e.strip()][:20]
+        except Exception:
+            return []
+
+    def _generate_raptor_summaries(self, documents: List[Dict]) -> List[Dict]:
+        """Generate RAPTOR summary nodes for a list of already-split chunks.
+
+        Groups consecutive chunks by source in windows of raptor_chunk_group_size,
+        then calls the LLM to produce a summary passage.  Each summary is returned
+        as a new synthetic document (raptor_level=1 in metadata) that will be
+        embedded and stored alongside the leaf chunks.
+        """
+        from itertools import groupby
+
+        n = self.config.raptor_chunk_group_size
+        summaries = []
+
+        # Group chunks by their source file so we only summarise within one document
+        def _source(doc):
+            return doc.get("metadata", {}).get("source", doc["id"])
+
+        sorted_docs = sorted(documents, key=_source)
+        for source, group in groupby(sorted_docs, key=_source):
+            chunks = list(group)
+            for i in range(0, len(chunks), n):
+                window = chunks[i:i + n]
+                combined = "\n\n".join(c["text"] for c in window)
+                prompt = (
+                    "Summarise the following passage into a concise but comprehensive paragraph "
+                    "that captures all key facts and concepts. "
+                    "Output only the summary paragraph.\n\n" + combined[:4000]
+                )
+                try:
+                    summary_text = self.llm.complete(
+                        prompt,
+                        system_prompt="You are an expert at summarising technical documents."
+                    )
+                    if not summary_text or not summary_text.strip():
+                        continue
+                    # Build a deterministic ID from source + window position
+                    import hashlib
+                    uid = hashlib.md5(f"{source}|raptor|{i}".encode()).hexdigest()[:12]
+                    summaries.append({
+                        "id": f"raptor_{uid}",
+                        "text": summary_text.strip(),
+                        "metadata": {
+                            "source": source,
+                            "raptor_level": 1,
+                            "window_start": i,
+                            "window_end": i + len(window) - 1,
+                        },
+                    })
+                except Exception as e:
+                    logger.debug(f"RAPTOR summary failed for {source}[{i}]: {e}")
+
+        if summaries:
+            logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
+        return summaries
+
+    def _expand_with_entity_graph(self, query: str, results: List[Dict]) -> List[Dict]:
+        """Expand retrieval results using GraphRAG entity linkage.
+
+        1. Extract entities from the query.
+        2. Look up all chunk IDs linked to those entities in the entity graph.
+        3. Fetch any chunks not already in results from the vector store.
+        4. Append them (capped to avoid bloat), returning the expanded list.
+        """
+        query_entities = self._extract_entities(query)
+        if not query_entities:
+            return results
+
+        existing_ids = {r["id"] for r in results}
+        extra_ids: List[str] = []
+        for entity in query_entities:
+            for eid, doc_ids in self._entity_graph.items():
+                if entity.lower() in eid.lower() or eid.lower() in entity.lower():
+                    for did in doc_ids:
+                        if did not in existing_ids and did not in extra_ids:
+                            extra_ids.append(did)
+
+        if not extra_ids:
+            return results
+
+        # Fetch the extra chunks from the vector store (up to top_k worth)
+        try:
+            extra_results = self.vector_store.get_by_ids(extra_ids[: self.config.top_k])
+            if extra_results:
+                logger.info(f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)")
+                results = list(results) + extra_results
+        except Exception as e:
+            logger.debug(f"GraphRAG expansion failed: {e}")
+
+        return results
 
     def _doc_hash(self, doc: Dict) -> str:
         """Return an MD5 hex digest of the document's text content."""
@@ -980,6 +1149,29 @@ Your primary goal is to help the user by answering questions based on the provid
                 return
             self._ingested_hashes.update(new_hashes)
             self._save_hash_store()
+
+        # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
+        if self.config.raptor:
+            raptor_docs = self._generate_raptor_summaries(documents)
+            documents = documents + raptor_docs
+
+        # GraphRAG: extract entities from new chunks and update entity graph
+        if self.config.graph_rag:
+            updated = False
+            for doc in documents:
+                if doc.get("metadata", {}).get("raptor_level"):
+                    continue  # skip synthetic RAPTOR nodes
+                entities = self._extract_entities(doc["text"])
+                for entity in entities:
+                    key = entity.lower()
+                    if key not in self._entity_graph:
+                        self._entity_graph[key] = []
+                    if doc["id"] not in self._entity_graph[key]:
+                        self._entity_graph[key].append(doc["id"])
+                        updated = True
+            if updated:
+                self._save_entity_graph()
+
         n_chunks = len(documents)
         if self.bm25: self.bm25.add_documents(documents)
 
@@ -1207,6 +1399,10 @@ Your primary goal is to help the user by answering questions based on the provid
 
         results = [r for r in results if r.get('score', 1.0) >= cfg.similarity_threshold or 'fused_only' in r]
 
+        # GraphRAG: expand results with entity-linked documents
+        if cfg.graph_rag and self._entity_graph:
+            results = self._expand_with_entity_graph(query, results)
+
         # Web Search (Truth Grounding)
         # Trigger when the best cosine similarity from vector search is below the threshold,
         # meaning local knowledge is genuinely insufficient (even if BM25 returned fused_only docs).
@@ -1264,6 +1460,12 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg is None:
             cfg = self.config
         base = self.SYSTEM_PROMPT if cfg.discussion_fallback else self.SYSTEM_PROMPT_STRICT
+        if cfg.cite_sources:
+            base = base + (
+                "\n\n**Citation requirement**: When using information from the context, "
+                "cite it inline using the document label from the context block, e.g. [Doc 1], [Doc 2]. "
+                "Place the citation immediately after the relevant sentence or fact."
+            )
         if not cfg.truth_grounding:
             return base
         if has_web:
@@ -1449,6 +1651,14 @@ def main():
                         help='Enable/disable LLM context compression (extracts only relevant sentences before generation)')
     parser.add_argument('--cache', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable in-memory query result caching')
+    parser.add_argument('--cite', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable inline source citations ([Doc N]) in LLM answers')
+    parser.add_argument('--raptor', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable RAPTOR hierarchical summarisation nodes during ingest')
+    parser.add_argument('--raptor-group-size', type=int, metavar='N',
+                        help='Number of consecutive chunks to group per RAPTOR summary (default: 5)')
+    parser.add_argument('--graph-rag', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable GraphRAG entity-centric retrieval expansion')
     parser.add_argument('--no-dedup', action='store_true',
                         help='Disable ingest deduplication (allow re-ingesting identical content)')
     parser.add_argument('--parent-chunk-size', type=int, metavar='N',
@@ -1523,6 +1733,14 @@ def main():
         config.query_cache = args.cache
     if args.no_dedup:
         config.dedup_on_ingest = False
+    if args.cite is not None:
+        config.cite_sources = args.cite
+    if args.raptor is not None:
+        config.raptor = args.raptor
+    if args.raptor_group_size is not None:
+        config.raptor_chunk_group_size = args.raptor_group_size
+    if args.graph_rag is not None:
+        config.graph_rag = args.graph_rag
 
     if args.list_models:
         print("\n🤖 Supported LLM providers and example models:\n")
