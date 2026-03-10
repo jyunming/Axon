@@ -152,6 +152,7 @@ addopts = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
+    "eval: marks RAG evaluation smoke tests (precision@k, context relevance, faithfulness)",
 ]
 
 [tool.coverage.run]

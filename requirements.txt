@@ -20,6 +20,7 @@ rich>=13.0.0
 # Vector Stores
 chromadb>=0.4.0
 qdrant-client>=1.7.0
+lancedb>=0.8.0
 
 # LLM Providers
 ollama>=0.1.0
@@ -33,6 +34,9 @@ tf-keras>=2.0.0
 python-docx>=1.0.0
 pymupdf>=1.24.0
 pypdf>=4.0.0
+
+# Optional: FastEmbed (lightweight embedding alternative to sentence-transformers)
+# fastembed>=0.2.0
 
 # Optional: For future vLLM support
 # vllm>=0.2.0

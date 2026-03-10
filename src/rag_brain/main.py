@@ -92,20 +92,64 @@ class OpenStudioConfig:
     # Re-ranking
     rerank: bool = False
     reranker_provider: Literal["cross-encoder", "llm"] = "cross-encoder"
+    # Default: fast ms-marco model (small, already commonly cached).
+    # Upgrade to "BAAI/bge-reranker-v2-m3" for SOTA multilingual accuracy.
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+    # Parent-Document / Small-to-Big Retrieval
+    # Set parent_chunk_size > chunk_size to enable. Child chunks (chunk_size)
+    # are indexed for precise retrieval; parent chunks are returned as context.
+    # 0 = disabled (use retrieval chunks directly).
+    parent_chunk_size: int = 0
 
     # Query Transformations
     multi_query: bool = False
     hyde: bool = False
+    step_back: bool = False
+    query_decompose: bool = False
     discussion_fallback: bool = True
+
+    # Context Compression
+    # Uses the generation LLM to extract only query-relevant sentences from each
+    # retrieved chunk before passing context to the final answer generation step.
+    compress_context: bool = False
 
     # Web Search / Truth Grounding
     truth_grounding: bool = False
     brave_api_key: str = ""
 
+    # Query Result Caching
+    query_cache: bool = False
+    query_cache_size: int = 128
+
+    # Ingest Deduplication
+    dedup_on_ingest: bool = True
+
     # Offline Mode
     offline_mode: bool = False
     local_models_dir: str = ""
+
+    # Inline Source Citations
+    # When enabled, the LLM is instructed to cite [Doc N] inline in its answer
+    # matching the document labels injected into the context block.
+    cite_sources: bool = False
+
+    # RAPTOR Hierarchical Indexing
+    # During ingest, groups every raptor_chunk_group_size consecutive chunks per source
+    # and generates a summarisation node that is indexed alongside the leaf chunks.
+    # At retrieval time these summary nodes surface high-level context for multi-hop
+    # questions that no single leaf chunk can answer.
+    raptor: bool = False
+    raptor_chunk_group_size: int = 5
+
+    # GraphRAG Entity-Centric Retrieval
+    # During ingest, named entities are extracted from each chunk via the LLM and
+    # stored in an entity→doc_id map.  At retrieval time, entities found in the
+    # query are used to expand the result set with graph-connected documents.
+    graph_rag: bool = False
+
+    # LLM request timeout in seconds (applied where the provider client supports it)
+    llm_timeout: int = 60
 
     @classmethod
     def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
@@ -143,12 +187,11 @@ class OpenStudioConfig:
                 config_dict['reranker_model'] = data['rerank']['model']
                 
         if 'query_transformations' in data:
-            if 'multi_query' in data['query_transformations']:
-                config_dict['multi_query'] = data['query_transformations']['multi_query']
-            if 'hyde' in data['query_transformations']:
-                config_dict['hyde'] = data['query_transformations']['hyde']
-            if 'discussion_fallback' in data['query_transformations']:
-                config_dict['discussion_fallback'] = data['query_transformations']['discussion_fallback']
+            for key in ('multi_query', 'hyde', 'step_back', 'query_decompose', 'discussion_fallback'):
+                if key in data['query_transformations']:
+                    config_dict[key] = data['query_transformations'][key]
+        if 'context_compression' in data:
+            config_dict['compress_context'] = data['context_compression'].get('enabled', False)
         if 'web_search' in data:
             ws = data['web_search']
             config_dict['truth_grounding'] = ws.get('enabled', False)
@@ -458,7 +501,8 @@ class OpenLLM:
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
-                max_tokens=self.config.llm_max_tokens
+                max_tokens=self.config.llm_max_tokens,
+                timeout=self.config.llm_timeout,
             )
             return response.choices[0].message.content
 
@@ -476,6 +520,7 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
+                timeout=self.config.llm_timeout,
             )
             return response.choices[0].message.content
 
@@ -595,7 +640,8 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
-                stream=True
+                stream=True,
+                timeout=self.config.llm_timeout,
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -616,6 +662,7 @@ class OpenLLM:
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True,
+                timeout=self.config.llm_timeout,
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -647,7 +694,15 @@ class OpenVectorStore:
             from qdrant_client import QdrantClient
             logger.info(f"💾 Initializing Qdrant: {self.config.vector_store_path}")
             self.client = QdrantClient(path=self.config.vector_store_path)
-    
+        elif self.provider == "lancedb":
+            import lancedb
+            logger.info(f"💾 Initializing LanceDB: {self.config.vector_store_path}")
+            self.client = lancedb.connect(self.config.vector_store_path)
+            try:
+                self.collection = self.client.open_table("rag_brain")
+            except Exception:
+                self.collection = None   # created lazily on first add()
+
     def add(self, ids: List[str], texts: List[str], embeddings: List[List[float]], metadatas: List[Dict] = None):
         if self.provider == "chroma":
             self.collection.add(ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas)
@@ -659,7 +714,25 @@ class OpenVectorStore:
                 if metadatas: payload.update(metadatas[i])
                 points.append(PointStruct(id=id, vector=embedding, payload=payload))
             self.client.upsert(collection_name="rag_brain", points=points)
-    
+        elif self.provider == "lancedb":
+            import json
+            rows = []
+            for i, (doc_id, emb, text) in enumerate(zip(ids, embeddings, texts)):
+                meta = metadatas[i] if metadatas else {}
+                rows.append({
+                    "id": doc_id,
+                    "vector": emb,
+                    "text": text,
+                    "source": meta.get("source", ""),
+                    "metadata_json": json.dumps(meta),
+                })
+            if self.collection is None:
+                self.collection = self.client.create_table(
+                    "rag_brain", data=rows, mode="overwrite", metric="cosine"
+                )
+            else:
+                self.collection.add(rows)
+
     def list_documents(self) -> List[Dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
 
@@ -690,6 +763,19 @@ class OpenVectorStore:
                 sources[source]["chunks"] += 1
                 sources[source]["doc_ids"].append(str(point.id))
             return sorted(sources.values(), key=lambda x: x["source"])
+        elif self.provider == "lancedb":
+            import json
+            if self.collection is None:
+                return []
+            rows = self.collection.to_arrow().to_pydict()
+            sources: Dict[str, Dict[str, Any]] = {}
+            for doc_id, source in zip(rows.get("id", []), rows.get("source", [])):
+                src = source or "unknown"
+                if src not in sources:
+                    sources[src] = {"source": src, "chunks": 0, "doc_ids": []}
+                sources[src]["chunks"] += 1
+                sources[src]["doc_ids"].append(doc_id)
+            return sorted(sources.values(), key=lambda x: x["source"])
         return []
 
     def search(self, query_embedding: List[float], top_k: int = 10, filter_dict: Dict = None) -> List[Dict]:
@@ -702,6 +788,105 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             results = self.client.search(collection_name="rag_brain", query_vector=query_embedding, limit=top_k)
             return [{"id": str(r.id), "text": r.payload.get("text", ""), "score": r.score, "metadata": {k: v for k, v in r.payload.items() if k != "text"}} for r in results]
+        elif self.provider == "lancedb":
+            import json
+            if self.collection is None:
+                return []
+            results = self.collection.search(query_embedding).limit(top_k).to_list()
+            return [
+                {
+                    "id": r["id"],
+                    "text": r["text"],
+                    "score": max(0.0, 1.0 - r.get("_distance", 1.0)),
+                    "metadata": json.loads(r.get("metadata_json", "{}")),
+                }
+                for r in results
+            ]
+
+    def get_by_ids(self, ids: List[str]) -> List[Dict]:
+        """Fetch stored documents by their IDs (used by GraphRAG expansion).
+
+        Returns a list of result dicts in the same format as search(), with score=1.0
+        since these docs are fetched by exact ID (not scored).
+        """
+        if not ids:
+            return []
+        if self.provider == "chroma":
+            result = self.collection.get(ids=ids, include=["documents", "metadatas"])
+            result_ids = result.get("ids") or []
+            result_docs = result.get("documents") or []
+            result_metas = result.get("metadatas") or []
+            num_ids = len(result_ids)
+            if len(result_docs) < num_ids:
+                result_docs = list(result_docs) + [""] * (num_ids - len(result_docs))
+            if len(result_metas) < num_ids:
+                result_metas = list(result_metas) + [{}] * (num_ids - len(result_metas))
+            docs = []
+            for i in range(num_ids):
+                docs.append({
+                    "id": result_ids[i],
+                    "text": result_docs[i] or "",
+                    "score": 1.0,
+                    "metadata": result_metas[i] or {},
+                })
+            return docs
+        if self.provider == "qdrant":
+            try:
+                points = self.client.retrieve(
+                    collection_name="rag_brain",
+                    ids=ids,
+                    with_payload=True,
+                )
+                return [
+                    {
+                        "id": str(p.id),
+                        "text": p.payload.get("text", ""),
+                        "score": 1.0,
+                        "metadata": {k: v for k, v in p.payload.items() if k != "text"},
+                    }
+                    for p in points
+                ]
+            except Exception as e:
+                logger.debug(f"GraphRAG get_by_ids (Qdrant) failed: {e}")
+                return []
+        if self.provider == "lancedb":
+            import json
+            if self.collection is None:
+                return []
+            try:
+                id_str = ", ".join(f"'{i}'" for i in ids)
+                rows = self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
+                return [
+                    {
+                        "id": r["id"],
+                        "text": r["text"],
+                        "score": 1.0,
+                        "metadata": json.loads(r.get("metadata_json", "{}")),
+                    }
+                    for r in rows
+                ]
+            except Exception as e:
+                logger.debug(f"GraphRAG get_by_ids (LanceDB) failed: {e}")
+                return []
+        return []
+
+    def delete_by_ids(self, ids: List[str]) -> None:
+        """Delete documents by ID from the vector store."""
+        if not ids:
+            return
+        if self.provider == "chroma":
+            self.collection.delete(ids=ids)
+        elif self.provider == "qdrant":
+            from qdrant_client.models import PointIdsList
+            self.client.delete(
+                collection_name="rag_brain",
+                points_selector=PointIdsList(points=ids),
+            )
+        elif self.provider == "lancedb":
+            if self.collection is None:
+                return
+            id_str = ", ".join(f"'{i}'" for i in ids)
+            self.collection.delete(f"id IN ({id_str})")
 
 
 class OpenStudioBrain:
@@ -768,6 +953,18 @@ Your primary goal is to help the user by answering questions based on the provid
             if self.config.truth_grounding:
                 logger.info("Offline mode: disabling web search (truth_grounding → OFF)")
                 self.config.truth_grounding = False
+            if self.config.raptor:
+                logger.warning(
+                    "Offline mode: RAPTOR requires LLM calls and is not supported offline. "
+                    "Disabling raptor for this session."
+                )
+                self.config.raptor = False
+            if self.config.graph_rag:
+                logger.warning(
+                    "Offline mode: GraphRAG requires LLM calls and is not supported offline. "
+                    "Disabling graph_rag for this session."
+                )
+                self.config.graph_rag = False
             # Resolve bare HF model IDs to local paths
             self.config.embedding_model = self._resolve_model_path(self.config.embedding_model)
             self.config.reranker_model  = self._resolve_model_path(self.config.reranker_model)
@@ -797,7 +994,20 @@ Your primary goal is to help the user by answering questions based on the provid
             self.splitter = RecursiveCharacterTextSplitter(chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap)
         except ImportError:
             self.splitter = None
-        
+
+        # In-memory query result cache (keyed by hash of query + filters + active flags).
+        # Uses OrderedDict for true LRU eviction: hits are moved to the end so the
+        # least-recently-used entry is always at the front and evicted first.
+        from collections import OrderedDict
+        self._query_cache: "OrderedDict[str, str]" = OrderedDict()
+        self._cache_lock = threading.Lock()
+
+        # Content hash store for ingest deduplication
+        self._ingested_hashes: set = self._load_hash_store()
+
+        # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
+        self._entity_graph: Dict[str, List[str]] = self._load_entity_graph()
+
         logger.info("✅ Local RAG Brain ready!")
 
     def switch_project(self, name: str) -> None:
@@ -836,14 +1046,224 @@ Your primary goal is to help the user by answering questions based on the provid
         except ImportError:
             self.bm25 = None
 
+        # Reload project-scoped state so dedup/GraphRAG use the new project's data
+        # and cached answers from the previous project cannot bleed across.
+        from collections import OrderedDict
+        with self._cache_lock:
+            self._query_cache = OrderedDict()
+        self._ingested_hashes = self._load_hash_store()
+        self._entity_graph = self._load_entity_graph()
+
         self._active_project = name
         set_active_project(name)
         logger.info(f"📂 Switched to project '{name}'")
     
+    def _load_hash_store(self) -> set:
+        """Load persisted content hashes for ingest deduplication."""
+        import pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".content_hashes"
+        if path.exists():
+            return set(path.read_text(encoding="utf-8").splitlines())
+        return set()
+
+    def _save_hash_store(self) -> None:
+        """Persist content hashes to disk."""
+        import pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".content_hashes"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(self._ingested_hashes), encoding="utf-8")
+
+    def _load_entity_graph(self) -> Dict[str, List[str]]:
+        """Load persisted entity→doc_id graph from disk."""
+        import json, pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict):
+                    return {}
+                cleaned: Dict[str, List[str]] = {}
+                for key, value in raw.items():
+                    if not isinstance(key, str) or not isinstance(value, list):
+                        continue
+                    cleaned[key] = [v for v in value if isinstance(v, str)]
+                return cleaned
+            except Exception:
+                pass
+        return {}
+
+    def _save_entity_graph(self) -> None:
+        """Persist entity graph to disk."""
+        import json, pathlib
+        path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
+
+    def _extract_entities(self, text: str) -> List[str]:
+        """Extract named entities from text using the LLM.
+
+        Returns a list of entity strings (people, organisations, places, concepts).
+        Returns an empty list on failure.
+        """
+        prompt = (
+            "Extract the key named entities (people, organisations, places, products, "
+            "technical concepts) from the following text. "
+            "Output one entity per line, no bullets or numbering. "
+            "If there are no entities, output nothing.\n\n"
+            + text[:1500]  # cap to avoid huge prompts
+        )
+        try:
+            raw = self.llm.complete(prompt, system_prompt="You are a named entity extraction specialist.")
+            return [e.strip() for e in raw.splitlines() if e.strip()][:20]
+        except Exception:
+            return []
+
+    def _generate_raptor_summaries(self, documents: List[Dict]) -> List[Dict]:
+        """Generate RAPTOR summary nodes for a list of already-split chunks.
+
+        Groups consecutive chunks by source in windows of raptor_chunk_group_size,
+        then calls the LLM to produce a summary passage.  Each summary is returned
+        as a new synthetic document (raptor_level=1 in metadata) that will be
+        embedded and stored alongside the leaf chunks.
+        """
+        from itertools import groupby
+
+        n = self.config.raptor_chunk_group_size
+        if n < 1:
+            logger.warning("raptor_chunk_group_size must be >= 1, skipping RAPTOR")
+            return []
+        summaries = []
+
+        # Group chunks by their source file so we only summarise within one document
+        def _source(doc):
+            return doc.get("metadata", {}).get("source", doc["id"])
+
+        sorted_docs = sorted(documents, key=_source)
+        for source, group in groupby(sorted_docs, key=_source):
+            chunks = list(group)
+            for i in range(0, len(chunks), n):
+                window = chunks[i:i + n]
+                combined = "\n\n".join(c["text"] for c in window)
+                prompt = (
+                    "Summarise the following passage into a concise but comprehensive paragraph "
+                    "that captures all key facts and concepts. "
+                    "Output only the summary paragraph.\n\n" + combined[:4000]
+                )
+                try:
+                    summary_text = self.llm.complete(
+                        prompt,
+                        system_prompt="You are an expert at summarising technical documents."
+                    )
+                    if not summary_text or not summary_text.strip():
+                        continue
+                    # Build a deterministic ID from source + window position + content
+                    # so that re-ingesting updated content produces a new ID and
+                    # does not silently collide with a stale RAPTOR node in the store.
+                    import hashlib
+                    content_sig = hashlib.md5(summary_text.strip().encode("utf-8", errors="replace")).hexdigest()[:8]
+                    uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
+                    summaries.append({
+                        "id": f"raptor_{uid}",
+                        "text": summary_text.strip(),
+                        "metadata": {
+                            "source": source,
+                            "raptor_level": 1,
+                            "window_start": i,
+                            "window_end": i + len(window) - 1,
+                        },
+                    })
+                except Exception as e:
+                    logger.debug(f"RAPTOR summary failed for {source}[{i}]: {e}")
+
+        if summaries:
+            logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
+        return summaries
+
+    def _expand_with_entity_graph(self, query: str, results: List[Dict], cfg=None) -> List[Dict]:
+        """Expand retrieval results using GraphRAG entity linkage.
+
+        1. Extract entities from the query.
+        2. Look up all chunk IDs linked to those entities in the entity graph.
+        3. Fetch any chunks not already in results from the vector store.
+        4. Append them (capped to avoid bloat), returning the expanded list.
+        """
+        query_entities = self._extract_entities(query)
+        if not query_entities:
+            return results
+
+        active_top_k = (cfg.top_k if cfg is not None else None) or self.config.top_k
+
+        existing_ids = {r["id"] for r in results}
+        extra_ids: List[str] = []
+        for entity in query_entities:
+            for eid, doc_ids in self._entity_graph.items():
+                if entity.lower() in eid.lower() or eid.lower() in entity.lower():
+                    for did in doc_ids:
+                        if did not in existing_ids and did not in extra_ids:
+                            extra_ids.append(did)
+
+        if not extra_ids:
+            return results
+
+        # Fetch the extra chunks from the vector store (capped to the active top_k)
+        try:
+            extra_results = self.vector_store.get_by_ids(extra_ids[:active_top_k])
+            if extra_results:
+                logger.info(f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)")
+                results = list(results) + extra_results
+        except Exception as e:
+            logger.debug(f"GraphRAG expansion failed: {e}")
+
+        return results
+
+    def _doc_hash(self, doc: Dict) -> str:
+        """Return an MD5 hex digest of the document's text content."""
+        import hashlib
+        return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
+
+    def _make_cache_key(self, query: str, filters, cfg) -> str:
+        """Return a stable cache key for the given query + active config.
+
+        All flags that change retrieval or generation are included so two
+        requests that differ only by (e.g.) cite_sources or compress_context
+        receive distinct cache entries.
+        """
+        import hashlib, json
+        # Serialize filters safely regardless of type
+        try:
+            filters_key = json.dumps(filters or {}, sort_keys=True, default=str)
+        except Exception:
+            filters_key = str(filters)
+        key_data = {
+            "q": query,
+            "f": filters_key,
+            "top_k": cfg.top_k,
+            "hybrid": cfg.hybrid_search,
+            "rerank": cfg.rerank,
+            "hyde": cfg.hyde,
+            "multi_query": cfg.multi_query,
+            "step_back": cfg.step_back,
+            "query_decompose": cfg.query_decompose,
+            "threshold": cfg.similarity_threshold,
+            "discuss": cfg.discussion_fallback,
+            "compress_context": cfg.compress_context,
+            "cite_sources": cfg.cite_sources,
+            "truth_grounding": cfg.truth_grounding,
+            "graph_rag": cfg.graph_rag,
+            "llm_provider": cfg.llm_provider,
+            "llm_model": cfg.llm_model,
+            "embedding_provider": cfg.embedding_provider,
+            "embedding_model": cfg.embedding_model,
+            "reranker_model": cfg.reranker_model,
+        }
+        return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
+
     def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
                             filtered_count: int, final_count: int, top_score: float,
-                            latency_ms: float, transformations: Dict = None):
+                            latency_ms: float, transformations: Dict = None,
+                            cfg=None):
         """Log structured metrics for a query."""
+        active = cfg if cfg is not None else self.config
         logger.info({
             "event": "query_complete",
             "query_preview": query[:80],
@@ -855,17 +1275,90 @@ Your primary goal is to help the user by answering questions based on the provid
                 "final": final_count,
             },
             "top_score": round(top_score, 4) if top_score else None,
-            "hybrid": self.config.hybrid_search,
-            "rerank": self.config.rerank,
+            "hybrid": active.hybrid_search,
+            "rerank": active.rerank,
             "transformations": transformations or {}
         })
+
+    def _split_with_parents(self, documents: List[Dict]) -> List[Dict]:
+        """Split documents using parent-document (small-to-big) strategy.
+
+        1. Split each raw document into large parent chunks (parent_chunk_size).
+        2. Split each parent into small child chunks (chunk_size) for indexing.
+        3. Store the parent text in every child's metadata so that at generation
+           time _build_context() can return the richer parent passage instead of
+           the small retrieval chunk.
+        """
+        from rag_brain.splitters import RecursiveCharacterTextSplitter
+        parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.config.parent_chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
+        )
+        all_chunks = []
+        for doc in documents:
+            parent_texts = parent_splitter.split(doc["text"])
+            for p_idx, parent_text in enumerate(parent_texts):
+                p_doc = {
+                    "id": f"{doc['id']}_p{p_idx}",
+                    "text": parent_text,
+                    "metadata": doc.get("metadata", {}).copy(),
+                }
+                child_chunks = self.splitter.transform_documents([p_doc])
+                for child in child_chunks:
+                    child["metadata"]["parent_text"] = parent_text
+                all_chunks.extend(child_chunks)
+        return all_chunks
 
     def ingest(self, documents: List[Dict[str, Any]]):
         if not documents: return
         t0 = time.time()
         from tqdm import tqdm
         logger.info(f"📥 Ingesting {len(documents)} documents...")
-        if self.splitter: documents = self.splitter.transform_documents(documents)
+        if self.splitter and self.config.parent_chunk_size > 0:
+            documents = self._split_with_parents(documents)
+        elif self.splitter:
+            documents = self.splitter.transform_documents(documents)
+
+        if self.config.dedup_on_ingest:
+            before = len(documents)
+            new_docs = []
+            new_hashes = []
+            for doc in documents:
+                h = self._doc_hash(doc)
+                if h not in self._ingested_hashes:
+                    new_docs.append(doc)
+                    new_hashes.append(h)
+            skipped = before - len(new_docs)
+            if skipped:
+                logger.info(f"   Dedup: skipped {skipped} already-seen chunk(s), ingesting {len(new_docs)} new.")
+            documents = new_docs
+            if not documents:
+                return
+            self._ingested_hashes.update(new_hashes)
+            self._save_hash_store()
+
+        # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
+        if self.config.raptor:
+            raptor_docs = self._generate_raptor_summaries(documents)
+            documents = documents + raptor_docs
+
+        # GraphRAG: extract entities from new chunks and update entity graph
+        if self.config.graph_rag:
+            updated = False
+            for doc in documents:
+                if doc.get("metadata", {}).get("raptor_level"):
+                    continue  # skip synthetic RAPTOR nodes
+                entities = self._extract_entities(doc["text"])
+                for entity in entities:
+                    key = entity.lower()
+                    if key not in self._entity_graph:
+                        self._entity_graph[key] = []
+                    if doc["id"] not in self._entity_graph[key]:
+                        self._entity_graph[key].append(doc["id"])
+                        updated = True
+            if updated:
+                self._save_entity_graph()
+
         n_chunks = len(documents)
         if self.bm25: self.bm25.add_documents(documents)
 
@@ -892,6 +1385,77 @@ Your primary goal is to help the user by answering questions based on the provid
             "store_ms": round(store_ms, 1),
             "total_ms": round((time.time() - t0) * 1000, 1),
         })
+
+    def _decompose_query(self, query: str) -> List[str]:
+        """Break a complex query into atomic sub-questions for independent retrieval.
+
+        Returns the original query plus up to 4 sub-questions.
+        """
+        prompt = (
+            "Break the following question into 2–4 simpler, atomic sub-questions that together "
+            "cover all aspects of the original. Output each sub-question on a new line with no "
+            "numbering or bullet prefix. If the question is already simple, output it unchanged.\n\n"
+            "Question: " + query
+        )
+        response = self.llm.complete(prompt, system_prompt="You are an expert at decomposing complex questions.")
+        sub_qs = [q.strip("- \t1234567890.)") for q in response.split("\n") if q.strip()]
+        # Dedupe while preserving order; always keep original first
+        seen = {query}
+        unique = [query]
+        for q in sub_qs[:4]:
+            if q and q not in seen:
+                seen.add(q)
+                unique.append(q)
+        return unique
+
+    def _compress_context(self, query: str, results: List[Dict]) -> List[Dict]:
+        """Extract only query-relevant sentences from each retrieved chunk (parallel).
+
+        Compresses non-web results by asking the LLM to strip irrelevant text.
+        Falls back to the original chunk if compression fails or makes it longer.
+        """
+        if not results:
+            return results
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _compress_one(result: Dict) -> Dict:
+            if result.get("is_web"):
+                return result
+            # Use parent_text if available (small-to-big path), else chunk text
+            source_text = result.get("metadata", {}).get("parent_text") or result["text"]
+            prompt = (
+                "Extract only the sentences from the passage below that directly help answer "
+                "the question. Output only those sentences verbatim, nothing else. "
+                "If no sentence is relevant, keep the single most informative sentence.\n\n"
+                f"Question: {query}\n\nPassage:\n{source_text}"
+            )
+            try:
+                compressed = self.llm.complete(prompt, system_prompt="You are an expert at extracting relevant information.")
+                if compressed and len(compressed.strip()) < len(source_text):
+                    r = {**result, "metadata": {**result.get("metadata", {})}}
+                    # Overwrite whichever field _build_context reads
+                    if "parent_text" in r["metadata"]:
+                        r["metadata"]["parent_text"] = compressed.strip()
+                    else:
+                        r["text"] = compressed.strip()
+                    r["metadata"]["compressed"] = True
+                    return r
+            except Exception as e:
+                logger.debug(f"Context compression failed for {result.get('id')}: {e}")
+            return result
+
+        with ThreadPoolExecutor(max_workers=min(len(results), 4)) as pool:
+            return list(pool.map(_compress_one, results))
+
+    def _get_step_back_query(self, query: str) -> str:
+        """Generate a more abstract, step-back version of the query for retrieval."""
+        prompt = (
+            "Given the following specific question, generate a more general, abstract version "
+            "of it that would help retrieve relevant background knowledge. Output only the "
+            "abstract question, nothing else.\n\nSpecific question: " + query
+        )
+        return self.llm.complete(prompt, system_prompt="You are an expert at abstracting questions to their core concepts.")
 
     def _get_hyde_document(self, query: str) -> str:
         """Generate a Hypothetical Document Embedding (HyDE) passage."""
@@ -940,30 +1504,50 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.warning(f"🌐 Web search failed: {e}")
             return []
 
-    def _execute_retrieval(self, query: str, filters: Dict = None) -> Dict:
+    def _execute_retrieval(self, query: str, filters: Dict = None, cfg=None) -> Dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
-        transforms = {"hyde_applied": False, "multi_query_applied": False, "web_search_applied": False, "queries": [query]}
-        
+        if cfg is None:
+            cfg = self.config
+        transforms = {"hyde_applied": False, "multi_query_applied": False, "step_back_applied": False, "decompose_applied": False, "web_search_applied": False, "queries": [query]}
+
         search_queries = [query]
         vector_query = query
-        
-        if self.config.multi_query:
+
+        if cfg.multi_query:
             search_queries = self._get_multi_queries(query)
             transforms['multi_query_applied'] = True
             transforms['queries'] = search_queries
-            
-        if self.config.hyde:
+
+        if cfg.step_back:
+            abstract_query = self._get_step_back_query(query)
+            if abstract_query not in search_queries:
+                search_queries = search_queries + [abstract_query]
+            transforms['step_back_applied'] = True
+            transforms['queries'] = search_queries
+
+        if cfg.query_decompose:
+            sub_questions = self._decompose_query(query)
+            # Merge without duplicates, preserving order
+            existing = set(search_queries)
+            for sq in sub_questions:
+                if sq not in existing:
+                    search_queries = search_queries + [sq]
+                    existing.add(sq)
+            transforms['decompose_applied'] = True
+            transforms['queries'] = search_queries
+
+        if cfg.hyde:
             # We construct a single hypothetical document based on the primary query
             vector_query = self._get_hyde_document(query)
             transforms['hyde_applied'] = True
 
-        fetch_k = self.config.top_k * 3 if (self.config.rerank or self.config.hybrid_search) else self.config.top_k
-        
+        fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
+
         all_vector_results = []
         all_bm25_results = []
-        
+
         # Vector Search
-        if self.config.hyde:
+        if cfg.hyde:
              # HyDE uses a single hypothetical document as the vector query
              all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters))
         else:
@@ -976,7 +1560,7 @@ Your primary goal is to help the user by answering questions based on the provid
                  embeddings = self.embedding.embed(search_queries)
                  for emb in embeddings:
                      all_vector_results.extend(self.vector_store.search(emb, top_k=fetch_k, filter_dict=filters))
-        
+
         # Dedupe vector store results based on ID
         dedup_vector = {}
         for r in all_vector_results:
@@ -987,35 +1571,39 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # Hybrid Search
         bm25_count = 0
-        if self.config.hybrid_search and self.bm25:
+        if cfg.hybrid_search and self.bm25:
             for sq in search_queries:
                 all_bm25_results.extend(self.bm25.search(sq, top_k=fetch_k))
-                
+
             dedup_bm25 = {}
             for r in all_bm25_results:
                 if r['id'] not in dedup_bm25 or r['score'] > dedup_bm25[r['id']]['score']:
                     dedup_bm25[r['id']] = r
             bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
-            
+
             from rag_brain.retrievers import reciprocal_rank_fusion
             results = reciprocal_rank_fusion(vector_results, bm25_results)
         else:
             results = vector_results
 
-        results = [r for r in results if r.get('score', 1.0) >= self.config.similarity_threshold or 'fused_only' in r]
+        results = [r for r in results if r.get('score', 1.0) >= cfg.similarity_threshold or 'fused_only' in r]
+
+        # GraphRAG: expand results with entity-linked documents
+        if cfg.graph_rag and self._entity_graph:
+            results = self._expand_with_entity_graph(query, results, cfg=cfg)
 
         # Web Search (Truth Grounding)
         # Trigger when the best cosine similarity from vector search is below the threshold,
         # meaning local knowledge is genuinely insufficient (even if BM25 returned fused_only docs).
         web_count = 0
-        if self.config.truth_grounding and self.config.brave_api_key:
+        if cfg.truth_grounding and cfg.brave_api_key:
             max_vector_score = max((r['score'] for r in vector_results), default=0.0)
-            local_sufficient = max_vector_score >= self.config.similarity_threshold
+            local_sufficient = max_vector_score >= cfg.similarity_threshold
             if not local_sufficient:
                 logger.info(
                     f"🌐 Local knowledge insufficient (best vector score {max_vector_score:.3f} < "
-                    f"threshold {self.config.similarity_threshold}) — falling back to Brave web search"
+                    f"threshold {cfg.similarity_threshold}) — falling back to Brave web search"
                 )
                 web_results = self._execute_web_search(query)
                 web_count = len(web_results)
@@ -1046,10 +1634,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 title = r.get("metadata", {}).get("title", r["id"])
                 parts.append(f"[Web Result {i+1} — {title} ({r['id']})]\n{r['text']}")
             else:
-                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{r['text']}")
+                # Small-to-big: prefer parent passage for richer LLM context
+                context_text = r.get("metadata", {}).get("parent_text") or r["text"]
+                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{context_text}")
         return "\n\n".join(parts), has_web
 
-    def _build_system_prompt(self, has_web: bool) -> str:
+    def _build_system_prompt(self, has_web: bool, cfg=None) -> str:
         """Return the system prompt based on discussion_fallback and web search state.
 
         When discussion_fallback is False, uses a strict context-only prompt so
@@ -1057,8 +1647,17 @@ Your primary goal is to help the user by answering questions based on the provid
         irrelevant. When True, uses the permissive prompt that encourages general
         knowledge fallback when context is insufficient.
         """
-        base = self.SYSTEM_PROMPT if self.config.discussion_fallback else self.SYSTEM_PROMPT_STRICT
-        if not self.config.truth_grounding:
+        if cfg is None:
+            cfg = self.config
+        base = self.SYSTEM_PROMPT if cfg.discussion_fallback else self.SYSTEM_PROMPT_STRICT
+        if cfg.cite_sources:
+            base = base + (
+                "\n\n**Citation requirement**: When using information from the context, "
+                "cite it inline using the document label from the context block exactly as shown, "
+                "e.g. [Document 1 (ID: ...)], [Document 2 (ID: ...)]. "
+                "Place the citation immediately after the relevant sentence or fact."
+            )
+        if not cfg.truth_grounding:
             return base
         if has_web:
             return base + (
@@ -1071,56 +1670,93 @@ Your primary goal is to help the user by answering questions based on the provid
             "you have access to live Brave Search as a fallback tool. It was not needed for this query."
         )
 
-    def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None) -> str:
-        t0 = time.time()
-        
-        retrieval = self._execute_retrieval(query, filters)
-        results = retrieval['results']
-        
-        if not results:
-            self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
-                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'])
-            
-            if self.config.discussion_fallback:
-                # Send plain query as user message so multi-turn history stays consistent
-                return self.llm.complete(query, self._build_system_prompt(False), chat_history=chat_history)
-            
-            return "I don't have any relevant information to answer that question."
-            
-        if self.config.rerank: results = self.reranker.rerank(query, results)
+    def _apply_overrides(self, overrides: Optional[Dict]) -> 'OpenStudioConfig':
+        """Return a config copy with per-request overrides applied (thread-safe)."""
+        if not overrides:
+            return self.config
+        import copy
+        cfg = copy.copy(self.config)
+        for k, v in overrides.items():
+            if v is not None and hasattr(cfg, k):
+                setattr(cfg, k, v)
+        return cfg
 
-        results = results[:self.config.top_k]
+    def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None) -> str:
+        t0 = time.time()
+        cfg = self._apply_overrides(overrides)
+
+        # Cache lookup (only when chat_history is empty — cached responses don't track turns)
+        cache_key = None
+        if cfg.query_cache and not chat_history and cfg.query_cache_size >= 1:
+            cache_key = self._make_cache_key(query, filters, cfg)
+            with self._cache_lock:
+                if cache_key in self._query_cache:
+                    logger.info(f"💾 Cache hit for query: {query[:60]}")
+                    # Move to end so this entry is treated as most-recently-used (LRU)
+                    self._query_cache.move_to_end(cache_key)
+                    return self._query_cache[cache_key]
+
+        retrieval = self._execute_retrieval(query, filters, cfg=cfg)
+        results = retrieval['results']
+
+        if not results:
+            self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
+                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'], cfg=cfg)
+
+            if cfg.discussion_fallback:
+                # Send plain query as user message so multi-turn history stays consistent
+                return self.llm.complete(query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history)
+
+            return "I don't have any relevant information to answer that question."
+
+        if cfg.rerank: results = self.reranker.rerank(query, results)
+
+        results = results[:cfg.top_k]
+        if cfg.compress_context:
+            results = self._compress_context(query, results)
         final_count = len(results)
         top_score = results[0].get('score', 0) if results else 0
         context, has_web = self._build_context(results)
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
-        system_prompt = self._build_system_prompt(has_web) + f"\n\n**Relevant context from documents:**\n{context}"
+        system_prompt = self._build_system_prompt(has_web, cfg=cfg) + f"\n\n**Relevant context from documents:**\n{context}"
         response = self.llm.complete(query, system_prompt, chat_history=chat_history)
-        self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'], 
-                                retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
+        self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
+                                retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'], cfg=cfg)
+
+        if cache_key is not None:
+            with self._cache_lock:
+                # Evict least-recently-used entry when cache is at capacity
+                if len(self._query_cache) >= cfg.query_cache_size and self._query_cache:
+                    self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
+                self._query_cache[cache_key] = response
+                self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
+
         return response
 
-    def query_stream(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None):
-        retrieval = self._execute_retrieval(query, filters)
+    def query_stream(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None):
+        cfg = self._apply_overrides(overrides)
+        retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval['results']
-        
+
         if not results:
-            if self.config.discussion_fallback:
+            if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
-                yield from self.llm.stream(query, self._build_system_prompt(False), chat_history=chat_history)
+                yield from self.llm.stream(query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history)
                 return
             yield "I don't have any relevant information to answer that question."
             return
-            
-        if self.config.rerank: results = self.reranker.rerank(query, results)
-        
-        results = results[:self.config.top_k]
+
+        if cfg.rerank: results = self.reranker.rerank(query, results)
+
+        results = results[:cfg.top_k]
+        if cfg.compress_context:
+            results = self._compress_context(query, results)
         context, has_web = self._build_context(results)
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
-        system_prompt = self._build_system_prompt(has_web) + f"\n\n**Relevant context from documents:**\n{context}"
-        
+        system_prompt = self._build_system_prompt(has_web, cfg=cfg) + f"\n\n**Relevant context from documents:**\n{context}"
+
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
 
@@ -1197,10 +1833,34 @@ def main():
                         help='Enable/disable hybrid BM25+vector search')
     parser.add_argument('--rerank', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable cross-encoder reranking')
+    parser.add_argument('--reranker-model', metavar='MODEL',
+                        help='Re-ranker model to use (e.g. BAAI/bge-reranker-v2-m3 for SOTA accuracy, '
+                             'default: cross-encoder/ms-marco-MiniLM-L-6-v2)')
     parser.add_argument('--hyde', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable HyDE (hypothetical document embedding)')
     parser.add_argument('--multi-query', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable multi-query retrieval')
+    parser.add_argument('--step-back', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable step-back prompting (abstracts query before retrieval)')
+    parser.add_argument('--decompose', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable query decomposition (breaks complex questions into sub-questions)')
+    parser.add_argument('--compress', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable LLM context compression (extracts only relevant sentences before generation)')
+    parser.add_argument('--cache', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable in-memory query result caching')
+    parser.add_argument('--cite', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable inline source citations ([Doc N]) in LLM answers')
+    parser.add_argument('--raptor', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable RAPTOR hierarchical summarisation nodes during ingest')
+    parser.add_argument('--raptor-group-size', type=int, metavar='N',
+                        help='Number of consecutive chunks to group per RAPTOR summary (default: 5)')
+    parser.add_argument('--graph-rag', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable GraphRAG entity-centric retrieval expansion')
+    parser.add_argument('--no-dedup', action='store_true',
+                        help='Disable ingest deduplication (allow re-ingesting identical content)')
+    parser.add_argument('--parent-chunk-size', type=int, metavar='N',
+                        help='Enable small-to-big retrieval: index child chunks of --chunk-size tokens '
+                             'but return parent passages of N tokens as LLM context. 0 = disabled.')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress spinners and progress (auto-enabled when stdin is not a TTY)')
     args = parser.parse_args()
@@ -1252,10 +1912,32 @@ def main():
         config.hybrid_search = args.hybrid
     if args.rerank is not None:
         config.rerank = args.rerank
+    if args.reranker_model:
+        config.reranker_model = args.reranker_model
+    if args.parent_chunk_size is not None:
+        config.parent_chunk_size = args.parent_chunk_size
     if args.hyde is not None:
         config.hyde = args.hyde
     if args.multi_query is not None:
         config.multi_query = args.multi_query
+    if args.step_back is not None:
+        config.step_back = args.step_back
+    if args.decompose is not None:
+        config.query_decompose = args.decompose
+    if args.compress is not None:
+        config.compress_context = args.compress
+    if args.cache is not None:
+        config.query_cache = args.cache
+    if args.no_dedup:
+        config.dedup_on_ingest = False
+    if args.cite is not None:
+        config.cite_sources = args.cite
+    if args.raptor is not None:
+        config.raptor = args.raptor
+    if args.raptor_group_size is not None:
+        config.raptor_chunk_group_size = args.raptor_group_size
+    if args.graph_rag is not None:
+        config.graph_rag = args.graph_rag
 
     if args.list_models:
         print("\n🤖 Supported LLM providers and example models:\n")
@@ -2164,7 +2846,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                              display_meta=f"{turns} turns")
                 # ── /rag <option> ─────────────────────────────────────────
                 elif text.startswith("/rag "):
-                    opts = ["topk ", "threshold ", "hybrid", "rerank", "hyde", "multi"]
+                    opts = ["topk ", "threshold ", "hybrid", "rerank", "rerank-model ", "hyde", "multi", "step-back", "decompose", "compress", "cite", "raptor", "graph-rag"]
                     prefix = text[len("/rag "):]
                     for o in opts:
                         if o.startswith(prefix):
@@ -2371,7 +3053,13 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     "  /rag rerank                  toggle cross-encoder reranker\n"
                                     "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
                                     "  /rag hyde                    toggle HyDE query expansion\n"
-                                    "  /rag multi                   toggle multi-query expansion",
+                                    "  /rag multi                   toggle multi-query expansion\n"
+                                    "  /rag step-back               toggle step-back prompting\n"
+                                    "  /rag decompose               toggle query decomposition\n"
+                                    "  /rag compress                toggle LLM context compression\n"
+                                    "  /rag cite                    toggle inline [Document N] citations\n"
+                                    "  /rag raptor                  toggle RAPTOR hierarchical indexing\n"
+                                    "  /rag graph-rag               toggle GraphRAG entity retrieval",
                         "sessions": "  /sessions                    list recent saved sessions\n"
                                     "  /resume <id>                 load a session by ID\n"
                                     "  Sessions auto-save after each turn.",
@@ -2583,7 +3271,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 print(f"  💬 Discussion mode {state}.")
 
             elif cmd == "/rag":
-                _RAG_TOGGLES = {"hybrid", "rerank", "hyde", "multi"}
                 if not arg:
                     print(
                         f"\n  top-k        · {brain.config.top_k}\n"
@@ -2593,6 +3280,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "") + "\n"
                         f"  hyde         · {'ON' if brain.config.hyde else 'OFF'}\n"
                         f"  multi-query  · {'ON' if brain.config.multi_query else 'OFF'}\n"
+                        f"  step-back    · {'ON' if brain.config.step_back else 'OFF'}\n"
+                        f"  decompose    · {'ON' if brain.config.query_decompose else 'OFF'}\n"
+                        f"  compress     · {'ON' if brain.config.compress_context else 'OFF'}\n"
+                        f"  cite         · {'ON' if brain.config.cite_sources else 'OFF'}\n"
+                        f"  raptor       · {'ON' if brain.config.raptor else 'OFF'}\n"
+                        f"  graph-rag    · {'ON' if brain.config.graph_rag else 'OFF'}\n"
                         f"\n  /help rag   for usage details\n"
                     )
                 else:
@@ -2627,6 +3320,24 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     elif rag_opt == "multi":
                         brain.config.multi_query = not brain.config.multi_query
                         print(f"  ✅ Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
+                    elif rag_opt == "step-back":
+                        brain.config.step_back = not brain.config.step_back
+                        print(f"  ✅ Step-back prompting {'ON' if brain.config.step_back else 'OFF'}")
+                    elif rag_opt == "decompose":
+                        brain.config.query_decompose = not brain.config.query_decompose
+                        print(f"  ✅ Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}")
+                    elif rag_opt == "compress":
+                        brain.config.compress_context = not brain.config.compress_context
+                        print(f"  ✅ Context compression {'ON' if brain.config.compress_context else 'OFF'}")
+                    elif rag_opt == "cite":
+                        brain.config.cite_sources = not brain.config.cite_sources
+                        print(f"  ✅ Inline citations {'ON' if brain.config.cite_sources else 'OFF'}")
+                    elif rag_opt == "raptor":
+                        brain.config.raptor = not brain.config.raptor
+                        print(f"  ✅ RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}")
+                    elif rag_opt in ("graph-rag", "graph_rag", "graphrag"):
+                        brain.config.graph_rag = not brain.config.graph_rag
+                        print(f"  ✅ GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}")
                     elif rag_opt == "rerank-model":
                         if not rag_val:
                             print(f"  Current reranker: {brain.config.reranker_model}")
@@ -2647,7 +3358,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 brain.config.rerank = False
                                 print(f"  ❌ Failed to load reranker: {e}")
                     else:
-                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi")
+                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)

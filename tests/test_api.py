@@ -21,6 +21,17 @@ def _make_brain(provider="chroma"):
     brain.vector_store.provider = provider
     brain.bm25 = MagicMock()
     brain.config.top_k = 5
+    brain.config.hybrid_search = True
+    brain.config.rerank = False
+    brain.config.hyde = False
+    brain.config.multi_query = False
+    brain.config.discussion_fallback = True
+    brain.config.similarity_threshold = 0.3
+    brain.config.step_back = False
+    brain.config.query_decompose = False
+    brain.config.compress_context = False
+    # _apply_overrides returns a copy of config with overrides applied
+    brain._apply_overrides.return_value = brain.config
     return brain
 
 
@@ -113,17 +124,27 @@ def test_delete_success():
     assert data["status"] == "success"
     assert data["deleted"] == 2
     assert set(data["doc_ids"]) == {"doc1", "doc2"}
-    # Verify ChromaDB delete was called
-    api_module.brain.vector_store.collection.delete.assert_called_once_with(ids=["doc1", "doc2"])
+    # Verify delete_by_ids was called on the vector store
+    api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["doc1", "doc2"])
     # Verify BM25 delete was called
     api_module.brain.bm25.delete_documents.assert_called_once_with(["doc1", "doc2"])
 
 
 def test_delete_propagates_error():
     api_module.brain = _make_brain()
-    api_module.brain.vector_store.collection.delete.side_effect = RuntimeError("chroma down")
+    api_module.brain.vector_store.delete_by_ids.side_effect = RuntimeError("store down")
     resp = client.post("/delete", json={"doc_ids": ["x"]})
     assert resp.status_code == 500
+
+
+def test_delete_calls_delete_by_ids_not_collection_delete():
+    """Endpoint must use delete_by_ids (works for all providers) not collection.delete."""
+    api_module.brain = _make_brain()
+    resp = client.post("/delete", json={"doc_ids": ["id1"]})
+    assert resp.status_code == 200
+    api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["id1"])
+    # collection.delete should NOT be called directly by the endpoint
+    api_module.brain.vector_store.collection.delete.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +184,8 @@ def test_query_passes_filters():
     filters = {"type": "text", "source": "manual"}
     resp = client.post("/query", json={"query": "What?", "filters": filters})
     assert resp.status_code == 200
-    api_module.brain.query.assert_called_once_with("What?", filters=filters)
+    call = api_module.brain.query.call_args
+    assert call.kwargs.get("filters") == filters or (call.args and call.args[1] == filters)
 
 
 # ---------------------------------------------------------------------------
@@ -296,3 +318,146 @@ def test_collection_propagates_error():
     api_module.brain.list_documents.side_effect = RuntimeError("chroma down")
     resp = client.get("/collection")
     assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# /query — per-request RAG overrides
+# ---------------------------------------------------------------------------
+
+
+def test_query_override_hyde():
+    """hyde=true override is forwarded to brain.query as overrides dict."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "HyDE answer"
+    resp = client.post("/query", json={"query": "What is RAG?", "hyde": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["hyde"] is True
+
+
+def test_query_override_multi_query():
+    """multi_query=true override is forwarded to brain.query."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Multi-query answer"
+    resp = client.post("/query", json={"query": "Explain RAG", "multi_query": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["multi_query"] is True
+
+
+def test_query_override_top_k():
+    """top_k override is forwarded to brain.query."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer"
+    resp = client.post("/query", json={"query": "test", "top_k": 3})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["top_k"] == 3
+
+
+def test_query_override_rerank():
+    """rerank=true override is forwarded to brain.query."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Reranked answer"
+    resp = client.post("/query", json={"query": "test", "rerank": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["rerank"] is True
+
+
+def test_query_response_includes_settings():
+    """Response body includes a 'settings' key with active flag values."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer"
+    resp = client.post("/query", json={"query": "test", "hyde": True, "top_k": 7})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "settings" in data
+    assert "top_k" in data["settings"]
+    assert "hyde" in data["settings"]
+    assert "multi_query" in data["settings"]
+
+
+def test_query_no_override_does_not_mutate_config():
+    """Requests without overrides do not change brain.config (thread safety)."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer"
+    original_top_k = api_module.brain.config.top_k
+
+    resp = client.post("/query", json={"query": "test"})
+    assert resp.status_code == 200
+    assert api_module.brain.config.top_k == original_top_k
+
+
+def test_query_stream_override_forwarded():
+    """Overrides are forwarded to brain.query_stream."""
+    api_module.brain = _make_brain()
+    api_module.brain.query_stream = MagicMock(return_value=iter(["chunk"]))
+    resp = client.post("/query/stream", json={"query": "test", "hyde": True, "multi_query": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query_stream.call_args[1]
+    assert call_kwargs["overrides"]["hyde"] is True
+    assert call_kwargs["overrides"]["multi_query"] is True
+
+
+def test_query_override_decompose():
+    """decompose=true override is forwarded to brain.query overrides dict."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Decomposed answer"
+    resp = client.post("/query", json={"query": "complex multi-part question", "decompose": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["query_decompose"] is True
+
+
+def test_query_override_compress():
+    """compress=true override is forwarded to brain.query overrides dict."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Compressed answer"
+    resp = client.post("/query", json={"query": "test", "compress": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["compress_context"] is True
+
+
+def test_query_override_cite():
+    """cite=true override is forwarded to brain.query overrides dict as cite_sources."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Cited answer [Doc 1]"
+    resp = client.post("/query", json={"query": "test", "cite": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["cite_sources"] is True
+
+
+def test_query_response_includes_cite_in_settings():
+    """Response settings dict includes 'cite' key reflecting applied config."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer"
+    resp = client.post("/query", json={"query": "test", "cite": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "cite" in data["settings"]
+
+
+def test_concurrent_requests_no_cross_contamination():
+    """Different override values in concurrent requests do not bleed into each other."""
+    import threading
+
+    api_module.brain = _make_brain()
+    results = {}
+
+    def make_request(name, hyde_val):
+        api_module.brain.query.return_value = f"answer-{name}"
+        r = client.post("/query", json={"query": f"q-{name}", "hyde": hyde_val})
+        results[name] = r
+
+    t1 = threading.Thread(target=make_request, args=("a", True))
+    t2 = threading.Thread(target=make_request, args=("b", False))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    assert results["a"].status_code == 200
+    assert results["b"].status_code == 200
+    # The global config must remain unchanged after both requests
+    assert api_module.brain.config.top_k == 5

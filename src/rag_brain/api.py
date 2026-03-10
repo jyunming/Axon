@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import os
@@ -30,6 +30,23 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# Optional API key authentication — enabled when RAG_API_KEY env var is set
+_RAG_API_KEY: Optional[str] = os.getenv("RAG_API_KEY")
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """Enforce X-API-Key header when RAG_API_KEY is configured."""
+    if _RAG_API_KEY:
+        # Allow health-check without auth so load-balancers can probe freely
+        if request.url.path != "/health":
+            provided = request.headers.get("X-API-Key")
+            if provided != _RAG_API_KEY:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid or missing X-API-Key header."},
+                )
+    return await call_next(request)
+
 # Global Brain Instance
 brain: Optional[OpenStudioBrain] = None
 
@@ -48,6 +65,18 @@ class QueryRequest(BaseModel):
     query: str = Field(..., description="The question or prompt to ask the brain")
     filters: Optional[Dict[str, Any]] = Field(None, description="Metadata filters for retrieval")
     stream: bool = Field(False, description="Whether to stream the response (not fully implemented in REST yet)")
+    # Per-request RAG overrides (match CLI flags exactly)
+    top_k: Optional[int] = Field(None, ge=1, description="Override number of chunks to retrieve")
+    threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Override similarity threshold (0.0–1.0)")
+    hybrid: Optional[bool] = Field(None, description="Override hybrid BM25+vector search toggle")
+    rerank: Optional[bool] = Field(None, description="Override cross-encoder re-ranking toggle")
+    hyde: Optional[bool] = Field(None, description="Override HyDE query transformation toggle")
+    multi_query: Optional[bool] = Field(None, description="Override multi-query retrieval toggle")
+    step_back: Optional[bool] = Field(None, description="Override step-back prompting toggle")
+    decompose: Optional[bool] = Field(None, description="Override query decomposition toggle")
+    compress: Optional[bool] = Field(None, description="Override LLM context compression toggle")
+    discuss: Optional[bool] = Field(None, description="Override discussion fallback toggle")
+    cite: Optional[bool] = Field(None, description="Override inline source citation toggle")
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="The query string for semantic search")
@@ -65,6 +94,9 @@ class TextIngestRequest(BaseModel):
 class DeleteRequest(BaseModel):
     doc_ids: List[str] = Field(..., description="List of document IDs to delete")
 
+class ProjectSwitchRequest(BaseModel):
+    project_name: str = Field(..., description="Project name to switch to, or 'default' for the global knowledge base")
+
 class SearchResult(BaseModel):
     id: str
     text: str
@@ -81,8 +113,34 @@ async def query_brain(request: QueryRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        response = brain.query(request.query, filters=request.filters)
-        return {"query": request.query, "response": response}
+        overrides = {
+            "top_k": request.top_k,
+            "similarity_threshold": request.threshold,
+            "hybrid_search": request.hybrid,
+            "rerank": request.rerank,
+            "hyde": request.hyde,
+            "multi_query": request.multi_query,
+            "step_back": request.step_back,
+            "query_decompose": request.decompose,
+            "compress_context": request.compress,
+            "discussion_fallback": request.discuss,
+            "cite_sources": request.cite,
+        }
+        response = brain.query(request.query, filters=request.filters, overrides=overrides)
+        cfg = brain._apply_overrides(overrides)
+        settings = {
+            "top_k": cfg.top_k,
+            "hybrid": cfg.hybrid_search,
+            "rerank": cfg.rerank,
+            "hyde": cfg.hyde,
+            "multi_query": cfg.multi_query,
+            "step_back": cfg.step_back,
+            "decompose": cfg.query_decompose,
+            "compress": cfg.compress_context,
+            "discuss": cfg.discussion_fallback,
+            "cite": cfg.cite_sources,
+        }
+        return {"query": request.query, "response": response, "settings": settings}
     except Exception as e:
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -92,10 +150,24 @@ async def query_brain_stream(request: QueryRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
+    overrides = {
+        "top_k": request.top_k,
+        "similarity_threshold": request.threshold,
+        "hybrid_search": request.hybrid,
+        "rerank": request.rerank,
+        "hyde": request.hyde,
+        "multi_query": request.multi_query,
+        "step_back": request.step_back,
+        "query_decompose": request.decompose,
+        "compress_context": request.compress,
+        "discussion_fallback": request.discuss,
+        "cite_sources": request.cite,
+    }
+
     def generate():
         try:
             import json
-            for chunk in brain.query_stream(request.query, filters=request.filters):
+            for chunk in brain.query_stream(request.query, filters=request.filters, overrides=overrides):
                 if isinstance(chunk, dict):
                     yield f"data: {json.dumps(chunk)}\n\n"
                 else:
@@ -134,7 +206,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     validated_path = _validate_ingest_path(request.path)
 
     try:
-        requested_path = pathlib.Path(validated_path).resolve()
+        requested_path = pathlib.Path(os.path.realpath(validated_path))
         if not requested_path.exists():
             raise HTTPException(status_code=404, detail="Path does not exist")
     except (ValueError, OSError) as e:
@@ -202,9 +274,7 @@ async def delete_documents(request: DeleteRequest):
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        # Delete from ChromaDB if provider is chroma
-        if brain.vector_store.provider == "chroma":
-            brain.vector_store.collection.delete(ids=request.doc_ids)
+        brain.vector_store.delete_by_ids(request.doc_ids)
         # Delete from BM25
         if brain.bm25 is not None:
             brain.bm25.delete_documents(request.doc_ids)
@@ -212,6 +282,21 @@ async def delete_documents(request: DeleteRequest):
     except Exception as e:
         logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/project/switch")
+async def switch_project(request: ProjectSwitchRequest):
+    """Switch the active project, reinitializing vector store and BM25."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        brain.switch_project(request.project_name)
+        return {"status": "success", "active_project": request.project_name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Project switch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 def main():
     """Main entry point for rag-brain-api command."""

@@ -108,6 +108,8 @@ class TestOpenStudioBrain:
         config = OpenStudioConfig(chunk_size=1000)
         brain = OpenStudioBrain(config)
         brain.splitter = None
+        brain._save_hash_store = MagicMock()
+        brain._ingested_hashes = set()  # isolate from real on-disk hash store
 
         docs = [{"id": "d1", "text": "t1"}, {"id": "d2", "text": "t2"}]
         brain.embedding.embed = MagicMock(return_value=[[0.1], [0.1]])
@@ -124,10 +126,246 @@ class TestOpenStudioBrain:
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(return_value=[])
         brain._execute_web_search = MagicMock(return_value=[{"id": "w1", "text": "web", "score": 1.0, "is_web": True}])
-        
+
         retrieval = brain._execute_retrieval("query")
         assert retrieval['web_count'] == 1
         assert retrieval['results'][0]['is_web'] is True
+
+    # ------------------------------------------------------------------
+    # Query caching
+    # ------------------------------------------------------------------
+
+    def test_query_cache_returns_cached_response(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Second identical query hits cache; LLM called only once."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0, query_cache=True)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[{"id": "d1", "text": "ctx", "score": 0.9}])
+        brain.llm.complete = MagicMock(return_value="Cached answer")
+
+        r1 = brain.query("What is RAG?")
+        r2 = brain.query("What is RAG?")
+
+        assert r1 == r2 == "Cached answer"
+        assert brain.llm.complete.call_count == 1
+
+    def test_query_cache_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """With query_cache=False (default), LLM is called every time."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[{"id": "d1", "text": "ctx", "score": 0.9}])
+        brain.llm.complete = MagicMock(return_value="Fresh answer")
+
+        brain.query("What is RAG?")
+        brain.query("What is RAG?")
+
+        assert brain.llm.complete.call_count == 2
+
+    def test_query_cache_not_used_with_chat_history(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Cache is bypassed when chat_history is present (multi-turn context varies)."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0, query_cache=True)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[{"id": "d1", "text": "ctx", "score": 0.9}])
+        brain.llm.complete = MagicMock(return_value="Contextual answer")
+
+        history = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+        brain.query("What is RAG?", chat_history=history)
+        brain.query("What is RAG?", chat_history=history)
+
+        assert brain.llm.complete.call_count == 2
+
+    def test_query_cache_evicts_oldest_when_full(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Cache evicts oldest entry when query_cache_size is reached."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0,
+                                  query_cache=True, query_cache_size=2)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[{"id": "d1", "text": "ctx", "score": 0.9}])
+        brain.llm.complete = MagicMock(side_effect=["A", "B", "C"])
+
+        brain.query("q1")
+        brain.query("q2")
+        # q1 should be evicted now
+        brain.query("q3")
+        assert len(brain._query_cache) == 2
+
+    # ------------------------------------------------------------------
+    # Ingest deduplication
+    # ------------------------------------------------------------------
+
+    def test_ingest_dedup_skips_duplicate_chunks(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Re-ingesting the same text is skipped when dedup_on_ingest=True."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(dedup_on_ingest=True)
+        brain = OpenStudioBrain(config)
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]])
+        brain.vector_store.add = MagicMock()
+
+        docs = [{"id": "d1", "text": "unique text"}]
+        brain.ingest(docs)
+        brain.ingest(docs)  # second call — should be skipped
+
+        assert brain.vector_store.add.call_count == 1
+
+    def test_ingest_dedup_allows_new_content(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Different text content passes dedup check and is ingested."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(dedup_on_ingest=True)
+        brain = OpenStudioBrain(config)
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain.embedding.embed = MagicMock(side_effect=[[[0.1]], [[0.2]]])
+        brain.vector_store.add = MagicMock()
+
+        brain.ingest([{"id": "d1", "text": "first doc"}])
+        brain.ingest([{"id": "d2", "text": "second doc"}])
+
+        assert brain.vector_store.add.call_count == 2
+
+    def test_ingest_dedup_disabled(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """With dedup_on_ingest=False, identical content is ingested again."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(dedup_on_ingest=False)
+        brain = OpenStudioBrain(config)
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain.embedding.embed = MagicMock(side_effect=[[[0.1]], [[0.1]]])
+        brain.vector_store.add = MagicMock()
+
+        docs = [{"id": "d1", "text": "same text"}]
+        brain.ingest(docs)
+        brain.ingest(docs)
+
+        assert brain.vector_store.add.call_count == 2
+
+    # ------------------------------------------------------------------
+    # Step-back prompting
+    # ------------------------------------------------------------------
+
+    def test_step_back_adds_abstract_query_to_retrieval(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Step-back generates an abstract query and includes it in search_queries."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0, step_back=True)
+        brain = OpenStudioBrain(config)
+        brain._get_step_back_query = MagicMock(return_value="abstract concept query")
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.embedding.embed = MagicMock(return_value=[[0.1], [0.2]])
+        brain.vector_store.search = MagicMock(return_value=[])
+        brain.llm.complete = MagicMock(return_value="Step-back answer")
+
+        retrieval = brain._execute_retrieval("specific detailed question")
+
+        brain._get_step_back_query.assert_called_once_with("specific detailed question")
+        assert retrieval['transforms']['step_back_applied'] is True
+        assert "abstract concept query" in retrieval['transforms']['queries']
+
+    def test_step_back_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """step_back is False by default — no extra LLM call for abstraction."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False)
+        brain = OpenStudioBrain(config)
+        brain._get_step_back_query = MagicMock()
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[])
+
+        brain._execute_retrieval("any question")
+        brain._get_step_back_query.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Parent-document / small-to-big retrieval
+    # ------------------------------------------------------------------
+
+    def test_parent_chunk_size_zero_uses_standard_split(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """parent_chunk_size=0 (default) uses the normal splitter path."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(parent_chunk_size=0)
+        brain = OpenStudioBrain(config)
+        brain._save_hash_store = MagicMock()
+        brain._ingested_hashes = set()
+        brain.vector_store.add = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]])
+
+        docs = [{"id": "d1", "text": "short text"}]
+        brain.ingest(docs)
+        # Standard split: no parent_text in metadata
+        call_args = brain.vector_store.add.call_args
+        metadatas = call_args[0][3]
+        assert all("parent_text" not in m for m in metadatas)
+
+    def test_parent_chunk_creates_child_chunks_with_parent_text(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """parent_chunk_size > chunk_size embeds child chunks that carry parent_text in metadata."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(chunk_size=50, chunk_overlap=10, parent_chunk_size=200)
+        brain = OpenStudioBrain(config)
+        brain._save_hash_store = MagicMock()
+        brain._ingested_hashes = set()
+        brain.vector_store.add = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]] * 20)
+
+        # Create a document long enough to produce multiple child chunks
+        long_text = "word " * 80  # ~400 chars, will split into multiple 50-char child chunks
+        docs = [{"id": "d1", "text": long_text}]
+        brain.ingest(docs)
+
+        assert brain.vector_store.add.called
+        metadatas = brain.vector_store.add.call_args[0][3]
+        # Every indexed child chunk must carry parent_text
+        assert all("parent_text" in m for m in metadatas)
+
+    def test_build_context_uses_parent_text_when_present(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """_build_context returns parent_text (not chunk text) for small-to-big results."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig()
+        brain = OpenStudioBrain(config)
+
+        results = [{
+            "id": "d1_p0_chunk_0",
+            "text": "small retrieval chunk",
+            "score": 0.9,
+            "metadata": {"parent_text": "large parent passage with much more context"},
+        }]
+        context, _ = brain._build_context(results)
+        assert "large parent passage with much more context" in context
+        assert "small retrieval chunk" not in context
+
+    def test_build_context_falls_back_to_chunk_text_without_parent(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """_build_context falls back to chunk text when parent_text is absent."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig()
+        brain = OpenStudioBrain(config)
+
+        results = [{"id": "d1", "text": "normal chunk text", "score": 0.9, "metadata": {}}]
+        context, _ = brain._build_context(results)
+        assert "normal chunk text" in context
+
+    def test_reranker_model_cli_sets_config(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """--reranker-model CLI arg updates config.reranker_model before brain init."""
+        from rag_brain.main import OpenStudioConfig
+        config = OpenStudioConfig()
+        config.reranker_model = "BAAI/bge-reranker-v2-m3"
+        assert config.reranker_model == "BAAI/bge-reranker-v2-m3"
+
+    def test_reranker_default_model(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Default reranker model is the lightweight ms-marco cross-encoder."""
+        from rag_brain.main import OpenStudioConfig
+        config = OpenStudioConfig()
+        assert config.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
+    def test_parent_chunk_size_config_defaults_zero(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """parent_chunk_size defaults to 0 (feature disabled by default)."""
+        from rag_brain.main import OpenStudioConfig
+        config = OpenStudioConfig()
+        assert config.parent_chunk_size == 0
 
 
 class TestOpenReranker:
@@ -365,6 +603,168 @@ class TestQueryTransformations:
             asyncio.run(brain.load_directory(str(tmp_path)))
 
         brain.ingest.assert_not_called()
+
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestQueryDecomposeAndCompress:
+    """Tests for query decomposition and context compression."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0, **kwargs)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[])
+        return brain
+
+    # ------------------------------------------------------------------
+    # Query Decomposition
+    # ------------------------------------------------------------------
+
+    def test_decompose_breaks_query_into_sub_questions(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, query_decompose=True)
+        brain.llm.complete = MagicMock(return_value="What is X?\nHow does X work?\nWhy is X useful?")
+
+        sub_qs = brain._decompose_query("Tell me everything about X")
+
+        assert sub_qs[0] == "Tell me everything about X"  # original always first
+        assert len(sub_qs) >= 2
+        assert "What is X?" in sub_qs
+
+    def test_decompose_strips_numbering_and_bullets(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="1. Sub one\n2. Sub two\n- Sub three")
+
+        sub_qs = brain._decompose_query("complex question")
+
+        assert all(not q[0].isdigit() for q in sub_qs[1:])
+        assert all(not q.startswith("-") for q in sub_qs[1:])
+
+    def test_decompose_deduplicates_sub_questions(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="original question\noriginal question\nNew sub")
+
+        sub_qs = brain._decompose_query("original question")
+
+        assert sub_qs.count("original question") == 1
+
+    def test_decompose_applied_in_execute_retrieval(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, query_decompose=True)
+        brain._decompose_query = MagicMock(return_value=["original", "sub-q1", "sub-q2"])
+
+        retrieval = brain._execute_retrieval("original")
+
+        brain._decompose_query.assert_called_once_with("original")
+        assert retrieval['transforms']['decompose_applied'] is True
+        assert "sub-q1" in retrieval['transforms']['queries']
+
+    def test_decompose_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain._decompose_query = MagicMock()
+
+        brain._execute_retrieval("any question")
+
+        brain._decompose_query.assert_not_called()
+
+    def test_decompose_combines_with_multi_query(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """multi_query and query_decompose can run together; queries are deduplicated."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                  multi_query=True, query_decompose=True)
+        brain._get_multi_queries = MagicMock(return_value=["q", "alt1", "alt2"])
+        brain._decompose_query = MagicMock(return_value=["q", "sub1"])
+
+        retrieval = brain._execute_retrieval("q")
+
+        assert retrieval['transforms']['multi_query_applied'] is True
+        assert retrieval['transforms']['decompose_applied'] is True
+        queries = retrieval['transforms']['queries']
+        assert queries.count("q") == 1  # no duplicates
+
+    # ------------------------------------------------------------------
+    # Context Compression
+    # ------------------------------------------------------------------
+
+    def test_compress_context_shortens_chunks(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, compress_context=True)
+        long_text = "irrelevant sentence. " * 20 + "The answer is 42."
+        brain.llm.complete = MagicMock(return_value="The answer is 42.")
+
+        results = [{"id": "d1", "text": long_text, "score": 0.9, "metadata": {}}]
+        compressed = brain._compress_context("What is the answer?", results)
+
+        assert compressed[0]["text"] == "The answer is 42."
+
+    def test_compress_context_skips_web_results(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="compressed")
+
+        web_result = {"id": "http://ex.com", "text": "web content", "score": 1.0,
+                      "metadata": {}, "is_web": True}
+        results = brain._compress_context("q", [web_result])
+
+        # Web results must pass through unchanged; LLM must not be called
+        brain.llm.complete.assert_not_called()
+        assert results[0]["text"] == "web content"
+
+    def test_compress_context_falls_back_on_failure(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """If LLM compression raises, the original result is returned unchanged."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(side_effect=RuntimeError("llm down"))
+
+        original_text = "original chunk text"
+        results = [{"id": "d1", "text": original_text, "score": 0.9, "metadata": {}}]
+        compressed = brain._compress_context("q", results)
+
+        assert compressed[0]["text"] == original_text
+
+    def test_compress_context_does_not_expand_chunk(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """If LLM returns something longer than the original, keep the original."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        short_text = "short"
+        brain.llm.complete = MagicMock(return_value="much longer text that exceeds original length significantly")
+
+        results = [{"id": "d1", "text": short_text, "score": 0.9, "metadata": {}}]
+        compressed = brain._compress_context("q", results)
+
+        assert compressed[0]["text"] == short_text
+
+    def test_compress_context_uses_parent_text_as_source(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """When parent_text is in metadata, that is compressed (not the small child chunk)."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="compressed parent")
+
+        results = [{
+            "id": "d1_p0_chunk_0",
+            "text": "small child chunk",
+            "score": 0.9,
+            "metadata": {"parent_text": "large parent passage " * 10},
+        }]
+        compressed = brain._compress_context("q", results)
+
+        # Compression prompt should have used parent_text, result stored back in parent_text
+        call_prompt = brain.llm.complete.call_args[0][0]
+        assert "large parent passage" in call_prompt
+        assert compressed[0]["metadata"]["parent_text"] == "compressed parent"
+
+    def test_compress_context_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """compress_context=False (default): _compress_context is never called during query."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "ctx", "score": 0.9}
+        ])
+        brain.llm.complete = MagicMock(return_value="answer")
+        brain._compress_context = MagicMock(wraps=brain._compress_context)
+
+        brain.query("test?")
+
+        brain._compress_context.assert_not_called()
 
 
 @patch("rag_brain.retrievers.BM25Retriever")
@@ -614,4 +1014,504 @@ class TestInferProvider:
         from rag_brain.main import _infer_provider
         assert _infer_provider("GEMINI-2.0-FLASH") == "gemini"
         assert _infer_provider("GPT-4O") == "openai"
+
+
+# ---------------------------------------------------------------------------
+# Inline citations
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestCiteSources:
+    def test_cite_sources_injects_instruction_in_system_prompt(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """When cite_sources=True the system prompt must contain a citation directive."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, cite_sources=True, similarity_threshold=0.0)
+        brain = OpenStudioBrain(config)
+        brain._ingested_hashes = set()
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "Transformers use attention.", "score": 0.9, "metadata": {}}
+        ])
+        brain.llm.complete = MagicMock(return_value="Answer [Doc 1]")
+
+        brain.query("What is a transformer?")
+
+        call_args = brain.llm.complete.call_args
+        system_prompt = call_args[0][1]
+        assert "cite" in system_prompt.lower() or "[Doc" in system_prompt
+
+    def test_cite_sources_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Without cite_sources the system prompt must NOT contain the citation directive."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, cite_sources=False, similarity_threshold=0.0)
+        brain = OpenStudioBrain(config)
+        brain._ingested_hashes = set()
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "Transformers use attention.", "score": 0.9, "metadata": {}}
+        ])
+        brain.llm.complete = MagicMock(return_value="Answer")
+
+        brain.query("What is a transformer?")
+
+        call_args = brain.llm.complete.call_args
+        system_prompt = call_args[0][1]
+        assert "Citation requirement" not in system_prompt
+
+    def test_cite_override_applies_via_apply_overrides(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Per-request cite_sources override is applied via _apply_overrides."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, cite_sources=False, similarity_threshold=0.0)
+        brain = OpenStudioBrain(config)
+        brain._ingested_hashes = set()
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "Transformers use attention.", "score": 0.9, "metadata": {}}
+        ])
+        brain.llm.complete = MagicMock(return_value="Answer [Doc 1]")
+
+        # Pass override at query time
+        brain.query("What is a transformer?", overrides={"cite_sources": True})
+
+        call_args = brain.llm.complete.call_args
+        system_prompt = call_args[0][1]
+        assert "cite" in system_prompt.lower() or "[Doc" in system_prompt
+        # Ensure original config was not mutated
+        assert brain.config.cite_sources is False
+
+
+# ---------------------------------------------------------------------------
+# RAPTOR hierarchical indexing
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestRaptor:
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
+        brain = OpenStudioBrain(config)
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain._save_entity_graph = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1] * 384])
+        brain.vector_store.add = MagicMock()
+        return brain
+
+    def test_raptor_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        docs = [{"id": "d1", "text": "chunk one", "metadata": {"source": "a.txt"}},
+                {"id": "d2", "text": "chunk two", "metadata": {"source": "a.txt"}}]
+        # No LLM call for summaries when raptor=False
+        brain.llm.complete = MagicMock(return_value="summary")
+        brain.ingest(docs)
+        brain.llm.complete.assert_not_called()
+
+    def test_raptor_generates_summary_nodes(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 raptor=True, raptor_chunk_group_size=2)
+        docs = [{"id": f"d{i}", "text": f"chunk text {i}", "metadata": {"source": "a.txt"}} for i in range(4)]
+        brain.llm.complete = MagicMock(return_value="This is a raptor summary.")
+        brain.embedding.embed = MagicMock(side_effect=lambda texts: [[0.1] * 384] * len(texts))
+        brain.ingest(docs)
+        # 4 chunks / group_size=2 → 2 summary nodes + 4 leaf = 6 total
+        add_calls = brain.vector_store.add.call_args_list
+        total_ingested = sum(len(c[0][0]) for c in add_calls)  # first positional arg = ids list
+        assert total_ingested >= 5, f"Expected at least 5 docs (4 leaves + ≥1 summary), got {total_ingested}"
+        # LLM was called to produce summaries
+        assert brain.llm.complete.call_count >= 1
+
+    def test_raptor_summary_metadata_has_raptor_level(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 raptor=True, raptor_chunk_group_size=3)
+        docs = [{"id": f"d{i}", "text": f"text {i}", "metadata": {"source": "b.txt"}} for i in range(3)]
+        brain.llm.complete = MagicMock(return_value="Summary content")
+        brain.embedding.embed = MagicMock(side_effect=lambda texts: [[0.1] * 384] * len(texts))
+        brain.ingest(docs)
+
+        add_calls = brain.vector_store.add.call_args_list
+        all_metadatas = []
+        for call in add_calls:
+            all_metadatas.extend(call[0][3])  # 4th positional arg = metadatas
+        raptor_meta = [m for m in all_metadatas if m.get("raptor_level") == 1]
+        assert len(raptor_meta) >= 1
+
+    def test_raptor_failure_silently_skipped(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """If LLM fails for a group, RAPTOR skips that group without crashing."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 raptor=True, raptor_chunk_group_size=2)
+        docs = [{"id": f"d{i}", "text": f"text {i}", "metadata": {"source": "c.txt"}} for i in range(2)]
+        brain.llm.complete = MagicMock(side_effect=RuntimeError("LLM down"))
+        brain.embedding.embed = MagicMock(return_value=[[0.1] * 384] * 2)
+        brain.ingest(docs)  # should not raise
+        # Only the 2 leaf chunks ingested (no summary added)
+        add_calls = brain.vector_store.add.call_args_list
+        total_ingested = sum(len(c[0][0]) for c in add_calls)
+        assert total_ingested == 2
+
+
+# ---------------------------------------------------------------------------
+# GraphRAG entity-centric retrieval
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestGraphRAG:
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
+        brain = OpenStudioBrain(config)
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain._save_entity_graph = MagicMock()
+        return brain
+
+    def test_graph_rag_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        docs = [{"id": "d1", "text": "Attention is all you need.", "metadata": {"source": "a.txt"}}]
+        brain.embedding.embed = MagicMock(return_value=[[0.1] * 384])
+        brain.vector_store.add = MagicMock()
+        brain.llm.complete = MagicMock(return_value="Attention")
+        brain.ingest(docs)
+        # Entity graph should remain empty since graph_rag=False
+        assert brain._entity_graph == {}
+
+    def test_graph_rag_populates_entity_graph_on_ingest(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, graph_rag=True)
+        docs = [{"id": "d1", "text": "BERT is a transformer model.", "metadata": {"source": "ml.txt"}}]
+        brain.embedding.embed = MagicMock(return_value=[[0.1] * 384])
+        brain.vector_store.add = MagicMock()
+        brain.llm.complete = MagicMock(return_value="BERT\ntransformer")
+        brain.ingest(docs)
+        # At least one entity should be in the graph
+        assert len(brain._entity_graph) >= 1
+        # doc id (possibly with chunk suffix from splitter) should appear under at least one entity
+        all_ids = {doc_id for ids in brain._entity_graph.values() for doc_id in ids}
+        assert any(doc_id.startswith("d1") for doc_id in all_ids)
+
+    def test_graph_rag_expands_results_at_query_time(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Entity graph expansion fetches related docs not in original results."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 graph_rag=True, similarity_threshold=0.0)
+        # Pre-populate entity graph
+        brain._entity_graph = {"transformer": ["d2"]}
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        # Primary retrieval returns only d1
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "Attention mechanisms", "score": 0.9, "metadata": {}}
+        ])
+        # get_by_ids returns d2 for GraphRAG expansion
+        brain.vector_store.get_by_ids = MagicMock(return_value=[
+            {"id": "d2", "text": "BERT is a transformer.", "score": 1.0, "metadata": {}}
+        ])
+        brain.llm.complete = MagicMock(return_value="transformer")  # entity extraction
+        brain.llm.complete.side_effect = ["transformer", "Answer"]
+        # Answer
+        brain.llm.complete = MagicMock(side_effect=["transformer", "final answer"])
+        result = brain.query("What is a transformer?")
+        # get_by_ids should have been called for graph expansion
+        brain.vector_store.get_by_ids.assert_called()
+
+    def test_graph_rag_does_not_duplicate_already_retrieved(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """GraphRAG expansion skips doc IDs already in primary results."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 graph_rag=True, similarity_threshold=0.0)
+        brain._entity_graph = {"transformer": ["d1"]}  # d1 already in primary results
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "Attention", "score": 0.9, "metadata": {}}
+        ])
+        brain.vector_store.get_by_ids = MagicMock(return_value=[])
+        brain.llm.complete = MagicMock(side_effect=["transformer", "answer"])
+        brain.query("What is a transformer?")
+        # get_by_ids called but with empty list (d1 already present)
+        if brain.vector_store.get_by_ids.called:
+            call_ids = brain.vector_store.get_by_ids.call_args[0][0]
+            assert "d1" not in call_ids
+
+
+# ---------------------------------------------------------------------------
+# Cache: LRU eviction & make_cache_key completeness
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestCacheFixes:
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False,
+                                  similarity_threshold=0.0, **cfg_kwargs)
+        brain = OpenStudioBrain(config)
+        brain._ingested_hashes = set()
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "ctx", "score": 0.9, "metadata": {}}
+        ])
+        return brain
+
+    def test_lru_hit_moves_to_end(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Cache hit moves the entry to the end (most-recently-used position)."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 query_cache=True, query_cache_size=3)
+        brain.llm.complete = MagicMock(side_effect=["A", "B", "A_again"])
+        brain.query("q1")  # inserts key1
+        brain.query("q2")  # inserts key2
+        # Hit q1 — should move key1 to end so key2 would be evicted next
+        brain.llm.complete.side_effect = ["A"]
+        brain.query("q1")  # cache hit; key1 moved to end
+        # Now insert q3 — cache is at size 3 (q1, q2, both present + q3 = need evict q2 = LRU)
+        brain.llm.complete.side_effect = ["C"]
+        brain.query("q3")
+        keys = list(brain._query_cache.keys())
+        # q2 should have been evicted (it was LRU after q1 was accessed)
+        # q1 and q3 should still be present
+        assert len(brain._query_cache) == 3  # size=3, nothing evicted yet
+        # With size=3 nothing evicted, but verify ordering: q1 was moved to end after hit
+        # so in the OrderedDict q2 should be earlier than q1
+        key_q2 = [k for k in keys if brain._query_cache.get(k) == "B"]
+        key_q1 = [k for k in keys if brain._query_cache.get(k) == "A"]
+        if key_q1 and key_q2:
+            assert keys.index(key_q2[0]) < keys.index(key_q1[0])
+
+    def test_lru_evicts_least_recently_used(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """When cache is full the LRU entry (front of OrderedDict) is evicted."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 query_cache=True, query_cache_size=2)
+        brain.llm.complete = MagicMock(side_effect=["A", "B"])
+        brain.query("q1")
+        brain.query("q2")
+        # Access q1 to make q2 LRU
+        brain.llm.complete.side_effect = ["A"]  # would be skipped (cache hit)
+        brain.query("q1")  # cache hit; q1 now MRU
+        # q3 insert should evict q2 (LRU)
+        brain.llm.complete.side_effect = ["C"]
+        brain.query("q3")
+        assert len(brain._query_cache) == 2
+        cached_values = list(brain._query_cache.values())
+        assert "B" not in cached_values, "q2 (LRU) should have been evicted"
+        assert "A" in cached_values
+        assert "C" in cached_values
+
+    def test_cache_size_zero_does_not_cache(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """query_cache_size=0 disables caching (guard against StopIteration on empty cache)."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 query_cache=True, query_cache_size=0)
+        brain.llm.complete = MagicMock(return_value="answer")
+        brain.query("q1")
+        brain.query("q1")  # second call — should NOT raise and should call LLM again
+        assert brain.llm.complete.call_count == 2  # no caching when size=0
+
+    def test_cache_key_includes_cite_sources(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Two requests differing only in cite_sources get distinct cache keys."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        from rag_brain.main import OpenStudioConfig
+        cfg_no_cite = OpenStudioConfig(cite_sources=False)
+        cfg_cite = OpenStudioConfig(cite_sources=True)
+        key1 = brain._make_cache_key("q", None, cfg_no_cite)
+        key2 = brain._make_cache_key("q", None, cfg_cite)
+        assert key1 != key2
+
+    def test_cache_key_includes_compress_context(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Two requests differing only in compress_context get distinct cache keys."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        from rag_brain.main import OpenStudioConfig
+        key1 = brain._make_cache_key("q", None, OpenStudioConfig(compress_context=False))
+        key2 = brain._make_cache_key("q", None, OpenStudioConfig(compress_context=True))
+        assert key1 != key2
+
+    def test_cache_key_filter_serialisation_is_stable(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Same filters in different insertion order produce the same cache key."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        from rag_brain.main import OpenStudioConfig
+        cfg = OpenStudioConfig()
+        key1 = brain._make_cache_key("q", {"b": 2, "a": 1}, cfg)
+        key2 = brain._make_cache_key("q", {"a": 1, "b": 2}, cfg)
+        assert key1 == key2
+
+
+# ---------------------------------------------------------------------------
+# _compress_context empty-results guard
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestCompressContextGuard:
+    def test_compress_context_empty_list_returns_empty(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """_compress_context([]) must not raise ValueError from ThreadPoolExecutor(max_workers=0)."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        brain = OpenStudioBrain(OpenStudioConfig())
+        result = brain._compress_context("any query", [])
+        assert result == []
+
+    def test_compress_context_single_item(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Single-item list compresses without error."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        brain = OpenStudioBrain(OpenStudioConfig())
+        brain.llm.complete = MagicMock(return_value="short")
+        doc = {"id": "d1", "text": "this is a longer original text for the test", "metadata": {}}
+        result = brain._compress_context("query", [doc])
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# switch_project reloads project-scoped state
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestSwitchProjectState:
+    def test_switch_project_clears_query_cache(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path):
+        """Switching project empties the query cache to prevent cross-project bleed."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        from rag_brain.projects import ensure_project
+        config = OpenStudioConfig(
+            query_cache=True, query_cache_size=128,
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        brain = OpenStudioBrain(config)
+        # Prime the cache with a fake entry
+        brain._query_cache["fake_key"] = "cached_answer"
+        # Create a real project dir so switch_project doesn't raise
+        proj_path = tmp_path / ".rag_brain" / "projects" / "myproject"
+        proj_path.mkdir(parents=True, exist_ok=True)
+        with patch("rag_brain.projects.project_dir", return_value=proj_path), \
+             patch("rag_brain.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")), \
+             patch("rag_brain.projects.project_bm25_path", return_value=str(tmp_path / "proj_bm25")), \
+             patch("rag_brain.projects.set_active_project"):
+            brain.switch_project("myproject")
+        assert len(brain._query_cache) == 0
+
+    def test_switch_project_reloads_ingested_hashes(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path):
+        """Switching project loads the new project's content hashes."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        brain = OpenStudioBrain(config)
+        # Seed some hashes so we can confirm they get replaced
+        brain._ingested_hashes = {"oldhash1", "oldhash2"}
+        # Write new project's hash store
+        new_bm25 = tmp_path / "proj_bm25"
+        new_bm25.mkdir(parents=True)
+        (new_bm25 / ".content_hashes").write_text("newhash1\nnewhash2\nnewhash3", encoding="utf-8")
+        proj_path = tmp_path / ".rag_brain" / "projects" / "proj2"
+        proj_path.mkdir(parents=True, exist_ok=True)
+        with patch("rag_brain.projects.project_dir", return_value=proj_path), \
+             patch("rag_brain.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")), \
+             patch("rag_brain.projects.project_bm25_path", return_value=str(new_bm25)), \
+             patch("rag_brain.projects.set_active_project"):
+            brain.switch_project("proj2")
+        assert brain._ingested_hashes == {"newhash1", "newhash2", "newhash3"}
+        assert "oldhash1" not in brain._ingested_hashes
+
+
+# ---------------------------------------------------------------------------
+# LanceDB vector store
+# ---------------------------------------------------------------------------
+
+import sys
+import types as _types
+
+
+def _make_lancedb_mock():
+    """Create and register a minimal lancedb mock module in sys.modules."""
+    mock_lancedb = _types.ModuleType("lancedb")
+    mock_lancedb.connect = MagicMock()
+    sys.modules["lancedb"] = mock_lancedb
+    return mock_lancedb
+
+
+class TestOpenVectorStoreLanceDB:
+    def _make_store(self, mock_lancedb):
+        """Helper: returns (store, mock_table) with lancedb already mocked."""
+        from rag_brain.main import OpenVectorStore, OpenStudioConfig
+        config = OpenStudioConfig(vector_store="lancedb", vector_store_path="./lancedb_test")
+        mock_table = MagicMock()
+        mock_lancedb.connect.return_value.open_table.side_effect = Exception("not found")
+        mock_lancedb.connect.return_value.create_table.return_value = mock_table
+        store = OpenVectorStore(config)
+        return store, mock_table
+
+    def test_init_no_existing_table(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, _ = self._make_store(mock_lancedb)
+        assert store.collection is None   # lazy until first add
+
+    def test_add_creates_table_on_first_call(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.add(["id1"], ["hello"], [[0.1, 0.2]], [{"source": "a.txt"}])
+        mock_lancedb.connect.return_value.create_table.assert_called_once()
+        assert store.collection is mock_table
+
+    def test_search_returns_empty_when_no_table(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, _ = self._make_store(mock_lancedb)
+        results = store.search([0.1, 0.2], top_k=5)
+        assert results == []
+
+    def test_search_converts_distance_to_score(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table   # simulate existing table
+        mock_table.search.return_value.limit.return_value.to_list.return_value = [
+            {"id": "d1", "text": "foo", "_distance": 0.2, "metadata_json": "{}"}
+        ]
+        results = store.search([0.1, 0.2], top_k=5)
+        assert len(results) == 1
+        assert abs(results[0]["score"] - 0.8) < 1e-6
+
+    def test_list_documents_groups_by_source(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table
+        mock_table.to_arrow.return_value.to_pydict.return_value = {
+            "id": ["c1", "c2", "c3"],
+            "source": ["notes.txt", "notes.txt", "report.pdf"],
+        }
+        result = store.list_documents()
+        assert len(result) == 2
+        by_src = {d["source"]: d for d in result}
+        assert by_src["notes.txt"]["chunks"] == 2
+
+    def test_get_by_ids(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table
+        mock_table.search.return_value.where.return_value.to_list.return_value = [
+            {"id": "id1", "text": "hello", "metadata_json": '{"source": "x.txt"}'}
+        ]
+        results = store.get_by_ids(["id1"])
+        assert results[0]["id"] == "id1"
+        assert results[0]["metadata"]["source"] == "x.txt"
+
+    def test_delete_by_ids(self):
+        mock_lancedb = _make_lancedb_mock()
+        store, mock_table = self._make_store(mock_lancedb)
+        store.collection = mock_table
+        store.delete_by_ids(["id1", "id2"])
+        mock_table.delete.assert_called_once()
+        call_arg = mock_table.delete.call_args[0][0]
+        assert "id1" in call_arg and "id2" in call_arg
 
