@@ -2799,7 +2799,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             "": "",
             "completion-menu.completion.current": "bg:#444466 #ffffff",
             "bottom-toolbar":    "bg:#2b2b2b #b0b0b0",
-            "tblbl":             "bg:#2b2b2b #ffffff bold",
+            "tblbl":             "#ffffff bold",
         })
 
         class _PTCompleter(Completer):
