@@ -12,6 +12,7 @@ EXPECTED_TOOL_NAMES = {
     "delete_documents",
     "ingest_directory",
     "stream_query",
+    "list_knowledge_base",
 }
 
 
@@ -41,9 +42,13 @@ def test_each_tool_has_required_schema_fields():
 
 
 def test_each_tool_has_at_least_one_required_parameter():
+    # Tools that are intentionally zero-argument (no required params) are excluded.
+    zero_arg_tools = {"list_knowledge_base"}
     tools = get_rag_tool_definition()
     for tool in tools:
         fn = tool["function"]
+        if fn["name"] in zero_arg_tools:
+            continue
         required = fn["parameters"].get("required", [])
         assert len(required) >= 1, f"Tool '{fn['name']}' has no required parameters"
 

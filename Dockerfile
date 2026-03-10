@@ -22,5 +22,9 @@ RUN pip install -e .
 EXPOSE 8000
 EXPOSE 8501
 
+# Run as non-root user for security
+RUN useradd -m appuser && chown -R appuser /app
+USER appuser
+
 # Default command launches the API
 CMD ["rag-brain-api"]

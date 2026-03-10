@@ -1515,3 +1515,85 @@ class TestOpenVectorStoreLanceDB:
         call_arg = mock_table.delete.call_args[0][0]
         assert "id1" in call_arg and "id2" in call_arg
 
+
+class TestExpandAtFiles:
+    """Tests for _expand_at_files() — file/folder context attachment."""
+
+    def test_plain_text_file_inlined(self, tmp_path):
+        from rag_brain.main import _expand_at_files
+        f = tmp_path / "notes.txt"
+        f.write_text("hello world", encoding="utf-8")
+        result = _expand_at_files(f"review @{f}")
+        assert "hello world" in result
+        assert str(f) in result
+
+    def test_unknown_path_left_unchanged(self):
+        from rag_brain.main import _expand_at_files
+        text = "check @nonexistent_xyz_file.txt please"
+        assert _expand_at_files(text) == text
+
+    def test_directory_expands_text_files(self, tmp_path):
+        from rag_brain.main import _expand_at_files
+        (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
+        (tmp_path / "b.md").write_text("beta", encoding="utf-8")
+        (tmp_path / "skip.bin").write_bytes(b"\x00\x01\x02")
+        result = _expand_at_files(f"look at @{tmp_path}/")
+        assert "alpha" in result
+        assert "beta" in result
+        assert "skip.bin" not in result   # binary ext not in _AT_TEXT_EXTS
+
+    def test_directory_skips_hidden_dirs(self, tmp_path):
+        from rag_brain.main import _expand_at_files
+        hidden = tmp_path / ".hidden"
+        hidden.mkdir()
+        (hidden / "secret.txt").write_text("secret", encoding="utf-8")
+        (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+        result = _expand_at_files(f"@{tmp_path}/")
+        assert "visible" in result
+        assert "secret" not in result
+
+    def test_directory_context_limit(self, tmp_path):
+        from rag_brain.main import _expand_at_files, _AT_DIR_MAX_BYTES, _AT_FILE_MAX_BYTES
+        # Each file is capped at _AT_FILE_MAX_BYTES on read; create enough files so that
+        # their combined sizes exceed _AT_DIR_MAX_BYTES, which triggers the skip message.
+        # We need ceil(_AT_DIR_MAX_BYTES / _AT_FILE_MAX_BYTES) + 1 files.
+        n_to_fill = (_AT_DIR_MAX_BYTES // _AT_FILE_MAX_BYTES) + 1
+        for i in range(n_to_fill):
+            (tmp_path / f"chunk{i:02d}.txt").write_text("y" * _AT_FILE_MAX_BYTES, encoding="utf-8")
+        # This extra file should be skipped with "context limit reached"
+        (tmp_path / "zzz_last.txt").write_text("should-be-skipped", encoding="utf-8")
+        result = _expand_at_files(f"@{tmp_path}/")
+        assert "context limit reached" in result
+
+    def test_docx_uses_loader(self, tmp_path):
+        from rag_brain.main import _expand_at_files
+        from unittest.mock import patch, MagicMock
+        docx_path = tmp_path / "report.docx"
+        docx_path.write_bytes(b"PK fake docx")
+        mock_instance = MagicMock()
+        mock_instance.load.return_value = [{"text": "Extracted docx text"}]
+        with patch("rag_brain.loaders.DOCXLoader", return_value=mock_instance):
+            result = _expand_at_files(f"@{docx_path}")
+        assert "Extracted docx text" in result
+
+    def test_pdf_uses_loader(self, tmp_path):
+        from rag_brain.main import _expand_at_files
+        from unittest.mock import patch, MagicMock
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4 fake")
+        mock_instance = MagicMock()
+        mock_instance.load.return_value = [{"text": "Extracted pdf text"}]
+        with patch("rag_brain.loaders.PDFLoader", return_value=mock_instance):
+            result = _expand_at_files(f"@{pdf_path}")
+        assert "Extracted pdf text" in result
+
+    def test_multiple_at_refs_in_one_query(self, tmp_path):
+        from rag_brain.main import _expand_at_files
+        f1 = tmp_path / "one.txt"
+        f2 = tmp_path / "two.txt"
+        f1.write_text("AAA", encoding="utf-8")
+        f2.write_text("BBB", encoding="utf-8")
+        result = _expand_at_files(f"compare @{f1} and @{f2}")
+        assert "AAA" in result
+        assert "BBB" in result
+
