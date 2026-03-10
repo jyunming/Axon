@@ -106,7 +106,13 @@ class OpenStudioConfig:
     multi_query: bool = False
     hyde: bool = False
     step_back: bool = False
+    query_decompose: bool = False
     discussion_fallback: bool = True
+
+    # Context Compression
+    # Uses the generation LLM to extract only query-relevant sentences from each
+    # retrieved chunk before passing context to the final answer generation step.
+    compress_context: bool = False
 
     # Web Search / Truth Grounding
     truth_grounding: bool = False
@@ -159,9 +165,11 @@ class OpenStudioConfig:
                 config_dict['reranker_model'] = data['rerank']['model']
                 
         if 'query_transformations' in data:
-            for key in ('multi_query', 'hyde', 'step_back', 'discussion_fallback'):
+            for key in ('multi_query', 'hyde', 'step_back', 'query_decompose', 'discussion_fallback'):
                 if key in data['query_transformations']:
                     config_dict[key] = data['query_transformations'][key]
+        if 'context_compression' in data:
+            config_dict['compress_context'] = data['context_compression'].get('enabled', False)
         if 'web_search' in data:
             ws = data['web_search']
             config_dict['truth_grounding'] = ws.get('enabled', False)
@@ -999,6 +1007,65 @@ Your primary goal is to help the user by answering questions based on the provid
             "total_ms": round((time.time() - t0) * 1000, 1),
         })
 
+    def _decompose_query(self, query: str) -> List[str]:
+        """Break a complex query into atomic sub-questions for independent retrieval.
+
+        Returns the original query plus up to 4 sub-questions.
+        """
+        prompt = (
+            "Break the following question into 2–4 simpler, atomic sub-questions that together "
+            "cover all aspects of the original. Output each sub-question on a new line with no "
+            "numbering or bullet prefix. If the question is already simple, output it unchanged.\n\n"
+            "Question: " + query
+        )
+        response = self.llm.complete(prompt, system_prompt="You are an expert at decomposing complex questions.")
+        sub_qs = [q.strip("- \t1234567890.)") for q in response.split("\n") if q.strip()]
+        # Dedupe while preserving order; always keep original first
+        seen = {query}
+        unique = [query]
+        for q in sub_qs[:4]:
+            if q and q not in seen:
+                seen.add(q)
+                unique.append(q)
+        return unique
+
+    def _compress_context(self, query: str, results: List[Dict]) -> List[Dict]:
+        """Extract only query-relevant sentences from each retrieved chunk (parallel).
+
+        Compresses non-web results by asking the LLM to strip irrelevant text.
+        Falls back to the original chunk if compression fails or makes it longer.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _compress_one(result: Dict) -> Dict:
+            if result.get("is_web"):
+                return result
+            # Use parent_text if available (small-to-big path), else chunk text
+            source_text = result.get("metadata", {}).get("parent_text") or result["text"]
+            prompt = (
+                "Extract only the sentences from the passage below that directly help answer "
+                "the question. Output only those sentences verbatim, nothing else. "
+                "If no sentence is relevant, keep the single most informative sentence.\n\n"
+                f"Question: {query}\n\nPassage:\n{source_text}"
+            )
+            try:
+                compressed = self.llm.complete(prompt, system_prompt="You are an expert at extracting relevant information.")
+                if compressed and len(compressed.strip()) < len(source_text):
+                    r = {**result, "metadata": {**result.get("metadata", {})}}
+                    # Overwrite whichever field _build_context reads
+                    if "parent_text" in r["metadata"]:
+                        r["metadata"]["parent_text"] = compressed.strip()
+                    else:
+                        r["text"] = compressed.strip()
+                    r["metadata"]["compressed"] = True
+                    return r
+            except Exception as e:
+                logger.debug(f"Context compression failed for {result.get('id')}: {e}")
+            return result
+
+        with ThreadPoolExecutor(max_workers=min(len(results), 4)) as pool:
+            return list(pool.map(_compress_one, results))
+
     def _get_step_back_query(self, query: str) -> str:
         """Generate a more abstract, step-back version of the query for retrieval."""
         prompt = (
@@ -1059,7 +1126,7 @@ Your primary goal is to help the user by answering questions based on the provid
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
         if cfg is None:
             cfg = self.config
-        transforms = {"hyde_applied": False, "multi_query_applied": False, "step_back_applied": False, "web_search_applied": False, "queries": [query]}
+        transforms = {"hyde_applied": False, "multi_query_applied": False, "step_back_applied": False, "decompose_applied": False, "web_search_applied": False, "queries": [query]}
 
         search_queries = [query]
         vector_query = query
@@ -1074,6 +1141,17 @@ Your primary goal is to help the user by answering questions based on the provid
             if abstract_query not in search_queries:
                 search_queries = search_queries + [abstract_query]
             transforms['step_back_applied'] = True
+            transforms['queries'] = search_queries
+
+        if cfg.query_decompose:
+            sub_questions = self._decompose_query(query)
+            # Merge without duplicates, preserving order
+            existing = set(search_queries)
+            for sq in sub_questions:
+                if sq not in existing:
+                    search_queries = search_queries + [sq]
+                    existing.add(sq)
+            transforms['decompose_applied'] = True
             transforms['queries'] = search_queries
 
         if cfg.hyde:
@@ -1237,6 +1315,8 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank: results = self.reranker.rerank(query, results)
 
         results = results[:cfg.top_k]
+        if cfg.compress_context:
+            results = self._compress_context(query, results)
         final_count = len(results)
         top_score = results[0].get('score', 0) if results else 0
         context, has_web = self._build_context(results)
@@ -1271,6 +1351,8 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank: results = self.reranker.rerank(query, results)
 
         results = results[:cfg.top_k]
+        if cfg.compress_context:
+            results = self._compress_context(query, results)
         context, has_web = self._build_context(results)
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
@@ -1361,6 +1443,10 @@ def main():
                         help='Enable/disable multi-query retrieval')
     parser.add_argument('--step-back', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable step-back prompting (abstracts query before retrieval)')
+    parser.add_argument('--decompose', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable query decomposition (breaks complex questions into sub-questions)')
+    parser.add_argument('--compress', action=argparse.BooleanOptionalAction, default=None,
+                        help='Enable/disable LLM context compression (extracts only relevant sentences before generation)')
     parser.add_argument('--cache', action=argparse.BooleanOptionalAction, default=None,
                         help='Enable/disable in-memory query result caching')
     parser.add_argument('--no-dedup', action='store_true',
@@ -1429,6 +1515,10 @@ def main():
         config.multi_query = args.multi_query
     if args.step_back is not None:
         config.step_back = args.step_back
+    if args.decompose is not None:
+        config.query_decompose = args.decompose
+    if args.compress is not None:
+        config.compress_context = args.compress
     if args.cache is not None:
         config.query_cache = args.cache
     if args.no_dedup:

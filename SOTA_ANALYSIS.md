@@ -52,10 +52,10 @@ Standard RAG sends the raw user query directly to the retriever. SOTA systems tr
 - **What it does:** Generates an abstract, higher-level version of the query and runs retrieval for both the specific and abstract queries. Useful when KB has general background but query is highly specific.
 - **Papers:** Zheng et al., 2023 — "Take a Step Back: Evoking Reasoning via Abstraction in Large Language Models"
 
-#### 1.4 Query Decomposition — ⬜ MISSING
-- **What it does:** Breaks multi-part or complex questions into atomic sub-questions, retrieves independently, and synthesizes a combined answer.
-- **Why it matters:** Without decomposition, the retriever tries to satisfy multiple requirements with a single search — often poorly.
-- **Effort:** Medium — similar pattern to multi-query; needs a synthesis step.
+#### 1.4 Query Decomposition ✅ DONE
+- **Status:** Implemented. Enable with `--decompose` (CLI) or `"decompose": true` (API) or `query_decompose: true` in `config.yaml` under `query_transformations:`.
+- **What it does:** Uses the LLM to break complex multi-part questions into 2–4 atomic sub-questions, runs retrieval for each, merges and deduplicates results. Composes naturally with `multi_query` and `step_back`.
+- **Synthesis:** Retrieval merges across all sub-questions; a single LLM call generates the answer with the combined context (no extra LLM calls beyond decomposition itself).
 
 ---
 
@@ -95,10 +95,10 @@ Current system indexes fixed-size chunks. SOTA systems use more sophisticated in
 - **Why it matters:** Significantly outperforms the default `ms-marco-MiniLM-L-6-v2` on BEIR benchmarks; supports 100+ languages.
 - **Default kept as** `ms-marco-MiniLM-L-6-v2` (smaller, faster, already commonly cached). Upgrade when accuracy matters more than speed.
 
-#### 3.3 Contextual Compression — ⬜ MISSING
-- **What it does:** After retrieval, uses an LLM to extract only the specific sentences directly relevant to the query, discarding surrounding noise.
-- **Why it matters:** Reduces context noise; allows fitting more unique sources into the LLM context window.
-- **Effort:** Medium.
+#### 3.3 Contextual Compression ✅ DONE
+- **Status:** Implemented (LLM-based). Enable with `--compress` (CLI) or `"compress": true` (API) or `compress_context: true` in `config.yaml`.
+- **What it does:** After reranking, uses the generation LLM to extract only query-relevant sentences from each retrieved chunk (parallel via ThreadPoolExecutor). Falls back to the original chunk if compression fails or would expand the text. Integrates with small-to-big: compresses the parent passage, not the small child chunk.
+- **Note:** LLMLingua (token-level compression with a separate small LM) would be more efficient at scale but requires an additional model download. The LLM-based approach works out of the box with any configured provider.
 
 ---
 
@@ -214,8 +214,8 @@ Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 | ~~8~~ | ~~Step-back prompting~~ | Low | Medium | ✅ Shipped |
 | ~~9~~ | ~~BGE Reranker v2-m3~~ | Low | Medium | ✅ Shipped — `--reranker-model BAAI/bge-reranker-v2-m3` or config |
 | ~~10~~ | ~~Parent-document / small-to-big retrieval~~ | Medium | High | ✅ Shipped — `parent_chunk_size` config / `--parent-chunk-size` CLI |
-| 1 | **Query decomposition** | Medium | Medium | ⬜ Not implemented |
-| 2 | **Context compression (LLMLingua)** | Medium | Medium | ⬜ Not implemented |
+| ~~1~~ | ~~Query decomposition~~ | Medium | Medium | ✅ Shipped — `--decompose` CLI / `"decompose": true` API |
+| ~~2~~ | ~~Context compression (LLMLingua)~~ | Medium | Medium | ✅ Shipped (LLM-based) — `--compress` CLI / `"compress": true` API |
 | 3 | **Inline chunk-level citations in answers** | Medium | Medium | ⬜ Partial — sources in stream but not in text |
 | 4 | **RAPTOR hierarchical indexing** | High | High | ⬜ Not implemented |
 | 5 | **GraphRAG integration** | High | High | ⬜ Not implemented |
@@ -241,4 +241,4 @@ Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 
 ---
 
-*Last updated: March 2026 — Sprint 3 (BGE reranker flag + parent-document retrieval)*
+*Last updated: March 2026 — Sprint 4 (query decomposition + LLM context compression)*

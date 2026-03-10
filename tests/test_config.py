@@ -84,6 +84,18 @@ class TestOpenStudioConfig:
         assert config.query_cache_size == 64
         assert config.dedup_on_ingest is False
 
+    def test_yaml_query_decompose_and_compress(self):
+        """query_decompose and compress_context are loaded from their YAML sections."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump({
+                "query_transformations": {"query_decompose": True},
+                "context_compression": {"enabled": True},
+            }, f)
+            f.flush()
+            config = OpenStudioConfig.load(f.name)
+        assert config.query_decompose is True
+        assert config.compress_context is True
+
     def test_yaml_rerank_model_bge(self):
         """reranker_model is loaded from rerank.model in YAML."""
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:

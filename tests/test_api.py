@@ -28,6 +28,8 @@ def _make_brain(provider="chroma"):
     brain.config.discussion_fallback = True
     brain.config.similarity_threshold = 0.3
     brain.config.step_back = False
+    brain.config.query_decompose = False
+    brain.config.compress_context = False
     # _apply_overrides returns a copy of config with overrides applied
     brain._apply_overrides.return_value = brain.config
     return brain
@@ -386,6 +388,26 @@ def test_query_stream_override_forwarded():
     call_kwargs = api_module.brain.query_stream.call_args[1]
     assert call_kwargs["overrides"]["hyde"] is True
     assert call_kwargs["overrides"]["multi_query"] is True
+
+
+def test_query_override_decompose():
+    """decompose=true override is forwarded to brain.query overrides dict."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Decomposed answer"
+    resp = client.post("/query", json={"query": "complex multi-part question", "decompose": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["query_decompose"] is True
+
+
+def test_query_override_compress():
+    """compress=true override is forwarded to brain.query overrides dict."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Compressed answer"
+    resp = client.post("/query", json={"query": "test", "compress": True})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["compress_context"] is True
 
 
 def test_concurrent_requests_no_cross_contamination():

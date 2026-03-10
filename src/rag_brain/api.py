@@ -56,6 +56,8 @@ class QueryRequest(BaseModel):
     hyde: Optional[bool] = Field(None, description="Override HyDE query transformation toggle")
     multi_query: Optional[bool] = Field(None, description="Override multi-query retrieval toggle")
     step_back: Optional[bool] = Field(None, description="Override step-back prompting toggle")
+    decompose: Optional[bool] = Field(None, description="Override query decomposition toggle")
+    compress: Optional[bool] = Field(None, description="Override LLM context compression toggle")
     discuss: Optional[bool] = Field(None, description="Override discussion fallback toggle")
 
 class SearchRequest(BaseModel):
@@ -98,6 +100,8 @@ async def query_brain(request: QueryRequest):
             "hyde": request.hyde,
             "multi_query": request.multi_query,
             "step_back": request.step_back,
+            "query_decompose": request.decompose,
+            "compress_context": request.compress,
             "discussion_fallback": request.discuss,
         }
         response = brain.query(request.query, filters=request.filters, overrides=overrides)
@@ -109,6 +113,8 @@ async def query_brain(request: QueryRequest):
             "hyde": cfg.hyde,
             "multi_query": cfg.multi_query,
             "step_back": cfg.step_back,
+            "decompose": cfg.query_decompose,
+            "compress": cfg.compress_context,
             "discuss": cfg.discussion_fallback,
         }
         return {"query": request.query, "response": response, "settings": settings}
@@ -129,6 +135,8 @@ async def query_brain_stream(request: QueryRequest):
         "hyde": request.hyde,
         "multi_query": request.multi_query,
         "step_back": request.step_back,
+        "query_decompose": request.decompose,
+        "compress_context": request.compress,
         "discussion_fallback": request.discuss,
     }
 

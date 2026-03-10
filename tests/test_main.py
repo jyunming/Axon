@@ -610,6 +610,168 @@ class TestQueryTransformations:
 @patch("rag_brain.main.OpenLLM")
 @patch("rag_brain.main.OpenEmbedding")
 @patch("rag_brain.main.OpenReranker")
+class TestQueryDecomposeAndCompress:
+    """Tests for query decomposition and context compression."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0, **kwargs)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[])
+        return brain
+
+    # ------------------------------------------------------------------
+    # Query Decomposition
+    # ------------------------------------------------------------------
+
+    def test_decompose_breaks_query_into_sub_questions(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, query_decompose=True)
+        brain.llm.complete = MagicMock(return_value="What is X?\nHow does X work?\nWhy is X useful?")
+
+        sub_qs = brain._decompose_query("Tell me everything about X")
+
+        assert sub_qs[0] == "Tell me everything about X"  # original always first
+        assert len(sub_qs) >= 2
+        assert "What is X?" in sub_qs
+
+    def test_decompose_strips_numbering_and_bullets(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="1. Sub one\n2. Sub two\n- Sub three")
+
+        sub_qs = brain._decompose_query("complex question")
+
+        assert all(not q[0].isdigit() for q in sub_qs[1:])
+        assert all(not q.startswith("-") for q in sub_qs[1:])
+
+    def test_decompose_deduplicates_sub_questions(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="original question\noriginal question\nNew sub")
+
+        sub_qs = brain._decompose_query("original question")
+
+        assert sub_qs.count("original question") == 1
+
+    def test_decompose_applied_in_execute_retrieval(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, query_decompose=True)
+        brain._decompose_query = MagicMock(return_value=["original", "sub-q1", "sub-q2"])
+
+        retrieval = brain._execute_retrieval("original")
+
+        brain._decompose_query.assert_called_once_with("original")
+        assert retrieval['transforms']['decompose_applied'] is True
+        assert "sub-q1" in retrieval['transforms']['queries']
+
+    def test_decompose_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain._decompose_query = MagicMock()
+
+        brain._execute_retrieval("any question")
+
+        brain._decompose_query.assert_not_called()
+
+    def test_decompose_combines_with_multi_query(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """multi_query and query_decompose can run together; queries are deduplicated."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                  multi_query=True, query_decompose=True)
+        brain._get_multi_queries = MagicMock(return_value=["q", "alt1", "alt2"])
+        brain._decompose_query = MagicMock(return_value=["q", "sub1"])
+
+        retrieval = brain._execute_retrieval("q")
+
+        assert retrieval['transforms']['multi_query_applied'] is True
+        assert retrieval['transforms']['decompose_applied'] is True
+        queries = retrieval['transforms']['queries']
+        assert queries.count("q") == 1  # no duplicates
+
+    # ------------------------------------------------------------------
+    # Context Compression
+    # ------------------------------------------------------------------
+
+    def test_compress_context_shortens_chunks(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, compress_context=True)
+        long_text = "irrelevant sentence. " * 20 + "The answer is 42."
+        brain.llm.complete = MagicMock(return_value="The answer is 42.")
+
+        results = [{"id": "d1", "text": long_text, "score": 0.9, "metadata": {}}]
+        compressed = brain._compress_context("What is the answer?", results)
+
+        assert compressed[0]["text"] == "The answer is 42."
+
+    def test_compress_context_skips_web_results(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="compressed")
+
+        web_result = {"id": "http://ex.com", "text": "web content", "score": 1.0,
+                      "metadata": {}, "is_web": True}
+        results = brain._compress_context("q", [web_result])
+
+        # Web results must pass through unchanged; LLM must not be called
+        brain.llm.complete.assert_not_called()
+        assert results[0]["text"] == "web content"
+
+    def test_compress_context_falls_back_on_failure(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """If LLM compression raises, the original result is returned unchanged."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(side_effect=RuntimeError("llm down"))
+
+        original_text = "original chunk text"
+        results = [{"id": "d1", "text": original_text, "score": 0.9, "metadata": {}}]
+        compressed = brain._compress_context("q", results)
+
+        assert compressed[0]["text"] == original_text
+
+    def test_compress_context_does_not_expand_chunk(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """If LLM returns something longer than the original, keep the original."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        short_text = "short"
+        brain.llm.complete = MagicMock(return_value="much longer text that exceeds original length significantly")
+
+        results = [{"id": "d1", "text": short_text, "score": 0.9, "metadata": {}}]
+        compressed = brain._compress_context("q", results)
+
+        assert compressed[0]["text"] == short_text
+
+    def test_compress_context_uses_parent_text_as_source(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """When parent_text is in metadata, that is compressed (not the small child chunk)."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="compressed parent")
+
+        results = [{
+            "id": "d1_p0_chunk_0",
+            "text": "small child chunk",
+            "score": 0.9,
+            "metadata": {"parent_text": "large parent passage " * 10},
+        }]
+        compressed = brain._compress_context("q", results)
+
+        # Compression prompt should have used parent_text, result stored back in parent_text
+        call_prompt = brain.llm.complete.call_args[0][0]
+        assert "large parent passage" in call_prompt
+        assert compressed[0]["metadata"]["parent_text"] == "compressed parent"
+
+    def test_compress_context_disabled_by_default(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """compress_context=False (default): _compress_context is never called during query."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        brain = OpenStudioBrain(config)
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "ctx", "score": 0.9}
+        ])
+        brain.llm.complete = MagicMock(return_value="answer")
+        brain._compress_context = MagicMock(wraps=brain._compress_context)
+
+        brain.query("test?")
+
+        brain._compress_context.assert_not_called()
+
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
 class TestLogQueryMetrics:
     def test_metrics_logged_without_exception(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
