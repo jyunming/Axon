@@ -1239,3 +1239,189 @@ class TestGraphRAG:
             call_ids = brain.vector_store.get_by_ids.call_args[0][0]
             assert "d1" not in call_ids
 
+
+# ---------------------------------------------------------------------------
+# Cache: LRU eviction & make_cache_key completeness
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestCacheFixes:
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(hybrid_search=False, rerank=False,
+                                  similarity_threshold=0.0, **cfg_kwargs)
+        brain = OpenStudioBrain(config)
+        brain._ingested_hashes = set()
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[
+            {"id": "d1", "text": "ctx", "score": 0.9, "metadata": {}}
+        ])
+        return brain
+
+    def test_lru_hit_moves_to_end(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Cache hit moves the entry to the end (most-recently-used position)."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 query_cache=True, query_cache_size=3)
+        brain.llm.complete = MagicMock(side_effect=["A", "B", "A_again"])
+        brain.query("q1")  # inserts key1
+        brain.query("q2")  # inserts key2
+        # Hit q1 — should move key1 to end so key2 would be evicted next
+        brain.llm.complete.side_effect = ["A"]
+        brain.query("q1")  # cache hit; key1 moved to end
+        # Now insert q3 — cache is at size 3 (q1, q2, both present + q3 = need evict q2 = LRU)
+        brain.llm.complete.side_effect = ["C"]
+        brain.query("q3")
+        keys = list(brain._query_cache.keys())
+        # q2 should have been evicted (it was LRU after q1 was accessed)
+        # q1 and q3 should still be present
+        assert len(brain._query_cache) == 3  # size=3, nothing evicted yet
+        # With size=3 nothing evicted, but verify ordering: q1 was moved to end after hit
+        # so in the OrderedDict q2 should be earlier than q1
+        key_q2 = [k for k in keys if brain._query_cache.get(k) == "B"]
+        key_q1 = [k for k in keys if brain._query_cache.get(k) == "A"]
+        if key_q1 and key_q2:
+            assert keys.index(key_q2[0]) < keys.index(key_q1[0])
+
+    def test_lru_evicts_least_recently_used(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """When cache is full the LRU entry (front of OrderedDict) is evicted."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 query_cache=True, query_cache_size=2)
+        brain.llm.complete = MagicMock(side_effect=["A", "B"])
+        brain.query("q1")
+        brain.query("q2")
+        # Access q1 to make q2 LRU
+        brain.llm.complete.side_effect = ["A"]  # would be skipped (cache hit)
+        brain.query("q1")  # cache hit; q1 now MRU
+        # q3 insert should evict q2 (LRU)
+        brain.llm.complete.side_effect = ["C"]
+        brain.query("q3")
+        assert len(brain._query_cache) == 2
+        cached_values = list(brain._query_cache.values())
+        assert "B" not in cached_values, "q2 (LRU) should have been evicted"
+        assert "A" in cached_values
+        assert "C" in cached_values
+
+    def test_cache_size_zero_does_not_cache(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """query_cache_size=0 disables caching (guard against StopIteration on empty cache)."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25,
+                                 query_cache=True, query_cache_size=0)
+        brain.llm.complete = MagicMock(return_value="answer")
+        brain.query("q1")
+        brain.query("q1")  # second call — should NOT raise and should call LLM again
+        assert brain.llm.complete.call_count == 2  # no caching when size=0
+
+    def test_cache_key_includes_cite_sources(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Two requests differing only in cite_sources get distinct cache keys."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        from rag_brain.main import OpenStudioConfig
+        cfg_no_cite = OpenStudioConfig(cite_sources=False)
+        cfg_cite = OpenStudioConfig(cite_sources=True)
+        key1 = brain._make_cache_key("q", None, cfg_no_cite)
+        key2 = brain._make_cache_key("q", None, cfg_cite)
+        assert key1 != key2
+
+    def test_cache_key_includes_compress_context(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Two requests differing only in compress_context get distinct cache keys."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        from rag_brain.main import OpenStudioConfig
+        key1 = brain._make_cache_key("q", None, OpenStudioConfig(compress_context=False))
+        key2 = brain._make_cache_key("q", None, OpenStudioConfig(compress_context=True))
+        assert key1 != key2
+
+    def test_cache_key_filter_serialisation_is_stable(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Same filters in different insertion order produce the same cache key."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        from rag_brain.main import OpenStudioConfig
+        cfg = OpenStudioConfig()
+        key1 = brain._make_cache_key("q", {"b": 2, "a": 1}, cfg)
+        key2 = brain._make_cache_key("q", {"a": 1, "b": 2}, cfg)
+        assert key1 == key2
+
+
+# ---------------------------------------------------------------------------
+# _compress_context empty-results guard
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestCompressContextGuard:
+    def test_compress_context_empty_list_returns_empty(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """_compress_context([]) must not raise ValueError from ThreadPoolExecutor(max_workers=0)."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        brain = OpenStudioBrain(OpenStudioConfig())
+        result = brain._compress_context("any query", [])
+        assert result == []
+
+    def test_compress_context_single_item(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """Single-item list compresses without error."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        brain = OpenStudioBrain(OpenStudioConfig())
+        brain.llm.complete = MagicMock(return_value="short")
+        doc = {"id": "d1", "text": "this is a longer original text for the test", "metadata": {}}
+        result = brain._compress_context("query", [doc])
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# switch_project reloads project-scoped state
+# ---------------------------------------------------------------------------
+
+@patch("rag_brain.retrievers.BM25Retriever")
+@patch("rag_brain.main.OpenVectorStore")
+@patch("rag_brain.main.OpenLLM")
+@patch("rag_brain.main.OpenEmbedding")
+@patch("rag_brain.main.OpenReranker")
+class TestSwitchProjectState:
+    def test_switch_project_clears_query_cache(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path):
+        """Switching project empties the query cache to prevent cross-project bleed."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        from rag_brain.projects import ensure_project
+        config = OpenStudioConfig(
+            query_cache=True, query_cache_size=128,
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        brain = OpenStudioBrain(config)
+        # Prime the cache with a fake entry
+        brain._query_cache["fake_key"] = "cached_answer"
+        # Create a real project dir so switch_project doesn't raise
+        proj_path = tmp_path / ".rag_brain" / "projects" / "myproject"
+        proj_path.mkdir(parents=True, exist_ok=True)
+        with patch("rag_brain.projects.project_dir", return_value=proj_path), \
+             patch("rag_brain.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")), \
+             patch("rag_brain.projects.project_bm25_path", return_value=str(tmp_path / "proj_bm25")), \
+             patch("rag_brain.projects.set_active_project"):
+            brain.switch_project("myproject")
+        assert len(brain._query_cache) == 0
+
+    def test_switch_project_reloads_ingested_hashes(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path):
+        """Switching project loads the new project's content hashes."""
+        from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+        config = OpenStudioConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+        )
+        brain = OpenStudioBrain(config)
+        # Seed some hashes so we can confirm they get replaced
+        brain._ingested_hashes = {"oldhash1", "oldhash2"}
+        # Write new project's hash store
+        new_bm25 = tmp_path / "proj_bm25"
+        new_bm25.mkdir(parents=True)
+        (new_bm25 / ".content_hashes").write_text("newhash1\nnewhash2\nnewhash3", encoding="utf-8")
+        proj_path = tmp_path / ".rag_brain" / "projects" / "proj2"
+        proj_path.mkdir(parents=True, exist_ok=True)
+        with patch("rag_brain.projects.project_dir", return_value=proj_path), \
+             patch("rag_brain.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")), \
+             patch("rag_brain.projects.project_bm25_path", return_value=str(new_bm25)), \
+             patch("rag_brain.projects.set_active_project"):
+            brain.switch_project("proj2")
+        assert brain._ingested_hashes == {"newhash1", "newhash2", "newhash3"}
+        assert "oldhash1" not in brain._ingested_hashes
+

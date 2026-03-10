@@ -61,16 +61,47 @@ bm25:
 rag:
   # Number of documents to retrieve
   top_k: 10
-  
+
   # Minimum similarity score (0-1).
   # Calibrated for all-MiniLM-L6-v2 (typical relevant scores: 0.30–0.60).
   # Raise to 0.5+ for stricter matching; lower to 0.2 for broader recall.
   # Also used as the web-search fallback trigger: if best cosine score < this
   # value, Brave Search fires (when truth_grounding is enabled).
   similarity_threshold: 0.3
-  
+
   # Enable hybrid search (vector + keyword)
   hybrid_search: true
+
+  # Parent-document / small-to-big retrieval.
+  # Set to a value larger than chunk.size (e.g. 3000) to index small child chunks
+  # for precision but return the richer parent passage to the LLM as context.
+  # 0 = disabled (use retrieval chunks directly).
+  # parent_chunk_size: 0
+
+  # Inline source citations in LLM answers.
+  # When enabled the LLM is instructed to cite [Doc N] inline in its response.
+  # Also: --cite CLI flag, "cite": true API override.
+  # cite_sources: false
+
+  # RAPTOR hierarchical indexing (requires LLM during ingest — adds latency).
+  # Groups consecutive chunks per source and generates LLM summary nodes
+  # that are indexed alongside leaf chunks for multi-hop questions.
+  # raptor: false
+  # raptor_chunk_group_size: 5
+
+  # GraphRAG entity-centric retrieval (requires LLM during ingest — adds latency).
+  # Extracts named entities from each chunk; expands query results at retrieval
+  # time using an entity→doc_id graph persisted to {bm25_path}/.entity_graph.json.
+  # graph_rag: false
+
+  # In-memory query result cache (LRU eviction, keyed on query + active flags).
+  # Speeds up repeated identical queries. Bypassed when chat history is non-empty.
+  # query_cache: false
+  # query_cache_size: 128
+
+  # Ingest deduplication — skip chunks with identical content (MD5 hash).
+  # Persisted to {bm25_path}/.content_hashes across restarts.
+  # dedup_on_ingest: true
 
 # Chunking Settings
 chunk:
@@ -88,6 +119,15 @@ query_transformations:
   multi_query: false
   hyde: false
   discussion_fallback: true
+  # step_back: false     # generate a more abstract query before retrieval
+  # query_decompose: false  # break complex questions into sub-questions
+
+# Context Compression
+# Uses the generation LLM to extract only query-relevant sentences from each
+# retrieved chunk before generation. Falls back to the full chunk if compression
+# would expand the text.
+# context_compression:
+#   enabled: false
 
 # Web Search / Truth Grounding
 # Uses Brave Search API to ground answers with live web results

@@ -14,15 +14,15 @@ The following features are already implemented:
 |----------|-------------|
 | **Retrieval** | Hybrid search: dense vector + BM25 keyword, fused via Reciprocal Rank Fusion (RRF) |
 | **Re-ranking** | Cross-encoder re-ranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`) **and** LLM-based pointwise re-ranking via `reranker_provider: llm` |
-| **Query transformations** | HyDE, Multi-Query, **Step-Back prompting** — all available via CLI flags, REPL slash commands, and REST API overrides |
+| **Query transformations** | HyDE, Multi-Query, Step-Back, Query Decomposition — all available via CLI flags, REPL slash commands (`/rag hyde`, `/rag multi`, `/rag step-back`, `/rag decompose`, `/rag compress`, `/rag cite`), and REST API overrides |
 | **Embedding providers** | sentence-transformers (`all-MiniLM-L6-v2`), Ollama (`nomic-embed-text`), FastEmbed (`BAAI/bge-small-en-v1.5`, BGE-M3 via fastembed), OpenAI |
 | **LLM** | Ollama (local), Gemini, OpenAI, Ollama Cloud, vLLM — all with streaming |
-| **Vector stores** | ChromaDB (default), Qdrant, LanceDB |
+| **Vector stores** | ChromaDB (default), Qdrant |
 | **Document formats** | PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, BMP/PNG/TIF/TIFF/PGM images |
 | **Multimodal** | Raster image ingestion (BMP/PNG/TIF/PGM) with VLM auto-captioning (llava) |
 | **Agent interface** | FastAPI with per-request RAG flag overrides (full CLI parity); 8+ REST endpoints |
 | **Ingest quality** | Hash-based content deduplication on ingest (skips re-ingesting identical chunks) |
-| **Performance** | In-memory query result cache (`query_cache: true`) with LRU eviction |
+| **Performance** | In-memory query result cache (`query_cache: true`) with true LRU eviction (`OrderedDict` + move-to-end on hit) |
 | **Web search** | Brave Search fallback when local KB is insufficient (truth grounding) |
 | **Evaluation** | RAGAS evaluation script (`scripts/evaluate.py`) |
 | **Chunking** | Recursive character text splitter with configurable size/overlap |
@@ -48,12 +48,12 @@ Standard RAG sends the raw user query directly to the retriever. SOTA systems tr
 - **Impact:** Consistently improves recall with minimal added latency.
 
 #### 1.3 Step-Back Prompting ✅ DONE
-- **Status:** Fully implemented. Enable with `--step-back` (CLI) or `"step_back": true` (API).
+- **Status:** Fully implemented. Enable with `--step-back` (CLI), `/rag step-back` (REPL), or `"step_back": true` (API).
 - **What it does:** Generates an abstract, higher-level version of the query and runs retrieval for both the specific and abstract queries. Useful when KB has general background but query is highly specific.
 - **Papers:** Zheng et al., 2023 — "Take a Step Back: Evoking Reasoning via Abstraction in Large Language Models"
 
 #### 1.4 Query Decomposition ✅ DONE
-- **Status:** Implemented. Enable with `--decompose` (CLI) or `"decompose": true` (API) or `query_decompose: true` in `config.yaml` under `query_transformations:`.
+- **Status:** Implemented. Enable with `--decompose` (CLI), `/rag decompose` (REPL), `"decompose": true` (API), or `query_decompose: true` in `config.yaml` under `query_transformations:`.
 - **What it does:** Uses the LLM to break complex multi-part questions into 2–4 atomic sub-questions, runs retrieval for each, merges and deduplicates results. Composes naturally with `multi_query` and `step_back`.
 - **Synthesis:** Retrieval merges across all sub-questions; a single LLM call generates the answer with the combined context (no extra LLM calls beyond decomposition itself).
 

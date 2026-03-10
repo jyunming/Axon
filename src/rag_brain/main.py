@@ -761,6 +761,25 @@ class OpenVectorStore:
             ):
                 docs.append({"id": doc_id, "text": text or "", "score": 1.0, "metadata": meta or {}})
             return docs
+        if self.provider == "qdrant":
+            try:
+                points = self.client.retrieve(
+                    collection_name="rag_brain",
+                    ids=ids,
+                    with_payload=True,
+                )
+                return [
+                    {
+                        "id": str(p.id),
+                        "text": p.payload.get("text", ""),
+                        "score": 1.0,
+                        "metadata": {k: v for k, v in p.payload.items() if k != "text"},
+                    }
+                    for p in points
+                ]
+            except Exception as e:
+                logger.debug(f"GraphRAG get_by_ids (Qdrant) failed: {e}")
+                return []
         return []
 
 
@@ -858,8 +877,11 @@ Your primary goal is to help the user by answering questions based on the provid
         except ImportError:
             self.splitter = None
 
-        # In-memory query result cache (keyed by hash of query + filters + active flags)
-        self._query_cache: Dict[str, str] = {}
+        # In-memory query result cache (keyed by hash of query + filters + active flags).
+        # Uses OrderedDict for true LRU eviction: hits are moved to the end so the
+        # least-recently-used entry is always at the front and evicted first.
+        from collections import OrderedDict
+        self._query_cache: "OrderedDict[str, str]" = OrderedDict()
 
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
@@ -904,6 +926,13 @@ Your primary goal is to help the user by answering questions based on the provid
             self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
         except ImportError:
             self.bm25 = None
+
+        # Reload project-scoped state so dedup/GraphRAG use the new project's data
+        # and cached answers from the previous project cannot bleed across.
+        from collections import OrderedDict
+        self._query_cache = OrderedDict()
+        self._ingested_hashes = self._load_hash_store()
+        self._entity_graph = self._load_entity_graph()
 
         self._active_project = name
         set_active_project(name)
@@ -996,9 +1025,12 @@ Your primary goal is to help the user by answering questions based on the provid
                     )
                     if not summary_text or not summary_text.strip():
                         continue
-                    # Build a deterministic ID from source + window position
+                    # Build a deterministic ID from source + window position + content
+                    # so that re-ingesting updated content produces a new ID and
+                    # does not silently collide with a stale RAPTOR node in the store.
                     import hashlib
-                    uid = hashlib.md5(f"{source}|raptor|{i}".encode()).hexdigest()[:12]
+                    content_sig = hashlib.md5(summary_text.strip().encode("utf-8", errors="replace")).hexdigest()[:8]
+                    uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
                     summaries.append({
                         "id": f"raptor_{uid}",
                         "text": summary_text.strip(),
@@ -1016,7 +1048,7 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
         return summaries
 
-    def _expand_with_entity_graph(self, query: str, results: List[Dict]) -> List[Dict]:
+    def _expand_with_entity_graph(self, query: str, results: List[Dict], cfg=None) -> List[Dict]:
         """Expand retrieval results using GraphRAG entity linkage.
 
         1. Extract entities from the query.
@@ -1027,6 +1059,8 @@ Your primary goal is to help the user by answering questions based on the provid
         query_entities = self._extract_entities(query)
         if not query_entities:
             return results
+
+        active_top_k = (cfg.top_k if cfg is not None else None) or self.config.top_k
 
         existing_ids = {r["id"] for r in results}
         extra_ids: List[str] = []
@@ -1040,9 +1074,9 @@ Your primary goal is to help the user by answering questions based on the provid
         if not extra_ids:
             return results
 
-        # Fetch the extra chunks from the vector store (up to top_k worth)
+        # Fetch the extra chunks from the vector store (capped to the active top_k)
         try:
-            extra_results = self.vector_store.get_by_ids(extra_ids[: self.config.top_k])
+            extra_results = self.vector_store.get_by_ids(extra_ids[:active_top_k])
             if extra_results:
                 logger.info(f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)")
                 results = list(results) + extra_results
@@ -1057,19 +1091,34 @@ Your primary goal is to help the user by answering questions based on the provid
         return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
 
     def _make_cache_key(self, query: str, filters, cfg) -> str:
-        """Return a stable cache key for the given query + active config."""
+        """Return a stable cache key for the given query + active config.
+
+        All flags that change retrieval or generation are included so two
+        requests that differ only by (e.g.) cite_sources or compress_context
+        receive distinct cache entries.
+        """
         import hashlib, json
+        # Serialize filters safely regardless of type
+        try:
+            filters_key = json.dumps(filters or {}, sort_keys=True, default=str)
+        except Exception:
+            filters_key = str(filters)
         key_data = {
             "q": query,
-            "f": filters or {},
+            "f": filters_key,
             "top_k": cfg.top_k,
             "hybrid": cfg.hybrid_search,
             "rerank": cfg.rerank,
             "hyde": cfg.hyde,
             "multi_query": cfg.multi_query,
             "step_back": cfg.step_back,
+            "query_decompose": cfg.query_decompose,
             "threshold": cfg.similarity_threshold,
             "discuss": cfg.discussion_fallback,
+            "compress_context": cfg.compress_context,
+            "cite_sources": cfg.cite_sources,
+            "truth_grounding": cfg.truth_grounding,
+            "graph_rag": cfg.graph_rag,
         }
         return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
@@ -1227,6 +1276,9 @@ Your primary goal is to help the user by answering questions based on the provid
         Compresses non-web results by asking the LLM to strip irrelevant text.
         Falls back to the original chunk if compression fails or makes it longer.
         """
+        if not results:
+            return results
+
         from concurrent.futures import ThreadPoolExecutor
 
         def _compress_one(result: Dict) -> Dict:
@@ -1401,7 +1453,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # GraphRAG: expand results with entity-linked documents
         if cfg.graph_rag and self._entity_graph:
-            results = self._expand_with_entity_graph(query, results)
+            results = self._expand_with_entity_graph(query, results, cfg=cfg)
 
         # Web Search (Truth Grounding)
         # Trigger when the best cosine similarity from vector search is below the threshold,
@@ -1495,10 +1547,13 @@ Your primary goal is to help the user by answering questions based on the provid
         cfg = self._apply_overrides(overrides)
 
         # Cache lookup (only when chat_history is empty — cached responses don't track turns)
-        if cfg.query_cache and not chat_history:
+        cache_key = None
+        if cfg.query_cache and not chat_history and cfg.query_cache_size >= 1:
             cache_key = self._make_cache_key(query, filters, cfg)
             if cache_key in self._query_cache:
                 logger.info(f"💾 Cache hit for query: {query[:60]}")
+                # Move to end so this entry is treated as most-recently-used (LRU)
+                self._query_cache.move_to_end(cache_key)
                 return self._query_cache[cache_key]
 
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
@@ -1529,11 +1584,12 @@ Your primary goal is to help the user by answering questions based on the provid
         self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
                                 retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'])
 
-        if cfg.query_cache and not chat_history:
-            # Evict oldest entry if cache is full
+        if cache_key is not None:
+            # Evict least-recently-used entry when cache is at capacity
             if len(self._query_cache) >= cfg.query_cache_size:
-                self._query_cache.pop(next(iter(self._query_cache)))
+                self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
             self._query_cache[cache_key] = response
+            self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
 
         return response
 
@@ -2649,7 +2705,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                              display_meta=f"{turns} turns")
                 # ── /rag <option> ─────────────────────────────────────────
                 elif text.startswith("/rag "):
-                    opts = ["topk ", "threshold ", "hybrid", "rerank", "hyde", "multi"]
+                    opts = ["topk ", "threshold ", "hybrid", "rerank", "rerank-model ", "hyde", "multi", "step-back", "decompose", "compress", "cite"]
                     prefix = text[len("/rag "):]
                     for o in opts:
                         if o.startswith(prefix):
@@ -2856,7 +2912,11 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     "  /rag rerank                  toggle cross-encoder reranker\n"
                                     "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
                                     "  /rag hyde                    toggle HyDE query expansion\n"
-                                    "  /rag multi                   toggle multi-query expansion",
+                                    "  /rag multi                   toggle multi-query expansion\n"
+                                    "  /rag step-back               toggle step-back prompting\n"
+                                    "  /rag decompose               toggle query decomposition\n"
+                                    "  /rag compress                toggle LLM context compression\n"
+                                    "  /rag cite                    toggle inline [Doc N] citations",
                         "sessions": "  /sessions                    list recent saved sessions\n"
                                     "  /resume <id>                 load a session by ID\n"
                                     "  Sessions auto-save after each turn.",
@@ -3068,7 +3128,6 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 print(f"  💬 Discussion mode {state}.")
 
             elif cmd == "/rag":
-                _RAG_TOGGLES = {"hybrid", "rerank", "hyde", "multi"}
                 if not arg:
                     print(
                         f"\n  top-k        · {brain.config.top_k}\n"
@@ -3078,6 +3137,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "") + "\n"
                         f"  hyde         · {'ON' if brain.config.hyde else 'OFF'}\n"
                         f"  multi-query  · {'ON' if brain.config.multi_query else 'OFF'}\n"
+                        f"  step-back    · {'ON' if brain.config.step_back else 'OFF'}\n"
+                        f"  decompose    · {'ON' if brain.config.query_decompose else 'OFF'}\n"
+                        f"  compress     · {'ON' if brain.config.compress_context else 'OFF'}\n"
+                        f"  cite         · {'ON' if brain.config.cite_sources else 'OFF'}\n"
                         f"\n  /help rag   for usage details\n"
                     )
                 else:
@@ -3112,6 +3175,18 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     elif rag_opt == "multi":
                         brain.config.multi_query = not brain.config.multi_query
                         print(f"  ✅ Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
+                    elif rag_opt == "step-back":
+                        brain.config.step_back = not brain.config.step_back
+                        print(f"  ✅ Step-back prompting {'ON' if brain.config.step_back else 'OFF'}")
+                    elif rag_opt == "decompose":
+                        brain.config.query_decompose = not brain.config.query_decompose
+                        print(f"  ✅ Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}")
+                    elif rag_opt == "compress":
+                        brain.config.compress_context = not brain.config.compress_context
+                        print(f"  ✅ Context compression {'ON' if brain.config.compress_context else 'OFF'}")
+                    elif rag_opt == "cite":
+                        brain.config.cite_sources = not brain.config.cite_sources
+                        print(f"  ✅ Inline citations {'ON' if brain.config.cite_sources else 'OFF'}")
                     elif rag_opt == "rerank-model":
                         if not rag_val:
                             print(f"  Current reranker: {brain.config.reranker_model}")
@@ -3132,7 +3207,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 brain.config.rerank = False
                                 print(f"  ❌ Failed to load reranker: {e}")
                     else:
-                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi")
+                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)
