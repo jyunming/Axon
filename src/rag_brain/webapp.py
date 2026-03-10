@@ -152,6 +152,34 @@ st.markdown(
         color: rgba(228,228,231,0.85) !important;
     }
 
+    /* ── Sidebar widgets: match sidebar background (#1c1c2a) ── */
+    /* Selectbox trigger */
+    [data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {
+        background-color: #1c1c2a !important;
+        border-color: rgba(255,255,255,0.08) !important;
+    }
+    /* Text / password inputs */
+    [data-testid="stSidebar"] [data-baseweb="base-input"] {
+        background-color: #1c1c2a !important;
+    }
+    [data-testid="stSidebar"] [data-baseweb="input"] {
+        background-color: #1c1c2a !important;
+        border-color: rgba(255,255,255,0.08) !important;
+    }
+    /* Slider track fill */
+    [data-testid="stSidebar"] [data-testid="stSlider"] > div {
+        background-color: transparent !important;
+    }
+    /* File uploader drop zone */
+    [data-testid="stSidebar"] [data-testid="stFileUploader"] > div {
+        background-color: #1c1c2a !important;
+        border-color: rgba(255,255,255,0.08) !important;
+    }
+    /* Expander inner content area */
+    [data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
+        background-color: transparent !important;
+    }
+
     /* ── Chat messages — card style ── */
     [data-testid="stChatMessage"] {
         border: 1px solid rgba(255,255,255,0.06) !important;
@@ -517,6 +545,36 @@ with st.sidebar:
             "HyDE",
             config.hyde,
             help="Generate a hypothetical answer document and embed that instead of the raw query",
+        )
+        config.step_back = st.checkbox(
+            "Step-back prompting",
+            config.step_back,
+            help="Abstract the query to a more general form before retrieval to surface background knowledge",
+        )
+        config.query_decompose = st.checkbox(
+            "Query decomposition",
+            config.query_decompose,
+            help="Break complex questions into simpler sub-questions for independent retrieval",
+        )
+        config.compress_context = st.checkbox(
+            "Context compression",
+            config.compress_context,
+            help="Use the LLM to extract only query-relevant sentences from each retrieved chunk",
+        )
+        config.cite_sources = st.checkbox(
+            "Inline citations",
+            config.cite_sources,
+            help="Instruct the LLM to cite [Doc N] inline when using information from retrieved documents",
+        )
+        config.raptor = st.checkbox(
+            "RAPTOR",
+            config.raptor,
+            help="Generate hierarchical summary nodes during ingest for multi-hop question answering",
+        )
+        config.graph_rag = st.checkbox(
+            "GraphRAG",
+            config.graph_rag,
+            help="Extract entities during ingest and expand retrieval results via entity-linked documents",
         )
         config.rerank = st.checkbox("Re-ranking", config.rerank)
         if config.rerank:
