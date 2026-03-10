@@ -216,10 +216,10 @@ Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 | ~~10~~ | ~~Parent-document / small-to-big retrieval~~ | Medium | High | ✅ Shipped — `parent_chunk_size` config / `--parent-chunk-size` CLI |
 | ~~1~~ | ~~Query decomposition~~ | Medium | Medium | ✅ Shipped — `--decompose` CLI / `"decompose": true` API |
 | ~~2~~ | ~~Context compression (LLMLingua)~~ | Medium | Medium | ✅ Shipped (LLM-based) — `--compress` CLI / `"compress": true` API |
-| 3 | **Inline chunk-level citations in answers** | Medium | Medium | ⬜ Partial — sources in stream but not in text |
-| 4 | **RAPTOR hierarchical indexing** | High | High | ⬜ Not implemented |
-| 5 | **GraphRAG integration** | High | High | ⬜ Not implemented |
-| 6 | **Evaluation in CI** | Medium | Medium | ⬜ Script exists; not in CI pipeline |
+| ~~3~~ | ~~Inline chunk-level citations in answers~~ | Medium | Medium | ✅ Shipped — `--cite` CLI / `"cite": true` API / `cite_sources` config |
+| ~~4~~ | ~~RAPTOR hierarchical indexing~~ | High | High | ✅ Shipped — `--raptor` CLI / `rag.raptor` config; LLM summary nodes indexed alongside leaf chunks |
+| ~~5~~ | ~~GraphRAG integration~~ | High | High | ✅ Shipped — `--graph-rag` CLI / `rag.graph_rag` config; entity graph persisted to `.entity_graph.json`; result expansion at query time |
+| ~~6~~ | ~~Evaluation in CI~~ | Medium | Medium | ✅ Shipped — `tests/test_eval_smoke.py` (precision@k, context relevance, faithfulness, recall@k); `@pytest.mark.eval`; dedicated CI step |
 
 ---
 
