@@ -43,7 +43,7 @@ def set_projects_root(path: str | Path) -> None:
     """Override PROJECTS_ROOT at runtime (call before any project operations).
 
     Priority order: explicit call here > AXON_PROJECTS_ROOT env var > default.
-    Used by OpenStudioBrain to apply the projects_root from config.yaml.
+    Used by AxonBrain to apply the projects_root from config.yaml.
     """
     global PROJECTS_ROOT
     PROJECTS_ROOT = Path(path).expanduser()

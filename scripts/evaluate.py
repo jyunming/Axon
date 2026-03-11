@@ -17,10 +17,8 @@ Output:
 import argparse
 import json
 import sys
-import time
-import os
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -28,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 def load_testset(path: str):
     """Load JSONL testset."""
     samples = []
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -44,16 +42,18 @@ def run_pipeline(brain, questions):
             # Get raw search results (contexts)
             query_embedding = brain.embedding.embed_query(q)
             raw_results = brain.vector_store.search(query_embedding, top_k=brain.config.top_k)
-            contexts = [r['text'] for r in raw_results[:5]]
-            
+            contexts = [r["text"] for r in raw_results[:5]]
+
             # Get generated answer
             answer = brain.query(q)
-            
-            results.append({
-                "question": q,
-                "answer": answer,
-                "contexts": contexts,
-            })
+
+            results.append(
+                {
+                    "question": q,
+                    "answer": answer,
+                    "contexts": contexts,
+                }
+            )
         except Exception as e:
             results.append({"question": q, "answer": f"ERROR: {e}", "contexts": []})
     return results
@@ -62,12 +62,12 @@ def run_pipeline(brain, questions):
 def evaluate_with_ragas(results, testset, llm_model: str):
     """Score results using RAGAS with local Ollama LLM."""
     try:
-        from ragas import evaluate
-        from ragas.metrics import faithfulness, context_recall, context_precision, answer_relevancy
-        from ragas.llms import LangchainLLMWrapper
+        from datasets import Dataset
         from langchain_community.chat_models import ChatOllama
         from langchain_community.embeddings import OllamaEmbeddings
-        from datasets import Dataset
+        from ragas import evaluate
+        from ragas.llms import LangchainLLMWrapper
+        from ragas.metrics import answer_relevancy, context_precision, context_recall, faithfulness
     except ImportError as e:
         print(f"Missing dependency: {e}")
         print("Install with: pip install ragas langchain-community datasets")
@@ -98,15 +98,15 @@ def write_report(scores, results, output_path: str):
     """Write markdown evaluation report."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [
-        f"# RAG Evaluation Report",
-        f"",
+        "# RAG Evaluation Report",
+        "",
         f"**Generated:** {ts}",
         f"**Samples:** {len(results)}",
-        f"",
-        f"## Scores",
-        f"",
-        f"| Metric | Score |",
-        f"|--------|-------|",
+        "",
+        "## Scores",
+        "",
+        "| Metric | Score |",
+        "|--------|-------|",
     ]
     if scores:
         for metric in ["faithfulness", "context_recall", "context_precision", "answer_relevancy"]:
@@ -116,32 +116,32 @@ def write_report(scores, results, output_path: str):
             lines.append(f"| {metric} | {val} |")
     else:
         lines.append("| Scores not available — check RAGAS installation | — |")
-    
+
     lines += [
-        f"",
-        f"## Score Interpretation",
-        f"",
-        f"- **faithfulness** (0-1): Fraction of answer claims supported by retrieved context. >0.8 is good.",
-        f"- **context_recall** (0-1): Fraction of ground-truth info present in retrieved context. >0.7 is good.",
-        f"- **context_precision** (0-1): Fraction of retrieved context that is relevant. >0.7 is good.",
-        f"- **answer_relevancy** (0-1): How well the answer addresses the question. >0.8 is good.",
-        f"",
-        f"## Sample Outputs",
-        f"",
+        "",
+        "## Score Interpretation",
+        "",
+        "- **faithfulness** (0-1): Fraction of answer claims supported by retrieved context. >0.8 is good.",
+        "- **context_recall** (0-1): Fraction of ground-truth info present in retrieved context. >0.7 is good.",
+        "- **context_precision** (0-1): Fraction of retrieved context that is relevant. >0.7 is good.",
+        "- **answer_relevancy** (0-1): How well the answer addresses the question. >0.8 is good.",
+        "",
+        "## Sample Outputs",
+        "",
     ]
     for i, r in enumerate(results[:5]):  # show first 5
         lines += [
             f"### Sample {i+1}",
             f"**Q:** {r['question']}",
-            f"",
+            "",
             f"**A:** {r['answer'][:300]}{'...' if len(r['answer']) > 300 else ''}",
-            f"",
+            "",
             f"**Contexts retrieved:** {len(r['contexts'])}",
-            f"",
+            "",
         ]
-    
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines))
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
     print(f"📄 Report written to {output_path}")
 
 
@@ -150,16 +150,18 @@ def main():
     parser.add_argument("--testset", required=True, help="Path to JSONL testset file")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--model", default=None, help="LLM model to use (defaults to config value)")
-    parser.add_argument("--output", default=None, help="Output report path (default: eval_report_<ts>.md)")
+    parser.add_argument(
+        "--output", default=None, help="Output report path (default: eval_report_<ts>.md)"
+    )
     args = parser.parse_args()
 
-    from axon.main import OpenStudioBrain, OpenStudioConfig
-    
+    from axon.main import AxonBrain, AxonConfig
+
     print("🧠 Loading Axon...")
-    config = OpenStudioConfig.load(args.config)
+    config = AxonConfig.load(args.config)
     if args.model:
         config.llm_model = args.model
-    brain = OpenStudioBrain(config)
+    brain = AxonBrain(config)
 
     print(f"📋 Loading testset from {args.testset}...")
     testset = load_testset(args.testset)

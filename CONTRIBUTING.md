@@ -13,8 +13,8 @@ Thank you for your interest in contributing to Axon! This document provides guid
 
 1. **Fork and clone the repository**
    ```bash
-   git clone https://github.com/jyunming/studio_brain_open.git
-   cd studio_brain_open
+   git clone https://github.com/jyunming/Axon.git
+   cd Axon
    ```
 
 2. **Create a virtual environment**
@@ -82,7 +82,7 @@ pre-commit run --all-files  # Run manually
 ## Project Structure
 
 ```
-studio_brain_open/
+Axon/
 ├── src/
 │   └── axon/          # Main package
 │       ├── main.py         # Core RAG engine

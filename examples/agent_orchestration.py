@@ -14,13 +14,11 @@ Usage:
     python examples/agent_orchestration.py
 """
 
-import json
 import logging
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
-
 from axon.tools import get_rag_tool_definition
 
 logger = logging.getLogger(__name__)
@@ -41,6 +39,7 @@ MIN_RELEVANT_CHUNKS = 1
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 0 — Health check
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def check_health(client: httpx.Client) -> bool:
     """
@@ -71,11 +70,12 @@ def check_health(client: httpx.Client) -> bool:
 # Phase 1 — Retrieve
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def retrieve_chunks(
     client: httpx.Client,
     question: str,
     top_k: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Phase 1 — POST /search to get raw document chunks.
 
@@ -90,7 +90,7 @@ def retrieve_chunks(
         timeout=30.0,
     )
     resp.raise_for_status()
-    chunks: List[Dict[str, Any]] = resp.json()
+    chunks: list[dict[str, Any]] = resp.json()
     print(f"    → Retrieved {len(chunks)} chunk(s)")
     for i, chunk in enumerate(chunks):
         score = chunk.get("score", 0.0)
@@ -103,7 +103,8 @@ def retrieve_chunks(
 # Phase 2 — Reason (local heuristic)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def evaluate_chunks(chunks: List[Dict[str, Any]]) -> bool:
+
+def evaluate_chunks(chunks: list[dict[str, Any]]) -> bool:
     """
     Phase 2 — Inspect retrieved chunks and decide whether they are sufficient.
 
@@ -126,7 +127,9 @@ def evaluate_chunks(chunks: List[Dict[str, Any]]) -> bool:
     )
 
     sufficient = len(relevant) >= MIN_RELEVANT_CHUNKS
-    verdict = "SUFFICIENT — will synthesize" if sufficient else "INSUFFICIENT — will inject knowledge"
+    verdict = (
+        "SUFFICIENT — will synthesize" if sufficient else "INSUFFICIENT — will inject knowledge"
+    )
     print(f"    → Verdict: {verdict}")
     return sufficient
 
@@ -135,10 +138,11 @@ def evaluate_chunks(chunks: List[Dict[str, Any]]) -> bool:
 # Phase 3a — Synthesize
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def synthesize_answer(
     client: httpx.Client,
     question: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Phase 3a — POST /query to get a synthesized, LLM-generated answer.
 
@@ -160,10 +164,11 @@ def synthesize_answer(
 # Phase 3b — Learn (inject new fact) then retry
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def inject_knowledge(
     client: httpx.Client,
     fact: str,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> bool:
     """
     Phase 3b — POST /add_text to teach the knowledge base a new fact.
@@ -172,9 +177,9 @@ def inject_knowledge(
     information is missing, then inject it so that a subsequent /query call
     can draw on the new content.  This closes the "learn" arc of the loop.
     """
-    print(f"\n📚  Phase 3b — Learn: injecting new fact into knowledge base")
+    print("\n📚  Phase 3b — Learn: injecting new fact into knowledge base")
     print(f'    Fact: "{fact[:100]}..."' if len(fact) > 100 else f'    Fact: "{fact}"')
-    payload: Dict[str, Any] = {"text": fact}
+    payload: dict[str, Any] = {"text": fact}
     if metadata:
         payload["metadata"] = metadata
     resp = client.post(f"{API_URL}/add_text", json=payload, timeout=30.0)
@@ -188,6 +193,7 @@ def inject_knowledge(
 # ──────────────────────────────────────────────────────────────────────────────
 # Tool-schema helper
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def show_tool_schemas() -> None:
     """
@@ -210,6 +216,7 @@ def show_tool_schemas() -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 # Routing helper — mimics LLM tool selection
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def select_tool(question: str) -> str:
     """
@@ -235,9 +242,10 @@ def select_tool(question: str) -> str:
 # Orchestration loop
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def orchestrate(
     question: str,
-    fallback_fact: Optional[str] = None,
+    fallback_fact: str | None = None,
 ) -> None:
     """
     Run the 3-phase planner-critic loop for a single question.
@@ -253,7 +261,6 @@ def orchestrate(
     print("=" * 60)
 
     with httpx.Client() as client:
-
         # ── Phase 0: Health ───────────────────────────────────────────────
         if not check_health(client):
             sys.exit(1)

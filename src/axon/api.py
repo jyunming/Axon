@@ -4,15 +4,14 @@ import pathlib
 from typing import Any
 
 import uvicorn
+from axon.main import AxonBrain, AxonConfig
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from axon.main import OpenStudioBrain, OpenStudioConfig
-
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("RAGBrainAPI")
+logger = logging.getLogger("AxonAPI")
 
 
 def _validate_ingest_path(path: str) -> str:
@@ -53,7 +52,7 @@ async def api_key_middleware(request: Request, call_next):
 
 
 # Global Brain Instance
-brain: OpenStudioBrain | None = None
+brain: AxonBrain | None = None
 
 
 @app.on_event("startup")
@@ -61,8 +60,8 @@ async def startup_event():
     global brain
     try:
         config_path = os.getenv("AXON_CONFIG_PATH")
-        config = OpenStudioConfig.load(config_path)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig.load(config_path)
+        brain = AxonBrain(config)
         logger.info("Axon initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize Axon: {e}")
@@ -151,7 +150,6 @@ async def query_brain(request: QueryRequest):
             "query_decompose": request.decompose,
             "compress_context": request.compress,
             "discussion_fallback": request.discuss,
-            "cite_sources": request.cite,
         }
         response = brain.query(request.query, filters=request.filters, overrides=overrides)
         cfg = brain._apply_overrides(overrides)
@@ -165,7 +163,6 @@ async def query_brain(request: QueryRequest):
             "decompose": cfg.query_decompose,
             "compress": cfg.compress_context,
             "discuss": cfg.discussion_fallback,
-            "cite": cfg.cite_sources,
         }
         return {"query": request.query, "response": response, "settings": settings}
     except Exception as e:
@@ -189,7 +186,6 @@ async def query_brain_stream(request: QueryRequest):
         "query_decompose": request.decompose,
         "compress_context": request.compress,
         "discussion_fallback": request.discuss,
-        "cite_sources": request.cite,
     }
 
     def generate():
@@ -214,7 +210,7 @@ async def search_brain(request: SearchRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        # We need to expose the search method from OpenStudioBrain more directly
+        # We need to expose the search method from AxonBrain more directly
         # or use the vector_store directly.
         # For agentic use, we'll implement a search flow here.
         query_embedding = brain.embedding.embed_query(request.query)

@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-logger = logging.getLogger("StudioBrainOpen.Loaders")
+logger = logging.getLogger("Axon.Loaders")
 
 _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
 

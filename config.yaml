@@ -13,33 +13,33 @@
 embedding:
   # Provider: sentence_transformers, ollama, fastembed, openai
   provider: sentence_transformers
-  
+
   # Model names by provider:
   # sentence_transformers: all-MiniLM-L6-v2, BAAI/bge-large-en, etc.
   # ollama: nomic-embed-text, mxbai-embed-large, embeddinggemma, etc.
   # fastembed: BAAI/bge-small-en-v1.5, etc.
   # openai: text-embedding-3-small, etc.
   model: all-MiniLM-L6-v2
-  
+
   # For Ollama provider:
   # base_url: http://localhost:11434
 
 llm:
   # Provider: ollama, gemini, ollama_cloud, openai, vllm
   provider: ollama
-  
+
   # Model names:
   # ollama: llama3.1, gemma, llama3.1:70b, qwen2.5:32b, mistral-nemo
   # gemini: gemini-1.5-pro, gemini-1.5-flash
   # openai: gpt-4o, gpt-4o-mini, local-model...
   model: gemma
-  
+
   # Base URL for API connections. Useful to point the 'openai' client to an Open Source Docker Engine like vLLM.
   base_url: http://localhost:11434
-  
+
   # API Key for cloud providers (or fake string for local open-source API engines)
   api_key: ""
-  
+
   # Provider specific keys (can also be set via env vars)
   gemini_api_key: ""
   ollama_cloud_key: ""
@@ -62,13 +62,13 @@ llm:
 vector_store:
   # Provider: chroma, qdrant, lancedb
   provider: chroma
-  
+
   # Storage path
-  path: ./chroma_data
+  path: ~/.axon/data/chroma
 
 # BM25 Keyword Search
 bm25:
-  path: ./bm25_index
+  path: ~/.axon/data/bm25
 
 rag:
   # Number of documents to retrieve

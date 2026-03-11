@@ -46,10 +46,10 @@ def test_brain_art_content():
 def test_open_studio_config_path_defaults():
     from pathlib import Path
 
-    from axon.main import OpenStudioConfig
+    from axon.main import AxonConfig
 
     # Mock or check defaults
-    config = OpenStudioConfig()
+    config = AxonConfig()
     home = Path.home() / ".axon"
 
     # Verify that the paths default to the user's home directory subdirectory

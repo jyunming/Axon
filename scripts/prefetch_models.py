@@ -30,7 +30,6 @@ import argparse
 import os
 import sys
 
-
 DEFAULT_MODELS = [
     "sentence-transformers/all-MiniLM-L6-v2",
     "BAAI/bge-reranker-base",
@@ -64,7 +63,7 @@ def download_model(repo_id: str, output_dir: str) -> None:
     snapshot_download(
         repo_id=repo_id,
         local_dir=local_dir,
-        local_dir_use_symlinks=False,   # copy files, not symlinks — safe for transfer
+        local_dir_use_symlinks=False,  # copy files, not symlinks — safe for transfer
     )
 
     # Report size
@@ -104,9 +103,9 @@ def main() -> None:
     for repo_id in models:
         download_model(repo_id, output_dir)
 
-    print(f"\n✅ Done.  Set in config.yaml:\n")
-    print(f"    offline:")
-    print(f"      enabled: true")
+    print("\n✅ Done.  Set in config.yaml:\n")
+    print("    offline:")
+    print("      enabled: true")
     print(f"      local_models_dir: {output_dir}")
     print()
     print("    embedding:")

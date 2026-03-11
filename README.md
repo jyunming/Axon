@@ -216,7 +216,7 @@ echo "What is X?" | axon -q
 
 ## 🤖 AI Agent Integration
 
-Agents can use this brain as a "Collective Memory."
+Agents can use Axon as a "Collective Memory."
 
 ### Knowledge API Endpoints
 

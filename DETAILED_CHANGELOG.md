@@ -214,14 +214,14 @@
 6. Add Google-style docstring to handler function
 
 ### When Changing Config Fields
-1. Update `OpenStudioConfig` dataclass (lines 28-87)
-2. Update `OpenStudioConfig.load()` method (lines 89-153)
+1. Update `AxonConfig` dataclass (lines 28-87)
+2. Update `AxonConfig.load()` method (lines 89-153)
 3. Update config.yaml with new field
 4. Update README.md "Configuration" section if user-facing
 5. Update QUICKREF.md "Config File" section if it follows a new naming pattern
 
 ### When Changing Default Models
-1. Update `OpenStudioConfig` dataclass defaults
+1. Update `AxonConfig` dataclass defaults
 2. Update config.yaml defaults
 3. Update MODEL_GUIDE.md "Executive Summary"
 4. Update SETUP.md setup instructions if needed

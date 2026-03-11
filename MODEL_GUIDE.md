@@ -374,16 +374,16 @@ ollama pull nomic-embed-text  # Optional, for better quality
 
 3. **Import and test:**
 ```python
-from axon import OpenStudioBrain, OpenStudioConfig
+from axon import AxonBrain, AxonConfig
 
-config = OpenStudioConfig(
+config = AxonConfig(
     embedding_provider="sentence_transformers",
     embedding_model="all-MiniLM-L6-v2",
     llm_provider="ollama",
     llm_model="llama3.1:8b"
 )
 
-brain = OpenStudioBrain(config)
+brain = AxonBrain(config)
 response = brain.query("What are the key themes in my documents?")
 ```
 

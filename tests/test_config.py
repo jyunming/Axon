@@ -3,16 +3,15 @@
 import tempfile
 
 import yaml
+from axon.main import AxonConfig
 
-from axon.main import OpenStudioConfig
 
-
-class TestOpenStudioConfig:
-    """Test the OpenStudioConfig class."""
+class TestAxonConfig:
+    """Test the AxonConfig class."""
 
     def test_default_config(self):
         """Test default configuration values."""
-        config = OpenStudioConfig()
+        config = AxonConfig()
 
         assert config.embedding_provider == "sentence_transformers"
         assert config.llm_provider == "ollama"
@@ -31,7 +30,7 @@ class TestOpenStudioConfig:
             yaml.dump(config_data, f)
             f.flush()
 
-            config = OpenStudioConfig.load(f.name)
+            config = AxonConfig.load(f.name)
 
             assert config.embedding_provider == "ollama"
             assert config.embedding_model == "nomic-embed-text"
@@ -41,9 +40,9 @@ class TestOpenStudioConfig:
 
     def test_load_nonexistent_config(self):
         """Test loading from nonexistent file returns defaults."""
-        config = OpenStudioConfig.load("nonexistent_config.yaml")
+        config = AxonConfig.load("nonexistent_config.yaml")
 
-        assert isinstance(config, OpenStudioConfig)
+        assert isinstance(config, AxonConfig)
         assert config.embedding_provider == "sentence_transformers"
 
     def test_yaml_query_transformations_step_back(self):
@@ -51,7 +50,7 @@ class TestOpenStudioConfig:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump({"query_transformations": {"step_back": True, "hyde": True}}, f)
             f.flush()
-            config = OpenStudioConfig.load(f.name)
+            config = AxonConfig.load(f.name)
         assert config.step_back is True
         assert config.hyde is True
 
@@ -60,7 +59,7 @@ class TestOpenStudioConfig:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump({"rag": {"parent_chunk_size": 2000, "top_k": 5}}, f)
             f.flush()
-            config = OpenStudioConfig.load(f.name)
+            config = AxonConfig.load(f.name)
         assert config.parent_chunk_size == 2000
         assert config.top_k == 5
 
@@ -71,7 +70,7 @@ class TestOpenStudioConfig:
                 {"rag": {"query_cache": True, "query_cache_size": 64, "dedup_on_ingest": False}}, f
             )
             f.flush()
-            config = OpenStudioConfig.load(f.name)
+            config = AxonConfig.load(f.name)
         assert config.query_cache is True
         assert config.query_cache_size == 64
         assert config.dedup_on_ingest is False
@@ -87,7 +86,7 @@ class TestOpenStudioConfig:
                 f,
             )
             f.flush()
-            config = OpenStudioConfig.load(f.name)
+            config = AxonConfig.load(f.name)
         assert config.query_decompose is True
         assert config.compress_context is True
 
@@ -96,6 +95,6 @@ class TestOpenStudioConfig:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump({"rerank": {"enabled": True, "model": "BAAI/bge-reranker-v2-m3"}}, f)
             f.flush()
-            config = OpenStudioConfig.load(f.name)
+            config = AxonConfig.load(f.name)
         assert config.rerank is True
         assert config.reranker_model == "BAAI/bge-reranker-v2-m3"

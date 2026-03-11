@@ -348,33 +348,33 @@ logging.basicConfig(level=logging.DEBUG)
 
 ### Basic RAG Query
 ```python
-from axon.main import OpenStudioBrain
+from axon.main import AxonBrain
 
-brain = OpenStudioBrain()
+brain = AxonBrain()
 response = brain.query("What is the main topic?")
 print(response)
 ```
 
 ### Custom Configuration
 ```python
-from axon.main import OpenStudioBrain, OpenStudioConfig
+from axon.main import AxonBrain, AxonConfig
 
-config = OpenStudioConfig(
+config = AxonConfig(
     embedding_provider="ollama",
     llm_model="llama3.1:70b",
     top_k=5,
     hybrid_search=True
 )
-brain = OpenStudioBrain(config)
+brain = AxonBrain(config)
 ```
 
 ### Ingest Documents
 ```python
 import asyncio
-from axon.main import OpenStudioBrain
+from axon.main import AxonBrain
 
 async def ingest_docs():
-    brain = OpenStudioBrain()
+    brain = AxonBrain()
     await brain.load_directory("./my_documents")
 
 asyncio.run(ingest_docs())

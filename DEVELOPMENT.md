@@ -5,8 +5,8 @@
 ### 1. Setup Environment
 ```bash
 # Clone the repository
-git clone https://github.com/jyunming/studio_brain_open.git
-cd studio_brain_open
+git clone https://github.com/jyunming/Axon.git
+cd Axon
 
 # Create virtual environment
 python -m venv venv
@@ -50,7 +50,7 @@ make docker-logs   # View logs
 ### 3. Project Structure
 
 ```
-studio_brain_open/
+Axon/
 ├── src/axon/          # Main package
 │   ├── main.py             # Core RAG engine
 │   ├── api.py              # REST API endpoints
@@ -252,8 +252,8 @@ make lint
 
 ## Getting Help
 
-- 🐛 **Bug Reports:** [GitHub Issues](https://github.com/jyunming/studio_brain_open/issues)
-- 💡 **Feature Requests:** [GitHub Discussions](https://github.com/jyunming/studio_brain_open/discussions)
+- 🐛 **Bug Reports:** [GitHub Issues](https://github.com/jyunming/Axon/issues)
+- 💡 **Feature Requests:** [GitHub Discussions](https://github.com/jyunming/Axon/discussions)
 - 💬 **Questions:** [Discord/Slack Community](#)
 
 Happy coding! 🚀

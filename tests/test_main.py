@@ -3,11 +3,11 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 
-class TestOpenStudioConfig:
+class TestAxonConfig:
     def test_defaults(self):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig()
+        config = AxonConfig()
         assert config.embedding_provider == "sentence_transformers"
         assert config.llm_provider == "ollama"
         assert config.vector_store == "chroma"
@@ -16,7 +16,7 @@ class TestOpenStudioConfig:
         assert config.discussion_fallback is True
 
     def test_load_from_yaml(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         cfg = {
             "embedding": {"provider": "fastembed", "model": "BAAI/bge-small-en-v1.5"},
@@ -41,7 +41,7 @@ class TestOpenStudioConfig:
         with open(cfg_path, "w") as f:
             yaml.dump(cfg, f)
 
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.embedding_provider == "fastembed"
         assert config.llm_model == "phi3:mini"
         assert config.top_k == 5
@@ -50,18 +50,18 @@ class TestOpenStudioConfig:
         assert config.brave_api_key == "test_key"
 
     def test_load_projects_root_from_yaml(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         cfg = {"projects_root": str(tmp_path / "myprojects")}
         cfg_path = tmp_path / "config.yaml"
         with open(cfg_path, "w") as f:
             yaml.dump(cfg, f)
 
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.projects_root == str(tmp_path / "myprojects")
 
     def test_env_var_overrides_yaml_projects_root(self, tmp_path, monkeypatch):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         cfg = {"projects_root": str(tmp_path / "yaml_root")}
         cfg_path = tmp_path / "config.yaml"
@@ -70,15 +70,15 @@ class TestOpenStudioConfig:
 
         env_root = str(tmp_path / "env_root")
         monkeypatch.setenv("AXON_PROJECTS_ROOT", env_root)
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.projects_root == env_root
 
     def test_projects_root_defaults_to_home(self):
         from pathlib import Path
 
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig()
+        config = AxonConfig()
         expected = str(Path.home() / ".axon" / "projects")
         assert config.projects_root == expected
 
@@ -137,12 +137,12 @@ class TestMultiStoreWriteErrors:
 @patch("axon.main.OpenLLM")
 @patch("axon.main.OpenEmbedding")
 @patch("axon.main.OpenReranker")
-class TestOpenStudioBrain:
+class TestAxonBrain:
     def test_query_flow(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        brain = AxonBrain(config)
 
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
@@ -154,10 +154,10 @@ class TestOpenStudioBrain:
         assert result == "Test answer"
 
     def test_discussion_fallback(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False, discussion_fallback=True)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, discussion_fallback=True)
+        brain = AxonBrain(config)
 
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(return_value=[])
@@ -174,10 +174,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """User message sent to LLM must be the plain query so chat_history stays consistent."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
 
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
@@ -200,10 +200,10 @@ class TestOpenStudioBrain:
         assert kwargs["chat_history"] == history
 
     def test_ingest_flow(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(chunk_size=1000)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(chunk_size=1000)
+        brain = AxonBrain(config)
         brain.splitter = None
         brain._save_hash_store = MagicMock()
         brain._ingested_hashes = set()  # isolate from real on-disk hash store
@@ -216,10 +216,10 @@ class TestOpenStudioBrain:
         assert brain.vector_store.add.called
 
     def test_web_search_integration(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(truth_grounding=True, brave_api_key="key")
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(truth_grounding=True, brave_api_key="key")
+        brain = AxonBrain(config)
 
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(return_value=[])
@@ -239,12 +239,12 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Second identical query hits cache; LLM called only once."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             hybrid_search=False, rerank=False, similarity_threshold=0.0, query_cache=True
         )
-        brain = OpenStudioBrain(config)
+        brain = AxonBrain(config)
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -261,10 +261,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """With query_cache=False (default), LLM is called every time."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        brain = AxonBrain(config)
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -280,12 +280,12 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Cache is bypassed when chat_history is present (multi-turn context varies)."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             hybrid_search=False, rerank=False, similarity_threshold=0.0, query_cache=True
         )
-        brain = OpenStudioBrain(config)
+        brain = AxonBrain(config)
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -302,16 +302,16 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Cache evicts oldest entry when query_cache_size is reached."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             hybrid_search=False,
             rerank=False,
             similarity_threshold=0.0,
             query_cache=True,
             query_cache_size=2,
         )
-        brain = OpenStudioBrain(config)
+        brain = AxonBrain(config)
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -332,10 +332,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Re-ingesting the same text is skipped when dedup_on_ingest=True."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(dedup_on_ingest=True)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(dedup_on_ingest=True)
+        brain = AxonBrain(config)
         brain.splitter = None
         brain._ingested_hashes = set()
         brain._save_hash_store = MagicMock()
@@ -352,10 +352,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Different text content passes dedup check and is ingested."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(dedup_on_ingest=True)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(dedup_on_ingest=True)
+        brain = AxonBrain(config)
         brain.splitter = None
         brain._ingested_hashes = set()
         brain._save_hash_store = MagicMock()
@@ -369,10 +369,10 @@ class TestOpenStudioBrain:
 
     def test_ingest_dedup_disabled(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         """With dedup_on_ingest=False, identical content is ingested again."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(dedup_on_ingest=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(dedup_on_ingest=False)
+        brain = AxonBrain(config)
         brain.splitter = None
         brain._ingested_hashes = set()
         brain.embedding.embed = MagicMock(side_effect=[[[0.1]], [[0.1]]])
@@ -392,12 +392,12 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Step-back generates an abstract query and includes it in search_queries."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             hybrid_search=False, rerank=False, similarity_threshold=0.0, step_back=True
         )
-        brain = OpenStudioBrain(config)
+        brain = AxonBrain(config)
         brain._get_step_back_query = MagicMock(return_value="abstract concept query")
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.embedding.embed = MagicMock(return_value=[[0.1], [0.2]])
@@ -414,10 +414,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """step_back is False by default — no extra LLM call for abstraction."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain._get_step_back_query = MagicMock()
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(return_value=[])
@@ -433,10 +433,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """parent_chunk_size=0 (default) uses the normal splitter path."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(parent_chunk_size=0)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(parent_chunk_size=0)
+        brain = AxonBrain(config)
         brain._save_hash_store = MagicMock()
         brain._ingested_hashes = set()
         brain.vector_store.add = MagicMock()
@@ -453,10 +453,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """parent_chunk_size > chunk_size embeds child chunks that carry parent_text in metadata."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(chunk_size=50, chunk_overlap=10, parent_chunk_size=200)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(chunk_size=50, chunk_overlap=10, parent_chunk_size=200)
+        brain = AxonBrain(config)
         brain._save_hash_store = MagicMock()
         brain._ingested_hashes = set()
         brain.vector_store.add = MagicMock()
@@ -476,10 +476,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """_build_context returns parent_text (not chunk text) for small-to-big results."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig()
-        brain = OpenStudioBrain(config)
+        config = AxonConfig()
+        brain = AxonBrain(config)
 
         results = [
             {
@@ -497,10 +497,10 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """_build_context falls back to chunk text when parent_text is absent."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig()
-        brain = OpenStudioBrain(config)
+        config = AxonConfig()
+        brain = AxonBrain(config)
 
         results = [{"id": "d1", "text": "normal chunk text", "score": 0.9, "metadata": {}}]
         context, _ = brain._build_context(results)
@@ -510,34 +510,34 @@ class TestOpenStudioBrain:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """--reranker-model CLI arg updates config.reranker_model before brain init."""
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig()
+        config = AxonConfig()
         config.reranker_model = "BAAI/bge-reranker-v2-m3"
         assert config.reranker_model == "BAAI/bge-reranker-v2-m3"
 
     def test_reranker_default_model(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         """Default reranker model is the lightweight ms-marco cross-encoder."""
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig()
+        config = AxonConfig()
         assert config.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     def test_parent_chunk_size_config_defaults_zero(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """parent_chunk_size defaults to 0 (feature disabled by default)."""
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig()
+        config = AxonConfig()
         assert config.parent_chunk_size == 0
 
 
 class TestOpenReranker:
     def test_llm_reranker(self):
-        from axon.main import OpenReranker, OpenStudioConfig
+        from axon.main import AxonConfig, OpenReranker
 
-        config = OpenStudioConfig(rerank=True, reranker_provider="llm")
+        config = AxonConfig(rerank=True, reranker_provider="llm")
         reranker = OpenReranker(config)
         reranker.llm = MagicMock()
         reranker.llm.complete = MagicMock(side_effect=["10", "5"])
@@ -551,9 +551,9 @@ class TestOpenReranker:
 class TestOpenLLM:
     @patch("ollama.Client")
     def test_ollama_num_ctx(self, MockOllama):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import AxonConfig, OpenLLM
 
-        config = OpenStudioConfig(llm_provider="ollama")
+        config = AxonConfig(llm_provider="ollama")
         llm = OpenLLM(config)
 
         mock_client = MockOllama.return_value
@@ -566,10 +566,10 @@ class TestOpenLLM:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_gemma_handling(self, MockGenaiConfigure, MockGenerativeModel):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import AxonConfig, OpenLLM
 
         # Test Gemma
-        config = OpenStudioConfig(llm_provider="gemini", llm_model="gemma-3-27b-it")
+        config = AxonConfig(llm_provider="gemini", llm_model="gemma-3-27b-it")
         llm = OpenLLM(config)
 
         mock_model = MockGenerativeModel.return_value
@@ -587,10 +587,10 @@ class TestOpenLLM:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_pro_handling(self, MockGenaiConfigure, MockGenerativeModel):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import AxonConfig, OpenLLM
 
         # Test Pro (supports system instructions)
-        config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-1.5-pro")
+        config = AxonConfig(llm_provider="gemini", llm_model="gemini-1.5-pro")
         llm = OpenLLM(config)
 
         llm.complete("hello", system_prompt="be helpful")
@@ -601,10 +601,10 @@ class TestOpenLLM:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_flash_handling(self, MockGenaiConfigure, MockGenerativeModel):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import AxonConfig, OpenLLM
 
         # Test Flash (also supports system instructions)
-        config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-1.5-flash")
+        config = AxonConfig(llm_provider="gemini", llm_model="gemini-1.5-flash")
         llm = OpenLLM(config)
 
         llm.complete("hello", system_prompt="be helpful")
@@ -614,9 +614,9 @@ class TestOpenLLM:
 
     @patch("httpx.Client")
     def test_ollama_cloud_handling(self, MockHttpxClient):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import AxonConfig, OpenLLM
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             llm_provider="ollama_cloud", ollama_cloud_key="test_key", llm_model="gemma"
         )
         llm = OpenLLM(config)
@@ -633,9 +633,9 @@ class TestOpenLLM:
     @patch("openai.resources.chat.Completions.create")
     @patch("openai.OpenAI")
     def test_openai_handling(self, MockOpenAI, MockCreate):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import AxonConfig, OpenLLM
 
-        config = OpenStudioConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
+        config = AxonConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
         llm = OpenLLM(config)
 
         # Setup mock client
@@ -650,9 +650,9 @@ class TestOpenLLM:
 
     @patch("openai.OpenAI")
     def test_vllm_complete(self, MockOpenAI):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import AxonConfig, OpenLLM
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             llm_provider="vllm",
             llm_model="meta-llama/Llama-3.1-8B-Instruct",
             vllm_base_url="http://localhost:8000/v1",
@@ -671,13 +671,13 @@ class TestOpenLLM:
 
     def test_vllm_default_base_url(self, monkeypatch):
         monkeypatch.delenv("VLLM_BASE_URL", raising=False)
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig()
+        config = AxonConfig()
         assert config.vllm_base_url == "http://localhost:8000/v1"
 
     def test_vllm_base_url_from_yaml(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         cfg = {
             "llm": {
@@ -691,7 +691,7 @@ class TestOpenLLM:
 
         with open(cfg_path, "w") as f:
             yaml.dump(cfg, f)
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.llm_provider == "vllm"
         assert config.vllm_base_url == "http://192.168.1.10:8000/v1"
 
@@ -708,10 +708,10 @@ class TestOpenLLM:
 @patch("axon.main.OpenReranker")
 class TestQueryTransformations:
     def test_hyde_document_calls_llm(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hyde=False, hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hyde=False, hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain.llm.complete = MagicMock(return_value="Hypothetical passage about X.")
 
         result = brain._get_hyde_document("What is X?")
@@ -724,10 +724,10 @@ class TestQueryTransformations:
     def test_multi_queries_returns_original_plus_alternatives(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(multi_query=True, hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(multi_query=True, hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain.llm.complete = MagicMock(return_value="Alt query one\nAlt query two\nAlt query three")
 
         queries = brain._get_multi_queries("original question")
@@ -742,10 +742,10 @@ class TestQueryTransformations:
     def test_multi_queries_strips_numbering(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(multi_query=True, hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(multi_query=True, hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain.llm.complete = MagicMock(
             return_value="1. How does X work\n2. Explain X\n3. X overview"
         )
@@ -759,10 +759,10 @@ class TestQueryTransformations:
     ):
         import asyncio
 
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain.ingest = MagicMock()
 
         # Create a real .txt file so DirectoryLoader finds and loads something.
@@ -778,10 +778,10 @@ class TestQueryTransformations:
         import asyncio
         from unittest.mock import AsyncMock, patch
 
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain.ingest = MagicMock()
 
         with patch("axon.loaders.DirectoryLoader") as MockLoader:
@@ -802,12 +802,10 @@ class TestQueryDecomposeAndCompress:
     """Tests for query decomposition and context compression."""
 
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
-            hybrid_search=False, rerank=False, similarity_threshold=0.0, **kwargs
-        )
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0, **kwargs)
+        brain = AxonBrain(config)
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(return_value=[])
         return brain
@@ -991,10 +989,10 @@ class TestQueryDecomposeAndCompress:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """compress_context=False (default): _compress_context is never called during query."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        brain = AxonBrain(config)
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -1018,10 +1016,10 @@ class TestLogQueryMetrics:
     ):
         from unittest.mock import patch as _patch
 
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
 
         with _patch("axon.main.logger") as mock_logger:
             brain._log_query_metrics(
@@ -1046,10 +1044,10 @@ class TestLogQueryMetrics:
     ):
         from unittest.mock import patch as _patch
 
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
 
         with _patch("axon.main.logger") as mock_logger:
             brain._log_query_metrics(
@@ -1080,10 +1078,10 @@ class TestListDocuments:
     def test_list_documents_delegates_to_vector_store(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain.vector_store.list_documents = MagicMock(
             return_value=[
                 {"source": "a.txt", "chunks": 3, "doc_ids": ["1", "2", "3"]},
@@ -1100,10 +1098,10 @@ class TestListDocuments:
         assert result[1]["source"] == "b.pdf"
 
     def test_list_documents_empty_kb(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False)
+        brain = AxonBrain(config)
         brain.vector_store.list_documents = MagicMock(return_value=[])
 
         result = brain.list_documents()
@@ -1114,9 +1112,9 @@ class TestOpenVectorStoreListDocuments:
     def test_chroma_groups_by_source(self):
         from unittest.mock import MagicMock, patch
 
-        from axon.main import OpenStudioConfig, OpenVectorStore
+        from axon.main import AxonConfig, OpenVectorStore
 
-        config = OpenStudioConfig(vector_store="chroma")
+        config = AxonConfig(vector_store="chroma")
         with patch("chromadb.PersistentClient") as MockClient:
             mock_col = MagicMock()
             MockClient.return_value.get_or_create_collection.return_value = mock_col
@@ -1141,9 +1139,9 @@ class TestOpenVectorStoreListDocuments:
     def test_chroma_handles_missing_source_metadata(self):
         from unittest.mock import MagicMock, patch
 
-        from axon.main import OpenStudioConfig, OpenVectorStore
+        from axon.main import AxonConfig, OpenVectorStore
 
-        config = OpenStudioConfig(vector_store="chroma")
+        config = AxonConfig(vector_store="chroma")
         with patch("chromadb.PersistentClient") as MockClient:
             mock_col = MagicMock()
             MockClient.return_value.get_or_create_collection.return_value = mock_col
@@ -1283,41 +1281,12 @@ class TestInferProvider:
 @patch("axon.main.OpenEmbedding")
 @patch("axon.main.OpenReranker")
 class TestCiteSources:
-    def test_cite_sources_injects_instruction_in_system_prompt(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
-        """When cite_sources=True the system prompt must contain a citation directive."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+    def test_citations_always_present(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """The system prompt must contain citation directives."""
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
-            hybrid_search=False, rerank=False, cite_sources=True, similarity_threshold=0.0
-        )
-        brain = OpenStudioBrain(config)
-        brain._ingested_hashes = set()
-        brain.embedding.embed_query = MagicMock(return_value=[0.1])
-        brain.vector_store.search = MagicMock(
-            return_value=[
-                {"id": "d1", "text": "Transformers use attention.", "score": 0.9, "metadata": {}}
-            ]
-        )
-        brain.llm.complete = MagicMock(return_value="Answer [Doc 1]")
-
-        brain.query("What is a transformer?")
-
-        call_args = brain.llm.complete.call_args
-        system_prompt = call_args[0][1]
-        assert "cite" in system_prompt.lower() or "[Doc" in system_prompt
-
-    def test_cite_sources_disabled_by_default(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
-        """Without cite_sources the system prompt must NOT contain the citation directive."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
-
-        config = OpenStudioConfig(
-            hybrid_search=False, rerank=False, cite_sources=False, similarity_threshold=0.0
-        )
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        brain = AxonBrain(config)
         brain._ingested_hashes = set()
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
@@ -1331,35 +1300,7 @@ class TestCiteSources:
 
         call_args = brain.llm.complete.call_args
         system_prompt = call_args[0][1]
-        assert "Citation requirement" not in system_prompt
-
-    def test_cite_override_applies_via_apply_overrides(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
-        """Per-request cite_sources override is applied via _apply_overrides."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
-
-        config = OpenStudioConfig(
-            hybrid_search=False, rerank=False, cite_sources=False, similarity_threshold=0.0
-        )
-        brain = OpenStudioBrain(config)
-        brain._ingested_hashes = set()
-        brain.embedding.embed_query = MagicMock(return_value=[0.1])
-        brain.vector_store.search = MagicMock(
-            return_value=[
-                {"id": "d1", "text": "Transformers use attention.", "score": 0.9, "metadata": {}}
-            ]
-        )
-        brain.llm.complete = MagicMock(return_value="Answer [Doc 1]")
-
-        # Pass override at query time
-        brain.query("What is a transformer?", overrides={"cite_sources": True})
-
-        call_args = brain.llm.complete.call_args
-        system_prompt = call_args[0][1]
-        assert "cite" in system_prompt.lower() or "[Doc" in system_prompt
-        # Ensure original config was not mutated
-        assert brain.config.cite_sources is False
+        assert "cite" in system_prompt.lower() or "[Document" in system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1374,10 +1315,10 @@ class TestCiteSources:
 @patch("axon.main.OpenReranker")
 class TestRaptor:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
+        brain = AxonBrain(config)
         brain._ingested_hashes = set()
         brain._save_hash_store = MagicMock()
         brain._save_entity_graph = MagicMock()
@@ -1489,10 +1430,10 @@ class TestRaptor:
 @patch("axon.main.OpenReranker")
 class TestGraphRAG:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
+        brain = AxonBrain(config)
         brain._ingested_hashes = set()
         brain._save_hash_store = MagicMock()
         brain._save_entity_graph = MagicMock()
@@ -1604,12 +1545,12 @@ class TestGraphRAG:
 @patch("axon.main.OpenReranker")
 class TestCacheFixes:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             hybrid_search=False, rerank=False, similarity_threshold=0.0, **cfg_kwargs
         )
-        brain = OpenStudioBrain(config)
+        brain = AxonBrain(config)
         brain._ingested_hashes = set()
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
@@ -1694,28 +1635,15 @@ class TestCacheFixes:
         brain.query("q1")  # second call — should NOT raise and should call LLM again
         assert brain.llm.complete.call_count == 2  # no caching when size=0
 
-    def test_cache_key_includes_cite_sources(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
-        """Two requests differing only in cite_sources get distinct cache keys."""
-        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        from axon.main import OpenStudioConfig
-
-        cfg_no_cite = OpenStudioConfig(cite_sources=False)
-        cfg_cite = OpenStudioConfig(cite_sources=True)
-        key1 = brain._make_cache_key("q", None, cfg_no_cite)
-        key2 = brain._make_cache_key("q", None, cfg_cite)
-        assert key1 != key2
-
     def test_cache_key_includes_compress_context(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Two requests differing only in compress_context get distinct cache keys."""
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        key1 = brain._make_cache_key("q", None, OpenStudioConfig(compress_context=False))
-        key2 = brain._make_cache_key("q", None, OpenStudioConfig(compress_context=True))
+        key1 = brain._make_cache_key("q", None, AxonConfig(compress_context=False))
+        key2 = brain._make_cache_key("q", None, AxonConfig(compress_context=True))
         assert key1 != key2
 
     def test_cache_key_filter_serialisation_is_stable(
@@ -1723,9 +1651,9 @@ class TestCacheFixes:
     ):
         """Same filters in different insertion order produce the same cache key."""
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        cfg = OpenStudioConfig()
+        cfg = AxonConfig()
         key1 = brain._make_cache_key("q", {"b": 2, "a": 1}, cfg)
         key2 = brain._make_cache_key("q", {"a": 1, "b": 2}, cfg)
         assert key1 == key2
@@ -1746,9 +1674,9 @@ class TestCompressContextGuard:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """_compress_context([]) must not raise ValueError from ThreadPoolExecutor(max_workers=0)."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        brain = OpenStudioBrain(OpenStudioConfig())
+        brain = AxonBrain(AxonConfig())
         result = brain._compress_context("any query", [])
         assert result == []
 
@@ -1756,9 +1684,9 @@ class TestCompressContextGuard:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """Single-item list compresses without error."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        brain = OpenStudioBrain(OpenStudioConfig())
+        brain = AxonBrain(AxonConfig())
         brain.llm.complete = MagicMock(return_value="short")
         doc = {"id": "d1", "text": "this is a longer original text for the test", "metadata": {}}
         result = brain._compress_context("query", [doc])
@@ -1780,15 +1708,15 @@ class TestSwitchProjectState:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         """Switching project empties the query cache to prevent cross-project bleed."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             query_cache=True,
             query_cache_size=128,
             vector_store_path=str(tmp_path / "chroma"),
             bm25_path=str(tmp_path / "bm25"),
         )
-        brain = OpenStudioBrain(config)
+        brain = AxonBrain(config)
         # Prime the cache with a fake entry
         brain._query_cache["fake_key"] = "cached_answer"
         # Create a real project dir so switch_project doesn't raise
@@ -1807,13 +1735,13 @@ class TestSwitchProjectState:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         """Switching project loads the new project's content hashes."""
-        from axon.main import OpenStudioBrain, OpenStudioConfig
+        from axon.main import AxonBrain, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             vector_store_path=str(tmp_path / "chroma"),
             bm25_path=str(tmp_path / "bm25"),
         )
-        brain = OpenStudioBrain(config)
+        brain = AxonBrain(config)
         # Seed some hashes so we can confirm they get replaced
         brain._ingested_hashes = {"oldhash1", "oldhash2"}
         # Write new project's hash store
@@ -1852,9 +1780,9 @@ def _make_lancedb_mock():
 class TestOpenVectorStoreLanceDB:
     def _make_store(self, mock_lancedb):
         """Helper: returns (store, mock_table) with lancedb already mocked."""
-        from axon.main import OpenStudioConfig, OpenVectorStore
+        from axon.main import AxonConfig, OpenVectorStore
 
-        config = OpenStudioConfig(vector_store="lancedb", vector_store_path="./lancedb_test")
+        config = AxonConfig(vector_store="lancedb", vector_store_path="./lancedb_test")
         mock_table = MagicMock()
         mock_lancedb.connect.return_value.open_table.side_effect = Exception("not found")
         mock_lancedb.connect.return_value.create_table.return_value = mock_table
@@ -1981,7 +1909,6 @@ class TestExpandAtFiles:
     def test_docx_extension_routes_to_loader(self, tmp_path):
         """Verify .docx files are routed through _read_via_loader (not plain text)."""
         import pytest
-
         from axon.main import _expand_at_files
 
         try:
@@ -2000,7 +1927,6 @@ class TestExpandAtFiles:
     def test_pdf_extension_routes_to_loader(self, tmp_path):
         """Verify .pdf files are routed through _read_via_loader (not plain text)."""
         import pytest
-
         from axon.main import _AT_LOADER_EXTS, _expand_at_files
 
         # Confirm .pdf is registered as a loader extension
