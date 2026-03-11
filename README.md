@@ -13,15 +13,16 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 ## 📚 Documentation
 
+- **[Getting Started](GETTING_STARTED.md)** - New here? Start with this
 - **[Setup Guide](SETUP.md)** - Detailed step-by-step setup for LLM and embedding models
-- **[SOTA Analysis](SOTA_ANALYSIS.md)** - Gap analysis vs. state-of-the-art RAG systems and roadmap
 - **[Quick Reference](QUICKREF.md)** - Common commands and examples
+- **[Model Guide](MODEL_GUIDE.md)** - Supported models and configuration
+- **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and fixes
 - **[Development Guide](DEVELOPMENT.md)** - Setup and development workflow
 - **[Contributing](CONTRIBUTING.md)** - How to contribute
 - **[Security Policy](SECURITY.md)** - Security best practices
+- **[SOTA Analysis](SOTA_ANALYSIS.md)** - Gap analysis vs. state-of-the-art RAG systems and roadmap
 - **[Improvements Summary](IMPROVEMENTS.md)** - Recent enhancements
-- **[Model Guide](MODEL_GUIDE.md)** - Supported models and configuration
-- **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues and fixes
 
 ---
 
