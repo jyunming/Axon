@@ -4164,6 +4164,35 @@ def _interactive_repl(
                 if not arg:
                     print("  Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
                 else:
+                    from axon.projects import ensure_project, list_projects
+
+                    # Prompt to create a project if none exist and currently in 'default'
+                    if brain._active_project == "default":
+                        try:
+                            if not list_projects():
+                                print(
+                                    "\n  \033[1mNote\033[0m: You are about to ingest into the 'default' project."
+                                )
+                                print(
+                                    "  It is recommended to create a dedicated project to keep your data organized."
+                                )
+                                confirm = (
+                                    _read_input("  Create a new project now? [y/N]: ")
+                                    .strip()
+                                    .lower()
+                                )
+                                if confirm == "y":
+                                    new_name = _read_input("  New project name: ").strip().lower()
+                                    if new_name:
+                                        try:
+                                            ensure_project(new_name)
+                                            brain.switch_project(new_name)
+                                            print(f"  Switched to project '{new_name}'.\n")
+                                        except ValueError as e:
+                                            print(f"  {e}")
+                        except (EOFError, KeyboardInterrupt):
+                            print("\n  Cancelled project check.")
+
                     import glob as _glob
 
                     from axon.loaders import DirectoryLoader
