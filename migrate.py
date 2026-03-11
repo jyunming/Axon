@@ -1,5 +1,5 @@
 """
-Migration script for Local RAG Brain.
+Migration script for Axon.
 
 This script helps export data from existing RAG systems
 and import it into this fully open-source implementation.
@@ -46,9 +46,9 @@ def export_from_legacy(output_file: str = "rag_export.json"):
 
 def import_to_local_brain(input_file: str = "rag_export.json", directory: str = None):
     """
-    Import documents into the Local RAG Brain.
+    Import documents into the Axon.
     """
-    from rag_brain.main import OpenStudioBrain
+    from axon.main import OpenStudioBrain
     import asyncio
     
     brain = OpenStudioBrain()
@@ -74,7 +74,7 @@ def compare_query(query: str):
     print("=" * 60)
     
     try:
-        from rag_brain.main import OpenStudioBrain
+        from axon.main import OpenStudioBrain
         brain = OpenStudioBrain()
         response = brain.query(query)
         print(response)
@@ -84,7 +84,7 @@ def compare_query(query: str):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Migrate documents to Local RAG Brain")
+    parser = argparse.ArgumentParser(description="Migrate documents to Axon")
     parser.add_argument('action', choices=['export', 'import', 'migrate', 'compare'], help='Action to perform')
     parser.add_argument('--input', default='rag_export.json', help='Input file for import')
     parser.add_argument('--dir', help='Directory to import directly')

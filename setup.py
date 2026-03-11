@@ -4,7 +4,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="local-rag-brain",
+    name="axon",
     version="2.0.0",
     author="Open Source Contributor",
     description="General-purpose open-source RAG and embedding interface",
@@ -56,9 +56,9 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "rag-brain=rag_brain.main:main",
-            "rag-brain-ui=rag_brain.webapp:main_ui",
-            "rag-brain-api=rag_brain.api:main",
+            "axon=axon.main:main",
+            "axon-ui=axon.webapp:main_ui",
+            "axon-api=axon.api:main",
         ],
     },
 )

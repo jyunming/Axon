@@ -1,6 +1,6 @@
 # Documentation Audit - Detailed Change Log
 
-**Completed:** Documentation audit and comprehensive update to match current Local RAG Brain implementation
+**Completed:** Documentation audit and comprehensive update to match current Axon implementation
 
 ---
 
@@ -46,7 +46,7 @@
 - All 16 Slash Commands listed with brief descriptions
 
 **Updated Commands section:**
-- Line 13: Clarified `rag-brain` enters interactive REPL when run with no args
+- Line 13: Clarified `axon` enters interactive REPL when run with no args
 
 ### 4. .github/copilot-instructions.md
 
@@ -79,7 +79,7 @@
 - To: "**LLM:** `Gemma 2B` (default; smallest performant model) or `Llama 3.1 8B Instruct`..."
 - Updated memory footprint: "2–8 GB RAM/VRAM" (was 6-8 GB)
 
-### 6. src/rag_brain/main.py
+### 6. src/axon/main.py
 
 **Function: _interactive_repl() (lines 1652-1668)**
 - Added comprehensive Google-style docstring
@@ -162,7 +162,7 @@
 - ✅ qdrant (main.py:60, config.yaml:45)
 
 ### Major Features Documented
-- ✅ Session persistence to `~/.rag_brain/sessions/session_<timestamp>.json` (main.py:1187, 1657)
+- ✅ Session persistence to `~/.axon/sessions/session_<timestamp>.json` (main.py:1187, 1657)
 - ✅ Resume prompt on startup (main.py:1723-1739)
 - ✅ prompt_toolkit live tab completion (main.py:1623-1681, 1689)
 - ✅ Animated braille spinner (⠋⠙⠹…) during init (main.py:1531, 1554-1565)
@@ -198,7 +198,7 @@
 | CLAUDE.md | ~2.8 KB | ~3.4 KB | +0.6 KB |
 | .github/copilot-instructions.md | ~3.5 KB | ~4.8 KB | +1.3 KB |
 | MODEL_GUIDE.md | ~12.1 KB | ~12.2 KB | +0.1 KB |
-| src/rag_brain/main.py | ~70 KB | ~70.2 KB | +0.2 KB |
+| src/axon/main.py | ~70 KB | ~70.2 KB | +0.2 KB |
 | **Total** | **~101 KB** | **~104 KB** | **+3.4 KB** |
 
 ---
@@ -251,6 +251,6 @@
 
 ## Conclusion
 
-All documentation files have been thoroughly audited and updated to accurately reflect the Local RAG Brain implementation. The REPL CLI, configuration system, and API endpoints are now comprehensively documented. The documentation is maintenance-ready with clear guidance for future feature additions.
+All documentation files have been thoroughly audited and updated to accurately reflect the Axon implementation. The REPL CLI, configuration system, and API endpoints are now comprehensively documented. The documentation is maintenance-ready with clear guidance for future feature additions.
 
 **Status: READY FOR COMMIT ✅**

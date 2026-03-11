@@ -1,4 +1,4 @@
-# Local RAG Brain - Requirements
+# Axon - Requirements
 # Python 3.10+ required
 
 # Core dependencies

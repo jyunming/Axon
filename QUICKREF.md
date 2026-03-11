@@ -27,7 +27,7 @@ ruff check src/ tests/
 
 # Type check
 make type-check
-mypy src/rag_brain/
+mypy src/axon/
 
 # Run all checks
 make all
@@ -41,7 +41,7 @@ pytest
 
 # With coverage
 make test-cov
-pytest --cov=rag_brain --cov-report=html
+pytest --cov=axon --cov-report=html
 
 # Specific test file
 pytest tests/test_loaders.py
@@ -58,39 +58,39 @@ pytest -v -s  # Verbose with output
 ```bash
 # API Server
 make run-api
-rag-brain-api
+axon-api
 
 # Streamlit UI
 make run-ui
-rag-brain-ui
+axon-ui
 
 # CLI — interactive REPL (default when no args)
-rag-brain
+axon
 
 # CLI — single-shot query
-rag-brain "What is RAG?"
+axon "What is RAG?"
 
 # CLI — stream response token-by-token
-rag-brain --stream "Summarise my documents"
+axon --stream "Summarise my documents"
 
 # CLI — ingest a directory
-rag-brain --ingest ./documents/
+axon --ingest ./documents/
 
 # CLI — list all ingested documents
-rag-brain --list
+axon --list
 
 # CLI — switch model at runtime (auto-pulls Ollama model if missing)
-rag-brain --model gemma:2b "Your question"
+axon --model gemma:2b "Your question"
 
 # CLI — use a cloud provider
-rag-brain --provider gemini --model gemini-1.5-flash "Your question"
-rag-brain --provider openai --model gpt-4o "Your question"
+axon --provider gemini --model gemini-1.5-flash "Your question"
+axon --provider openai --model gpt-4o "Your question"
 
 # CLI — pull a model explicitly
-rag-brain --pull gemma:2b
+axon --pull gemma:2b
 
 # CLI — see all providers and locally available models
-rag-brain --list-models
+axon --list-models
 ```
 
 **REPL slash commands (interactive mode):**
@@ -121,7 +121,7 @@ rag-brain --list-models
 ```bash
 # Build image
 make docker-build
-docker build -t local-rag-brain:latest .
+docker build -t local-axon:latest .
 
 # Run with docker-compose
 make docker-run
@@ -267,7 +267,7 @@ curl -X POST http://localhost:8000/ingest \
 # Solution
 pip install -e .
 # Or reinstall
-pip uninstall local-rag-brain
+pip uninstall local-axon
 pip install -e .
 ```
 
@@ -307,14 +307,14 @@ netstat -ano | findstr :8000  # Windows
 
 # Change port
 export RAG_BRAIN_PORT=8001
-rag-brain-api
+axon-api
 ```
 
 ### Debug Mode
 ```bash
 # Enable debug logging
 export LOG_LEVEL=DEBUG
-rag-brain-api
+axon-api
 
 # Or in Python
 import logging
@@ -325,7 +325,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 ### Basic RAG Query
 ```python
-from rag_brain.main import OpenStudioBrain
+from axon.main import OpenStudioBrain
 
 brain = OpenStudioBrain()
 response = brain.query("What is the main topic?")
@@ -334,7 +334,7 @@ print(response)
 
 ### Custom Configuration
 ```python
-from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+from axon.main import OpenStudioBrain, OpenStudioConfig
 
 config = OpenStudioConfig(
     embedding_provider="ollama",
@@ -348,7 +348,7 @@ brain = OpenStudioBrain(config)
 ### Ingest Documents
 ```python
 import asyncio
-from rag_brain.main import OpenStudioBrain
+from axon.main import OpenStudioBrain
 
 async def ingest_docs():
     brain = OpenStudioBrain()
@@ -390,7 +390,7 @@ def test_feature():
 def test_api_endpoint():
     """Test API endpoint."""
     from fastapi.testclient import TestClient
-    from rag_brain.api import app
+    from axon.api import app
 
     client = TestClient(app)
     response = client.post("/query", json={"query": "test"})

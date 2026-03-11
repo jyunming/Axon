@@ -1,6 +1,6 @@
 """
 Simple Agent Orchestration Example.
-This script demonstrates how an agent can use the Local RAG Brain API.
+This script demonstrates how an agent can use the Axon API.
 """
 
 import httpx

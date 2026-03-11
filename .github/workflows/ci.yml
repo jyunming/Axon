@@ -39,13 +39,13 @@ jobs:
 
       - name: Syntax check (py_compile)
         run: |
-          python -m py_compile src/rag_brain/main.py
-          python -m py_compile src/rag_brain/api.py
-          python -m py_compile src/rag_brain/loaders.py
-          python -m py_compile src/rag_brain/retrievers.py
-          python -m py_compile src/rag_brain/splitters.py
-          python -m py_compile src/rag_brain/tools.py
-          python -m py_compile src/rag_brain/webapp.py
+          python -m py_compile src/axon/main.py
+          python -m py_compile src/axon/api.py
+          python -m py_compile src/axon/loaders.py
+          python -m py_compile src/axon/retrievers.py
+          python -m py_compile src/axon/splitters.py
+          python -m py_compile src/axon/tools.py
+          python -m py_compile src/axon/webapp.py
 
       - name: Lint with ruff (if installed)
         run: |
@@ -66,7 +66,7 @@ jobs:
       - name: Type check with mypy (if installed)
         run: |
           if pip show mypy &>/dev/null; then
-            mypy src/rag_brain/ --ignore-missing-imports --no-error-summary
+            mypy src/axon/ --ignore-missing-imports --no-error-summary
           else
             echo "mypy not installed — skipping type check."
           fi
@@ -76,7 +76,7 @@ jobs:
         run: |
           if [ -d tests ] && [ -n "$(find tests -name '*.py' -not -name '__init__.py')" ]; then
             if pip show pytest-cov &>/dev/null; then
-              python -m pytest tests/ -v --tb=short --cov=rag_brain --cov-report=xml --cov-report=term
+              python -m pytest tests/ -v --tb=short --cov=axon --cov-report=xml --cov-report=term
             else
               python -m pytest tests/ -v --tb=short
             fi
@@ -101,8 +101,8 @@ jobs:
 
     - name: Build Docker image
       run: |
-        docker build -t local-rag-brain:test .
+        docker build -t local-axon:test .
 
     - name: Test Docker image
       run: |
-        docker run --rm local-rag-brain:test rag-brain --help
+        docker run --rm local-axon:test axon --help

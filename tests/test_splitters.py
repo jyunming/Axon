@@ -1,7 +1,7 @@
 """Tests for text splitters."""
 
 import pytest
-from rag_brain.splitters import RecursiveCharacterTextSplitter
+from axon.splitters import RecursiveCharacterTextSplitter
 
 
 class TestRecursiveCharacterTextSplitter:

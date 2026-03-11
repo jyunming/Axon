@@ -362,7 +362,7 @@ vector_store:
 python migrate.py export --output rag_export.json
 ```
 
-2. **Setup Local RAG Brain with lightweight models:**
+2. **Setup Axon with lightweight models:**
 ```bash
 # Install dependencies
 pip install -r requirements.txt
@@ -374,7 +374,7 @@ ollama pull nomic-embed-text  # Optional, for better quality
 
 3. **Import and test:**
 ```python
-from rag_brain import OpenStudioBrain, OpenStudioConfig
+from axon import OpenStudioBrain, OpenStudioConfig
 
 config = OpenStudioConfig(
     embedding_provider="sentence_transformers",

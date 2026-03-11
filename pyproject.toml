@@ -3,7 +3,7 @@ requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-rag-brain"
+name = "axon"
 version = "2.0.0"
 description = "General-purpose open-source RAG and embedding interface"
 readme = "README.md"
@@ -69,9 +69,9 @@ all = [
 ]
 
 [project.scripts]
-rag-brain = "rag_brain.main:main"
-rag-brain-ui = "rag_brain.webapp:main_ui"
-rag-brain-api = "rag_brain.api:main"
+axon = "axon.main:main"
+axon-ui = "axon.webapp:main_ui"
+axon-api = "axon.api:main"
 
 [tool.black]
 line-length = 100
@@ -144,7 +144,7 @@ python_functions = ["test_*"]
 addopts = [
     "-v",
     "--strict-markers",
-    "--cov=rag_brain",
+    "--cov=axon",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
@@ -156,7 +156,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["src/rag_brain"]
+source = ["src/axon"]
 omit = [
     "*/tests/*",
     "*/test_*.py",

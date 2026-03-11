@@ -3,7 +3,7 @@
 import pytest
 import tempfile
 import os
-from rag_brain.retrievers import BM25Retriever, reciprocal_rank_fusion
+from axon.retrievers import BM25Retriever, reciprocal_rank_fusion
 
 
 class TestBM25Retriever:

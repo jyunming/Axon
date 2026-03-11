@@ -1,7 +1,7 @@
 """
 tests/test_api.py
 
-Unit tests for the FastAPI endpoints in rag_brain.api.
+Unit tests for the FastAPI endpoints in axon.api.
 """
 import os
 from unittest.mock import MagicMock, patch
@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-import rag_brain.api as api_module
-from rag_brain.api import app
+import axon.api as api_module
+from axon.api import app
 
 client = TestClient(app, raise_server_exceptions=False)
 

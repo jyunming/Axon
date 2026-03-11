@@ -6,7 +6,7 @@ import os
 import pathlib
 import uvicorn
 import logging
-from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+from axon.main import OpenStudioBrain, OpenStudioConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +25,7 @@ def _validate_ingest_path(path: str) -> str:
     return abs_path
 
 app = FastAPI(
-    title="Local RAG Brain API",
+    title="Axon API",
     description="REST API for agent orchestration and document retrieval",
     version="2.0.0"
 )
@@ -56,9 +56,9 @@ async def startup_event():
     try:
         config = OpenStudioConfig.load()
         brain = OpenStudioBrain(config)
-        logger.info("✅ RAG Brain initialized successfully")
+        logger.info("✅ Axon initialized successfully")
     except Exception as e:
-        logger.error(f"❌ Failed to initialize RAG Brain: {e}")
+        logger.error(f"❌ Failed to initialize Axon: {e}")
 
 # Models
 class QueryRequest(BaseModel):
@@ -218,7 +218,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
             if requested_path.is_dir():
                 asyncio.run(brain.load_directory(str(requested_path)))
             else:
-                from rag_brain.loaders import DirectoryLoader
+                from axon.loaders import DirectoryLoader
                 ext = requested_path.suffix.lower()
                 loader_mgr = DirectoryLoader()
                 if ext in loader_mgr.loaders:
@@ -299,7 +299,7 @@ async def switch_project(request: ProjectSwitchRequest):
 
 
 def main():
-    """Main entry point for rag-brain-api command."""
+    """Main entry point for axon-api command."""
     host = os.getenv("RAG_BRAIN_HOST", "0.0.0.0")
     port = int(os.getenv("RAG_BRAIN_PORT", "8000"))
     uvicorn.run(app, host=host, port=port)

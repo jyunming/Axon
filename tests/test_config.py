@@ -4,7 +4,7 @@ import pytest
 import tempfile
 import yaml
 from pathlib import Path
-from rag_brain.main import OpenStudioConfig
+from axon.main import OpenStudioConfig
 
 
 class TestOpenStudioConfig:

@@ -1,7 +1,7 @@
 """
 tests/test_loaders.py
 
-Unit tests for all document loaders in rag_brain.loaders.
+Unit tests for all document loaders in axon.loaders.
 """
 import csv
 import json
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag_brain.loaders import (
+from axon.loaders import (
     BMPLoader,
     CSVLoader,
     DirectoryLoader,
@@ -168,8 +168,8 @@ def test_docx_loader_happy(tmp_path):
     docx_mock.Document.return_value = mock_doc
     with patch.dict(sys.modules, {"docx": docx_mock}):
         # Force re-import inside the loader function by clearing cached module
-        sys.modules.pop("rag_brain.loaders", None)
-        from rag_brain.loaders import DOCXLoader as _DOCXLoader
+        sys.modules.pop("axon.loaders", None)
+        from axon.loaders import DOCXLoader as _DOCXLoader
         docs = _DOCXLoader().load(str(p))
 
     assert len(docs) == 1
@@ -208,8 +208,8 @@ def test_pdf_loader_fitz(tmp_path):
 
     with patch.dict(sys.modules, {"fitz": fitz_mock}):
         # Remove cached import if any
-        sys.modules.pop("rag_brain.loaders", None)
-        from rag_brain.loaders import PDFLoader as _PDFLoader  # re-import inside patch
+        sys.modules.pop("axon.loaders", None)
+        from axon.loaders import PDFLoader as _PDFLoader  # re-import inside patch
         docs = _PDFLoader().load(str(p))
 
     assert len(docs) == 2
@@ -231,8 +231,8 @@ def test_pdf_loader_pypdf_fallback(tmp_path):
     pypdf_mock.PdfReader.return_value = reader_mock
 
     with patch.dict(sys.modules, {"fitz": None, "pypdf": pypdf_mock}):
-        sys.modules.pop("rag_brain.loaders", None)
-        from rag_brain.loaders import PDFLoader as _PDFLoader
+        sys.modules.pop("axon.loaders", None)
+        from axon.loaders import PDFLoader as _PDFLoader
         docs = _PDFLoader().load(str(p))
 
     assert len(docs) == 1
@@ -244,8 +244,8 @@ def test_pdf_loader_no_deps(tmp_path):
     p = tmp_path / "doc.pdf"
     p.write_bytes(b"%PDF-fake")
     with patch.dict(sys.modules, {"fitz": None, "pypdf": None}):
-        sys.modules.pop("rag_brain.loaders", None)
-        from rag_brain.loaders import PDFLoader as _PDFLoader
+        sys.modules.pop("axon.loaders", None)
+        from axon.loaders import PDFLoader as _PDFLoader
         docs = _PDFLoader().load(str(p))
     assert docs == []
 

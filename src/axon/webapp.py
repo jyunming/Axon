@@ -10,7 +10,7 @@ import logging
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+from axon.main import OpenStudioBrain, OpenStudioConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -504,7 +504,7 @@ with st.sidebar:
             )
         with st.spinner("Loading embedding model…"):
             try:
-                from rag_brain.main import OpenEmbedding
+                from axon.main import OpenEmbedding
                 st.session_state.brain.embedding = OpenEmbedding(config)
                 st.session_state["_emb_provider"] = config.embedding_provider
                 st.session_state["_emb_model"] = config.embedding_model
@@ -599,7 +599,7 @@ with st.sidebar:
                         tmp_file.write(uploaded_file.getvalue())
                         tmp_path = tmp_file.name
                     try:
-                        from rag_brain.loaders import DirectoryLoader
+                        from axon.loaders import DirectoryLoader
                         ext = os.path.splitext(uploaded_file.name)[1].lower()
                         loader_mgr = DirectoryLoader()
                         if ext in loader_mgr.loaders:

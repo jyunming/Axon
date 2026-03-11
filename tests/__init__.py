@@ -1,1 +1,1 @@
-"""Test suite for Local RAG Brain."""
+"""Test suite for Axon."""

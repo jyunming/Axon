@@ -2,7 +2,7 @@
 
 **Date:** 2025  
 **Scope:** Complete audit of all documentation files against current application implementation  
-**Status:** ✅ **COMPLETE** — All docs now accurately reflect the Local RAG Brain implementation
+**Status:** ✅ **COMPLETE** — All docs now accurately reflect the Axon implementation
 
 ---
 
@@ -47,7 +47,7 @@
   - Animated Spinners
   - Slash Commands
 - Listed all 16 slash commands with brief descriptions
-- Clarified that REPL is entry point when running `rag-brain` with no args (line 13)
+- Clarified that REPL is entry point when running `axon` with no args (line 13)
 
 **Key Sections Updated:**
 - Section: "Commands" — added REPL mode clarification
@@ -85,7 +85,7 @@
 
 ---
 
-### 6. **src/rag_brain/main.py** ✅
+### 6. **src/axon/main.py** ✅
 **Docstrings Added (Google Style):**
 
 #### `_interactive_repl()` (lines 1652-1668)
@@ -95,7 +95,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     """Interactive REPL chat session with session persistence and live tab completion.
 
     Features:
-    - Session persistence: auto-saves to ~/.rag_brain/sessions/session_<timestamp>.json
+    - Session persistence: auto-saves to ~/.axon/sessions/session_<timestamp>.json
     - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
     - Animated spinners: braille spinner during init and LLM generation
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
@@ -168,7 +168,7 @@ All 16 REPL commands match `_SLASH_COMMANDS` constant (line 1135):
 - ✅ lancedb is NOT mentioned anywhere (correct — not supported)
 
 ### Features Verified
-- ✅ Session persistence to `~/.rag_brain/sessions/session_<timestamp>.json`
+- ✅ Session persistence to `~/.axon/sessions/session_<timestamp>.json`
 - ✅ Resume prompt on startup
 - ✅ prompt_toolkit live tab completion (slash commands, paths, model names)
 - ✅ Animated braille spinner (⠋⠙⠹…) during init
@@ -189,7 +189,7 @@ All 16 REPL commands match `_SLASH_COMMANDS` constant (line 1135):
 | CLAUDE.md | AI Assistant Guide | 100% | ✅ Complete |
 | .github/copilot-instructions.md | Developer Guide | 100% | ✅ Complete |
 | MODEL_GUIDE.md | Model Selection | 100% | ✅ Updated |
-| src/rag_brain/main.py | Docstrings | 100% | ✅ Complete |
+| src/axon/main.py | Docstrings | 100% | ✅ Complete |
 | config.yaml | Configuration | 100% | ✅ Accurate |
 
 ---
@@ -231,7 +231,7 @@ The following were verified to be accurate and require NO changes:
 5. Add/update Google-style docstring
 
 ### When Changing Default Models
-1. Update src/rag_brain/main.py `OpenStudioConfig` dataclass defaults
+1. Update src/axon/main.py `OpenStudioConfig` dataclass defaults
 2. Update config.yaml defaults
 3. Update MODEL_GUIDE.md "Executive Summary"
 4. Update SETUP.md LLM setup section if needed
@@ -254,6 +254,6 @@ The following were verified to be accurate and require NO changes:
 
 ## ✨ Summary
 
-**All 6 documentation files have been thoroughly audited and updated to accurately reflect the Local RAG Brain implementation. The REPL CLI, configuration system, and API endpoints are now comprehensively documented across all user-facing and developer guides.**
+**All 6 documentation files have been thoroughly audited and updated to accurately reflect the Axon implementation. The REPL CLI, configuration system, and API endpoints are now comprehensively documented across all user-facing and developer guides.**
 
 The documentation is now maintenance-ready with clear guidance for future feature additions.

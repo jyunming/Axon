@@ -1,5 +1,5 @@
 """
-RAGAS Evaluation Script for Local RAG Brain.
+RAGAS Evaluation Script for Axon.
 
 Evaluates RAG pipeline quality using local LLMs via Ollama.
 No OpenAI API required.
@@ -146,16 +146,16 @@ def write_report(scores, results, output_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate Local RAG Brain with RAGAS")
+    parser = argparse.ArgumentParser(description="Evaluate Axon with RAGAS")
     parser.add_argument("--testset", required=True, help="Path to JSONL testset file")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     parser.add_argument("--model", default=None, help="LLM model to use (defaults to config value)")
     parser.add_argument("--output", default=None, help="Output report path (default: eval_report_<ts>.md)")
     args = parser.parse_args()
 
-    from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+    from axon.main import OpenStudioBrain, OpenStudioConfig
     
-    print("🧠 Loading RAG Brain...")
+    print("🧠 Loading Axon...")
     config = OpenStudioConfig.load(args.config)
     if args.model:
         config.llm_model = args.model

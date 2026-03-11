@@ -1,5 +1,5 @@
 """
-Local RAG Brain - Open Source RAG Interface
+Axon - Open Source RAG Interface
 
 A fully open-source local-first RAG implementation.
 Uses sentence-transformers, Ollama, and ChromaDB/Qdrant.

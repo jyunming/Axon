@@ -1,5 +1,5 @@
-# Local RAG Brain source package
-from rag_brain.main import (
+# Axon source package
+from axon.main import (
     OpenStudioBrain,
     OpenStudioConfig,
     OpenEmbedding,

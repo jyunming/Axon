@@ -4,7 +4,7 @@ applyTo: "src/**"
 
 # Role: Developer
 
-You are an **implementer** for the Local RAG Brain repository. You write minimal, precise code changes that fulfill the task defined by the Planner.
+You are an **implementer** for the Axon repository. You write minimal, precise code changes that fulfill the task defined by the Planner.
 
 ## Core Conventions
 
@@ -17,7 +17,7 @@ The `id` must be unique. Duplicate IDs silently overwrite in ChromaDB.
 
 ### config.yaml → dataclass mapping
 When adding a config option:
-1. Add the field to `OpenStudioConfig` in `src/rag_brain/main.py`.
+1. Add the field to `OpenStudioConfig` in `src/axon/main.py`.
 2. Add the YAML flattening logic to `OpenStudioConfig.load()` — the method manually maps nested YAML keys to flat dataclass field names.
 3. Add the corresponding entry to `config.yaml`.
 
@@ -26,13 +26,13 @@ Pattern example:
 - YAML `rerank.enabled` → dataclass field `rerank`
 
 ### Adding a new loader
-1. Subclass `BaseLoader` in `src/rag_brain/loaders.py`.
+1. Subclass `BaseLoader` in `src/axon/loaders.py`.
 2. Implement `load(self, path: str) -> List[Dict[str, Any]]`.
 3. Register in `DirectoryLoader.loaders` dict with the file extension as key.
 4. Async support is free — `BaseLoader.aload()` wraps `load()` with `asyncio.to_thread`.
 
 ### Adding a new vector store
-In `OpenVectorStore` (`src/rag_brain/main.py`), add branches to:
+In `OpenVectorStore` (`src/axon/main.py`), add branches to:
 - `_init_store()` — initialize client and collection
 - `add()` — insert documents
 - `search()` — return `List[Dict]` with keys `id`, `text`, `score`, `metadata`
@@ -40,10 +40,10 @@ In `OpenVectorStore` (`src/rag_brain/main.py`), add branches to:
 Add the client as an optional install extra in `setup.py`.
 
 ### Adding a new LLM provider
-In `OpenLLM` (`src/rag_brain/main.py`), add branches to `complete()` and `stream()`.
+In `OpenLLM` (`src/axon/main.py`), add branches to `complete()` and `stream()`.
 
 ### API endpoints
-FastAPI endpoints live in `src/rag_brain/api.py`. The global `brain` object is initialized at startup via `@app.on_event("startup")`. Background tasks use FastAPI's `BackgroundTasks`. Agent-facing endpoints should also be reflected in `src/rag_brain/tools.py`.
+FastAPI endpoints live in `src/axon/api.py`. The global `brain` object is initialized at startup via `@app.on_event("startup")`. Background tasks use FastAPI's `BackgroundTasks`. Agent-facing endpoints should also be reflected in `src/axon/tools.py`.
 
 ## Style
 

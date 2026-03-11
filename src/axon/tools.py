@@ -1,6 +1,6 @@
 """
 Tool definitions for Agent Orchestration.
-These can be used to describe the Local RAG Brain to an LLM.
+These can be used to describe the Axon to an LLM.
 """
 
 from typing import Dict, Any, List

@@ -36,7 +36,7 @@ pytestmark = pytest.mark.eval
 # ---------------------------------------------------------------------------
 
 def _make_config(**overrides):
-    from rag_brain.main import OpenStudioConfig
+    from axon.main import OpenStudioConfig
     cfg = OpenStudioConfig()
     for k, v in overrides.items():
         setattr(cfg, k, v)
@@ -235,7 +235,7 @@ class TestPipelineIntegrationSmoke:
 
     def _make_brain(self):
         """Construct a mocked OpenStudioBrain that uses CORPUS for retrieval."""
-        import rag_brain.main as m
+        import axon.main as m
 
         cfg = _make_config(
             top_k=3,
@@ -252,7 +252,7 @@ class TestPipelineIntegrationSmoke:
             patch.object(m, "OpenLLM"),
             patch.object(m, "OpenVectorStore"),
             patch.object(m, "OpenReranker"),
-            patch("rag_brain.retrievers.BM25Retriever"),
+            patch("axon.retrievers.BM25Retriever"),
         ):
             brain = m.OpenStudioBrain.__new__(m.OpenStudioBrain)
             brain.config = cfg

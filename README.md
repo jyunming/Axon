@@ -1,4 +1,4 @@
-# Local RAG Brain
+# Axon
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -27,12 +27,12 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 ## 🎯 Key Features
 
-- **Local First:** Runs entirely on your hardware using Ollama and Sentence Transformers. **No Docker required** — `pip install -e .` and `rag-brain` gets you started.
+- **Local First:** Runs entirely on your hardware using Ollama and Sentence Transformers. **No Docker required** — `pip install -e .` and `axon` gets you started.
 - **Multi-LLM & Embedding Support:** Switch LLM provider (Ollama, Gemini, OpenAI, Ollama Cloud, vLLM) and embedding provider (sentence-transformers, Ollama, FastEmbed) live from the REPL or web UI sidebar.
 - **Hybrid Search:** Combines semantic vector search with keyword-based BM25 for maximum precision.
 - **Truth Grounding (Web Search):** Agentic Brave Search fallback — fires automatically only when local knowledge is insufficient (max cosine score < similarity threshold).
 - **Project-Based Knowledge Bases:** Create named projects (`/project new research`) with completely isolated vector stores, BM25 indexes, and sessions. Switch instantly with `/project switch`.
-- **Knowledge Base Viewer:** Browse all ingested documents and chunk counts from the web UI sidebar or via `rag-brain --list`.
+- **Knowledge Base Viewer:** Browse all ingested documents and chunk counts from the web UI sidebar or via `axon --list`.
 - **Chat Sessions:** Create, switch, and delete independent conversation sessions with full history persistence (auto-saved, persists across restarts).
 - **Rich Interactive REPL:** Markdown rendering, animated spinners, tab completion, `@file` context attachment, `!cmd` shell passthrough, `/retry`, and a pinned status bar.
 - **Conversational Memory:** The LLM remembers your previous messages within a session for natural follow-up questions.
@@ -45,7 +45,7 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 ## 🖥️ Preview
 
-![Local RAG Brain REPL](docs/assets/repl-demo.png)
+![Axon REPL](docs/assets/repl-demo.png)
 
 *The interactive REPL — always-visible header box with model, search and discuss settings; live Tab autocomplete for all slash commands; pinned two-line status toolbar.*
 
@@ -110,12 +110,12 @@ ollama pull gemma           # default LLM
 ollama pull nomic-embed-text  # optional — higher-quality embeddings
 
 # 3. Launch what you need
-rag-brain                   # interactive REPL (no server required)
-rag-brain-api               # FastAPI server on :8000 (optional)
-rag-brain-ui                # Streamlit web UI on :8501 (optional)
+axon                   # interactive REPL (no server required)
+axon-api               # FastAPI server on :8000 (optional)
+axon-ui                # Streamlit web UI on :8501 (optional)
 
 # Or use make shortcuts
-make run-cli                # alias for rag-brain
+make run-cli                # alias for axon
 make run-all                # starts both API and UI
 ```
 
@@ -128,53 +128,53 @@ No ports, no containers, no compose file — just `pip install` and go.
 #### Option C: CLI Commands
 ```bash
 # Interactive REPL (default — no args)
-rag-brain
+axon
 
 # Single-shot query
-rag-brain "What is the main topic?"
+axon "What is the main topic?"
 
 # Stream response token-by-token
-rag-brain --stream "Summarise my documents"
+axon --stream "Summarise my documents"
 
 # Switch model at runtime (auto-pulls if not available locally)
-rag-brain --model gemma:2b "Your question"
-rag-brain --model gemini/gemini-2.5-flash-lite "Your question"
-rag-brain --model openai/gpt-4o "Your question"
+axon --model gemma:2b "Your question"
+axon --model gemini/gemini-2.5-flash-lite "Your question"
+axon --model openai/gpt-4o "Your question"
 
 # Pull a model explicitly
-rag-brain --pull gemma:2b
+axon --pull gemma:2b
 
 # List available providers and locally installed Ollama models
-rag-brain --list-models
+axon --list-models
 
 # List all ingested documents in the knowledge base
-rag-brain --list
+axon --list
 
 # Ingest data
-rag-brain --ingest ./my_documents/
+axon --ingest ./my_documents/
 
 # Embedding model override
-rag-brain --embed ollama/nomic-embed-text "Your question"
+axon --embed ollama/nomic-embed-text "Your question"
 
 # RAG behaviour flags (all also settable live from REPL)
-rag-brain --no-discuss "Your question"   # refuse to answer outside documents
-rag-brain --discuss "Your question"      # allow general knowledge fallback (default)
-rag-brain --search "Your question"       # enable Brave web search (requires BRAVE_API_KEY)
-rag-brain --top-k 5 "Your question"      # retrieve 5 chunks (default: 10)
-rag-brain --threshold 0.5 "Your question" # stricter similarity cutoff (default: 0.3)
-rag-brain --no-hybrid "Your question"    # vector-only search (disable BM25)
-rag-brain --rerank "Your question"       # enable cross-encoder reranking
-rag-brain --hyde "Your question"         # enable HyDE query expansion
-rag-brain --multi-query "Your question"  # enable multi-query retrieval
+axon --no-discuss "Your question"   # refuse to answer outside documents
+axon --discuss "Your question"      # allow general knowledge fallback (default)
+axon --search "Your question"       # enable Brave web search (requires BRAVE_API_KEY)
+axon --top-k 5 "Your question"      # retrieve 5 chunks (default: 10)
+axon --threshold 0.5 "Your question" # stricter similarity cutoff (default: 0.3)
+axon --no-hybrid "Your question"    # vector-only search (disable BM25)
+axon --rerank "Your question"       # enable cross-encoder reranking
+axon --hyde "Your question"         # enable HyDE query expansion
+axon --multi-query "Your question"  # enable multi-query retrieval
 
 # Project management (all also available from REPL /project)
-rag-brain --project-list                 # list all projects
-rag-brain --project-new research --ingest ./papers/   # create project + ingest in one step
-rag-brain --project research "Your question"          # query within a project
-rag-brain --project-delete research                   # delete a project
+axon --project-list                 # list all projects
+axon --project-new research --ingest ./papers/   # create project + ingest in one step
+axon --project research "Your question"          # query within a project
+axon --project-delete research                   # delete a project
 
 # Quiet mode (for pipes and CI)
-echo "What is X?" | rag-brain -q
+echo "What is X?" | axon -q
 ```
 
 **Interactive REPL slash commands:**
@@ -206,9 +206,9 @@ echo "What is X?" | rag-brain -q
 - **Live Tab Completion:** Slash commands, `@file` paths, project names, and Ollama model names auto-complete as you type
 - **Animated Spinners:** Braille spinner (⠋⠙⠹…) shows status during initialization and while the LLM generates responses
 - **Rich Markdown Rendering:** Responses are rendered with syntax highlighting and word-wrap via the `rich` library
-- **Session Persistence:** Chat history auto-saves to `~/.rag_brain/sessions/session_<timestamp>.json`; resume any past session on startup
-- **Input History Persistence:** ↑↓ arrows cycle through history across sessions (saved to `~/.rag_brain/repl_history`)
-- **Project-Based Knowledge Isolation:** Each project has its own vector store, BM25 index, and sessions under `~/.rag_brain/projects/<name>/`
+- **Session Persistence:** Chat history auto-saves to `~/.axon/sessions/session_<timestamp>.json`; resume any past session on startup
+- **Input History Persistence:** ↑↓ arrows cycle through history across sessions (saved to `~/.axon/repl_history`)
+- **Project-Based Knowledge Isolation:** Each project has its own vector store, BM25 index, and sessions under `~/.axon/projects/<name>/`
 - **Pinned Status Bar:** LLM model, embedding model, discuss, search, and hybrid settings always visible at the terminal bottom even during streaming
 - **Context Window Visibility:** `/context` shows exact token counts, model context limits, and retrieved sources with scores
 - **Keyboard shortcuts:** `Tab` complete · `↑↓` history · `Ctrl+C` cancel generation · `Ctrl+L` clear screen · `Ctrl+D` exit
@@ -230,7 +230,7 @@ Agents can use this brain as a "Collective Memory."
 | `/collection` | GET | List all ingested sources with chunk counts. Returns `{total_files, total_chunks, files:[{source,chunks}]}`. |
 
 ### Tool Definitions
-Standardized JSON schemas for tool-calling are provided in `src/rag_brain/tools.py`. The `get_rag_tool_definition()` function returns 6 OpenAI-compatible tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, and `stream_query`. See `examples/agent_simple.py` for a minimal integration, or `examples/agent_orchestration.py` for a richer multi-step planner-critic loop.
+Standardized JSON schemas for tool-calling are provided in `src/axon/tools.py`. The `get_rag_tool_definition()` function returns 6 OpenAI-compatible tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, and `stream_query`. See `examples/agent_simple.py` for a minimal integration, or `examples/agent_orchestration.py` for a richer multi-step planner-critic loop.
 
 ## ⚙️ Configuration
 

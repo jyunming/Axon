@@ -14,13 +14,13 @@ from unittest.mock import patch, MagicMock, call
 def _make_brain(config):
     """Construct an OpenStudioBrain with all heavy dependencies mocked."""
     with (
-        patch("rag_brain.main.OpenEmbedding"),
-        patch("rag_brain.main.OpenLLM"),
-        patch("rag_brain.main.OpenVectorStore"),
-        patch("rag_brain.main.OpenReranker"),
-        patch("rag_brain.retrievers.BM25Retriever"),
+        patch("axon.main.OpenEmbedding"),
+        patch("axon.main.OpenLLM"),
+        patch("axon.main.OpenVectorStore"),
+        patch("axon.main.OpenReranker"),
+        patch("axon.retrievers.BM25Retriever"),
     ):
-        from rag_brain.main import OpenStudioBrain
+        from axon.main import OpenStudioBrain
         return OpenStudioBrain(config)
 
 
@@ -31,7 +31,7 @@ def _make_brain(config):
 class TestOpenLLMStream:
     @patch("ollama.Client")
     def test_ollama_stream_yields_strings(self, MockOllama):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="ollama")
         llm = OpenLLM(config)
@@ -46,7 +46,7 @@ class TestOpenLLMStream:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_stream_yields_strings(self, _cfg, MockModel):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-2.0-flash")
         llm = OpenLLM(config)
@@ -61,7 +61,7 @@ class TestOpenLLMStream:
     @patch("httpx.Client")
     def test_ollama_cloud_stream_yields_strings(self, MockHttpx):
         import json as _json
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="ollama_cloud", ollama_cloud_key="k", llm_model="m")
         llm = OpenLLM(config)
@@ -83,7 +83,7 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_openai_stream_yields_strings(self, MockOpenAI):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
         llm = OpenLLM(config)
@@ -101,7 +101,7 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_vllm_stream_yields_strings(self, MockOpenAI):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(
             llm_provider="vllm",
@@ -130,17 +130,17 @@ class TestOpenLLMStream:
 
 class TestQueryStream:
     def _make_brain_with_mocks(self):
-        from rag_brain.main import OpenStudioConfig
+        from axon.main import OpenStudioConfig
 
         config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
         with (
-            patch("rag_brain.main.OpenEmbedding"),
-            patch("rag_brain.main.OpenLLM"),
-            patch("rag_brain.main.OpenVectorStore"),
-            patch("rag_brain.main.OpenReranker"),
-            patch("rag_brain.retrievers.BM25Retriever"),
+            patch("axon.main.OpenEmbedding"),
+            patch("axon.main.OpenLLM"),
+            patch("axon.main.OpenVectorStore"),
+            patch("axon.main.OpenReranker"),
+            patch("axon.retrievers.BM25Retriever"),
         ):
-            from rag_brain.main import OpenStudioBrain
+            from axon.main import OpenStudioBrain
             brain = OpenStudioBrain(config)
         return brain
 

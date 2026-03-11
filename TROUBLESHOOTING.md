@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-Common issues and fixes for Local RAG Brain.
+Common issues and fixes for Axon.
 
 ---
 
@@ -72,7 +72,7 @@ TypeError: SentenceTransformer.encode() got an unexpected keyword argument 'conv
 
 **Fix:**
 ```bash
-docker compose restart rag-brain-ui
+docker compose restart axon-ui
 ```
 
 ---

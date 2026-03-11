@@ -4,7 +4,7 @@ applyTo: "tests/**"
 
 # Role: Tester
 
-You are a **test engineer** for the Local RAG Brain repository. You write `pytest` tests that provide meaningful coverage for the `rag_brain` modules.
+You are a **test engineer** for the Axon repository. You write `pytest` tests that provide meaningful coverage for the `axon` modules.
 
 ## Test Location & Structure
 
@@ -54,7 +54,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 def test_config_defaults():
-    from rag_brain.main import OpenStudioConfig
+    from axon.main import OpenStudioConfig
     config = OpenStudioConfig()
     assert config.embedding_provider == "sentence_transformers"
     assert config.hybrid_search is True

@@ -1,5 +1,5 @@
 """
-Core engine for Local RAG Brain - Open Source RAG Interface.
+Core engine for Axon - Open Source RAG Interface.
 """
 
 # Suppress TensorFlow/Keras noise before any imports that might trigger them
@@ -23,9 +23,9 @@ from typing import Literal, List, Optional, Dict, Any, Union
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-# Load environment variables — project .env first, then user-global ~/.rag_brain/.env
+# Load environment variables — project .env first, then user-global ~/.axon/.env
 load_dotenv()
-_user_env = Path.home() / ".rag_brain" / ".env"
+_user_env = Path.home() / ".axon" / ".env"
 if _user_env.exists():
     load_dotenv(_user_env)
 
@@ -39,7 +39,7 @@ logger = logging.getLogger("RAGBrain")
 
 @dataclass
 class OpenStudioConfig:
-    """Configuration for Local RAG Brain."""
+    """Configuration for Axon."""
     # Embedding
     embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
@@ -687,7 +687,7 @@ class OpenVectorStore:
             logger.info(f"💾 Initializing ChromaDB: {self.config.vector_store_path}")
             self.client = chromadb.PersistentClient(path=self.config.vector_store_path)
             self.collection = self.client.get_or_create_collection(
-                name="rag_brain",
+                name="axon",
                 metadata={"hnsw:space": "cosine"}
             )
         elif self.provider == "qdrant":
@@ -699,7 +699,7 @@ class OpenVectorStore:
             logger.info(f"💾 Initializing LanceDB: {self.config.vector_store_path}")
             self.client = lancedb.connect(self.config.vector_store_path)
             try:
-                self.collection = self.client.open_table("rag_brain")
+                self.collection = self.client.open_table("axon")
             except Exception:
                 self.collection = None   # created lazily on first add()
 
@@ -713,7 +713,7 @@ class OpenVectorStore:
                 payload = {"text": text}
                 if metadatas: payload.update(metadatas[i])
                 points.append(PointStruct(id=id, vector=embedding, payload=payload))
-            self.client.upsert(collection_name="rag_brain", points=points)
+            self.client.upsert(collection_name="axon", points=points)
         elif self.provider == "lancedb":
             import json
             rows = []
@@ -728,7 +728,7 @@ class OpenVectorStore:
                 })
             if self.collection is None:
                 self.collection = self.client.create_table(
-                    "rag_brain", data=rows, mode="overwrite", metric="cosine"
+                    "axon", data=rows, mode="overwrite", metric="cosine"
                 )
             else:
                 self.collection.add(rows)
@@ -754,7 +754,7 @@ class OpenVectorStore:
             return sorted(sources.values(), key=lambda x: x["source"])
         elif self.provider == "qdrant":
             from qdrant_client.models import ScrollRequest
-            results, _ = self.client.scroll(collection_name="rag_brain", limit=10000, with_payload=True)
+            results, _ = self.client.scroll(collection_name="axon", limit=10000, with_payload=True)
             sources: Dict[str, Dict[str, Any]] = {}
             for point in results:
                 source = point.payload.get("source", "unknown")
@@ -786,7 +786,7 @@ class OpenVectorStore:
                 for i in range(len(results['ids'][0]))
             ]
         elif self.provider == "qdrant":
-            results = self.client.search(collection_name="rag_brain", query_vector=query_embedding, limit=top_k)
+            results = self.client.search(collection_name="axon", query_vector=query_embedding, limit=top_k)
             return [{"id": str(r.id), "text": r.payload.get("text", ""), "score": r.score, "metadata": {k: v for k, v in r.payload.items() if k != "text"}} for r in results]
         elif self.provider == "lancedb":
             import json
@@ -833,7 +833,7 @@ class OpenVectorStore:
         if self.provider == "qdrant":
             try:
                 points = self.client.retrieve(
-                    collection_name="rag_brain",
+                    collection_name="axon",
                     ids=ids,
                     with_payload=True,
                 )
@@ -879,7 +879,7 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             from qdrant_client.models import PointIdsList
             self.client.delete(
-                collection_name="rag_brain",
+                collection_name="axon",
                 points_selector=PointIdsList(points=ids),
             )
         elif self.provider == "lancedb":
@@ -891,10 +891,10 @@ class OpenVectorStore:
 
 class OpenStudioBrain:
     """
-    Main interface for Local RAG Brain.
+    Main interface for Axon.
     """
     
-    SYSTEM_PROMPT = """You are the 'RAG Brain', a highly capable and friendly AI assistant. 
+    SYSTEM_PROMPT = """You are the 'Axon', a highly capable and friendly AI assistant. 
 Your primary goal is to help the user by answering questions based on the provided context from their private documents.
 
 **Guidelines:**
@@ -904,7 +904,7 @@ Your primary goal is to help the user by answering questions based on the provid
 4. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
 """
 
-    SYSTEM_PROMPT_STRICT = """You are the 'RAG Brain', a focused AI assistant that answers ONLY from the provided document context.
+    SYSTEM_PROMPT_STRICT = """You are the 'Axon', a focused AI assistant that answers ONLY from the provided document context.
 
 **Guidelines:**
 1. **Context Only**: Answer exclusively from the provided context. Do NOT use general knowledge or information outside the documents.
@@ -972,7 +972,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 f"🔒 Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
             )
 
-        logger.info("🧠 Initializing Local RAG Brain...")
+        logger.info("🧠 Initializing Axon...")
         self.embedding = OpenEmbedding(self.config)
         self.llm = OpenLLM(self.config)
         self.vector_store = OpenVectorStore(self.config)
@@ -984,13 +984,13 @@ Your primary goal is to help the user by answering questions based on the provid
         self._active_project: str = "default"
         
         try:
-            from rag_brain.retrievers import BM25Retriever
+            from axon.retrievers import BM25Retriever
             self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
         except ImportError:
             self.bm25 = None
             
         try:
-            from rag_brain.splitters import RecursiveCharacterTextSplitter
+            from axon.splitters import RecursiveCharacterTextSplitter
             self.splitter = RecursiveCharacterTextSplitter(chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap)
         except ImportError:
             self.splitter = None
@@ -1008,7 +1008,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: Dict[str, List[str]] = self._load_entity_graph()
 
-        logger.info("✅ Local RAG Brain ready!")
+        logger.info("✅ Axon ready!")
 
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
@@ -1022,7 +1022,7 @@ Your primary goal is to help the user by answering questions based on the provid
         Raises:
             ValueError: If the project does not exist (use /project new first).
         """
-        from rag_brain.projects import (
+        from axon.projects import (
             project_bm25_path, project_dir, project_vector_path, set_active_project,
         )
 
@@ -1041,7 +1041,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # Reinitialize stores with new paths
         self.vector_store = OpenVectorStore(self.config)
         try:
-            from rag_brain.retrievers import BM25Retriever
+            from axon.retrievers import BM25Retriever
             self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
         except ImportError:
             self.bm25 = None
@@ -1289,7 +1289,7 @@ Your primary goal is to help the user by answering questions based on the provid
            time _build_context() can return the richer parent passage instead of
            the small retrieval chunk.
         """
-        from rag_brain.splitters import RecursiveCharacterTextSplitter
+        from axon.splitters import RecursiveCharacterTextSplitter
         parent_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.config.parent_chunk_size,
             chunk_overlap=self.config.chunk_overlap,
@@ -1582,7 +1582,7 @@ Your primary goal is to help the user by answering questions based on the provid
             bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
 
-            from rag_brain.retrievers import reciprocal_rank_fusion
+            from axon.retrievers import reciprocal_rank_fusion
             results = reciprocal_rank_fusion(vector_results, bm25_results)
         else:
             results = vector_results
@@ -1763,7 +1763,7 @@ Your primary goal is to help the user by answering questions based on the provid
         yield from self.llm.stream(query, system_prompt, chat_history=chat_history)
 
     async def load_directory(self, directory: str):
-        from rag_brain.loaders import DirectoryLoader
+        from axon.loaders import DirectoryLoader
         loader = DirectoryLoader()
         logger.info(f"📁 Scanning: {directory}")
         documents = await loader.aload(directory)
@@ -1793,7 +1793,7 @@ def main():
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="Local RAG Brain CLI")
+    parser = argparse.ArgumentParser(description="Axon CLI")
     parser.add_argument('query', nargs='?', help='Question to ask')
     parser.add_argument('--ingest', help='Path to file or directory to ingest')
     parser.add_argument('--list', action='store_true', help='List all ingested sources in the knowledge base')
@@ -2042,7 +2042,7 @@ def main():
             _lg.propagate = _saved_propagate.get(_n, True)
 
     # --- Project CLI handling ---
-    from rag_brain.projects import delete_project, ensure_project, list_projects, project_dir
+    from axon.projects import delete_project, ensure_project, list_projects, project_dir
 
     if args.project_list:
         projects = list_projects()
@@ -2090,7 +2090,7 @@ def main():
 
         if os.path.isdir(args.ingest): asyncio.run(brain.load_directory(args.ingest))
         else:
-            from rag_brain.loaders import DirectoryLoader
+            from axon.loaders import DirectoryLoader
             ext = os.path.splitext(args.ingest)[1].lower()
             loader_mgr = DirectoryLoader()
             if ext in loader_mgr.loaders: brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
@@ -2130,7 +2130,7 @@ def main():
     # (colorama/posthog atexit callbacks raise tracebacks on double Ctrl+C)
     try:
         import readline as _rl
-        _hist = os.path.expanduser("~/.rag_brain_history")
+        _hist = os.path.expanduser("~/.axon_history")
         _rl.write_history_file(_hist)
     except Exception:
         pass
@@ -2191,7 +2191,7 @@ def _make_completer(brain: 'OpenStudioBrain'):
 import json as _json
 from datetime import datetime as _dt, timezone as _tz
 
-_SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".rag_brain", "sessions")
+_SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".axon", "sessions")
 
 
 def _sessions_dir() -> str:
@@ -2590,7 +2590,7 @@ def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> l
     rows = [
         f"  ╭{'─' * _BW}╮",                                                      # 1
         blank,                                                                     # 2
-        _brow("    🧠  Local RAG Brain", emoji_extra=1),                          # 3
+        _brow("    🧠  Axon", emoji_extra=1),                          # 3
         blank,                                                                     # 4
         _brow(f"    LLM    ·  {model_s}"),                                        # 5
         _brow(f"    Embed  ·  {embed_s}"),                                        # 6
@@ -2674,7 +2674,7 @@ class _InitDisplay(logging.Handler):
         sys.stdout.write(
             f"\n  ╭{'─' * _BW}╮\n"
             f"  │{' ' * _BW}│\n"
-            f"  │{'    🧠  Local RAG Brain'.ljust(_BW - 1)}│\n"
+            f"  │{'    🧠  Axon'.ljust(_BW - 1)}│\n"
             f"  │{' ' * _BW}│\n"
             f"  │{'    ⠿  Initializing…'.ljust(_BW)}│\n"   # step line (line 5)
             f"  │{' ' * _BW}│\n"
@@ -2707,7 +2707,7 @@ class _InitDisplay(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
-        if "Initializing Local RAG Brain" in msg:
+        if "Initializing Axon" in msg:
             with self._lock:
                 self._step = "Starting…"
         elif "Loading Sentence Transformers" in msg:
@@ -2724,7 +2724,7 @@ class _InitDisplay(logging.Handler):
             m = re.search(r"(\d+) documents", msg)
             self._tick("Vector store ready")
             self._tick(f"BM25  ·  {m.group(1) if m else '?'} docs")
-        elif "Local RAG Brain ready" in msg:
+        elif "Axon ready" in msg:
             self._done.set()
 
     def stop(self) -> None:
@@ -2764,7 +2764,7 @@ def _expand_at_files(text: str) -> str:
 
     def _read_via_loader(path: str) -> str:
         try:
-            from rag_brain.loaders import DOCXLoader, PDFLoader
+            from axon.loaders import DOCXLoader, PDFLoader
             ext = os.path.splitext(path)[1].lower()
             loader = DOCXLoader() if ext == ".docx" else PDFLoader()
             docs = loader.load(path)
@@ -2823,7 +2823,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     """Interactive REPL chat session with session persistence and live tab completion.
 
     Features:
-    - Session persistence: auto-saves to ~/.rag_brain/sessions/session_<timestamp>.json
+    - Session persistence: auto-saves to ~/.axon/sessions/session_<timestamp>.json
     - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
     - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
@@ -2860,7 +2860,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         from prompt_toolkit.history import FileHistory as _FileHistory
         import glob as _pglob
 
-        _HIST_DIR = os.path.expanduser("~/.rag_brain")
+        _HIST_DIR = os.path.expanduser("~/.axon")
         os.makedirs(_HIST_DIR, exist_ok=True)
         _HIST_FILE = os.path.join(_HIST_DIR, "repl_history")
 
@@ -2939,7 +2939,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         cmd_len = len("/project switch ") if text.startswith("/project switch ") else len("/project delete ")
                         pfx = text[cmd_len:]
                         try:
-                            from rag_brain.projects import list_projects
+                            from axon.projects import list_projects
                             for p in list_projects():
                                 n = p["name"]
                                 if n.startswith(pfx):
@@ -3011,7 +3011,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         try:
             import readline
             import atexit
-            _hist_file = os.path.expanduser("~/.rag_brain/repl_history")
+            _hist_file = os.path.expanduser("~/.axon/repl_history")
             os.makedirs(os.path.dirname(_hist_file), exist_ok=True)
             try:
                 readline.read_history_file(_hist_file)
@@ -3149,7 +3149,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         "keys":     "  /keys                        show API key status for all providers\n"
                                     "  /keys set <provider>         interactively set an API key\n"
                                     "  providers: gemini, openai, brave, ollama_cloud\n"
-                                    "  Keys are saved to ~/.rag_brain/.env and loaded at startup.",
+                                    "  Keys are saved to ~/.axon/.env and loaded at startup.",
                         "project":  "  /project                     show active project + list all\n"
                                     "  /project list                 list all projects\n"
                                     "  /project new <name>           create a new project and switch to it\n"
@@ -3159,7 +3159,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     "  /project delete <name>        delete a project and all its data\n"
                                     "  /project folder               open the active project folder\n"
                                     "\n"
-                                    "  Projects are stored in ~/.rag_brain/projects/<name>/\n"
+                                    "  Projects are stored in ~/.axon/projects/<name>/\n"
                                     "  Each project has its own vector store and BM25 index.\n"
                                     "  Use /ingest after switching to add documents to a project.",
                     }
@@ -3201,7 +3201,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     print("  Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
                 else:
                     import glob as _glob
-                    from rag_brain.loaders import DirectoryLoader
+                    from axon.loaders import DirectoryLoader
                     # Expand glob pattern; fallback to literal path
                     matched = sorted(_glob.glob(arg, recursive=True))
                     if not matched:
@@ -3448,7 +3448,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 _save_session(session)
 
             elif cmd == "/project":
-                from rag_brain.projects import (
+                from axon.projects import (
                     delete_project, ensure_project,
                     list_projects, project_dir,
                 )
@@ -3578,7 +3578,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         print(f"  ✅ Loaded session {session['id']}  ({turns} turns)\n")
 
             elif cmd == "/keys":
-                _env_file = Path.home() / ".rag_brain" / ".env"
+                _env_file = Path.home() / ".axon" / ".env"
                 _provider_keys = {
                     "gemini":       ("GEMINI_API_KEY",   "https://aistudio.google.com/app/apikey"),
                     "openai":       ("OPENAI_API_KEY",   "https://platform.openai.com/api-keys"),
