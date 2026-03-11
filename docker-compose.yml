@@ -33,7 +33,7 @@ services:
       - ./.streamlit:/app/.streamlit
     environment:
       - OLLAMA_HOST=http://ollama:11434
-      - RAG_BRAIN_API_URL=http://axon-api:8000
+      - AXON_API_URL=http://axon-api:8000
     env_file:
       - path: .env
         required: false
