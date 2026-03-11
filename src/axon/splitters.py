@@ -8,6 +8,10 @@ class RecursiveCharacterTextSplitter:
     """
 
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 100):
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size ({chunk_size}) must be > 0.")
+        if chunk_overlap < 0:
+            raise ValueError(f"chunk_overlap ({chunk_overlap}) must be >= 0.")
         if chunk_overlap >= chunk_size:
             raise ValueError(
                 f"chunk_overlap ({chunk_overlap}) must be less than chunk_size ({chunk_size})."

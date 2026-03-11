@@ -62,9 +62,9 @@ async def startup_event():
     try:
         config = OpenStudioConfig.load()
         brain = OpenStudioBrain(config)
-        logger.info("✅ Axon initialized successfully")
+        logger.info("Axon initialized successfully")
     except Exception as e:
-        logger.error(f"❌ Failed to initialize Axon: {e}")
+        logger.error(f"Failed to initialize Axon: {e}")
 
 
 # Models

@@ -386,9 +386,12 @@ class DirectoryLoader:
         if not tasks:
             return []
 
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         all_documents = []
-        for docs in results:
-            all_documents.extend(docs)
+        for res in results:
+            if isinstance(res, Exception):
+                logger.warning("async file load failed: %s", res)
+                continue
+            all_documents.extend(res)
 
         return all_documents
