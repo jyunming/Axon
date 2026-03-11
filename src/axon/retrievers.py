@@ -97,7 +97,7 @@ class BM25Retriever:
                 self.corpus = corpus
                 self.save()  # save as JSON
                 os.remove(legacy_pkl)
-                logger.info("✅ Migrated BM25 index from pickle to JSON")
+                logger.info("Migrated BM25 index from pickle to JSON")
             except Exception as e:
                 logger.error(f"Failed to migrate BM25 pickle: {e}")
                 return

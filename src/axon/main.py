@@ -4,6 +4,7 @@ Core engine for Axon - Open Source RAG Interface.
 
 # Suppress TensorFlow/Keras noise before any imports that might trigger them
 import os
+import shutil
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
@@ -35,7 +36,10 @@ if _user_env.exists():
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger("RAGBrain")
+logger = logging.getLogger("Axon")
+
+# XDG-style user config dir — consistent across Linux / macOS / Windows
+_USER_CONFIG_PATH = Path.home() / ".config" / "axon" / "config.yaml"
 
 
 @dataclass
@@ -156,13 +160,82 @@ class OpenStudioConfig:
     llm_timeout: int = 60
 
     @classmethod
-    def load(cls, path: str = "config.yaml") -> "OpenStudioConfig":
-        """Load configuration from a YAML file."""
+    def load(cls, path: str | None = None) -> "OpenStudioConfig":
+        """Load configuration from a YAML file.
+
+        Defaults to ``~/.config/axon/config.yaml``.  On first run (file absent)
+        the directory is created and a starter config is written automatically,
+        so the notice appears only once.  Passing an explicit *path* that does
+        not exist still produces a WARNING.
+        """
+        _DEFAULT_CONFIG_YAML = """\
+# Axon Configuration — edit to customise behaviour.
+# Full option reference: see config.yaml in the project repository.
+
+embedding:
+  provider: sentence_transformers
+  model: all-MiniLM-L6-v2
+
+llm:
+  provider: ollama
+  model: gemma
+  temperature: 0.7
+  max_tokens: 2048
+
+vector_store:
+  provider: chroma
+  path: ./chroma_data
+
+bm25:
+  path: ./bm25_index
+
+rag:
+  top_k: 10
+  similarity_threshold: 0.3
+  hybrid_search: true
+
+chunk:
+  size: 1000
+  overlap: 200
+
+rerank:
+  enabled: false
+  provider: cross-encoder
+
+query_transformations:
+  multi_query: false
+  hyde: false
+  discussion_fallback: true
+
+web_search:
+  enabled: false
+
+offline:
+  enabled: false
+  local_models_dir: ""
+"""
+        using_default = path is None
+        if using_default:
+            path = str(_USER_CONFIG_PATH)
+
         if not os.path.exists(path):
-            logger.warning(f"Config file {path} not found. Using defaults.")
+            if using_default:
+                try:
+                    cfg_path = Path(path)
+                    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                    cfg_path.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
+                    logger.info("Created default config at %s — edit it to customise Axon.", path)
+                except (OSError, PermissionError) as exc:
+                    logger.warning(
+                        "Could not create default config at %s (%s). Using in-memory defaults.",
+                        path,
+                        exc,
+                    )
+            else:
+                logger.warning("Config file %s not found. Using defaults.", path)
             return cls()
 
-        with open(path) as f:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
         # Flatten the YAML structure to match dataclass fields
@@ -172,14 +245,11 @@ class OpenStudioConfig:
         if "llm" in data:
             config_dict.update({f"llm_{k}": v for k, v in data["llm"].items()})
         if "vector_store" in data:
-            config_dict.update(
-                {
-                    f"vector_store_{k}" if k == "provider" else k: v
-                    for k, v in data["vector_store"].items()
-                }
-            )
-            if "path" in data["vector_store"]:
-                config_dict["vector_store_path"] = data["vector_store"]["path"]
+            vs = data["vector_store"]
+            if "provider" in vs:
+                config_dict["vector_store"] = vs["provider"]
+            if "path" in vs:
+                config_dict["vector_store_path"] = vs["path"]
         if "bm25" in data:
             if "path" in data["bm25"]:
                 config_dict["bm25_path"] = data["bm25"]["path"]
@@ -257,13 +327,13 @@ class OpenReranker:
                 try:
                     from sentence_transformers import CrossEncoder
 
-                    logger.info(f"📊 Loading Reranker: {self.config.reranker_model}")
+                    logger.info(f"Loading Reranker: {self.config.reranker_model}")
                     self.model = CrossEncoder(self.config.reranker_model)
                 except ImportError:
                     logger.error("sentence-transformers not installed. Reranking disabled.")
                     self.config.rerank = False
             elif self.config.reranker_provider == "llm":
-                logger.info("📊 Using LLM for Re-ranking (RankGPT)")
+                logger.info("Using LLM for Re-ranking (RankGPT)")
                 self.llm = OpenLLM(self.config)
 
     def rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -273,7 +343,7 @@ class OpenReranker:
         if not self.config.rerank or (not self.model and not self.llm) or not documents:
             return documents
 
-        logger.info(f"🔄 Reranking {len(documents)} documents...")
+        logger.info(f"Reranking {len(documents)} documents...")
 
         if self.config.reranker_provider == "llm" and self.llm:
             return self._llm_rerank(query, documents)
@@ -335,18 +405,18 @@ class OpenEmbedding:
         if self.provider == "sentence_transformers":
             from sentence_transformers import SentenceTransformer
 
-            logger.info(f"📊 Loading Sentence Transformers: {self.config.embedding_model}")
+            logger.info(f"Loading Sentence Transformers: {self.config.embedding_model}")
             self.model = SentenceTransformer(self.config.embedding_model)
             self.dimension = self.model.get_sentence_embedding_dimension()
 
         elif self.provider == "ollama":
-            logger.info(f"📊 Using Ollama Embedding: {self.config.embedding_model}")
+            logger.info(f"Using Ollama Embedding: {self.config.embedding_model}")
             self.dimension = 768  # nomic-embed-text dimension
 
         elif self.provider == "fastembed":
             from fastembed import TextEmbedding
 
-            logger.info(f"📊 Loading FastEmbed: {self.config.embedding_model}")
+            logger.info(f"Loading FastEmbed: {self.config.embedding_model}")
             self.model = TextEmbedding(model_name=self.config.embedding_model)
             if "bge-m3" in self.config.embedding_model.lower():
                 self.dimension = 1024
@@ -356,7 +426,7 @@ class OpenEmbedding:
         elif self.provider == "openai":
             from openai import OpenAI
 
-            logger.info(f"📊 Using OpenAI API Embedding: {self.config.embedding_model}")
+            logger.info(f"Using OpenAI API Embedding: {self.config.embedding_model}")
             kwargs = (
                 {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
             )
@@ -734,7 +804,7 @@ class OpenVectorStore:
         if self.provider == "chroma":
             import chromadb
 
-            logger.info(f"💾 Initializing ChromaDB: {self.config.vector_store_path}")
+            logger.info(f"Initializing ChromaDB: {self.config.vector_store_path}")
             self.client = chromadb.PersistentClient(path=self.config.vector_store_path)
             self.collection = self.client.get_or_create_collection(
                 name="axon", metadata={"hnsw:space": "cosine"}
@@ -742,12 +812,12 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             from qdrant_client import QdrantClient
 
-            logger.info(f"💾 Initializing Qdrant: {self.config.vector_store_path}")
+            logger.info(f"Initializing Qdrant: {self.config.vector_store_path}")
             self.client = QdrantClient(path=self.config.vector_store_path)
         elif self.provider == "lancedb":
             import lancedb
 
-            logger.info(f"💾 Initializing LanceDB: {self.config.vector_store_path}")
+            logger.info(f"Initializing LanceDB: {self.config.vector_store_path}")
             self.client = lancedb.connect(self.config.vector_store_path)
             try:
                 self.collection = self.client.open_table("axon")
@@ -988,6 +1058,7 @@ Your primary goal is to help the user by answering questions based on the provid
 2. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response.
 3. **Be Transparent**: If you are using your general knowledge because no local documents matched the query, briefly mention it (e.g., 'I couldn't find specific details in your documents, but based on my general knowledge...').
 4. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
+5. **No emoji**: Do not use emoji in your responses. Plain text only.
 """
 
     SYSTEM_PROMPT_STRICT = """You are the 'Axon', a focused AI assistant that answers ONLY from the provided document context.
@@ -997,6 +1068,7 @@ Your primary goal is to help the user by answering questions based on the provid
 2. **No Match — Say So**: If the context does not contain relevant information to answer the question, respond with: "I don't have relevant information in my documents to answer that."
 3. **Cite Sources**: When answering, reference the relevant document or section.
 4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
+5. **No emoji**: Do not use emoji in your responses. Plain text only.
 """
 
     def _resolve_model_path(self, model_name: str) -> str:
@@ -1055,10 +1127,10 @@ Your primary goal is to help the user by answering questions based on the provid
             self.config.embedding_model = self._resolve_model_path(self.config.embedding_model)
             self.config.reranker_model = self._resolve_model_path(self.config.reranker_model)
             logger.info(
-                f"🔒 Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
+                f"Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
             )
 
-        logger.info("🧠 Initializing Axon...")
+        logger.info("Initializing Axon...")
         self.embedding = OpenEmbedding(self.config)
         self.llm = OpenLLM(self.config)
         self.vector_store = OpenVectorStore(self.config)
@@ -1099,7 +1171,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
 
-        logger.info("✅ Axon ready!")
+        logger.info("Axon ready!")
 
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
@@ -1152,7 +1224,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._active_project = name
         set_active_project(name)
-        logger.info(f"📂 Switched to project '{name}'")
+        logger.info(f"Switched to project '{name}'")
 
     def _load_hash_store(self) -> set:
         """Load persisted content hashes for ingest deduplication."""
@@ -1442,7 +1514,7 @@ Your primary goal is to help the user by answering questions based on the provid
         t0 = time.time()
         from tqdm import tqdm
 
-        logger.info(f"📥 Ingesting {len(documents)} documents...")
+        logger.info(f"Ingesting {len(documents)} documents...")
         if self.splitter and self.config.parent_chunk_size > 0:
             documents = self._split_with_parents(documents)
         elif self.splitter:
@@ -1644,10 +1716,10 @@ Your primary goal is to help the user by answering questions based on the provid
                         "is_web": True,
                     }
                 )
-            logger.info(f"🌐 Brave Search returned {len(web_results)} results for: {query[:60]}")
+            logger.info(f"Brave Search returned {len(web_results)} results for: {query[:60]}")
             return web_results
         except Exception as e:
-            logger.warning(f"🌐 Web search failed: {e}")
+            logger.warning(f"Web search failed: {e}")
             return []
 
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
@@ -1770,7 +1842,7 @@ Your primary goal is to help the user by answering questions based on the provid
             local_sufficient = max_vector_score >= cfg.similarity_threshold
             if not local_sufficient:
                 logger.info(
-                    f"🌐 Local knowledge insufficient (best vector score {max_vector_score:.3f} < "
+                    f"Local knowledge insufficient (best vector score {max_vector_score:.3f} < "
                     f"threshold {cfg.similarity_threshold}) — falling back to Brave web search"
                 )
                 web_results = self._execute_web_search(query)
@@ -1866,7 +1938,7 @@ Your primary goal is to help the user by answering questions based on the provid
             cache_key = self._make_cache_key(query, filters, cfg)
             with self._cache_lock:
                 if cache_key in self._query_cache:
-                    logger.info(f"💾 Cache hit for query: {query[:60]}")
+                    logger.info(f"Cache hit for query: {query[:60]}")
                     # Move to end so this entry is treated as most-recently-used (LRU)
                     self._query_cache.move_to_end(cache_key)
                     return self._query_cache[cache_key]
@@ -1977,7 +2049,7 @@ Your primary goal is to help the user by answering questions based on the provid
         from axon.loaders import DirectoryLoader
 
         loader = DirectoryLoader()
-        logger.info(f"📁 Scanning: {directory}")
+        logger.info(f"Scanning: {directory}")
         documents = await loader.aload(directory)
         if documents:
             self.ingest(documents)
@@ -2030,7 +2102,12 @@ def main():
     parser.add_argument(
         "--project-delete", metavar="NAME", help="Delete a project and all its data, then exit"
     )
-    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help="Path to config YAML (default: ~/.config/axon/config.yaml)",
+    )
     parser.add_argument("--stream", action="store_true", help="Stream the response")
     parser.add_argument(
         "--provider",
@@ -2253,7 +2330,7 @@ def main():
         config.graph_rag = args.graph_rag
 
     if args.list_models:
-        print("\n🤖 Supported LLM providers and example models:\n")
+        print("\n  Supported LLM providers and example models:\n")
         print("  ollama       (local)  — gemma:2b, gemma, llama3.1, mistral, phi3")
         print("  gemini       (cloud)  — gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash")
         print("  ollama_cloud (cloud)  — any model hosted at your OLLAMA_CLOUD_URL")
@@ -2270,7 +2347,7 @@ def main():
             response = _ollama.list()
             models = response.models if hasattr(response, "models") else response.get("models", [])
             if models:
-                print("  📦 Locally available Ollama models:")
+                print("  Locally available Ollama models:")
                 for m in models:
                     name = m.model if hasattr(m, "model") else m.get("name", str(m))
                     size_gb = m.size / 1e9 if hasattr(m, "size") and m.size else 0
@@ -2285,7 +2362,7 @@ def main():
         try:
             import ollama as _ollama
 
-            print(f"⬇️  Pulling '{args.pull}'...")
+            print(f"  Pulling '{args.pull}'...")
             for chunk in _ollama.pull(args.pull, stream=True):
                 status = (
                     chunk.get("status", "")
@@ -2305,9 +2382,9 @@ def main():
                     print(f"\r  {status}: {pct}%  ", end="", flush=True)
                 elif status:
                     print(f"\r  {status}...    ", end="", flush=True)
-            print(f"\n✅ '{args.pull}' is ready.\n")
+            print(f"\n  '{args.pull}' is ready.\n")
         except Exception as e:
-            print(f"\n❌ Failed to pull '{args.pull}': {e}")
+            print(f"\n  Error: Failed to pull '{args.pull}': {e}")
         return
 
     # Auto-pull Ollama model if not available locally
@@ -2326,7 +2403,7 @@ def main():
                 config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
             )
             if model_tag not in local_names and config.llm_model not in local_names:
-                print(f"⬇️  Model '{config.llm_model}' not found locally — pulling from Ollama...")
+                print(f"  Model '{config.llm_model}' not found locally — pulling from Ollama...")
                 for chunk in _ollama.pull(config.llm_model, stream=True):
                     status = (
                         chunk.get("status", "")
@@ -2348,7 +2425,7 @@ def main():
                         print(f"\r  {status}: {pct}%", end="", flush=True)
                     elif status:
                         print(f"\r  {status}...", end="", flush=True)
-                print(f"\n✅ Model '{config.llm_model}' ready.\n")
+                print(f"\n  Model '{config.llm_model}' ready.\n")
         except Exception as e:
             logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
 
@@ -2364,7 +2441,8 @@ def main():
     _init_display: _InitDisplay | None = None
     _saved_propagate: dict = {}
     _INIT_LOGGER_NAMES = [
-        "RAGBrain",
+        "Axon",
+        "Axon.Retrievers",
         "StudioBrainOpen.Retrievers",
         "sentence_transformers.SentenceTransformer",
         "sentence_transformers",
@@ -2415,9 +2493,9 @@ def main():
             if brain._active_project == proj_name:
                 brain.switch_project("default")
             delete_project(proj_name)
-            print(f"  ✅ Deleted project '{proj_name}'.")
+            print(f"  Deleted project '{proj_name}'.")
         except ValueError as e:
-            print(f"  ❌ {e}")
+            print(f"  {e}")
             sys.exit(1)
         return
 
@@ -2427,7 +2505,7 @@ def main():
         try:
             brain.switch_project(proj_name)
         except ValueError as e:
-            print(f"  ❌ {e}")
+            print(f"  {e}")
             sys.exit(1)
 
     # Create (if needed) and switch to new project
@@ -2435,7 +2513,7 @@ def main():
         proj_name = args.project_new.lower()
         ensure_project(proj_name)
         brain.switch_project(proj_name)
-        print(f"  ✅ Using project '{proj_name}'  ({project_dir(proj_name)})")
+        print(f"  Using project '{proj_name}'  ({project_dir(proj_name)})")
 
         if os.path.isdir(args.ingest):
             asyncio.run(brain.load_directory(args.ingest))
@@ -2450,10 +2528,10 @@ def main():
     if args.list:
         docs = brain.list_documents()
         if not docs:
-            print("📭 Knowledge base is empty.")
+            print("  Knowledge base is empty.")
         else:
             total_chunks = sum(d["chunks"] for d in docs)
-            print(f"\n📚 Knowledge Base — {len(docs)} file(s), {total_chunks} chunk(s)\n")
+            print(f"\n  Knowledge Base — {len(docs)} file(s), {total_chunks} chunk(s)\n")
             print(f"  {'Source':<60} {'Chunks':>6}")
             print(f"  {'-'*60} {'-'*6}")
             for d in docs:
@@ -2468,7 +2546,7 @@ def main():
                 print(chunk, end="", flush=True)
             print()
         else:
-            print(f"\n📝 Response:\n{brain.query(args.query)}")
+            print(f"\n  Response:\n{brain.query(args.query)}")
         return
 
     # No query supplied — enter interactive REPL (streaming on by default)
@@ -2477,7 +2555,7 @@ def main():
         _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
     except (KeyboardInterrupt, EOFError):
         pass
-    print("\n👋 Bye!")
+    print("\n  Bye!")
     # Manually flush readline history, then hard-exit to skip atexit handlers
     # (colorama/posthog atexit callbacks raise tracebacks on double Ctrl+C)
     try:
@@ -2690,7 +2768,7 @@ def _token_bar(used: int, total: int, width: int = 20) -> str:
     pct = min(used / total, 1.0) if total > 0 else 0
     filled = int(pct * width)
     bar = "█" * filled + "░" * (width - filled)
-    color = "🟢" if pct < 0.6 else ("🟡" if pct < 0.85 else "🔴")
+    color = "[ok]" if pct < 0.6 else ("[!]" if pct < 0.85 else "[!!]")
     return f"{color} {bar}  {used:,} / {total:,} ({int(pct*100)}%)"
 
 
@@ -2718,7 +2796,7 @@ def _show_context(
         last_sources: List of document dicts from last retrieval (with "vector_score", "metadata", "text").
         last_query: The user query that was used for the last retrieval.
     """
-    W = _BW  # match main header box width
+    W = _box_width()  # match main header box width
     TOP = f"  ╭{'─' * W}╮"
     BOTTOM = f"  ╰{'─' * W}╯"
     SEP = f"  ├{'─' * W}┤"
@@ -2762,7 +2840,7 @@ def _show_context(
 
     def wrap_row(text: str, indent: int = 4, max_lines: int = 0) -> list:
         """Word-wrap text into multiple box rows. 0 = no limit."""
-        avail = W - indent
+        avail = W - indent - 2  # 2-char right margin so text never crowds the border
         words = text.split()
         lines_out, current = [], ""
         for w in words:
@@ -2790,10 +2868,10 @@ def _show_context(
     bar_w = 40
     filled = int(pct * bar_w)
     bar = "█" * filled + "░" * (bar_w - filled)
-    indicator = "🟢" if pct < 0.6 else ("🟡" if pct < 0.85 else "🔴")
+    indicator = "[ok]" if pct < 0.6 else ("[!]" if pct < 0.85 else "[!!]")
 
     lines = [TOP, BLANK]
-    lines.append(row("📋  Context Window", indent=4))
+    lines.append(row("Context Window", indent=4))
     lines.append(BLANK)
 
     # ── Model section ──────────────────────────────────────────────────────────
@@ -2883,7 +2961,7 @@ def _show_context(
             meta = src.get("metadata", {})
             name = os.path.basename(meta.get("source", src.get("id", "?")))
             score = src.get("vector_score", src.get("score", 0))
-            kind = "🌐" if src.get("is_web") else "📄"
+            kind = "web" if src.get("is_web") else "doc"
             score_bar = "█" * int(score * 10) + "░" * (10 - int(score * 10))
             lines.append(row(f"{i:>2}. {kind} {score_bar} {score:.3f}   {name}"))
     lines.append(BLANK)
@@ -2937,26 +3015,147 @@ def _do_compact(brain: "OpenStudioBrain", chat_history: list) -> None:
         chat_history.clear()
         chat_history.append({"role": "assistant", "content": f"[Conversation summary]: {summary}"})
         tokens_saved = _estimate_tokens(conversation) - _estimate_tokens(summary)
-        print(f"\r  ✅ Compacted {turns_before} turns → 1 summary  (~{tokens_saved:,} tokens freed)")
+        print(f"\r  Compacted {turns_before} turns -> 1 summary  (~{tokens_saved:,} tokens freed)")
     except Exception as e:
-        print(f"\r  ❌ Compact failed: {e}")
+        print(f"\r  Compact failed: {e}")
 
 
 # ── Banner constants ───────────────────────────────────────────────────────────
-_BW = 112  # inner box width in terminal columns
 _HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
-_SEP = "  " + "─" * (_BW + 2)  # separator line matching box outer width
-_HEADER_ROWS = 16  # box(12) + blank(1) + hint(1) + sep(1) + blank(1)
+
+
+def _box_width() -> int:
+    """Return inner box width: terminal columns minus 4, minimum 43."""
+    return max(43, shutil.get_terminal_size((120, 24)).columns - 4)
+
+
+# FIGlet "Big" ASCII art for AXON — all chars are 1-col wide, each line is 35 cols
+_AXON_ART = [
+    " █████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
+    "██╔══██╗╚██╗██╔╝██╔═══██╗████╗  ██║",
+    "███████║ ╚███╔╝ ██║   ██║██╔██╗ ██║",
+    "██╔══██║ ██╔██╗ ██║   ██║██║╚██╗██║",
+    "██║  ██║██╔╝ ██╗╚██████╔╝██║ ╚████║",
+    "╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝",
+]
+# 24-bit blue gradient: light sky → cornflower → dodger → royal → medium → cobalt
+_AXON_BLUE = [
+    "\x1b[38;2;173;216;230m",  # light blue
+    "\x1b[38;2;135;206;250m",  # light sky blue
+    "\x1b[38;2;100;149;237m",  # cornflower blue
+    "\x1b[38;2;30;144;255m",  # dodger blue
+    "\x1b[38;2;65;105;225m",  # royal blue
+    "\x1b[38;2;0;71;171m",  # cobalt blue
+]
+_AXON_RST = "\x1b[0m"
 
 
 def _brow(content: str, emoji_extra: int = 0) -> str:
-    """One box row: pads/truncates content to exactly _BW terminal columns."""
+    """One box row: pads/truncates content to exactly _box_width() terminal columns."""
+    bw = _box_width()
     vis = len(content) + emoji_extra
-    if vis > _BW:
-        content = content[: _BW - emoji_extra - 1] + "…"
-        vis = _BW
-    pad = _BW - vis
-    return f"  │{content}{' ' * pad}│"
+    if vis > bw:
+        content = content[: bw - emoji_extra - 1] + "…"
+        vis = bw
+    pad = bw - vis
+    return f"  ┃{content}{' ' * pad}┃"
+
+
+def _anim_pad(row_idx: int, frame: int, width: int) -> str:
+    """Return an animated art-pad string of exact visual width `width`.
+
+    Renders a neural-signal network: horizontal tracks (rows 0, 2, 4) carry multiple
+    independent pulses at different speeds and directions, connected at two hub columns
+    by vertical `│` lines (rows 1, 3) that flash when signals pass through.
+    Each particle type has a distinct colour and a 3-level fading trail.
+
+    Args:
+        row_idx: Art row index 0-5.
+        frame:   Current animation frame counter (advances every ~0.08 s).
+        width:   Required visual width in terminal columns.
+    """
+    if width < 12:
+        return " " * width
+
+    track_w = width - 2  # 1-space margin on each side
+    hub1 = track_w // 3  # first junction column
+    hub2 = 2 * track_w // 3  # second junction column
+
+    RST = "\x1b[0m"
+    DIM = "\x1b[2m"
+    NODE = "\x1b[38;2;70;110;155m"  # muted steel-blue — static wire / nodes
+
+    # Three signal "families": teal · sky-blue · violet
+    _PCOL = [
+        "\x1b[38;2;0;245;210m",  # teal   — head
+        "\x1b[38;2;80;195;255m",  # sky    — head
+        "\x1b[38;2;170;120;255m",  # violet — head
+    ]
+    _TRAIL = [
+        ("\x1b[38;2;0;155;130m", "\x1b[38;2;0;90;75m", "\x1b[38;2;0;50;42m"),
+        ("\x1b[38;2;40;130;200m", "\x1b[38;2;20;75;125m", "\x1b[38;2;10;45;75m"),
+        ("\x1b[38;2;105;65;200m", "\x1b[38;2;60;35;130m", "\x1b[38;2;35;18;75m"),
+    ]
+
+    def _particle(r: int, j: int) -> tuple[int, int, int]:
+        """Return (speed 1-3, direction ±1, phase) for particle j on row r."""
+        spd = (r * 5 + j * 7 + 3) % 3 + 1
+        drn = 1 if (r * 13 + j * 11) % 3 != 0 else -1
+        ph = (r * 37 + j * 23 + 11) % max(1, track_w)
+        return spd, drn, ph
+
+    if row_idx == 5:
+        return " " * width
+
+    if row_idx in (1, 3):
+        # Vertical connector rows: blank except │ at hub1 and hub2.
+        # Each hub flashes with the passing particle's colour.
+        chars: list[str] = [" "] * track_w
+        adj = [0, 2] if row_idx == 1 else [2, 4]
+        for hub in (hub1, hub2):
+            lit_col = None
+            for cr in adj:
+                for j in range(3):
+                    spd, drn, ph = _particle(cr, j)
+                    if (frame * spd * drn + ph) % track_w == hub:
+                        lit_col = _PCOL[j]
+                        break
+                if lit_col:
+                    break
+            chars[hub] = f"{lit_col or NODE}│{RST}"
+        return " " + "".join(chars) + " "
+
+    # Horizontal track rows (row_idx ∈ {0, 2, 4})
+    # priority[i] = (level, colour, char) — highest level wins per column.
+    prio: list[tuple] = [(0, None, None)] * track_w
+
+    for j in range(3):
+        spd, drn, ph = _particle(row_idx, j)
+        pos = (frame * spd * drn + ph) % track_w
+        col = _PCOL[j]
+        t1, t2, t3 = _TRAIL[j]
+        head = "▸" if drn > 0 else "◂"
+
+        for idx, level, c, ch in [
+            (pos, 4, col, head),
+            ((pos - drn) % track_w, 3, t1, "─"),
+            ((pos - 2 * drn) % track_w, 2, t2, "─"),
+            ((pos - 3 * drn) % track_w, 1, t3, "─"),
+        ]:
+            if prio[idx][0] < level:
+                prio[idx] = (level, c, ch)
+
+    static = {0: "○", track_w - 1: "○", hub1: "●", hub2: "●"}
+    parts: list[str] = []
+    for i in range(track_w):
+        p, col, ch = prio[i]
+        if p > 0:
+            parts.append(f"{col}{ch}{RST}")
+        elif i in static:
+            parts.append(f"{NODE}{static[i]}{RST}")
+        else:
+            parts.append(f"{DIM}─{RST}")
+    return " " + "".join(parts) + " "
 
 
 def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> list:
@@ -2974,10 +3173,13 @@ def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> l
     except Exception:
         doc_s = "unknown"
 
+    bw = _box_width()
+    art_pad = " " * max(0, bw - 39)  # 4 indent + 35 art cols = 39 vis cols
+
     # Build tick status — wrap onto a second row if too wide
     tick_items = [f"✓ {t}" for t in tick_lines] if tick_lines else ["✓ Ready"]
     ticks_s = "   ".join(tick_items)
-    inner_w = _BW - 4  # 4-char left indent "    "
+    inner_w = bw - 4  # 4-char left indent "    "
     if len(ticks_s) > inner_w:
         # Split into two roughly equal halves at a separator boundary
         mid = len(tick_items) // 2
@@ -2986,25 +3188,27 @@ def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> l
     else:
         ticks_s2 = None
 
-    blank = f"  │{' ' * _BW}│"
+    blank = f"  ┃{' ' * bw}┃"
     rows = [
-        f"  ╭{'─' * _BW}╮",  # 1
+        f"  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m",  # 1
         blank,  # 2
-        _brow("    🧠  Axon", emoji_extra=1),  # 3
-        blank,  # 4
-        _brow(f"    LLM    ·  {model_s}"),  # 5
-        _brow(f"    Embed  ·  {embed_s}"),  # 6
-        blank,  # 7
-        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),  # 8
+        *[  # 3-8  blue-shaded art lines
+            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃" for i, line in enumerate(_AXON_ART)
+        ],
+        blank,  # 9
+        _brow(f"    LLM    ·  {model_s}"),  # 6
+        _brow(f"    Embed  ·  {embed_s}"),  # 7
+        blank,  # 8
+        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),  # 9
         _brow(
             f"    Docs   ·  {doc_s:<26}  Hybrid   ·  {hybrid_s}   top-k · {topk_s}   threshold · {thr_s}"
-        ),  # 9
-        blank,  # 10
-        _brow(f"    {ticks_s}"),  # 11
+        ),  # 10
+        blank,  # 11
+        _brow(f"    {ticks_s}"),  # 12
     ]
     if ticks_s2:
-        rows.append(_brow(f"    {ticks_s2}"))  # 11b (overflow)
-    rows.append(f"  ╰{'─' * _BW}╯")  # 12
+        rows.append(_brow(f"    {ticks_s2}"))  # 12b (overflow)
+    rows.append(f"  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m")  # 13
     return rows
 
 
@@ -3020,11 +3224,13 @@ def _draw_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> No
         tick_lines: Optional list of status messages (e.g., ["Starting", "Embedding ready [CPU]"])
                    to display in the header box.
     """
+    bw = _box_width()
+    sep = "  " + "─" * (bw + 2)
     lines = _build_header(brain, tick_lines)
     sys.stdout.write("\033[2J\033[H")  # clear screen, cursor to top-left
     for line in lines:
         sys.stdout.write(line + "\n")
-    sys.stdout.write("\n" + _HINT + "\n" + _SEP + "\n\n")
+    sys.stdout.write("\n" + _HINT + "\n" + sep + "\n\n")
     sys.stdout.flush()
 
 
@@ -3069,18 +3275,23 @@ class _InitDisplay(logging.Handler):
         super().__init__()
         self._step: str = ""
         self._idx: int = 0
+        self._anim_frame: int = 0
         self._lock = threading.Lock()
         self._done = threading.Event()
         self.tick_lines: list = []  # collected for the final banner
         # Print CLOSED 7-line box immediately — step line updated in-place
+        bw = _box_width()
+        art_pad = " " * max(0, bw - 39)  # 4 indent + 35 art cols = 39 vis cols
+        _art_rows = "".join(
+            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃\n"
+            for i, line in enumerate(_AXON_ART)
+        )
         sys.stdout.write(
-            f"\n  ╭{'─' * _BW}╮\n"
-            f"  │{' ' * _BW}│\n"
-            f"  │{'    🧠  Axon'.ljust(_BW - 1)}│\n"
-            f"  │{' ' * _BW}│\n"
-            f"  │{'    ⠿  Initializing…'.ljust(_BW)}│\n"  # step line (line 5)
-            f"  │{' ' * _BW}│\n"
-            f"  ╰{'─' * _BW}╯\n"
+            f"\n  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
+            f"  ┃{' ' * bw}┃\n" + _art_rows + f"  ┃{' ' * bw}┃\n"
+            f"  ┃{'    ⠿  Initializing…'.ljust(bw)}┃\n"  # step line (3rd from bottom)
+            f"  ┃{' ' * bw}┃\n"
+            f"  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
         )
         sys.stdout.flush()
         self._thread = threading.Thread(target=self._spin_loop, daemon=True)
@@ -3089,15 +3300,36 @@ class _InitDisplay(logging.Handler):
     def _spin_loop(self) -> None:
         while not self._done.wait(0.08):
             with self._lock:
+                self._anim_frame += 1
+                bw = _box_width()
+                apad_w = max(0, bw - 39)
+
+                # Rebuild the 6 animated art rows (AXON text + signal animation)
+                art_rows = [
+                    f"  ┃    {_AXON_BLUE[i]}{_AXON_ART[i]}{_AXON_RST}"
+                    f"{_anim_pad(i, self._anim_frame, apad_w)}┃"
+                    for i in range(6)
+                ]
+
+                # Box line layout (1-indexed, cursor rests at line 14 after init print):
+                #  1=blank  2=╭╮  3=┃blank┃  4-9=art  10=┃blank┃  11=┃step┃  12=┃blank┃  13=╰╯
+                # Go up 10 from line 14 → line 4 (first art row), rewrite all 6.
+                sys.stdout.write("\033[10A")
+                for arow in art_rows:
+                    sys.stdout.write(f"\r{arow}\n")
+                # Cursor now at line 10 (blank row after art).
+
                 if self._step:
-                    frame = self._FRAMES[self._idx % len(self._FRAMES)]
-                    content = f"    {frame}  {self._step}"
-                    line = _brow(content)
-                    # Box is 7 lines; step is line 5; cursor after ╰╯ is at line 8.
-                    # Up 3 → line 5; write; newline → line 6; down 2 → line 8.
-                    sys.stdout.write(f"\033[3A\r{line}\n\033[2B")
-                    sys.stdout.flush()
+                    spinner = self._FRAMES[self._idx % len(self._FRAMES)]
+                    line = _brow(f"    {spinner}  {self._step}")
+                    # Down 1 → line 11 (step), write, newline → 12, down 2 → 14.
+                    sys.stdout.write(f"\033[1B\r{line}\n\033[2B")
                     self._idx += 1
+                else:
+                    # Skip blank(10) step(11) blank(12) bottom(13) → back to line 14.
+                    sys.stdout.write("\033[4B")
+
+                sys.stdout.flush()
 
     def _tick(self, label: str) -> None:
         with self._lock:
@@ -3187,19 +3419,21 @@ def _expand_at_files(text: str) -> str:
     - @folder/   → recursively reads all supported files in the folder (capped at
                    _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
     """
+    # Imported at call time so tests can patch axon.loaders.DOCXLoader / PDFLoader.
+    from axon.loaders import DOCXLoader, PDFLoader
 
     def _read_text_file(path: str, max_bytes: int = _AT_FILE_MAX_BYTES) -> str:
         try:
-            raw = open(path, encoding="utf-8", errors="ignore").read(max_bytes)
+            with open(path, "rb") as f:
+                raw = f.read(max_bytes)
+            text = raw.decode("utf-8", errors="ignore")
             truncated = os.path.getsize(path) > max_bytes
-            return raw + ("\n… (truncated)" if truncated else "")
+            return text + ("\n… (truncated)" if truncated else "")
         except OSError:
             return ""
 
     def _read_via_loader(path: str) -> str:
         try:
-            from axon.loaders import DOCXLoader, PDFLoader
-
             ext = os.path.splitext(path)[1].lower()
             loader = DOCXLoader() if ext == ".docx" else PDFLoader()
             docs = loader.load(path)
@@ -3230,13 +3464,22 @@ def _expand_at_files(text: str) -> str:
                 fpath = os.path.join(root, fname)
                 rel = os.path.relpath(fpath, dirpath)
                 if total >= _AT_DIR_MAX_BYTES:
+                    # Budget exhausted — skip remaining files without reading them
                     parts.append(f"\n--- @{rel} (skipped: context limit reached) ---")
                     continue
                 content = _read_file(fpath)
                 if not content:
                     continue
-                parts.append(f"\n--- @{rel} ---\n{content}\n--- end ---")
-                total += len(content.encode("utf-8", errors="ignore"))
+                encoded = content.encode("utf-8", errors="ignore")
+                next_size = len(encoded)
+                if total + next_size > _AT_DIR_MAX_BYTES:
+                    remaining = _AT_DIR_MAX_BYTES - total
+                    truncated_text = encoded[:remaining].decode("utf-8", errors="ignore")
+                    parts.append(f"\n--- @{rel} ---\n{truncated_text}\n… (truncated)\n--- end ---")
+                    total = _AT_DIR_MAX_BYTES
+                else:
+                    parts.append(f"\n--- @{rel} ---\n{content}\n--- end ---")
+                    total += next_size
         return "\n".join(parts) if parts else f"\n(no readable files found in {dirpath})"
 
     def _replace(m: re.Match) -> str:
@@ -3317,7 +3560,7 @@ def _interactive_repl(
             {
                 "": "",
                 "completion-menu.completion.current": "bg:#444466 #ffffff",
-                "bottom-toolbar": "bg:#2b2b2b #b0b0b0",
+                "bottom-toolbar": "bg:#0a2a5e #c8d8f0",
             }
         )
 
@@ -3424,16 +3667,14 @@ def _interactive_repl(
                 return s if len(s) <= w else s[: w - 1] + "…"
 
             # No explicit background codes — the bottom-toolbar class paints
-            # bg:#2b2b2b for every cell uniformly.  Bold labels only change
-            # font weight and foreground; the class background is never overridden.
+            # bg:#0a2a5e for every cell uniformly.  Bold labels only change
+            # font weight; the class background is never overridden.
             _BON = "\x1b[1m"  # bold on
             _BOF = "\x1b[22m"  # bold off
-            _FGN = "\x1b[39m"  # default foreground (toolbar class handles colour)
-            _FGL = "\x1b[97m"  # bright white for labels
             _RST = "\x1b[0m"
 
             def _lbl(text: str) -> str:
-                return f"{_BON}{_FGL}{text}{_BOF}{_FGN}"
+                return f"{_BON}{text}{_BOF}"
 
             def _pad(label: str, val: str, width: int) -> str:
                 return " " * max(0, width - len(label) - 1 - len(str(val)))
@@ -3446,7 +3687,7 @@ def _interactive_repl(
             except Exception:
                 doc_s = "?"
             proj = getattr(brain, "_active_project", "default")
-            proj_s = f"  │  📂 {proj}" if proj != "default" else ""
+            proj_s = f"  │  {proj}" if proj != "default" else ""
             sep = "  │  "
             W1, W2 = 28, 30
             C1 = len("LLM  ") + W1  # 33
@@ -3517,7 +3758,7 @@ def _interactive_repl(
         h_val = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
         tk = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
         proj = getattr(brain, "_active_project", "default")
-        proj_s = f"  │  📂 {proj}" if proj != "default" else ""
+        proj_s = f"  │  {proj}" if proj != "default" else ""
         sep = "  │  "
         W1, W2 = 28, 30
         C1 = len("LLM  ") + W1  # 33
@@ -3549,6 +3790,7 @@ def _interactive_repl(
 
     _last_sources: list = []
     _last_query: str = ""
+    _last_config_snapshot: tuple = ()  # (provider/model, search, discuss, hybrid)
 
     while True:
         try:
@@ -3596,7 +3838,7 @@ def _interactive_repl(
                         "  /embed <provider>/<model>   switch provider + model\n"
                         "  /embed /path/to/local        local HuggingFace folder\n"
                         "  providers: sentence_transformers, ollama, fastembed, openai\n"
-                        "  ⚠️  Re-ingest after changing embedding model.",
+                        "  !  Re-ingest after changing embedding model.",
                         "ingest": "  /ingest <path>              ingest a directory\n"
                         "  /ingest ./src/*.py           glob pattern\n"
                         "  /ingest ./notes/**/*.md      recursive glob",
@@ -3659,10 +3901,10 @@ def _interactive_repl(
             elif cmd == "/list":
                 docs = brain.list_documents()
                 if not docs:
-                    print("📭 Knowledge base is empty.")
+                    print("  Knowledge base is empty.")
                 else:
                     total = sum(d["chunks"] for d in docs)
-                    print(f"\n📚 {len(docs)} file(s), {total} chunk(s)\n")
+                    print(f"\n  {len(docs)} file(s), {total} chunk(s)\n")
                     for d in docs:
                         print(f"  {d['source']:<60} {d['chunks']:>6}")
                     print()
@@ -3682,24 +3924,24 @@ def _interactive_repl(
                         if os.path.isdir(arg):
                             matched = [arg]
                         else:
-                            print(f"  ❌ No files matched: {arg}")
+                            print(f"  No files matched: {arg}")
                     if matched:
                         loader_mgr = DirectoryLoader()
                         ingested, skipped = 0, 0
                         for path in matched:
                             if os.path.isdir(path):
-                                print(f"  📁 {path} …", end="", flush=True)
+                                print(f"  {path} …", end="", flush=True)
                                 asyncio.run(brain.load_directory(path))
-                                print("  ✅")
+                                print("  done")
                                 ingested += 1
                             elif os.path.isfile(path):
                                 ext = os.path.splitext(path)[1].lower()
                                 if ext in loader_mgr.loaders:
                                     brain.ingest(loader_mgr.loaders[ext].load(path))
-                                    print(f"  ✅ {path}")
+                                    print(f"  {path}")
                                     ingested += 1
                                 else:
-                                    print(f"  ⚠️  Skipped (unsupported type): {path}")
+                                    print(f"  !  Skipped (unsupported type): {path}")
                                     skipped += 1
                         print(f"  Done — {ingested} ingested, {skipped} skipped.")
 
@@ -3720,13 +3962,13 @@ def _interactive_repl(
                     provider, model = arg.split("/", 1)
                     if provider not in _PROVIDERS:
                         print(
-                            f"  ❌ Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
+                            f"  Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
                         )
                     else:
                         brain.config.llm_provider = provider
                         brain.config.llm_model = model
                         brain.llm = OpenLLM(brain.config)
-                        print(f"  ✅ Switched LLM to {provider}/{model}")
+                        print(f"  Switched LLM to {provider}/{model}")
                         if provider == "vllm":
                             print(
                                 f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
@@ -3738,7 +3980,7 @@ def _interactive_repl(
                     brain.config.llm_provider = inferred
                     brain.config.llm_model = arg
                     brain.llm = OpenLLM(brain.config)
-                    print(f"  ✅ Switched LLM to {inferred}/{arg}")
+                    print(f"  Switched LLM to {inferred}/{arg}")
                     if inferred != "ollama":
                         print("  ℹ️  Make sure the required API key env var is set.")
 
@@ -3749,7 +3991,7 @@ def _interactive_repl(
                 else:
                     brain.config.vllm_base_url = arg
                     brain.llm._openai_clients = {}  # invalidate cached client
-                    print(f"  ✅ vLLM base URL set to {arg}")
+                    print(f"  vLLM base URL set to {arg}")
 
             elif cmd == "/embed":
                 _EMBED_PROVIDERS = ("sentence_transformers", "ollama", "fastembed", "openai")
@@ -3765,7 +4007,7 @@ def _interactive_repl(
                     print("    /embed /path/to/local/model                (local folder)")
                     print("    /embed ollama/nomic-embed-text")
                     print("    /embed fastembed/BAAI/bge-small-en")
-                    print("  ⚠️  Changing embedding model invalidates existing indexed documents.")
+                    print("  !  Changing embedding model invalidates existing indexed documents.")
                 else:
                     if "/" in arg:
                         provider, model = arg.split("/", 1)
@@ -3784,11 +4026,11 @@ def _interactive_repl(
                         print("  ⠿ Loading embedding model…", end="", flush=True)
                         brain.embedding = OpenEmbedding(brain.config)
                         print(
-                            f"\r  ✅ Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                            f"\r  Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
                         )
-                        print("  ⚠️  Re-ingest your documents so they use the new embedding model.")
+                        print("  Re-ingest your documents so they use the new embedding model.")
                     except Exception as e:
-                        print(f"\r  ❌ Failed to load embedding: {e}")
+                        print(f"\r  Failed to load embedding: {e}")
 
             elif cmd == "/pull":
                 if not arg:
@@ -3797,7 +4039,7 @@ def _interactive_repl(
                     try:
                         import ollama as _ollama
 
-                        print(f"  ⬇️  Pulling '{arg}' …")
+                        print(f"  Pulling '{arg}' …")
                         last_status = ""
                         for chunk in _ollama.pull(arg, stream=True):
                             status = (
@@ -3824,36 +4066,34 @@ def _interactive_repl(
                             # Pad to clear previous longer line
                             print(f"\r{line:<60}", end="", flush=True)
                             last_status = line  # noqa: F841
-                        print(f"\r  ✅ '{arg}' ready.{' ' * 50}")
+                        print(f"\r  '{arg}' ready.{' ' * 50}")
                     except Exception as e:
-                        print(f"  ❌ Pull failed: {e}")
+                        print(f"  Pull failed: {e}")
 
             elif cmd == "/clear":
                 chat_history.clear()
-                print("  🗑️  Chat history cleared.")
+                print("  Chat history cleared.")
 
             elif cmd == "/search":
                 if brain.config.offline_mode:
-                    print("  🔒 Offline mode is ON — web search is disabled.")
+                    print("  Offline mode is ON — web search is disabled.")
                 elif brain.config.truth_grounding:
                     brain.config.truth_grounding = False
-                    print("  🔍 Web search OFF — answers from local knowledge only.")
+                    print("  Web search OFF — answers from local knowledge only.")
                 else:
                     if not brain.config.brave_api_key:
-                        print(
-                            "  ❌ BRAVE_API_KEY is not set. Export it and restart, or set it with:"
-                        )
+                        print("  BRAVE_API_KEY is not set. Export it and restart, or set it with:")
                         print("     export BRAVE_API_KEY=your_key")
                     else:
                         brain.config.truth_grounding = True
                         print(
-                            "  🔍 Web search ON — Brave Search will be used as fallback when local knowledge is insufficient."
+                            "  Web search ON — Brave Search will be used as fallback when local knowledge is insufficient."
                         )
 
             elif cmd == "/discuss":
                 brain.config.discussion_fallback = not brain.config.discussion_fallback
                 state = "ON" if brain.config.discussion_fallback else "OFF"
-                print(f"  💬 Discussion mode {state}.")
+                print(f"  Discussion mode {state}.")
 
             elif cmd == "/rag":
                 if not arg:
@@ -3883,7 +4123,7 @@ def _interactive_repl(
                             n = int(rag_val)
                             assert 1 <= n <= 50
                             brain.config.top_k = n
-                            print(f"  ✅ top-k set to {n}")
+                            print(f"  top-k set to {n}")
                         except Exception:
                             print("  Usage: /rag topk <integer 1–50>")
                     elif rag_opt == "threshold":
@@ -3891,50 +4131,46 @@ def _interactive_repl(
                             v = float(rag_val)
                             assert 0.0 <= v <= 1.0
                             brain.config.similarity_threshold = v
-                            print(f"  ✅ threshold set to {v}")
+                            print(f"  threshold set to {v}")
                         except Exception:
                             print("  Usage: /rag threshold <float 0.0–1.0>")
                     elif rag_opt == "hybrid":
                         brain.config.hybrid_search = not brain.config.hybrid_search
-                        print(f"  ✅ Hybrid search {'ON' if brain.config.hybrid_search else 'OFF'}")
+                        print(f"  Hybrid search {'ON' if brain.config.hybrid_search else 'OFF'}")
                     elif rag_opt == "rerank":
                         brain.config.rerank = not brain.config.rerank
-                        print(f"  ✅ Reranker {'ON' if brain.config.rerank else 'OFF'}")
+                        print(f"  Reranker {'ON' if brain.config.rerank else 'OFF'}")
                     elif rag_opt == "hyde":
                         brain.config.hyde = not brain.config.hyde
-                        print(f"  ✅ HyDE {'ON' if brain.config.hyde else 'OFF'}")
+                        print(f"  HyDE {'ON' if brain.config.hyde else 'OFF'}")
                     elif rag_opt == "multi":
                         brain.config.multi_query = not brain.config.multi_query
-                        print(f"  ✅ Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
+                        print(f"  Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
                     elif rag_opt == "step-back":
                         brain.config.step_back = not brain.config.step_back
-                        print(
-                            f"  ✅ Step-back prompting {'ON' if brain.config.step_back else 'OFF'}"
-                        )
+                        print(f"  Step-back prompting {'ON' if brain.config.step_back else 'OFF'}")
                     elif rag_opt == "decompose":
                         brain.config.query_decompose = not brain.config.query_decompose
                         print(
-                            f"  ✅ Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}"
+                            f"  Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}"
                         )
                     elif rag_opt == "compress":
                         brain.config.compress_context = not brain.config.compress_context
                         print(
-                            f"  ✅ Context compression {'ON' if brain.config.compress_context else 'OFF'}"
+                            f"  Context compression {'ON' if brain.config.compress_context else 'OFF'}"
                         )
                     elif rag_opt == "cite":
                         brain.config.cite_sources = not brain.config.cite_sources
-                        print(
-                            f"  ✅ Inline citations {'ON' if brain.config.cite_sources else 'OFF'}"
-                        )
+                        print(f"  Inline citations {'ON' if brain.config.cite_sources else 'OFF'}")
                     elif rag_opt == "raptor":
                         brain.config.raptor = not brain.config.raptor
                         print(
-                            f"  ✅ RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}"
+                            f"  RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}"
                         )
                     elif rag_opt in ("graph-rag", "graph_rag", "graphrag"):
                         brain.config.graph_rag = not brain.config.graph_rag
                         print(
-                            f"  ✅ GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
+                            f"  GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
                         )
                     elif rag_opt == "rerank-model":
                         if not rag_val:
@@ -3945,16 +4181,16 @@ def _interactive_repl(
                         else:
                             resolved = brain._resolve_model_path(rag_val)
                             if resolved != rag_val:
-                                print(f"  → Resolved to local path: {resolved}")
+                                print(f"  Resolved to local path: {resolved}")
                             brain.config.reranker_model = resolved
                             brain.config.rerank = True  # auto-enable when setting a model
-                            print(f"  ⏳ Loading reranker '{resolved}'…")
+                            print(f"  Loading reranker '{resolved}'…")
                             try:
                                 brain.reranker = OpenReranker(brain.config)
-                                print(f"  ✅ Reranker → {resolved}  (rerank: ON)")
+                                print(f"  Reranker → {resolved}  (rerank: ON)")
                             except Exception as e:
                                 brain.config.rerank = False
-                                print(f"  ❌ Failed to load reranker: {e}")
+                                print(f"  Failed to load reranker: {e}")
                     else:
                         print(
                             f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag"
@@ -4003,11 +4239,11 @@ def _interactive_repl(
                         try:
                             ensure_project(proj_name, proj_desc)
                             brain.switch_project(proj_name)
-                            print(f"  ✅ Created and switched to project '{proj_name}'")
-                            print(f"  📁 {project_dir(proj_name)}")
+                            print(f"  Created and switched to project '{proj_name}'")
+                            print(f"  {project_dir(proj_name)}")
                             print("  Use /ingest to add documents to this project.\n")
                         except ValueError as e:
-                            print(f"  ❌ {e}")
+                            print(f"  {e}")
 
                 elif sub == "switch":
                     if not sub_arg:
@@ -4022,12 +4258,12 @@ def _interactive_repl(
                                     if brain.vector_store.provider == "chroma"
                                     else "?"
                                 )
-                                print(f"  ✅ Switched to project '{proj_name}'  ({count} chunks)\n")
+                                print(f"  Switched to project '{proj_name}'  ({count} chunks)\n")
                             except Exception as e:
-                                print(f"  ❌ {e}")
+                                print(f"  {e}")
                         else:
                             print(
-                                f"  ❌ Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
+                                f"  Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
                             )
 
                 elif sub == "delete":
@@ -4038,7 +4274,7 @@ def _interactive_repl(
                         try:
                             confirm = (
                                 _read_input(
-                                    f"  ⚠️  Delete project '{proj_name}' and ALL its data? [y/N]: "
+                                    f"  !  Delete project '{proj_name}' and ALL its data? [y/N]: "
                                 )
                                 .strip()
                                 .lower()
@@ -4051,9 +4287,9 @@ def _interactive_repl(
                                     brain.switch_project("default")
                                     print("  ↩️  Switched back to default project.")
                                 delete_project(proj_name)
-                                print(f"  ✅ Deleted project '{proj_name}'.\n")
+                                print(f"  Deleted project '{proj_name}'.\n")
                             except ValueError as e:
-                                print(f"  ❌ {e}")
+                                print(f"  {e}")
                         else:
                             print("  Cancelled.")
 
@@ -4065,7 +4301,7 @@ def _interactive_repl(
                         print(f"    BM25 index:   {brain.config.bm25_path}\n")
                     else:
                         folder = str(project_dir(active))
-                        print(f"  📁 {folder}")
+                        print(f"  {folder}")
                         import subprocess
 
                         try:
@@ -4100,13 +4336,13 @@ def _interactive_repl(
                 else:
                     loaded = _load_session(arg)
                     if loaded is None:
-                        print(f"  ❌ Session '{arg}' not found. Use /sessions to list.")
+                        print(f"  Session '{arg}' not found. Use /sessions to list.")
                     else:
                         session = loaded
                         chat_history.clear()
                         chat_history.extend(session["history"])
                         turns = len(chat_history) // 2
-                        print(f"  ✅ Loaded session {session['id']}  ({turns} turns)\n")
+                        print(f"  Loaded session {session['id']}  ({turns} turns)\n")
 
             elif cmd == "/keys":
                 _env_file = Path.home() / ".axon" / ".env"
@@ -4155,7 +4391,7 @@ def _interactive_repl(
                                     brain.config.openai_api_key = new_key
                                 elif prov == "ollama_cloud":
                                     brain.config.ollama_cloud_key = new_key
-                                print(f"  ✅ {env_name} saved to {_env_file} and applied.")
+                                print(f"  {env_name} saved to {_env_file} and applied.")
                                 print(f"  Switch provider: /model {prov}/<model-name>")
                             else:
                                 print("  No key entered — nothing saved.")
@@ -4165,9 +4401,9 @@ def _interactive_repl(
                         val = os.environ.get(env_name, "")
                         if val:
                             masked = val[:4] + "****" + val[-2:] if len(val) > 6 else "****"
-                            status = f"✅ {masked}"
+                            status = f"set ({masked})"
                         else:
-                            status = "❌ not set"
+                            status = "not set"
                         print(f"  {prov:<14} {env_name:<22} {status}")
                     if _env_file.exists():
                         print(f"\n  Keys file: {_env_file}")
@@ -4186,7 +4422,7 @@ def _interactive_repl(
         query_text = _expand_at_files(user_input)
         if query_text != user_input:
             at_files = re.findall(r"@(\S+)", user_input)
-            print(f"  📎 Attached: {', '.join(at_files)}")
+            print(f"  Attached: {', '.join(at_files)}")
 
         # --- Regular query — use Rich Live for spinner + streaming response ---
         response_parts: list = []
@@ -4218,7 +4454,10 @@ def _interactive_repl(
                     s_v = "search:ON" if brain.config.truth_grounding else "search:off"
                     d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
                     h_v = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
-                    print(f"\033[2m  🧠 {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
+                    _snap = (m, s_v, d_v, h_v)
+                    if _snap != _last_config_snapshot:
+                        print(f"\033[2m  {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
+                        _last_config_snapshot = _snap
                     print()
                     # Spinner until first real token arrives
                     with _RL(
@@ -4244,10 +4483,10 @@ def _interactive_repl(
                 # then swap to full Markdown on completion — no raw cursor
                 # save/restore so the terminal scrollback is never corrupted.
                 try:
-                    accumulated = "".join(response_parts)
                     _console.print("[bold yellow]Brain:[/bold yellow]")
+                    _accumulated = "".join(response_parts)
                     with _RL(
-                        _RT(accumulated + " ▋"),
+                        _RT(_accumulated + " ▋"),
                         console=_console,
                         transient=False,
                         refresh_per_second=15,
@@ -4257,18 +4496,17 @@ def _interactive_repl(
                                 if chunk.get("type") == "sources":
                                     _last_sources = chunk.get("sources", [])
                                 continue
+                            _accumulated += chunk
                             response_parts.append(chunk)
-                            accumulated += chunk
-                            live.update(_RT(accumulated + " ▋"))
+                            live.update(_RT(_accumulated + " ▋"))
                         # All tokens received — swap plain text for Markdown
-                        live.update(_RM(accumulated))
+                        live.update(_RM(_accumulated))
                     print()
                 except KeyboardInterrupt:
                     _cancelled = True
-                    if response_parts:
-                        _console.print("[bold yellow]Brain:[/bold yellow]")
-                        _console.print(_RM("".join(response_parts)))
-                    print("\n  ⚠️  Cancelled.\n")
+                    if _accumulated:
+                        _console.print(_RM(_accumulated))
+                    print("\n  !  Cancelled.\n")
             else:
                 # Non-streaming: spinner while brain.query() blocks
                 _spin_stop2 = threading.Event()
