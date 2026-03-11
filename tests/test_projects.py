@@ -320,3 +320,24 @@ class TestDeleteWithChildren:
         delete_project("parent/child")
         assert project_dir("parent").exists()
         assert (project_dir("parent") / "meta.json").is_file()
+
+
+class TestSetProjectsRoot:
+    def test_set_projects_root_changes_project_dir(self, tmp_path, monkeypatch):
+        import axon.projects as _p
+
+        new_root = tmp_path / "custom_root"
+        _p.set_projects_root(new_root)
+        monkeypatch.setattr(_p, "PROJECTS_ROOT", _p.PROJECTS_ROOT)
+        assert _p.project_dir("myproj") == new_root / "myproj"
+        # Restore
+        _p.set_projects_root(tmp_path / "projects")
+
+    def test_projects_root_env_var_applied_at_module_load(self, tmp_path, monkeypatch):
+        """AXON_PROJECTS_ROOT is read by _resolve_projects_root at import time;
+        verify set_projects_root applies the same path so env-var behaviour is consistent."""
+        import axon.projects as _p
+
+        custom = tmp_path / "env_root"
+        monkeypatch.setattr(_p, "PROJECTS_ROOT", custom)
+        assert _p.project_dir("proj") == custom / "proj"

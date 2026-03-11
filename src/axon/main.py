@@ -1112,6 +1112,9 @@ class MultiVectorStore:
                 seen[doc["id"]] = doc
         return list(seen.values())
 
+    def delete_by_ids(self, ids: list[str]) -> None:
+        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
+
     def delete_documents(self, ids: list[str]) -> None:
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
@@ -1140,6 +1143,9 @@ class MultiBM25Retriever:
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
     def add_documents(self, *args, **kwargs):
+        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
+
+    def delete_documents(self, doc_ids: list[str]) -> None:
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
     # Alias used by ingest code
@@ -4455,9 +4461,7 @@ def _interactive_repl(
                                 brain.switch_project(proj_name)
                                 is_merged = isinstance(brain.vector_store, MultiVectorStore)
                                 if is_merged:
-                                    print(
-                                        f"  Switched to project '{proj_name}'  [merged view]\n"
-                                    )
+                                    print(f"  Switched to project '{proj_name}'  [merged view]\n")
                                 elif brain.vector_store.provider == "chroma":
                                     count = brain.vector_store.collection.count()
                                     print(
