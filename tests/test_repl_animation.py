@@ -1,6 +1,5 @@
-from unittest.mock import MagicMock
-import pytest
-from axon.main import _get_brain_anim_row, _AXON_BLUE, _AXON_ART, _BRAIN_ART
+from axon.main import _AXON_BLUE, _BRAIN_ART, _get_brain_anim_row
+
 
 def test_get_brain_anim_row_width():
     # Test that the output width is correct
@@ -8,15 +7,18 @@ def test_get_brain_anim_row_width():
     row = _get_brain_anim_row(0, 0, width)
     # The output contains ANSI codes, so we strip them to check visible width
     import re
-    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
-    plain_row = ansi_escape.sub('', row)
+
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*m")
+    plain_row = ansi_escape.sub("", row)
     assert len(plain_row) == width
+
 
 def test_get_brain_anim_row_small_width():
     # Test fallback for small width
     width = 20
     row = _get_brain_anim_row(0, 0, width)
     assert row == " " * width
+
 
 def test_get_brain_anim_row_fully_connected():
     # Test the fully connected state (frame=-1)
@@ -29,10 +31,12 @@ def test_get_brain_anim_row_fully_connected():
     # GLOW is "\x1b[38;2;255;255;255m"
     assert "\x1b[38;2;255;255;255m(O)" in row
 
+
 def test_axon_blue_exists():
     # Ensure we didn't accidentally delete the original blue gradient
     assert len(_AXON_BLUE) == 6
     assert "\x1b[38;2;173;216;230m" in _AXON_BLUE
+
 
 def test_brain_art_content():
     assert len(_BRAIN_ART) == 6
