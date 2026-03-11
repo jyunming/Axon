@@ -4,11 +4,10 @@ import pathlib
 from typing import Any
 
 import uvicorn
+from axon.main import AxonBrain, AxonConfig
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-
-from axon.main import AxonBrain, AxonConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)

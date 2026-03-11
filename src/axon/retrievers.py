@@ -21,7 +21,9 @@ class BM25Retriever:
         # Legacy alias — used only during pickle→JSON migration
         self.index_file = os.path.join(storage_path, "bm25_index.pkl")
         self.bm25 = None
-        self.corpus = []  # List of dicts: {'id': id, 'text': text, 'metadata': meta}
+        self.corpus: list[
+            dict[str, Any]
+        ] = []  # List of dicts: {'id': id, 'text': text, 'metadata': meta}
 
         if not os.path.exists(storage_path):
             os.makedirs(storage_path)

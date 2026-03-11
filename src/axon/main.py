@@ -13,18 +13,18 @@ os.environ.setdefault("USE_TF", "0")  # tell transformers to skip TF backend
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
-import asyncio
-import logging
-import re
-import sys
-import threading
-import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Literal
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+import re  # noqa: E402
+import sys  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any, Literal  # noqa: E402
 
-import yaml
-from dotenv import load_dotenv
+import yaml  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
 
 # Load environment variables — project .env first, then user-global ~/.axon/.env
 load_dotenv()
@@ -95,10 +95,32 @@ class AxonConfig:
         if env_bm25:
             self.bm25_path = env_bm25
 
-        # Always expand user paths for safety
-        self.projects_root = os.path.expanduser(self.projects_root)
-        self.vector_store_path = os.path.expanduser(self.vector_store_path)
-        self.bm25_path = os.path.expanduser(self.bm25_path)
+        # 3. Aggressive WSL/Linux path resolution to avoid "readonly database"
+        # errors on Windows-mounted drives (drvfs).
+        is_linux = sys.platform == "linux"
+        home = Path.home() / ".axon"
+
+        def _resolve_safe(path_str: str, sub: str) -> str:
+            if not path_str:
+                return str(home / sub)
+            # Expand ~
+            p = Path(os.path.expanduser(path_str))
+            # If it's the legacy relative default, force to home
+            legacy_defaults = ("./chroma_data", "chroma_data", "./bm25_index", "bm25_index")
+            if path_str in legacy_defaults:
+                return str(home / "data" / sub)
+            # If absolute but on a Windows mount in Linux, it will likely fail
+            if is_linux and p.is_absolute() and str(p).startswith("/mnt/"):
+                # Only redirect if it looks like the user didn't explicitly set a custom Linux path
+                # (heuristic: if it contains 'studio_brain_open' or 'axon' in a Windows path)
+                if any(x in str(p).lower() for x in ("axon", "studio_brain")):
+                    safe_path = home / "data" / sub
+                    return str(safe_path)
+            return str(p.absolute())
+
+        self.projects_root = _resolve_safe(self.projects_root, "projects")
+        self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma")
+        self.bm25_path = _resolve_safe(self.bm25_path, "bm25")
 
     # Projects
     # Root directory for all named projects. Defaults to ~/.axon/projects.
@@ -205,10 +227,10 @@ llm:
 
 vector_store:
   provider: chroma
-  path: ./chroma_data
+  path: ~/.axon/data/chroma
 
 bm25:
-  path: ./bm25_index
+  path: ~/.axon/data/bm25
 
 rag:
   top_k: 10
@@ -424,7 +446,8 @@ class OpenEmbedding:
     def __init__(self, config: AxonConfig):
         self.config = config
         self.provider = config.embedding_provider
-        self.model = None
+        self.model: Any = None
+        self.dimension: int = 0
         self._load_model()
 
     def _load_model(self):
@@ -823,8 +846,8 @@ class OpenVectorStore:
     def __init__(self, config: AxonConfig):
         self.config = config
         self.provider = config.vector_store
-        self.client = None
-        self.collection = None
+        self.client: Any = None
+        self.collection: Any = None
         self._init_store()
 
     def _init_store(self):
@@ -832,10 +855,27 @@ class OpenVectorStore:
             import chromadb
 
             logger.info(f"Initializing ChromaDB: {self.config.vector_store_path}")
-            self.client = chromadb.PersistentClient(path=self.config.vector_store_path)
-            self.collection = self.client.get_or_create_collection(
-                name="axon", metadata={"hnsw:space": "cosine"}
-            )
+            try:
+                self.client = chromadb.PersistentClient(path=self.config.vector_store_path)
+                self.collection = self.client.get_or_create_collection(
+                    name="axon", metadata={"hnsw:space": "cosine"}
+                )
+            except Exception as e:
+                # Catch the specific WSL/SQLite readonly error (code 8)
+                if "(code: 8)" in str(e) and "readonly database" in str(e).lower():
+                    msg = (
+                        f"\n\n[bold red]ERROR:[/bold red] ChromaDB failed to initialize at: {self.config.vector_store_path}\n"
+                        "This typically happens in WSL when using a Windows-mounted drive (/mnt/c/...). \n"
+                        "SQLite does not support locking on these mounts.\n\n"
+                        "FIX: Store your data in the Linux filesystem instead:\n"
+                        "  1. Set environment variable: [bold]CHROMA_DATA_PATH=~/axon_data[/bold]\n"
+                        "  2. Or edit config.yaml to use a path like: [bold]~/axon_data[/bold]\n"
+                    )
+                    from rich.console import Console
+
+                    Console().print(msg)
+                    sys.exit(1)
+                raise e
         elif self.provider == "qdrant":
             from qdrant_client import QdrantClient
 
@@ -4601,7 +4641,7 @@ def _interactive_repl(
                                 elif prov == "gemini":
                                     brain.config.gemini_api_key = new_key
                                 elif prov == "openai":
-                                    brain.config.openai_api_key = new_key
+                                    brain.config.api_key = new_key
                                 elif prov == "ollama_cloud":
                                     brain.config.ollama_cloud_key = new_key
                                 print(f"  {env_name} saved to {_env_file} and applied.")

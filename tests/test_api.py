@@ -7,11 +7,10 @@ Unit tests for the FastAPI endpoints in axon.api.
 import os
 from unittest.mock import MagicMock, patch
 
-import pytest
-from fastapi.testclient import TestClient
-
 import axon.api as api_module
+import pytest
 from axon.api import app
+from fastapi.testclient import TestClient
 
 client = TestClient(app, raise_server_exceptions=False)
 

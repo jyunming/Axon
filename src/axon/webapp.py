@@ -11,7 +11,7 @@ import streamlit as st
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from axon.main import AxonBrain
+from axon.main import AxonBrain  # noqa: E402
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)

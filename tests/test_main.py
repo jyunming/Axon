@@ -1909,7 +1909,6 @@ class TestExpandAtFiles:
     def test_docx_extension_routes_to_loader(self, tmp_path):
         """Verify .docx files are routed through _read_via_loader (not plain text)."""
         import pytest
-
         from axon.main import _expand_at_files
 
         try:
@@ -1928,7 +1927,6 @@ class TestExpandAtFiles:
     def test_pdf_extension_routes_to_loader(self, tmp_path):
         """Verify .pdf files are routed through _read_via_loader (not plain text)."""
         import pytest
-
         from axon.main import _AT_LOADER_EXTS, _expand_at_files
 
         # Confirm .pdf is registered as a loader extension
