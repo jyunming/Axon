@@ -60,7 +60,8 @@ brain: OpenStudioBrain | None = None
 async def startup_event():
     global brain
     try:
-        config = OpenStudioConfig.load()
+        config_path = os.getenv("AXON_CONFIG_PATH")
+        config = OpenStudioConfig.load(config_path)
         brain = OpenStudioBrain(config)
         logger.info("Axon initialized successfully")
     except Exception as e:

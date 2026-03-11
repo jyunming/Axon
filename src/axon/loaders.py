@@ -389,7 +389,9 @@ class DirectoryLoader:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         all_documents = []
         for res in results:
-            if isinstance(res, Exception):
+            if isinstance(res, BaseException):
+                if isinstance(res, asyncio.CancelledError):
+                    raise res
                 logger.warning("async file load failed: %s", res)
                 continue
             all_documents.extend(res)

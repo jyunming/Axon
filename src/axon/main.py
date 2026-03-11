@@ -41,10 +41,6 @@ logger = logging.getLogger("Axon")
 # XDG-style user config dir — consistent across Linux / macOS / Windows
 _USER_CONFIG_PATH = Path.home() / ".config" / "axon" / "config.yaml"
 
-# Emoji rendering: disabled on Linux/CI where glyphs are often unsupported.
-# Override by setting AXON_EMOJI=1 in your environment.
-_USE_EMOJI: bool = os.environ.get("AXON_EMOJI", "1" if sys.platform == "win32" else "0") == "1"
-
 
 @dataclass
 class OpenStudioConfig:
@@ -224,15 +220,22 @@ offline:
 
         if not os.path.exists(path):
             if using_default:
-                cfg_path = Path(path)
-                cfg_path.parent.mkdir(parents=True, exist_ok=True)
-                cfg_path.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
-                logger.info("Created default config at %s — edit it to customise Axon.", path)
+                try:
+                    cfg_path = Path(path)
+                    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                    cfg_path.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
+                    logger.info("Created default config at %s — edit it to customise Axon.", path)
+                except (OSError, PermissionError) as exc:
+                    logger.warning(
+                        "Could not create default config at %s (%s). Using in-memory defaults.",
+                        path,
+                        exc,
+                    )
             else:
                 logger.warning("Config file %s not found. Using defaults.", path)
             return cls()
 
-        with open(path) as f:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
         # Flatten the YAML structure to match dataclass fields
@@ -242,14 +245,11 @@ offline:
         if "llm" in data:
             config_dict.update({f"llm_{k}": v for k, v in data["llm"].items()})
         if "vector_store" in data:
-            config_dict.update(
-                {
-                    f"vector_store_{k}" if k == "provider" else k: v
-                    for k, v in data["vector_store"].items()
-                }
-            )
-            if "path" in data["vector_store"]:
-                config_dict["vector_store_path"] = data["vector_store"]["path"]
+            vs = data["vector_store"]
+            if "provider" in vs:
+                config_dict["vector_store"] = vs["provider"]
+            if "path" in vs:
+                config_dict["vector_store_path"] = vs["path"]
         if "bm25" in data:
             if "path" in data["bm25"]:
                 config_dict["bm25_path"] = data["bm25"]["path"]
@@ -2443,6 +2443,7 @@ def main():
     _INIT_LOGGER_NAMES = [
         "Axon",
         "Axon.Retrievers",
+        "StudioBrainOpen.Retrievers",
         "sentence_transformers.SentenceTransformer",
         "sentence_transformers",
         "chromadb",
@@ -4480,8 +4481,9 @@ def _interactive_repl(
                 # save/restore so the terminal scrollback is never corrupted.
                 try:
                     _console.print("[bold yellow]Brain:[/bold yellow]")
+                    _accumulated = "".join(response_parts)
                     with _RL(
-                        _RT("".join(response_parts) + " ▋"),
+                        _RT(_accumulated + " ▋"),
                         console=_console,
                         transient=False,
                         refresh_per_second=15,
@@ -4491,16 +4493,16 @@ def _interactive_repl(
                                 if chunk.get("type") == "sources":
                                     _last_sources = chunk.get("sources", [])
                                 continue
+                            _accumulated += chunk
                             response_parts.append(chunk)
-                            live.update(_RT("".join(response_parts) + " ▋"))
+                            live.update(_RT(_accumulated + " ▋"))
                         # All tokens received — swap plain text for Markdown
-                        accumulated = "".join(response_parts)
-                        live.update(_RM(accumulated))
+                        live.update(_RM(_accumulated))
                     print()
                 except KeyboardInterrupt:
                     _cancelled = True
-                    if response_parts:
-                        _console.print(_RM("".join(response_parts)))
+                    if _accumulated:
+                        _console.print(_RM(_accumulated))
                     print("\n  !  Cancelled.\n")
             else:
                 # Non-streaming: spinner while brain.query() blocks
