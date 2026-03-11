@@ -300,8 +300,8 @@ async def switch_project(request: ProjectSwitchRequest):
 
 def main():
     """Main entry point for axon-api command."""
-    host = os.getenv("RAG_BRAIN_HOST", "0.0.0.0")
-    port = int(os.getenv("RAG_BRAIN_PORT", "8000"))
+    host = os.getenv("AXON_HOST", "0.0.0.0")
+    port = int(os.getenv("AXON_PORT", "8000"))
     uvicorn.run(app, host=host, port=port)
 
 if __name__ == "__main__":

@@ -27,4 +27,4 @@ RUN useradd -m appuser && chown -R appuser /app
 USER appuser
 
 # Default command launches the API
-CMD ["rag-brain-api"]
+CMD ["axon-api"]

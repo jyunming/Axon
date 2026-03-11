@@ -1,7 +1,7 @@
 .PHONY: help install install-dev test lint format type-check clean run-api run-ui docker-build docker-run
 
 help:  ## Show this help message
-	@echo "Local RAG Brain - Development Commands"
+	@echo "Axon - Development Commands"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
@@ -16,7 +16,7 @@ test:  ## Run tests
 	pytest tests/ -v
 
 test-cov:  ## Run tests with coverage
-	pytest tests/ -v --cov=rag_brain --cov-report=term-missing --cov-report=html
+	pytest tests/ -v --cov=axon --cov-report=term-missing --cov-report=html
 
 lint:  ## Run linting checks
 	ruff check src/ tests/
@@ -27,7 +27,7 @@ format:  ## Format code with black and ruff
 	ruff check --fix src/ tests/
 
 type-check:  ## Run type checking
-	mypy src/rag_brain/ --ignore-missing-imports
+	mypy src/axon/ --ignore-missing-imports
 
 clean:  ## Clean build artifacts and caches
 	rm -rf build/
@@ -42,20 +42,20 @@ clean:  ## Clean build artifacts and caches
 	find . -type f -name "*.pyc" -delete
 
 run-cli:  ## Run the interactive REPL CLI (local, no Docker needed)
-	rag-brain
+	axon
 
 run-api:  ## Run the FastAPI server
-	rag-brain-api
+	axon-api
 
 run-ui:  ## Run the Streamlit UI
-	rag-brain-ui
+	axon-ui
 
 run-all:  ## Run API + UI together (local, no Docker)
 	@echo "Starting API on :8000 and UI on :8501 ..."
-	rag-brain-api & rag-brain-ui
+	axon-api & axon-ui
 
 docker-build:  ## Build Docker image
-	docker build -t local-rag-brain:latest .
+	docker build -t axon:latest .
 
 docker-run:  ## Run Docker containers with docker-compose
 	docker-compose up -d

@@ -170,8 +170,8 @@ nano .env
 ```bash
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=gemma
-RAG_BRAIN_HOST=127.0.0.1
-RAG_BRAIN_PORT=8000
+AXON_HOST=127.0.0.1
+AXON_PORT=8000
 LOG_LEVEL=INFO
 ```
 
@@ -306,7 +306,7 @@ lsof -i :8000  # Mac/Linux
 netstat -ano | findstr :8000  # Windows
 
 # Change port
-export RAG_BRAIN_PORT=8001
+export AXON_PORT=8001
 axon-api
 ```
 

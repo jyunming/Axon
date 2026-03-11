@@ -521,9 +521,9 @@ OLLAMA_MODEL=llama3.1
 OLLAMA_EMBED_MODEL=nomic-embed-text
 
 # API server settings
-# Bind to localhost by default for local setups. For Docker/Compose deployments, set RAG_BRAIN_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
-RAG_BRAIN_HOST=127.0.0.1
-RAG_BRAIN_PORT=8000
+# Bind to localhost by default for local setups. For Docker/Compose deployments, set AXON_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
+AXON_HOST=127.0.0.1
+AXON_PORT=8000
 
 # Where ChromaDB stores its data
 CHROMA_DATA_PATH=./chroma_data
@@ -660,7 +660,7 @@ lsof -i :8000       # Linux / macOS
 netstat -ano | findstr :8000  # Windows
 
 # Change the port in .env
-RAG_BRAIN_PORT=8001
+AXON_PORT=8001
 ```
 
 ---
