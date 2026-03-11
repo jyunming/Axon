@@ -74,8 +74,9 @@ class TestOpenStudioConfig:
         assert config.projects_root == env_root
 
     def test_projects_root_defaults_to_home(self):
-        from axon.main import OpenStudioConfig
         from pathlib import Path
+
+        from axon.main import OpenStudioConfig
 
         config = OpenStudioConfig()
         expected = str(Path.home() / ".axon" / "projects")
