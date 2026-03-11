@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from axon.loaders import (
     BMPLoader,
     CSVLoader,
@@ -20,6 +22,7 @@ from axon.loaders import (
     JSONLoader,
     TextLoader,
     TSVLoader,
+    URLLoader,
 )
 
 # ---------------------------------------------------------------------------
@@ -511,3 +514,144 @@ class TestDirectoryLoaderAload:
         texts = {d["text"] for d in docs}
         assert "file A content" in texts
         assert "file B content" in texts
+
+
+# ---------------------------------------------------------------------------
+# URLLoader  (P1-B)
+# ---------------------------------------------------------------------------
+
+
+class TestURLLoader:
+    """Tests for URLLoader. All network calls are mocked — no real HTTP."""
+
+    def _make_response(
+        self,
+        text="<html><body>Hello world</body></html>",
+        status=200,
+        content_type="text/html; charset=utf-8",
+    ):
+        """Build a minimal mock httpx.Response."""
+        resp = MagicMock()
+        resp.status_code = status
+        resp.headers = {"content-type": content_type}
+        resp.text = text
+        return resp
+
+    # --- Scheme / SSRF mitigations (no network needed) ---
+
+    def test_blocks_file_scheme(self):
+        """file:// URLs are rejected before any network call."""
+        loader = URLLoader()
+        with pytest.raises(ValueError, match="Scheme 'file'"):
+            loader.load("file:///etc/passwd")
+
+    def test_blocks_ftp_scheme(self):
+        loader = URLLoader()
+        with pytest.raises(ValueError, match="Scheme 'ftp'"):
+            loader.load("ftp://example.com/file.txt")
+
+    def test_blocks_localhost_loopback(self):
+        """127.x addresses are rejected via DNS resolution check."""
+        loader = URLLoader()
+        # Patch socket.getaddrinfo so we don't do real DNS
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai:
+            mock_gai.return_value = [(None, None, None, None, ("127.0.0.1", 0))]
+            with pytest.raises(ValueError, match="blocked private"):
+                loader.load("http://localhost")
+
+    def test_blocks_cloud_metadata_ip(self):
+        """169.254.169.254 (cloud IMDS) is rejected."""
+        loader = URLLoader()
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai:
+            mock_gai.return_value = [(None, None, None, None, ("169.254.169.254", 0))]
+            with pytest.raises(ValueError, match="blocked private"):
+                loader.load("http://metadata.internal")
+
+    def test_blocks_rfc1918_private_10(self):
+        """10.x private range is rejected."""
+        loader = URLLoader()
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai:
+            mock_gai.return_value = [(None, None, None, None, ("10.0.0.1", 0))]
+            with pytest.raises(ValueError, match="blocked private"):
+                loader.load("http://internal.corp")
+
+    # --- Successful fetch ---
+
+    def test_success_html_strips_tags(self):
+        """HTML content is fetched and tags are stripped; doc schema is valid."""
+        loader = URLLoader()
+
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai, patch(
+            "axon.loaders.URLLoader._check_ssrf"
+        ), patch("httpx.get") as mock_get:
+            mock_gai.return_value = [(None, None, None, None, ("93.184.216.34", 0))]
+            mock_get.return_value = self._make_response(
+                text="<html><head><title>T</title></head><body><p>Hello world</p></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            docs = loader.load("https://example.com")
+
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert "Hello world" in docs[0]["text"]
+        assert "<" not in docs[0]["text"], "HTML tags should be stripped"
+        assert docs[0]["metadata"]["source"] == "https://example.com"
+        assert docs[0]["metadata"]["type"] == "url"
+
+    def test_success_plain_text_not_stripped(self):
+        """Plain text responses are returned as-is without HTML stripping."""
+        loader = URLLoader()
+
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.get") as mock_get:
+            mock_get.return_value = self._make_response(
+                text="raw text content",
+                content_type="text/plain",
+            )
+            docs = loader.load("https://example.com/readme.txt")
+
+        assert docs[0]["text"] == "raw text content"
+
+    # --- Error conditions ---
+
+    def test_non_200_raises_value_error(self):
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.get") as mock_get:
+            mock_get.return_value = self._make_response(status=404)
+            with pytest.raises(ValueError, match="HTTP 404"):
+                loader.load("https://example.com/missing")
+
+    def test_binary_content_type_raises_value_error(self):
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.get") as mock_get:
+            mock_get.return_value = self._make_response(content_type="application/pdf")
+            with pytest.raises(ValueError, match="Non-text content type"):
+                loader.load("https://example.com/file.pdf")
+
+    def test_timeout_raises_value_error(self):
+        import httpx
+
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch(
+            "httpx.get", side_effect=httpx.TimeoutException("timeout", request=None)
+        ):
+            with pytest.raises(ValueError, match="timed out"):
+                loader.load("https://slow.example.com")
+
+    def test_too_many_redirects_raises_value_error(self):
+        import httpx
+
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch(
+            "httpx.get", side_effect=httpx.TooManyRedirects("redirects", request=None)
+        ):
+            with pytest.raises(ValueError, match="redirects"):
+                loader.load("https://redirect.example.com")
+
+    def test_dns_failure_raises_value_error(self):
+        """Unresolvable hostname raises ValueError before any HTTP call."""
+        import socket
+
+        loader = URLLoader()
+        with patch("axon.loaders.socket.getaddrinfo", side_effect=socket.gaierror("NXDOMAIN")):
+            with pytest.raises(ValueError, match="Could not resolve"):
+                loader.load("https://nonexistent.example.invalid")

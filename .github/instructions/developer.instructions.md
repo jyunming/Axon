@@ -45,6 +45,32 @@ In `OpenLLM` (`src/axon/main.py`), add branches to `complete()` and `stream()`.
 ### API endpoints
 FastAPI endpoints live in `src/axon/api.py`. The global `brain` object is initialized at startup via `@app.on_event("startup")`. Background tasks use FastAPI's `BackgroundTasks`. Agent-facing endpoints should also be reflected in `src/axon/tools.py`.
 
+### Adding a new MCP tool
+
+MCP tools live in `src/axon/mcp_server.py`. They are **distinct** from the
+OpenAI-format schemas in `tools.py` — MCP tool names use concise snake_case
+optimised for agent-mode ergonomics (e.g. `search_knowledge`, not
+`search_documents`). Do not rename or alter `tools.py` when adding an MCP tool.
+
+Steps:
+1. Add the tool definition to the `@mcp.tool()` decorated section of
+   `mcp_server.py`. Follow the existing pattern: async function, docstring as
+   the tool description, typed parameters.
+2. Inside the handler, call the REST API via `httpx.AsyncClient`. Always
+   include the `X-API-Key` header (read from the `RAG_API_KEY` env var):
+   ```python
+   async with httpx.AsyncClient() as client:
+       resp = await client.post(
+           f"{API_BASE}/your_endpoint",
+           json={...},
+           headers={"X-API-Key": API_KEY} if API_KEY else {},
+       )
+   ```
+3. Return structured data from the handler — the MCP SDK serialises it for
+   the agent.
+4. Run `python -m axon.mcp_server` and send a `tools/list` JSON-RPC request
+   to verify the new tool appears before opening a PR.
+
 ## Style
 
 - Use Python type hints on all function signatures.

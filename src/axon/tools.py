@@ -127,6 +127,62 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_texts",
+                "description": "Add multiple text documents to the knowledge base in a single batched embedding call. Prefer this over calling add_knowledge repeatedly.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "docs": {
+                            "type": "array",
+                            "description": "List of documents to ingest.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "The text content to ingest.",
+                                    },
+                                    "doc_id": {
+                                        "type": "string",
+                                        "description": "Optional stable ID. A UUID is assigned if omitted.",
+                                    },
+                                    "metadata": {
+                                        "type": "object",
+                                        "description": "Optional metadata dict (e.g. {'source': 'https://...', 'topic': 'react'}).",
+                                    },
+                                },
+                                "required": ["text"],
+                            },
+                        }
+                    },
+                    "required": ["docs"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ingest_url",
+                "description": "Fetch an HTTP/HTTPS URL and ingest its text content into the knowledge base. HTML is stripped automatically. Private/internal URLs are blocked.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The HTTP or HTTPS URL to fetch and ingest.",
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Optional extra metadata merged with the page's source metadata.",
+                        },
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
     ]
 
 

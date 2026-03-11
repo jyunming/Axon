@@ -14,6 +14,8 @@ EXPECTED_TOOL_NAMES = {
     "ingest_directory",
     "stream_query",
     "list_knowledge_base",
+    "add_texts",
+    "ingest_url",
 }
 
 

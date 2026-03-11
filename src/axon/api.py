@@ -1,6 +1,9 @@
+import hashlib
 import logging
 import os
 import pathlib
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import uvicorn
@@ -54,6 +57,44 @@ async def api_key_middleware(request: Request, call_next):
 
 # Global Brain Instance
 brain: AxonBrain | None = None
+
+# ---------------------------------------------------------------------------
+# Source-level dedup store
+# Keyed by project name → content_hash → {doc_id, last_ingested_at}.
+# NOTE: v1 uses "_global" as the project key for all endpoints.
+#       P1-D (per-call project targeting) will parameterise this properly.
+# This dict is in-memory only; it is lost on server restart.
+# ---------------------------------------------------------------------------
+_source_hashes: dict[str, dict[str, dict]] = {}
+
+
+def _compute_content_hash(text: str) -> str:
+    """Return a SHA-256 hex digest of the normalised text content."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+def _check_and_record_dedup(text: str, doc_id: str, project: str = "_global") -> dict | None:
+    """Check whether *text* was already ingested in *project*.
+
+    Returns a ``{status, reason, doc_id}`` dict if the content is a duplicate
+    (caller should short-circuit and return that response without ingesting).
+    Returns ``None`` if the content is new — the hash is recorded so future
+    calls for the same content are detected.
+    """
+    content_hash = _compute_content_hash(text)
+    bucket = _source_hashes.setdefault(project, {})
+    if content_hash in bucket:
+        existing = bucket[content_hash]
+        return {
+            "status": "skipped",
+            "reason": "already_ingested",
+            "doc_id": existing["doc_id"],
+        }
+    bucket[content_hash] = {
+        "doc_id": doc_id,
+        "last_ingested_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return None
 
 
 @app.on_event("startup")
@@ -109,6 +150,30 @@ class TextIngestRequest(BaseModel):
         default_factory=dict, description="Metadata for the document"
     )
     doc_id: str | None = Field(None, description="Optional unique ID for the document")
+
+
+class BatchDocItem(BaseModel):
+    """A single item within a batch ingest request."""
+
+    text: str = Field(..., description="The content to ingest")
+    doc_id: str | None = Field(
+        None, description="Optional unique ID; a UUID4 prefix is assigned if omitted"
+    )
+    metadata: dict[str, Any] | None = Field(default_factory=dict, description="Optional metadata")
+
+
+class BatchTextIngestRequest(BaseModel):
+    docs: list[BatchDocItem] = Field(
+        ..., description="List of documents to ingest in one batch (one embedding call)"
+    )
+
+
+class URLIngestRequest(BaseModel):
+    url: str = Field(..., description="HTTP or HTTPS URL to fetch and ingest")
+    metadata: dict[str, Any] | None = Field(
+        default_factory=dict,
+        description="Optional extra metadata merged with the loader's source metadata",
+    )
 
 
 class DeleteRequest(BaseModel):
@@ -267,9 +332,11 @@ async def add_text(request: TextIngestRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
-    import uuid
-
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
+
+    skip = _check_and_record_dedup(request.text, doc_id)
+    if skip:
+        return {**skip, "doc_id": skip["doc_id"]}
 
     doc = {
         "id": doc_id,
@@ -285,9 +352,89 @@ async def add_text(request: TextIngestRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/add_texts")
+async def add_texts(request: BatchTextIngestRequest):
+    """Ingest a list of documents in a single embedding batch.
+
+    Each item is checked for duplicate content before ingestion. Duplicate
+    items receive ``status: skipped`` in the response without calling the
+    embedding model. All non-duplicate items are ingested in one
+    ``brain.ingest()`` call (one batched embedding round-trip).
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    results: list[dict] = []
+    docs_to_ingest: list[dict] = []
+
+    for item in request.docs:
+        doc_id = item.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
+        skip = _check_and_record_dedup(item.text, doc_id)
+        if skip:
+            results.append({"id": skip["doc_id"], "status": "skipped", "error": None})
+            continue
+        doc = {
+            "id": doc_id,
+            "text": item.text,
+            "metadata": item.metadata or {"source": "api_agent", "type": "agent_input"},
+        }
+        docs_to_ingest.append(doc)
+        results.append({"id": doc_id, "status": "created", "error": None})
+
+    if docs_to_ingest:
+        try:
+            brain.ingest(docs_to_ingest)
+        except Exception as e:
+            logger.error(f"Error batch-ingesting texts: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return results
+
+
+@app.post("/ingest_url")
+async def ingest_url(request: URLIngestRequest):
+    """Fetch an HTTP/HTTPS URL and ingest its text content.
+
+    The URL is validated for scheme and SSRF-safe IP ranges before any network
+    request is made. Binary or non-text responses are rejected. Duplicate
+    content (same SHA-256 as a previously ingested document) is skipped.
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    from axon.loaders import URLLoader
+
+    loader = URLLoader()
+    try:
+        docs = loader.load(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Unexpected error fetching URL '{request.url}': {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if not docs:
+        raise HTTPException(status_code=422, detail="No content could be extracted from the URL.")
+
+    doc = docs[0]
+    if request.metadata:
+        doc["metadata"].update(request.metadata)
+
+    skip = _check_and_record_dedup(doc["text"], doc["id"])
+    if skip:
+        return {**skip, "id": skip["doc_id"], "url": request.url}
+
+    try:
+        brain.ingest([doc])
+    except Exception as exc:
+        logger.error(f"Error ingesting URL content: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"status": "ingested", "doc_id": doc["id"], "url": request.url}
+
+
 @app.get("/collection")
 async def get_collection():
-    """List all unique sources in the knowledge base with chunk counts."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:

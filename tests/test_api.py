@@ -55,11 +55,13 @@ def test_health_returns_200():
 
 @pytest.fixture(autouse=True)
 def reset_brain():
-    """Ensure brain is reset to None before/after every test."""
+    """Ensure brain and source-dedup state are reset before/after every test."""
     original = api_module.brain
     api_module.brain = None
+    api_module._source_hashes.clear()
     yield
     api_module.brain = original
+    api_module._source_hashes.clear()
 
 
 def test_query_503_no_brain():
@@ -453,3 +455,228 @@ def test_concurrent_requests_no_cross_contamination():
     assert results["b"].status_code == 200
     # The global config must remain unchanged after both requests
     assert api_module.brain.config.top_k == 5
+
+
+# ---------------------------------------------------------------------------
+# /add_texts  (P1-A)
+# ---------------------------------------------------------------------------
+
+
+def test_add_texts_503_no_brain():
+    resp = client.post("/add_texts", json={"docs": [{"text": "hello"}]})
+    assert resp.status_code == 503
+
+
+def test_add_texts_batch_returns_unique_ids():
+    """Three documents submitted together should return three distinct IDs."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    payload = {
+        "docs": [
+            {"text": "document alpha", "metadata": {"source": "test"}},
+            {"text": "document beta", "metadata": {"source": "test"}},
+            {"text": "document gamma", "metadata": {"source": "test"}},
+        ]
+    }
+    resp = client.post("/add_texts", json=payload)
+    assert resp.status_code == 200
+
+    results = resp.json()
+    assert len(results) == 3
+    ids = [r["id"] for r in results]
+    assert len(set(ids)) == 3, "All returned IDs must be unique"
+    for r in results:
+        assert r["status"] == "created"
+
+
+def test_add_texts_batch_calls_ingest_once():
+    """brain.ingest is called exactly once regardless of batch size."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    payload = {"docs": [{"text": "doc one"}, {"text": "doc two"}]}
+    resp = client.post("/add_texts", json=payload)
+    assert resp.status_code == 200
+    assert api_module.brain.ingest.call_count == 1
+    ingested_docs = api_module.brain.ingest.call_args[0][0]
+    assert len(ingested_docs) == 2
+
+
+def test_add_texts_explicit_doc_id_preserved():
+    """Explicitly supplied doc_id is used and returned."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    payload = {"docs": [{"text": "explicit id doc", "doc_id": "my-stable-id"}]}
+    resp = client.post("/add_texts", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()[0]["id"] == "my-stable-id"
+
+
+# ---------------------------------------------------------------------------
+# /ingest_url  (P1-B)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_url_503_no_brain():
+    resp = client.post("/ingest_url", json={"url": "https://example.com"})
+    assert resp.status_code == 503
+
+
+def test_ingest_url_success():
+    """A valid URL that URLLoader accepts returns status=ingested and a doc_id."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    fake_doc = {
+        "id": "abc123",
+        "text": "Example page content",
+        "metadata": {"source": "https://example.com", "type": "url"},
+    }
+
+    with patch("axon.loaders.URLLoader") as mock_cls:
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+        mock_instance.load.return_value = [fake_doc]
+
+        resp = client.post("/ingest_url", json={"url": "https://example.com"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ingested"
+    assert data["doc_id"] == "abc123"
+    assert data["url"] == "https://example.com"
+    api_module.brain.ingest.assert_called_once()
+
+
+def test_ingest_url_blocked_returns_400():
+    """URLLoader.load raising ValueError (e.g. blocked host) maps to HTTP 400."""
+    api_module.brain = _make_brain()
+
+    with patch("axon.loaders.URLLoader") as mock_cls:
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+        mock_instance.load.side_effect = ValueError("blocked private address")
+
+        resp = client.post("/ingest_url", json={"url": "http://127.0.0.1"})
+
+    assert resp.status_code == 400
+    assert "blocked" in resp.json()["detail"]
+
+
+def test_ingest_url_extra_metadata_merged():
+    """metadata supplied in the request is merged into the document metadata."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    fake_doc = {
+        "id": "xyz",
+        "text": "content",
+        "metadata": {"source": "https://example.com", "type": "url"},
+    }
+
+    with patch("axon.loaders.URLLoader") as mock_cls:
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+        mock_instance.load.return_value = [fake_doc]
+
+        resp = client.post(
+            "/ingest_url",
+            json={"url": "https://example.com", "metadata": {"topic": "testing"}},
+        )
+
+    assert resp.status_code == 200
+    ingested = api_module.brain.ingest.call_args[0][0][0]
+    assert ingested["metadata"]["topic"] == "testing"
+
+
+# ---------------------------------------------------------------------------
+# Source-level deduplication  (P1-E)
+# ---------------------------------------------------------------------------
+
+
+def test_add_text_dedup_skips_second_identical_call():
+    """Ingesting the same text twice returns 'skipped' on the second call."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    payload = {"text": "unique dedup test content", "doc_id": "dedup-id-1"}
+
+    resp1 = client.post("/add_text", json=payload)
+    assert resp1.status_code == 200
+    assert resp1.json()["status"] == "success"
+
+    resp2 = client.post("/add_text", json=payload)
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["status"] == "skipped"
+    assert data2["reason"] == "already_ingested"
+    assert data2["doc_id"] == "dedup-id-1"
+
+    # ingest should only have been called once (the second call was skipped)
+    assert api_module.brain.ingest.call_count == 1
+
+
+def test_add_texts_dedup_skips_duplicate_within_batch():
+    """Duplicate docs within the same batch are detected and skipped."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    # Send two docs where the second is a repeat of the first
+    payload = {
+        "docs": [
+            {"text": "repeated content", "doc_id": "first-id"},
+            {"text": "repeated content", "doc_id": "second-id"},  # duplicate
+        ]
+    }
+    resp = client.post("/add_texts", json=payload)
+    assert resp.status_code == 200
+    results = resp.json()
+    assert results[0]["status"] == "created"
+    assert results[1]["status"] == "skipped"
+
+    # Only 1 doc should have been passed to brain.ingest
+    ingested = api_module.brain.ingest.call_args[0][0]
+    assert len(ingested) == 1
+
+
+def test_add_text_dedup_different_content_not_skipped():
+    """Different content is never considered a duplicate."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    client.post("/add_text", json={"text": "first unique text"})
+    resp = client.post("/add_text", json={"text": "second unique text"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "success"
+    assert api_module.brain.ingest.call_count == 2
+
+
+def test_ingest_url_dedup_skips_second_identical_url():
+    """Fetching the same URL twice returns 'skipped' on the second request."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    fake_doc = {
+        "id": "url-doc-1",
+        "text": "same page content",
+        "metadata": {"source": "https://example.com", "type": "url"},
+    }
+
+    with patch("axon.loaders.URLLoader") as mock_cls:
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+        mock_instance.load.return_value = [fake_doc]
+
+        resp1 = client.post("/ingest_url", json={"url": "https://example.com"})
+        assert resp1.json()["status"] == "ingested"
+
+        # Second call with identical content
+        mock_instance.load.return_value = [dict(fake_doc, id="url-doc-2")]  # same text, new id
+        resp2 = client.post("/ingest_url", json={"url": "https://example.com"})
+
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["status"] == "skipped"
+    assert api_module.brain.ingest.call_count == 1
