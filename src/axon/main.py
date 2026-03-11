@@ -47,9 +47,9 @@ class OpenStudioConfig:
     """Configuration for Axon."""
 
     # Embedding
-    embedding_provider: Literal[
-        "sentence_transformers", "ollama", "fastembed", "openai"
-    ] = "sentence_transformers"
+    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = (
+        "sentence_transformers"
+    )
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
 
@@ -1045,6 +1045,93 @@ class OpenVectorStore:
             self.collection.delete(f"id IN ({id_str})")
 
 
+class MultiVectorStore:
+    """Read-only fan-out wrapper over multiple OpenVectorStore instances.
+
+    Used when a parent project is active: queries are dispatched to all
+    descendant stores and the top-k results (by score) are returned merged.
+    Writes are NOT supported — use the project's own OpenVectorStore for that.
+    """
+
+    def __init__(self, stores: list[OpenVectorStore]):
+        self._stores = stores
+        # Expose provider/collection from the first store so callers that
+        # inspect brain.vector_store.provider / .collection still work.
+        self.provider = stores[0].provider if stores else "chroma"
+        self.collection = stores[0].collection if stores else None
+
+    def search(
+        self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
+    ) -> list[dict]:
+        seen: dict[str, dict] = {}
+        for store in self._stores:
+            for doc in store.search(query_embedding, top_k=top_k, filter_dict=filter_dict):
+                doc_id = doc["id"]
+                if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                    seen[doc_id] = doc
+        return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
+
+    def add(self, *args, **kwargs):
+        raise RuntimeError(
+            "Cannot ingest into a merged parent project view. "
+            "Switch to a specific sub-project first."
+        )
+
+    def list_documents(self) -> list[dict]:
+        seen: dict[str, dict] = {}
+        for store in self._stores:
+            for doc in store.list_documents():
+                src = doc["source"]
+                if src not in seen:
+                    seen[src] = doc.copy()
+                else:
+                    seen[src]["chunks"] += doc["chunks"]
+                    seen[src]["doc_ids"].extend(doc["doc_ids"])
+        return sorted(seen.values(), key=lambda x: x["source"])
+
+    def get_by_ids(self, ids: list[str]) -> list[dict]:
+        seen: dict[str, dict] = {}
+        for store in self._stores:
+            for doc in store.get_by_ids(ids):
+                seen[doc["id"]] = doc
+        return list(seen.values())
+
+    def delete_documents(self, ids: list[str]) -> None:
+        raise RuntimeError(
+            "Cannot delete from a merged parent project view. "
+            "Switch to the specific sub-project first."
+        )
+
+
+class MultiBM25Retriever:
+    """Read-only fan-out wrapper over multiple BM25Retriever instances.
+
+    Merges BM25 results from all descendant stores and returns the top-k
+    by score. Writes are NOT supported.
+    """
+
+    def __init__(self, retrievers: list) -> None:
+        self._retrievers = retrievers
+
+    def search(self, query: str, top_k: int = 10) -> list[dict]:
+        seen: dict[str, dict] = {}
+        for r in self._retrievers:
+            for doc in r.search(query, top_k=top_k):
+                doc_id = doc["id"]
+                if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                    seen[doc_id] = doc
+        return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
+
+    def add_documents(self, *args, **kwargs):
+        raise RuntimeError(
+            "Cannot ingest into a merged parent project view. "
+            "Switch to a specific sub-project first."
+        )
+
+    # Alias used by ingest code
+    batch_add_documents = add_documents
+
+
 class OpenStudioBrain:
     """
     Main interface for Axon.
@@ -1148,6 +1235,12 @@ Your primary goal is to help the user by answering questions based on the provid
         except ImportError:
             self.bm25 = None
 
+        # Write-path stores: always point to the active project's own data dir.
+        # When a parent project is active, self.vector_store / self.bm25 become
+        # Multi* fan-out wrappers for reads, while _own_* handles writes.
+        self._own_vector_store: OpenVectorStore = self.vector_store
+        self._own_bm25 = self.bm25
+
         try:
             from axon.splitters import RecursiveCharacterTextSplitter
 
@@ -1179,13 +1272,20 @@ Your primary goal is to help the user by answering questions based on the provid
         Embedding and LLM are kept (expensive to reload). The "default" sentinel
         restores the paths from config.yaml.
 
+        When switching to a *parent* project (one that has sub-projects), the
+        read path (self.vector_store / self.bm25) becomes a Multi* fan-out over
+        the parent's own store plus all descendants. The write path
+        (self._own_vector_store / self._own_bm25) always points only to the
+        parent's own data directory.
+
         Args:
-            name: Project name or "default".
+            name: Project name (slash-separated for sub-projects) or "default".
 
         Raises:
             ValueError: If the project does not exist (use /project new first).
         """
         from axon.projects import (
+            list_descendants,
             project_bm25_path,
             project_dir,
             project_vector_path,
@@ -1204,14 +1304,50 @@ Your primary goal is to help the user by answering questions based on the provid
             self.config.vector_store_path = project_vector_path(name)
             self.config.bm25_path = project_bm25_path(name)
 
-        # Reinitialize stores with new paths
-        self.vector_store = OpenVectorStore(self.config)
+        # Own store: always the project's own data (used for writes / dedup / GraphRAG)
+        own_vs = OpenVectorStore(self.config)
         try:
             from axon.retrievers import BM25Retriever
 
-            self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
+            own_bm25 = BM25Retriever(storage_path=self.config.bm25_path)
         except ImportError:
-            self.bm25 = None
+            own_bm25 = None
+
+        self._own_vector_store = own_vs
+        self._own_bm25 = own_bm25
+
+        # If the project has sub-projects, build fan-out stores for reads
+        if name != "default":
+            descendants = list_descendants(name)
+        else:
+            descendants = []
+
+        if descendants:
+            from axon.retrievers import BM25Retriever as _BM25
+
+            child_configs = []
+            for desc in descendants:
+                import copy
+
+                child_cfg = copy.copy(self.config)
+                child_cfg.vector_store_path = project_vector_path(desc)
+                child_cfg.bm25_path = project_bm25_path(desc)
+                child_configs.append(child_cfg)
+
+            all_vs = [own_vs] + [OpenVectorStore(cfg) for cfg in child_configs]
+            all_bm25 = [own_bm25] if own_bm25 else []
+            for cfg in child_configs:
+                try:
+                    all_bm25.append(_BM25(storage_path=cfg.bm25_path))
+                except Exception:
+                    pass
+
+            self.vector_store = MultiVectorStore(all_vs)
+            self.bm25 = MultiBM25Retriever(all_bm25) if all_bm25 else None
+        else:
+            # Leaf project or default: read == write
+            self.vector_store = own_vs
+            self.bm25 = own_bm25
 
         # Reload project-scoped state so dedup/GraphRAG use the new project's data
         # and cached answers from the previous project cannot bleed across.
@@ -1563,8 +1699,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._save_entity_graph()
 
         n_chunks = len(documents)
-        if self.bm25:
-            self.bm25.add_documents(documents)
+        if self._own_bm25:
+            self._own_bm25.add_documents(documents)
 
         ids = [d["id"] for d in documents]
         texts = [d["text"] for d in documents]
@@ -1579,7 +1715,7 @@ Your primary goal is to help the user by answering questions based on the provid
         embed_ms = (time.time() - t_embed) * 1000
 
         t_store = time.time()
-        self.vector_store.add(ids, texts, all_embeddings, metadatas)
+        self._own_vector_store.add(ids, texts, all_embeddings, metadatas)
         store_ms = (time.time() - t_store) * 1000
 
         logger.info(
@@ -2470,7 +2606,14 @@ def main():
             _lg.propagate = _saved_propagate.get(_n, True)
 
     # --- Project CLI handling ---
-    from axon.projects import delete_project, ensure_project, list_projects, project_dir
+    from axon.projects import (
+        ProjectHasChildrenError,
+        delete_project,
+        ensure_project,
+        has_children,
+        list_projects,
+        project_dir,
+    )
 
     if args.project_list:
         projects = list_projects()
@@ -2479,11 +2622,19 @@ def main():
         else:
             print()
             active = brain._active_project
-            for p in projects:
-                marker = "●" if p["name"] == active else " "
-                ts = p["created_at"][:10] if p["created_at"] else ""
-                desc = f"  {p['description']}" if p.get("description") else ""
-                print(f"  {marker} {p['name']:<24} {ts}{desc}")
+
+            def _cli_print_tree(proj_list: list, indent: int = 0) -> None:
+                pad = "  " * indent
+                for p in proj_list:
+                    marker = "●" if p["name"] == active else " "
+                    ts = p["created_at"][:10] if p["created_at"] else ""
+                    desc = f"  {p['description']}" if p.get("description") else ""
+                    merged = "  [merged]" if has_children(p["name"]) else ""
+                    short = p["name"].split("/")[-1]
+                    print(f"  {pad}{marker} {short:<22} {ts}{merged}{desc}")
+                    _cli_print_tree(p.get("children", []), indent + 1)
+
+            _cli_print_tree(projects)
             print(f"\n  Active: {active}")
         return
 
@@ -2494,6 +2645,9 @@ def main():
                 brain.switch_project("default")
             delete_project(proj_name)
             print(f"  Deleted project '{proj_name}'.")
+        except ProjectHasChildrenError as e:
+            print(f"  {e}")
+            sys.exit(1)
         except ValueError as e:
             print(f"  {e}")
             sys.exit(1)
@@ -3687,7 +3841,10 @@ def _interactive_repl(
             except Exception:
                 doc_s = "?"
             proj = getattr(brain, "_active_project", "default")
-            proj_s = f"  │  {proj}" if proj != "default" else ""
+            _proj_display = proj.replace("/", " > ") if proj != "default" else ""
+            _merged = isinstance(brain.vector_store, MultiVectorStore)
+            _merged_tag = " [merged]" if _merged else ""
+            proj_s = f"  │  {_proj_display}{_merged_tag}" if proj != "default" else ""
             sep = "  │  "
             W1, W2 = 28, 30
             C1 = len("LLM  ") + W1  # 33
@@ -3758,7 +3915,10 @@ def _interactive_repl(
         h_val = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
         tk = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
         proj = getattr(brain, "_active_project", "default")
-        proj_s = f"  │  {proj}" if proj != "default" else ""
+        _proj_display = proj.replace("/", " > ") if proj != "default" else ""
+        _merged = isinstance(brain.vector_store, MultiVectorStore)
+        _merged_tag = " [merged]" if _merged else ""
+        proj_s = f"  │  {_proj_display}{_merged_tag}" if proj != "default" else ""
         sep = "  │  "
         W1, W2 = 28, 30
         C1 = len("LLM  ") + W1  # 33
@@ -3863,18 +4023,21 @@ def _interactive_repl(
                         "  /keys set <provider>         interactively set an API key\n"
                         "  providers: gemini, openai, brave, ollama_cloud\n"
                         "  Keys are saved to ~/.axon/.env and loaded at startup.",
-                        "project": "  /project                     show active project + list all\n"
-                        "  /project list                 list all projects\n"
-                        "  /project new <name>           create a new project and switch to it\n"
-                        "  /project new <name> <desc>    create with description\n"
-                        "  /project switch <name>        switch to an existing project\n"
-                        "  /project switch default       return to the global knowledge base\n"
-                        "  /project delete <name>        delete a project and all its data\n"
-                        "  /project folder               open the active project folder\n"
+                        "project": "  /project                          show active project + list all\n"
+                        "  /project list                      list all projects (tree view)\n"
+                        "  /project new <name>                create a new project and switch to it\n"
+                        "  /project new <name> <desc>         create with description\n"
+                        "  /project new <parent>/<child>      create a sub-project (up to 3 levels)\n"
+                        "  /project switch <name>             switch to an existing project\n"
+                        "  /project switch <parent>/<child>   switch to a sub-project\n"
+                        "  /project switch default            return to the global knowledge base\n"
+                        "  /project delete <name>             delete a leaf project and its data\n"
+                        "  /project folder                    open the active project folder\n"
                         "\n"
                         "  Projects are stored in ~/.axon/projects/<name>/\n"
-                        "  Each project has its own vector store and BM25 index.\n"
-                        "  Use /ingest after switching to add documents to a project.",
+                        "  Sub-projects use nested subs/ directories (max depth: 3).\n"
+                        "  Switching to a parent project shows merged data across all sub-projects.\n"
+                        "  Use /ingest after switching to add documents to the current project.",
                     }
                     key = arg.lstrip("/")
                     if key in _detail:
@@ -4202,8 +4365,10 @@ def _interactive_repl(
 
             elif cmd == "/project":
                 from axon.projects import (
+                    ProjectHasChildrenError,
                     delete_project,
                     ensure_project,
+                    has_children,
                     list_projects,
                     project_dir,
                 )
@@ -4215,23 +4380,33 @@ def _interactive_repl(
                 if not sub or sub == "list":
                     projects = list_projects()
                     active = brain._active_project
+
+                    def _print_project_tree(proj_list: list, indent: int = 0) -> None:
+                        pad = "  " * indent
+                        for p in proj_list:
+                            marker = "●" if p["name"] == active else " "
+                            ts = p["created_at"][:10] if p["created_at"] else ""
+                            desc = f"  {p['description']}" if p["description"] else ""
+                            merged = "  [merged]" if has_children(p["name"]) else ""
+                            short = p["name"].split("/")[-1]
+                            print(f"  {pad}{marker} {short:<22} {ts}{merged}{desc}")
+                            _print_project_tree(p.get("children", []), indent + 1)
+
                     if not projects:
                         print("  No projects yet. Use /project new <name> to create one.")
                     else:
                         print()
-                        for p in projects:
-                            marker = "●" if p["name"] == active else " "
-                            ts = p["created_at"][:10] if p["created_at"] else ""
-                            desc = f"  {p['description']}" if p["description"] else ""
-                            print(f"  {marker} {p['name']:<24} {ts}{desc}")
+                        _print_project_tree(projects)
                     print(f"\n  Active: {active}")
-                    print("  /project new <name>    create + switch")
-                    print("  /project switch <name> switch to existing")
-                    print("  /project folder        open active project folder\n")
+                    print("  /project new <name>           create + switch")
+                    print("  /project new <parent>/<name>  create sub-project")
+                    print("  /project switch <name>        switch to existing")
+                    print("  /project folder               open active project folder\n")
 
                 elif sub == "new":
                     if not sub_arg:
                         print("  Usage: /project new <name>  [description]")
+                        print("         /project new research/papers  (sub-project)")
                     else:
                         name_parts = sub_arg.split(maxsplit=1)
                         proj_name = name_parts[0].lower()
@@ -4253,12 +4428,18 @@ def _interactive_repl(
                         if proj_name == "default" or project_dir(proj_name).exists():
                             try:
                                 brain.switch_project(proj_name)
-                                count = (
-                                    brain.vector_store.collection.count()
-                                    if brain.vector_store.provider == "chroma"
-                                    else "?"
-                                )
-                                print(f"  Switched to project '{proj_name}'  ({count} chunks)\n")
+                                is_merged = isinstance(brain.vector_store, MultiVectorStore)
+                                if is_merged:
+                                    print(
+                                        f"  Switched to project '{proj_name}'  [merged view]\n"
+                                    )
+                                elif brain.vector_store.provider == "chroma":
+                                    count = brain.vector_store.collection.count()
+                                    print(
+                                        f"  Switched to project '{proj_name}'  ({count} chunks)\n"
+                                    )
+                                else:
+                                    print(f"  Switched to project '{proj_name}'\n")
                             except Exception as e:
                                 print(f"  {e}")
                         else:
@@ -4288,6 +4469,8 @@ def _interactive_repl(
                                     print("  ↩️  Switched back to default project.")
                                 delete_project(proj_name)
                                 print(f"  Deleted project '{proj_name}'.\n")
+                            except ProjectHasChildrenError as e:
+                                print(f"  {e}")
                             except ValueError as e:
                                 print(f"  {e}")
                         else:
