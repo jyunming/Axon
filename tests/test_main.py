@@ -1,7 +1,6 @@
-import pytest
-import os
+from unittest.mock import MagicMock, patch
+
 import yaml
-from unittest.mock import patch, MagicMock
 
 
 class TestOpenStudioConfig:
@@ -388,10 +387,10 @@ class TestOpenLLM:
         from axon.main import OpenLLM, OpenStudioConfig
         config = OpenStudioConfig(llm_provider="ollama")
         llm = OpenLLM(config)
-        
+
         mock_client = MockOllama.return_value
         mock_client.chat.return_value = {"message": {"content": "resp"}}
-        
+
         llm.complete("q")
         call_kwargs = mock_client.chat.call_args[1]
         assert call_kwargs['options']['num_ctx'] == 8192
@@ -403,15 +402,15 @@ class TestOpenLLM:
         # Test Gemma
         config = OpenStudioConfig(llm_provider="gemini", llm_model="gemma-3-27b-it")
         llm = OpenLLM(config)
-        
+
         mock_model = MockGenerativeModel.return_value
         mock_model.generate_content.return_value = MagicMock(text="gemma answer")
-        
+
         llm.complete("hello", system_prompt="be helpful")
-        
+
         # Verify system_instruction was NOT passed to constructor
         MockGenerativeModel.assert_called_with(model_name="gemma-3-27b-it")
-        
+
         # Verify prompt was prepended
         gen_args = mock_model.generate_content.call_args[0][0]
         assert "be helpful\n\nhello" in gen_args[-1]['parts'][0]
@@ -423,7 +422,7 @@ class TestOpenLLM:
         # Test Pro (supports system instructions)
         config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-1.5-pro")
         llm = OpenLLM(config)
-        
+
         llm.complete("hello", system_prompt="be helpful")
         MockGenerativeModel.assert_called_with(model_name="gemini-1.5-pro", system_instruction="be helpful")
 
@@ -434,7 +433,7 @@ class TestOpenLLM:
         # Test Flash (also supports system instructions)
         config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-1.5-flash")
         llm = OpenLLM(config)
-        
+
         llm.complete("hello", system_prompt="be helpful")
         MockGenerativeModel.assert_called_with(model_name="gemini-1.5-flash", system_instruction="be helpful")
 
@@ -443,10 +442,10 @@ class TestOpenLLM:
         from axon.main import OpenLLM, OpenStudioConfig
         config = OpenStudioConfig(llm_provider="ollama_cloud", ollama_cloud_key="test_key", llm_model="gemma")
         llm = OpenLLM(config)
-        
+
         mock_client = MockHttpxClient.return_value.__enter__.return_value
         mock_client.post.return_value = MagicMock(json=lambda: {"response": "cloud resp"}, status_code=200)
-        
+
         result = llm.complete("hello", system_prompt="be helpful")
         assert result == "cloud resp"
         assert mock_client.post.called
@@ -569,6 +568,7 @@ class TestQueryTransformations:
     ):
         import asyncio
         from unittest.mock import AsyncMock, patch
+
         from axon.main import OpenStudioBrain, OpenStudioConfig
 
         config = OpenStudioConfig(hybrid_search=False, rerank=False)
@@ -590,6 +590,7 @@ class TestQueryTransformations:
     ):
         import asyncio
         from unittest.mock import AsyncMock, patch
+
         from axon.main import OpenStudioBrain, OpenStudioConfig
 
         config = OpenStudioConfig(hybrid_search=False, rerank=False)
@@ -776,8 +777,8 @@ class TestLogQueryMetrics:
     def test_metrics_logged_without_exception(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        import logging
         from unittest.mock import patch as _patch
+
         from axon.main import OpenStudioBrain, OpenStudioConfig
 
         config = OpenStudioConfig(hybrid_search=False, rerank=False)
@@ -805,6 +806,7 @@ class TestLogQueryMetrics:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         from unittest.mock import patch as _patch
+
         from axon.main import OpenStudioBrain, OpenStudioConfig
 
         config = OpenStudioConfig(hybrid_search=False, rerank=False)
@@ -865,8 +867,9 @@ class TestListDocuments:
 
 class TestOpenVectorStoreListDocuments:
     def test_chroma_groups_by_source(self):
-        from axon.main import OpenVectorStore, OpenStudioConfig
         from unittest.mock import MagicMock, patch
+
+        from axon.main import OpenStudioConfig, OpenVectorStore
 
         config = OpenStudioConfig(vector_store="chroma")
         with patch("chromadb.PersistentClient") as MockClient:
@@ -891,8 +894,9 @@ class TestOpenVectorStoreListDocuments:
         assert set(by_source["notes.txt"]["doc_ids"]) == {"c1", "c2"}
 
     def test_chroma_handles_missing_source_metadata(self):
-        from axon.main import OpenVectorStore, OpenStudioConfig
         from unittest.mock import MagicMock, patch
+
+        from axon.main import OpenStudioConfig, OpenVectorStore
 
         config = OpenStudioConfig(vector_store="chroma")
         with patch("chromadb.PersistentClient") as MockClient:
@@ -1218,7 +1222,7 @@ class TestGraphRAG:
         brain.llm.complete.side_effect = ["transformer", "Answer"]
         # Answer
         brain.llm.complete = MagicMock(side_effect=["transformer", "final answer"])
-        result = brain.query("What is a transformer?")
+        brain.query("What is a transformer?")
         # get_by_ids should have been called for graph expansion
         brain.vector_store.get_by_ids.assert_called()
 
@@ -1382,7 +1386,6 @@ class TestSwitchProjectState:
     def test_switch_project_clears_query_cache(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path):
         """Switching project empties the query cache to prevent cross-project bleed."""
         from axon.main import OpenStudioBrain, OpenStudioConfig
-        from axon.projects import ensure_project
         config = OpenStudioConfig(
             query_cache=True, query_cache_size=128,
             vector_store_path=str(tmp_path / "chroma"),
@@ -1445,7 +1448,7 @@ def _make_lancedb_mock():
 class TestOpenVectorStoreLanceDB:
     def _make_store(self, mock_lancedb):
         """Helper: returns (store, mock_table) with lancedb already mocked."""
-        from axon.main import OpenVectorStore, OpenStudioConfig
+        from axon.main import OpenStudioConfig, OpenVectorStore
         config = OpenStudioConfig(vector_store="lancedb", vector_store_path="./lancedb_test")
         mock_table = MagicMock()
         mock_lancedb.connect.return_value.open_table.side_effect = Exception("not found")
@@ -1553,7 +1556,7 @@ class TestExpandAtFiles:
         assert "secret" not in result
 
     def test_directory_context_limit(self, tmp_path):
-        from axon.main import _expand_at_files, _AT_DIR_MAX_BYTES, _AT_FILE_MAX_BYTES
+        from axon.main import _AT_DIR_MAX_BYTES, _AT_FILE_MAX_BYTES, _expand_at_files
         # Each file is capped at _AT_FILE_MAX_BYTES on read; create enough files so that
         # their combined sizes exceed _AT_DIR_MAX_BYTES, which triggers the skip message.
         # We need ceil(_AT_DIR_MAX_BYTES / _AT_FILE_MAX_BYTES) + 1 files.
@@ -1566,8 +1569,9 @@ class TestExpandAtFiles:
         assert "context limit reached" in result
 
     def test_docx_uses_loader(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
         from axon.main import _expand_at_files
-        from unittest.mock import patch, MagicMock
         docx_path = tmp_path / "report.docx"
         docx_path.write_bytes(b"PK fake docx")
         mock_instance = MagicMock()
@@ -1577,8 +1581,9 @@ class TestExpandAtFiles:
         assert "Extracted docx text" in result
 
     def test_pdf_uses_loader(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
         from axon.main import _expand_at_files
-        from unittest.mock import patch, MagicMock
         pdf_path = tmp_path / "paper.pdf"
         pdf_path.write_bytes(b"%PDF-1.4 fake")
         mock_instance = MagicMock()

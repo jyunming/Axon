@@ -4,6 +4,7 @@ Core engine for Axon - Open Source RAG Interface.
 
 # Suppress TensorFlow/Keras noise before any imports that might trigger them
 import os
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("USE_TF", "0")  # tell transformers to skip TF backend
@@ -11,16 +12,17 @@ os.environ.setdefault("USE_TF", "0")  # tell transformers to skip TF backend
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
+import asyncio
+import logging
 import re
 import sys
-import time
-import yaml
-import logging
-import asyncio
 import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, List, Optional, Dict, Any, Union
-from dataclasses import dataclass, field
+from typing import Any, Literal
+
+import yaml
 from dotenv import load_dotenv
 
 # Load environment variables — project .env first, then user-global ~/.axon/.env
@@ -44,7 +46,7 @@ class OpenStudioConfig:
     embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
-    
+
     # LLM
     llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai", "vllm"] = "ollama"
     llm_model: str = "gemma"
@@ -72,23 +74,23 @@ class OpenStudioConfig:
                 self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
-    
+
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
     vector_store_path: str = "./chroma_data"
-    
+
     # BM25 Settings
     bm25_path: str = "./bm25_index"
-    
+
     # RAG Settings
     top_k: int = 10
     similarity_threshold: float = 0.3
     hybrid_search: bool = True
-    
+
     # Chunking
     chunk_size: int = 1000
     chunk_overlap: int = 200
-    
+
     # Re-ranking
     rerank: bool = False
     reranker_provider: Literal["cross-encoder", "llm"] = "cross-encoder"
@@ -157,8 +159,8 @@ class OpenStudioConfig:
         if not os.path.exists(path):
             logger.warning(f"Config file {path} not found. Using defaults.")
             return cls()
-        
-        with open(path, 'r') as f:
+
+        with open(path) as f:
             data = yaml.safe_load(f) or {}
 
         # Flatten the YAML structure to match dataclass fields
@@ -185,7 +187,7 @@ class OpenStudioConfig:
                 config_dict['reranker_provider'] = data['rerank']['provider']
             if 'model' in data['rerank']:
                 config_dict['reranker_model'] = data['rerank']['model']
-                
+
         if 'query_transformations' in data:
             for key in ('multi_query', 'hyde', 'step_back', 'query_decompose', 'discussion_fallback'):
                 if key in data['query_transformations']:
@@ -202,17 +204,17 @@ class OpenStudioConfig:
             config_dict['offline_mode'] = ol.get('enabled', False)
             if ol.get('local_models_dir'):
                 config_dict['local_models_dir'] = ol['local_models_dir']
-        
+
         # Map some specific names if they don't match exactly
         if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
             config_dict['ollama_base_url'] = config_dict['llm_base_url']
-            
+
         if 'api_key' not in config_dict and 'llm_api_key' in config_dict:
             config_dict['api_key'] = config_dict['llm_api_key']
 
         if 'llm_vllm_base_url' in config_dict:
             config_dict['vllm_base_url'] = config_dict['llm_vllm_base_url']
-            
+
         # Environment Variable Overrides (High Priority — wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -224,7 +226,7 @@ class OpenStudioConfig:
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_dict = {k: v for k, v in config_dict.items() if k in valid_fields}
-        
+
         return cls(**filtered_dict)
 
 
@@ -232,7 +234,7 @@ class OpenReranker:
     """
     Open-source reranking using Cross-Encoders.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self.model = None
@@ -247,43 +249,43 @@ class OpenReranker:
                     logger.error("sentence-transformers not installed. Reranking disabled.")
                     self.config.rerank = False
             elif self.config.reranker_provider == "llm":
-                logger.info(f"📊 Using LLM for Re-ranking (RankGPT)")
+                logger.info("📊 Using LLM for Re-ranking (RankGPT)")
                 self.llm = OpenLLM(self.config)
-    
-    def rerank(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+    def rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Rerank a list of documents based on a query.
         """
         if not self.config.rerank or (not self.model and not self.llm) or not documents:
             return documents
-        
+
         logger.info(f"🔄 Reranking {len(documents)} documents...")
 
         if self.config.reranker_provider == "llm" and self.llm:
             return self._llm_rerank(query, documents)
-        
+
         # Cross-encoder pointwise scoring
         # Prepare pairs: (query, doc_text)
         pairs = [[query, doc['text']] for doc in documents]
-        
+
         # Get scores
         scores = self.model.predict(pairs)
-        
+
         # Add scores to documents and sort
         for doc, score in zip(documents, scores):
             doc['rerank_score'] = float(score)
-        
+
         # Sort by rerank score descending
         reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
-        
+
         return reranked_docs
 
-    def _llm_rerank(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _llm_rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """RankGPT pointwise scoring implementation."""
         system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
-        
+
         from concurrent.futures import ThreadPoolExecutor
-        
+
         def score_doc(doc):
             prompt = f"Query: {query}\n\nDocument: {doc['text']}\n\nScore (1-10):"
             try:
@@ -291,14 +293,14 @@ class OpenReranker:
                 return float(response) if response.replace('.','',1).isdigit() else 0.0
             except Exception:
                 return 0.0
-                
+
         # Batch concurrent requests to reduce overall latency
         with ThreadPoolExecutor(max_workers=min(10, len(documents))) as executor:
             scores = list(executor.map(score_doc, documents))
-            
+
         for doc, score in zip(documents, scores):
             doc['rerank_score'] = score
-            
+
         reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
         return reranked_docs
 
@@ -307,13 +309,13 @@ class OpenEmbedding:
     """
     Open-source embedding provider.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self.provider = config.embedding_provider
         self.model = None
         self._load_model()
-    
+
     def _load_model(self):
         """Load the embedding model."""
         if self.provider == "sentence_transformers":
@@ -321,12 +323,11 @@ class OpenEmbedding:
             logger.info(f"📊 Loading Sentence Transformers: {self.config.embedding_model}")
             self.model = SentenceTransformer(self.config.embedding_model)
             self.dimension = self.model.get_sentence_embedding_dimension()
-            
+
         elif self.provider == "ollama":
-            import ollama
             logger.info(f"📊 Using Ollama Embedding: {self.config.embedding_model}")
             self.dimension = 768  # nomic-embed-text dimension
-            
+
         elif self.provider == "fastembed":
             from fastembed import TextEmbedding
             logger.info(f"📊 Loading FastEmbed: {self.config.embedding_model}")
@@ -335,7 +336,7 @@ class OpenEmbedding:
                 self.dimension = 1024
             else:
                 self.dimension = 384
-                
+
         elif self.provider == "openai":
             from openai import OpenAI
             logger.info(f"📊 Using OpenAI API Embedding: {self.config.embedding_model}")
@@ -344,17 +345,17 @@ class OpenEmbedding:
                 kwargs["base_url"] = self.config.ollama_base_url
             self.model = OpenAI(**kwargs)
             self.dimension = 1536
-            
+
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
-    
-    def embed(self, texts: List[str]) -> List[List[float]]:
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
         if self.provider == "sentence_transformers":
             embeddings = self.model.encode(texts, show_progress_bar=False)
             if hasattr(embeddings, 'tolist'):
                 return embeddings.tolist()
             return list(embeddings)
-            
+
         elif self.provider == "ollama":
             from ollama import Client
             client = Client(host=self.config.ollama_base_url)
@@ -363,16 +364,16 @@ class OpenEmbedding:
                 response = client.embeddings(model=self.config.embedding_model, prompt=text)
                 embeddings.append(response['embedding'])
             return embeddings
-            
+
         elif self.provider == "fastembed":
             embeddings = list(self.model.embed(texts))
             return [e.tolist() for e in embeddings]
-            
+
         elif self.provider == "openai":
             response = self.model.embeddings.create(input=texts, model=self.config.embedding_model)
             return [data.embedding for data in response.data]
-    
-    def embed_query(self, query: str) -> List[float]:
+
+    def embed_query(self, query: str) -> list[float]:
         return self.embed([query])[0]
 
 
@@ -380,7 +381,7 @@ class OpenLLM:
     """
     Open-source LLM provider.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self._openai_clients: dict = {}
@@ -396,8 +397,8 @@ class OpenLLM:
                 kwargs["base_url"] = base_url
             self._openai_clients[cache_key] = OpenAI(**kwargs)
         return self._openai_clients[cache_key]
-    
-    def complete(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None) -> str:
+
+    def complete(self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None) -> str:
         provider = self.config.llm_provider
         history = chat_history or []
         if provider == "ollama":
@@ -406,14 +407,14 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            
+
             # Add chat history
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
+
             response = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
@@ -423,7 +424,7 @@ class OpenLLM:
                 }
             )
             return response['message']['content']
-            
+
         elif provider == "gemini":
             import warnings
             with warnings.catch_warnings():
@@ -437,17 +438,17 @@ class OpenLLM:
             if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
-            
+
             contents = []
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            
+
             user_text = prompt
             if system_prompt and is_gemma:
                 user_text = f"{system_prompt}\n\n{prompt}"
             contents.append({"role": "user", "parts": [user_text]})
-                
+
             response = model.generate_content(
                 contents,
                 generation_config=genai.types.GenerationConfig(
@@ -456,23 +457,23 @@ class OpenLLM:
                 )
             )
             return response.text
-            
+
         elif provider == "ollama_cloud":
             import httpx
             headers = {
                 "Authorization": f"Bearer {self.config.ollama_cloud_key}",
                 "Content-Type": "application/json"
             }
-            
+
             history_str = ""
             for msg in history:
                 role = "Assistant" if msg["role"] == "assistant" else "User"
                 history_str += f"{role}: {msg['content']}\n\n"
-                
+
             full_prompt = f"{system_prompt}\n\n" if system_prompt else ""
             full_prompt += history_str
             full_prompt += f"User: {prompt}\n\nAssistant:"
-            
+
             payload = {
                 "model": self.config.llm_model,
                 "prompt": full_prompt,
@@ -483,7 +484,7 @@ class OpenLLM:
                 response = client.post(f"{self.config.ollama_cloud_url}/generate", json=payload, headers=headers)
                 response.raise_for_status()
                 return response.json()["response"]
-            
+
         elif provider == "openai":
             messages = []
             if system_prompt:
@@ -526,8 +527,8 @@ class OpenLLM:
 
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
-    
-    def stream(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None):
+
+    def stream(self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None):
         provider = self.config.llm_provider
         history = chat_history or []
         if provider == "ollama":
@@ -536,13 +537,13 @@ class OpenLLM:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            
+
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
+
             stream_resp = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
@@ -554,7 +555,7 @@ class OpenLLM:
             )
             for chunk in stream_resp:
                 yield chunk['message']['content']
-                
+
         elif provider == "gemini":
             import warnings
             with warnings.catch_warnings():
@@ -568,17 +569,17 @@ class OpenLLM:
             if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
-            
+
             contents = []
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            
+
             user_text = prompt
             if system_prompt and is_gemma:
                 user_text = f"{system_prompt}\n\n{prompt}"
             contents.append({"role": "user", "parts": [user_text]})
-                
+
             response = model.generate_content(
                 contents,
                 stream=True,
@@ -589,23 +590,23 @@ class OpenLLM:
             )
             for chunk in response:
                 yield chunk.text
-                
+
         elif provider == "ollama_cloud":
             import httpx
             headers = {
                 "Authorization": f"Bearer {self.config.ollama_cloud_key}",
                 "Content-Type": "application/json"
             }
-            
+
             history_str = ""
             for msg in history:
                 role = "Assistant" if msg["role"] == "assistant" else "User"
                 history_str += f"{role}: {msg['content']}\n\n"
-                
+
             full_prompt = f"{system_prompt}\n\n" if system_prompt else ""
             full_prompt += history_str
             full_prompt += f"User: {prompt}\n\nAssistant:"
-            
+
             payload = {
                 "model": self.config.llm_model,
                 "prompt": full_prompt,
@@ -621,7 +622,7 @@ class OpenLLM:
                             data = json.loads(line)
                             if "response" in data:
                                 yield data["response"]
-                
+
         elif provider == "openai":
             messages = []
             if system_prompt:
@@ -673,14 +674,14 @@ class OpenVectorStore:
     """
     Open-source vector store interface.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self.provider = config.vector_store
         self.client = None
         self.collection = None
         self._init_store()
-    
+
     def _init_store(self):
         if self.provider == "chroma":
             import chromadb
@@ -703,7 +704,7 @@ class OpenVectorStore:
             except Exception:
                 self.collection = None   # created lazily on first add()
 
-    def add(self, ids: List[str], texts: List[str], embeddings: List[List[float]], metadatas: List[Dict] = None):
+    def add(self, ids: list[str], texts: list[str], embeddings: list[list[float]], metadatas: list[dict] = None):
         if self.provider == "chroma":
             self.collection.add(ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas)
         elif self.provider == "qdrant":
@@ -711,7 +712,8 @@ class OpenVectorStore:
             points = []
             for i, (id, embedding, text) in enumerate(zip(ids, embeddings, texts)):
                 payload = {"text": text}
-                if metadatas: payload.update(metadatas[i])
+                if metadatas:
+                    payload.update(metadatas[i])
                 points.append(PointStruct(id=id, vector=embedding, payload=payload))
             self.client.upsert(collection_name="axon", points=points)
         elif self.provider == "lancedb":
@@ -733,7 +735,7 @@ class OpenVectorStore:
             else:
                 self.collection.add(rows)
 
-    def list_documents(self) -> List[Dict[str, Any]]:
+    def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
 
         Returns:
@@ -744,7 +746,7 @@ class OpenVectorStore:
         """
         if self.provider == "chroma":
             result = self.collection.get(include=["metadatas"])
-            sources: Dict[str, Dict[str, Any]] = {}
+            sources: dict[str, dict[str, Any]] = {}
             for doc_id, meta in zip(result["ids"], result["metadatas"] or [{}] * len(result["ids"])):
                 source = (meta or {}).get("source", "unknown")
                 if source not in sources:
@@ -753,9 +755,8 @@ class OpenVectorStore:
                 sources[source]["doc_ids"].append(doc_id)
             return sorted(sources.values(), key=lambda x: x["source"])
         elif self.provider == "qdrant":
-            from qdrant_client.models import ScrollRequest
             results, _ = self.client.scroll(collection_name="axon", limit=10000, with_payload=True)
-            sources: Dict[str, Dict[str, Any]] = {}
+            sources: dict[str, dict[str, Any]] = {}
             for point in results:
                 source = point.payload.get("source", "unknown")
                 if source not in sources:
@@ -764,11 +765,10 @@ class OpenVectorStore:
                 sources[source]["doc_ids"].append(str(point.id))
             return sorted(sources.values(), key=lambda x: x["source"])
         elif self.provider == "lancedb":
-            import json
             if self.collection is None:
                 return []
             rows = self.collection.to_arrow().to_pydict()
-            sources: Dict[str, Dict[str, Any]] = {}
+            sources: dict[str, dict[str, Any]] = {}
             for doc_id, source in zip(rows.get("id", []), rows.get("source", [])):
                 src = source or "unknown"
                 if src not in sources:
@@ -778,7 +778,7 @@ class OpenVectorStore:
             return sorted(sources.values(), key=lambda x: x["source"])
         return []
 
-    def search(self, query_embedding: List[float], top_k: int = 10, filter_dict: Dict = None) -> List[Dict]:
+    def search(self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None) -> list[dict]:
         if self.provider == "chroma":
             results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
             return [
@@ -803,7 +803,7 @@ class OpenVectorStore:
                 for r in results
             ]
 
-    def get_by_ids(self, ids: List[str]) -> List[Dict]:
+    def get_by_ids(self, ids: list[str]) -> list[dict]:
         """Fetch stored documents by their IDs (used by GraphRAG expansion).
 
         Returns a list of result dicts in the same format as search(), with score=1.0
@@ -870,7 +870,7 @@ class OpenVectorStore:
                 return []
         return []
 
-    def delete_by_ids(self, ids: List[str]) -> None:
+    def delete_by_ids(self, ids: list[str]) -> None:
         """Delete documents by ID from the vector store."""
         if not ids:
             return
@@ -893,13 +893,13 @@ class OpenStudioBrain:
     """
     Main interface for Axon.
     """
-    
-    SYSTEM_PROMPT = """You are the 'Axon', a highly capable and friendly AI assistant. 
+
+    SYSTEM_PROMPT = """You are the 'Axon', a highly capable and friendly AI assistant.
 Your primary goal is to help the user by answering questions based on the provided context from their private documents.
 
 **Guidelines:**
 1. **Prioritize Context**: If relevant information is found in the provided context, use it to answer the question accurately and cite the documents.
-2. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response. 
+2. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response.
 3. **Be Transparent**: If you are using your general knowledge because no local documents matched the query, briefly mention it (e.g., 'I couldn't find specific details in your documents, but based on my general knowledge...').
 4. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
 """
@@ -912,7 +912,7 @@ Your primary goal is to help the user by answering questions based on the provid
 3. **Cite Sources**: When answering, reference the relevant document or section.
 4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
 """
-    
+
     def _resolve_model_path(self, model_name: str) -> str:
         """Resolve a HuggingFace model ID to a local path when offline_mode is on.
 
@@ -942,7 +942,7 @@ Your primary goal is to help the user by answering questions based on the provid
         )
         return model_name
 
-    def __init__(self, config: Optional[OpenStudioConfig] = None):
+    def __init__(self, config: OpenStudioConfig | None = None):
         self.config = config or OpenStudioConfig.load()
 
         # ── Offline mode: lock down all network access before any model loads ──
@@ -982,13 +982,13 @@ Your primary goal is to help the user by answering questions based on the provid
         self._base_vector_store_path: str = os.path.abspath(self.config.vector_store_path)
         self._base_bm25_path: str = os.path.abspath(self.config.bm25_path)
         self._active_project: str = "default"
-        
+
         try:
             from axon.retrievers import BM25Retriever
             self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
         except ImportError:
             self.bm25 = None
-            
+
         try:
             from axon.splitters import RecursiveCharacterTextSplitter
             self.splitter = RecursiveCharacterTextSplitter(chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap)
@@ -999,14 +999,14 @@ Your primary goal is to help the user by answering questions based on the provid
         # Uses OrderedDict for true LRU eviction: hits are moved to the end so the
         # least-recently-used entry is always at the front and evicted first.
         from collections import OrderedDict
-        self._query_cache: "OrderedDict[str, str]" = OrderedDict()
+        self._query_cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
 
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
 
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
-        self._entity_graph: Dict[str, List[str]] = self._load_entity_graph()
+        self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
 
         logger.info("✅ Axon ready!")
 
@@ -1023,7 +1023,10 @@ Your primary goal is to help the user by answering questions based on the provid
             ValueError: If the project does not exist (use /project new first).
         """
         from axon.projects import (
-            project_bm25_path, project_dir, project_vector_path, set_active_project,
+            project_bm25_path,
+            project_dir,
+            project_vector_path,
+            set_active_project,
         )
 
         if name == "default":
@@ -1057,7 +1060,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self._active_project = name
         set_active_project(name)
         logger.info(f"📂 Switched to project '{name}'")
-    
+
     def _load_hash_store(self) -> set:
         """Load persisted content hashes for ingest deduplication."""
         import pathlib
@@ -1073,16 +1076,17 @@ Your primary goal is to help the user by answering questions based on the provid
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(self._ingested_hashes), encoding="utf-8")
 
-    def _load_entity_graph(self) -> Dict[str, List[str]]:
+    def _load_entity_graph(self) -> dict[str, list[str]]:
         """Load persisted entity→doc_id graph from disk."""
-        import json, pathlib
+        import json
+        import pathlib
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
         if path.exists():
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(raw, dict):
                     return {}
-                cleaned: Dict[str, List[str]] = {}
+                cleaned: dict[str, list[str]] = {}
                 for key, value in raw.items():
                     if not isinstance(key, str) or not isinstance(value, list):
                         continue
@@ -1094,12 +1098,13 @@ Your primary goal is to help the user by answering questions based on the provid
 
     def _save_entity_graph(self) -> None:
         """Persist entity graph to disk."""
-        import json, pathlib
+        import json
+        import pathlib
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
 
-    def _extract_entities(self, text: str) -> List[str]:
+    def _extract_entities(self, text: str) -> list[str]:
         """Extract named entities from text using the LLM.
 
         Returns a list of entity strings (people, organisations, places, concepts).
@@ -1118,7 +1123,7 @@ Your primary goal is to help the user by answering questions based on the provid
         except Exception:
             return []
 
-    def _generate_raptor_summaries(self, documents: List[Dict]) -> List[Dict]:
+    def _generate_raptor_summaries(self, documents: list[dict]) -> list[dict]:
         """Generate RAPTOR summary nodes for a list of already-split chunks.
 
         Groups consecutive chunks by source in windows of raptor_chunk_group_size,
@@ -1179,7 +1184,7 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
         return summaries
 
-    def _expand_with_entity_graph(self, query: str, results: List[Dict], cfg=None) -> List[Dict]:
+    def _expand_with_entity_graph(self, query: str, results: list[dict], cfg=None) -> list[dict]:
         """Expand retrieval results using GraphRAG entity linkage.
 
         1. Extract entities from the query.
@@ -1194,7 +1199,7 @@ Your primary goal is to help the user by answering questions based on the provid
         active_top_k = (cfg.top_k if cfg is not None else None) or self.config.top_k
 
         existing_ids = {r["id"] for r in results}
-        extra_ids: List[str] = []
+        extra_ids: list[str] = []
         for entity in query_entities:
             for eid, doc_ids in self._entity_graph.items():
                 if entity.lower() in eid.lower() or eid.lower() in entity.lower():
@@ -1216,7 +1221,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return results
 
-    def _doc_hash(self, doc: Dict) -> str:
+    def _doc_hash(self, doc: dict) -> str:
         """Return an MD5 hex digest of the document's text content."""
         import hashlib
         return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
@@ -1228,7 +1233,8 @@ Your primary goal is to help the user by answering questions based on the provid
         requests that differ only by (e.g.) cite_sources or compress_context
         receive distinct cache entries.
         """
-        import hashlib, json
+        import hashlib
+        import json
         # Serialize filters safely regardless of type
         try:
             filters_key = json.dumps(filters or {}, sort_keys=True, default=str)
@@ -1260,7 +1266,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
     def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
                             filtered_count: int, final_count: int, top_score: float,
-                            latency_ms: float, transformations: Dict = None,
+                            latency_ms: float, transformations: dict = None,
                             cfg=None):
         """Log structured metrics for a query."""
         active = cfg if cfg is not None else self.config
@@ -1280,7 +1286,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "transformations": transformations or {}
         })
 
-    def _split_with_parents(self, documents: List[Dict]) -> List[Dict]:
+    def _split_with_parents(self, documents: list[dict]) -> list[dict]:
         """Split documents using parent-document (small-to-big) strategy.
 
         1. Split each raw document into large parent chunks (parent_chunk_size).
@@ -1309,8 +1315,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 all_chunks.extend(child_chunks)
         return all_chunks
 
-    def ingest(self, documents: List[Dict[str, Any]]):
-        if not documents: return
+    def ingest(self, documents: list[dict[str, Any]]):
+        if not documents:
+            return
         t0 = time.time()
         from tqdm import tqdm
         logger.info(f"📥 Ingesting {len(documents)} documents...")
@@ -1360,7 +1367,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._save_entity_graph()
 
         n_chunks = len(documents)
-        if self.bm25: self.bm25.add_documents(documents)
+        if self.bm25:
+            self.bm25.add_documents(documents)
 
         ids = [d['id'] for d in documents]
         texts = [d['text'] for d in documents]
@@ -1386,7 +1394,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "total_ms": round((time.time() - t0) * 1000, 1),
         })
 
-    def _decompose_query(self, query: str) -> List[str]:
+    def _decompose_query(self, query: str) -> list[str]:
         """Break a complex query into atomic sub-questions for independent retrieval.
 
         Returns the original query plus up to 4 sub-questions.
@@ -1408,7 +1416,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 unique.append(q)
         return unique
 
-    def _compress_context(self, query: str, results: List[Dict]) -> List[Dict]:
+    def _compress_context(self, query: str, results: list[dict]) -> list[dict]:
         """Extract only query-relevant sentences from each retrieved chunk (parallel).
 
         Compresses non-web results by asking the LLM to strip irrelevant text.
@@ -1419,7 +1427,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         from concurrent.futures import ThreadPoolExecutor
 
-        def _compress_one(result: Dict) -> Dict:
+        def _compress_one(result: dict) -> dict:
             if result.get("is_web"):
                 return result
             # Use parent_text if available (small-to-big path), else chunk text
@@ -1462,14 +1470,14 @@ Your primary goal is to help the user by answering questions based on the provid
         prompt = f"Please write a hypothetical, detailed passage that directly answers the following question. Use informative and factual language.\n\nQuestion: {query}"
         return self.llm.complete(prompt, system_prompt="You are a helpful expert answering questions.")
 
-    def _get_multi_queries(self, query: str) -> List[str]:
+    def _get_multi_queries(self, query: str) -> list[str]:
         """Generate alternative query phrasings for multi-query retrieval."""
         prompt = f"Generate 3 alternative phrasings of the following question to help with retrieving documents from a vector database. Output each phrasing on a new line and DO NOT output anything else.\n\nQuestion: {query}"
         response = self.llm.complete(prompt, system_prompt="You are an expert search engineer.")
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
 
-    def _execute_web_search(self, query: str, count: int = 5) -> List[Dict]:
+    def _execute_web_search(self, query: str, count: int = 5) -> list[dict]:
         """Execute a web search using the Brave Search API and return results."""
         import httpx
         try:
@@ -1485,7 +1493,7 @@ Your primary goal is to help the user by answering questions based on the provid
             )
             response.raise_for_status()
             data = response.json()
-            
+
             web_results = []
             for item in data.get("web", {}).get("results", [])[:count]:
                 snippet = item.get("description", "")
@@ -1504,7 +1512,7 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.warning(f"🌐 Web search failed: {e}")
             return []
 
-    def _execute_retrieval(self, query: str, filters: Dict = None, cfg=None) -> Dict:
+    def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
         if cfg is None:
             cfg = self.config
@@ -1620,7 +1628,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "transforms": transforms
         }
 
-    def _build_context(self, results: List[Dict]) -> tuple:
+    def _build_context(self, results: list[dict]) -> tuple:
         """Build context string from results, labelling web vs local sources distinctly.
 
         Returns:
@@ -1670,7 +1678,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "you have access to live Brave Search as a fallback tool. It was not needed for this query."
         )
 
-    def _apply_overrides(self, overrides: Optional[Dict]) -> 'OpenStudioConfig':
+    def _apply_overrides(self, overrides: dict | None) -> 'OpenStudioConfig':
         """Return a config copy with per-request overrides applied (thread-safe)."""
         if not overrides:
             return self.config
@@ -1681,7 +1689,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 setattr(cfg, k, v)
         return cfg
 
-    def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None) -> str:
+    def query(self, query: str, filters: dict = None, chat_history: list[dict[str, str]] = None, overrides: dict = None) -> str:
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
@@ -1709,7 +1717,8 @@ Your primary goal is to help the user by answering questions based on the provid
 
             return "I don't have any relevant information to answer that question."
 
-        if cfg.rerank: results = self.reranker.rerank(query, results)
+        if cfg.rerank:
+            results = self.reranker.rerank(query, results)
 
         results = results[:cfg.top_k]
         if cfg.compress_context:
@@ -1734,7 +1743,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return response
 
-    def query_stream(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None):
+    def query_stream(self, query: str, filters: dict = None, chat_history: list[dict[str, str]] = None, overrides: dict = None):
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval['results']
@@ -1747,7 +1756,8 @@ Your primary goal is to help the user by answering questions based on the provid
             yield "I don't have any relevant information to answer that question."
             return
 
-        if cfg.rerank: results = self.reranker.rerank(query, results)
+        if cfg.rerank:
+            results = self.reranker.rerank(query, results)
 
         results = results[:cfg.top_k]
         if cfg.compress_context:
@@ -1767,9 +1777,10 @@ Your primary goal is to help the user by answering questions based on the provid
         loader = DirectoryLoader()
         logger.info(f"📁 Scanning: {directory}")
         documents = await loader.aload(directory)
-        if documents: self.ingest(documents)
+        if documents:
+            self.ingest(documents)
 
-    def list_documents(self) -> List[Dict[str, Any]]:
+    def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files in the knowledge base with chunk counts.
 
         Returns:
@@ -2015,7 +2026,7 @@ def main():
         and not getattr(args, 'pull', None)
         and sys.stdin.isatty()
     )
-    _init_display: Optional[_InitDisplay] = None
+    _init_display: _InitDisplay | None = None
     _saved_propagate: dict = {}
     _INIT_LOGGER_NAMES = [
         "RAGBrain", "StudioBrainOpen.Retrievers",
@@ -2088,12 +2099,14 @@ def main():
         print(f"  ✅ Using project '{proj_name}'  ({project_dir(proj_name)})")
 
 
-        if os.path.isdir(args.ingest): asyncio.run(brain.load_directory(args.ingest))
+        if os.path.isdir(args.ingest):
+            asyncio.run(brain.load_directory(args.ingest))
         else:
             from axon.loaders import DirectoryLoader
             ext = os.path.splitext(args.ingest)[1].lower()
             loader_mgr = DirectoryLoader()
-            if ext in loader_mgr.loaders: brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
+            if ext in loader_mgr.loaders:
+                brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
 
     if args.list:
         docs = brain.list_documents()
@@ -2107,7 +2120,7 @@ def main():
             for d in docs:
                 print(f"  {d['source']:<60} {d['chunks']:>6}")
         return
-    
+
     if args.query:
         if args.stream:
             for chunk in brain.query_stream(args.query):
@@ -2188,8 +2201,9 @@ def _make_completer(brain: 'OpenStudioBrain'):
 
 
 # ── Session persistence ────────────────────────────────────────────────────────
-import json as _json
-from datetime import datetime as _dt, timezone as _tz
+import json as _json  # noqa: E402
+from datetime import datetime as _dt  # noqa: E402
+from datetime import timezone as _tz  # noqa: E402
 
 _SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".axon", "sessions")
 
@@ -2263,7 +2277,7 @@ def _print_sessions(sessions: list) -> None:
     print()
 
 
-_MODEL_CTX: Dict[str, int] = {
+_MODEL_CTX: dict[str, int] = {
     "gemma": 8192, "gemma:2b": 8192, "gemma:7b": 8192,
     "llama3.1": 131072, "llama3.1:8b": 131072, "llama3.1:70b": 131072,
     "mistral": 32768, "mistral:7b": 32768,
@@ -2852,13 +2866,16 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     # ── Input: prefer prompt_toolkit (live completions), fall back to readline ──
     _pt_session = None
     try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.completion import Completer, Completion
-        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-        from prompt_toolkit.styles import Style
-        from prompt_toolkit.formatted_text import HTML as _PThtml, FormattedText as _PTFT, ANSI as _PTANSI
-        from prompt_toolkit.history import FileHistory as _FileHistory
         import glob as _pglob
+
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.formatted_text import ANSI as _PTANSI
+        from prompt_toolkit.formatted_text import HTML as _PThtml
+        from prompt_toolkit.formatted_text import FormattedText as _PTFT  # noqa: F401
+        from prompt_toolkit.history import FileHistory as _FileHistory
+        from prompt_toolkit.styles import Style
 
         _HIST_DIR = os.path.expanduser("~/.axon")
         os.makedirs(_HIST_DIR, exist_ok=True)
@@ -3009,8 +3026,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     except ImportError:
         # Fall back to readline with history persistence
         try:
-            import readline
             import atexit
+            import readline
             _hist_file = os.path.expanduser("~/.axon/repl_history")
             os.makedirs(os.path.dirname(_hist_file), exist_ok=True)
             try:
@@ -3201,6 +3218,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     print("  Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
                 else:
                     import glob as _glob
+
                     from axon.loaders import DirectoryLoader
                     # Expand glob pattern; fallback to literal path
                     matched = sorted(_glob.glob(arg, recursive=True))
@@ -3235,8 +3253,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 if not arg:
                     print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
                     print(f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}")
-                    print(f"  Usage:   /model <model>              (auto-detect provider)")
-                    print(f"           /model <provider>/<model>   (switch provider too)")
+                    print("  Usage:   /model <model>              (auto-detect provider)")
+                    print("           /model <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_PROVIDERS)}")
                     print(f"  vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
                 elif "/" in arg:
@@ -3251,7 +3269,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         if provider == "vllm":
                             print(f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
                         elif provider != "ollama":
-                            print(f"  ℹ️  Make sure the required API key env var is set.")
+                            print("  ℹ️  Make sure the required API key env var is set.")
                 else:
                     inferred = _infer_provider(arg)
                     brain.config.llm_provider = inferred
@@ -3259,12 +3277,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     brain.llm = OpenLLM(brain.config)
                     print(f"  ✅ Switched LLM to {inferred}/{arg}")
                     if inferred != "ollama":
-                        print(f"  ℹ️  Make sure the required API key env var is set.")
+                        print("  ℹ️  Make sure the required API key env var is set.")
 
             elif cmd == "/vllm-url":
                 if not arg:
                     print(f"  Current vLLM base URL: {brain.config.vllm_base_url}")
-                    print(f"  Usage: /vllm-url http://host:port/v1")
+                    print("  Usage: /vllm-url http://host:port/v1")
                 else:
                     brain.config.vllm_base_url = arg
                     brain.llm._openai_clients = {}   # invalidate cached client
@@ -3274,15 +3292,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
                 if not arg:
                     print(f"  Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}")
-                    print(f"  Usage:   /embed <model>              (keep current provider)")
-                    print(f"           /embed <provider>/<model>   (switch provider too)")
+                    print("  Usage:   /embed <model>              (keep current provider)")
+                    print("           /embed <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_EMBED_PROVIDERS)}")
-                    print(f"  Examples:")
-                    print(f"    /embed all-MiniLM-L6-v2                    (sentence_transformers)")
-                    print(f"    /embed /path/to/local/model                (local folder)")
-                    print(f"    /embed ollama/nomic-embed-text")
-                    print(f"    /embed fastembed/BAAI/bge-small-en")
-                    print(f"  ⚠️  Changing embedding model invalidates existing indexed documents.")
+                    print("  Examples:")
+                    print("    /embed all-MiniLM-L6-v2                    (sentence_transformers)")
+                    print("    /embed /path/to/local/model                (local folder)")
+                    print("    /embed ollama/nomic-embed-text")
+                    print("    /embed fastembed/BAAI/bge-small-en")
+                    print("  ⚠️  Changing embedding model invalidates existing indexed documents.")
                 else:
                     if "/" in arg:
                         provider, model = arg.split("/", 1)
@@ -3298,10 +3316,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         model = arg
                         brain.config.embedding_model = model
                     try:
-                        print(f"  ⠿ Loading embedding model…", end="", flush=True)
+                        print("  ⠿ Loading embedding model…", end="", flush=True)
                         brain.embedding = OpenEmbedding(brain.config)
                         print(f"\r  ✅ Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}")
-                        print(f"  ⚠️  Re-ingest your documents so they use the new embedding model.")
+                        print("  ⚠️  Re-ingest your documents so they use the new embedding model.")
                     except Exception as e:
                         print(f"\r  ❌ Failed to load embedding: {e}")
 
@@ -3325,7 +3343,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 continue
                             # Pad to clear previous longer line
                             print(f"\r{line:<60}", end="", flush=True)
-                            last_status = line
+                            last_status = line  # noqa: F841
                         print(f"\r  ✅ '{arg}' ready.{' ' * 50}")
                     except Exception as e:
                         print(f"  ❌ Pull failed: {e}")
@@ -3424,9 +3442,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     elif rag_opt == "rerank-model":
                         if not rag_val:
                             print(f"  Current reranker: {brain.config.reranker_model}")
-                            print(f"  Usage: /rag rerank-model <HuggingFace ID or local path>")
-                            print(f"  e.g.  /rag rerank-model BAAI/bge-reranker-base")
-                            print(f"        /rag rerank-model ./models/bge-reranker-base")
+                            print("  Usage: /rag rerank-model <HuggingFace ID or local path>")
+                            print("  e.g.  /rag rerank-model BAAI/bge-reranker-base")
+                            print("        /rag rerank-model ./models/bge-reranker-base")
                         else:
                             resolved = brain._resolve_model_path(rag_val)
                             if resolved != rag_val:
@@ -3449,8 +3467,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
             elif cmd == "/project":
                 from axon.projects import (
-                    delete_project, ensure_project,
-                    list_projects, project_dir,
+                    delete_project,
+                    ensure_project,
+                    list_projects,
+                    project_dir,
                 )
                 sub_parts = arg.split(maxsplit=1)
                 sub = sub_parts[0].lower() if sub_parts else ""
@@ -3485,7 +3505,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                             brain.switch_project(proj_name)
                             print(f"  ✅ Created and switched to project '{proj_name}'")
                             print(f"  📁 {project_dir(proj_name)}")
-                            print(f"  Use /ingest to add documents to this project.\n")
+                            print("  Use /ingest to add documents to this project.\n")
                         except ValueError as e:
                             print(f"  ❌ {e}")
 
@@ -3519,7 +3539,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                             try:
                                 if brain._active_project == proj_name:
                                     brain.switch_project("default")
-                                    print(f"  ↩️  Switched back to default project.")
+                                    print("  ↩️  Switched back to default project.")
                                 delete_project(proj_name)
                                 print(f"  ✅ Deleted project '{proj_name}'.\n")
                             except ValueError as e:
@@ -3530,7 +3550,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 elif sub == "folder":
                     active = brain._active_project
                     if active == "default":
-                        print(f"  Default project uses config paths:")
+                        print("  Default project uses config paths:")
                         print(f"    Vector store: {brain.config.vector_store_path}")
                         print(f"    BM25 index:   {brain.config.bm25_path}\n")
                     else:
@@ -3589,7 +3609,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     set_parts = arg.split(maxsplit=1)
                     prov = set_parts[1].lower().strip() if len(set_parts) > 1 else ""
                     if not prov or prov not in _provider_keys:
-                        print(f"  Usage: /keys set <provider>")
+                        print("  Usage: /keys set <provider>")
                         print(f"  Providers: {', '.join(_provider_keys)}")
                     else:
                         env_name, url = _provider_keys[prov]
@@ -3603,7 +3623,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                             if new_key:
                                 _env_file.parent.mkdir(parents=True, exist_ok=True)
                                 existing = _env_file.read_text(encoding="utf-8") if _env_file.exists() else ""
-                                lines = [l for l in existing.splitlines() if not l.startswith(f"{env_name}=")]
+                                lines = [ln for ln in existing.splitlines() if not ln.startswith(f"{env_name}=")]
                                 lines.append(f"{env_name}={new_key}")
                                 _env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
                                 os.environ[env_name] = new_key
@@ -3621,7 +3641,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 print("  No key entered — nothing saved.")
                 else:
                     print("\n  API Key Status\n  " + "─" * 50)
-                    for prov, (env_name, url) in _provider_keys.items():
+                    for prov, (env_name, _url) in _provider_keys.items():
                         val = os.environ.get(env_name, "")
                         if val:
                             masked = val[:4] + "****" + val[-2:] if len(val) > 6 else "****"
@@ -3632,9 +3652,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     if _env_file.exists():
                         print(f"\n  Keys file: {_env_file}")
                     else:
-                        print(f"\n  No keys file yet. Use /keys set <provider> to add keys.")
-                    print(f"  /keys set <provider>  to set a key interactively")
-                    print(f"  /help keys            for provider URLs and usage\n")
+                        print("\n  No keys file yet. Use /keys set <provider> to add keys.")
+                    print("  /keys set <provider>  to set a key interactively")
+                    print("  /help keys            for provider URLs and usage\n")
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")

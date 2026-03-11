@@ -107,10 +107,14 @@ ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
+    "B904",  # raise-without-from-inside-except — HTTPException wrapping is intentional
+    "B905",  # zip-without-explicit-strict — lengths are guaranteed equal at call sites
+    "B023",  # function-uses-loop-variable — closures intentionally capture outer scope
 ]
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]  # unused imports
+"tests/*.py" = ["E402"]   # mid-file imports used for lazy mock patching
 
 [tool.mypy]
 python_version = "3.10"

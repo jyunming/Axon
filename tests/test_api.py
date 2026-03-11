@@ -454,8 +454,10 @@ def test_concurrent_requests_no_cross_contamination():
 
     t1 = threading.Thread(target=make_request, args=("a", True))
     t2 = threading.Thread(target=make_request, args=("b", False))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
     assert results["a"].status_code == 200
     assert results["b"].status_code == 200
