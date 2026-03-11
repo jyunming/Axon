@@ -267,7 +267,9 @@ curl -X POST http://localhost:8000/ingest \
 # Solution
 pip install -e .
 # Or reinstall
-pip uninstall local-axon
+pip uninstall axon  # main package name
+# If you previously installed the old name, also run:
+pip uninstall local-axon || true
 pip install -e .
 ```
 
