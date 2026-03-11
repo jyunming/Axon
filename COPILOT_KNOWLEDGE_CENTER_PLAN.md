@@ -30,7 +30,7 @@ Copilot Agent Mode (VS Code)
   RAG Brain API  ── already exists at localhost:8000
   (FastAPI)
         │
-        ├── ChromaDB (vector store)   ← free, local
+        ├── Vector store (default: ChromaDB; also Qdrant, LanceDB) ← free, local
         └── BM25 index                ← free, local
 ```
 
@@ -191,22 +191,32 @@ the response contains 3 unique `id` values and `/collection` count increases by 
 **Files:** `loaders.py`, `api.py`, `tools.py`
 
 Add a `URLLoader` class to `loaders.py`:
-1. Fetch URL with `httpx.get()` (already in deps)
-2. Strip HTML with stdlib `html.parser` (zero new deps)
-3. Return `{"id", "text", "metadata"}` with `source` = URL
+1. Accept only `http`/`https` URLs; reject all other schemes.
+2. Parse hostname and reject requests to private, loopback, link-local, and
+   cloud metadata ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`,
+   `192.168.0.0/16`, `169.254.169.254`) — prevents SSRF.
+3. Fetch URL with `httpx.get()` (already in deps) with a timeout and a
+   capped redirect limit (e.g., `max_redirects=5`).
+4. Strip HTML with stdlib `html.parser` (zero new deps).
+5. Return `{"id", "text", "metadata"}` with `source` = URL.
 
 Add `POST /ingest_url` in `api.py` calling this loader and feeding into
-`brain.ingest()`.
+`brain.ingest()`. The endpoint must enforce the same scheme and IP-range checks
+server-side and should be gated behind API key auth (already enforced by
+`RAG_API_KEY`) to prevent untrusted callers from triggering arbitrary
+server-side requests.
 
-**Pre-test:** Fetch a plain-text URL (e.g., `https://example.com`). Verify
-text is readable, not raw HTML.
+**Pre-test:** Fetch a plain-text URL (e.g., `https://example.com`). Verify text
+is readable, not raw HTML. Also verify that `http://127.0.0.1` and
+`http://169.254.169.254` return a 400 error, not a fetch.
 
 **Unit test:** `tests/test_loaders.py::test_url_loader` with `httpx` mocked —
-no real network calls in CI.
+no real network calls in CI. Include cases that assert blocked hosts/schemes
+raise errors before any network call is made.
 
-**Edge cases to handle:** redirect following, non-200 status, non-text content
-type (reject binary), max content size (reuse `_MAX_FILE_BYTES` pattern from
-existing loaders).
+**Edge cases to handle:** redirect following (capped), non-200 status, non-text
+content type (reject binary), max content size (reuse `_MAX_FILE_BYTES` pattern
+from existing loaders), and SSRF mitigations (scheme allowlist, IP range check).
 
 ---
 
@@ -269,13 +279,18 @@ project's `/collection` and neither leaks into the other.
 
 **File:** `api.py`
 
-Add a `_source_hashes: Dict[str, Dict[str, str]]` dict keyed by **project name**,
-so deduplication is scoped per-project and a document ingested into one project
-does not block the same source from being ingested into a different project.
-This mirrors the existing `.content_hashes` mechanism that `switch_project()`
-reloads per project. Before ingesting in `/add_text`, `/add_texts`,
-`/ingest_url`: compute `sha256(text or url)`, check `_source_hashes[project]`,
-and return:
+Add a `_source_hashes: Dict[str, Dict[str, dict]]` dict keyed by **project
+name**, so deduplication is scoped per-project and a document ingested into one
+project does not block the same source from being ingested into a different
+project. This mirrors the existing `.content_hashes` mechanism that
+`switch_project()` reloads per project.
+
+Each entry stores `{content_hash, doc_id, last_ingested_at}`. The hash is
+always over the **fetched, normalised content** — never the URL string alone.
+Hashing the URL would incorrectly skip re-ingestion when a page's content
+changes; hashing the content enables proper change detection. Before ingesting
+in `/add_text`, `/add_texts`, `/ingest_url`: compute `sha256(content)`, check
+`_source_hashes[project]`, and return:
 
 ```json
 {"status": "skipped", "reason": "already_ingested", "doc_id": "<existing>"}
@@ -361,13 +376,16 @@ icon. Confirm `rag-brain` tools appear in the tool list.
 
 **Files:** `requirements.txt`, `setup.py`, `pyproject.toml`
 
-- Add `mcp>=1.0.0` to `requirements.txt` **and** to `install_requires` in `setup.py`
-  (the repo uses `setup.py` as the authoritative packaging file; omitting it here
-  means installs via `pip install .` will miss the dependency).
+- **Reconcile first:** `setup.py` and `pyproject.toml` are already divergent —
+  `pyproject.toml` declares FastAPI/Uvicorn while `setup.py` does not. Before
+  adding `mcp`, decide which file is the single source of truth and bring the
+  other into sync. Adding `mcp` to only one file will cause broken installs
+  depending on the build path used.
+- Add `mcp>=1.0.0` to `requirements.txt`, to `install_requires` in `setup.py`,
+  **and** to the appropriate dependency table in `pyproject.toml`.
 - Add console script `rag-brain-mcp = rag_brain.mcp_server:main` to
-  `entry_points["console_scripts"]` in `setup.py`.
-- If `pyproject.toml` is present, mirror the `mcp` extra and `rag-brain-mcp`
-  script there and keep it in sync with `setup.py` to avoid divergence.
+  `entry_points["console_scripts"]` in `setup.py` and mirror the same script
+  in `pyproject.toml` so both build paths expose the CLI.
 
 ---
 
