@@ -3420,6 +3420,8 @@ def _expand_at_files(text: str) -> str:
     - @folder/   → recursively reads all supported files in the folder (capped at
                    _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
     """
+    # Imported at call time so tests can patch axon.loaders.DOCXLoader / PDFLoader.
+    from axon.loaders import DOCXLoader, PDFLoader
 
     def _read_text_file(path: str, max_bytes: int = _AT_FILE_MAX_BYTES) -> str:
         try:
@@ -3433,8 +3435,6 @@ def _expand_at_files(text: str) -> str:
 
     def _read_via_loader(path: str) -> str:
         try:
-            from axon.loaders import DOCXLoader, PDFLoader
-
             ext = os.path.splitext(path)[1].lower()
             loader = DOCXLoader() if ext == ".docx" else PDFLoader()
             docs = loader.load(path)

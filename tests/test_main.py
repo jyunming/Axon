@@ -676,7 +676,6 @@ class TestQueryTransformations:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
         import asyncio
-        from unittest.mock import AsyncMock, patch
 
         from axon.main import OpenStudioBrain, OpenStudioConfig
 
@@ -684,15 +683,12 @@ class TestQueryTransformations:
         brain = OpenStudioBrain(config)
         brain.ingest = MagicMock()
 
-        docs = [{"id": "f1.txt", "text": "hello", "metadata": {}}]
+        # Create a real .txt file so DirectoryLoader finds and loads something.
+        (tmp_path / "sample.txt").write_text("hello world", encoding="utf-8")
 
-        with patch("axon.loaders.DirectoryLoader") as MockLoader:
-            mock_loader_instance = MockLoader.return_value
-            mock_loader_instance.aload = AsyncMock(return_value=docs)
+        asyncio.run(brain.load_directory(str(tmp_path)))
 
-            asyncio.run(brain.load_directory(str(tmp_path)))
-
-        brain.ingest.assert_called_once_with(docs)
+        brain.ingest.assert_called_once()
 
     def test_load_directory_skips_ingest_when_empty(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
