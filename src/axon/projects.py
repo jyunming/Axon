@@ -133,18 +133,15 @@ def ensure_project(name: str, description: str = "") -> Path:
     Returns:
         Path to the target project root directory.
     """
-    _validate_name(name)
-    if name == "default":
-        root = project_dir("default")
-    else:
-        segments = _parse_name(name)
+    # _parse_name validates and returns segments in one call — no double-parse.
+    segments = _parse_name(name)
+    if name != "default":
         # Ensure every ancestor exists (without overwriting existing meta.json)
         for depth in range(1, len(segments)):
             ancestor_name = "/".join(segments[:depth])
             _ensure_single_project(ancestor_name, description="")
-        root = project_dir(name)
     _ensure_single_project(name, description=description)
-    return root
+    return project_dir(name)
 
 
 def _ensure_single_project(name: str, description: str) -> Path:
@@ -201,8 +198,14 @@ def list_descendants(name: str) -> list[str]:
 
 
 def has_children(name: str) -> bool:
-    """Return True if the project has any sub-projects."""
-    return bool(list_descendants(name))
+    """Return True if the project has any direct sub-projects.
+
+    Short-circuits on the first child found — does not traverse the full tree.
+    """
+    subs_dir = project_dir(name) / "subs"
+    if not subs_dir.exists():
+        return False
+    return any(e.is_dir() and (e / "meta.json").exists() for e in subs_dir.iterdir())
 
 
 def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:

@@ -1075,19 +1075,23 @@ class MultiVectorStore:
     def search(
         self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
     ) -> list[dict]:
+        from concurrent.futures import ThreadPoolExecutor
+
         seen: dict[str, dict] = {}
-        for store in self._stores:
-            for doc in store.search(query_embedding, top_k=top_k, filter_dict=filter_dict):
-                doc_id = doc["id"]
-                if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
-                    seen[doc_id] = doc
+        with ThreadPoolExecutor(max_workers=min(4, len(self._stores))) as ex:
+            futures = [
+                ex.submit(store.search, query_embedding, top_k, filter_dict)
+                for store in self._stores
+            ]
+            for fut in futures:
+                for doc in fut.result():
+                    doc_id = doc["id"]
+                    if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                        seen[doc_id] = doc
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
     def add(self, *args, **kwargs):
-        raise RuntimeError(
-            "Cannot ingest into a merged parent project view. "
-            "Switch to a specific sub-project first."
-        )
+        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
     def list_documents(self) -> list[dict]:
         seen: dict[str, dict] = {}
@@ -1109,10 +1113,7 @@ class MultiVectorStore:
         return list(seen.values())
 
     def delete_documents(self, ids: list[str]) -> None:
-        raise RuntimeError(
-            "Cannot delete from a merged parent project view. "
-            "Switch to the specific sub-project first."
-        )
+        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
 
 class MultiBM25Retriever:
@@ -1126,19 +1127,20 @@ class MultiBM25Retriever:
         self._retrievers = retrievers
 
     def search(self, query: str, top_k: int = 10) -> list[dict]:
+        from concurrent.futures import ThreadPoolExecutor
+
         seen: dict[str, dict] = {}
-        for r in self._retrievers:
-            for doc in r.search(query, top_k=top_k):
-                doc_id = doc["id"]
-                if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
-                    seen[doc_id] = doc
+        with ThreadPoolExecutor(max_workers=min(4, len(self._retrievers))) as ex:
+            futures = [ex.submit(r.search, query, top_k) for r in self._retrievers]
+            for fut in futures:
+                for doc in fut.result():
+                    doc_id = doc["id"]
+                    if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                        seen[doc_id] = doc
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
     def add_documents(self, *args, **kwargs):
-        raise RuntimeError(
-            "Cannot ingest into a merged parent project view. "
-            "Switch to a specific sub-project first."
-        )
+        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
     # Alias used by ingest code
     batch_add_documents = add_documents
@@ -1256,7 +1258,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # Write-path stores: always point to the active project's own data dir.
         # When a parent project is active, self.vector_store / self.bm25 become
-        # Multi* fan-out wrappers for reads, while _own_* handles writes.
+        # Multi* fan-out wrappers (read-only views across all descendants), while
+        # _own_vector_store / _own_bm25 keep pointing to this project's own dir
+        # so ingest(), dedup, and GraphRAG always write to the right place.
         self._own_vector_store: OpenVectorStore = self.vector_store
         self._own_bm25 = self.bm25
 
@@ -1342,12 +1346,12 @@ Your primary goal is to help the user by answering questions based on the provid
             descendants = []
 
         if descendants:
+            import copy
+
             from axon.retrievers import BM25Retriever as _BM25
 
             child_configs = []
             for desc in descendants:
-                import copy
-
                 child_cfg = copy.copy(self.config)
                 child_cfg.vector_store_path = project_vector_path(desc)
                 child_cfg.bm25_path = project_bm25_path(desc)
@@ -2221,6 +2225,32 @@ Your primary goal is to help the user by answering questions based on the provid
         return self.vector_store.list_documents()
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers used by both CLI (main()) and REPL
+# ---------------------------------------------------------------------------
+
+_MERGED_VIEW_WRITE_ERROR = (
+    "Cannot write to a merged parent project view. " "Switch to a specific sub-project first."
+)
+
+
+def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
+    """Print a recursive project tree with active-project marker and metadata.
+
+    Uses the already-fetched ``children`` list from list_projects() rather than
+    calling has_children() again, avoiding redundant directory traversals.
+    """
+    pad = "  " * indent
+    for p in proj_list:
+        marker = "●" if p["name"] == active else " "
+        ts = p["created_at"][:10] if p["created_at"] else ""
+        desc = f"  {p.get('description', '')}" if p.get("description") else ""
+        merged = "  [merged]" if p.get("children") else ""
+        short = p["name"].split("/")[-1]
+        print(f"  {pad}{marker} {short:<22} {ts}{merged}{desc}")
+        _print_project_tree(p.get("children", []), active, indent + 1)
+
+
 def main():
     import argparse
 
@@ -2629,7 +2659,6 @@ def main():
         ProjectHasChildrenError,
         delete_project,
         ensure_project,
-        has_children,
         list_projects,
         project_dir,
     )
@@ -2642,18 +2671,7 @@ def main():
             print()
             active = brain._active_project
 
-            def _cli_print_tree(proj_list: list, indent: int = 0) -> None:
-                pad = "  " * indent
-                for p in proj_list:
-                    marker = "●" if p["name"] == active else " "
-                    ts = p["created_at"][:10] if p["created_at"] else ""
-                    desc = f"  {p['description']}" if p.get("description") else ""
-                    merged = "  [merged]" if has_children(p["name"]) else ""
-                    short = p["name"].split("/")[-1]
-                    print(f"  {pad}{marker} {short:<22} {ts}{merged}{desc}")
-                    _cli_print_tree(p.get("children", []), indent + 1)
-
-            _cli_print_tree(projects)
+            _print_project_tree(projects, active)
             print(f"\n  Active: {active}")
         return
 
@@ -4387,7 +4405,6 @@ def _interactive_repl(
                     ProjectHasChildrenError,
                     delete_project,
                     ensure_project,
-                    has_children,
                     list_projects,
                     project_dir,
                 )
@@ -4400,22 +4417,11 @@ def _interactive_repl(
                     projects = list_projects()
                     active = brain._active_project
 
-                    def _print_project_tree(proj_list: list, indent: int = 0) -> None:
-                        pad = "  " * indent
-                        for p in proj_list:
-                            marker = "●" if p["name"] == active else " "
-                            ts = p["created_at"][:10] if p["created_at"] else ""
-                            desc = f"  {p['description']}" if p["description"] else ""
-                            merged = "  [merged]" if has_children(p["name"]) else ""
-                            short = p["name"].split("/")[-1]
-                            print(f"  {pad}{marker} {short:<22} {ts}{merged}{desc}")
-                            _print_project_tree(p.get("children", []), indent + 1)
-
                     if not projects:
                         print("  No projects yet. Use /project new <name> to create one.")
                     else:
                         print()
-                        _print_project_tree(projects)
+                        _print_project_tree(projects, active)
                     print(f"\n  Active: {active}")
                     print("  /project new <name>           create + switch")
                     print("  /project new <parent>/<name>  create sub-project")
