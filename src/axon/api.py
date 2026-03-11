@@ -87,7 +87,6 @@ class QueryRequest(BaseModel):
     decompose: bool | None = Field(None, description="Override query decomposition toggle")
     compress: bool | None = Field(None, description="Override LLM context compression toggle")
     discuss: bool | None = Field(None, description="Override discussion fallback toggle")
-    cite: bool | None = Field(None, description="Override inline source citation toggle")
 
 
 class SearchRequest(BaseModel):

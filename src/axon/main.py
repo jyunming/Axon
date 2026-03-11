@@ -64,6 +64,23 @@ class AxonConfig:
     ollama_cloud_url: str = ""
     vllm_base_url: str = "http://localhost:8000/v1"
 
+    # Projects
+    # Root directory for all named projects. Defaults to ~/.axon/projects.
+    # Override via config.yaml (projects_root: /path/to/dir) or the
+    # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
+    projects_root: str = os.path.join(os.path.expanduser("~"), ".axon", "projects")
+
+    # Vector Store
+    vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
+    vector_store_path: str = os.path.join(
+        os.path.expanduser("~"), ".axon", "projects", "default", "chroma_data"
+    )
+
+    # BM25 Settings
+    bm25_path: str = os.path.join(
+        os.path.expanduser("~"), ".axon", "projects", "default", "bm25_index"
+    )
+
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
         # 1. API Keys and URLs
@@ -102,13 +119,13 @@ class AxonConfig:
 
         def _resolve_safe(path_str: str, sub: str) -> str:
             if not path_str:
-                return os.path.join(home, sub)
+                return os.path.join(home, "projects", "default", sub)
             # Expand ~
             p_str = os.path.expanduser(path_str)
             # If it's the legacy relative default, force to home
             legacy_defaults = ("./chroma_data", "chroma_data", "./bm25_index", "bm25_index")
             if path_str in legacy_defaults:
-                return os.path.join(home, "data", sub)
+                return os.path.join(home, "projects", "default", sub)
 
             # Check for absolute paths
             if is_linux:
@@ -123,7 +140,7 @@ class AxonConfig:
                 # Only redirect if it looks like the user didn't explicitly set a custom Linux path
                 # (heuristic: if it contains 'studio_brain_open' or 'axon' in a Windows path)
                 if any(x in p_str.lower() for x in ("axon", "studio_brain")):
-                    safe_path = os.path.join(home, "data", sub)
+                    safe_path = os.path.join(home, "projects", "default", sub)
                     return safe_path
 
             if is_linux:
@@ -131,22 +148,19 @@ class AxonConfig:
                 return p_str
             return os.path.abspath(p_str)
 
-        self.projects_root = _resolve_safe(self.projects_root, "projects")
-        self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma")
-        self.bm25_path = _resolve_safe(self.bm25_path, "bm25")
+        # Projects root special case (no sub-path)
+        if not os.getenv("AXON_PROJECTS_ROOT"):
+            self.projects_root = os.path.expanduser(self.projects_root)
+            if (
+                is_linux
+                and os.path.isabs(self.projects_root)
+                and self.projects_root.startswith("/mnt/")
+            ):
+                if any(x in self.projects_root.lower() for x in ("axon", "studio_brain")):
+                    self.projects_root = os.path.join(home, "projects")
 
-    # Projects
-    # Root directory for all named projects. Defaults to ~/.axon/projects.
-    # Override via config.yaml (projects_root: /path/to/dir) or the
-    # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
-    projects_root: str = os.path.join(os.path.expanduser("~"), ".axon", "projects")
-
-    # Vector Store
-    vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
-    vector_store_path: str = os.path.join(os.path.expanduser("~"), ".axon", "data", "chroma")
-
-    # BM25 Settings
-    bm25_path: str = os.path.join(os.path.expanduser("~"), ".axon", "data", "bm25")
+        self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma_data")
+        self.bm25_path = _resolve_safe(self.bm25_path, "bm25_index")
 
     # RAG Settings
     top_k: int = 10
@@ -240,10 +254,10 @@ llm:
 
 vector_store:
   provider: chroma
-  path: ~/.axon/data/chroma
+  path: ~/.axon/projects/default/chroma_data
 
 bm25:
-  path: ~/.axon/data/bm25
+  path: ~/.axon/projects/default/bm25_index
 
 rag:
   top_k: 10
@@ -887,7 +901,9 @@ class OpenVectorStore:
                     from rich.console import Console
 
                     Console().print(msg)
-                    sys.exit(1)
+                    raise RuntimeError(
+                        f"ChromaDB failed to initialize at: {self.config.vector_store_path}"
+                    )
                 raise e
         elif self.provider == "qdrant":
             from qdrant_client import QdrantClient
@@ -1334,6 +1350,11 @@ Your primary goal is to help the user by answering questions based on the provid
 
             _proj_mod.set_projects_root(self.config.projects_root)
             logger.info(f"Projects root: {_proj_mod.PROJECTS_ROOT}")
+
+        # Ensure the 'default' project directory exists
+        from axon.projects import ensure_project
+
+        ensure_project("default")
 
         logger.info("Initializing Axon...")
         self.embedding = OpenEmbedding(self.config)
@@ -3708,7 +3729,17 @@ _AT_TEXT_EXTS = {
     ".graphql",
 }
 # Extensions handled by dedicated loaders (extract clean text from binary formats)
-_AT_LOADER_EXTS = {".docx", ".pdf"}
+_AT_LOADER_EXTS = {
+    ".docx",
+    ".pptx",
+    ".pdf",
+    ".doc",
+    ".ppt",
+    ".bmp",
+    ".png",
+    ".jpg",
+    ".jpeg",
+}
 _AT_DIR_MAX_BYTES = 120_000  # ~120 KB total across all files in a folder
 _AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
 
@@ -4956,6 +4987,27 @@ def _interactive_repl(
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
             _save_session(session)  # persist after every turn
+
+
+# Backwards-compatible aliases (Deprecated)
+def __getattr__(name):
+    import warnings
+
+    if name == "OpenStudioBrain":
+        warnings.warn(
+            "OpenStudioBrain is deprecated and will be removed in a future version. Use AxonBrain instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return AxonBrain
+    if name == "OpenStudioConfig":
+        warnings.warn(
+            "OpenStudioConfig is deprecated and will be removed in a future version. Use AxonConfig instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return AxonConfig
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":

@@ -325,10 +325,9 @@ class TestPipelineIntegrationSmoke:
         system_prompt = call_args[0][1] if call_args[0] else call_args[1].get("system_prompt", "")
         assert "transformer" in system_prompt.lower() or "attention" in system_prompt.lower()
 
-    def test_cite_sources_flag_injects_citation_instruction(self):
-        """cite_sources=True causes the system prompt to contain citation instruction."""
+    def test_pipeline_always_injects_citation_instruction(self):
+        """The system prompt must always contain citation instructions."""
         brain = self._make_brain()
-        brain.config.cite_sources = True
         brain.query("What is a transformer?")
         call_args = brain.llm.complete.call_args
         system_prompt = call_args[0][1] if call_args[0] else call_args[1].get("system_prompt", "")

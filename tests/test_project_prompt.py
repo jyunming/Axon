@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from unittest.mock import patch
 
 from axon.main import AxonBrain, AxonConfig
@@ -30,14 +29,12 @@ def test_should_recommend_project_false_when_projects_exist():
 
 
 def test_wsl_path_resolution_legacy_defaults():
-    # Legacy defaults should be forced to home
-    config = AxonConfig(
-        vector_store_path="./chroma_data", bm25_path="./bm25_index", projects_root=""
-    )
-    home = Path.home() / ".axon"
-    assert config.vector_store_path == str(home / "data" / "chroma")
-    assert config.bm25_path == str(home / "data" / "bm25")
-    assert config.projects_root == str(home / "projects")
+    # Legacy defaults should be forced to home projects/default
+    config = AxonConfig(vector_store_path="./chroma_data", bm25_path="./bm25_index")
+    home = os.path.join(os.path.expanduser("~"), ".axon")
+    assert config.vector_store_path == os.path.join(home, "projects", "default", "chroma_data")
+    assert config.bm25_path == os.path.join(home, "projects", "default", "bm25_index")
+    assert config.projects_root == os.path.join(home, "projects")
 
 
 def test_wsl_path_resolution_mnt_c_redirect():
@@ -47,7 +44,7 @@ def test_wsl_path_resolution_mnt_c_redirect():
             # Test path containing 'axon'
             config = AxonConfig(vector_store_path="/mnt/c/dev/axon/chroma_data")
             home = os.path.join(os.path.expanduser("~"), ".axon")
-            expected = os.path.join(home, "data", "chroma")
+            expected = os.path.join(home, "projects", "default", "chroma_data")
             assert config.vector_store_path == expected
 
             # Test path NOT containing 'axon' or 'studio_brain' - should stay as is

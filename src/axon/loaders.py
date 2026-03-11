@@ -198,9 +198,62 @@ class DOCXLoader(BaseLoader):
         ]
 
 
+class PPTXLoader(BaseLoader):
+    """Loader for PPTX files using python-pptx."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            from pptx import Presentation
+        except ImportError:
+            logger.error("python-pptx not installed. Install with: pip install python-pptx")
+            return []
+
+        prs = Presentation(path)
+        text_runs = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text"):
+                    text_runs.append(shape.text.strip())
+        text = "\n\n".join([t for t in text_runs if t])
+
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {"source": path, "type": "pptx"},
+            }
+        ]
+
+
+class LegacyOfficeLoader(BaseLoader):
+    """Loader for legacy binary Office files (.doc, .ppt) using textract."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            import textract
+        except ImportError:
+            logger.error("textract not installed. Install with: pip install textract")
+            return []
+
+        try:
+            text = textract.process(path).decode("utf-8")
+            return [
+                {
+                    "id": os.path.basename(path),
+                    "text": text,
+                    "metadata": {"source": path, "type": "legacy_office"},
+                }
+            ]
+        except Exception as e:
+            logger.error(f"Error extracting text from {path}: {e}")
+            return []
+
+
 class ImageLoader(BaseLoader):
     """
-    Loader for raster images (BMP, PNG, TIF/TIFF, PGM) using Ollama VLM for captioning.
+    Loader for raster images (BMP, PNG, JPG, TIF/TIFF, PGM) using Ollama VLM for captioning.
 
     Images are converted to PNG bytes via Pillow before being sent to the VLM so that
     all formats — including exotic ones like PGM — are handled uniformly.
@@ -335,6 +388,7 @@ class DirectoryLoader:
 
     def __init__(self, vlm_model: str = "llava"):
         _image_loader = ImageLoader(ollama_model=vlm_model)
+        _legacy_office_loader = LegacyOfficeLoader()
         self.loaders = {
             ".txt": TextLoader(),
             ".md": TextLoader(),
@@ -344,8 +398,13 @@ class DirectoryLoader:
             ".html": HTMLLoader(),
             ".htm": HTMLLoader(),
             ".docx": DOCXLoader(),
+            ".pptx": PPTXLoader(),
+            ".doc": _legacy_office_loader,
+            ".ppt": _legacy_office_loader,
             ".bmp": _image_loader,
             ".png": _image_loader,
+            ".jpg": _image_loader,
+            ".jpeg": _image_loader,
             ".tif": _image_loader,
             ".tiff": _image_loader,
             ".pgm": _image_loader,
