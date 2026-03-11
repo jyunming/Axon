@@ -47,9 +47,9 @@ class OpenStudioConfig:
     """Configuration for Axon."""
 
     # Embedding
-    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = (
-        "sentence_transformers"
-    )
+    embedding_provider: Literal[
+        "sentence_transformers", "ollama", "fastembed", "openai"
+    ] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
 
