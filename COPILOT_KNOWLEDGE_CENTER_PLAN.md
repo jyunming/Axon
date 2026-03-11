@@ -174,11 +174,15 @@ Add a new Pydantic model `BatchTextIngestRequest` and a `/add_texts` endpoint
 that calls `brain.ingest([...])` with a list. One HTTP call, one embedding
 batch, N documents.
 
-**Pre-test:** Send `[{"text": "doc1"}, {"text": "doc2"}]` via curl. Confirm
-both appear in `/collection`.
+**ID assignment:** Each item has the shape `{"text": str, "doc_id": Optional[str], "metadata": Optional[dict]}`.
+If `doc_id` is omitted, the server generates a UUID4. The response returns a
+per-item list: `[{"id": "<assigned-id>", "status": "created"|"updated", "error": Optional[str]}]`.
+
+**Pre-test:** Send `[{"text": "doc1"}, {"text": "doc2"}]` via curl. Confirm the
+response contains 2 distinct `id` values and both appear in `/collection`.
 
 **Unit test:** `tests/test_api.py::test_add_texts_batch` — post 3 docs, assert
-`/collection` count increases by 3.
+the response contains 3 unique `id` values and `/collection` count increases by 3.
 
 ---
 
@@ -231,6 +235,11 @@ so job status will appear inconsistent in multi-worker deployments. For v1,
 assume a single API worker and document both limitations explicitly in the
 deployment docs.
 
+**Cleanup / TTL:** Without a retention policy `_jobs` grows without bound. Apply
+a simple max-size cap (e.g., 1 000 entries) or a TTL sweep: on every write,
+evict entries older than N minutes (e.g., 60 min). Document the chosen policy
+in the deployment docs alongside the single-worker requirement.
+
 ---
 
 ### P1-D: Per-Call Project Targeting _(0.5 hrs)_
@@ -238,15 +247,21 @@ deployment docs.
 **File:** `api.py`
 
 Add optional `project: Optional[str]` to `TextIngestRequest` and
-`BatchTextIngestRequest`. If provided, call `brain.switch_project(project)`
-before ingesting.
+`BatchTextIngestRequest`. If provided, route the request to the correct
+project-scoped brain instance — do **not** call `brain.switch_project()`
+from inside a request handler.
 
-**Pre-test:** Ingest a doc with `project: "test-project"`, switch to that
-project via `/project/switch`, confirm the doc appears in `/collection`.
+**Concurrency requirement:** `brain.switch_project()` mutates shared global
+state (vector store, BM25 path, hash store, cache) and MUST NOT be called
+directly from request handlers. Implement one of:
+- A `Dict[str, OpenStudioBrain]` mapping project name → dedicated brain
+  instance, selecting the right one per request (preferred).
+- A process-wide `asyncio.Lock` guarding any global-state switch + ingest/query
+  pair (simpler but serialises all ingestion).
 
-**Race condition warning:** `brain.switch_project()` mutates global state.
-Under concurrent calls this is unsafe. For v1: document this. For v2: use a
-per-request brain instance scoped to the project.
+**Pre-test:** Ingest a doc with `project: "test-project"` and a doc with
+`project: "other-project"` concurrently. Confirm each appears only in its own
+project's `/collection` and neither leaks into the other.
 
 ---
 
@@ -254,9 +269,13 @@ per-request brain instance scoped to the project.
 
 **File:** `api.py`
 
-Add module-level `_source_hashes: Dict[str, str]` dict. Before ingesting in
-`/add_text`, `/add_texts`, `/ingest_url`: compute `sha256(text or url)`, check
-if already seen. Return:
+Add a `_source_hashes: Dict[str, Dict[str, str]]` dict keyed by **project name**,
+so deduplication is scoped per-project and a document ingested into one project
+does not block the same source from being ingested into a different project.
+This mirrors the existing `.content_hashes` mechanism that `switch_project()`
+reloads per project. Before ingesting in `/add_text`, `/add_texts`,
+`/ingest_url`: compute `sha256(text or url)`, check `_source_hashes[project]`,
+and return:
 
 ```json
 {"status": "skipped", "reason": "already_ingested", "doc_id": "<existing>"}
@@ -305,6 +324,11 @@ own, more concise names optimised for agent-mode ergonomics. The existing
 `tools.py` schemas (OpenAI format, used by other LLM callers) are kept
 unchanged. Do not treat the two sets of names as interchangeable.
 
+**API key auth:** `api.py` enforces `X-API-Key` on all endpoints except
+`/health` when `RAG_API_KEY` is set. The MCP server must read `RAG_API_KEY`
+from its environment and include it as an `X-API-Key` header in every `httpx`
+call. Omitting this header will cause 401 errors in any secured deployment.
+
 **Pre-test:** Run `python -m rag_brain.mcp_server` — confirm it starts without
 error and responds to an MCP `tools/list` request.
 
@@ -335,12 +359,15 @@ icon. Confirm `rag-brain` tools appear in the tool list.
 
 ### P2-C: Dependency Updates _(15 min)_
 
-**Files:** `requirements.txt`, `pyproject.toml`
+**Files:** `requirements.txt`, `setup.py`, `pyproject.toml`
 
-- Add `mcp>=1.0.0` to `requirements.txt`
-- Add `[mcp]` optional extra in `pyproject.toml`
-- Add entry point `rag-brain-mcp = "rag_brain.mcp_server:main"` in
-  `[project.scripts]`
+- Add `mcp>=1.0.0` to `requirements.txt` **and** to `install_requires` in `setup.py`
+  (the repo uses `setup.py` as the authoritative packaging file; omitting it here
+  means installs via `pip install .` will miss the dependency).
+- Add console script `rag-brain-mcp = rag_brain.mcp_server:main` to
+  `entry_points["console_scripts"]` in `setup.py`.
+- If `pyproject.toml` is present, mirror the `mcp` extra and `rag-brain-mcp`
+  script there and keep it in sync with `setup.py` to avoid divergence.
 
 ---
 
