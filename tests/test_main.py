@@ -535,7 +535,7 @@ class TestAxonBrain:
 
 class TestOpenReranker:
     def test_llm_reranker(self):
-        from axon.main import OpenReranker, AxonConfig
+        from axon.main import AxonConfig, OpenReranker
 
         config = AxonConfig(rerank=True, reranker_provider="llm")
         reranker = OpenReranker(config)
@@ -551,7 +551,7 @@ class TestOpenReranker:
 class TestOpenLLM:
     @patch("ollama.Client")
     def test_ollama_num_ctx(self, MockOllama):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(llm_provider="ollama")
         llm = OpenLLM(config)
@@ -566,7 +566,7 @@ class TestOpenLLM:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_gemma_handling(self, MockGenaiConfigure, MockGenerativeModel):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         # Test Gemma
         config = AxonConfig(llm_provider="gemini", llm_model="gemma-3-27b-it")
@@ -587,7 +587,7 @@ class TestOpenLLM:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_pro_handling(self, MockGenaiConfigure, MockGenerativeModel):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         # Test Pro (supports system instructions)
         config = AxonConfig(llm_provider="gemini", llm_model="gemini-1.5-pro")
@@ -601,7 +601,7 @@ class TestOpenLLM:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_flash_handling(self, MockGenaiConfigure, MockGenerativeModel):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         # Test Flash (also supports system instructions)
         config = AxonConfig(llm_provider="gemini", llm_model="gemini-1.5-flash")
@@ -614,7 +614,7 @@ class TestOpenLLM:
 
     @patch("httpx.Client")
     def test_ollama_cloud_handling(self, MockHttpxClient):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(
             llm_provider="ollama_cloud", ollama_cloud_key="test_key", llm_model="gemma"
@@ -633,7 +633,7 @@ class TestOpenLLM:
     @patch("openai.resources.chat.Completions.create")
     @patch("openai.OpenAI")
     def test_openai_handling(self, MockOpenAI, MockCreate):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
         llm = OpenLLM(config)
@@ -650,7 +650,7 @@ class TestOpenLLM:
 
     @patch("openai.OpenAI")
     def test_vllm_complete(self, MockOpenAI):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(
             llm_provider="vllm",
@@ -804,9 +804,7 @@ class TestQueryDecomposeAndCompress:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
         from axon.main import AxonBrain, AxonConfig
 
-        config = AxonConfig(
-            hybrid_search=False, rerank=False, similarity_threshold=0.0, **kwargs
-        )
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0, **kwargs)
         brain = AxonBrain(config)
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(return_value=[])
@@ -1283,9 +1281,7 @@ class TestInferProvider:
 @patch("axon.main.OpenEmbedding")
 @patch("axon.main.OpenReranker")
 class TestCiteSources:
-    def test_citations_always_present(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
+    def test_citations_always_present(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         """The system prompt must contain citation directives."""
         from axon.main import AxonBrain, AxonConfig
 

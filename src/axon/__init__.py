@@ -7,6 +7,7 @@ Uses sentence-transformers, Ollama, and ChromaDB/Qdrant.
 
 from .main import AxonBrain, AxonConfig, OpenEmbedding, OpenLLM, OpenVectorStore
 
+
 # Backwards-compatible aliases (Deprecated)
 def __getattr__(name):
     import warnings

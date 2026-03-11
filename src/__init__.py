@@ -1,6 +1,7 @@
 # Axon source package
 from axon.main import AxonBrain, AxonConfig, OpenEmbedding, OpenLLM, OpenVectorStore
 
+
 # Backwards-compatible aliases (Deprecated)
 def __getattr__(name):
     import warnings

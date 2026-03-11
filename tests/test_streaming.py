@@ -33,7 +33,7 @@ def _make_brain(config):
 class TestOpenLLMStream:
     @patch("ollama.Client")
     def test_ollama_stream_yields_strings(self, MockOllama):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(llm_provider="ollama")
         llm = OpenLLM(config)
@@ -48,7 +48,7 @@ class TestOpenLLMStream:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_stream_yields_strings(self, _cfg, MockModel):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(llm_provider="gemini", llm_model="gemini-2.0-flash")
         llm = OpenLLM(config)
@@ -64,7 +64,7 @@ class TestOpenLLMStream:
     def test_ollama_cloud_stream_yields_strings(self, MockHttpx):
         import json as _json
 
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(llm_provider="ollama_cloud", ollama_cloud_key="k", llm_model="m")
         llm = OpenLLM(config)
@@ -86,7 +86,7 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_openai_stream_yields_strings(self, MockOpenAI):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
         llm = OpenLLM(config)
@@ -104,7 +104,7 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_vllm_stream_yields_strings(self, MockOpenAI):
-        from axon.main import OpenLLM, AxonConfig
+        from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(
             llm_provider="vllm",
