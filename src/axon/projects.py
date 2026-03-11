@@ -311,7 +311,16 @@ def delete_project(name: str) -> None:
             f"Project '{name}' has sub-projects: {', '.join(children)}. "
             "Delete the sub-projects first."
         )
-    shutil.rmtree(root)
+    import time
+
+    for attempt in range(3):
+        try:
+            shutil.rmtree(root)
+            break
+        except PermissionError:
+            if attempt == 2:
+                raise
+            time.sleep(0.5)
     # If this was the active project, reset to default
     if get_active_project() == name:
         set_active_project("default")

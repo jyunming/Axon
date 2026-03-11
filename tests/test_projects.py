@@ -1,6 +1,7 @@
 """Tests for src/axon/projects.py"""
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -166,6 +167,19 @@ class TestDeleteProject:
         set_active_project("active")
         delete_project("active")
         assert get_active_project() == "default"
+
+    def test_delete_project_retries_on_permission_error(self, tmp_projects):
+        from axon.projects import delete_project, ensure_project
+
+        ensure_project("retry-test")
+
+        # Mock shutil.rmtree to fail once with PermissionError and then succeed
+        with patch("shutil.rmtree") as mock_rmtree:
+            mock_rmtree.side_effect = [PermissionError("Locked"), None]
+            with patch("time.sleep") as mock_sleep:  # avoid actual waiting
+                delete_project("retry-test")
+                assert mock_rmtree.call_count == 2
+                mock_sleep.assert_called_with(0.5)
 
 
 class TestSubProjectPaths:
