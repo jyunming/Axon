@@ -45,7 +45,7 @@ Copilot Agent Mode (VS Code)
 | `mcp` package | **Not installed, not in deps** |
 | `.github/copilot-instructions.md` | **Does not exist** |
 | `.vscode/mcp.json` | **Does not exist** |
-| `src/rag_brain/mcp_server.py` | **Does not exist** |
+| `src/axon/mcp_server.py` | **Does not exist** |
 | Test suite | 11 test files covering api, loaders, main, projects, retrievers |
 
 ---
@@ -142,7 +142,7 @@ yet — it will be added as part of Phase 2.
 ### P0-D: Confirm RAG Brain API Boots
 
 ```bash
-rag-brain-api &
+axon-api &
 curl http://localhost:8000/health
 ```
 
@@ -311,7 +311,7 @@ Estimated effort: **2.5–3 hours**
 
 Build only after all Phase 1 endpoints pass their tests.
 
-### P2-A: `src/rag_brain/mcp_server.py` _(2 hrs)_
+### P2-A: `src/axon/mcp_server.py` _(2 hrs)_
 
 A stdio process using the `mcp` Python SDK. Tool definitions adapted from the
 existing `tools.py` (already almost MCP-compatible). Each tool handler calls
@@ -344,7 +344,7 @@ unchanged. Do not treat the two sets of names as interchangeable.
 from its environment and include it as an `X-API-Key` header in every `httpx`
 call. Omitting this header will cause 401 errors in any secured deployment.
 
-**Pre-test:** Run `python -m rag_brain.mcp_server` — confirm it starts without
+**Pre-test:** Run `python -m axon.mcp_server` — confirm it starts without
 error and responds to an MCP `tools/list` request.
 
 ---
@@ -354,10 +354,10 @@ error and responds to an MCP `tools/list` request.
 ```json
 {
   "servers": {
-    "rag-brain": {
+    "axon": {
       "type": "stdio",
       "command": "python",
-      "args": ["-m", "rag_brain.mcp_server"],
+      "args": ["-m", "axon.mcp_server"],
       "env": {
         "RAG_API_BASE": "http://localhost:8000",
         "RAG_API_KEY": ""
@@ -368,7 +368,7 @@ error and responds to an MCP `tools/list` request.
 ```
 
 **Pre-test:** Reload VS Code window. Open Copilot Chat → Agent mode → Tools
-icon. Confirm `rag-brain` tools appear in the tool list.
+icon. Confirm `axon` tools appear in the tool list.
 
 ---
 
@@ -383,7 +383,7 @@ icon. Confirm `rag-brain` tools appear in the tool list.
   depending on the build path used.
 - Add `mcp>=1.0.0` to `requirements.txt`, to `install_requires` in `setup.py`,
   **and** to the appropriate dependency table in `pyproject.toml`.
-- Add console script `rag-brain-mcp = rag_brain.mcp_server:main` to
+- Add console script `axon-mcp = axon.mcp_server:main` to
   `entry_points["console_scripts"]` in `setup.py` and mirror the same script
   in `pyproject.toml` so both build paths expose the CLI.
 
@@ -449,7 +449,7 @@ These require a human with VS Code open in Copilot agent mode:
 After all phases, run the existing test suite to confirm nothing broke:
 
 ```bash
-pytest tests/ -m "not slow and not integration" --cov=rag_brain
+pytest tests/ -m "not slow and not integration" --cov=axon
 ```
 
 ---
