@@ -38,9 +38,9 @@ Copilot Agent Mode (VS Code)
 
 | Asset | State |
 |-------|-------|
-| `api.py` | 309 lines — `/add_text`, `/ingest`, `/query`, `/search`, `/collection` |
+| `api.py` | 309 lines — `/health`, `/add_text`, `/ingest`, `/query`, `/query/stream`, `/search`, `/collection`, `/delete`, `/project/switch` |
 | `tools.py` | OpenAI-format tool schemas — very close to MCP, wrong transport |
-| `loaders.py` | File-only: `.txt .tsv .json .csv .html .docx .pdf .png` |
+| `loaders.py` | File-only: `.txt .tsv .json .csv .md .html .htm .docx .pdf .png .bmp .tif .tiff .pgm` |
 | `requirements.txt` | `httpx` already present — URL fetching costs zero new deps |
 | `mcp` package | **Not installed, not in deps** |
 | `.github/copilot-instructions.md` | **Does not exist** |
@@ -68,10 +68,14 @@ let Copilot POST a URL directly.
 job ID. Copilot cannot tell if ingestion succeeded, failed, or is still running.
 Need a job ID and `GET /ingest/status/{job_id}`.
 
-**Gap 4 — No Source-Level Deduplication at API**
-Chunk-level dedup exists inside the pipeline, but if Copilot re-ingests the
-same URL twice, you get duplicate vectors degrading retrieval quality. Need a
-source fingerprint registry (`sha256(content)`) checked before embedding.
+**Gap 4 — No Source-Level Tracking / Skip Signaling at API**
+The core ingest pipeline already does content-based dedup (hashing `doc["text"]`
+when `dedup_on_ingest` is enabled), so duplicate vectors are usually avoided at
+the chunk level. What is missing is source-level tracking and clear UX: Copilot
+cannot tell if a re-ingested URL was newly stored or quickly recognised and
+skipped. Need API fields (e.g., stable `source_id` / URL) and explicit statuses
+like `ingested` vs `skipped_duplicate` for observability — avoiding unnecessary
+embedding work and giving Copilot actionable feedback.
 
 **Gap 5 — No GitHub-Specific Loader**
 No native support for GitHub URLs, repo file trees, issues, or PRs. Copilot
@@ -149,7 +153,9 @@ cleanly, nothing in Phase 2 will work.
 
 `/ingest` path validation uses the `RAG_INGEST_BASE` env var (defaults to `.`).
 Decide and document what this should be set to in the dev environment before
-building the URL loader, which writes fetched content to a temp path.
+building the URL loader. The URL loader design in Phase 1 fetches and returns
+documents directly in memory (no temp file). If a future implementation variant
+writes to disk instead, ensure its temp directory lives under `RAG_INGEST_BASE`.
 
 ---
 
@@ -219,8 +225,11 @@ Changes:
 **Unit test:** `tests/test_api.py::test_ingest_job_status` — mock
 `brain.load_directory`, assert status transitions `processing` → `completed`.
 
-**Note:** In-memory only — jobs are lost on server restart. Acceptable for v1;
-document this limitation explicitly.
+**Note:** In-memory only — jobs are lost on server restart and the `_jobs`
+dict is not shared across multiple API workers (e.g., `uvicorn --workers > 1`),
+so job status will appear inconsistent in multi-worker deployments. For v1,
+assume a single API worker and document both limitations explicitly in the
+deployment docs.
 
 ---
 
@@ -288,6 +297,13 @@ Tools to expose:
 | `list_knowledge()` | `GET /collection` |
 | `switch_project(project_name)` | `POST /project/switch` |
 | `delete_documents(doc_ids[])` | `POST /delete` |
+
+**Naming note:** MCP tool names above (e.g., `search_knowledge`,
+`query_knowledge`) differ deliberately from the existing `tools.py` names
+(`search_documents`, `query_knowledge_base`). The MCP server will define its
+own, more concise names optimised for agent-mode ergonomics. The existing
+`tools.py` schemas (OpenAI format, used by other LLM callers) are kept
+unchanged. Do not treat the two sets of names as interchangeable.
 
 **Pre-test:** Run `python -m rag_brain.mcp_server` — confirm it starts without
 error and responds to an MCP `tools/list` request.
