@@ -1919,7 +1919,7 @@ class TestExpandAtFiles:
         """Verify .pdf files are routed through _read_via_loader (not plain text)."""
         import pytest
 
-        from axon.main import _expand_at_files, _AT_LOADER_EXTS
+        from axon.main import _AT_LOADER_EXTS, _expand_at_files
 
         # Confirm .pdf is registered as a loader extension
         assert ".pdf" in _AT_LOADER_EXTS
