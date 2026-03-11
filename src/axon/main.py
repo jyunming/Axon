@@ -3022,7 +3022,6 @@ def _do_compact(brain: "OpenStudioBrain", chat_history: list) -> None:
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 _HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
-_HEADER_ROWS = 21  # box(17) + blank(1) + hint(1) + sep(1) + blank(1)
 
 
 def _box_width() -> int:
@@ -3464,6 +3463,10 @@ def _expand_at_files(text: str) -> str:
                     continue
                 fpath = os.path.join(root, fname)
                 rel = os.path.relpath(fpath, dirpath)
+                if total >= _AT_DIR_MAX_BYTES:
+                    # Budget exhausted — skip remaining files without reading them
+                    parts.append(f"\n--- @{rel} (skipped: context limit reached) ---")
+                    continue
                 content = _read_file(fpath)
                 if not content:
                     continue
@@ -3471,10 +3474,6 @@ def _expand_at_files(text: str) -> str:
                 next_size = len(encoded)
                 if total + next_size > _AT_DIR_MAX_BYTES:
                     remaining = _AT_DIR_MAX_BYTES - total
-                    if remaining <= 0:
-                        parts.append(f"\n--- @{rel} (skipped: context limit reached) ---")
-                        total = _AT_DIR_MAX_BYTES
-                        continue
                     truncated_text = encoded[:remaining].decode("utf-8", errors="ignore")
                     parts.append(f"\n--- @{rel} ---\n{truncated_text}\n… (truncated)\n--- end ---")
                     total = _AT_DIR_MAX_BYTES
