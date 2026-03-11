@@ -1,10 +1,10 @@
 """Tests for offline mode: config loading, model path resolution, and runtime guards."""
 
 import os
-import yaml
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
 
 # ---------------------------------------------------------------------------
 # Helpers

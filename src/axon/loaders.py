@@ -1,11 +1,13 @@
-import os
-import json
-import pandas as pd
 import asyncio
-from typing import List, Dict, Any, Optional
-from pathlib import Path
-import logging
 import io
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
 logger = logging.getLogger("StudioBrainOpen.Loaders")
 
 _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
@@ -22,18 +24,18 @@ def _check_file_size(path: str) -> None:
 
 class BaseLoader:
     """Base class for document loaders."""
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         raise NotImplementedError
-    
-    async def aload(self, path: str) -> List[Dict[str, Any]]:
+
+    async def aload(self, path: str) -> list[dict[str, Any]]:
         """Async version of load."""
         return await asyncio.to_thread(self.load, path)
 
 class TextLoader(BaseLoader):
     """Loader for plain text files."""
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             content = f.read()
         return [{
             "id": os.path.basename(path),
@@ -43,7 +45,7 @@ class TextLoader(BaseLoader):
 
 class TSVLoader(BaseLoader):
     """Loader for tab-delimited files."""
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         df = pd.read_csv(path, sep='	')
         documents = []
@@ -62,15 +64,15 @@ class TSVLoader(BaseLoader):
 
 class JSONLoader(BaseLoader):
     """Loader for JSON files."""
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             try:
                 data = json.load(f)
             except json.JSONDecodeError as exc:
                 logger.warning(f"Skipping malformed JSON file {path}: {exc}")
                 return []
-        
+
         if isinstance(data, list):
             documents = []
             for i, item in enumerate(data):
@@ -95,11 +97,11 @@ class JSONLoader(BaseLoader):
 
 class CSVLoader(BaseLoader):
     """Loader for CSV files. Each row becomes a document."""
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         import csv
         documents = []
-        with open(path, 'r', encoding='utf-8', newline='') as f:
+        with open(path, encoding='utf-8', newline='') as f:
             reader = csv.DictReader(f)
             for i, row in enumerate(reader):
                 # Use 'text' or 'content' column if present, else join all values
@@ -121,7 +123,7 @@ class CSVLoader(BaseLoader):
 
 class HTMLLoader(BaseLoader):
     """Loader for HTML files. Extracts visible text content."""
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         from html.parser import HTMLParser
 
@@ -153,7 +155,7 @@ class HTMLLoader(BaseLoader):
             def get_text(self):
                 return ' '.join(self._texts)
 
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, encoding='utf-8', errors='ignore') as f:
             content = f.read()
 
         extractor = _TextExtractor()
@@ -169,7 +171,7 @@ class HTMLLoader(BaseLoader):
 
 class DOCXLoader(BaseLoader):
     """Loader for DOCX files using python-docx."""
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         try:
             from docx import Document
@@ -213,7 +215,7 @@ class ImageLoader(BaseLoader):
             self.ollama = None
             logger.warning("ollama package not installed. Image loading will be skipped.")
 
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         if self._pil is None or self.ollama is None:
             return []
 
@@ -261,7 +263,7 @@ BMPLoader = ImageLoader
 class PDFLoader(BaseLoader):
     """Loader for PDF files. Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback."""
 
-    def load(self, path: str) -> List[Dict[str, Any]]:
+    def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         try:
             import fitz  # PyMuPDF
@@ -336,11 +338,11 @@ class DirectoryLoader:
             ".pgm": _image_loader,
             ".pdf": PDFLoader(),
         }
-    
-    def load(self, directory: str) -> List[Dict[str, Any]]:
+
+    def load(self, directory: str) -> list[dict[str, Any]]:
         all_documents = []
         path = Path(directory)
-        
+
         for file_path in path.rglob("*"):
             if file_path.suffix.lower() in self.loaders:
                 loader = self.loaders[file_path.suffix.lower()]
@@ -349,10 +351,10 @@ class DirectoryLoader:
                     all_documents.extend(docs)
                 except Exception as e:
                     logger.error(f"Failed to load {file_path}: {e}")
-        
+
         return all_documents
 
-    async def aload(self, directory: str) -> List[Dict[str, Any]]:
+    async def aload(self, directory: str) -> list[dict[str, Any]]:
         """Async version of load_directory — caps concurrency at 32 tasks."""
         path = Path(directory)
         semaphore = asyncio.Semaphore(32)

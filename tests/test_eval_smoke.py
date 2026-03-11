@@ -19,7 +19,6 @@ Metrics covered
 
 from __future__ import annotations
 
-from typing import List, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,7 +42,7 @@ def _make_config(**overrides):
     return cfg
 
 
-def _relevant_ids(corpus: List[Dict], keyword: str) -> List[str]:
+def _relevant_ids(corpus: list[dict], keyword: str) -> list[str]:
     """Return IDs of corpus docs whose text contains keyword (ground truth)."""
     return [d["id"] for d in corpus if keyword.lower() in d["text"].lower()]
 
@@ -68,7 +67,7 @@ CORPUS = [
 class TestPrecisionAtK:
     """Fraction of top-k retrieved results that are actually relevant."""
 
-    def _precision(self, retrieved_ids: List[str], relevant_ids: List[str]) -> float:
+    def _precision(self, retrieved_ids: list[str], relevant_ids: list[str]) -> float:
         if not retrieved_ids:
             return 0.0
         hits = sum(1 for rid in retrieved_ids if rid in relevant_ids)
@@ -114,14 +113,14 @@ class TestPrecisionAtK:
 class TestContextRelevance:
     """Retrieved context should contain keywords expected for the query."""
 
-    def _context_relevance(self, context: str, expected_keywords: List[str]) -> float:
+    def _context_relevance(self, context: str, expected_keywords: list[str]) -> float:
         """Fraction of expected keywords found in context (simple keyword overlap)."""
         if not expected_keywords:
             return 0.0
         found = sum(1 for kw in expected_keywords if kw.lower() in context.lower())
         return found / len(expected_keywords)
 
-    def _build_context(self, docs: List[Dict]) -> str:
+    def _build_context(self, docs: list[dict]) -> str:
         return "\n\n".join(f"[Document {i+1}]\n{d['text']}" for i, d in enumerate(docs))
 
     def test_relevant_context_high_score(self):
@@ -196,7 +195,7 @@ class TestAnswerFaithfulness:
 class TestRecallAtK:
     """All truly relevant documents should appear in the top-k results."""
 
-    def _recall(self, retrieved_ids: List[str], relevant_ids: List[str]) -> float:
+    def _recall(self, retrieved_ids: list[str], relevant_ids: list[str]) -> float:
         if not relevant_ids:
             return 1.0  # nothing to recall
         hits = sum(1 for rid in relevant_ids if rid in retrieved_ids)

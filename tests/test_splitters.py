@@ -1,6 +1,5 @@
 """Tests for text splitters."""
 
-import pytest
 from axon.splitters import RecursiveCharacterTextSplitter
 
 

@@ -3,9 +3,10 @@ Tool definitions for Agent Orchestration.
 These can be used to describe the Axon to an LLM.
 """
 
-from typing import Dict, Any, List
+from typing import Any
 
-def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List[Dict[str, Any]]:
+
+def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list[dict[str, Any]]:
     """
     Returns tool definitions compatible with OpenAI/Ollama/Anthropic tool calling.
     """

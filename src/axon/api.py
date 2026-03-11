@@ -1,11 +1,13 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+import logging
 import os
 import pathlib
+from typing import Any
+
 import uvicorn
-import logging
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
+
 from axon.main import OpenStudioBrain, OpenStudioConfig
 
 # Setup logging
@@ -31,7 +33,7 @@ app = FastAPI(
 )
 
 # Optional API key authentication — enabled when RAG_API_KEY env var is set
-_RAG_API_KEY: Optional[str] = os.getenv("RAG_API_KEY")
+_RAG_API_KEY: str | None = os.getenv("RAG_API_KEY")
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
@@ -48,7 +50,7 @@ async def api_key_middleware(request: Request, call_next):
     return await call_next(request)
 
 # Global Brain Instance
-brain: Optional[OpenStudioBrain] = None
+brain: OpenStudioBrain | None = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -63,36 +65,36 @@ async def startup_event():
 # Models
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The question or prompt to ask the brain")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Metadata filters for retrieval")
+    filters: dict[str, Any] | None = Field(None, description="Metadata filters for retrieval")
     stream: bool = Field(False, description="Whether to stream the response (not fully implemented in REST yet)")
     # Per-request RAG overrides (match CLI flags exactly)
-    top_k: Optional[int] = Field(None, ge=1, description="Override number of chunks to retrieve")
-    threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Override similarity threshold (0.0–1.0)")
-    hybrid: Optional[bool] = Field(None, description="Override hybrid BM25+vector search toggle")
-    rerank: Optional[bool] = Field(None, description="Override cross-encoder re-ranking toggle")
-    hyde: Optional[bool] = Field(None, description="Override HyDE query transformation toggle")
-    multi_query: Optional[bool] = Field(None, description="Override multi-query retrieval toggle")
-    step_back: Optional[bool] = Field(None, description="Override step-back prompting toggle")
-    decompose: Optional[bool] = Field(None, description="Override query decomposition toggle")
-    compress: Optional[bool] = Field(None, description="Override LLM context compression toggle")
-    discuss: Optional[bool] = Field(None, description="Override discussion fallback toggle")
-    cite: Optional[bool] = Field(None, description="Override inline source citation toggle")
+    top_k: int | None = Field(None, ge=1, description="Override number of chunks to retrieve")
+    threshold: float | None = Field(None, ge=0.0, le=1.0, description="Override similarity threshold (0.0–1.0)")
+    hybrid: bool | None = Field(None, description="Override hybrid BM25+vector search toggle")
+    rerank: bool | None = Field(None, description="Override cross-encoder re-ranking toggle")
+    hyde: bool | None = Field(None, description="Override HyDE query transformation toggle")
+    multi_query: bool | None = Field(None, description="Override multi-query retrieval toggle")
+    step_back: bool | None = Field(None, description="Override step-back prompting toggle")
+    decompose: bool | None = Field(None, description="Override query decomposition toggle")
+    compress: bool | None = Field(None, description="Override LLM context compression toggle")
+    discuss: bool | None = Field(None, description="Override discussion fallback toggle")
+    cite: bool | None = Field(None, description="Override inline source citation toggle")
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="The query string for semantic search")
-    top_k: Optional[int] = Field(None, description="Number of documents to return")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Metadata filters")
+    top_k: int | None = Field(None, description="Number of documents to return")
+    filters: dict[str, Any] | None = Field(None, description="Metadata filters")
 
 class IngestRequest(BaseModel):
     path: str = Field(..., description="Path to a file or directory to ingest. Must be within RAG_INGEST_BASE (default: current working directory).")
 
 class TextIngestRequest(BaseModel):
     text: str = Field(..., description="The content to ingest")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Metadata for the document")
-    doc_id: Optional[str] = Field(None, description="Optional unique ID for the document")
+    metadata: dict[str, Any] | None = Field(default_factory=dict, description="Metadata for the document")
+    doc_id: str | None = Field(None, description="Optional unique ID for the document")
 
 class DeleteRequest(BaseModel):
-    doc_ids: List[str] = Field(..., description="List of document IDs to delete")
+    doc_ids: list[str] = Field(..., description="List of document IDs to delete")
 
 class ProjectSwitchRequest(BaseModel):
     project_name: str = Field(..., description="Project name to switch to, or 'default' for the global knowledge base")
@@ -101,7 +103,7 @@ class SearchResult(BaseModel):
     id: str
     text: str
     score: float
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 # Endpoints
 @app.get("/health")
@@ -177,7 +179,7 @@ async def query_brain_stream(request: QueryRequest):
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
-@app.post("/search", response_model=List[SearchResult])
+@app.post("/search", response_model=list[SearchResult])
 async def search_brain(request: SearchRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
@@ -187,10 +189,10 @@ async def search_brain(request: SearchRequest):
         # For agentic use, we'll implement a search flow here.
         query_embedding = brain.embedding.embed_query(request.query)
         top_k = request.top_k or brain.config.top_k
-        
+
         results = brain.vector_store.search(
-            query_embedding, 
-            top_k=top_k, 
+            query_embedding,
+            top_k=top_k,
             filter_dict=request.filters
         )
         return results
@@ -236,16 +238,16 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
 async def add_text(request: TextIngestRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    
+
     import uuid
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
-    
+
     doc = {
         "id": doc_id,
         "text": request.text,
         "metadata": request.metadata or {"source": "api_agent", "type": "agent_input"}
     }
-    
+
     try:
         brain.ingest([doc])
         return {"status": "success", "doc_id": doc_id}

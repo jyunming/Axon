@@ -3,9 +3,7 @@ tests/test_streaming.py
 
 Tests for OpenLLM.stream() and OpenStudioBrain.query_stream().
 """
-import pytest
-from unittest.mock import patch, MagicMock, call
-
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,6 +59,7 @@ class TestOpenLLMStream:
     @patch("httpx.Client")
     def test_ollama_cloud_stream_yields_strings(self, MockHttpx):
         import json as _json
+
         from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="ollama_cloud", ollama_cloud_key="k", llm_model="m")

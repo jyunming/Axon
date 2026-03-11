@@ -16,7 +16,6 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
 
 PROJECTS_ROOT: Path = Path.home() / ".axon" / "projects"
 _ACTIVE_FILE: Path = Path.home() / ".axon" / ".active_project"
@@ -79,7 +78,7 @@ def ensure_project(name: str, description: str = "") -> Path:
     return root
 
 
-def list_projects() -> List[dict]:
+def list_projects() -> list[dict]:
     """Return all projects sorted by creation time (newest first).
 
     Returns:

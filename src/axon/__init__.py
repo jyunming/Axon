@@ -5,13 +5,7 @@ A fully open-source local-first RAG implementation.
 Uses sentence-transformers, Ollama, and ChromaDB/Qdrant.
 """
 
-from .main import (
-    OpenStudioBrain,
-    OpenStudioConfig,
-    OpenEmbedding,
-    OpenLLM,
-    OpenVectorStore
-)
+from .main import OpenEmbedding, OpenLLM, OpenStudioBrain, OpenStudioConfig, OpenVectorStore
 
 __version__ = "2.0.0"
 __all__ = [

@@ -1,5 +1,6 @@
 """Tests for src/axon/projects.py"""
 import json
+
 import pytest
 
 
@@ -134,7 +135,10 @@ class TestDeleteProject:
 
     def test_resets_active_project_to_default(self, tmp_projects):
         from axon.projects import (
-            delete_project, ensure_project, get_active_project, set_active_project,
+            delete_project,
+            ensure_project,
+            get_active_project,
+            set_active_project,
         )
         ensure_project("active")
         set_active_project("active")

@@ -1,16 +1,17 @@
-import streamlit as st
+import json
+import logging
 import os
 import sys
-import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-import logging
+
+import streamlit as st
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from axon.main import OpenStudioBrain, OpenStudioConfig
+from axon.main import OpenStudioBrain
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -259,7 +260,7 @@ SESSIONS_FILE = "sessions.json"
 def load_sessions():
     if os.path.exists(SESSIONS_FILE):
         try:
-            with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
+            with open(SESSIONS_FILE, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}

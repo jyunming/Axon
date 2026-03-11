@@ -1,8 +1,7 @@
 """Tests for retriever modules."""
 
-import pytest
 import tempfile
-import os
+
 from axon.retrievers import BM25Retriever, reciprocal_rank_fusion
 
 

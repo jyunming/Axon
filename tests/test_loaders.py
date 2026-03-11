@@ -3,14 +3,11 @@ tests/test_loaders.py
 
 Unit tests for all document loaders in axon.loaders.
 """
-import csv
 import json
 import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from axon.loaders import (
     BMPLoader,
@@ -20,7 +17,6 @@ from axon.loaders import (
     HTMLLoader,
     ImageLoader,
     JSONLoader,
-    PDFLoader,
     TextLoader,
     TSVLoader,
 )

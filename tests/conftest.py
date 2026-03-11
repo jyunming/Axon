@@ -3,7 +3,6 @@ tests/conftest.py
 
 Project-level pytest fixtures for the Axon test suite.
 """
-import os
 import shutil
 import tempfile
 from pathlib import Path
