@@ -3479,7 +3479,7 @@ def _print_recent_turns(history: list, n_turns: int = 2) -> None:
             # Cap very long responses so they don't flood the screen
             if len(content) > 600:
                 content = content[:600] + "…"
-            sys.stdout.write(f"\n  \033[1;33mBrain\033[0m:\n  {content}\n")
+            sys.stdout.write(f"\n  \033[1;33mAxon\033[0m:\n  {content}\n")
         sys.stdout.write("\n")
     sys.stdout.flush()
 
@@ -3753,6 +3753,7 @@ def _interactive_repl(
     import logging as _logging
 
     for _log in (
+        "Axon",
         "RAGBrain",
         "StudioBrainOpen.Retrievers",
         "httpx",
@@ -4022,7 +4023,15 @@ def _interactive_repl(
 
     _last_sources: list = []
     _last_query: str = ""
-    _last_config_snapshot: tuple = ()  # (provider/model, search, discuss, hybrid)
+
+    # Initial snapshot to avoid printing status on the very first query
+    m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+    s_v = "search:ON" if brain.config.truth_grounding else "search:off"
+    d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+    h_v = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
+    tk = f"top-k:{brain.config.top_k}"
+    thr = f"thr:{brain.config.similarity_threshold}"
+    _last_config_snapshot: tuple = (m, s_v, d_v, h_v, tk, thr)
 
     while True:
         try:
@@ -4684,7 +4693,7 @@ def _interactive_repl(
             def _spin_update(live: "_RL") -> None:
                 while not _spin_stop.wait(0.1):
                     f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
-                    live.update(_RT.from_markup(f"[bold yellow]Brain:[/bold yellow] {f} thinking…"))
+                    live.update(_RT.from_markup(f"[bold yellow]Axon:[/bold yellow] {f} thinking…"))
                     _spin_idx[0] += 1
 
             if stream:
@@ -4695,14 +4704,24 @@ def _interactive_repl(
                     s_v = "search:ON" if brain.config.truth_grounding else "search:off"
                     d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
                     h_v = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
-                    _snap = (m, s_v, d_v, h_v)
+                    tk = f"top-k:{brain.config.top_k}"
+                    thr = f"thr:{brain.config.similarity_threshold}"
+                    _snap = (m, s_v, d_v, h_v, tk, thr)
+
                     if _snap != _last_config_snapshot:
-                        print(f"\033[2m  {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
+                        # Only show the parts that changed
+                        changes = []
+                        for i, val in enumerate(_snap):
+                            if i >= len(_last_config_snapshot) or val != _last_config_snapshot[i]:
+                                changes.append(val)
+                        if changes:
+                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
                         _last_config_snapshot = _snap
+
                     print()
                     # Spinner until first real token arrives
                     with _RL(
-                        _RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"),
+                        _RT.from_markup("[bold yellow]Axon:[/bold yellow] ⠋ thinking…"),
                         console=_console,
                         transient=True,
                         refresh_per_second=10,
@@ -4724,7 +4743,7 @@ def _interactive_repl(
                 # then swap to full Markdown on completion — no raw cursor
                 # save/restore so the terminal scrollback is never corrupted.
                 try:
-                    _console.print("[bold yellow]Brain:[/bold yellow]")
+                    _console.print("[bold yellow]Axon:[/bold yellow]")
                     _accumulated = "".join(response_parts)
                     with _RL(
                         _RT(_accumulated + " ▋"),
@@ -4754,6 +4773,25 @@ def _interactive_repl(
                 _result: list = []
                 _err: list = []
 
+                if not quiet:
+                    m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+                    s_v = "search:ON" if brain.config.truth_grounding else "search:off"
+                    d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
+                    h_v = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
+                    tk = f"top-k:{brain.config.top_k}"
+                    thr = f"thr:{brain.config.similarity_threshold}"
+                    _snap = (m, s_v, d_v, h_v, tk, thr)
+
+                    if _snap != _last_config_snapshot:
+                        # Only show the parts that changed
+                        changes = []
+                        for i, val in enumerate(_snap):
+                            if i >= len(_last_config_snapshot) or val != _last_config_snapshot[i]:
+                                changes.append(val)
+                        if changes:
+                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
+                        _last_config_snapshot = _snap
+
                 def _run_query() -> None:
                     try:
                         _result.append(brain.query(query_text, chat_history=chat_history))
@@ -4768,7 +4806,7 @@ def _interactive_repl(
                 if not quiet:
                     print()
                     with _RL(
-                        _RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"),
+                        _RT.from_markup("[bold yellow]Axon:[/bold yellow] ⠋ thinking…"),
                         console=_console,
                         transient=True,
                         refresh_per_second=10,
@@ -4786,8 +4824,8 @@ def _interactive_repl(
                 if _err:
                     raise _err[0]
                 response = _result[0] if _result else ""
-                print()  # blank line between You: and Brain:
-                _console.print("[bold yellow]Brain:[/bold yellow]")
+                print()  # blank line between You: and Axon:
+                _console.print("[bold yellow]Axon:[/bold yellow]")
                 _console.print(_RM(response))
                 print()  # blank line after Brain response, before next You:
                 response_parts = [response]
@@ -4801,7 +4839,7 @@ def _interactive_repl(
             def _spin_plain() -> None:
                 while not _spin_stop.wait(0.1):
                     f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
-                    sys.stdout.write(f"\r  Brain: {f} thinking…")
+                    sys.stdout.write(f"\r  Axon: {f} thinking…")
                     sys.stdout.flush()
                     _spin_idx[0] += 1
 
@@ -4812,7 +4850,7 @@ def _interactive_repl(
             response = brain.query(query_text, chat_history=chat_history)
             if not quiet:
                 _spin_stop.set()
-            print(f"\n\033[1;33mBrain:\033[0m {response}\n")
+            print(f"\n\033[1;33mAxon:\033[0m {response}\n")
             response_parts = [response]
 
         response = "".join(response_parts)
@@ -4822,7 +4860,6 @@ def _interactive_repl(
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
             _save_session(session)  # persist after every turn
-            _print_status_bar()  # reprint status below each response
 
 
 if __name__ == "__main__":
