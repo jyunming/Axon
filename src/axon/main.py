@@ -3791,6 +3791,7 @@ def _interactive_repl(
 
     _last_sources: list = []
     _last_query: str = ""
+    _last_config_snapshot: tuple = ()  # (provider/model, search, discuss, hybrid)
 
     while True:
         try:
@@ -4454,7 +4455,10 @@ def _interactive_repl(
                     s_v = "search:ON" if brain.config.truth_grounding else "search:off"
                     d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
                     h_v = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
-                    print(f"\033[2m  {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
+                    _snap = (m, s_v, d_v, h_v)
+                    if _snap != _last_config_snapshot:
+                        print(f"\033[2m  {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
+                        _last_config_snapshot = _snap
                     print()
                     # Spinner until first real token arrives
                     with _RL(
