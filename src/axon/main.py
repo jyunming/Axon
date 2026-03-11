@@ -82,29 +82,18 @@ class AxonConfig:
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
 
-        # 2. Path resolution: default to home-based directories (~/.axon)
-        # to avoid filesystem permission/locking issues in WSL/Linux.
-        home = Path.home() / ".axon"
+        # 2. Environment variable overrides for paths
+        env_root = os.getenv("AXON_PROJECTS_ROOT")
+        if env_root:
+            self.projects_root = env_root
 
-        # Projects Root
-        if not self.projects_root:
-            self.projects_root = os.getenv("AXON_PROJECTS_ROOT", str(home / "projects"))
+        env_vsp = os.getenv("CHROMA_DATA_PATH")
+        if env_vsp:
+            self.vector_store_path = env_vsp
 
-        # Vector Store Path
-        if self.vector_store_path == "./chroma_data":
-            env_vsp = os.getenv("CHROMA_DATA_PATH")
-            if env_vsp:
-                self.vector_store_path = env_vsp
-            else:
-                self.vector_store_path = str(home / "data" / "chroma")
-
-        # BM25 Path
-        if self.bm25_path == "./bm25_index":
-            env_bm25 = os.getenv("BM25_INDEX_PATH")
-            if env_bm25:
-                self.bm25_path = env_bm25
-            else:
-                self.bm25_path = str(home / "data" / "bm25")
+        env_bm25 = os.getenv("BM25_INDEX_PATH")
+        if env_bm25:
+            self.bm25_path = env_bm25
 
         # Always expand user paths for safety
         self.projects_root = os.path.expanduser(self.projects_root)
@@ -115,14 +104,14 @@ class AxonConfig:
     # Root directory for all named projects. Defaults to ~/.axon/projects.
     # Override via config.yaml (projects_root: /path/to/dir) or the
     # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
-    projects_root: str = ""
+    projects_root: str = str(Path.home() / ".axon" / "projects")
 
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
-    vector_store_path: str = "./chroma_data"
+    vector_store_path: str = str(Path.home() / ".axon" / "data" / "chroma")
 
     # BM25 Settings
-    bm25_path: str = "./bm25_index"
+    bm25_path: str = str(Path.home() / ".axon" / "data" / "bm25")
 
     # RAG Settings
     top_k: int = 10
@@ -174,10 +163,6 @@ class AxonConfig:
     local_models_dir: str = ""
 
     # Inline Source Citations
-    # When enabled, the LLM is instructed to cite [Doc N] inline in its answer
-    # matching the document labels injected into the context block.
-    cite_sources: bool = False
-
     # RAPTOR Hierarchical Indexing
     # During ingest, groups every raptor_chunk_group_size consecutive chunks per source
     # and generates a summarisation node that is indexed alongside the leaf chunks.
@@ -1607,7 +1592,7 @@ Your primary goal is to help the user by answering questions based on the provid
         """Return a stable cache key for the given query + active config.
 
         All flags that change retrieval or generation are included so two
-        requests that differ only by (e.g.) cite_sources or compress_context
+        requests that differ only by (e.g.) compress_context
         receive distinct cache entries.
         """
         import hashlib
@@ -1631,7 +1616,6 @@ Your primary goal is to help the user by answering questions based on the provid
             "threshold": cfg.similarity_threshold,
             "discuss": cfg.discussion_fallback,
             "compress_context": cfg.compress_context,
-            "cite_sources": cfg.cite_sources,
             "truth_grounding": cfg.truth_grounding,
             "graph_rag": cfg.graph_rag,
             "llm_provider": cfg.llm_provider,
@@ -2426,12 +2410,6 @@ def main():
         help="Enable/disable in-memory query result caching",
     )
     parser.add_argument(
-        "--cite",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable/disable inline source citations ([Doc N]) in LLM answers",
-    )
-    parser.add_argument(
         "--raptor",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -2534,8 +2512,6 @@ def main():
         config.query_cache = args.cache
     if args.no_dedup:
         config.dedup_on_ingest = False
-    if args.cite is not None:
-        config.cite_sources = args.cite
     if args.raptor is not None:
         config.raptor = args.raptor
     if args.raptor_group_size is not None:
@@ -2656,7 +2632,6 @@ def main():
     _saved_propagate: dict = {}
     _INIT_LOGGER_NAMES = [
         "Axon",
-        "Axon.Retrievers",
         "Axon.Retrievers",
         "sentence_transformers.SentenceTransformer",
         "sentence_transformers",
@@ -3747,7 +3722,6 @@ def _interactive_repl(
 
     for _log in (
         "Axon",
-        "Axon",
         "Axon.Retrievers",
         "httpx",
         "sentence_transformers",
@@ -4346,7 +4320,6 @@ def _interactive_repl(
                         f"  step-back    · {'ON' if brain.config.step_back else 'OFF'}\n"
                         f"  decompose    · {'ON' if brain.config.query_decompose else 'OFF'}\n"
                         f"  compress     · {'ON' if brain.config.compress_context else 'OFF'}\n"
-                        f"  cite         · {'ON' if brain.config.cite_sources else 'OFF'}\n"
                         f"  raptor       · {'ON' if brain.config.raptor else 'OFF'}\n"
                         f"  graph-rag    · {'ON' if brain.config.graph_rag else 'OFF'}\n"
                         f"\n  /help rag   for usage details\n"
@@ -4396,9 +4369,6 @@ def _interactive_repl(
                         print(
                             f"  Context compression {'ON' if brain.config.compress_context else 'OFF'}"
                         )
-                    elif rag_opt == "cite":
-                        brain.config.cite_sources = not brain.config.cite_sources
-                        print(f"  Inline citations {'ON' if brain.config.cite_sources else 'OFF'}")
                     elif rag_opt == "raptor":
                         brain.config.raptor = not brain.config.raptor
                         print(

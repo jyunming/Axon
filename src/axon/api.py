@@ -151,7 +151,6 @@ async def query_brain(request: QueryRequest):
             "query_decompose": request.decompose,
             "compress_context": request.compress,
             "discussion_fallback": request.discuss,
-            "cite_sources": request.cite,
         }
         response = brain.query(request.query, filters=request.filters, overrides=overrides)
         cfg = brain._apply_overrides(overrides)
@@ -165,7 +164,6 @@ async def query_brain(request: QueryRequest):
             "decompose": cfg.query_decompose,
             "compress": cfg.compress_context,
             "discuss": cfg.discussion_fallback,
-            "cite": cfg.cite_sources,
         }
         return {"query": request.query, "response": response, "settings": settings}
     except Exception as e:
@@ -189,7 +187,6 @@ async def query_brain_stream(request: QueryRequest):
         "query_decompose": request.decompose,
         "compress_context": request.compress,
         "discussion_fallback": request.discuss,
-        "cite_sources": request.cite,
     }
 
     def generate():

@@ -634,11 +634,6 @@ with st.sidebar:
             config.compress_context,
             help="Use the LLM to extract only query-relevant sentences from each retrieved chunk",
         )
-        config.cite_sources = st.checkbox(
-            "Inline citations",
-            config.cite_sources,
-            help="Instruct the LLM to cite [Doc N] inline when using information from retrieved documents",
-        )
         config.raptor = st.checkbox(
             "RAPTOR",
             config.raptor,

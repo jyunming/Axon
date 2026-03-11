@@ -1283,40 +1283,13 @@ class TestInferProvider:
 @patch("axon.main.OpenEmbedding")
 @patch("axon.main.OpenReranker")
 class TestCiteSources:
-    def test_cite_sources_injects_instruction_in_system_prompt(
+    def test_citations_always_present(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """When cite_sources=True the system prompt must contain a citation directive."""
+        """The system prompt must contain citation directives."""
         from axon.main import AxonBrain, AxonConfig
 
-        config = AxonConfig(
-            hybrid_search=False, rerank=False, cite_sources=True, similarity_threshold=0.0
-        )
-        brain = AxonBrain(config)
-        brain._ingested_hashes = set()
-        brain.embedding.embed_query = MagicMock(return_value=[0.1])
-        brain.vector_store.search = MagicMock(
-            return_value=[
-                {"id": "d1", "text": "Transformers use attention.", "score": 0.9, "metadata": {}}
-            ]
-        )
-        brain.llm.complete = MagicMock(return_value="Answer [Doc 1]")
-
-        brain.query("What is a transformer?")
-
-        call_args = brain.llm.complete.call_args
-        system_prompt = call_args[0][1]
-        assert "cite" in system_prompt.lower() or "[Doc" in system_prompt
-
-    def test_cite_sources_disabled_by_default(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
-        """Without cite_sources the system prompt must NOT contain the citation directive."""
-        from axon.main import AxonBrain, AxonConfig
-
-        config = AxonConfig(
-            hybrid_search=False, rerank=False, cite_sources=False, similarity_threshold=0.0
-        )
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
         brain = AxonBrain(config)
         brain._ingested_hashes = set()
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
@@ -1331,35 +1304,7 @@ class TestCiteSources:
 
         call_args = brain.llm.complete.call_args
         system_prompt = call_args[0][1]
-        assert "Citation requirement" not in system_prompt
-
-    def test_cite_override_applies_via_apply_overrides(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
-        """Per-request cite_sources override is applied via _apply_overrides."""
-        from axon.main import AxonBrain, AxonConfig
-
-        config = AxonConfig(
-            hybrid_search=False, rerank=False, cite_sources=False, similarity_threshold=0.0
-        )
-        brain = AxonBrain(config)
-        brain._ingested_hashes = set()
-        brain.embedding.embed_query = MagicMock(return_value=[0.1])
-        brain.vector_store.search = MagicMock(
-            return_value=[
-                {"id": "d1", "text": "Transformers use attention.", "score": 0.9, "metadata": {}}
-            ]
-        )
-        brain.llm.complete = MagicMock(return_value="Answer [Doc 1]")
-
-        # Pass override at query time
-        brain.query("What is a transformer?", overrides={"cite_sources": True})
-
-        call_args = brain.llm.complete.call_args
-        system_prompt = call_args[0][1]
-        assert "cite" in system_prompt.lower() or "[Doc" in system_prompt
-        # Ensure original config was not mutated
-        assert brain.config.cite_sources is False
+        assert "cite" in system_prompt.lower() or "[Document" in system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1693,19 +1638,6 @@ class TestCacheFixes:
         brain.query("q1")
         brain.query("q1")  # second call — should NOT raise and should call LLM again
         assert brain.llm.complete.call_count == 2  # no caching when size=0
-
-    def test_cache_key_includes_cite_sources(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
-    ):
-        """Two requests differing only in cite_sources get distinct cache keys."""
-        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        from axon.main import AxonConfig
-
-        cfg_no_cite = AxonConfig(cite_sources=False)
-        cfg_cite = AxonConfig(cite_sources=True)
-        key1 = brain._make_cache_key("q", None, cfg_no_cite)
-        key2 = brain._make_cache_key("q", None, cfg_cite)
-        assert key1 != key2
 
     def test_cache_key_includes_compress_context(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
