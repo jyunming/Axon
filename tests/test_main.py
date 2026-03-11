@@ -83,6 +83,22 @@ class TestAxonConfig:
         assert config.projects_root == expected
 
 
+class TestVectorStoreClose:
+    def test_chroma_close_called(self):
+        from axon.main import AxonConfig, OpenVectorStore
+
+        config = AxonConfig(vector_store="chroma")
+        with patch("chromadb.PersistentClient") as mock_chroma:
+            mock_client = MagicMock()
+            mock_chroma.return_value = mock_client
+            store = OpenVectorStore(config)
+            store.close()
+            # Depending on chroma version, it might have close()
+            if hasattr(mock_client, "close"):
+                assert mock_client.close.called
+            assert store.client is None
+
+
 class TestMultiStoreWriteErrors:
     """Merged parent-project views must raise on all write / delete operations."""
 
@@ -198,6 +214,22 @@ class TestAxonBrain:
         assert "turn 2 question" not in args[1] or "Relevant context" in args[1]
         # History must be forwarded
         assert kwargs["chat_history"] == history
+
+    def test_brain_close_closes_stores(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(AxonConfig())
+        brain.vector_store.close = MagicMock()
+        brain.bm25.close = MagicMock()
+        brain._own_vector_store.close = MagicMock()
+        brain._own_bm25.close = MagicMock()
+
+        brain.close()
+
+        assert brain.vector_store.close.called
+        assert brain.bm25.close.called
+        assert brain._own_vector_store.close.called
+        assert brain._own_bm25.close.called
 
     def test_ingest_flow(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         from axon.main import AxonBrain, AxonConfig
@@ -1909,6 +1941,7 @@ class TestExpandAtFiles:
     def test_docx_extension_routes_to_loader(self, tmp_path):
         """Verify .docx files are routed through _read_via_loader (not plain text)."""
         import pytest
+
         from axon.main import _expand_at_files
 
         try:
@@ -1927,6 +1960,7 @@ class TestExpandAtFiles:
     def test_pdf_extension_routes_to_loader(self, tmp_path):
         """Verify .pdf files are routed through _read_via_loader (not plain text)."""
         import pytest
+
         from axon.main import _AT_LOADER_EXTS, _expand_at_files
 
         # Confirm .pdf is registered as a loader extension

@@ -44,16 +44,16 @@ def test_brain_art_content():
 
 
 def test_open_studio_config_path_defaults():
-    from pathlib import Path
+    import os
 
     from axon.main import AxonConfig
 
     # Mock or check defaults
     config = AxonConfig()
-    home = Path.home() / ".axon"
+    home = os.path.join(os.path.expanduser("~"), ".axon")
 
     # Verify that the paths default to the user's home directory subdirectory
     # (unless overridden by env vars, but in a clean test env they should be default)
-    assert config.vector_store_path == str(home / "data" / "chroma")
-    assert config.bm25_path == str(home / "data" / "bm25")
-    assert config.projects_root == str(home / "projects")
+    assert config.vector_store_path == os.path.join(home, "projects", "default", "chroma_data")
+    assert config.bm25_path == os.path.join(home, "projects", "default", "bm25_index")
+    assert config.projects_root == os.path.join(home, "projects")

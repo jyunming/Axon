@@ -4,10 +4,11 @@ import pathlib
 from typing import Any
 
 import uvicorn
-from axon.main import AxonBrain, AxonConfig
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+
+from axon.main import AxonBrain, AxonConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -87,7 +88,6 @@ class QueryRequest(BaseModel):
     decompose: bool | None = Field(None, description="Override query decomposition toggle")
     compress: bool | None = Field(None, description="Override LLM context compression toggle")
     discuss: bool | None = Field(None, description="Override discussion fallback toggle")
-    cite: bool | None = Field(None, description="Override inline source citation toggle")
 
 
 class SearchRequest(BaseModel):

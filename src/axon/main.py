@@ -39,7 +39,7 @@ logging.basicConfig(
 logger = logging.getLogger("Axon")
 
 # XDG-style user config dir — consistent across Linux / macOS / Windows
-_USER_CONFIG_PATH = Path.home() / ".config" / "axon" / "config.yaml"
+_USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "config.yaml")
 
 
 @dataclass
@@ -63,6 +63,23 @@ class AxonConfig:
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
     vllm_base_url: str = "http://localhost:8000/v1"
+
+    # Projects
+    # Root directory for all named projects. Defaults to ~/.axon/projects.
+    # Override via config.yaml (projects_root: /path/to/dir) or the
+    # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
+    projects_root: str = os.path.join(os.path.expanduser("~"), ".axon", "projects")
+
+    # Vector Store
+    vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
+    vector_store_path: str = os.path.join(
+        os.path.expanduser("~"), ".axon", "projects", "default", "chroma_data"
+    )
+
+    # BM25 Settings
+    bm25_path: str = os.path.join(
+        os.path.expanduser("~"), ".axon", "projects", "default", "bm25_index"
+    )
 
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
@@ -98,42 +115,52 @@ class AxonConfig:
         # 3. Aggressive WSL/Linux path resolution to avoid "readonly database"
         # errors on Windows-mounted drives (drvfs).
         is_linux = sys.platform == "linux"
-        home = Path.home() / ".axon"
+        home = os.path.join(os.path.expanduser("~"), ".axon")
 
         def _resolve_safe(path_str: str, sub: str) -> str:
             if not path_str:
-                return str(home / sub)
+                return os.path.join(home, "projects", "default", sub)
             # Expand ~
-            p = Path(os.path.expanduser(path_str))
+            p_str = os.path.expanduser(path_str)
             # If it's the legacy relative default, force to home
             legacy_defaults = ("./chroma_data", "chroma_data", "./bm25_index", "bm25_index")
             if path_str in legacy_defaults:
-                return str(home / "data" / sub)
+                return os.path.join(home, "projects", "default", sub)
+
+            # Check for absolute paths
+            if is_linux:
+                import posixpath
+
+                is_abs = posixpath.isabs(p_str)
+            else:
+                is_abs = os.path.isabs(p_str)
+
             # If absolute but on a Windows mount in Linux, it will likely fail
-            if is_linux and p.is_absolute() and str(p).startswith("/mnt/"):
+            if is_linux and is_abs and p_str.startswith("/mnt/"):
                 # Only redirect if it looks like the user didn't explicitly set a custom Linux path
                 # (heuristic: if it contains 'studio_brain_open' or 'axon' in a Windows path)
-                if any(x in str(p).lower() for x in ("axon", "studio_brain")):
-                    safe_path = home / "data" / sub
-                    return str(safe_path)
-            return str(p.absolute())
+                if any(x in p_str.lower() for x in ("axon", "studio_brain")):
+                    safe_path = os.path.join(home, "projects", "default", sub)
+                    return safe_path
 
-        self.projects_root = _resolve_safe(self.projects_root, "projects")
-        self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma")
-        self.bm25_path = _resolve_safe(self.bm25_path, "bm25")
+            if is_linux:
+                # On Windows host testing linux, abspath adds C:\
+                return p_str
+            return os.path.abspath(p_str)
 
-    # Projects
-    # Root directory for all named projects. Defaults to ~/.axon/projects.
-    # Override via config.yaml (projects_root: /path/to/dir) or the
-    # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
-    projects_root: str = str(Path.home() / ".axon" / "projects")
+        # Projects root special case (no sub-path)
+        if not os.getenv("AXON_PROJECTS_ROOT"):
+            self.projects_root = os.path.expanduser(self.projects_root)
+            if (
+                is_linux
+                and os.path.isabs(self.projects_root)
+                and self.projects_root.startswith("/mnt/")
+            ):
+                if any(x in self.projects_root.lower() for x in ("axon", "studio_brain")):
+                    self.projects_root = os.path.join(home, "projects")
 
-    # Vector Store
-    vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
-    vector_store_path: str = str(Path.home() / ".axon" / "data" / "chroma")
-
-    # BM25 Settings
-    bm25_path: str = str(Path.home() / ".axon" / "data" / "bm25")
+        self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma_data")
+        self.bm25_path = _resolve_safe(self.bm25_path, "bm25_index")
 
     # RAG Settings
     top_k: int = 10
@@ -227,10 +254,10 @@ llm:
 
 vector_store:
   provider: chroma
-  path: ~/.axon/data/chroma
+  path: ~/.axon/projects/default/chroma_data
 
 bm25:
-  path: ~/.axon/data/bm25
+  path: ~/.axon/projects/default/bm25_index
 
 rag:
   top_k: 10
@@ -874,7 +901,9 @@ class OpenVectorStore:
                     from rich.console import Console
 
                     Console().print(msg)
-                    sys.exit(1)
+                    raise RuntimeError(
+                        f"ChromaDB failed to initialize at: {self.config.vector_store_path}"
+                    )
                 raise e
         elif self.provider == "qdrant":
             from qdrant_client import QdrantClient
@@ -890,6 +919,23 @@ class OpenVectorStore:
                 self.collection = self.client.open_table("axon")
             except Exception:
                 self.collection = None  # created lazily on first add()
+
+    def close(self):
+        """Release any open file handles or database connections."""
+        if self.provider == "chroma" and self.client:
+            # ChromaDB 0.4.x+ uses a persistent client that should be closed if supported
+            if hasattr(self.client, "close"):
+                try:
+                    self.client.close()
+                except Exception:
+                    pass
+            self.client = None
+            self.collection = None
+        elif self.provider == "lancedb" and self.client:
+            self.client = None
+            self.collection = None
+        elif self.provider == "qdrant" and self.client:
+            self.client = None
 
     def add(
         self,
@@ -1184,6 +1230,11 @@ class MultiBM25Retriever:
     def __init__(self, retrievers: list) -> None:
         self._retrievers = retrievers
 
+    def close(self):
+        for r in self._retrievers:
+            if hasattr(r, "close"):
+                r.close()
+
     def search(self, query: str, top_k: int = 10) -> list[dict]:
         from concurrent.futures import ThreadPoolExecutor
 
@@ -1300,6 +1351,11 @@ Your primary goal is to help the user by answering questions based on the provid
             _proj_mod.set_projects_root(self.config.projects_root)
             logger.info(f"Projects root: {_proj_mod.PROJECTS_ROOT}")
 
+        # Ensure the 'default' project directory exists
+        from axon.projects import ensure_project
+
+        ensure_project("default")
+
         logger.info("Initializing Axon...")
         self.embedding = OpenEmbedding(self.config)
         self.llm = OpenLLM(self.config)
@@ -1351,6 +1407,35 @@ Your primary goal is to help the user by answering questions based on the provid
 
         logger.info("Axon ready!")
 
+    def close(self):
+        """Explicitly release all resources (connections, file handles)."""
+        if hasattr(self, "vector_store") and self.vector_store:
+            if hasattr(self.vector_store, "close"):
+                self.vector_store.close()
+        if hasattr(self, "bm25") and self.bm25:
+            if hasattr(self.bm25, "close"):
+                self.bm25.close()
+        if hasattr(self, "_own_vector_store") and self._own_vector_store:
+            if hasattr(self._own_vector_store, "close"):
+                self._own_vector_store.close()
+        if hasattr(self, "_own_bm25") and self._own_bm25:
+            if hasattr(self._own_bm25, "close"):
+                self._own_bm25.close()
+
+    def should_recommend_project(self) -> bool:
+        """Return True if we should recommend creating a dedicated project.
+
+        True if the active project is 'default' AND no named projects exist yet.
+        """
+        if self._active_project != "default":
+            return False
+        from axon.projects import list_projects
+
+        try:
+            return not list_projects()
+        except Exception:
+            return False
+
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
 
@@ -1388,6 +1473,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 )
             self.config.vector_store_path = project_vector_path(name)
             self.config.bm25_path = project_bm25_path(name)
+
+        # Close existing stores before replacing them
+        self.close()
 
         # Own store: always the project's own data (used for writes / dedup / GraphRAG)
         own_vs = OpenVectorStore(self.config)
@@ -3641,7 +3729,17 @@ _AT_TEXT_EXTS = {
     ".graphql",
 }
 # Extensions handled by dedicated loaders (extract clean text from binary formats)
-_AT_LOADER_EXTS = {".docx", ".pdf"}
+_AT_LOADER_EXTS = {
+    ".docx",
+    ".pptx",
+    ".pdf",
+    ".doc",
+    ".ppt",
+    ".bmp",
+    ".png",
+    ".jpg",
+    ".jpeg",
+}
 _AT_DIR_MAX_BYTES = 120_000  # ~120 KB total across all files in a folder
 _AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
 
@@ -4164,6 +4262,32 @@ def _interactive_repl(
                 if not arg:
                     print("  Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
                 else:
+                    from axon.projects import ensure_project
+
+                    # Prompt to create a project if none exist and currently in 'default'
+                    if brain.should_recommend_project():
+                        try:
+                            print(
+                                "\n  \033[1mNote\033[0m: You are about to ingest into the 'default' project."
+                            )
+                            print(
+                                "  It is recommended to create a dedicated project to keep your data organized."
+                            )
+                            confirm = (
+                                _read_input("  Create a new project now? [y/N]: ").strip().lower()
+                            )
+                            if confirm == "y":
+                                new_name = _read_input("  New project name: ").strip().lower()
+                                if new_name:
+                                    try:
+                                        ensure_project(new_name)
+                                        brain.switch_project(new_name)
+                                        print(f"  Switched to project '{new_name}'.\n")
+                                    except ValueError as e:
+                                        print(f"  {e}")
+                        except (EOFError, KeyboardInterrupt):
+                            print("\n  Cancelled project check.")
+
                     import glob as _glob
 
                     from axon.loaders import DirectoryLoader
@@ -4863,6 +4987,27 @@ def _interactive_repl(
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
             _save_session(session)  # persist after every turn
+
+
+# Backwards-compatible aliases (Deprecated)
+def __getattr__(name):
+    import warnings
+
+    if name == "OpenStudioBrain":
+        warnings.warn(
+            "OpenStudioBrain is deprecated and will be removed in a future version. Use AxonBrain instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return AxonBrain
+    if name == "OpenStudioConfig":
+        warnings.warn(
+            "OpenStudioConfig is deprecated and will be removed in a future version. Use AxonConfig instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return AxonConfig
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":

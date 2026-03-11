@@ -64,12 +64,11 @@ vector_store:
   provider: chroma
 
   # Storage path
-  path: ~/.axon/data/chroma
+  path: ~/.axon/projects/default/chroma_data
 
 # BM25 Keyword Search
 bm25:
-  path: ~/.axon/data/bm25
-
+  path: ~/.axon/projects/default/bm25_index
 rag:
   # Number of documents to retrieve
   top_k: 10

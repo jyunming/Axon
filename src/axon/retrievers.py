@@ -30,6 +30,11 @@ class BM25Retriever:
 
         self.load()
 
+    def close(self):
+        """Release index and corpus references."""
+        self.bm25 = None
+        self.corpus = []
+
     def _tokenize(self, text: str) -> list[str]:
         """Simple tokenizer."""
         return text.lower().split()
@@ -83,7 +88,16 @@ class BM25Retriever:
         tmp_file = self.corpus_file + ".tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(self.corpus, f, ensure_ascii=False)
-        os.replace(tmp_file, self.corpus_file)
+
+        # Atomic-ish replace (os.replace can fail on Windows if file is held)
+        if os.path.exists(self.corpus_file):
+            try:
+                os.remove(self.corpus_file)
+            except PermissionError:
+                os.replace(tmp_file, self.corpus_file)
+                logger.info(f"💾 BM25 corpus saved to {self.corpus_file} (via replace)")
+                return
+        os.rename(tmp_file, self.corpus_file)
         logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
 
     def load(self):
