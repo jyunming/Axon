@@ -51,9 +51,9 @@ class OpenStudioConfig:
     """Configuration for Axon."""
 
     # Embedding
-    embedding_provider: Literal[
-        "sentence_transformers", "ollama", "fastembed", "openai"
-    ] = "sentence_transformers"
+    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = (
+        "sentence_transformers"
+    )
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
 
@@ -3028,6 +3028,7 @@ def _box_width() -> int:
     """Return inner box width: terminal columns minus 4, minimum 43."""
     return max(43, shutil.get_terminal_size((120, 24)).columns - 4)
 
+
 # FIGlet "Big" ASCII art for AXON — all chars are 1-col wide, each line is 35 cols
 _AXON_ART = [
     " █████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
@@ -3042,9 +3043,9 @@ _AXON_BLUE = [
     "\x1b[38;2;173;216;230m",  # light blue
     "\x1b[38;2;135;206;250m",  # light sky blue
     "\x1b[38;2;100;149;237m",  # cornflower blue
-    "\x1b[38;2;30;144;255m",   # dodger blue
-    "\x1b[38;2;65;105;225m",   # royal blue
-    "\x1b[38;2;0;71;171m",     # cobalt blue
+    "\x1b[38;2;30;144;255m",  # dodger blue
+    "\x1b[38;2;65;105;225m",  # royal blue
+    "\x1b[38;2;0;71;171m",  # cobalt blue
 ]
 _AXON_RST = "\x1b[0m"
 
@@ -3076,22 +3077,22 @@ def _anim_pad(row_idx: int, frame: int, width: int) -> str:
     if width < 12:
         return " " * width
 
-    track_w = width - 2          # 1-space margin on each side
-    hub1 = track_w // 3       # first junction column
-    hub2 = 2 * track_w // 3   # second junction column
+    track_w = width - 2  # 1-space margin on each side
+    hub1 = track_w // 3  # first junction column
+    hub2 = 2 * track_w // 3  # second junction column
 
-    RST  = "\x1b[0m"
-    DIM  = "\x1b[2m"
-    NODE = "\x1b[38;2;70;110;155m"   # muted steel-blue — static wire / nodes
+    RST = "\x1b[0m"
+    DIM = "\x1b[2m"
+    NODE = "\x1b[38;2;70;110;155m"  # muted steel-blue — static wire / nodes
 
     # Three signal "families": teal · sky-blue · violet
     _PCOL = [
-        "\x1b[38;2;0;245;210m",    # teal   — head
-        "\x1b[38;2;80;195;255m",   # sky    — head
+        "\x1b[38;2;0;245;210m",  # teal   — head
+        "\x1b[38;2;80;195;255m",  # sky    — head
         "\x1b[38;2;170;120;255m",  # violet — head
     ]
     _TRAIL = [
-        ("\x1b[38;2;0;155;130m",  "\x1b[38;2;0;90;75m",   "\x1b[38;2;0;50;42m"),
+        ("\x1b[38;2;0;155;130m", "\x1b[38;2;0;90;75m", "\x1b[38;2;0;50;42m"),
         ("\x1b[38;2;40;130;200m", "\x1b[38;2;20;75;125m", "\x1b[38;2;10;45;75m"),
         ("\x1b[38;2;105;65;200m", "\x1b[38;2;60;35;130m", "\x1b[38;2;35;18;75m"),
     ]
@@ -3100,7 +3101,7 @@ def _anim_pad(row_idx: int, frame: int, width: int) -> str:
         """Return (speed 1-3, direction ±1, phase) for particle j on row r."""
         spd = (r * 5 + j * 7 + 3) % 3 + 1
         drn = 1 if (r * 13 + j * 11) % 3 != 0 else -1
-        ph  = (r * 37 + j * 23 + 11) % max(1, track_w)
+        ph = (r * 37 + j * 23 + 11) % max(1, track_w)
         return spd, drn, ph
 
     if row_idx == 5:
@@ -3130,16 +3131,16 @@ def _anim_pad(row_idx: int, frame: int, width: int) -> str:
 
     for j in range(3):
         spd, drn, ph = _particle(row_idx, j)
-        pos  = (frame * spd * drn + ph) % track_w
-        col  = _PCOL[j]
+        pos = (frame * spd * drn + ph) % track_w
+        col = _PCOL[j]
         t1, t2, t3 = _TRAIL[j]
         head = "▸" if drn > 0 else "◂"
 
         for idx, level, c, ch in [
-            (pos,                    4, col, head),
-            ((pos - drn)   % track_w, 3, t1,  "─"),
-            ((pos - 2*drn) % track_w, 2, t2,  "─"),
-            ((pos - 3*drn) % track_w, 1, t3,  "─"),
+            (pos, 4, col, head),
+            ((pos - drn) % track_w, 3, t1, "─"),
+            ((pos - 2 * drn) % track_w, 2, t2, "─"),
+            ((pos - 3 * drn) % track_w, 1, t3, "─"),
         ]:
             if prio[idx][0] < level:
                 prio[idx] = (level, c, ch)
@@ -3191,9 +3192,8 @@ def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> l
     rows = [
         f"  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m",  # 1
         blank,  # 2
-        *[                                                   # 3-8  blue-shaded art lines
-            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃"
-            for i, line in enumerate(_AXON_ART)
+        *[  # 3-8  blue-shaded art lines
+            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃" for i, line in enumerate(_AXON_ART)
         ],
         blank,  # 9
         _brow(f"    LLM    ·  {model_s}"),  # 6
@@ -3288,9 +3288,7 @@ class _InitDisplay(logging.Handler):
         )
         sys.stdout.write(
             f"\n  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
-            f"  ┃{' ' * bw}┃\n"
-            + _art_rows
-            + f"  ┃{' ' * bw}┃\n"
+            f"  ┃{' ' * bw}┃\n" + _art_rows + f"  ┃{' ' * bw}┃\n"
             f"  ┃{'    ⠿  Initializing…'.ljust(bw)}┃\n"  # step line (3rd from bottom)
             f"  ┃{' ' * bw}┃\n"
             f"  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
@@ -4083,9 +4081,7 @@ def _interactive_repl(
                     print("  Web search OFF — answers from local knowledge only.")
                 else:
                     if not brain.config.brave_api_key:
-                        print(
-                            "  BRAVE_API_KEY is not set. Export it and restart, or set it with:"
-                        )
+                        print("  BRAVE_API_KEY is not set. Export it and restart, or set it with:")
                         print("     export BRAVE_API_KEY=your_key")
                     else:
                         brain.config.truth_grounding = True
@@ -4151,9 +4147,7 @@ def _interactive_repl(
                         print(f"  Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
                     elif rag_opt == "step-back":
                         brain.config.step_back = not brain.config.step_back
-                        print(
-                            f"  Step-back prompting {'ON' if brain.config.step_back else 'OFF'}"
-                        )
+                        print(f"  Step-back prompting {'ON' if brain.config.step_back else 'OFF'}")
                     elif rag_opt == "decompose":
                         brain.config.query_decompose = not brain.config.query_decompose
                         print(
@@ -4166,9 +4160,7 @@ def _interactive_repl(
                         )
                     elif rag_opt == "cite":
                         brain.config.cite_sources = not brain.config.cite_sources
-                        print(
-                            f"  Inline citations {'ON' if brain.config.cite_sources else 'OFF'}"
-                        )
+                        print(f"  Inline citations {'ON' if brain.config.cite_sources else 'OFF'}")
                     elif rag_opt == "raptor":
                         brain.config.raptor = not brain.config.raptor
                         print(
