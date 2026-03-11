@@ -36,9 +36,9 @@ pytestmark = pytest.mark.eval
 
 
 def _make_config(**overrides):
-    from axon.main import OpenStudioConfig
+    from axon.main import AxonConfig
 
-    cfg = OpenStudioConfig()
+    cfg = AxonConfig()
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
@@ -268,7 +268,7 @@ class TestPipelineIntegrationSmoke:
     """End-to-end pipeline smoke test with fully mocked dependencies."""
 
     def _make_brain(self):
-        """Construct a mocked OpenStudioBrain that uses CORPUS for retrieval."""
+        """Construct a mocked AxonBrain that uses CORPUS for retrieval."""
         import axon.main as m
 
         cfg = _make_config(
@@ -288,7 +288,7 @@ class TestPipelineIntegrationSmoke:
             patch.object(m, "OpenReranker"),
             patch("axon.retrievers.BM25Retriever"),
         ):
-            brain = m.OpenStudioBrain.__new__(m.OpenStudioBrain)
+            brain = m.AxonBrain.__new__(m.AxonBrain)
             brain.config = cfg
             brain.embedding = MagicMock()
             brain.embedding.embed_query.return_value = [0.1] * 384
@@ -302,13 +302,13 @@ class TestPipelineIntegrationSmoke:
             brain._query_cache = {}
             brain._ingested_hashes = set()
             brain._entity_graph = {}
-            brain._apply_overrides = m.OpenStudioBrain._apply_overrides.__get__(brain)
-            brain._execute_retrieval = m.OpenStudioBrain._execute_retrieval.__get__(brain)
-            brain._build_context = m.OpenStudioBrain._build_context.__get__(brain)
-            brain._build_system_prompt = m.OpenStudioBrain._build_system_prompt.__get__(brain)
-            brain._make_cache_key = m.OpenStudioBrain._make_cache_key.__get__(brain)
-            brain._log_query_metrics = m.OpenStudioBrain._log_query_metrics.__get__(brain)
-            brain._compress_context = m.OpenStudioBrain._compress_context.__get__(brain)
+            brain._apply_overrides = m.AxonBrain._apply_overrides.__get__(brain)
+            brain._execute_retrieval = m.AxonBrain._execute_retrieval.__get__(brain)
+            brain._build_context = m.AxonBrain._build_context.__get__(brain)
+            brain._build_system_prompt = m.AxonBrain._build_system_prompt.__get__(brain)
+            brain._make_cache_key = m.AxonBrain._make_cache_key.__get__(brain)
+            brain._log_query_metrics = m.AxonBrain._log_query_metrics.__get__(brain)
+            brain._compress_context = m.AxonBrain._compress_context.__get__(brain)
             return brain
 
     def test_pipeline_returns_non_empty_answer(self):

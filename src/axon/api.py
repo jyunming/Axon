@@ -8,11 +8,11 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from axon.main import OpenStudioBrain, OpenStudioConfig
+from axon.main import AxonBrain, AxonConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("RAGBrainAPI")
+logger = logging.getLogger("AxonAPI")
 
 
 def _validate_ingest_path(path: str) -> str:
@@ -53,7 +53,7 @@ async def api_key_middleware(request: Request, call_next):
 
 
 # Global Brain Instance
-brain: OpenStudioBrain | None = None
+brain: AxonBrain | None = None
 
 
 @app.on_event("startup")
@@ -61,8 +61,8 @@ async def startup_event():
     global brain
     try:
         config_path = os.getenv("AXON_CONFIG_PATH")
-        config = OpenStudioConfig.load(config_path)
-        brain = OpenStudioBrain(config)
+        config = AxonConfig.load(config_path)
+        brain = AxonBrain(config)
         logger.info("Axon initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize Axon: {e}")
@@ -214,7 +214,7 @@ async def search_brain(request: SearchRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        # We need to expose the search method from OpenStudioBrain more directly
+        # We need to expose the search method from AxonBrain more directly
         # or use the vector_store directly.
         # For agentic use, we'll implement a search flow here.
         query_embedding = brain.embedding.embed_query(request.query)

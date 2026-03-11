@@ -11,13 +11,13 @@ import streamlit as st
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from axon.main import OpenStudioBrain
+from axon.main import AxonBrain
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 
 st.set_page_config(
-    page_title="Studio Brain",
+    page_title="Axon",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -298,7 +298,7 @@ if "current_session_id" not in st.session_state:
 
 if "brain" not in st.session_state:
     with st.spinner("Initializing Brain…"):
-        st.session_state.brain = OpenStudioBrain()
+        st.session_state.brain = AxonBrain()
     # Seed embedding baseline so the hot-swap warning only fires on user changes
     st.session_state["_emb_provider"] = st.session_state.brain.config.embedding_provider
     st.session_state["_emb_model"] = st.session_state.brain.config.embedding_model
@@ -318,7 +318,7 @@ with st.sidebar:
 
     # ── App title ──
     st.markdown(
-        '<div style="font-size:1rem;font-weight:700;color:#e4e4e7;margin-bottom:8px;">🧠 Studio Brain</div>',
+        '<div style="font-size:1rem;font-weight:700;color:#e4e4e7;margin-bottom:8px;">🧠 Axon</div>',
         unsafe_allow_html=True,
     )
 

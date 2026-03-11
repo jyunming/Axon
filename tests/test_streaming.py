@@ -1,7 +1,7 @@
 """
 tests/test_streaming.py
 
-Tests for OpenLLM.stream() and OpenStudioBrain.query_stream().
+Tests for OpenLLM.stream() and AxonBrain.query_stream().
 """
 
 from unittest.mock import MagicMock, patch
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 
 def _make_brain(config):
-    """Construct an OpenStudioBrain with all heavy dependencies mocked."""
+    """Construct an AxonBrain with all heavy dependencies mocked."""
     with (
         patch("axon.main.OpenEmbedding"),
         patch("axon.main.OpenLLM"),
@@ -20,9 +20,9 @@ def _make_brain(config):
         patch("axon.main.OpenReranker"),
         patch("axon.retrievers.BM25Retriever"),
     ):
-        from axon.main import OpenStudioBrain
+        from axon.main import AxonBrain
 
-        return OpenStudioBrain(config)
+        return AxonBrain(config)
 
 
 # ---------------------------------------------------------------------------
@@ -33,9 +33,9 @@ def _make_brain(config):
 class TestOpenLLMStream:
     @patch("ollama.Client")
     def test_ollama_stream_yields_strings(self, MockOllama):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, AxonConfig
 
-        config = OpenStudioConfig(llm_provider="ollama")
+        config = AxonConfig(llm_provider="ollama")
         llm = OpenLLM(config)
 
         chunks = [{"message": {"content": t}} for t in ["Hello", " world", "!"]]
@@ -48,9 +48,9 @@ class TestOpenLLMStream:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_stream_yields_strings(self, _cfg, MockModel):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, AxonConfig
 
-        config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-2.0-flash")
+        config = AxonConfig(llm_provider="gemini", llm_model="gemini-2.0-flash")
         llm = OpenLLM(config)
 
         chunk_mocks = [MagicMock(text=t) for t in ["The", " answer", " is", " 42"]]
@@ -64,9 +64,9 @@ class TestOpenLLMStream:
     def test_ollama_cloud_stream_yields_strings(self, MockHttpx):
         import json as _json
 
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, AxonConfig
 
-        config = OpenStudioConfig(llm_provider="ollama_cloud", ollama_cloud_key="k", llm_model="m")
+        config = AxonConfig(llm_provider="ollama_cloud", ollama_cloud_key="k", llm_model="m")
         llm = OpenLLM(config)
 
         lines = [_json.dumps({"response": t}) for t in ["token1", " token2"]]
@@ -86,9 +86,9 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_openai_stream_yields_strings(self, MockOpenAI):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, AxonConfig
 
-        config = OpenStudioConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
+        config = AxonConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
         llm = OpenLLM(config)
 
         def _make_chunk(text):
@@ -104,9 +104,9 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_vllm_stream_yields_strings(self, MockOpenAI):
-        from axon.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             llm_provider="vllm",
             llm_model="meta-llama/Llama-3.1-8B-Instruct",
             vllm_base_url="http://localhost:8000/v1",
@@ -128,15 +128,15 @@ class TestOpenLLMStream:
 
 
 # ---------------------------------------------------------------------------
-# OpenStudioBrain.query_stream()
+# AxonBrain.query_stream()
 # ---------------------------------------------------------------------------
 
 
 class TestQueryStream:
     def _make_brain_with_mocks(self):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
+        config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
         with (
             patch("axon.main.OpenEmbedding"),
             patch("axon.main.OpenLLM"),
@@ -144,9 +144,9 @@ class TestQueryStream:
             patch("axon.main.OpenReranker"),
             patch("axon.retrievers.BM25Retriever"),
         ):
-            from axon.main import OpenStudioBrain
+            from axon.main import AxonBrain
 
-            brain = OpenStudioBrain(config)
+            brain = AxonBrain(config)
         return brain
 
     def test_yields_sources_then_tokens(self):

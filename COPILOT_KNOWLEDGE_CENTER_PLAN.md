@@ -264,7 +264,7 @@ from inside a request handler.
 **Concurrency requirement:** `brain.switch_project()` mutates shared global
 state (vector store, BM25 path, hash store, cache) and MUST NOT be called
 directly from request handlers. Implement one of:
-- A `Dict[str, OpenStudioBrain]` mapping project name → dedicated brain
+- A `Dict[str, AxonBrain]` mapping project name → dedicated brain
   instance, selecting the right one per request (preferred).
 - A process-wide `asyncio.Lock` guarding any global-state switch + ingest/query
   pair (simpler but serialises all ingestion).

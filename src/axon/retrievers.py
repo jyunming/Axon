@@ -6,7 +6,7 @@ from typing import Any
 
 from rank_bm25 import BM25Okapi
 
-logger = logging.getLogger("StudioBrainOpen.Retrievers")
+logger = logging.getLogger("Axon.Retrievers")
 
 
 class BM25Retriever:

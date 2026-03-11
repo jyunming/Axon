@@ -153,13 +153,13 @@ def main():
     parser.add_argument("--output", default=None, help="Output report path (default: eval_report_<ts>.md)")
     args = parser.parse_args()
 
-    from axon.main import OpenStudioBrain, OpenStudioConfig
+    from axon.main import AxonBrain, AxonConfig
     
     print("🧠 Loading Axon...")
-    config = OpenStudioConfig.load(args.config)
+    config = AxonConfig.load(args.config)
     if args.model:
         config.llm_model = args.model
-    brain = OpenStudioBrain(config)
+    brain = AxonBrain(config)
 
     print(f"📋 Loading testset from {args.testset}...")
     testset = load_testset(args.testset)

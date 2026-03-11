@@ -12,8 +12,8 @@ import yaml
 
 
 def _make_brain(config, *, mock_bm25=True):
-    """Construct an OpenStudioBrain with all heavy dependencies mocked."""
-    from axon.main import OpenStudioBrain
+    """Construct an AxonBrain with all heavy dependencies mocked."""
+    from axon.main import AxonBrain
 
     with (
         patch("axon.main.OpenEmbedding"),
@@ -22,7 +22,7 @@ def _make_brain(config, *, mock_bm25=True):
         patch("axon.main.OpenReranker"),
         patch("axon.retrievers.BM25Retriever"),
     ):
-        return OpenStudioBrain(config)
+        return AxonBrain(config)
 
 
 # ---------------------------------------------------------------------------
@@ -32,56 +32,56 @@ def _make_brain(config, *, mock_bm25=True):
 
 class TestOfflineConfig:
     def test_default_offline_fields(self):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig()
+        config = AxonConfig()
         assert config.offline_mode is False
         assert config.local_models_dir == ""
 
     def test_load_offline_section_enabled(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         data = {"offline": {"enabled": True, "local_models_dir": "/srv/models"}}
         cfg_path = tmp_path / "config.yaml"
         cfg_path.write_text(yaml.dump(data))
 
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.offline_mode is True
         assert config.local_models_dir == "/srv/models"
 
     def test_load_offline_section_disabled(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         data = {"offline": {"enabled": False, "local_models_dir": "/srv/models"}}
         cfg_path = tmp_path / "config.yaml"
         cfg_path.write_text(yaml.dump(data))
 
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.offline_mode is False
         # local_models_dir still loaded even if offline is disabled
         assert config.local_models_dir == "/srv/models"
 
     def test_load_offline_section_missing(self, tmp_path):
         """YAML without offline: section → defaults."""
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         data = {"llm": {"provider": "ollama", "model": "gemma"}}
         cfg_path = tmp_path / "config.yaml"
         cfg_path.write_text(yaml.dump(data))
 
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.offline_mode is False
         assert config.local_models_dir == ""
 
     def test_load_offline_no_local_models_dir(self, tmp_path):
         """offline.enabled without local_models_dir → empty string."""
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
         data = {"offline": {"enabled": True}}
         cfg_path = tmp_path / "config.yaml"
         cfg_path.write_text(yaml.dump(data))
 
-        config = OpenStudioConfig.load(str(cfg_path))
+        config = AxonConfig.load(str(cfg_path))
         assert config.offline_mode is True
         assert config.local_models_dir == ""
 
@@ -93,18 +93,18 @@ class TestOfflineConfig:
 
 class TestResolveModelPath:
     def _brain_offline(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             offline_mode=True,
             local_models_dir=str(tmp_path),
         )
         return _make_brain(config)
 
     def test_offline_off_returns_unchanged(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(offline_mode=False, local_models_dir=str(tmp_path))
+        config = AxonConfig(offline_mode=False, local_models_dir=str(tmp_path))
         brain = _make_brain(config)
         assert brain._resolve_model_path("all-MiniLM-L6-v2") == "all-MiniLM-L6-v2"
 
@@ -160,15 +160,15 @@ class TestResolveModelPath:
         assert result == "BAAI/bge-reranker-base"
 
     def test_empty_local_models_dir_returns_unchanged(self):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(offline_mode=True, local_models_dir="")
+        config = AxonConfig(offline_mode=True, local_models_dir="")
         brain = _make_brain(config)
         assert brain._resolve_model_path("all-MiniLM-L6-v2") == "all-MiniLM-L6-v2"
 
 
 # ---------------------------------------------------------------------------
-# OpenStudioBrain.__init__ — offline mode side-effects
+# AxonBrain.__init__ — offline mode side-effects
 # ---------------------------------------------------------------------------
 
 
@@ -177,9 +177,9 @@ class TestBrainOfflineInit:
         monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
         monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
         monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(offline_mode=True, local_models_dir=str(tmp_path))
+        config = AxonConfig(offline_mode=True, local_models_dir=str(tmp_path))
         _make_brain(config)
         assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
         assert os.environ.get("HF_DATASETS_OFFLINE") == "1"
@@ -189,18 +189,18 @@ class TestBrainOfflineInit:
         monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
         monkeypatch.delenv("HF_DATASETS_OFFLINE", raising=False)
         monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(offline_mode=False)
+        config = AxonConfig(offline_mode=False)
         _make_brain(config)
         # Must not be set to "1" by the brain itself
         assert os.environ.get("TRANSFORMERS_OFFLINE") != "1"
         assert os.environ.get("HF_HUB_OFFLINE") != "1"
 
     def test_truth_grounding_disabled_offline(self, tmp_path):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             offline_mode=True,
             local_models_dir=str(tmp_path),
             truth_grounding=True,
@@ -210,18 +210,18 @@ class TestBrainOfflineInit:
         assert brain.config.truth_grounding is False
 
     def test_truth_grounding_untouched_when_online(self):
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(offline_mode=False, truth_grounding=True, brave_api_key="key")
+        config = AxonConfig(offline_mode=False, truth_grounding=True, brave_api_key="key")
         brain = _make_brain(config)
         assert brain.config.truth_grounding is True
 
     def test_embedding_model_resolved_on_init(self, tmp_path):
         model_dir = tmp_path / "all-MiniLM-L6-v2"
         model_dir.mkdir()
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             offline_mode=True,
             local_models_dir=str(tmp_path),
             embedding_model="all-MiniLM-L6-v2",
@@ -232,9 +232,9 @@ class TestBrainOfflineInit:
     def test_reranker_model_resolved_on_init(self, tmp_path):
         model_dir = tmp_path / "bge-reranker-base"
         model_dir.mkdir()
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             offline_mode=True,
             local_models_dir=str(tmp_path),
             reranker_model="BAAI/bge-reranker-base",
@@ -245,9 +245,9 @@ class TestBrainOfflineInit:
     def test_already_absolute_reranker_model_unchanged(self, tmp_path):
         abs_model = str(tmp_path / "my-reranker")
         Path(abs_model).mkdir()
-        from axon.main import OpenStudioConfig
+        from axon.main import AxonConfig
 
-        config = OpenStudioConfig(
+        config = AxonConfig(
             offline_mode=True,
             local_models_dir=str(tmp_path),
             reranker_model=abs_model,

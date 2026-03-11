@@ -90,7 +90,7 @@
 
 #### `_interactive_repl()` (lines 1652-1668)
 ```python
-def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
+def _interactive_repl(brain: 'AxonBrain', stream: bool = True,
                       init_display: '_InitDisplay | None' = None) -> None:
     """Interactive REPL chat session with session persistence and live tab completion.
 
@@ -103,7 +103,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
 
     Args:
-        brain: OpenStudioBrain instance to use for queries.
+        brain: AxonBrain instance to use for queries.
         stream: If True, streams LLM response token-by-token; if False, waits for full response.
         init_display: Optional _InitDisplay handler to stop after initialization.
     """
@@ -112,7 +112,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 #### `_show_context()` (lines 1285-1290)
 ```python
 def _show_context(
-    brain: 'OpenStudioBrain',
+    brain: 'AxonBrain',
     chat_history: list,
     last_sources: list,
     last_query: str,

@@ -43,7 +43,7 @@ _USER_CONFIG_PATH = Path.home() / ".config" / "axon" / "config.yaml"
 
 
 @dataclass
-class OpenStudioConfig:
+class AxonConfig:
     """Configuration for Axon."""
 
     # Embedding
@@ -196,7 +196,7 @@ class OpenStudioConfig:
     llm_timeout: int = 60
 
     @classmethod
-    def load(cls, path: str | None = None) -> "OpenStudioConfig":
+    def load(cls, path: str | None = None) -> "AxonConfig":
         """Load configuration from a YAML file.
 
         Defaults to ``~/.config/axon/config.yaml``.  On first run (file absent)
@@ -360,7 +360,7 @@ class OpenReranker:
     Open-source reranking using Cross-Encoders.
     """
 
-    def __init__(self, config: OpenStudioConfig):
+    def __init__(self, config: AxonConfig):
         self.config = config
         self.model = None
         self.llm = None
@@ -436,7 +436,7 @@ class OpenEmbedding:
     Open-source embedding provider.
     """
 
-    def __init__(self, config: OpenStudioConfig):
+    def __init__(self, config: AxonConfig):
         self.config = config
         self.provider = config.embedding_provider
         self.model = None
@@ -517,7 +517,7 @@ class OpenLLM:
     Open-source LLM provider.
     """
 
-    def __init__(self, config: OpenStudioConfig):
+    def __init__(self, config: AxonConfig):
         self.config = config
         self._openai_clients: dict = {}
 
@@ -835,7 +835,7 @@ class OpenVectorStore:
     Open-source vector store interface.
     """
 
-    def __init__(self, config: OpenStudioConfig):
+    def __init__(self, config: AxonConfig):
         self.config = config
         self.provider = config.vector_store
         self.client = None
@@ -1182,7 +1182,7 @@ class MultiBM25Retriever:
     batch_add_documents = add_documents
 
 
-class OpenStudioBrain:
+class AxonBrain:
     """
     Main interface for Axon.
     """
@@ -1191,11 +1191,12 @@ class OpenStudioBrain:
 Your primary goal is to help the user by answering questions based on the provided context from their private documents.
 
 **Guidelines:**
-1. **Prioritize Context**: If relevant information is found in the provided context, use it to answer the question accurately and cite the documents.
-2. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response.
-3. **Be Transparent**: If you are using your general knowledge because no local documents matched the query, briefly mention it (e.g., 'I couldn't find specific details in your documents, but based on my general knowledge...').
-4. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
-5. **No emoji**: Do not use emoji in your responses. Plain text only.
+1. **Prioritize Context**: If relevant information is found in the provided context, use it to answer the question accurately.
+2. **Mandatory Citations**: ALWAYS cite your sources. When using information from the context, cite it inline using the document label exactly as shown (e.g. [Document 1 (ID: ...)]). If using information from a Web Search result, cite it as [Web Result] and include the source URL. Place the citation immediately after the relevant sentence or fact.
+3. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response.
+4. **Be Transparent**: If you are using your general knowledge because no local documents matched the query, briefly mention it (e.g., 'I couldn't find specific details in your documents, but based on my general knowledge...').
+5. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
+6. **No emoji**: Do not use emoji in your responses. Plain text only.
 """
 
     SYSTEM_PROMPT_STRICT = """You are the 'Axon', a focused AI assistant that answers ONLY from the provided document context.
@@ -1203,7 +1204,7 @@ Your primary goal is to help the user by answering questions based on the provid
 **Guidelines:**
 1. **Context Only**: Answer exclusively from the provided context. Do NOT use general knowledge or information outside the documents.
 2. **No Match — Say So**: If the context does not contain relevant information to answer the question, respond with: "I don't have relevant information in my documents to answer that."
-3. **Cite Sources**: When answering, reference the relevant document or section.
+3. **Mandatory Citations**: ALWAYS cite your sources. Reference the relevant document or section inline using the document label exactly as shown (e.g. [Document 1 (ID: ...)]). If information comes from a Web Search result, cite it as [Web Result] and include the source URL.
 4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
 5. **No emoji**: Do not use emoji in your responses. Plain text only.
 """
@@ -1237,8 +1238,8 @@ Your primary goal is to help the user by answering questions based on the provid
         )
         return model_name
 
-    def __init__(self, config: OpenStudioConfig | None = None):
-        self.config = config or OpenStudioConfig.load()
+    def __init__(self, config: AxonConfig | None = None):
+        self.config = config or AxonConfig.load()
 
         # ── Offline mode: lock down all network access before any model loads ──
         if self.config.offline_mode:
@@ -2077,21 +2078,13 @@ Your primary goal is to help the user by answering questions based on the provid
     def _build_system_prompt(self, has_web: bool, cfg=None) -> str:
         """Return the system prompt based on discussion_fallback and web search state.
 
-        When discussion_fallback is False, uses a strict context-only prompt so
-        the LLM will not answer from general knowledge even if retrieved docs are
-        irrelevant. When True, uses the permissive prompt that encourages general
-        knowledge fallback when context is insufficient.
+        When discussion_fallback is False, uses a strict context-only prompt.
+        When True, uses the permissive prompt.
         """
         if cfg is None:
             cfg = self.config
         base = self.SYSTEM_PROMPT if cfg.discussion_fallback else self.SYSTEM_PROMPT_STRICT
-        if cfg.cite_sources:
-            base = base + (
-                "\n\n**Citation requirement**: When using information from the context, "
-                "cite it inline using the document label from the context block exactly as shown, "
-                "e.g. [Document 1 (ID: ...)], [Document 2 (ID: ...)]. "
-                "Place the citation immediately after the relevant sentence or fact."
-            )
+
         if not cfg.truth_grounding:
             return base
         if has_web:
@@ -2105,7 +2098,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "you have access to live Brave Search as a fallback tool. It was not needed for this query."
         )
 
-    def _apply_overrides(self, overrides: dict | None) -> "OpenStudioConfig":
+    def _apply_overrides(self, overrides: dict | None) -> "AxonConfig":
         """Return a config copy with per-request overrides applied (thread-safe)."""
         if not overrides:
             return self.config
@@ -2481,7 +2474,7 @@ def main():
         logging.getLogger("httpx").propagate = False
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    config = OpenStudioConfig.load(args.config)
+    config = AxonConfig.load(args.config)
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
@@ -2664,7 +2657,7 @@ def main():
     _INIT_LOGGER_NAMES = [
         "Axon",
         "Axon.Retrievers",
-        "StudioBrainOpen.Retrievers",
+        "Axon.Retrievers",
         "sentence_transformers.SentenceTransformer",
         "sentence_transformers",
         "chromadb",
@@ -2681,7 +2674,7 @@ def main():
             _lg.setLevel(logging.INFO)
             _lg.addHandler(_init_display)
 
-    brain = OpenStudioBrain(config)
+    brain = AxonBrain(config)
 
     if _init_display:
         _init_display.stop()
@@ -2819,7 +2812,7 @@ _SLASH_COMMANDS = [
 ]
 
 
-def _make_completer(brain: "OpenStudioBrain"):
+def _make_completer(brain: "AxonBrain"):
     """Return a readline completer for slash commands, paths, and model names."""
 
     def completer(text: str, state: int):
@@ -2883,7 +2876,7 @@ def _sessions_dir() -> str:
     return _SESSIONS_DIR
 
 
-def _new_session(brain: "OpenStudioBrain") -> dict:
+def _new_session(brain: "AxonBrain") -> dict:
     return {
         "id": _dt.now(_tz.utc).strftime("%Y%m%dT%H%M%S%f")[:-3],
         "started_at": _dt.now(_tz.utc).isoformat(),
@@ -3000,7 +2993,7 @@ def _token_bar(used: int, total: int, width: int = 20) -> str:
 
 
 def _show_context(
-    brain: "OpenStudioBrain",
+    brain: "AxonBrain",
     chat_history: list,
     last_sources: list,
     last_query: str,
@@ -3018,7 +3011,7 @@ def _show_context(
     All content is wrapped in a box with section separators for readability.
 
     Args:
-        brain: OpenStudioBrain instance to extract model and config info.
+        brain: AxonBrain instance to extract model and config info.
         chat_history: List of message dicts {"role": "user"|"assistant", "content": str}.
         last_sources: List of document dicts from last retrieval (with "vector_score", "metadata", "text").
         last_query: The user query that was used for the last retrieval.
@@ -3207,7 +3200,7 @@ def _show_context(
     print()
 
 
-def _do_compact(brain: "OpenStudioBrain", chat_history: list) -> None:
+def _do_compact(brain: "AxonBrain", chat_history: list) -> None:
     """Summarize chat history via LLM and replace it with a single summary turn.
 
     Condenses all messages in chat_history into a 4-6 sentence summary using the configured LLM.
@@ -3217,7 +3210,7 @@ def _do_compact(brain: "OpenStudioBrain", chat_history: list) -> None:
     If chat_history is empty, prints a message and returns without action.
 
     Args:
-        brain: OpenStudioBrain instance used to call the LLM for summarization.
+        brain: AxonBrain instance used to call the LLM for summarization.
         chat_history: List of message dicts to summarize (modified in-place; emptied and refilled with summary).
     """
     if not chat_history:
@@ -3383,7 +3376,7 @@ def _anim_pad(row_idx: int, frame: int, width: int) -> str:
     return _get_brain_anim_row(row_idx, frame, width)
 
 
-def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> list:
+def _build_header(brain: "AxonBrain", tick_lines: list | None = None) -> list:
     """Return lines of the pinned header box (airy layout)."""
     model_s = f"{brain.config.llm_provider}/{brain.config.llm_model}"
     embed_s = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
@@ -3438,7 +3431,7 @@ def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> l
     return rows
 
 
-def _draw_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> None:
+def _draw_header(brain: "AxonBrain", tick_lines: list | None = None) -> None:
     """Clear screen and draw the welcome header box with LLM and embedding model info.
 
     Displays initialization status lines (e.g., "✓ Embedding ready [CPU]", "✓ BM25 · 42 docs").
@@ -3446,7 +3439,7 @@ def _draw_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> No
     Uses ANSI codes to clear and position the cursor — no scroll region (natural terminal scrollback).
 
     Args:
-        brain: OpenStudioBrain instance to extract model and provider information.
+        brain: AxonBrain instance to extract model and provider information.
         tick_lines: Optional list of status messages (e.g., ["Starting", "Embedding ready [CPU]"])
                    to display in the header box.
     """
@@ -3722,7 +3715,7 @@ def _expand_at_files(text: str) -> str:
 
 
 def _interactive_repl(
-    brain: "OpenStudioBrain",
+    brain: "AxonBrain",
     stream: bool = True,
     init_display: "_InitDisplay | None" = None,
     quiet: bool = False,
@@ -3740,7 +3733,7 @@ def _interactive_repl(
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
 
     Args:
-        brain: OpenStudioBrain instance to use for queries.
+        brain: AxonBrain instance to use for queries.
         stream: If True, streams LLM response token-by-token; if False, waits for full response.
         init_display: Optional _InitDisplay handler to stop after initialization.
         quiet: Suppress spinners and progress bars (auto-enabled for non-TTY stdin).
@@ -3754,8 +3747,8 @@ def _interactive_repl(
 
     for _log in (
         "Axon",
-        "RAGBrain",
-        "StudioBrainOpen.Retrievers",
+        "Axon",
+        "Axon.Retrievers",
         "httpx",
         "sentence_transformers",
         "chromadb",

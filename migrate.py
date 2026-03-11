@@ -48,10 +48,10 @@ def import_to_local_brain(input_file: str = "rag_export.json", directory: str = 
     """
     Import documents into the Axon.
     """
-    from axon.main import OpenStudioBrain
+    from axon.main import AxonBrain
     import asyncio
     
-    brain = OpenStudioBrain()
+    brain = AxonBrain()
     
     if directory:
         print(f"📥 Importing directory: {directory}...")
@@ -74,8 +74,8 @@ def compare_query(query: str):
     print("=" * 60)
     
     try:
-        from axon.main import OpenStudioBrain
-        brain = OpenStudioBrain()
+        from axon.main import AxonBrain
+        brain = AxonBrain()
         response = brain.query(query)
         print(response)
     except Exception as e:
