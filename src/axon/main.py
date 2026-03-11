@@ -66,6 +66,7 @@ class OpenStudioConfig:
 
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
+        # 1. API Keys and URLs
         if not self.api_key:
             self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
         if not self.gemini_api_key:
@@ -80,6 +81,35 @@ class OpenStudioConfig:
                 self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
+
+        # 2. Path resolution: default to home-based directories (~/.axon)
+        # to avoid filesystem permission/locking issues in WSL/Linux.
+        home = Path.home() / ".axon"
+
+        # Projects Root
+        if not self.projects_root:
+            self.projects_root = os.getenv("AXON_PROJECTS_ROOT", str(home / "projects"))
+
+        # Vector Store Path
+        if self.vector_store_path == "./chroma_data":
+            env_vsp = os.getenv("CHROMA_DATA_PATH")
+            if env_vsp:
+                self.vector_store_path = env_vsp
+            else:
+                self.vector_store_path = str(home / "data" / "chroma")
+
+        # BM25 Path
+        if self.bm25_path == "./bm25_index":
+            env_bm25 = os.getenv("BM25_INDEX_PATH")
+            if env_bm25:
+                self.bm25_path = env_bm25
+            else:
+                self.bm25_path = str(home / "data" / "bm25")
+
+        # Always expand user paths for safety
+        self.projects_root = os.path.expanduser(self.projects_root)
+        self.vector_store_path = os.path.expanduser(self.vector_store_path)
+        self.bm25_path = os.path.expanduser(self.bm25_path)
 
     # Projects
     # Root directory for all named projects. Defaults to ~/.axon/projects.

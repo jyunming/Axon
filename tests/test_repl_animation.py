@@ -41,3 +41,19 @@ def test_axon_blue_exists():
 def test_brain_art_content():
     assert len(_BRAIN_ART) == 6
     assert "(O)~~." in _BRAIN_ART[0]
+
+
+def test_open_studio_config_path_defaults():
+    from axon.main import OpenStudioConfig
+    import os
+    from pathlib import Path
+
+    # Mock or check defaults
+    config = OpenStudioConfig()
+    home = Path.home() / ".axon"
+
+    # Verify that the paths default to the user's home directory subdirectory
+    # (unless overridden by env vars, but in a clean test env they should be default)
+    assert config.vector_store_path == str(home / "data" / "chroma")
+    assert config.bm25_path == str(home / "data" / "bm25")
+    assert config.projects_root == str(home / "projects")
