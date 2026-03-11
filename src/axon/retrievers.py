@@ -8,6 +8,7 @@ from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger("StudioBrainOpen.Retrievers")
 
+
 class BM25Retriever:
     """
     Keyword-based retriever using BM25 algorithm.
@@ -36,7 +37,7 @@ class BM25Retriever:
         if not documents:
             return
         self.corpus.extend(documents)
-        tokenized_corpus = [self._tokenize(doc['text']) for doc in self.corpus]
+        tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
         self.bm25 = BM25Okapi(tokenized_corpus)
         self.save()
 
@@ -58,7 +59,7 @@ class BM25Retriever:
         for i in top_indices:
             if scores[i] > 0:
                 doc = self.corpus[i].copy()
-                doc['score'] = float(scores[i])
+                doc["score"] = float(scores[i])
                 results.append(doc)
 
         return results
@@ -66,10 +67,10 @@ class BM25Retriever:
     def delete_documents(self, doc_ids: list[str]) -> None:
         """Remove documents by ID and rebuild index."""
         original_count = len(self.corpus)
-        self.corpus = [doc for doc in self.corpus if doc['id'] not in doc_ids]
+        self.corpus = [doc for doc in self.corpus if doc["id"] not in doc_ids]
         if len(self.corpus) < original_count:
             if self.corpus:
-                tokenized_corpus = [self._tokenize(doc['text']) for doc in self.corpus]
+                tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
                 self.bm25 = BM25Okapi(tokenized_corpus)
             else:
                 self.bm25 = None
@@ -78,7 +79,7 @@ class BM25Retriever:
     def save(self):
         """Save the corpus to disk as JSON (atomic write via temp file)."""
         tmp_file = self.corpus_file + ".tmp"
-        with open(tmp_file, 'w', encoding='utf-8') as f:
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(self.corpus, f, ensure_ascii=False)
         os.replace(tmp_file, self.corpus_file)
         logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
@@ -90,7 +91,8 @@ class BM25Retriever:
         if os.path.exists(legacy_pkl) and not os.path.exists(self.corpus_file):
             try:
                 import pickle
-                with open(legacy_pkl, 'rb') as f:
+
+                with open(legacy_pkl, "rb") as f:
                     corpus, _ = pickle.load(f)
                 self.corpus = corpus
                 self.save()  # save as JSON
@@ -101,10 +103,10 @@ class BM25Retriever:
                 return
         elif os.path.exists(self.corpus_file):
             try:
-                with open(self.corpus_file, encoding='utf-8') as f:
+                with open(self.corpus_file, encoding="utf-8") as f:
                     self.corpus = json.load(f)
                 if self.corpus:
-                    tokenized_corpus = [self._tokenize(doc['text']) for doc in self.corpus]
+                    tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
                     self.bm25 = BM25Okapi(tokenized_corpus)
                 logger.info(f"📂 Loaded BM25 corpus with {len(self.corpus)} documents")
             except Exception as e:
@@ -113,7 +115,9 @@ class BM25Retriever:
                 self.bm25 = None
 
 
-def reciprocal_rank_fusion(vector_results: list[dict], bm25_results: list[dict], k: int = 60) -> list[dict]:
+def reciprocal_rank_fusion(
+    vector_results: list[dict], bm25_results: list[dict], k: int = 60
+) -> list[dict]:
     """Merge results from multiple retrievers using Reciprocal Rank Fusion.
 
     The original cosine similarity score from vector search is preserved in the
@@ -123,34 +127,34 @@ def reciprocal_rank_fusion(vector_results: list[dict], bm25_results: list[dict],
     fused_scores = {}
 
     # Preserve original cosine scores keyed by doc_id
-    vector_scores = {doc['id']: doc.get('score', 0.0) for doc in vector_results}
+    vector_scores = {doc["id"]: doc.get("score", 0.0) for doc in vector_results}
 
     for rank, doc in enumerate(vector_results):
-        doc_id = doc['id']
+        doc_id = doc["id"]
         fused_scores[doc_id] = fused_scores.get(doc_id, 0) + 1 / (rank + k)
 
     for rank, doc in enumerate(bm25_results):
-        doc_id = doc['id']
+        doc_id = doc["id"]
         if doc_id not in fused_scores:
             fused_scores[doc_id] = 1 / (rank + k)
-            doc['fused_only'] = True
+            doc["fused_only"] = True
         else:
             fused_scores[doc_id] += 1 / (rank + k)
 
-    all_docs = {doc['id']: doc for doc in vector_results}
+    all_docs = {doc["id"]: doc for doc in vector_results}
     for doc in bm25_results:
-        if doc['id'] not in all_docs:
-            all_docs[doc['id']] = doc
+        if doc["id"] not in all_docs:
+            all_docs[doc["id"]] = doc
 
     sorted_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
 
     final_results = []
     for doc_id in sorted_ids:
         doc = all_docs[doc_id]
-        doc['score'] = fused_scores[doc_id]
+        doc["score"] = fused_scores[doc_id]
         # Expose the original cosine similarity for display purposes
         if doc_id in vector_scores:
-            doc['vector_score'] = vector_scores[doc_id]
+            doc["vector_score"] = vector_scores[doc_id]
         final_results.append(doc)
 
     return final_results

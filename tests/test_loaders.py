@@ -3,6 +3,7 @@ tests/test_loaders.py
 
 Unit tests for all document loaders in axon.loaders.
 """
+
 import json
 import sys
 import tempfile
@@ -25,6 +26,7 @@ from axon.loaders import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _assert_doc(doc):
     """Assert a document has the required schema."""
     assert "id" in doc
@@ -36,6 +38,7 @@ def _assert_doc(doc):
 # ---------------------------------------------------------------------------
 # TextLoader
 # ---------------------------------------------------------------------------
+
 
 def test_text_loader_basic(tmp_path):
     p = tmp_path / "hello.txt"
@@ -59,6 +62,7 @@ def test_text_loader_empty(tmp_path):
 # TSVLoader
 # ---------------------------------------------------------------------------
 
+
 def test_tsv_loader(tmp_path):
     p = tmp_path / "data.tsv"
     p.write_text("content\tscore\nfoo bar\t1\nbaz qux\t2\n", encoding="utf-8")
@@ -72,6 +76,7 @@ def test_tsv_loader(tmp_path):
 # ---------------------------------------------------------------------------
 # JSONLoader
 # ---------------------------------------------------------------------------
+
 
 def test_json_loader_list(tmp_path):
     p = tmp_path / "items.json"
@@ -93,6 +98,7 @@ def test_json_loader_dict(tmp_path):
 # ---------------------------------------------------------------------------
 # CSVLoader
 # ---------------------------------------------------------------------------
+
 
 def test_csv_loader_text_column(tmp_path):
     p = tmp_path / "data.csv"
@@ -123,6 +129,7 @@ def test_csv_loader_empty(tmp_path):
 # HTMLLoader
 # ---------------------------------------------------------------------------
 
+
 def test_html_loader_strips_script(tmp_path):
     p = tmp_path / "page.html"
     p.write_text(
@@ -151,6 +158,7 @@ def test_html_loader_empty_body(tmp_path):
 # DOCXLoader
 # ---------------------------------------------------------------------------
 
+
 def test_docx_loader_happy(tmp_path):
     mock_para = MagicMock()
     mock_para.text = "Test paragraph"
@@ -166,6 +174,7 @@ def test_docx_loader_happy(tmp_path):
         # Force re-import inside the loader function by clearing cached module
         sys.modules.pop("axon.loaders", None)
         from axon.loaders import DOCXLoader as _DOCXLoader
+
         docs = _DOCXLoader().load(str(p))
 
     assert len(docs) == 1
@@ -185,6 +194,7 @@ def test_docx_loader_missing_dep(tmp_path):
 # ---------------------------------------------------------------------------
 # PDFLoader
 # ---------------------------------------------------------------------------
+
 
 def _make_fitz_mock(texts):
     """Build a minimal fitz (PyMuPDF) mock returning given page texts."""
@@ -206,6 +216,7 @@ def test_pdf_loader_fitz(tmp_path):
         # Remove cached import if any
         sys.modules.pop("axon.loaders", None)
         from axon.loaders import PDFLoader as _PDFLoader  # re-import inside patch
+
         docs = _PDFLoader().load(str(p))
 
     assert len(docs) == 2
@@ -229,6 +240,7 @@ def test_pdf_loader_pypdf_fallback(tmp_path):
     with patch.dict(sys.modules, {"fitz": None, "pypdf": pypdf_mock}):
         sys.modules.pop("axon.loaders", None)
         from axon.loaders import PDFLoader as _PDFLoader
+
         docs = _PDFLoader().load(str(p))
 
     assert len(docs) == 1
@@ -242,6 +254,7 @@ def test_pdf_loader_no_deps(tmp_path):
     with patch.dict(sys.modules, {"fitz": None, "pypdf": None}):
         sys.modules.pop("axon.loaders", None)
         from axon.loaders import PDFLoader as _PDFLoader
+
         docs = _PDFLoader().load(str(p))
     assert docs == []
 
@@ -249,6 +262,7 @@ def test_pdf_loader_no_deps(tmp_path):
 # ---------------------------------------------------------------------------
 # DirectoryLoader
 # ---------------------------------------------------------------------------
+
 
 def test_directory_loader_mixed(tmp_path):
     (tmp_path / "a.txt").write_text("text file", encoding="utf-8")
@@ -274,12 +288,13 @@ def test_directory_loader_ignores_unknown(tmp_path):
 # Class-based tests (origin/master style)
 # ---------------------------------------------------------------------------
 
+
 class TestTextLoader:
     """Test the TextLoader class."""
 
     def test_load_text_file(self):
         """Test loading a text file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("This is a test document.")
             f.flush()
 
@@ -297,10 +312,10 @@ class TestJSONLoader:
 
     def test_load_json_list(self):
         """Test loading JSON with a list of documents."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             data = [
                 {"text": "Document 1", "author": "Alice"},
-                {"text": "Document 2", "author": "Bob"}
+                {"text": "Document 2", "author": "Bob"},
             ]
             json.dump(data, f)
             f.flush()
@@ -314,7 +329,7 @@ class TestJSONLoader:
 
     def test_load_json_object(self):
         """Test loading JSON with a single object."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             data = {"text": "Single document", "category": "test"}
             json.dump(data, f)
             f.flush()
@@ -366,7 +381,9 @@ class TestImageLoader:
         assert docs[0]["metadata"]["model"] == "llava"
         mock_ollama.generate.assert_called_once()
         call_kwargs = mock_ollama.generate.call_args
-        assert call_kwargs[1]["model"] == "llava" or call_kwargs[0][0] == "llava"  # positional or kw
+        assert (
+            call_kwargs[1]["model"] == "llava" or call_kwargs[0][0] == "llava"
+        )  # positional or kw
 
     def test_image_loader_handles_png(self, tmp_path):
         """ImageLoader correctly records 'png' as format in metadata."""
@@ -450,6 +467,7 @@ class TestDirectoryLoader:
 # ---------------------------------------------------------------------------
 # New test: DirectoryLoader.aload()
 # ---------------------------------------------------------------------------
+
 
 class TestDirectoryLoaderAload:
     """Test the async aload() method of DirectoryLoader."""

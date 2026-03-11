@@ -33,7 +33,7 @@ class RecursiveCharacterTextSplitter:
                     split_at = self.chunk_size
                     break
 
-                last_idx = current_text[:self.chunk_size].rfind(sep)
+                last_idx = current_text[: self.chunk_size].rfind(sep)
                 if last_idx != -1:
                     split_at = last_idx + len(sep)
                     break
@@ -42,7 +42,7 @@ class RecursiveCharacterTextSplitter:
                 split_at = self.chunk_size
 
             chunks.append(current_text[:split_at].strip())
-            current_text = current_text[split_at - self.chunk_overlap:]
+            current_text = current_text[split_at - self.chunk_overlap :]
 
         if current_text:
             chunks.append(current_text.strip())
@@ -53,13 +53,11 @@ class RecursiveCharacterTextSplitter:
         """Split a list of documents into chunks."""
         all_chunks = []
         for doc in documents:
-            text_chunks = self.split(doc['text'])
+            text_chunks = self.split(doc["text"])
             for i, chunk in enumerate(text_chunks):
-                metadata = doc.get('metadata', {}).copy()
+                metadata = doc.get("metadata", {}).copy()
                 metadata.update({"chunk": i, "total_chunks": len(text_chunks)})
-                all_chunks.append({
-                    "id": f"{doc['id']}_chunk_{i}",
-                    "text": chunk,
-                    "metadata": metadata
-                })
+                all_chunks.append(
+                    {"id": f"{doc['id']}_chunk_{i}", "text": chunk, "metadata": metadata}
+                )
         return all_chunks

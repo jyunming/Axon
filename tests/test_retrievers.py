@@ -26,9 +26,13 @@ class TestBM25Retriever:
         with tempfile.TemporaryDirectory() as tmpdir:
             retriever = BM25Retriever(storage_path=tmpdir)
             docs = [
-                {"id": "doc1", "text": "The quick brown fox jumps over the lazy dog", "metadata": {}},
+                {
+                    "id": "doc1",
+                    "text": "The quick brown fox jumps over the lazy dog",
+                    "metadata": {},
+                },
                 {"id": "doc2", "text": "Python is a great programming language", "metadata": {}},
-                {"id": "doc3", "text": "Machine learning with Python is powerful", "metadata": {}}
+                {"id": "doc3", "text": "Machine learning with Python is powerful", "metadata": {}},
             ]
             retriever.add_documents(docs)
             results = retriever.search("Python programming", top_k=2)
@@ -98,10 +102,14 @@ class TestReciprocalRankFusion:
     """Test reciprocal rank fusion function."""
 
     def test_merges_overlapping_results(self):
-        vec = [{"id": "a", "text": "t", "score": 0.9, "metadata": {}},
-               {"id": "b", "text": "t", "score": 0.7, "metadata": {}}]
-        bm25 = [{"id": "b", "text": "t", "score": 5.0, "metadata": {}},
-                {"id": "c", "text": "t", "score": 3.0, "metadata": {}}]
+        vec = [
+            {"id": "a", "text": "t", "score": 0.9, "metadata": {}},
+            {"id": "b", "text": "t", "score": 0.7, "metadata": {}},
+        ]
+        bm25 = [
+            {"id": "b", "text": "t", "score": 5.0, "metadata": {}},
+            {"id": "c", "text": "t", "score": 3.0, "metadata": {}},
+        ]
         fused = reciprocal_rank_fusion(vec, bm25)
         ids = [r["id"] for r in fused]
         assert "a" in ids and "b" in ids and "c" in ids
@@ -114,11 +122,11 @@ class TestReciprocalRankFusion:
         """Test basic fusion of two result sets."""
         vector_results = [
             {"id": "doc1", "text": "text1", "score": 0.9},
-            {"id": "doc2", "text": "text2", "score": 0.8}
+            {"id": "doc2", "text": "text2", "score": 0.8},
         ]
         bm25_results = [
             {"id": "doc2", "text": "text2", "score": 5.0},
-            {"id": "doc3", "text": "text3", "score": 4.0}
+            {"id": "doc3", "text": "text3", "score": 4.0},
         ]
         fused = reciprocal_rank_fusion(vector_results, bm25_results)
         assert len(fused) == 3
@@ -151,6 +159,7 @@ class TestReciprocalRankFusion:
 # ---------------------------------------------------------------------------
 # New tests: delete_documents, save/load
 # ---------------------------------------------------------------------------
+
 
 class TestBM25RetrieverDelete:
     def test_delete_removes_document_from_search(self, tmp_path):

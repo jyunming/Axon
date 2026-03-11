@@ -32,9 +32,7 @@ class TestRecursiveCharacterTextSplitter:
     def test_transform_documents(self):
         """Test document transformation with metadata."""
         splitter = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=10)
-        docs = [
-            {"id": "doc1", "text": "A" * 100, "metadata": {"source": "test"}}
-        ]
+        docs = [{"id": "doc1", "text": "A" * 100, "metadata": {"source": "test"}}]
 
         result = splitter.transform_documents(docs)
 

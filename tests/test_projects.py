@@ -1,4 +1,5 @@
 """Tests for src/axon/projects.py"""
+
 import json
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 def tmp_projects(tmp_path, monkeypatch):
     """Redirect PROJECTS_ROOT and _ACTIVE_FILE to tmp_path for isolation."""
     import axon.projects as _p
+
     monkeypatch.setattr(_p, "PROJECTS_ROOT", tmp_path / "projects")
     monkeypatch.setattr(_p, "_ACTIVE_FILE", tmp_path / ".active_project")
     return tmp_path
@@ -16,30 +18,36 @@ def tmp_projects(tmp_path, monkeypatch):
 class TestValidateName:
     def test_default_allowed(self, tmp_projects):
         from axon.projects import _validate_name
-        _validate_name("default")   # must not raise
+
+        _validate_name("default")  # must not raise
 
     def test_valid_names(self, tmp_projects):
         from axon.projects import _validate_name
+
         for name in ["myproject", "my-project", "my_project", "abc123", "a"]:
             _validate_name(name)
 
     def test_invalid_starts_with_hyphen(self, tmp_projects):
         from axon.projects import _validate_name
+
         with pytest.raises(ValueError):
             _validate_name("-bad")
 
     def test_invalid_uppercase(self, tmp_projects):
         from axon.projects import _validate_name
+
         with pytest.raises(ValueError):
             _validate_name("MyProject")
 
     def test_invalid_spaces(self, tmp_projects):
         from axon.projects import _validate_name
+
         with pytest.raises(ValueError):
             _validate_name("my project")
 
     def test_too_long(self, tmp_projects):
         from axon.projects import _validate_name
+
         with pytest.raises(ValueError):
             _validate_name("a" * 51)
 
@@ -47,6 +55,7 @@ class TestValidateName:
 class TestEnsureProject:
     def test_creates_directories(self, tmp_projects):
         from axon.projects import ensure_project, project_dir
+
         ensure_project("testproj")
         root = project_dir("testproj")
         assert (root / "chroma_data").is_dir()
@@ -56,6 +65,7 @@ class TestEnsureProject:
 
     def test_meta_json_contents(self, tmp_projects):
         from axon.projects import ensure_project, project_dir
+
         ensure_project("myproj", description="A test project")
         meta = json.loads((project_dir("myproj") / "meta.json").read_text())
         assert meta["name"] == "myproj"
@@ -64,6 +74,7 @@ class TestEnsureProject:
 
     def test_idempotent(self, tmp_projects):
         from axon.projects import ensure_project, project_dir
+
         ensure_project("idempotent")
         ensure_project("idempotent", description="second call")
         meta = json.loads((project_dir("idempotent") / "meta.json").read_text())
@@ -72,6 +83,7 @@ class TestEnsureProject:
 
     def test_invalid_name_raises(self, tmp_projects):
         from axon.projects import ensure_project
+
         with pytest.raises(ValueError):
             ensure_project("BadName")
 
@@ -79,15 +91,18 @@ class TestEnsureProject:
 class TestActiveProject:
     def test_default_when_no_file(self, tmp_projects):
         from axon.projects import get_active_project
+
         assert get_active_project() == "default"
 
     def test_set_and_get(self, tmp_projects):
         from axon.projects import get_active_project, set_active_project
+
         set_active_project("myproj")
         assert get_active_project() == "myproj"
 
     def test_overwrite(self, tmp_projects):
         from axon.projects import get_active_project, set_active_project
+
         set_active_project("first")
         set_active_project("second")
         assert get_active_project() == "second"
@@ -96,10 +111,12 @@ class TestActiveProject:
 class TestListProjects:
     def test_empty_when_no_projects(self, tmp_projects):
         from axon.projects import list_projects
+
         assert list_projects() == []
 
     def test_lists_created_projects(self, tmp_projects):
         from axon.projects import ensure_project, list_projects
+
         ensure_project("alpha")
         ensure_project("beta")
         names = [p["name"] for p in list_projects()]
@@ -108,6 +125,7 @@ class TestListProjects:
 
     def test_includes_metadata(self, tmp_projects):
         from axon.projects import ensure_project, list_projects
+
         ensure_project("proj1", description="hello")
         projects = list_projects()
         match = next(p for p in projects if p["name"] == "proj1")
@@ -118,6 +136,7 @@ class TestListProjects:
 class TestDeleteProject:
     def test_deletes_directory(self, tmp_projects):
         from axon.projects import delete_project, ensure_project, project_dir
+
         ensure_project("todelete")
         assert project_dir("todelete").exists()
         delete_project("todelete")
@@ -125,11 +144,13 @@ class TestDeleteProject:
 
     def test_cannot_delete_default(self, tmp_projects):
         from axon.projects import delete_project
+
         with pytest.raises(ValueError, match="Cannot delete"):
             delete_project("default")
 
     def test_cannot_delete_nonexistent(self, tmp_projects):
         from axon.projects import delete_project
+
         with pytest.raises(ValueError):
             delete_project("ghost")
 
@@ -140,6 +161,7 @@ class TestDeleteProject:
             get_active_project,
             set_active_project,
         )
+
         ensure_project("active")
         set_active_project("active")
         delete_project("active")

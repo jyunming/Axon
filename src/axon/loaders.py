@@ -18,12 +18,13 @@ def _check_file_size(path: str) -> None:
     size = os.path.getsize(path)
     if size > _MAX_FILE_BYTES:
         raise ValueError(
-            f"File '{path}' is {size / (1024 * 1024):.1f} MB, "
-            f"which exceeds the 100 MB limit."
+            f"File '{path}' is {size / (1024 * 1024):.1f} MB, " f"which exceeds the 100 MB limit."
         )
+
 
 class BaseLoader:
     """Base class for document loaders."""
+
     def load(self, path: str) -> list[dict[str, Any]]:
         raise NotImplementedError
 
@@ -31,42 +32,48 @@ class BaseLoader:
         """Async version of load."""
         return await asyncio.to_thread(self.load, path)
 
+
 class TextLoader(BaseLoader):
     """Loader for plain text files."""
+
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
-        return [{
-            "id": os.path.basename(path),
-            "text": content,
-            "metadata": {"source": path, "type": "text"}
-        }]
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": content,
+                "metadata": {"source": path, "type": "text"},
+            }
+        ]
+
 
 class TSVLoader(BaseLoader):
     """Loader for tab-delimited files."""
+
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        df = pd.read_csv(path, sep='	')
+        df = pd.read_csv(path, sep="	")
         documents = []
         for i, row in df.iterrows():
             # Assume first column or 'content' column is the text
-            text_col = 'content' if 'content' in df.columns else df.columns[0]
+            text_col = "content" if "content" in df.columns else df.columns[0]
             text = str(row[text_col])
             metadata = row.drop(text_col).to_dict()
             metadata.update({"source": path, "type": "tsv", "row": i})
-            documents.append({
-                "id": f"{os.path.basename(path)}_row_{i}",
-                "text": text,
-                "metadata": metadata
-            })
+            documents.append(
+                {"id": f"{os.path.basename(path)}_row_{i}", "text": text, "metadata": metadata}
+            )
         return documents
+
 
 class JSONLoader(BaseLoader):
     """Loader for JSON files."""
+
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding="utf-8") as f:
             try:
                 data = json.load(f)
             except json.JSONDecodeError as exc:
@@ -76,53 +83,49 @@ class JSONLoader(BaseLoader):
         if isinstance(data, list):
             documents = []
             for i, item in enumerate(data):
-                text = item.get('text', item.get('content', json.dumps(item)))
-                metadata = {k: v for k, v in item.items() if k not in ['text', 'content']}
+                text = item.get("text", item.get("content", json.dumps(item)))
+                metadata = {k: v for k, v in item.items() if k not in ["text", "content"]}
                 metadata.update({"source": path, "type": "json", "index": i})
-                documents.append({
-                    "id": f"{os.path.basename(path)}_{i}",
-                    "text": text,
-                    "metadata": metadata
-                })
+                documents.append(
+                    {"id": f"{os.path.basename(path)}_{i}", "text": text, "metadata": metadata}
+                )
             return documents
         else:
-            text = data.get('text', data.get('content', json.dumps(data)))
-            metadata = {k: v for k, v in data.items() if k not in ['text', 'content']}
+            text = data.get("text", data.get("content", json.dumps(data)))
+            metadata = {k: v for k, v in data.items() if k not in ["text", "content"]}
             metadata.update({"source": path, "type": "json"})
-            return [{
-                "id": os.path.basename(path),
-                "text": text,
-                "metadata": metadata
-            }]
+            return [{"id": os.path.basename(path), "text": text, "metadata": metadata}]
+
 
 class CSVLoader(BaseLoader):
     """Loader for CSV files. Each row becomes a document."""
+
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         import csv
+
         documents = []
-        with open(path, encoding='utf-8', newline='') as f:
+        with open(path, encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
             for i, row in enumerate(reader):
                 # Use 'text' or 'content' column if present, else join all values
-                text_col = next((c for c in ['text', 'content', 'body'] if c in row), None)
+                text_col = next((c for c in ["text", "content", "body"] if c in row), None)
                 if text_col:
                     text = row[text_col]
                     metadata = {k: v for k, v in row.items() if k != text_col}
                 else:
-                    text = ' | '.join(f"{k}: {v}" for k, v in row.items())
+                    text = " | ".join(f"{k}: {v}" for k, v in row.items())
                     metadata = {}
                 metadata.update({"source": path, "type": "csv", "row": i})
-                documents.append({
-                    "id": f"{os.path.basename(path)}_row_{i}",
-                    "text": text,
-                    "metadata": metadata
-                })
+                documents.append(
+                    {"id": f"{os.path.basename(path)}_row_{i}", "text": text, "metadata": metadata}
+                )
         return documents
 
 
 class HTMLLoader(BaseLoader):
     """Loader for HTML files. Extracts visible text content."""
+
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         from html.parser import HTMLParser
@@ -131,7 +134,7 @@ class HTMLLoader(BaseLoader):
             def __init__(self):
                 super().__init__()
                 self._texts = []
-                self._skip_tags = {'script', 'style', 'head', 'meta', 'link'}
+                self._skip_tags = {"script", "style", "head", "meta", "link"}
                 self._current_skip = False
                 self._skip_depth = 0
 
@@ -153,24 +156,27 @@ class HTMLLoader(BaseLoader):
                         self._texts.append(stripped)
 
             def get_text(self):
-                return ' '.join(self._texts)
+                return " ".join(self._texts)
 
-        with open(path, encoding='utf-8', errors='ignore') as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             content = f.read()
 
         extractor = _TextExtractor()
         extractor.feed(content)
         text = extractor.get_text()
 
-        return [{
-            "id": os.path.basename(path),
-            "text": text,
-            "metadata": {"source": path, "type": "html"}
-        }]
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {"source": path, "type": "html"},
+            }
+        ]
 
 
 class DOCXLoader(BaseLoader):
     """Loader for DOCX files using python-docx."""
+
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         try:
@@ -181,13 +187,15 @@ class DOCXLoader(BaseLoader):
 
         doc = Document(path)
         paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        text = '\n\n'.join(paragraphs)
+        text = "\n\n".join(paragraphs)
 
-        return [{
-            "id": os.path.basename(path),
-            "text": text,
-            "metadata": {"source": path, "type": "docx"}
-        }]
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {"source": path, "type": "docx"},
+            }
+        ]
 
 
 class ImageLoader(BaseLoader):
@@ -274,16 +282,18 @@ class PDFLoader(BaseLoader):
             for page_num in range(total):
                 page = doc[page_num]
                 text = page.get_text()
-                documents.append({
-                    "id": f"{os.path.basename(path)}_page_{page_num}",
-                    "text": text,
-                    "metadata": {
-                        "source": path,
-                        "type": "pdf",
-                        "page": page_num,
-                        "total_pages": total,
-                    },
-                })
+                documents.append(
+                    {
+                        "id": f"{os.path.basename(path)}_page_{page_num}",
+                        "text": text,
+                        "metadata": {
+                            "source": path,
+                            "type": "pdf",
+                            "page": page_num,
+                            "total_pages": total,
+                        },
+                    }
+                )
             doc.close()
             return documents
         except ImportError:
@@ -297,16 +307,18 @@ class PDFLoader(BaseLoader):
             documents = []
             for page_num in range(total):
                 text = reader.pages[page_num].extract_text() or ""
-                documents.append({
-                    "id": f"{os.path.basename(path)}_page_{page_num}",
-                    "text": text,
-                    "metadata": {
-                        "source": path,
-                        "type": "pdf",
-                        "page": page_num,
-                        "total_pages": total,
-                    },
-                })
+                documents.append(
+                    {
+                        "id": f"{os.path.basename(path)}_page_{page_num}",
+                        "text": text,
+                        "metadata": {
+                            "source": path,
+                            "type": "pdf",
+                            "page": page_num,
+                            "total_pages": total,
+                        },
+                    }
+                )
             return documents
         except ImportError:
             pass
@@ -320,6 +332,7 @@ class PDFLoader(BaseLoader):
 
 class DirectoryLoader:
     """Loader that crawls a directory and uses appropriate loaders for each file."""
+
     def __init__(self, vlm_model: str = "llava"):
         _image_loader = ImageLoader(ollama_model=vlm_model)
         self.loaders = {

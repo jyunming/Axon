@@ -22,21 +22,11 @@ class TestOpenStudioConfig:
 
     def test_load_from_yaml(self):
         """Test loading configuration from YAML file."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             config_data = {
-                "embedding": {
-                    "provider": "ollama",
-                    "model": "nomic-embed-text"
-                },
-                "llm": {
-                    "provider": "ollama",
-                    "model": "llama3.1",
-                    "temperature": 0.5
-                },
-                "rag": {
-                    "top_k": 5,
-                    "hybrid_search": False
-                }
+                "embedding": {"provider": "ollama", "model": "nomic-embed-text"},
+                "llm": {"provider": "ollama", "model": "llama3.1", "temperature": 0.5},
+                "rag": {"top_k": 5, "hybrid_search": False},
             }
             yaml.dump(config_data, f)
             f.flush()
@@ -58,7 +48,7 @@ class TestOpenStudioConfig:
 
     def test_yaml_query_transformations_step_back(self):
         """step_back is loaded from query_transformations section in YAML."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump({"query_transformations": {"step_back": True, "hyde": True}}, f)
             f.flush()
             config = OpenStudioConfig.load(f.name)
@@ -67,7 +57,7 @@ class TestOpenStudioConfig:
 
     def test_yaml_rag_section_parent_chunk_size(self):
         """parent_chunk_size is loaded from rag section in YAML."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump({"rag": {"parent_chunk_size": 2000, "top_k": 5}}, f)
             f.flush()
             config = OpenStudioConfig.load(f.name)
@@ -76,8 +66,10 @@ class TestOpenStudioConfig:
 
     def test_yaml_rag_section_caching_and_dedup(self):
         """query_cache and dedup_on_ingest are loaded from rag section in YAML."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            yaml.dump({"rag": {"query_cache": True, "query_cache_size": 64, "dedup_on_ingest": False}}, f)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(
+                {"rag": {"query_cache": True, "query_cache_size": 64, "dedup_on_ingest": False}}, f
+            )
             f.flush()
             config = OpenStudioConfig.load(f.name)
         assert config.query_cache is True
@@ -86,11 +78,14 @@ class TestOpenStudioConfig:
 
     def test_yaml_query_decompose_and_compress(self):
         """query_decompose and compress_context are loaded from their YAML sections."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            yaml.dump({
-                "query_transformations": {"query_decompose": True},
-                "context_compression": {"enabled": True},
-            }, f)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.dump(
+                {
+                    "query_transformations": {"query_decompose": True},
+                    "context_compression": {"enabled": True},
+                },
+                f,
+            )
             f.flush()
             config = OpenStudioConfig.load(f.name)
         assert config.query_decompose is True
@@ -98,7 +93,7 @@ class TestOpenStudioConfig:
 
     def test_yaml_rerank_model_bge(self):
         """reranker_model is loaded from rerank.model in YAML."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump({"rerank": {"enabled": True, "model": "BAAI/bge-reranker-v2-m3"}}, f)
             f.flush()
             config = OpenStudioConfig.load(f.name)

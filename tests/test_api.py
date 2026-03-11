@@ -3,6 +3,7 @@ tests/test_api.py
 
 Unit tests for the FastAPI endpoints in axon.api.
 """
+
 import os
 from unittest.mock import MagicMock, patch
 
@@ -39,6 +40,7 @@ def _make_brain(provider="chroma"):
 # /health
 # ---------------------------------------------------------------------------
 
+
 def test_health_returns_200():
     resp = client.get("/health")
     assert resp.status_code == 200
@@ -49,6 +51,7 @@ def test_health_returns_200():
 # ---------------------------------------------------------------------------
 # 503 when brain is None
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def reset_brain():
@@ -78,6 +81,7 @@ def test_delete_503_no_brain():
 # Path traversal protection
 # ---------------------------------------------------------------------------
 
+
 def test_ingest_403_path_traversal(tmp_path):
     api_module.brain = _make_brain()
     # Set base to tmp_path; attempt escape via ../../..
@@ -96,12 +100,15 @@ def test_ingest_valid_path(tmp_path):
             resp = client.post("/ingest", json={"path": str(doc_file)})
     # Background task is queued — endpoint returns 200 with processing message
     assert resp.status_code == 200
-    assert "processing" in resp.json().get("status", "").lower() or "Ingestion" in resp.json().get("message", "")
+    assert "processing" in resp.json().get("status", "").lower() or "Ingestion" in resp.json().get(
+        "message", ""
+    )
 
 
 # ---------------------------------------------------------------------------
 # /query
 # ---------------------------------------------------------------------------
+
 
 def test_query_success():
     api_module.brain = _make_brain()
@@ -115,6 +122,7 @@ def test_query_success():
 # ---------------------------------------------------------------------------
 # /delete
 # ---------------------------------------------------------------------------
+
 
 def test_delete_success():
     api_module.brain = _make_brain()
@@ -150,6 +158,7 @@ def test_delete_calls_delete_by_ids_not_collection_delete():
 # ---------------------------------------------------------------------------
 # /query/stream
 # ---------------------------------------------------------------------------
+
 
 def test_query_stream_503_no_brain():
     resp = client.post("/query/stream", json={"query": "hello"})
@@ -277,6 +286,7 @@ def test_search_propagates_error():
 # ---------------------------------------------------------------------------
 # GET /collection
 # ---------------------------------------------------------------------------
+
 
 def test_collection_503_no_brain():
     resp = client.get("/collection")

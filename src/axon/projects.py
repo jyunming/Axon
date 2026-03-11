@@ -19,7 +19,7 @@ from pathlib import Path
 
 PROJECTS_ROOT: Path = Path.home() / ".axon" / "projects"
 _ACTIVE_FILE: Path = Path.home() / ".axon" / ".active_project"
-_NAME_RE: re.Pattern = re.compile(r'^[a-z0-9][a-z0-9_-]{0,49}$')
+_NAME_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 
 
 def _validate_name(name: str) -> None:
@@ -70,11 +70,16 @@ def ensure_project(name: str, description: str = "") -> Path:
     (root / "sessions").mkdir(parents=True, exist_ok=True)
     meta_file = root / "meta.json"
     if not meta_file.exists():
-        meta_file.write_text(json.dumps({
-            "name": name,
-            "description": description,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }, indent=2))
+        meta_file.write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "description": description,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            )
+        )
     return root
 
 
@@ -98,12 +103,14 @@ def list_projects() -> list[dict]:
                 meta = {}
         else:
             meta = {}
-        result.append({
-            "name": entry.name,
-            "description": meta.get("description", ""),
-            "created_at": meta.get("created_at", ""),
-            "path": str(entry),
-        })
+        result.append(
+            {
+                "name": entry.name,
+                "description": meta.get("description", ""),
+                "created_at": meta.get("created_at", ""),
+                "path": str(entry),
+            }
+        )
     result.sort(key=lambda p: p["created_at"], reverse=True)
     return result
 

@@ -3,11 +3,13 @@ tests/test_streaming.py
 
 Tests for OpenLLM.stream() and OpenStudioBrain.query_stream().
 """
+
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_brain(config):
     """Construct an OpenStudioBrain with all heavy dependencies mocked."""
@@ -19,12 +21,14 @@ def _make_brain(config):
         patch("axon.retrievers.BM25Retriever"),
     ):
         from axon.main import OpenStudioBrain
+
         return OpenStudioBrain(config)
 
 
 # ---------------------------------------------------------------------------
 # OpenLLM.stream() — all 4 providers
 # ---------------------------------------------------------------------------
+
 
 class TestOpenLLMStream:
     @patch("ollama.Client")
@@ -127,6 +131,7 @@ class TestOpenLLMStream:
 # OpenStudioBrain.query_stream()
 # ---------------------------------------------------------------------------
 
+
 class TestQueryStream:
     def _make_brain_with_mocks(self):
         from axon.main import OpenStudioConfig
@@ -140,6 +145,7 @@ class TestQueryStream:
             patch("axon.retrievers.BM25Retriever"),
         ):
             from axon.main import OpenStudioBrain
+
             brain = OpenStudioBrain(config)
         return brain
 
@@ -147,14 +153,16 @@ class TestQueryStream:
         brain = self._make_brain_with_mocks()
 
         docs = [{"id": "d1", "text": "hello", "score": 0.9, "metadata": {}}]
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": docs,
-            "vector_count": 1,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 1,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": docs,
+                "vector_count": 1,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 1,
+                "transforms": {},
+            }
+        )
         brain.llm.stream = MagicMock(return_value=iter(["tok1", " tok2"]))
 
         chunks = list(brain.query_stream("my question"))
@@ -169,14 +177,16 @@ class TestQueryStream:
         brain = self._make_brain_with_mocks()
         brain.config.discussion_fallback = False
 
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": [],
-            "vector_count": 0,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 0,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": [],
+                "vector_count": 0,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 0,
+                "transforms": {},
+            }
+        )
 
         chunks = list(brain.query_stream("unknown"))
         text = "".join(c for c in chunks if isinstance(c, str))
@@ -186,14 +196,16 @@ class TestQueryStream:
         brain = self._make_brain_with_mocks()
         brain.config.discussion_fallback = True
 
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": [],
-            "vector_count": 0,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 0,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": [],
+                "vector_count": 0,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 0,
+                "transforms": {},
+            }
+        )
         brain.llm.stream = MagicMock(return_value=iter(["fallback answer"]))
 
         chunks = list(brain.query_stream("orphan query"))
@@ -203,14 +215,16 @@ class TestQueryStream:
     def test_completes_without_exception(self):
         brain = self._make_brain_with_mocks()
 
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": [{"id": "x", "text": "ctx", "score": 1.0, "metadata": {}}],
-            "vector_count": 1,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 1,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": [{"id": "x", "text": "ctx", "score": 1.0, "metadata": {}}],
+                "vector_count": 1,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 1,
+                "transforms": {},
+            }
+        )
         brain.llm.stream = MagicMock(return_value=iter(["done"]))
 
         # Should not raise
