@@ -66,6 +66,7 @@ class OpenStudioConfig:
 
     def __post_init__(self) -> None:
         """Populate API-related fields from environment variables when not set."""
+        # 1. API Keys and URLs
         if not self.api_key:
             self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
         if not self.gemini_api_key:
@@ -80,6 +81,35 @@ class OpenStudioConfig:
                 self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
+
+        # 2. Path resolution: default to home-based directories (~/.axon)
+        # to avoid filesystem permission/locking issues in WSL/Linux.
+        home = Path.home() / ".axon"
+
+        # Projects Root
+        if not self.projects_root:
+            self.projects_root = os.getenv("AXON_PROJECTS_ROOT", str(home / "projects"))
+
+        # Vector Store Path
+        if self.vector_store_path == "./chroma_data":
+            env_vsp = os.getenv("CHROMA_DATA_PATH")
+            if env_vsp:
+                self.vector_store_path = env_vsp
+            else:
+                self.vector_store_path = str(home / "data" / "chroma")
+
+        # BM25 Path
+        if self.bm25_path == "./bm25_index":
+            env_bm25 = os.getenv("BM25_INDEX_PATH")
+            if env_bm25:
+                self.bm25_path = env_bm25
+            else:
+                self.bm25_path = str(home / "data" / "bm25")
+
+        # Always expand user paths for safety
+        self.projects_root = os.path.expanduser(self.projects_root)
+        self.vector_store_path = os.path.expanduser(self.vector_store_path)
+        self.bm25_path = os.path.expanduser(self.bm25_path)
 
     # Projects
     # Root directory for all named projects. Defaults to ~/.axon/projects.
@@ -3247,6 +3277,96 @@ _AXON_BLUE = [
 _AXON_RST = "\x1b[0m"
 
 
+# Symmetrical brain/axon hub design (25 columns wide)
+_BRAIN_ART = [
+    "(O)~~.             .~~(O)",
+    "  \\   *~._     _.~*   /  ",
+    "[#]--.    ( O )    .--[#]",
+    "[#]--'    ( O )    '--[#]",
+    "  /   *~.'     '.~*   \\  ",
+    "(O)~~'             '~~(O)",
+]
+
+
+def _get_brain_anim_row(row_idx: int, frame: int, width: int) -> str:
+    """Return one row of the animated brain design, centered in `width`."""
+    if width < 25:
+        return " " * width
+
+    pad = (width - 25) // 2
+    l_pad = " " * pad
+    r_pad = " " * (width - 25 - pad)
+
+    line = _BRAIN_ART[row_idx]
+    RST = "\x1b[0m"
+    DIM = "\x1b[38;2;100;110;130m"  # Muted steel-blue (base connection)
+    PULSE = "\x1b[38;2;180;210;255m"  # Pastel Blue (moving signal)
+    GLOW = "\x1b[38;2;255;255;255m"  # Soft White (peak flash)
+
+    # Staggered animation: 6 paths pulsing at different offsets in a 24-frame cycle
+    total_cycle = 24
+    # Paths: (phase, row, start, end)
+    # Phase 0: Center, Phase 1: Inner path, Phase 2: Outer path, Phase 3: Cell/Dot
+    tl_path = [(1, 1, 6, 10), (2, 0, 3, 6), (3, 0, 0, 3), (3, 1, 2, 3)]
+    tr_path = [(1, 1, 15, 19), (2, 0, 19, 22), (3, 0, 22, 25), (3, 1, 22, 23)]
+    ml_path = [(1, 2, 3, 6), (1, 3, 3, 6), (3, 2, 0, 3), (3, 3, 0, 3)]  # Mid-left
+    mr_path = [(1, 2, 19, 22), (1, 3, 19, 22), (3, 2, 22, 25), (3, 3, 22, 25)]  # Mid-right
+    bl_path = [(1, 4, 6, 10), (2, 5, 3, 6), (3, 5, 0, 3), (3, 4, 2, 3)]
+    br_path = [(1, 4, 15, 19), (2, 5, 19, 22), (3, 5, 22, 25), (3, 4, 22, 23)]
+
+    # (offset, path_segments)
+    groups = [
+        (0, tl_path),
+        (4, br_path),
+        (8, tr_path),
+        (12, bl_path),
+        (16, ml_path),
+        (20, mr_path),
+    ]
+
+    char_levels = [0] * 25  # 0: DIM, 1: PULSE, 2: GLOW
+    if frame == -1:
+        # Fully connected state: all paths lit, center and cells glowing
+        for _, path in groups:
+            for phase, r, s, e in path + [(0, 2, 10, 15), (0, 3, 10, 15)]:
+                if r == row_idx:
+                    level = 2 if phase in (0, 3) else 1
+                    for i in range(s, e):
+                        char_levels[i] = max(char_levels[i], level)
+    else:
+        for offset, path in groups:
+            rel = (frame - offset) % total_cycle
+            # Add center to every path's start (phase 0)
+            for phase, r, s, e in path + [(0, 2, 10, 15), (0, 3, 10, 15)]:
+                if r == row_idx:
+                    level = 0
+                    if rel == phase:
+                        level = 2
+                    elif rel == (phase + 1) % total_cycle:
+                        level = 1
+                    for i in range(s, e):
+                        char_levels[i] = max(char_levels[i], level)
+
+    char_colors = [DIM] * 25
+    for i, level in enumerate(char_levels):
+        if level == 2:
+            char_colors[i] = GLOW
+        elif level == 1:
+            char_colors[i] = PULSE
+
+    res = ""
+    curr_col = ""
+    for i, char in enumerate(line):
+        if char == " ":
+            res += char
+            continue
+        if char_colors[i] != curr_col:
+            res += char_colors[i]
+            curr_col = char_colors[i]
+        res += char
+    return l_pad + res + RST + r_pad
+
+
 def _brow(content: str, emoji_extra: int = 0) -> str:
     """One box row: pads/truncates content to exactly _box_width() terminal columns."""
     bw = _box_width()
@@ -3259,100 +3379,8 @@ def _brow(content: str, emoji_extra: int = 0) -> str:
 
 
 def _anim_pad(row_idx: int, frame: int, width: int) -> str:
-    """Return an animated art-pad string of exact visual width `width`.
-
-    Renders a neural-signal network: horizontal tracks (rows 0, 2, 4) carry multiple
-    independent pulses at different speeds and directions, connected at two hub columns
-    by vertical `│` lines (rows 1, 3) that flash when signals pass through.
-    Each particle type has a distinct colour and a 3-level fading trail.
-
-    Args:
-        row_idx: Art row index 0-5.
-        frame:   Current animation frame counter (advances every ~0.08 s).
-        width:   Required visual width in terminal columns.
-    """
-    if width < 12:
-        return " " * width
-
-    track_w = width - 2  # 1-space margin on each side
-    hub1 = track_w // 3  # first junction column
-    hub2 = 2 * track_w // 3  # second junction column
-
-    RST = "\x1b[0m"
-    DIM = "\x1b[2m"
-    NODE = "\x1b[38;2;70;110;155m"  # muted steel-blue — static wire / nodes
-
-    # Three signal "families": teal · sky-blue · violet
-    _PCOL = [
-        "\x1b[38;2;0;245;210m",  # teal   — head
-        "\x1b[38;2;80;195;255m",  # sky    — head
-        "\x1b[38;2;170;120;255m",  # violet — head
-    ]
-    _TRAIL = [
-        ("\x1b[38;2;0;155;130m", "\x1b[38;2;0;90;75m", "\x1b[38;2;0;50;42m"),
-        ("\x1b[38;2;40;130;200m", "\x1b[38;2;20;75;125m", "\x1b[38;2;10;45;75m"),
-        ("\x1b[38;2;105;65;200m", "\x1b[38;2;60;35;130m", "\x1b[38;2;35;18;75m"),
-    ]
-
-    def _particle(r: int, j: int) -> tuple[int, int, int]:
-        """Return (speed 1-3, direction ±1, phase) for particle j on row r."""
-        spd = (r * 5 + j * 7 + 3) % 3 + 1
-        drn = 1 if (r * 13 + j * 11) % 3 != 0 else -1
-        ph = (r * 37 + j * 23 + 11) % max(1, track_w)
-        return spd, drn, ph
-
-    if row_idx == 5:
-        return " " * width
-
-    if row_idx in (1, 3):
-        # Vertical connector rows: blank except │ at hub1 and hub2.
-        # Each hub flashes with the passing particle's colour.
-        chars: list[str] = [" "] * track_w
-        adj = [0, 2] if row_idx == 1 else [2, 4]
-        for hub in (hub1, hub2):
-            lit_col = None
-            for cr in adj:
-                for j in range(3):
-                    spd, drn, ph = _particle(cr, j)
-                    if (frame * spd * drn + ph) % track_w == hub:
-                        lit_col = _PCOL[j]
-                        break
-                if lit_col:
-                    break
-            chars[hub] = f"{lit_col or NODE}│{RST}"
-        return " " + "".join(chars) + " "
-
-    # Horizontal track rows (row_idx ∈ {0, 2, 4})
-    # priority[i] = (level, colour, char) — highest level wins per column.
-    prio: list[tuple] = [(0, None, None)] * track_w
-
-    for j in range(3):
-        spd, drn, ph = _particle(row_idx, j)
-        pos = (frame * spd * drn + ph) % track_w
-        col = _PCOL[j]
-        t1, t2, t3 = _TRAIL[j]
-        head = "▸" if drn > 0 else "◂"
-
-        for idx, level, c, ch in [
-            (pos, 4, col, head),
-            ((pos - drn) % track_w, 3, t1, "─"),
-            ((pos - 2 * drn) % track_w, 2, t2, "─"),
-            ((pos - 3 * drn) % track_w, 1, t3, "─"),
-        ]:
-            if prio[idx][0] < level:
-                prio[idx] = (level, c, ch)
-
-    static = {0: "○", track_w - 1: "○", hub1: "●", hub2: "●"}
-    parts: list[str] = []
-    for i in range(track_w):
-        p, col, ch = prio[i]
-        if p > 0:
-            parts.append(f"{col}{ch}{RST}")
-        elif i in static:
-            parts.append(f"{NODE}{static[i]}{RST}")
-        else:
-            parts.append(f"{DIM}─{RST}")
-    return " " + "".join(parts) + " "
+    """Return an animated brain design centered in `width`."""
+    return _get_brain_anim_row(row_idx, frame, width)
 
 
 def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> list:
@@ -3371,7 +3399,7 @@ def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> l
         doc_s = "unknown"
 
     bw = _box_width()
-    art_pad = " " * max(0, bw - 39)  # 4 indent + 35 art cols = 39 vis cols
+    apad_w = max(0, bw - 39)  # 4 indent + 35 art cols = 39 vis cols
 
     # Build tick status — wrap onto a second row if too wide
     tick_items = [f"✓ {t}" for t in tick_lines] if tick_lines else ["✓ Ready"]
@@ -3389,8 +3417,9 @@ def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> l
     rows = [
         f"  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m",  # 1
         blank,  # 2
-        *[  # 3-8  blue-shaded art lines
-            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃" for i, line in enumerate(_AXON_ART)
+        *[  # 3-8  blue-shaded art lines + brain design
+            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{_get_brain_anim_row(i, -1, apad_w)}┃"
+            for i, line in enumerate(_AXON_ART)
         ],
         blank,  # 9
         _brow(f"    LLM    ·  {model_s}"),  # 6

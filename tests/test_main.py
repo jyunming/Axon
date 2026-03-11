@@ -73,11 +73,14 @@ class TestOpenStudioConfig:
         config = OpenStudioConfig.load(str(cfg_path))
         assert config.projects_root == env_root
 
-    def test_projects_root_defaults_to_empty(self):
+    def test_projects_root_defaults_to_home(self):
+        from pathlib import Path
+
         from axon.main import OpenStudioConfig
 
         config = OpenStudioConfig()
-        assert config.projects_root == ""
+        expected = str(Path.home() / ".axon" / "projects")
+        assert config.projects_root == expected
 
 
 class TestMultiStoreWriteErrors:
