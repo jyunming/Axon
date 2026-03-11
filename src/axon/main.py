@@ -81,6 +81,12 @@ class OpenStudioConfig:
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
 
+    # Projects
+    # Root directory for all named projects. Defaults to ~/.axon/projects.
+    # Override via config.yaml (projects_root: /path/to/dir) or the
+    # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
+    projects_root: str = ""
+
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
     vector_store_path: str = "./chroma_data"
@@ -298,6 +304,9 @@ offline:
         if "llm_vllm_base_url" in config_dict:
             config_dict["vllm_base_url"] = config_dict["llm_vllm_base_url"]
 
+        if "projects_root" in data:
+            config_dict["projects_root"] = data["projects_root"]
+
         # Environment Variable Overrides (High Priority — wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -305,6 +314,9 @@ offline:
         env_vllm = os.getenv("VLLM_BASE_URL")
         if env_vllm:
             config_dict["vllm_base_url"] = env_vllm
+        env_projects_root = os.getenv("AXON_PROJECTS_ROOT")
+        if env_projects_root:
+            config_dict["projects_root"] = env_projects_root
 
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
@@ -1216,6 +1228,13 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.info(
                 f"Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
             )
+
+        # Apply custom projects root from config before any project operations
+        if self.config.projects_root:
+            from axon import projects as _proj_mod
+
+            _proj_mod.set_projects_root(self.config.projects_root)
+            logger.info(f"Projects root: {_proj_mod.PROJECTS_ROOT}")
 
         logger.info("Initializing Axon...")
         self.embedding = OpenEmbedding(self.config)

@@ -20,13 +20,35 @@ The special name "default" is a sentinel that uses the paths from config.yaml.
 """
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-PROJECTS_ROOT: Path = Path.home() / ".axon" / "projects"
+
+def _resolve_projects_root() -> Path:
+    """Return the projects root, honouring AXON_PROJECTS_ROOT if set."""
+    env = os.environ.get("AXON_PROJECTS_ROOT")
+    if env:
+        return Path(env).expanduser()
+    return Path.home() / ".axon" / "projects"
+
+
+PROJECTS_ROOT: Path = _resolve_projects_root()
 _ACTIVE_FILE: Path = Path.home() / ".axon" / ".active_project"
+
+
+def set_projects_root(path: str | Path) -> None:
+    """Override PROJECTS_ROOT at runtime (call before any project operations).
+
+    Priority order: explicit call here > AXON_PROJECTS_ROOT env var > default.
+    Used by OpenStudioBrain to apply the projects_root from config.yaml.
+    """
+    global PROJECTS_ROOT
+    PROJECTS_ROOT = Path(path).expanduser()
+
+
 _SEGMENT_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 _MAX_DEPTH: int = 3
 
