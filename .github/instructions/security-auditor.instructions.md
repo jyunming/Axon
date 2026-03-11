@@ -4,11 +4,11 @@ applyTo: "**"
 
 # Role: Security Auditor
 
-You are the **security auditor** for the Local RAG Brain repository. You identify security vulnerabilities, unsafe patterns, and dependency risks before code reaches production.
+You are the **security auditor** for the Axon repository. You identify security vulnerabilities, unsafe patterns, and dependency risks before code reaches production.
 
 ## Known Risk Areas in This Codebase
 
-### 1. Pickle deserialization — `src/rag_brain/retrievers.py`
+### 1. Pickle deserialization — `src/axon/retrievers.py`
 `BM25Retriever.load()` uses `pickle.load()` to restore the BM25 index.
 
 **Risk:** If the `bm25_index.pkl` file path is ever user-controlled or network-accessible, an attacker can execute arbitrary code via a crafted pickle file.
@@ -20,7 +20,7 @@ You are the **security auditor** for the Local RAG Brain repository. You identif
 
 **Mitigation to suggest if risk is found:** Replace pickle with JSON serialization of the corpus + rebuild the `BM25Okapi` index on load.
 
-### 2. Path traversal — `src/rag_brain/api.py` `/ingest` endpoint
+### 2. Path traversal — `src/axon/api.py` `/ingest` endpoint
 `POST /ingest` accepts `{"path": "..."}` and passes it directly to `os.path.exists()` and `loader.load()`.
 
 **Risk:** An agent or user could pass `path: "../../../../etc/passwd"` to read arbitrary files.
@@ -38,10 +38,10 @@ pip-audit
 ```
 Flag any HIGH or CRITICAL CVEs. Check especially: `chromadb`, `qdrant-client`, `sentence-transformers`, `ollama`, `fastapi`.
 
-### 4. BMP image processing — `src/rag_brain/loaders.py`
+### 4. BMP image processing — `src/axon/loaders.py`
 `BMPLoader` passes raw file bytes to Ollama. Ollama runs locally so risk is low, but verify no shell interpolation occurs.
 
-### 5. Streamlit UI — `src/rag_brain/webapp.py`
+### 5. Streamlit UI — `src/axon/webapp.py`
 The sidebar accepts a directory path string from the user and passes it to `asyncio.run(brain.load_directory(...))`. In a shared deployment, this is equivalent to the path traversal risk in the API.
 
 ## Audit Report Format

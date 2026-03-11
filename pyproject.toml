@@ -3,7 +3,7 @@ requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-rag-brain"
+name = "axon"
 version = "2.0.0"
 description = "General-purpose open-source RAG and embedding interface"
 readme = "README.md"
@@ -52,7 +52,7 @@ dev = [
     "pytest>=7.4.0,<8.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",
     "pytest-cov>=4.1.0,<5.0.0",
-    "black>=23.0.0,<24.0.0",
+    "black==23.12.1",
     "ruff>=0.1.0,<1.0.0",
     "mypy>=1.5.0,<2.0.0",
     "pre-commit>=3.4.0,<4.0.0",
@@ -69,9 +69,9 @@ all = [
 ]
 
 [project.scripts]
-rag-brain = "rag_brain.main:main"
-rag-brain-ui = "rag_brain.webapp:main_ui"
-rag-brain-api = "rag_brain.api:main"
+axon = "axon.main:main"
+axon-ui = "axon.webapp:main_ui"
+axon-api = "axon.api:main"
 
 [tool.black]
 line-length = 100
@@ -107,10 +107,14 @@ ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
+    "B904",  # raise-without-from-inside-except — HTTPException wrapping is intentional
+    "B905",  # zip-without-explicit-strict — lengths are guaranteed equal at call sites
+    "B023",  # function-uses-loop-variable — closures intentionally capture outer scope
 ]
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]  # unused imports
+"tests/*.py" = ["E402"]   # mid-file imports used for lazy mock patching
 
 [tool.mypy]
 python_version = "3.10"
@@ -144,7 +148,7 @@ python_functions = ["test_*"]
 addopts = [
     "-v",
     "--strict-markers",
-    "--cov=rag_brain",
+    "--cov=axon",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
@@ -156,7 +160,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["src/rag_brain"]
+source = ["src/axon"]
 omit = [
     "*/tests/*",
     "*/test_*.py",

@@ -1,9 +1,10 @@
 """
-Core engine for Local RAG Brain - Open Source RAG Interface.
+Core engine for Axon - Open Source RAG Interface.
 """
 
 # Suppress TensorFlow/Keras noise before any imports that might trigger them
 import os
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("USE_TF", "0")  # tell transformers to skip TF backend
@@ -11,40 +12,43 @@ os.environ.setdefault("USE_TF", "0")  # tell transformers to skip TF backend
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
+import asyncio
+import logging
 import re
 import sys
-import time
-import yaml
-import logging
-import asyncio
 import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, List, Optional, Dict, Any, Union
-from dataclasses import dataclass, field
+from typing import Any, Literal
+
+import yaml
 from dotenv import load_dotenv
 
-# Load environment variables — project .env first, then user-global ~/.rag_brain/.env
+# Load environment variables — project .env first, then user-global ~/.axon/.env
 load_dotenv()
-_user_env = Path.home() / ".rag_brain" / ".env"
+_user_env = Path.home() / ".axon" / ".env"
 if _user_env.exists():
     load_dotenv(_user_env)
 
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("RAGBrain")
 
 
 @dataclass
 class OpenStudioConfig:
-    """Configuration for Local RAG Brain."""
+    """Configuration for Axon."""
+
     # Embedding
-    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = "sentence_transformers"
+    embedding_provider: Literal[
+        "sentence_transformers", "ollama", "fastembed", "openai"
+    ] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
-    
+
     # LLM
     llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai", "vllm"] = "ollama"
     llm_model: str = "gemma"
@@ -72,23 +76,23 @@ class OpenStudioConfig:
                 self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
-    
+
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
     vector_store_path: str = "./chroma_data"
-    
+
     # BM25 Settings
     bm25_path: str = "./bm25_index"
-    
+
     # RAG Settings
     top_k: int = 10
     similarity_threshold: float = 0.3
     hybrid_search: bool = True
-    
+
     # Chunking
     chunk_size: int = 1000
     chunk_overlap: int = 200
-    
+
     # Re-ranking
     rerank: bool = False
     reranker_provider: Literal["cross-encoder", "llm"] = "cross-encoder"
@@ -152,79 +156,90 @@ class OpenStudioConfig:
     llm_timeout: int = 60
 
     @classmethod
-    def load(cls, path: str = "config.yaml") -> 'OpenStudioConfig':
+    def load(cls, path: str = "config.yaml") -> "OpenStudioConfig":
         """Load configuration from a YAML file."""
         if not os.path.exists(path):
             logger.warning(f"Config file {path} not found. Using defaults.")
             return cls()
-        
-        with open(path, 'r') as f:
+
+        with open(path) as f:
             data = yaml.safe_load(f) or {}
 
         # Flatten the YAML structure to match dataclass fields
         config_dict = {}
-        if 'embedding' in data:
-            config_dict.update({f"embedding_{k}": v for k, v in data['embedding'].items()})
-        if 'llm' in data:
-            config_dict.update({f"llm_{k}": v for k, v in data['llm'].items()})
-        if 'vector_store' in data:
-            config_dict.update({f"vector_store_{k}" if k == 'provider' else k: v for k, v in data['vector_store'].items()})
-            if 'path' in data['vector_store']:
-                config_dict['vector_store_path'] = data['vector_store']['path']
-        if 'bm25' in data:
-            if 'path' in data['bm25']:
-                config_dict['bm25_path'] = data['bm25']['path']
-        if 'rag' in data:
-            config_dict.update(data['rag'])
-        if 'chunk' in data:
-            config_dict.update({f"chunk_{k}": v for k, v in data['chunk'].items()})
-        if 'rerank' in data:
-            if 'enabled' in data['rerank']:
-                config_dict['rerank'] = data['rerank']['enabled']
-            if 'provider' in data['rerank']:
-                config_dict['reranker_provider'] = data['rerank']['provider']
-            if 'model' in data['rerank']:
-                config_dict['reranker_model'] = data['rerank']['model']
-                
-        if 'query_transformations' in data:
-            for key in ('multi_query', 'hyde', 'step_back', 'query_decompose', 'discussion_fallback'):
-                if key in data['query_transformations']:
-                    config_dict[key] = data['query_transformations'][key]
-        if 'context_compression' in data:
-            config_dict['compress_context'] = data['context_compression'].get('enabled', False)
-        if 'web_search' in data:
-            ws = data['web_search']
-            config_dict['truth_grounding'] = ws.get('enabled', False)
-            if ws.get('brave_api_key'):
-                config_dict['brave_api_key'] = ws['brave_api_key']
-        if 'offline' in data:
-            ol = data['offline']
-            config_dict['offline_mode'] = ol.get('enabled', False)
-            if ol.get('local_models_dir'):
-                config_dict['local_models_dir'] = ol['local_models_dir']
-        
-        # Map some specific names if they don't match exactly
-        if 'ollama_base_url' not in config_dict and 'llm_base_url' in config_dict:
-            config_dict['ollama_base_url'] = config_dict['llm_base_url']
-            
-        if 'api_key' not in config_dict and 'llm_api_key' in config_dict:
-            config_dict['api_key'] = config_dict['llm_api_key']
+        if "embedding" in data:
+            config_dict.update({f"embedding_{k}": v for k, v in data["embedding"].items()})
+        if "llm" in data:
+            config_dict.update({f"llm_{k}": v for k, v in data["llm"].items()})
+        if "vector_store" in data:
+            config_dict.update(
+                {
+                    f"vector_store_{k}" if k == "provider" else k: v
+                    for k, v in data["vector_store"].items()
+                }
+            )
+            if "path" in data["vector_store"]:
+                config_dict["vector_store_path"] = data["vector_store"]["path"]
+        if "bm25" in data:
+            if "path" in data["bm25"]:
+                config_dict["bm25_path"] = data["bm25"]["path"]
+        if "rag" in data:
+            config_dict.update(data["rag"])
+        if "chunk" in data:
+            config_dict.update({f"chunk_{k}": v for k, v in data["chunk"].items()})
+        if "rerank" in data:
+            if "enabled" in data["rerank"]:
+                config_dict["rerank"] = data["rerank"]["enabled"]
+            if "provider" in data["rerank"]:
+                config_dict["reranker_provider"] = data["rerank"]["provider"]
+            if "model" in data["rerank"]:
+                config_dict["reranker_model"] = data["rerank"]["model"]
 
-        if 'llm_vllm_base_url' in config_dict:
-            config_dict['vllm_base_url'] = config_dict['llm_vllm_base_url']
-            
+        if "query_transformations" in data:
+            for key in (
+                "multi_query",
+                "hyde",
+                "step_back",
+                "query_decompose",
+                "discussion_fallback",
+            ):
+                if key in data["query_transformations"]:
+                    config_dict[key] = data["query_transformations"][key]
+        if "context_compression" in data:
+            config_dict["compress_context"] = data["context_compression"].get("enabled", False)
+        if "web_search" in data:
+            ws = data["web_search"]
+            config_dict["truth_grounding"] = ws.get("enabled", False)
+            if ws.get("brave_api_key"):
+                config_dict["brave_api_key"] = ws["brave_api_key"]
+        if "offline" in data:
+            ol = data["offline"]
+            config_dict["offline_mode"] = ol.get("enabled", False)
+            if ol.get("local_models_dir"):
+                config_dict["local_models_dir"] = ol["local_models_dir"]
+
+        # Map some specific names if they don't match exactly
+        if "ollama_base_url" not in config_dict and "llm_base_url" in config_dict:
+            config_dict["ollama_base_url"] = config_dict["llm_base_url"]
+
+        if "api_key" not in config_dict and "llm_api_key" in config_dict:
+            config_dict["api_key"] = config_dict["llm_api_key"]
+
+        if "llm_vllm_base_url" in config_dict:
+            config_dict["vllm_base_url"] = config_dict["llm_vllm_base_url"]
+
         # Environment Variable Overrides (High Priority — wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
-            config_dict['ollama_base_url'] = env_ollama_host
+            config_dict["ollama_base_url"] = env_ollama_host
         env_vllm = os.getenv("VLLM_BASE_URL")
         if env_vllm:
-            config_dict['vllm_base_url'] = env_vllm
+            config_dict["vllm_base_url"] = env_vllm
 
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_dict = {k: v for k, v in config_dict.items() if k in valid_fields}
-        
+
         return cls(**filtered_dict)
 
 
@@ -232,7 +247,7 @@ class OpenReranker:
     """
     Open-source reranking using Cross-Encoders.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self.model = None
@@ -241,65 +256,66 @@ class OpenReranker:
             if self.config.reranker_provider == "cross-encoder":
                 try:
                     from sentence_transformers import CrossEncoder
+
                     logger.info(f"📊 Loading Reranker: {self.config.reranker_model}")
                     self.model = CrossEncoder(self.config.reranker_model)
                 except ImportError:
                     logger.error("sentence-transformers not installed. Reranking disabled.")
                     self.config.rerank = False
             elif self.config.reranker_provider == "llm":
-                logger.info(f"📊 Using LLM for Re-ranking (RankGPT)")
+                logger.info("📊 Using LLM for Re-ranking (RankGPT)")
                 self.llm = OpenLLM(self.config)
-    
-    def rerank(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+    def rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Rerank a list of documents based on a query.
         """
         if not self.config.rerank or (not self.model and not self.llm) or not documents:
             return documents
-        
+
         logger.info(f"🔄 Reranking {len(documents)} documents...")
 
         if self.config.reranker_provider == "llm" and self.llm:
             return self._llm_rerank(query, documents)
-        
+
         # Cross-encoder pointwise scoring
         # Prepare pairs: (query, doc_text)
-        pairs = [[query, doc['text']] for doc in documents]
-        
+        pairs = [[query, doc["text"]] for doc in documents]
+
         # Get scores
         scores = self.model.predict(pairs)
-        
+
         # Add scores to documents and sort
         for doc, score in zip(documents, scores):
-            doc['rerank_score'] = float(score)
-        
+            doc["rerank_score"] = float(score)
+
         # Sort by rerank score descending
-        reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
-        
+        reranked_docs = sorted(documents, key=lambda x: x["rerank_score"], reverse=True)
+
         return reranked_docs
 
-    def _llm_rerank(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _llm_rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """RankGPT pointwise scoring implementation."""
         system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
-        
+
         from concurrent.futures import ThreadPoolExecutor
-        
+
         def score_doc(doc):
             prompt = f"Query: {query}\n\nDocument: {doc['text']}\n\nScore (1-10):"
             try:
                 response = self.llm.complete(prompt, system_prompt=system_prompt).strip()
-                return float(response) if response.replace('.','',1).isdigit() else 0.0
+                return float(response) if response.replace(".", "", 1).isdigit() else 0.0
             except Exception:
                 return 0.0
-                
+
         # Batch concurrent requests to reduce overall latency
         with ThreadPoolExecutor(max_workers=min(10, len(documents))) as executor:
             scores = list(executor.map(score_doc, documents))
-            
+
         for doc, score in zip(documents, scores):
-            doc['rerank_score'] = score
-            
-        reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
+            doc["rerank_score"] = score
+
+        reranked_docs = sorted(documents, key=lambda x: x["rerank_score"], reverse=True)
         return reranked_docs
 
 
@@ -307,72 +323,80 @@ class OpenEmbedding:
     """
     Open-source embedding provider.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self.provider = config.embedding_provider
         self.model = None
         self._load_model()
-    
+
     def _load_model(self):
         """Load the embedding model."""
         if self.provider == "sentence_transformers":
             from sentence_transformers import SentenceTransformer
+
             logger.info(f"📊 Loading Sentence Transformers: {self.config.embedding_model}")
             self.model = SentenceTransformer(self.config.embedding_model)
             self.dimension = self.model.get_sentence_embedding_dimension()
-            
+
         elif self.provider == "ollama":
-            import ollama
             logger.info(f"📊 Using Ollama Embedding: {self.config.embedding_model}")
             self.dimension = 768  # nomic-embed-text dimension
-            
+
         elif self.provider == "fastembed":
             from fastembed import TextEmbedding
+
             logger.info(f"📊 Loading FastEmbed: {self.config.embedding_model}")
             self.model = TextEmbedding(model_name=self.config.embedding_model)
             if "bge-m3" in self.config.embedding_model.lower():
                 self.dimension = 1024
             else:
                 self.dimension = 384
-                
+
         elif self.provider == "openai":
             from openai import OpenAI
+
             logger.info(f"📊 Using OpenAI API Embedding: {self.config.embedding_model}")
-            kwargs = {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
-            if self.config.ollama_base_url and self.config.ollama_base_url != "http://localhost:11434":
+            kwargs = (
+                {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
+            )
+            if (
+                self.config.ollama_base_url
+                and self.config.ollama_base_url != "http://localhost:11434"
+            ):
                 kwargs["base_url"] = self.config.ollama_base_url
             self.model = OpenAI(**kwargs)
             self.dimension = 1536
-            
+
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
-    
-    def embed(self, texts: List[str]) -> List[List[float]]:
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
         if self.provider == "sentence_transformers":
             embeddings = self.model.encode(texts, show_progress_bar=False)
-            if hasattr(embeddings, 'tolist'):
+            if hasattr(embeddings, "tolist"):
                 return embeddings.tolist()
             return list(embeddings)
-            
+
         elif self.provider == "ollama":
             from ollama import Client
+
             client = Client(host=self.config.ollama_base_url)
             embeddings = []
             for text in texts:
                 response = client.embeddings(model=self.config.embedding_model, prompt=text)
-                embeddings.append(response['embedding'])
+                embeddings.append(response["embedding"])
             return embeddings
-            
+
         elif self.provider == "fastembed":
             embeddings = list(self.model.embed(texts))
             return [e.tolist() for e in embeddings]
-            
+
         elif self.provider == "openai":
             response = self.model.embeddings.create(input=texts, model=self.config.embedding_model)
             return [data.embedding for data in response.data]
-    
-    def embed_query(self, query: str) -> List[float]:
+
+    def embed_query(self, query: str) -> list[float]:
         return self.embed([query])[0]
 
 
@@ -380,7 +404,7 @@ class OpenLLM:
     """
     Open-source LLM provider.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self._openai_clients: dict = {}
@@ -390,46 +414,48 @@ class OpenLLM:
         cache_key = base_url or "default"
         if cache_key not in self._openai_clients:
             from openai import OpenAI
+
             api_key = self.config.api_key if self.config.api_key else "sk-dummy"
             kwargs = {"api_key": api_key}
             if base_url:
                 kwargs["base_url"] = base_url
             self._openai_clients[cache_key] = OpenAI(**kwargs)
         return self._openai_clients[cache_key]
-    
-    def complete(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None) -> str:
+
+    def complete(
+        self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None
+    ) -> str:
         provider = self.config.llm_provider
         history = chat_history or []
         if provider == "ollama":
             from ollama import Client
+
             client = Client(host=self.config.ollama_base_url)
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            
+
             # Add chat history
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
+
             response = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
-                options={
-                    "temperature": self.config.llm_temperature,
-                    "num_ctx": 8192
-                }
+                options={"temperature": self.config.llm_temperature, "num_ctx": 8192},
             )
-            return response['message']['content']
-            
+            return response["message"]["content"]
+
         elif provider == "gemini":
             import warnings
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=FutureWarning)
                 import google.generativeai as genai
-            if not getattr(self, '_gemini_configured', False):
+            if not getattr(self, "_gemini_configured", False):
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
             model_kwargs = {"model_name": self.config.llm_model}
@@ -437,53 +463,56 @@ class OpenLLM:
             if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
-            
+
             contents = []
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            
+
             user_text = prompt
             if system_prompt and is_gemma:
                 user_text = f"{system_prompt}\n\n{prompt}"
             contents.append({"role": "user", "parts": [user_text]})
-                
+
             response = model.generate_content(
                 contents,
                 generation_config=genai.types.GenerationConfig(
                     temperature=self.config.llm_temperature,
-                    max_output_tokens=self.config.llm_max_tokens
-                )
+                    max_output_tokens=self.config.llm_max_tokens,
+                ),
             )
             return response.text
-            
+
         elif provider == "ollama_cloud":
             import httpx
+
             headers = {
                 "Authorization": f"Bearer {self.config.ollama_cloud_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
-            
+
             history_str = ""
             for msg in history:
                 role = "Assistant" if msg["role"] == "assistant" else "User"
                 history_str += f"{role}: {msg['content']}\n\n"
-                
+
             full_prompt = f"{system_prompt}\n\n" if system_prompt else ""
             full_prompt += history_str
             full_prompt += f"User: {prompt}\n\nAssistant:"
-            
+
             payload = {
                 "model": self.config.llm_model,
                 "prompt": full_prompt,
                 "stream": False,
-                "options": {"temperature": self.config.llm_temperature}
+                "options": {"temperature": self.config.llm_temperature},
             }
             with httpx.Client(timeout=60.0) as client:
-                response = client.post(f"{self.config.ollama_cloud_url}/generate", json=payload, headers=headers)
+                response = client.post(
+                    f"{self.config.ollama_cloud_url}/generate", json=payload, headers=headers
+                )
                 response.raise_for_status()
                 return response.json()["response"]
-            
+
         elif provider == "openai":
             messages = []
             if system_prompt:
@@ -496,7 +525,11 @@ class OpenLLM:
             messages.append({"role": "user", "content": prompt})
 
             # Pass base_url when pointing at an OpenAI-compatible local endpoint
-            _openai_base = self.config.ollama_base_url if self.config.ollama_base_url != "http://localhost:11434" else None
+            _openai_base = (
+                self.config.ollama_base_url
+                if self.config.ollama_base_url != "http://localhost:11434"
+                else None
+            )
             response = self._get_openai_client(base_url=_openai_base).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
@@ -515,7 +548,9 @@ class OpenLLM:
                     messages.append({"role": msg["role"], "content": msg["content"]})
             messages.append({"role": "user", "content": prompt})
 
-            response = self._get_openai_client(base_url=self.config.vllm_base_url).chat.completions.create(
+            response = self._get_openai_client(
+                base_url=self.config.vllm_base_url
+            ).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -526,41 +561,42 @@ class OpenLLM:
 
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
-    
-    def stream(self, prompt: str, system_prompt: str = None, chat_history: List[Dict[str, str]] = None):
+
+    def stream(
+        self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None
+    ):
         provider = self.config.llm_provider
         history = chat_history or []
         if provider == "ollama":
             from ollama import Client
+
             client = Client(host=self.config.ollama_base_url)
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            
+
             for msg in history:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
-                    
+
             messages.append({"role": "user", "content": prompt})
-            
+
             stream_resp = client.chat(
                 model=self.config.llm_model,
                 messages=messages,
                 stream=True,
-                options={
-                    "temperature": self.config.llm_temperature,
-                    "num_ctx": 8192
-                }
+                options={"temperature": self.config.llm_temperature, "num_ctx": 8192},
             )
             for chunk in stream_resp:
-                yield chunk['message']['content']
-                
+                yield chunk["message"]["content"]
+
         elif provider == "gemini":
             import warnings
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=FutureWarning)
                 import google.generativeai as genai
-            if not getattr(self, '_gemini_configured', False):
+            if not getattr(self, "_gemini_configured", False):
                 genai.configure(api_key=self.config.gemini_api_key)
                 self._gemini_configured = True
             model_kwargs = {"model_name": self.config.llm_model}
@@ -568,60 +604,67 @@ class OpenLLM:
             if system_prompt and not is_gemma:
                 model_kwargs["system_instruction"] = system_prompt
             model = genai.GenerativeModel(**model_kwargs)
-            
+
             contents = []
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else "user"
                 contents.append({"role": role, "parts": [msg["content"]]})
-            
+
             user_text = prompt
             if system_prompt and is_gemma:
                 user_text = f"{system_prompt}\n\n{prompt}"
             contents.append({"role": "user", "parts": [user_text]})
-                
+
             response = model.generate_content(
                 contents,
                 stream=True,
                 generation_config=genai.types.GenerationConfig(
                     temperature=self.config.llm_temperature,
-                    max_output_tokens=self.config.llm_max_tokens
-                )
+                    max_output_tokens=self.config.llm_max_tokens,
+                ),
             )
             for chunk in response:
                 yield chunk.text
-                
+
         elif provider == "ollama_cloud":
             import httpx
+
             headers = {
                 "Authorization": f"Bearer {self.config.ollama_cloud_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
-            
+
             history_str = ""
             for msg in history:
                 role = "Assistant" if msg["role"] == "assistant" else "User"
                 history_str += f"{role}: {msg['content']}\n\n"
-                
+
             full_prompt = f"{system_prompt}\n\n" if system_prompt else ""
             full_prompt += history_str
             full_prompt += f"User: {prompt}\n\nAssistant:"
-            
+
             payload = {
                 "model": self.config.llm_model,
                 "prompt": full_prompt,
                 "stream": True,
-                "options": {"temperature": self.config.llm_temperature}
+                "options": {"temperature": self.config.llm_temperature},
             }
             import json
+
             with httpx.Client(timeout=60.0) as client:
-                with client.stream("POST", f"{self.config.ollama_cloud_url}/generate", json=payload, headers=headers) as response:
+                with client.stream(
+                    "POST",
+                    f"{self.config.ollama_cloud_url}/generate",
+                    json=payload,
+                    headers=headers,
+                ) as response:
                     response.raise_for_status()
                     for line in response.iter_lines():
                         if line:
                             data = json.loads(line)
                             if "response" in data:
                                 yield data["response"]
-                
+
         elif provider == "openai":
             messages = []
             if system_prompt:
@@ -634,7 +677,11 @@ class OpenLLM:
             messages.append({"role": "user", "content": prompt})
 
             # Pass base_url when pointing at an OpenAI-compatible local endpoint
-            _openai_base = self.config.ollama_base_url if self.config.ollama_base_url != "http://localhost:11434" else None
+            _openai_base = (
+                self.config.ollama_base_url
+                if self.config.ollama_base_url != "http://localhost:11434"
+                else None
+            )
             stream = self._get_openai_client(base_url=_openai_base).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
@@ -656,7 +703,9 @@ class OpenLLM:
                     messages.append({"role": msg["role"], "content": msg["content"]})
             messages.append({"role": "user", "content": prompt})
 
-            stream = self._get_openai_client(base_url=self.config.vllm_base_url).chat.completions.create(
+            stream = self._get_openai_client(
+                base_url=self.config.vllm_base_url
+            ).chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -673,67 +722,82 @@ class OpenVectorStore:
     """
     Open-source vector store interface.
     """
-    
+
     def __init__(self, config: OpenStudioConfig):
         self.config = config
         self.provider = config.vector_store
         self.client = None
         self.collection = None
         self._init_store()
-    
+
     def _init_store(self):
         if self.provider == "chroma":
             import chromadb
+
             logger.info(f"💾 Initializing ChromaDB: {self.config.vector_store_path}")
             self.client = chromadb.PersistentClient(path=self.config.vector_store_path)
             self.collection = self.client.get_or_create_collection(
-                name="rag_brain",
-                metadata={"hnsw:space": "cosine"}
+                name="axon", metadata={"hnsw:space": "cosine"}
             )
         elif self.provider == "qdrant":
             from qdrant_client import QdrantClient
+
             logger.info(f"💾 Initializing Qdrant: {self.config.vector_store_path}")
             self.client = QdrantClient(path=self.config.vector_store_path)
         elif self.provider == "lancedb":
             import lancedb
+
             logger.info(f"💾 Initializing LanceDB: {self.config.vector_store_path}")
             self.client = lancedb.connect(self.config.vector_store_path)
             try:
-                self.collection = self.client.open_table("rag_brain")
+                self.collection = self.client.open_table("axon")
             except Exception:
-                self.collection = None   # created lazily on first add()
+                self.collection = None  # created lazily on first add()
 
-    def add(self, ids: List[str], texts: List[str], embeddings: List[List[float]], metadatas: List[Dict] = None):
+    def add(
+        self,
+        ids: list[str],
+        texts: list[str],
+        embeddings: list[list[float]],
+        metadatas: list[dict] = None,
+    ):
         if self.provider == "chroma":
-            self.collection.add(ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas)
+            self.collection.add(
+                ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas
+            )
         elif self.provider == "qdrant":
             from qdrant_client.models import PointStruct
+
             points = []
             for i, (id, embedding, text) in enumerate(zip(ids, embeddings, texts)):
                 payload = {"text": text}
-                if metadatas: payload.update(metadatas[i])
+                if metadatas:
+                    payload.update(metadatas[i])
                 points.append(PointStruct(id=id, vector=embedding, payload=payload))
-            self.client.upsert(collection_name="rag_brain", points=points)
+            self.client.upsert(collection_name="axon", points=points)
         elif self.provider == "lancedb":
             import json
+
             rows = []
             for i, (doc_id, emb, text) in enumerate(zip(ids, embeddings, texts)):
                 meta = metadatas[i] if metadatas else {}
-                rows.append({
-                    "id": doc_id,
-                    "vector": emb,
-                    "text": text,
-                    "source": meta.get("source", ""),
-                    "metadata_json": json.dumps(meta),
-                })
+                rows.append(
+                    {
+                        "id": doc_id,
+                        "vector": emb,
+                        "text": text,
+                        "source": meta.get("source", ""),
+                        "metadata_json": json.dumps(meta),
+                    }
+                )
             if self.collection is None:
                 self.collection = self.client.create_table(
-                    "rag_brain", data=rows, mode="overwrite", metric="cosine"
+                    "axon", data=rows, mode="overwrite", metric="cosine"
                 )
             else:
                 self.collection.add(rows)
 
-    def list_documents(self) -> List[Dict[str, Any]]:
+    def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
 
         Returns:
@@ -744,8 +808,10 @@ class OpenVectorStore:
         """
         if self.provider == "chroma":
             result = self.collection.get(include=["metadatas"])
-            sources: Dict[str, Dict[str, Any]] = {}
-            for doc_id, meta in zip(result["ids"], result["metadatas"] or [{}] * len(result["ids"])):
+            sources: dict[str, dict[str, Any]] = {}
+            for doc_id, meta in zip(
+                result["ids"], result["metadatas"] or [{}] * len(result["ids"])
+            ):
                 source = (meta or {}).get("source", "unknown")
                 if source not in sources:
                     sources[source] = {"source": source, "chunks": 0, "doc_ids": []}
@@ -753,9 +819,8 @@ class OpenVectorStore:
                 sources[source]["doc_ids"].append(doc_id)
             return sorted(sources.values(), key=lambda x: x["source"])
         elif self.provider == "qdrant":
-            from qdrant_client.models import ScrollRequest
-            results, _ = self.client.scroll(collection_name="rag_brain", limit=10000, with_payload=True)
-            sources: Dict[str, Dict[str, Any]] = {}
+            results, _ = self.client.scroll(collection_name="axon", limit=10000, with_payload=True)
+            sources: dict[str, dict[str, Any]] = {}
             for point in results:
                 source = point.payload.get("source", "unknown")
                 if source not in sources:
@@ -764,11 +829,10 @@ class OpenVectorStore:
                 sources[source]["doc_ids"].append(str(point.id))
             return sorted(sources.values(), key=lambda x: x["source"])
         elif self.provider == "lancedb":
-            import json
             if self.collection is None:
                 return []
             rows = self.collection.to_arrow().to_pydict()
-            sources: Dict[str, Dict[str, Any]] = {}
+            sources: dict[str, dict[str, Any]] = {}
             for doc_id, source in zip(rows.get("id", []), rows.get("source", [])):
                 src = source or "unknown"
                 if src not in sources:
@@ -778,18 +842,36 @@ class OpenVectorStore:
             return sorted(sources.values(), key=lambda x: x["source"])
         return []
 
-    def search(self, query_embedding: List[float], top_k: int = 10, filter_dict: Dict = None) -> List[Dict]:
+    def search(
+        self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
+    ) -> list[dict]:
         if self.provider == "chroma":
             results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
             return [
-                {"id": results['ids'][0][i], "text": results['documents'][0][i], "score": 1 - results['distances'][0][i], "metadata": results['metadatas'][0][i] if results['metadatas'] else {}}
-                for i in range(len(results['ids'][0]))
+                {
+                    "id": results["ids"][0][i],
+                    "text": results["documents"][0][i],
+                    "score": 1 - results["distances"][0][i],
+                    "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
+                }
+                for i in range(len(results["ids"][0]))
             ]
         elif self.provider == "qdrant":
-            results = self.client.search(collection_name="rag_brain", query_vector=query_embedding, limit=top_k)
-            return [{"id": str(r.id), "text": r.payload.get("text", ""), "score": r.score, "metadata": {k: v for k, v in r.payload.items() if k != "text"}} for r in results]
+            results = self.client.search(
+                collection_name="axon", query_vector=query_embedding, limit=top_k
+            )
+            return [
+                {
+                    "id": str(r.id),
+                    "text": r.payload.get("text", ""),
+                    "score": r.score,
+                    "metadata": {k: v for k, v in r.payload.items() if k != "text"},
+                }
+                for r in results
+            ]
         elif self.provider == "lancedb":
             import json
+
             if self.collection is None:
                 return []
             results = self.collection.search(query_embedding).limit(top_k).to_list()
@@ -803,7 +885,7 @@ class OpenVectorStore:
                 for r in results
             ]
 
-    def get_by_ids(self, ids: List[str]) -> List[Dict]:
+    def get_by_ids(self, ids: list[str]) -> list[dict]:
         """Fetch stored documents by their IDs (used by GraphRAG expansion).
 
         Returns a list of result dicts in the same format as search(), with score=1.0
@@ -823,17 +905,19 @@ class OpenVectorStore:
                 result_metas = list(result_metas) + [{}] * (num_ids - len(result_metas))
             docs = []
             for i in range(num_ids):
-                docs.append({
-                    "id": result_ids[i],
-                    "text": result_docs[i] or "",
-                    "score": 1.0,
-                    "metadata": result_metas[i] or {},
-                })
+                docs.append(
+                    {
+                        "id": result_ids[i],
+                        "text": result_docs[i] or "",
+                        "score": 1.0,
+                        "metadata": result_metas[i] or {},
+                    }
+                )
             return docs
         if self.provider == "qdrant":
             try:
                 points = self.client.retrieve(
-                    collection_name="rag_brain",
+                    collection_name="axon",
                     ids=ids,
                     with_payload=True,
                 )
@@ -851,6 +935,7 @@ class OpenVectorStore:
                 return []
         if self.provider == "lancedb":
             import json
+
             if self.collection is None:
                 return []
             try:
@@ -870,7 +955,7 @@ class OpenVectorStore:
                 return []
         return []
 
-    def delete_by_ids(self, ids: List[str]) -> None:
+    def delete_by_ids(self, ids: list[str]) -> None:
         """Delete documents by ID from the vector store."""
         if not ids:
             return
@@ -878,8 +963,9 @@ class OpenVectorStore:
             self.collection.delete(ids=ids)
         elif self.provider == "qdrant":
             from qdrant_client.models import PointIdsList
+
             self.client.delete(
-                collection_name="rag_brain",
+                collection_name="axon",
                 points_selector=PointIdsList(points=ids),
             )
         elif self.provider == "lancedb":
@@ -891,20 +977,20 @@ class OpenVectorStore:
 
 class OpenStudioBrain:
     """
-    Main interface for Local RAG Brain.
+    Main interface for Axon.
     """
-    
-    SYSTEM_PROMPT = """You are the 'RAG Brain', a highly capable and friendly AI assistant. 
+
+    SYSTEM_PROMPT = """You are the 'Axon', a highly capable and friendly AI assistant.
 Your primary goal is to help the user by answering questions based on the provided context from their private documents.
 
 **Guidelines:**
 1. **Prioritize Context**: If relevant information is found in the provided context, use it to answer the question accurately and cite the documents.
-2. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response. 
+2. **General Knowledge Fallback**: If no relevant information is found in the context, DO NOT strictly refuse to answer. Instead, use your broad internal knowledge to provide a helpful response.
 3. **Be Transparent**: If you are using your general knowledge because no local documents matched the query, briefly mention it (e.g., 'I couldn't find specific details in your documents, but based on my general knowledge...').
 4. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
 """
 
-    SYSTEM_PROMPT_STRICT = """You are the 'RAG Brain', a focused AI assistant that answers ONLY from the provided document context.
+    SYSTEM_PROMPT_STRICT = """You are the 'Axon', a focused AI assistant that answers ONLY from the provided document context.
 
 **Guidelines:**
 1. **Context Only**: Answer exclusively from the provided context. Do NOT use general knowledge or information outside the documents.
@@ -912,7 +998,7 @@ Your primary goal is to help the user by answering questions based on the provid
 3. **Cite Sources**: When answering, reference the relevant document or section.
 4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
 """
-    
+
     def _resolve_model_path(self, model_name: str) -> str:
         """Resolve a HuggingFace model ID to a local path when offline_mode is on.
 
@@ -923,16 +1009,16 @@ Your primary goal is to help the user by answering questions based on the provid
         """
         if not self.config.offline_mode or not self.config.local_models_dir:
             return model_name
-        if os.path.isabs(model_name) or model_name.startswith('.'):
+        if os.path.isabs(model_name) or model_name.startswith("."):
             return model_name
         base = self.config.local_models_dir
         # Try bare name: "BAAI/bge-reranker-base" → "<dir>/bge-reranker-base"
-        short_name = model_name.split('/')[-1]
+        short_name = model_name.split("/")[-1]
         candidate = os.path.join(base, short_name)
         if os.path.isdir(candidate):
             return candidate
         # Try HF cache style: "BAAI/bge-reranker-base" → "<dir>/BAAI--bge-reranker-base"
-        hf_name = model_name.replace('/', '--')
+        hf_name = model_name.replace("/", "--")
         candidate2 = os.path.join(base, hf_name)
         if os.path.isdir(candidate2):
             return candidate2
@@ -942,7 +1028,7 @@ Your primary goal is to help the user by answering questions based on the provid
         )
         return model_name
 
-    def __init__(self, config: Optional[OpenStudioConfig] = None):
+    def __init__(self, config: OpenStudioConfig | None = None):
         self.config = config or OpenStudioConfig.load()
 
         # ── Offline mode: lock down all network access before any model loads ──
@@ -967,12 +1053,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 self.config.graph_rag = False
             # Resolve bare HF model IDs to local paths
             self.config.embedding_model = self._resolve_model_path(self.config.embedding_model)
-            self.config.reranker_model  = self._resolve_model_path(self.config.reranker_model)
+            self.config.reranker_model = self._resolve_model_path(self.config.reranker_model)
             logger.info(
                 f"🔒 Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
             )
 
-        logger.info("🧠 Initializing Local RAG Brain...")
+        logger.info("🧠 Initializing Axon...")
         self.embedding = OpenEmbedding(self.config)
         self.llm = OpenLLM(self.config)
         self.vector_store = OpenVectorStore(self.config)
@@ -982,16 +1068,20 @@ Your primary goal is to help the user by answering questions based on the provid
         self._base_vector_store_path: str = os.path.abspath(self.config.vector_store_path)
         self._base_bm25_path: str = os.path.abspath(self.config.bm25_path)
         self._active_project: str = "default"
-        
+
         try:
-            from rag_brain.retrievers import BM25Retriever
+            from axon.retrievers import BM25Retriever
+
             self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
         except ImportError:
             self.bm25 = None
-            
+
         try:
-            from rag_brain.splitters import RecursiveCharacterTextSplitter
-            self.splitter = RecursiveCharacterTextSplitter(chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap)
+            from axon.splitters import RecursiveCharacterTextSplitter
+
+            self.splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+            )
         except ImportError:
             self.splitter = None
 
@@ -999,16 +1089,17 @@ Your primary goal is to help the user by answering questions based on the provid
         # Uses OrderedDict for true LRU eviction: hits are moved to the end so the
         # least-recently-used entry is always at the front and evicted first.
         from collections import OrderedDict
-        self._query_cache: "OrderedDict[str, str]" = OrderedDict()
+
+        self._query_cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
 
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
 
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
-        self._entity_graph: Dict[str, List[str]] = self._load_entity_graph()
+        self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
 
-        logger.info("✅ Local RAG Brain ready!")
+        logger.info("✅ Axon ready!")
 
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
@@ -1022,8 +1113,11 @@ Your primary goal is to help the user by answering questions based on the provid
         Raises:
             ValueError: If the project does not exist (use /project new first).
         """
-        from rag_brain.projects import (
-            project_bm25_path, project_dir, project_vector_path, set_active_project,
+        from axon.projects import (
+            project_bm25_path,
+            project_dir,
+            project_vector_path,
+            set_active_project,
         )
 
         if name == "default":
@@ -1041,7 +1135,8 @@ Your primary goal is to help the user by answering questions based on the provid
         # Reinitialize stores with new paths
         self.vector_store = OpenVectorStore(self.config)
         try:
-            from rag_brain.retrievers import BM25Retriever
+            from axon.retrievers import BM25Retriever
+
             self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
         except ImportError:
             self.bm25 = None
@@ -1049,6 +1144,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # Reload project-scoped state so dedup/GraphRAG use the new project's data
         # and cached answers from the previous project cannot bleed across.
         from collections import OrderedDict
+
         with self._cache_lock:
             self._query_cache = OrderedDict()
         self._ingested_hashes = self._load_hash_store()
@@ -1057,10 +1153,11 @@ Your primary goal is to help the user by answering questions based on the provid
         self._active_project = name
         set_active_project(name)
         logger.info(f"📂 Switched to project '{name}'")
-    
+
     def _load_hash_store(self) -> set:
         """Load persisted content hashes for ingest deduplication."""
         import pathlib
+
         path = pathlib.Path(self.config.bm25_path) / ".content_hashes"
         if path.exists():
             return set(path.read_text(encoding="utf-8").splitlines())
@@ -1069,20 +1166,23 @@ Your primary goal is to help the user by answering questions based on the provid
     def _save_hash_store(self) -> None:
         """Persist content hashes to disk."""
         import pathlib
+
         path = pathlib.Path(self.config.bm25_path) / ".content_hashes"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(self._ingested_hashes), encoding="utf-8")
 
-    def _load_entity_graph(self) -> Dict[str, List[str]]:
+    def _load_entity_graph(self) -> dict[str, list[str]]:
         """Load persisted entity→doc_id graph from disk."""
-        import json, pathlib
+        import json
+        import pathlib
+
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
         if path.exists():
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(raw, dict):
                     return {}
-                cleaned: Dict[str, List[str]] = {}
+                cleaned: dict[str, list[str]] = {}
                 for key, value in raw.items():
                     if not isinstance(key, str) or not isinstance(value, list):
                         continue
@@ -1094,12 +1194,14 @@ Your primary goal is to help the user by answering questions based on the provid
 
     def _save_entity_graph(self) -> None:
         """Persist entity graph to disk."""
-        import json, pathlib
+        import json
+        import pathlib
+
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
 
-    def _extract_entities(self, text: str) -> List[str]:
+    def _extract_entities(self, text: str) -> list[str]:
         """Extract named entities from text using the LLM.
 
         Returns a list of entity strings (people, organisations, places, concepts).
@@ -1113,12 +1215,14 @@ Your primary goal is to help the user by answering questions based on the provid
             + text[:1500]  # cap to avoid huge prompts
         )
         try:
-            raw = self.llm.complete(prompt, system_prompt="You are a named entity extraction specialist.")
+            raw = self.llm.complete(
+                prompt, system_prompt="You are a named entity extraction specialist."
+            )
             return [e.strip() for e in raw.splitlines() if e.strip()][:20]
         except Exception:
             return []
 
-    def _generate_raptor_summaries(self, documents: List[Dict]) -> List[Dict]:
+    def _generate_raptor_summaries(self, documents: list[dict]) -> list[dict]:
         """Generate RAPTOR summary nodes for a list of already-split chunks.
 
         Groups consecutive chunks by source in windows of raptor_chunk_group_size,
@@ -1142,7 +1246,7 @@ Your primary goal is to help the user by answering questions based on the provid
         for source, group in groupby(sorted_docs, key=_source):
             chunks = list(group)
             for i in range(0, len(chunks), n):
-                window = chunks[i:i + n]
+                window = chunks[i : i + n]
                 combined = "\n\n".join(c["text"] for c in window)
                 prompt = (
                     "Summarise the following passage into a concise but comprehensive paragraph "
@@ -1152,7 +1256,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 try:
                     summary_text = self.llm.complete(
                         prompt,
-                        system_prompt="You are an expert at summarising technical documents."
+                        system_prompt="You are an expert at summarising technical documents.",
                     )
                     if not summary_text or not summary_text.strip():
                         continue
@@ -1160,18 +1264,25 @@ Your primary goal is to help the user by answering questions based on the provid
                     # so that re-ingesting updated content produces a new ID and
                     # does not silently collide with a stale RAPTOR node in the store.
                     import hashlib
-                    content_sig = hashlib.md5(summary_text.strip().encode("utf-8", errors="replace")).hexdigest()[:8]
-                    uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
-                    summaries.append({
-                        "id": f"raptor_{uid}",
-                        "text": summary_text.strip(),
-                        "metadata": {
-                            "source": source,
-                            "raptor_level": 1,
-                            "window_start": i,
-                            "window_end": i + len(window) - 1,
-                        },
-                    })
+
+                    content_sig = hashlib.md5(
+                        summary_text.strip().encode("utf-8", errors="replace")
+                    ).hexdigest()[:8]
+                    uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[
+                        :12
+                    ]
+                    summaries.append(
+                        {
+                            "id": f"raptor_{uid}",
+                            "text": summary_text.strip(),
+                            "metadata": {
+                                "source": source,
+                                "raptor_level": 1,
+                                "window_start": i,
+                                "window_end": i + len(window) - 1,
+                            },
+                        }
+                    )
                 except Exception as e:
                     logger.debug(f"RAPTOR summary failed for {source}[{i}]: {e}")
 
@@ -1179,7 +1290,7 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
         return summaries
 
-    def _expand_with_entity_graph(self, query: str, results: List[Dict], cfg=None) -> List[Dict]:
+    def _expand_with_entity_graph(self, query: str, results: list[dict], cfg=None) -> list[dict]:
         """Expand retrieval results using GraphRAG entity linkage.
 
         1. Extract entities from the query.
@@ -1194,7 +1305,7 @@ Your primary goal is to help the user by answering questions based on the provid
         active_top_k = (cfg.top_k if cfg is not None else None) or self.config.top_k
 
         existing_ids = {r["id"] for r in results}
-        extra_ids: List[str] = []
+        extra_ids: list[str] = []
         for entity in query_entities:
             for eid, doc_ids in self._entity_graph.items():
                 if entity.lower() in eid.lower() or eid.lower() in entity.lower():
@@ -1209,16 +1320,19 @@ Your primary goal is to help the user by answering questions based on the provid
         try:
             extra_results = self.vector_store.get_by_ids(extra_ids[:active_top_k])
             if extra_results:
-                logger.info(f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)")
+                logger.info(
+                    f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)"
+                )
                 results = list(results) + extra_results
         except Exception as e:
             logger.debug(f"GraphRAG expansion failed: {e}")
 
         return results
 
-    def _doc_hash(self, doc: Dict) -> str:
+    def _doc_hash(self, doc: dict) -> str:
         """Return an MD5 hex digest of the document's text content."""
         import hashlib
+
         return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
 
     def _make_cache_key(self, query: str, filters, cfg) -> str:
@@ -1228,7 +1342,9 @@ Your primary goal is to help the user by answering questions based on the provid
         requests that differ only by (e.g.) cite_sources or compress_context
         receive distinct cache entries.
         """
-        import hashlib, json
+        import hashlib
+        import json
+
         # Serialize filters safely regardless of type
         try:
             filters_key = json.dumps(filters or {}, sort_keys=True, default=str)
@@ -1258,29 +1374,39 @@ Your primary goal is to help the user by answering questions based on the provid
         }
         return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
-    def _log_query_metrics(self, query: str, vector_count: int, bm25_count: int,
-                            filtered_count: int, final_count: int, top_score: float,
-                            latency_ms: float, transformations: Dict = None,
-                            cfg=None):
+    def _log_query_metrics(
+        self,
+        query: str,
+        vector_count: int,
+        bm25_count: int,
+        filtered_count: int,
+        final_count: int,
+        top_score: float,
+        latency_ms: float,
+        transformations: dict = None,
+        cfg=None,
+    ):
         """Log structured metrics for a query."""
         active = cfg if cfg is not None else self.config
-        logger.info({
-            "event": "query_complete",
-            "query_preview": query[:80],
-            "latency_ms": round(latency_ms, 1),
-            "results": {
-                "vector": vector_count,
-                "bm25": bm25_count,
-                "after_filter": filtered_count,
-                "final": final_count,
-            },
-            "top_score": round(top_score, 4) if top_score else None,
-            "hybrid": active.hybrid_search,
-            "rerank": active.rerank,
-            "transformations": transformations or {}
-        })
+        logger.info(
+            {
+                "event": "query_complete",
+                "query_preview": query[:80],
+                "latency_ms": round(latency_ms, 1),
+                "results": {
+                    "vector": vector_count,
+                    "bm25": bm25_count,
+                    "after_filter": filtered_count,
+                    "final": final_count,
+                },
+                "top_score": round(top_score, 4) if top_score else None,
+                "hybrid": active.hybrid_search,
+                "rerank": active.rerank,
+                "transformations": transformations or {},
+            }
+        )
 
-    def _split_with_parents(self, documents: List[Dict]) -> List[Dict]:
+    def _split_with_parents(self, documents: list[dict]) -> list[dict]:
         """Split documents using parent-document (small-to-big) strategy.
 
         1. Split each raw document into large parent chunks (parent_chunk_size).
@@ -1289,7 +1415,8 @@ Your primary goal is to help the user by answering questions based on the provid
            time _build_context() can return the richer parent passage instead of
            the small retrieval chunk.
         """
-        from rag_brain.splitters import RecursiveCharacterTextSplitter
+        from axon.splitters import RecursiveCharacterTextSplitter
+
         parent_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.config.parent_chunk_size,
             chunk_overlap=self.config.chunk_overlap,
@@ -1309,10 +1436,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 all_chunks.extend(child_chunks)
         return all_chunks
 
-    def ingest(self, documents: List[Dict[str, Any]]):
-        if not documents: return
+    def ingest(self, documents: list[dict[str, Any]]):
+        if not documents:
+            return
         t0 = time.time()
         from tqdm import tqdm
+
         logger.info(f"📥 Ingesting {len(documents)} documents...")
         if self.splitter and self.config.parent_chunk_size > 0:
             documents = self._split_with_parents(documents)
@@ -1330,7 +1459,9 @@ Your primary goal is to help the user by answering questions based on the provid
                     new_hashes.append(h)
             skipped = before - len(new_docs)
             if skipped:
-                logger.info(f"   Dedup: skipped {skipped} already-seen chunk(s), ingesting {len(new_docs)} new.")
+                logger.info(
+                    f"   Dedup: skipped {skipped} already-seen chunk(s), ingesting {len(new_docs)} new."
+                )
             documents = new_docs
             if not documents:
                 return
@@ -1360,33 +1491,36 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._save_entity_graph()
 
         n_chunks = len(documents)
-        if self.bm25: self.bm25.add_documents(documents)
+        if self.bm25:
+            self.bm25.add_documents(documents)
 
-        ids = [d['id'] for d in documents]
-        texts = [d['text'] for d in documents]
-        metadatas = [d.get('metadata', {}) for d in documents]
+        ids = [d["id"] for d in documents]
+        texts = [d["text"] for d in documents]
+        metadatas = [d.get("metadata", {}) for d in documents]
 
         logger.info("   Generating embeddings...")
         batch_size = 32
         all_embeddings = []
         t_embed = time.time()
         for i in tqdm(range(0, len(texts), batch_size), desc="Embedding"):
-            all_embeddings.extend(self.embedding.embed(texts[i:i + batch_size]))
+            all_embeddings.extend(self.embedding.embed(texts[i : i + batch_size]))
         embed_ms = (time.time() - t_embed) * 1000
 
         t_store = time.time()
         self.vector_store.add(ids, texts, all_embeddings, metadatas)
         store_ms = (time.time() - t_store) * 1000
 
-        logger.info({
-            "event": "ingest_complete",
-            "chunks": n_chunks,
-            "embed_ms": round(embed_ms, 1),
-            "store_ms": round(store_ms, 1),
-            "total_ms": round((time.time() - t0) * 1000, 1),
-        })
+        logger.info(
+            {
+                "event": "ingest_complete",
+                "chunks": n_chunks,
+                "embed_ms": round(embed_ms, 1),
+                "store_ms": round(store_ms, 1),
+                "total_ms": round((time.time() - t0) * 1000, 1),
+            }
+        )
 
-    def _decompose_query(self, query: str) -> List[str]:
+    def _decompose_query(self, query: str) -> list[str]:
         """Break a complex query into atomic sub-questions for independent retrieval.
 
         Returns the original query plus up to 4 sub-questions.
@@ -1397,7 +1531,9 @@ Your primary goal is to help the user by answering questions based on the provid
             "numbering or bullet prefix. If the question is already simple, output it unchanged.\n\n"
             "Question: " + query
         )
-        response = self.llm.complete(prompt, system_prompt="You are an expert at decomposing complex questions.")
+        response = self.llm.complete(
+            prompt, system_prompt="You are an expert at decomposing complex questions."
+        )
         sub_qs = [q.strip("- \t1234567890.)") for q in response.split("\n") if q.strip()]
         # Dedupe while preserving order; always keep original first
         seen = {query}
@@ -1408,7 +1544,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 unique.append(q)
         return unique
 
-    def _compress_context(self, query: str, results: List[Dict]) -> List[Dict]:
+    def _compress_context(self, query: str, results: list[dict]) -> list[dict]:
         """Extract only query-relevant sentences from each retrieved chunk (parallel).
 
         Compresses non-web results by asking the LLM to strip irrelevant text.
@@ -1419,7 +1555,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         from concurrent.futures import ThreadPoolExecutor
 
-        def _compress_one(result: Dict) -> Dict:
+        def _compress_one(result: dict) -> dict:
             if result.get("is_web"):
                 return result
             # Use parent_text if available (small-to-big path), else chunk text
@@ -1431,7 +1567,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 f"Question: {query}\n\nPassage:\n{source_text}"
             )
             try:
-                compressed = self.llm.complete(prompt, system_prompt="You are an expert at extracting relevant information.")
+                compressed = self.llm.complete(
+                    prompt, system_prompt="You are an expert at extracting relevant information."
+                )
                 if compressed and len(compressed.strip()) < len(source_text):
                     r = {**result, "metadata": {**result.get("metadata", {})}}
                     # Overwrite whichever field _build_context reads
@@ -1455,75 +1593,90 @@ Your primary goal is to help the user by answering questions based on the provid
             "of it that would help retrieve relevant background knowledge. Output only the "
             "abstract question, nothing else.\n\nSpecific question: " + query
         )
-        return self.llm.complete(prompt, system_prompt="You are an expert at abstracting questions to their core concepts.")
+        return self.llm.complete(
+            prompt,
+            system_prompt="You are an expert at abstracting questions to their core concepts.",
+        )
 
     def _get_hyde_document(self, query: str) -> str:
         """Generate a Hypothetical Document Embedding (HyDE) passage."""
         prompt = f"Please write a hypothetical, detailed passage that directly answers the following question. Use informative and factual language.\n\nQuestion: {query}"
-        return self.llm.complete(prompt, system_prompt="You are a helpful expert answering questions.")
+        return self.llm.complete(
+            prompt, system_prompt="You are a helpful expert answering questions."
+        )
 
-    def _get_multi_queries(self, query: str) -> List[str]:
+    def _get_multi_queries(self, query: str) -> list[str]:
         """Generate alternative query phrasings for multi-query retrieval."""
         prompt = f"Generate 3 alternative phrasings of the following question to help with retrieving documents from a vector database. Output each phrasing on a new line and DO NOT output anything else.\n\nQuestion: {query}"
         response = self.llm.complete(prompt, system_prompt="You are an expert search engineer.")
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
 
-    def _execute_web_search(self, query: str, count: int = 5) -> List[Dict]:
+    def _execute_web_search(self, query: str, count: int = 5) -> list[dict]:
         """Execute a web search using the Brave Search API and return results."""
         import httpx
+
         try:
             response = httpx.get(
                 "https://api.search.brave.com/res/v1/web/search",
                 headers={
                     "Accept": "application/json",
                     "Accept-Encoding": "gzip",
-                    "X-Subscription-Token": self.config.brave_api_key
+                    "X-Subscription-Token": self.config.brave_api_key,
                 },
                 params={"q": query, "count": count},
-                timeout=10.0
+                timeout=10.0,
             )
             response.raise_for_status()
             data = response.json()
-            
+
             web_results = []
             for item in data.get("web", {}).get("results", [])[:count]:
                 snippet = item.get("description", "")
                 title = item.get("title", "")
                 url = item.get("url", "")
-                web_results.append({
-                    "id": url,
-                    "text": f"{title}\n{snippet}",
-                    "score": 1.0,
-                    "metadata": {"source": url, "title": title},
-                    "is_web": True
-                })
+                web_results.append(
+                    {
+                        "id": url,
+                        "text": f"{title}\n{snippet}",
+                        "score": 1.0,
+                        "metadata": {"source": url, "title": title},
+                        "is_web": True,
+                    }
+                )
             logger.info(f"🌐 Brave Search returned {len(web_results)} results for: {query[:60]}")
             return web_results
         except Exception as e:
             logger.warning(f"🌐 Web search failed: {e}")
             return []
 
-    def _execute_retrieval(self, query: str, filters: Dict = None, cfg=None) -> Dict:
+    def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
         if cfg is None:
             cfg = self.config
-        transforms = {"hyde_applied": False, "multi_query_applied": False, "step_back_applied": False, "decompose_applied": False, "web_search_applied": False, "queries": [query]}
+        transforms = {
+            "hyde_applied": False,
+            "multi_query_applied": False,
+            "step_back_applied": False,
+            "decompose_applied": False,
+            "web_search_applied": False,
+            "queries": [query],
+        }
 
         search_queries = [query]
         vector_query = query
 
         if cfg.multi_query:
             search_queries = self._get_multi_queries(query)
-            transforms['multi_query_applied'] = True
-            transforms['queries'] = search_queries
+            transforms["multi_query_applied"] = True
+            transforms["queries"] = search_queries
 
         if cfg.step_back:
             abstract_query = self._get_step_back_query(query)
             if abstract_query not in search_queries:
                 search_queries = search_queries + [abstract_query]
-            transforms['step_back_applied'] = True
-            transforms['queries'] = search_queries
+            transforms["step_back_applied"] = True
+            transforms["queries"] = search_queries
 
         if cfg.query_decompose:
             sub_questions = self._decompose_query(query)
@@ -1533,13 +1686,13 @@ Your primary goal is to help the user by answering questions based on the provid
                 if sq not in existing:
                     search_queries = search_queries + [sq]
                     existing.add(sq)
-            transforms['decompose_applied'] = True
-            transforms['queries'] = search_queries
+            transforms["decompose_applied"] = True
+            transforms["queries"] = search_queries
 
         if cfg.hyde:
             # We construct a single hypothetical document based on the primary query
             vector_query = self._get_hyde_document(query)
-            transforms['hyde_applied'] = True
+            transforms["hyde_applied"] = True
 
         fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
 
@@ -1548,24 +1701,34 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # Vector Search
         if cfg.hyde:
-             # HyDE uses a single hypothetical document as the vector query
-             all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters))
+            # HyDE uses a single hypothetical document as the vector query
+            all_vector_results.extend(
+                self.vector_store.search(
+                    self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters
+                )
+            )
         else:
-             # When multi_query is enabled, batch embed all queries to avoid
-             # multiple sequential embedding calls (latency/cost optimization).
-             if len(search_queries) == 1:
-                 sq = search_queries[0]
-                 all_vector_results.extend(self.vector_store.search(self.embedding.embed_query(sq), top_k=fetch_k, filter_dict=filters))
-             else:
-                 embeddings = self.embedding.embed(search_queries)
-                 for emb in embeddings:
-                     all_vector_results.extend(self.vector_store.search(emb, top_k=fetch_k, filter_dict=filters))
+            # When multi_query is enabled, batch embed all queries to avoid
+            # multiple sequential embedding calls (latency/cost optimization).
+            if len(search_queries) == 1:
+                sq = search_queries[0]
+                all_vector_results.extend(
+                    self.vector_store.search(
+                        self.embedding.embed_query(sq), top_k=fetch_k, filter_dict=filters
+                    )
+                )
+            else:
+                embeddings = self.embedding.embed(search_queries)
+                for emb in embeddings:
+                    all_vector_results.extend(
+                        self.vector_store.search(emb, top_k=fetch_k, filter_dict=filters)
+                    )
 
         # Dedupe vector store results based on ID
         dedup_vector = {}
         for r in all_vector_results:
-            if r['id'] not in dedup_vector or r['score'] > dedup_vector[r['id']]['score']:
-                dedup_vector[r['id']] = r
+            if r["id"] not in dedup_vector or r["score"] > dedup_vector[r["id"]]["score"]:
+                dedup_vector[r["id"]] = r
         vector_results = list(dedup_vector.values())
         vector_count = len(vector_results)
 
@@ -1577,17 +1740,22 @@ Your primary goal is to help the user by answering questions based on the provid
 
             dedup_bm25 = {}
             for r in all_bm25_results:
-                if r['id'] not in dedup_bm25 or r['score'] > dedup_bm25[r['id']]['score']:
-                    dedup_bm25[r['id']] = r
+                if r["id"] not in dedup_bm25 or r["score"] > dedup_bm25[r["id"]]["score"]:
+                    dedup_bm25[r["id"]] = r
             bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
 
-            from rag_brain.retrievers import reciprocal_rank_fusion
+            from axon.retrievers import reciprocal_rank_fusion
+
             results = reciprocal_rank_fusion(vector_results, bm25_results)
         else:
             results = vector_results
 
-        results = [r for r in results if r.get('score', 1.0) >= cfg.similarity_threshold or 'fused_only' in r]
+        results = [
+            r
+            for r in results
+            if r.get("score", 1.0) >= cfg.similarity_threshold or "fused_only" in r
+        ]
 
         # GraphRAG: expand results with entity-linked documents
         if cfg.graph_rag and self._entity_graph:
@@ -1598,7 +1766,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # meaning local knowledge is genuinely insufficient (even if BM25 returned fused_only docs).
         web_count = 0
         if cfg.truth_grounding and cfg.brave_api_key:
-            max_vector_score = max((r['score'] for r in vector_results), default=0.0)
+            max_vector_score = max((r["score"] for r in vector_results), default=0.0)
             local_sufficient = max_vector_score >= cfg.similarity_threshold
             if not local_sufficient:
                 logger.info(
@@ -1609,7 +1777,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 web_count = len(web_results)
                 # Replace low-relevance local results with web results
                 results = web_results
-                transforms['web_search_applied'] = True
+                transforms["web_search_applied"] = True
 
         return {
             "results": results,
@@ -1617,10 +1785,10 @@ Your primary goal is to help the user by answering questions based on the provid
             "bm25_count": bm25_count,
             "web_count": web_count,
             "filtered_count": len(results),
-            "transforms": transforms
+            "transforms": transforms,
         }
 
-    def _build_context(self, results: List[Dict]) -> tuple:
+    def _build_context(self, results: list[dict]) -> tuple:
         """Build context string from results, labelling web vs local sources distinctly.
 
         Returns:
@@ -1670,18 +1838,25 @@ Your primary goal is to help the user by answering questions based on the provid
             "you have access to live Brave Search as a fallback tool. It was not needed for this query."
         )
 
-    def _apply_overrides(self, overrides: Optional[Dict]) -> 'OpenStudioConfig':
+    def _apply_overrides(self, overrides: dict | None) -> "OpenStudioConfig":
         """Return a config copy with per-request overrides applied (thread-safe)."""
         if not overrides:
             return self.config
         import copy
+
         cfg = copy.copy(self.config)
         for k, v in overrides.items():
             if v is not None and hasattr(cfg, k):
                 setattr(cfg, k, v)
         return cfg
 
-    def query(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None) -> str:
+    def query(
+        self,
+        query: str,
+        filters: dict = None,
+        chat_history: list[dict[str, str]] = None,
+        overrides: dict = None,
+    ) -> str:
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
@@ -1697,32 +1872,56 @@ Your primary goal is to help the user by answering questions based on the provid
                     return self._query_cache[cache_key]
 
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
-        results = retrieval['results']
+        results = retrieval["results"]
 
         if not results:
-            self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
-                                    retrieval['filtered_count'], 0, 0.0, (time.time() - t0) * 1000, retrieval['transforms'], cfg=cfg)
+            self._log_query_metrics(
+                query,
+                retrieval["vector_count"],
+                retrieval["bm25_count"],
+                retrieval["filtered_count"],
+                0,
+                0.0,
+                (time.time() - t0) * 1000,
+                retrieval["transforms"],
+                cfg=cfg,
+            )
 
             if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
-                return self.llm.complete(query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history)
+                return self.llm.complete(
+                    query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history
+                )
 
             return "I don't have any relevant information to answer that question."
 
-        if cfg.rerank: results = self.reranker.rerank(query, results)
+        if cfg.rerank:
+            results = self.reranker.rerank(query, results)
 
-        results = results[:cfg.top_k]
+        results = results[: cfg.top_k]
         if cfg.compress_context:
             results = self._compress_context(query, results)
         final_count = len(results)
-        top_score = results[0].get('score', 0) if results else 0
+        top_score = results[0].get("score", 0) if results else 0
         context, has_web = self._build_context(results)
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
-        system_prompt = self._build_system_prompt(has_web, cfg=cfg) + f"\n\n**Relevant context from documents:**\n{context}"
+        system_prompt = (
+            self._build_system_prompt(has_web, cfg=cfg)
+            + f"\n\n**Relevant context from documents:**\n{context}"
+        )
         response = self.llm.complete(query, system_prompt, chat_history=chat_history)
-        self._log_query_metrics(query, retrieval['vector_count'], retrieval['bm25_count'],
-                                retrieval['filtered_count'], final_count, top_score, (time.time() - t0) * 1000, retrieval['transforms'], cfg=cfg)
+        self._log_query_metrics(
+            query,
+            retrieval["vector_count"],
+            retrieval["bm25_count"],
+            retrieval["filtered_count"],
+            final_count,
+            top_score,
+            (time.time() - t0) * 1000,
+            retrieval["transforms"],
+            cfg=cfg,
+        )
 
         if cache_key is not None:
             with self._cache_lock:
@@ -1734,28 +1933,40 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return response
 
-    def query_stream(self, query: str, filters: Dict = None, chat_history: List[Dict[str, str]] = None, overrides: Dict = None):
+    def query_stream(
+        self,
+        query: str,
+        filters: dict = None,
+        chat_history: list[dict[str, str]] = None,
+        overrides: dict = None,
+    ):
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
-        results = retrieval['results']
+        results = retrieval["results"]
 
         if not results:
             if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
-                yield from self.llm.stream(query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history)
+                yield from self.llm.stream(
+                    query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history
+                )
                 return
             yield "I don't have any relevant information to answer that question."
             return
 
-        if cfg.rerank: results = self.reranker.rerank(query, results)
+        if cfg.rerank:
+            results = self.reranker.rerank(query, results)
 
-        results = results[:cfg.top_k]
+        results = results[: cfg.top_k]
         if cfg.compress_context:
             results = self._compress_context(query, results)
         context, has_web = self._build_context(results)
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
-        system_prompt = self._build_system_prompt(has_web, cfg=cfg) + f"\n\n**Relevant context from documents:**\n{context}"
+        system_prompt = (
+            self._build_system_prompt(has_web, cfg=cfg)
+            + f"\n\n**Relevant context from documents:**\n{context}"
+        )
 
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
@@ -1763,13 +1974,15 @@ Your primary goal is to help the user by answering questions based on the provid
         yield from self.llm.stream(query, system_prompt, chat_history=chat_history)
 
     async def load_directory(self, directory: str):
-        from rag_brain.loaders import DirectoryLoader
+        from axon.loaders import DirectoryLoader
+
         loader = DirectoryLoader()
         logger.info(f"📁 Scanning: {directory}")
         documents = await loader.aload(directory)
-        if documents: self.ingest(documents)
+        if documents:
+            self.ingest(documents)
 
-    def list_documents(self) -> List[Dict[str, Any]]:
+    def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files in the knowledge base with chunk counts.
 
         Returns:
@@ -1783,86 +1996,186 @@ Your primary goal is to help the user by answering questions based on the provid
 
 def main():
     import argparse
+
     # On Windows, switch the console to UTF-8 (codepage 65001) so that
     # box-drawing characters and emoji render correctly.
     if sys.platform == "win32":
         import ctypes
+
         ctypes.windll.kernel32.SetConsoleOutputCP(65001)
         ctypes.windll.kernel32.SetConsoleCP(65001)
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="Local RAG Brain CLI")
-    parser.add_argument('query', nargs='?', help='Question to ask')
-    parser.add_argument('--ingest', help='Path to file or directory to ingest')
-    parser.add_argument('--list', action='store_true', help='List all ingested sources in the knowledge base')
-    parser.add_argument('--project', metavar='NAME',
-                        help='Project to use (must exist; use --project-new to create). '
-                             'Use "default" for the global knowledge base.')
-    parser.add_argument('--project-new', metavar='NAME',
-                        help='Create a new project (if it does not exist) and use it. '
-                             'Combine with --ingest to populate in one step.')
-    parser.add_argument('--project-list', action='store_true',
-                        help='List all projects and exit')
-    parser.add_argument('--project-delete', metavar='NAME',
-                        help='Delete a project and all its data, then exit')
-    parser.add_argument('--config', default='config.yaml', help='Path to config file')
-    parser.add_argument('--stream', action='store_true', help='Stream the response')
+    parser = argparse.ArgumentParser(description="Axon CLI")
+    parser.add_argument("query", nargs="?", help="Question to ask")
+    parser.add_argument("--ingest", help="Path to file or directory to ingest")
     parser.add_argument(
-        '--provider',
-        choices=['ollama', 'gemini', 'ollama_cloud', 'openai', 'vllm'],
-        help='LLM provider to use (overrides config)',
+        "--list", action="store_true", help="List all ingested sources in the knowledge base"
     )
-    parser.add_argument('--model', help='Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o')
-    parser.add_argument('--list-models', action='store_true', help='List available Ollama models and supported cloud providers')
-    parser.add_argument('--pull', metavar='MODEL', help='Pull an Ollama model by name, e.g. --pull gemma:2b')
-    parser.add_argument('--embed', metavar='MODEL',
-                        help='Embedding model to use, e.g. all-MiniLM-L6-v2 or ollama/nomic-embed-text')
-    parser.add_argument('--discuss', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable discussion fallback (answer from general knowledge when no docs match). '
-                             'Use --discuss to enable, --no-discuss to disable.')
-    parser.add_argument('--search', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable Brave web search fallback (requires BRAVE_API_KEY). '
-                             'Use --search to enable, --no-search to disable.')
-    parser.add_argument('--top-k', type=int, metavar='N',
-                        help='Number of chunks to retrieve (default: from config, usually 10)')
-    parser.add_argument('--threshold', type=float, metavar='F',
-                        help='Similarity threshold for retrieval, 0.0–1.0 (default: from config, usually 0.3)')
-    parser.add_argument('--hybrid', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable hybrid BM25+vector search')
-    parser.add_argument('--rerank', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable cross-encoder reranking')
-    parser.add_argument('--reranker-model', metavar='MODEL',
-                        help='Re-ranker model to use (e.g. BAAI/bge-reranker-v2-m3 for SOTA accuracy, '
-                             'default: cross-encoder/ms-marco-MiniLM-L-6-v2)')
-    parser.add_argument('--hyde', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable HyDE (hypothetical document embedding)')
-    parser.add_argument('--multi-query', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable multi-query retrieval')
-    parser.add_argument('--step-back', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable step-back prompting (abstracts query before retrieval)')
-    parser.add_argument('--decompose', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable query decomposition (breaks complex questions into sub-questions)')
-    parser.add_argument('--compress', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable LLM context compression (extracts only relevant sentences before generation)')
-    parser.add_argument('--cache', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable in-memory query result caching')
-    parser.add_argument('--cite', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable inline source citations ([Doc N]) in LLM answers')
-    parser.add_argument('--raptor', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable RAPTOR hierarchical summarisation nodes during ingest')
-    parser.add_argument('--raptor-group-size', type=int, metavar='N',
-                        help='Number of consecutive chunks to group per RAPTOR summary (default: 5)')
-    parser.add_argument('--graph-rag', action=argparse.BooleanOptionalAction, default=None,
-                        help='Enable/disable GraphRAG entity-centric retrieval expansion')
-    parser.add_argument('--no-dedup', action='store_true',
-                        help='Disable ingest deduplication (allow re-ingesting identical content)')
-    parser.add_argument('--parent-chunk-size', type=int, metavar='N',
-                        help='Enable small-to-big retrieval: index child chunks of --chunk-size tokens '
-                             'but return parent passages of N tokens as LLM context. 0 = disabled.')
-    parser.add_argument('--quiet', '-q', action='store_true',
-                        help='Suppress spinners and progress (auto-enabled when stdin is not a TTY)')
+    parser.add_argument(
+        "--project",
+        metavar="NAME",
+        help="Project to use (must exist; use --project-new to create). "
+        'Use "default" for the global knowledge base.',
+    )
+    parser.add_argument(
+        "--project-new",
+        metavar="NAME",
+        help="Create a new project (if it does not exist) and use it. "
+        "Combine with --ingest to populate in one step.",
+    )
+    parser.add_argument("--project-list", action="store_true", help="List all projects and exit")
+    parser.add_argument(
+        "--project-delete", metavar="NAME", help="Delete a project and all its data, then exit"
+    )
+    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--stream", action="store_true", help="Stream the response")
+    parser.add_argument(
+        "--provider",
+        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm"],
+        help="LLM provider to use (overrides config)",
+    )
+    parser.add_argument(
+        "--model",
+        help="Model name to use (overrides config), e.g. gemma:2b, gemini-1.5-flash, gpt-4o",
+    )
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List available Ollama models and supported cloud providers",
+    )
+    parser.add_argument(
+        "--pull", metavar="MODEL", help="Pull an Ollama model by name, e.g. --pull gemma:2b"
+    )
+    parser.add_argument(
+        "--embed",
+        metavar="MODEL",
+        help="Embedding model to use, e.g. all-MiniLM-L6-v2 or ollama/nomic-embed-text",
+    )
+    parser.add_argument(
+        "--discuss",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable discussion fallback (answer from general knowledge when no docs match). "
+        "Use --discuss to enable, --no-discuss to disable.",
+    )
+    parser.add_argument(
+        "--search",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable Brave web search fallback (requires BRAVE_API_KEY). "
+        "Use --search to enable, --no-search to disable.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        metavar="N",
+        help="Number of chunks to retrieve (default: from config, usually 10)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        metavar="F",
+        help="Similarity threshold for retrieval, 0.0–1.0 (default: from config, usually 0.3)",
+    )
+    parser.add_argument(
+        "--hybrid",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable hybrid BM25+vector search",
+    )
+    parser.add_argument(
+        "--rerank",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable cross-encoder reranking",
+    )
+    parser.add_argument(
+        "--reranker-model",
+        metavar="MODEL",
+        help="Re-ranker model to use (e.g. BAAI/bge-reranker-v2-m3 for SOTA accuracy, "
+        "default: cross-encoder/ms-marco-MiniLM-L-6-v2)",
+    )
+    parser.add_argument(
+        "--hyde",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable HyDE (hypothetical document embedding)",
+    )
+    parser.add_argument(
+        "--multi-query",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable multi-query retrieval",
+    )
+    parser.add_argument(
+        "--step-back",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable step-back prompting (abstracts query before retrieval)",
+    )
+    parser.add_argument(
+        "--decompose",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable query decomposition (breaks complex questions into sub-questions)",
+    )
+    parser.add_argument(
+        "--compress",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable LLM context compression (extracts only relevant sentences before generation)",
+    )
+    parser.add_argument(
+        "--cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable in-memory query result caching",
+    )
+    parser.add_argument(
+        "--cite",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable inline source citations ([Doc N]) in LLM answers",
+    )
+    parser.add_argument(
+        "--raptor",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable RAPTOR hierarchical summarisation nodes during ingest",
+    )
+    parser.add_argument(
+        "--raptor-group-size",
+        type=int,
+        metavar="N",
+        help="Number of consecutive chunks to group per RAPTOR summary (default: 5)",
+    )
+    parser.add_argument(
+        "--graph-rag",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable GraphRAG entity-centric retrieval expansion",
+    )
+    parser.add_argument(
+        "--no-dedup",
+        action="store_true",
+        help="Disable ingest deduplication (allow re-ingesting identical content)",
+    )
+    parser.add_argument(
+        "--parent-chunk-size",
+        type=int,
+        metavar="N",
+        help="Enable small-to-big retrieval: index child chunks of --chunk-size tokens "
+        "but return parent passages of N tokens as LLM context. 0 = disabled.",
+    )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help="Suppress spinners and progress (auto-enabled when stdin is not a TTY)",
+    )
     args = parser.parse_args()
 
     # Suppress httpx INFO noise before _InitDisplay is active (ollama.list fires early)
@@ -1874,27 +2187,27 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud', 'vllm')
+        _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm")
         if "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
             if _prov in _PROVIDERS:
                 config.llm_provider = _prov
-                config.llm_model    = _mdl
+                config.llm_model = _mdl
             else:
                 # Not a provider prefix — treat whole string as model name
                 config.llm_provider = _infer_provider(args.model)
-                config.llm_model    = args.model
+                config.llm_model = args.model
         else:
             config.llm_provider = _infer_provider(args.model)
-            config.llm_model    = args.model
+            config.llm_model = args.model
 
     if args.embed:
-        _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
+        _EMBED_PROVIDERS = ("sentence_transformers", "ollama", "fastembed", "openai")
         if "/" in args.embed:
             _eprov, _emdl = args.embed.split("/", 1)
             if _eprov in _EMBED_PROVIDERS:
                 config.embedding_provider = _eprov
-                config.embedding_model    = _emdl
+                config.embedding_model = _emdl
             else:
                 config.embedding_model = args.embed
         else:
@@ -1945,17 +2258,22 @@ def main():
         print("  gemini       (cloud)  — gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash")
         print("  ollama_cloud (cloud)  — any model hosted at your OLLAMA_CLOUD_URL")
         print("  openai       (cloud)  — gpt-4o, gpt-4o-mini, gpt-3.5-turbo")
-        print("  vllm         (local)  — any model served by vLLM (e.g., meta-llama/Llama-3.1-8B-Instruct)")
-        print(f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)\n")
+        print(
+            "  vllm         (local)  — any model served by vLLM (e.g., meta-llama/Llama-3.1-8B-Instruct)"
+        )
+        print(
+            f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)\n"
+        )
         try:
             import ollama as _ollama
+
             response = _ollama.list()
-            models = response.models if hasattr(response, 'models') else response.get("models", [])
+            models = response.models if hasattr(response, "models") else response.get("models", [])
             if models:
                 print("  📦 Locally available Ollama models:")
                 for m in models:
-                    name = m.model if hasattr(m, 'model') else m.get('name', str(m))
-                    size_gb = (m.size / 1e9 if hasattr(m, 'size') and m.size else 0)
+                    name = m.model if hasattr(m, "model") else m.get("name", str(m))
+                    size_gb = m.size / 1e9 if hasattr(m, "size") and m.size else 0
                     size_str = f"  ({size_gb:.1f} GB)" if size_gb else ""
                     print(f"     • {name}{size_str}")
         except Exception:
@@ -1966,11 +2284,22 @@ def main():
     if args.pull:
         try:
             import ollama as _ollama
+
             print(f"⬇️  Pulling '{args.pull}'...")
             for chunk in _ollama.pull(args.pull, stream=True):
-                status = chunk.get("status", "") if isinstance(chunk, dict) else getattr(chunk, 'status', '')
-                total = chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, 'total', 0)
-                completed = chunk.get("completed", 0) if isinstance(chunk, dict) else getattr(chunk, 'completed', 0)
+                status = (
+                    chunk.get("status", "")
+                    if isinstance(chunk, dict)
+                    else getattr(chunk, "status", "")
+                )
+                total = (
+                    chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, "total", 0)
+                )
+                completed = (
+                    chunk.get("completed", 0)
+                    if isinstance(chunk, dict)
+                    else getattr(chunk, "completed", 0)
+                )
                 if total and completed:
                     pct = int(completed / total * 100)
                     print(f"\r  {status}: {pct}%  ", end="", flush=True)
@@ -1985,20 +2314,35 @@ def main():
     if config.llm_provider == "ollama" and config.llm_model:
         try:
             import ollama as _ollama
+
             response = _ollama.list()
-            models = response.models if hasattr(response, 'models') else response.get("models", [])
+            models = response.models if hasattr(response, "models") else response.get("models", [])
             local_names = set()
             for m in models:
-                name = m.model if hasattr(m, 'model') else m.get('name', '')
+                name = m.model if hasattr(m, "model") else m.get("name", "")
                 local_names.add(name)
                 local_names.add(name.split(":")[0])  # also match without tag
-            model_tag = config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
+            model_tag = (
+                config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
+            )
             if model_tag not in local_names and config.llm_model not in local_names:
                 print(f"⬇️  Model '{config.llm_model}' not found locally — pulling from Ollama...")
                 for chunk in _ollama.pull(config.llm_model, stream=True):
-                    status = chunk.get("status", "") if isinstance(chunk, dict) else getattr(chunk, 'status', '')
-                    total = chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, 'total', 0)
-                    completed = chunk.get("completed", 0) if isinstance(chunk, dict) else getattr(chunk, 'completed', 0)
+                    status = (
+                        chunk.get("status", "")
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "status", "")
+                    )
+                    total = (
+                        chunk.get("total", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "total", 0)
+                    )
+                    completed = (
+                        chunk.get("completed", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "completed", 0)
+                    )
                     if total and completed:
                         pct = int(completed / total * 100)
                         print(f"\r  {status}: {pct}%", end="", flush=True)
@@ -2010,17 +2354,23 @@ def main():
 
     # Animated init display — only when entering interactive REPL
     _entering_repl = (
-        not args.query and not getattr(args, 'ingest', None)
-        and not args.list and not args.list_models
-        and not getattr(args, 'pull', None)
+        not args.query
+        and not getattr(args, "ingest", None)
+        and not args.list
+        and not args.list_models
+        and not getattr(args, "pull", None)
         and sys.stdin.isatty()
     )
-    _init_display: Optional[_InitDisplay] = None
+    _init_display: _InitDisplay | None = None
     _saved_propagate: dict = {}
     _INIT_LOGGER_NAMES = [
-        "RAGBrain", "StudioBrainOpen.Retrievers",
-        "sentence_transformers.SentenceTransformer", "sentence_transformers",
-        "chromadb", "chromadb.telemetry.product.posthog", "httpx",
+        "RAGBrain",
+        "StudioBrainOpen.Retrievers",
+        "sentence_transformers.SentenceTransformer",
+        "sentence_transformers",
+        "chromadb",
+        "chromadb.telemetry.product.posthog",
+        "httpx",
     ]
     if _entering_repl:
         print()
@@ -2028,7 +2378,7 @@ def main():
         for _n in _INIT_LOGGER_NAMES:
             _lg = logging.getLogger(_n)
             _saved_propagate[_n] = _lg.propagate
-            _lg.propagate = False           # suppress default stderr handler
+            _lg.propagate = False  # suppress default stderr handler
             _lg.setLevel(logging.INFO)
             _lg.addHandler(_init_display)
 
@@ -2042,7 +2392,7 @@ def main():
             _lg.propagate = _saved_propagate.get(_n, True)
 
     # --- Project CLI handling ---
-    from rag_brain.projects import delete_project, ensure_project, list_projects, project_dir
+    from axon.projects import delete_project, ensure_project, list_projects, project_dir
 
     if args.project_list:
         projects = list_projects()
@@ -2087,13 +2437,15 @@ def main():
         brain.switch_project(proj_name)
         print(f"  ✅ Using project '{proj_name}'  ({project_dir(proj_name)})")
 
-
-        if os.path.isdir(args.ingest): asyncio.run(brain.load_directory(args.ingest))
+        if os.path.isdir(args.ingest):
+            asyncio.run(brain.load_directory(args.ingest))
         else:
-            from rag_brain.loaders import DirectoryLoader
+            from axon.loaders import DirectoryLoader
+
             ext = os.path.splitext(args.ingest)[1].lower()
             loader_mgr = DirectoryLoader()
-            if ext in loader_mgr.loaders: brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
+            if ext in loader_mgr.loaders:
+                brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
 
     if args.list:
         docs = brain.list_documents()
@@ -2107,7 +2459,7 @@ def main():
             for d in docs:
                 print(f"  {d['source']:<60} {d['chunks']:>6}")
         return
-    
+
     if args.query:
         if args.stream:
             for chunk in brain.query_stream(args.query):
@@ -2130,7 +2482,8 @@ def main():
     # (colorama/posthog atexit callbacks raise tracebacks on double Ctrl+C)
     try:
         import readline as _rl
-        _hist = os.path.expanduser("~/.rag_brain_history")
+
+        _hist = os.path.expanduser("~/.axon_history")
         _rl.write_history_file(_hist)
     except Exception:
         pass
@@ -2138,19 +2491,36 @@ def main():
 
 
 _SLASH_COMMANDS = [
-    "/help", "/list", "/ingest ", "/model ", "/embed ",
-    "/pull ", "/search", "/discuss", "/rag ", "/compact",
-    "/context", "/sessions", "/resume ", "/clear", "/retry",
-    "/project ", "/keys", "/vllm-url ",
-    "/quit", "/exit",
+    "/help",
+    "/list",
+    "/ingest ",
+    "/model ",
+    "/embed ",
+    "/pull ",
+    "/search",
+    "/discuss",
+    "/rag ",
+    "/compact",
+    "/context",
+    "/sessions",
+    "/resume ",
+    "/clear",
+    "/retry",
+    "/project ",
+    "/keys",
+    "/vllm-url ",
+    "/quit",
+    "/exit",
 ]
 
 
-def _make_completer(brain: 'OpenStudioBrain'):
+def _make_completer(brain: "OpenStudioBrain"):
     """Return a readline completer for slash commands, paths, and model names."""
+
     def completer(text: str, state: int):
         try:
             import readline
+
             full_line = readline.get_line_buffer()
 
             # Completing a slash command name
@@ -2160,8 +2530,9 @@ def _make_completer(brain: 'OpenStudioBrain'):
 
             # /ingest <path|glob> — complete filesystem paths
             if full_line.startswith("/ingest "):
-                path_prefix = full_line[len("/ingest "):]
+                path_prefix = full_line[len("/ingest ") :]
                 import glob as _glob
+
                 matches = _glob.glob(path_prefix + "*")
                 # Append / to directories
                 matches = [m + "/" if os.path.isdir(m) else m for m in matches]
@@ -2172,9 +2543,16 @@ def _make_completer(brain: 'OpenStudioBrain'):
                 model_prefix = full_line.split(" ", 1)[1]
                 try:
                     import ollama as _ollama
+
                     response = _ollama.list()
-                    all_models = response.models if hasattr(response, 'models') else response.get("models", [])
-                    names = [m.model if hasattr(m, 'model') else m.get('name', '') for m in all_models]
+                    all_models = (
+                        response.models
+                        if hasattr(response, "models")
+                        else response.get("models", [])
+                    )
+                    names = [
+                        m.model if hasattr(m, "model") else m.get("name", "") for m in all_models
+                    ]
                     matches = [n for n in names if n.startswith(model_prefix)]
                     return matches[state] if state < len(matches) else None
                 except Exception:
@@ -2188,10 +2566,11 @@ def _make_completer(brain: 'OpenStudioBrain'):
 
 
 # ── Session persistence ────────────────────────────────────────────────────────
-import json as _json
-from datetime import datetime as _dt, timezone as _tz
+import json as _json  # noqa: E402
+from datetime import datetime as _dt  # noqa: E402
+from datetime import timezone as _tz  # noqa: E402
 
-_SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".rag_brain", "sessions")
+_SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".axon", "sessions")
 
 
 def _sessions_dir() -> str:
@@ -2199,7 +2578,7 @@ def _sessions_dir() -> str:
     return _SESSIONS_DIR
 
 
-def _new_session(brain: 'OpenStudioBrain') -> dict:
+def _new_session(brain: "OpenStudioBrain") -> dict:
     return {
         "id": _dt.now(_tz.utc).strftime("%Y%m%dT%H%M%S%f")[:-3],
         "started_at": _dt.now(_tz.utc).isoformat(),
@@ -2257,21 +2636,31 @@ def _print_sessions(sessions: list) -> None:
     print(f"  {'─'*18}  {'─'*30}  {'─'*6}  {'─'*20}")
     for s in sessions:
         turns = len(s.get("history", [])) // 2
-        ts    = s.get("started_at", "")[:16].replace("T", " ")
+        ts = s.get("started_at", "")[:16].replace("T", " ")
         model = f"{s.get('provider','?')}/{s.get('model','?')}"
         print(f"  {s['id']:<18}  {model:<30}  {turns:<6}  {ts}")
     print()
 
 
-_MODEL_CTX: Dict[str, int] = {
-    "gemma": 8192, "gemma:2b": 8192, "gemma:7b": 8192,
-    "llama3.1": 131072, "llama3.1:8b": 131072, "llama3.1:70b": 131072,
-    "mistral": 32768, "mistral:7b": 32768,
-    "phi3": 131072, "phi3:mini": 131072,
-    "gemini-1.5-flash": 1048576, "gemini-1.5-pro": 2097152,
-    "gemini-2.0-flash": 1048576, "gemini-2.5-flash": 1048576,
+_MODEL_CTX: dict[str, int] = {
+    "gemma": 8192,
+    "gemma:2b": 8192,
+    "gemma:7b": 8192,
+    "llama3.1": 131072,
+    "llama3.1:8b": 131072,
+    "llama3.1:70b": 131072,
+    "mistral": 32768,
+    "mistral:7b": 32768,
+    "phi3": 131072,
+    "phi3:mini": 131072,
+    "gemini-1.5-flash": 1048576,
+    "gemini-1.5-pro": 2097152,
+    "gemini-2.0-flash": 1048576,
+    "gemini-2.5-flash": 1048576,
     "gemini-2.5-flash-lite": 1048576,
-    "gpt-4o": 128000, "gpt-4o-mini": 128000, "gpt-3.5-turbo": 16385,
+    "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
+    "gpt-3.5-turbo": 16385,
 }
 
 
@@ -2306,7 +2695,7 @@ def _token_bar(used: int, total: int, width: int = 20) -> str:
 
 
 def _show_context(
-    brain: 'OpenStudioBrain',
+    brain: "OpenStudioBrain",
     chat_history: list,
     last_sources: list,
     last_query: str,
@@ -2329,30 +2718,31 @@ def _show_context(
         last_sources: List of document dicts from last retrieval (with "vector_score", "metadata", "text").
         last_query: The user query that was used for the last retrieval.
     """
-    W      = _BW        # match main header box width
-    TOP    = f"  ╭{'─' * W}╮"
+    W = _BW  # match main header box width
+    TOP = f"  ╭{'─' * W}╮"
     BOTTOM = f"  ╰{'─' * W}╯"
-    SEP    = f"  ├{'─' * W}┤"
-    BLANK  = f"  │{' ' * W}│"
+    SEP = f"  ├{'─' * W}┤"
+    BLANK = f"  │{' ' * W}│"
 
     def _wlen(s: str) -> int:
         """Terminal display width: wide Unicode chars (emoji, CJK) count as 2 columns."""
         extra = sum(
-            1 for c in s
-            if '\U00001100' <= c <= '\U00001FFF'
-            or '\U00002E80' <= c <= '\U00002EFF'
-            or '\U00002F00' <= c <= '\U00002FDF'
-            or '\U00003000' <= c <= '\U00003FFF'
-            or '\U00004E00' <= c <= '\U00009FFF'
-            or '\U0000A000' <= c <= '\U0000ABFF'
-            or '\U0000AC00' <= c <= '\U0000D7FF'
-            or '\U0000F900' <= c <= '\U0000FAFF'
-            or '\U0000FE10' <= c <= '\U0000FE1F'
-            or '\U0000FE30' <= c <= '\U0000FE4F'
-            or '\U0000FF00' <= c <= '\U0000FF60'
-            or '\U0000FFE0' <= c <= '\U0000FFE6'
-            or '\U0001F000' <= c <= '\U0001FFFF'
-            or '\U00020000' <= c <= '\U0002FFFF'
+            1
+            for c in s
+            if "\U00001100" <= c <= "\U00001fff"
+            or "\U00002e80" <= c <= "\U00002eff"
+            or "\U00002f00" <= c <= "\U00002fdf"
+            or "\U00003000" <= c <= "\U00003fff"
+            or "\U00004e00" <= c <= "\U00009fff"
+            or "\U0000a000" <= c <= "\U0000abff"
+            or "\U0000ac00" <= c <= "\U0000d7ff"
+            or "\U0000f900" <= c <= "\U0000faff"
+            or "\U0000fe10" <= c <= "\U0000fe1f"
+            or "\U0000fe30" <= c <= "\U0000fe4f"
+            or "\U0000ff00" <= c <= "\U0000ff60"
+            or "\U0000ffe0" <= c <= "\U0000ffe6"
+            or "\U0001f000" <= c <= "\U0001ffff"
+            or "\U00020000" <= c <= "\U0002ffff"
         )
         return len(s) + extra
 
@@ -2360,7 +2750,7 @@ def _show_context(
         content = " " * indent + text
         display_w = _wlen(content)
         if display_w > W:
-            content = content[:W - 1] + "…"
+            content = content[: W - 1] + "…"
             display_w = _wlen(content)
         pad = W - display_w
         return f"  │{content}{' ' * pad}│"
@@ -2388,19 +2778,18 @@ def _show_context(
 
     # ── Token estimates ────────────────────────────────────────────────────────
     system_text = brain._build_system_prompt(False)
-    sys_tokens  = _estimate_tokens(system_text)
+    sys_tokens = _estimate_tokens(system_text)
     hist_tokens = sum(_estimate_tokens(m["content"]) for m in chat_history)
-    src_tokens  = sum(_estimate_tokens(s.get("text", "")) for s in last_sources)
-    total_used  = sys_tokens + hist_tokens + src_tokens
+    src_tokens = sum(_estimate_tokens(s.get("text", "")) for s in last_sources)
+    total_used = sys_tokens + hist_tokens + src_tokens
 
     model_key = brain.config.llm_model.split(":")[0].lower()
-    ctx_size  = _MODEL_CTX.get(brain.config.llm_model,
-                _MODEL_CTX.get(model_key, 8192))
+    ctx_size = _MODEL_CTX.get(brain.config.llm_model, _MODEL_CTX.get(model_key, 8192))
     remaining = max(0, ctx_size - total_used)
-    pct       = min(total_used / ctx_size, 1.0) if ctx_size > 0 else 0
-    bar_w     = 40
-    filled    = int(pct * bar_w)
-    bar       = "█" * filled + "░" * (bar_w - filled)
+    pct = min(total_used / ctx_size, 1.0) if ctx_size > 0 else 0
+    bar_w = 40
+    filled = int(pct * bar_w)
+    bar = "█" * filled + "░" * (bar_w - filled)
     indicator = "🟢" if pct < 0.6 else ("🟡" if pct < 0.85 else "🔴")
 
     lines = [TOP, BLANK]
@@ -2412,8 +2801,12 @@ def _show_context(
     lines.append(section("Model"))
     lines.append(SEP)
     lines.append(BLANK)
-    lines.append(row(f"LLM    ·  {brain.config.llm_provider}/{brain.config.llm_model}"
-                     f"   ({ctx_size:,} token context window)"))
+    lines.append(
+        row(
+            f"LLM    ·  {brain.config.llm_provider}/{brain.config.llm_model}"
+            f"   ({ctx_size:,} token context window)"
+        )
+    )
     lines.append(row(f"Embed  ·  {brain.config.embedding_provider}/{brain.config.embedding_model}"))
     lines.append(BLANK)
 
@@ -2422,11 +2815,17 @@ def _show_context(
     lines.append(section("Token Usage  (rough estimate — ~4 chars/token)"))
     lines.append(SEP)
     lines.append(BLANK)
-    lines.append(row(f"{indicator} {bar}  {total_used:,} / {ctx_size:,}  ({int(pct*100)}%)", indent=4))
+    lines.append(
+        row(f"{indicator} {bar}  {total_used:,} / {ctx_size:,}  ({int(pct*100)}%)", indent=4)
+    )
     lines.append(BLANK)
     lines.append(row(f"{'System prompt':<22}{sys_tokens:>7,} tokens"))
-    lines.append(row(f"{'Chat history':<22}{hist_tokens:>7,} tokens    ({len(chat_history) // 2} turns)"))
-    lines.append(row(f"{'Retrieved context':<22}{src_tokens:>7,} tokens    ({len(last_sources)} chunks)"))
+    lines.append(
+        row(f"{'Chat history':<22}{hist_tokens:>7,} tokens    ({len(chat_history) // 2} turns)")
+    )
+    lines.append(
+        row(f"{'Retrieved context':<22}{src_tokens:>7,} tokens    ({len(last_sources)} chunks)")
+    )
     lines.append(row("─" * 40))
     lines.append(row(f"{'Total':<22}{total_used:>7,} tokens    ({remaining:,} remaining)"))
     lines.append(BLANK)
@@ -2436,14 +2835,16 @@ def _show_context(
     lines.append(section("RAG Settings"))
     lines.append(SEP)
     lines.append(BLANK)
-    lines.append(row(
-        f"top-k · {brain.config.top_k}    "
-        f"threshold · {brain.config.similarity_threshold}    "
-        f"hybrid · {'ON' if brain.config.hybrid_search else 'OFF'}    "
-        f"rerank · {'ON' if brain.config.rerank else 'OFF'}    "
-        f"hyde · {'ON' if brain.config.hyde else 'OFF'}    "
-        f"multi-query · {'ON' if brain.config.multi_query else 'OFF'}"
-    ))
+    lines.append(
+        row(
+            f"top-k · {brain.config.top_k}    "
+            f"threshold · {brain.config.similarity_threshold}    "
+            f"hybrid · {'ON' if brain.config.hybrid_search else 'OFF'}    "
+            f"rerank · {'ON' if brain.config.rerank else 'OFF'}    "
+            f"hyde · {'ON' if brain.config.hyde else 'OFF'}    "
+            f"multi-query · {'ON' if brain.config.multi_query else 'OFF'}"
+        )
+    )
     lines.append(BLANK)
 
     # ── Chat history ───────────────────────────────────────────────────────────
@@ -2457,7 +2858,7 @@ def _show_context(
     else:
         shown = chat_history[-10:]
         for msg in shown:
-            tag  = "You   " if msg["role"] == "user" else "Brain "
+            tag = "You   " if msg["role"] == "user" else "Brain "
             snip = msg["content"].replace("\n", " ")
             avail = W - 14
             if len(snip) > avail:
@@ -2479,10 +2880,10 @@ def _show_context(
         lines.append(row("(no retrieval yet)"))
     else:
         for i, src in enumerate(last_sources[:8], 1):
-            meta  = src.get("metadata", {})
-            name  = os.path.basename(meta.get("source", src.get("id", "?")))
+            meta = src.get("metadata", {})
+            name = os.path.basename(meta.get("source", src.get("id", "?")))
             score = src.get("vector_score", src.get("score", 0))
-            kind  = "🌐" if src.get("is_web") else "📄"
+            kind = "🌐" if src.get("is_web") else "📄"
             score_bar = "█" * int(score * 10) + "░" * (10 - int(score * 10))
             lines.append(row(f"{i:>2}. {kind} {score_bar} {score:.3f}   {name}"))
     lines.append(BLANK)
@@ -2501,7 +2902,7 @@ def _show_context(
     print()
 
 
-def _do_compact(brain: 'OpenStudioBrain', chat_history: list) -> None:
+def _do_compact(brain: "OpenStudioBrain", chat_history: list) -> None:
     """Summarize chat history via LLM and replace it with a single summary turn.
 
     Condenses all messages in chat_history into a 4-6 sentence summary using the configured LLM.
@@ -2522,8 +2923,7 @@ def _do_compact(brain: 'OpenStudioBrain', chat_history: list) -> None:
     print(f"  ⠿ Compacting {turns_before} turns…", end="", flush=True)
 
     conversation = "\n".join(
-        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
-        for m in chat_history
+        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in chat_history
     )
     summary_prompt = (
         "Summarize the following conversation in 4-6 concise sentences. "
@@ -2543,9 +2943,9 @@ def _do_compact(brain: 'OpenStudioBrain', chat_history: list) -> None:
 
 
 # ── Banner constants ───────────────────────────────────────────────────────────
-_BW = 112         # inner box width in terminal columns
+_BW = 112  # inner box width in terminal columns
 _HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
-_SEP  = "  " + "─" * (_BW + 2)   # separator line matching box outer width
+_SEP = "  " + "─" * (_BW + 2)  # separator line matching box outer width
 _HEADER_ROWS = 16  # box(12) + blank(1) + hint(1) + sep(1) + blank(1)
 
 
@@ -2553,23 +2953,23 @@ def _brow(content: str, emoji_extra: int = 0) -> str:
     """One box row: pads/truncates content to exactly _BW terminal columns."""
     vis = len(content) + emoji_extra
     if vis > _BW:
-        content = content[:_BW - emoji_extra - 1] + "…"
+        content = content[: _BW - emoji_extra - 1] + "…"
         vis = _BW
     pad = _BW - vis
     return f"  │{content}{' ' * pad}│"
 
 
-def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> list:
+def _build_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> list:
     """Return lines of the pinned header box (airy layout)."""
-    model_s   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
-    embed_s   = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
-    search_s  = "ON  (Brave Search)" if brain.config.truth_grounding  else "OFF"
+    model_s = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+    embed_s = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
+    search_s = "ON  (Brave Search)" if brain.config.truth_grounding else "OFF"
     discuss_s = "ON" if brain.config.discussion_fallback else "OFF"
-    hybrid_s  = "ON" if brain.config.hybrid_search else "OFF"
-    topk_s    = str(brain.config.top_k)
-    thr_s     = str(brain.config.similarity_threshold)
+    hybrid_s = "ON" if brain.config.hybrid_search else "OFF"
+    topk_s = str(brain.config.top_k)
+    thr_s = str(brain.config.similarity_threshold)
     try:
-        docs  = brain.list_documents()
+        docs = brain.list_documents()
         doc_s = f"{sum(d['chunks'] for d in docs)} chunks  ({len(docs)} files)"
     except Exception:
         doc_s = "unknown"
@@ -2581,32 +2981,34 @@ def _build_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> l
     if len(ticks_s) > inner_w:
         # Split into two roughly equal halves at a separator boundary
         mid = len(tick_items) // 2
-        ticks_s  = "   ".join(tick_items[:mid])
+        ticks_s = "   ".join(tick_items[:mid])
         ticks_s2 = "   ".join(tick_items[mid:])
     else:
         ticks_s2 = None
 
     blank = f"  │{' ' * _BW}│"
     rows = [
-        f"  ╭{'─' * _BW}╮",                                                      # 1
-        blank,                                                                     # 2
-        _brow("    🧠  Local RAG Brain", emoji_extra=1),                          # 3
-        blank,                                                                     # 4
-        _brow(f"    LLM    ·  {model_s}"),                                        # 5
-        _brow(f"    Embed  ·  {embed_s}"),                                        # 6
-        blank,                                                                     # 7
-        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),         # 8
-        _brow(f"    Docs   ·  {doc_s:<26}  Hybrid   ·  {hybrid_s}   top-k · {topk_s}   threshold · {thr_s}"),  # 9
-        blank,                                                                     # 10
-        _brow(f"    {ticks_s}"),                                                   # 11
+        f"  ╭{'─' * _BW}╮",  # 1
+        blank,  # 2
+        _brow("    🧠  Axon", emoji_extra=1),  # 3
+        blank,  # 4
+        _brow(f"    LLM    ·  {model_s}"),  # 5
+        _brow(f"    Embed  ·  {embed_s}"),  # 6
+        blank,  # 7
+        _brow(f"    Search ·  {search_s:<26}  Discuss  ·  {discuss_s}"),  # 8
+        _brow(
+            f"    Docs   ·  {doc_s:<26}  Hybrid   ·  {hybrid_s}   top-k · {topk_s}   threshold · {thr_s}"
+        ),  # 9
+        blank,  # 10
+        _brow(f"    {ticks_s}"),  # 11
     ]
     if ticks_s2:
-        rows.append(_brow(f"    {ticks_s2}"))                                     # 11b (overflow)
-    rows.append(f"  ╰{'─' * _BW}╯")                                              # 12
+        rows.append(_brow(f"    {ticks_s2}"))  # 11b (overflow)
+    rows.append(f"  ╰{'─' * _BW}╯")  # 12
     return rows
 
 
-def _draw_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> None:
+def _draw_header(brain: "OpenStudioBrain", tick_lines: list | None = None) -> None:
     """Clear screen and draw the welcome header box with LLM and embedding model info.
 
     Displays initialization status lines (e.g., "✓ Embedding ready [CPU]", "✓ BM25 · 42 docs").
@@ -2619,7 +3021,7 @@ def _draw_header(brain: 'OpenStudioBrain', tick_lines: list | None = None) -> No
                    to display in the header box.
     """
     lines = _build_header(brain, tick_lines)
-    sys.stdout.write("\033[2J\033[H")          # clear screen, cursor to top-left
+    sys.stdout.write("\033[2J\033[H")  # clear screen, cursor to top-left
     for line in lines:
         sys.stdout.write(line + "\n")
     sys.stdout.write("\n" + _HINT + "\n" + _SEP + "\n\n")
@@ -2635,7 +3037,7 @@ def _print_recent_turns(history: list, n_turns: int = 2) -> None:
     """
     if not history:
         return
-    recent = history[-(n_turns * 2):]
+    recent = history[-(n_turns * 2) :]
     for msg in recent:
         role = msg.get("role", "")
         content = msg.get("content", "")
@@ -2666,17 +3068,17 @@ class _InitDisplay(logging.Handler):
     def __init__(self) -> None:
         super().__init__()
         self._step: str = ""
-        self._idx:  int = 0
-        self._lock  = threading.Lock()
-        self._done  = threading.Event()
-        self.tick_lines: list = []    # collected for the final banner
+        self._idx: int = 0
+        self._lock = threading.Lock()
+        self._done = threading.Event()
+        self.tick_lines: list = []  # collected for the final banner
         # Print CLOSED 7-line box immediately — step line updated in-place
         sys.stdout.write(
             f"\n  ╭{'─' * _BW}╮\n"
             f"  │{' ' * _BW}│\n"
-            f"  │{'    🧠  Local RAG Brain'.ljust(_BW - 1)}│\n"
+            f"  │{'    🧠  Axon'.ljust(_BW - 1)}│\n"
             f"  │{' ' * _BW}│\n"
-            f"  │{'    ⠿  Initializing…'.ljust(_BW)}│\n"   # step line (line 5)
+            f"  │{'    ⠿  Initializing…'.ljust(_BW)}│\n"  # step line (line 5)
             f"  │{' ' * _BW}│\n"
             f"  ╰{'─' * _BW}╯\n"
         )
@@ -2707,7 +3109,7 @@ class _InitDisplay(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
-        if "Initializing Local RAG Brain" in msg:
+        if "Initializing Axon" in msg:
             with self._lock:
                 self._step = "Starting…"
         elif "Loading Sentence Transformers" in msg:
@@ -2724,7 +3126,7 @@ class _InitDisplay(logging.Handler):
             m = re.search(r"(\d+) documents", msg)
             self._tick("Vector store ready")
             self._tick(f"BM25  ·  {m.group(1) if m else '?'} docs")
-        elif "Local RAG Brain ready" in msg:
+        elif "Axon ready" in msg:
             self._done.set()
 
     def stop(self) -> None:
@@ -2735,16 +3137,47 @@ class _InitDisplay(logging.Handler):
 
 
 _AT_TEXT_EXTS = {
-    ".txt", ".md", ".rst", ".py", ".js", ".ts", ".jsx", ".tsx",
-    ".json", ".yaml", ".yml", ".toml", ".csv", ".html", ".htm",
-    ".css", ".java", ".c", ".cpp", ".h", ".hpp", ".rs", ".go",
-    ".rb", ".sh", ".bash", ".zsh", ".fish", ".sql", ".xml",
-    ".ini", ".cfg", ".env", ".tf", ".proto", ".graphql",
+    ".txt",
+    ".md",
+    ".rst",
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".csv",
+    ".html",
+    ".htm",
+    ".css",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".rs",
+    ".go",
+    ".rb",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",
+    ".sql",
+    ".xml",
+    ".ini",
+    ".cfg",
+    ".env",
+    ".tf",
+    ".proto",
+    ".graphql",
 }
 # Extensions handled by dedicated loaders (extract clean text from binary formats)
 _AT_LOADER_EXTS = {".docx", ".pdf"}
-_AT_DIR_MAX_BYTES  = 120_000   # ~120 KB total across all files in a folder
-_AT_FILE_MAX_BYTES =  40_000   # ~40 KB per single file
+_AT_DIR_MAX_BYTES = 120_000  # ~120 KB total across all files in a folder
+_AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
 
 
 def _expand_at_files(text: str) -> str:
@@ -2754,6 +3187,7 @@ def _expand_at_files(text: str) -> str:
     - @folder/   → recursively reads all supported files in the folder (capped at
                    _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
     """
+
     def _read_text_file(path: str, max_bytes: int = _AT_FILE_MAX_BYTES) -> str:
         try:
             raw = open(path, encoding="utf-8", errors="ignore").read(max_bytes)
@@ -2764,7 +3198,8 @@ def _expand_at_files(text: str) -> str:
 
     def _read_via_loader(path: str) -> str:
         try:
-            from rag_brain.loaders import DOCXLoader, PDFLoader
+            from axon.loaders import DOCXLoader, PDFLoader
+
             ext = os.path.splitext(path)[1].lower()
             loader = DOCXLoader() if ext == ".docx" else PDFLoader()
             docs = loader.load(path)
@@ -2793,7 +3228,7 @@ def _expand_at_files(text: str) -> str:
                 if os.path.splitext(fname)[1].lower() not in supported:
                     continue
                 fpath = os.path.join(root, fname)
-                rel   = os.path.relpath(fpath, dirpath)
+                rel = os.path.relpath(fpath, dirpath)
                 if total >= _AT_DIR_MAX_BYTES:
                     parts.append(f"\n--- @{rel} (skipped: context limit reached) ---")
                     continue
@@ -2814,16 +3249,19 @@ def _expand_at_files(text: str) -> str:
                 return f"\n\n--- @{path} ---\n{content}\n--- end ---\n"
         return m.group(0)
 
-    return re.sub(r'@(\S+)', _replace, text)
+    return re.sub(r"@(\S+)", _replace, text)
 
 
-def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
-                      init_display: '_InitDisplay | None' = None,
-                      quiet: bool = False) -> None:
+def _interactive_repl(
+    brain: "OpenStudioBrain",
+    stream: bool = True,
+    init_display: "_InitDisplay | None" = None,
+    quiet: bool = False,
+) -> None:
     """Interactive REPL chat session with session persistence and live tab completion.
 
     Features:
-    - Session persistence: auto-saves to ~/.rag_brain/sessions/session_<timestamp>.json
+    - Session persistence: auto-saves to ~/.axon/sessions/session_<timestamp>.json
     - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
     - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
@@ -2839,36 +3277,49 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         quiet: Suppress spinners and progress bars (auto-enabled for non-TTY stdin).
     """
     import warnings
+
     warnings.filterwarnings("ignore", category=FutureWarning, module="google")
 
     # Silence INFO logs — they clutter the interactive UI
     import logging as _logging
-    for _log in ("RAGBrain", "StudioBrainOpen.Retrievers", "httpx",
-                 "sentence_transformers", "chromadb", "httpcore"):
+
+    for _log in (
+        "RAGBrain",
+        "StudioBrainOpen.Retrievers",
+        "httpx",
+        "sentence_transformers",
+        "chromadb",
+        "httpcore",
+    ):
         _lg = _logging.getLogger(_log)
         _lg.setLevel(_logging.WARNING)
-        _lg.propagate = False   # prevent bubbling to root logger
+        _lg.propagate = False  # prevent bubbling to root logger
 
     # ── Input: prefer prompt_toolkit (live completions), fall back to readline ──
     _pt_session = None
     try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.completion import Completer, Completion
-        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-        from prompt_toolkit.styles import Style
-        from prompt_toolkit.formatted_text import HTML as _PThtml, FormattedText as _PTFT, ANSI as _PTANSI
-        from prompt_toolkit.history import FileHistory as _FileHistory
         import glob as _pglob
 
-        _HIST_DIR = os.path.expanduser("~/.rag_brain")
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.formatted_text import ANSI as _PTANSI
+        from prompt_toolkit.formatted_text import HTML as _PThtml
+        from prompt_toolkit.formatted_text import FormattedText as _PTFT  # noqa: F401
+        from prompt_toolkit.history import FileHistory as _FileHistory
+        from prompt_toolkit.styles import Style
+
+        _HIST_DIR = os.path.expanduser("~/.axon")
         os.makedirs(_HIST_DIR, exist_ok=True)
         _HIST_FILE = os.path.join(_HIST_DIR, "repl_history")
 
-        _PT_STYLE = Style.from_dict({
-            "": "",
-            "completion-menu.completion.current": "bg:#444466 #ffffff",
-            "bottom-toolbar": "bg:#2b2b2b #b0b0b0",
-        })
+        _PT_STYLE = Style.from_dict(
+            {
+                "": "",
+                "completion-menu.completion.current": "bg:#444466 #ffffff",
+                "bottom-toolbar": "bg:#2b2b2b #b0b0b0",
+            }
+        )
 
         class _PTCompleter(Completer):
             def __init__(self, brain_ref):
@@ -2881,83 +3332,104 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     for cmd in _SLASH_COMMANDS:
                         c = cmd.rstrip()
                         if c.startswith(text):
-                            yield Completion(c[len(text):], display=c,
-                                             display_meta="command")
+                            yield Completion(c[len(text) :], display=c, display_meta="command")
                 # ── /ingest path / glob ───────────────────────────────────
                 elif text.startswith("/ingest "):
-                    prefix = text[len("/ingest "):]
+                    prefix = text[len("/ingest ") :]
                     for p in _pglob.glob(prefix + "*"):
                         disp = p + ("/" if os.path.isdir(p) else "")
-                        yield Completion(p[len(prefix):], display=disp)
+                        yield Completion(p[len(prefix) :], display=disp)
                 # ── /model <provider/model> ───────────────────────────────
                 elif text.startswith("/model ") or text.startswith("/embed "):
                     cmd_len = len("/model ") if text.startswith("/model ") else len("/embed ")
-                    prefix  = text[cmd_len:]
+                    prefix = text[cmd_len:]
                     try:
                         import ollama as _ol
+
                         resp = _ol.list()
                         mods = resp.models if hasattr(resp, "models") else resp.get("models", [])
                         for m in mods:
                             name = m.model if hasattr(m, "model") else m.get("name", "")
                             if name.startswith(prefix):
-                                yield Completion(name[len(prefix):], display=name)
+                                yield Completion(name[len(prefix) :], display=name)
                     except Exception:
                         pass
                 # ── /resume <session-id> ──────────────────────────────────
                 elif text.startswith("/resume "):
-                    prefix = text[len("/resume "):]
+                    prefix = text[len("/resume ") :]
                     for s in _list_sessions():
                         sid = s["id"]
                         if sid.startswith(prefix):
                             turns = len(s.get("history", [])) // 2
-                            yield Completion(sid[len(prefix):], display=sid,
-                                             display_meta=f"{turns} turns")
+                            yield Completion(
+                                sid[len(prefix) :], display=sid, display_meta=f"{turns} turns"
+                            )
                 # ── /rag <option> ─────────────────────────────────────────
                 elif text.startswith("/rag "):
-                    opts = ["topk ", "threshold ", "hybrid", "rerank", "rerank-model ", "hyde", "multi", "step-back", "decompose", "compress", "cite", "raptor", "graph-rag"]
-                    prefix = text[len("/rag "):]
+                    opts = [
+                        "topk ",
+                        "threshold ",
+                        "hybrid",
+                        "rerank",
+                        "rerank-model ",
+                        "hyde",
+                        "multi",
+                        "step-back",
+                        "decompose",
+                        "compress",
+                        "cite",
+                        "raptor",
+                        "graph-rag",
+                    ]
+                    prefix = text[len("/rag ") :]
                     for o in opts:
                         if o.startswith(prefix):
-                            yield Completion(o[len(prefix):], display=o)
+                            yield Completion(o[len(prefix) :], display=o)
                 # ── @file context attachment ──────────────────────────────
                 elif "@" in text:
                     at_pos = text.rfind("@")
-                    prefix = text[at_pos + 1:]
+                    prefix = text[at_pos + 1 :]
                     for p in _pglob.glob(prefix + "*"):
                         disp = p + ("/" if os.path.isdir(p) else "")
-                        yield Completion(p[len(prefix):], display=disp,
-                                         display_meta="file context")
+                        yield Completion(
+                            p[len(prefix) :], display=disp, display_meta="file context"
+                        )
                 # ── /project <subcommand> ──────────────────────────────────
                 elif text.startswith("/project "):
                     sub_opts = ["list", "new ", "switch ", "delete ", "folder"]
-                    prefix = text[len("/project "):]
+                    prefix = text[len("/project ") :]
                     for o in sub_opts:
                         if o.startswith(prefix):
-                            yield Completion(o[len(prefix):], display=o)
+                            yield Completion(o[len(prefix) :], display=o)
                     # also complete project names for switch/delete
                     if text.startswith(("/project switch ", "/project delete ")):
-                        cmd_len = len("/project switch ") if text.startswith("/project switch ") else len("/project delete ")
+                        cmd_len = (
+                            len("/project switch ")
+                            if text.startswith("/project switch ")
+                            else len("/project delete ")
+                        )
                         pfx = text[cmd_len:]
                         try:
-                            from rag_brain.projects import list_projects
+                            from axon.projects import list_projects
+
                             for p in list_projects():
                                 n = p["name"]
                                 if n.startswith(pfx):
-                                    yield Completion(n[len(pfx):], display=n)
+                                    yield Completion(n[len(pfx) :], display=n)
                         except Exception:
                             pass
 
         def _toolbar():
             def _t(s: str, w: int) -> str:
-                return s if len(s) <= w else s[:w - 1] + "…"
+                return s if len(s) <= w else s[: w - 1] + "…"
 
             # No explicit background codes — the bottom-toolbar class paints
             # bg:#2b2b2b for every cell uniformly.  Bold labels only change
             # font weight and foreground; the class background is never overridden.
-            _BON = "\x1b[1m"                 # bold on
-            _BOF = "\x1b[22m"                # bold off
-            _FGN = "\x1b[39m"                # default foreground (toolbar class handles colour)
-            _FGL = "\x1b[97m"                # bright white for labels
+            _BON = "\x1b[1m"  # bold on
+            _BOF = "\x1b[22m"  # bold off
+            _FGN = "\x1b[39m"  # default foreground (toolbar class handles colour)
+            _FGL = "\x1b[97m"  # bright white for labels
             _RST = "\x1b[0m"
 
             def _lbl(text: str) -> str:
@@ -2966,22 +3438,22 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             def _pad(label: str, val: str, width: int) -> str:
                 return " " * max(0, width - len(label) - 1 - len(str(val)))
 
-            m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+            m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
             emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
             try:
                 docs = brain.vector_store.collection.count()
                 doc_s = f"{docs} chunks"
             except Exception:
                 doc_s = "?"
-            proj  = getattr(brain, "_active_project", "default")
+            proj = getattr(brain, "_active_project", "default")
             proj_s = f"  │  📂 {proj}" if proj != "default" else ""
-            sep   = "  │  "
+            sep = "  │  "
             W1, W2 = 28, 30
-            C1 = len("LLM  ") + W1    # 33
+            C1 = len("LLM  ") + W1  # 33
             C2 = len("Embed  ") + W2  # 37
-            s_state = "ON"  if brain.config.truth_grounding    else "off"
-            d_state = "ON"  if brain.config.discussion_fallback else "off"
-            h_state = "ON"  if brain.config.hybrid_search      else "off"
+            s_state = "ON" if brain.config.truth_grounding else "off"
+            d_state = "ON" if brain.config.discussion_fallback else "off"
+            h_state = "ON" if brain.config.hybrid_search else "off"
 
             row1 = (
                 f"  {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
@@ -3009,9 +3481,10 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
     except ImportError:
         # Fall back to readline with history persistence
         try:
-            import readline
             import atexit
-            _hist_file = os.path.expanduser("~/.rag_brain/repl_history")
+            import readline
+
+            _hist_file = os.path.expanduser("~/.axon/repl_history")
             os.makedirs(os.path.dirname(_hist_file), exist_ok=True)
             try:
                 readline.read_history_file(_hist_file)
@@ -3028,44 +3501,41 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
     def _print_status_bar() -> None:
         """Reprint the 2-row status bar to stdout after each response."""
-        def _t(s: str, w: int) -> str:
-            return s if len(s) <= w else s[:w - 1] + "…"
 
-        m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+        def _t(s: str, w: int) -> str:
+            return s if len(s) <= w else s[: w - 1] + "…"
+
+        m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
         emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
         try:
             docs = brain.vector_store.collection.count()
             doc_s = f"{docs} chunks"
         except Exception:
             doc_s = "?"
-        s_val = "search:ON" if brain.config.truth_grounding    else "search:off"
+        s_val = "search:ON" if brain.config.truth_grounding else "search:off"
         d_val = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
-        h_val = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
-        tk    = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
-        proj  = getattr(brain, "_active_project", "default")
+        h_val = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
+        tk = f"top-k:{brain.config.top_k}  thr:{brain.config.similarity_threshold}"
+        proj = getattr(brain, "_active_project", "default")
         proj_s = f"  │  📂 {proj}" if proj != "default" else ""
         sep = "  │  "
         W1, W2 = 28, 30
-        C1 = len("LLM  ") + W1   # 33
+        C1 = len("LLM  ") + W1  # 33
         C2 = len("Embed  ") + W2  # 37
         row1 = (
             f"  \033[1mLLM\033[0m\033[2m  {_t(m, W1):{W1}}"
             f"{sep}\033[0m\033[1mEmbed\033[0m\033[2m  {_t(emb, W2):{W2}}"
             f"{sep}\033[0m\033[1mDocs\033[0m\033[2m  {doc_s}\033[0m"
         )
-        row2 = (
-            f"\033[2m  {s_val:<{C1}}"
-            f"{sep}{d_val:<{C2}}"
-            f"{sep}{h_val}  {tk}{proj_s}\033[0m"
-        )
+        row2 = f"\033[2m  {s_val:<{C1}}" f"{sep}{d_val:<{C2}}" f"{sep}{h_val}  {tk}{proj_s}\033[0m"
         print(row1)
         print(row2)
 
     def _read_input(prompt: str = "") -> str:
         if _pt_session:
-            _p = _PThtml('<ansigreen><b>You</b></ansigreen>: ') if not prompt else prompt
+            _p = _PThtml("<ansigreen><b>You</b></ansigreen>: ") if not prompt else prompt
             return _pt_session.prompt(_p)
-        return input(prompt if prompt else '\033[1;32mYou\033[0m: ')
+        return input(prompt if prompt else "\033[1;32mYou\033[0m: ")
 
     # REPL is conversational — always let the LLM answer even with no RAG hits
     brain.config.discussion_fallback = True
@@ -3094,6 +3564,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             shell_cmd = user_input[1:].strip()
             if shell_cmd:
                 import subprocess
+
                 subprocess.run(shell_cmd, shell=True)
             continue
 
@@ -3114,54 +3585,54 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 if arg:
                     # Per-command detail
                     _detail = {
-                        "model":    "  /model <model>              keep current provider\n"
-                                    "  /model <provider>/<model>   switch provider + model\n"
-                                    "  providers: ollama, gemini, openai, ollama_cloud, vllm\n"
-                                    "  e.g.  /model gemini/gemini-2.0-flash\n"
-                                    "        /model ollama/gemma:2b\n"
-                                    "        /model openai/gpt-4o\n"
-                                    "        /model vllm/meta-llama/Llama-3.1-8B-Instruct",
-                        "embed":    "  /embed <model>              keep current provider\n"
-                                    "  /embed <provider>/<model>   switch provider + model\n"
-                                    "  /embed /path/to/local        local HuggingFace folder\n"
-                                    "  providers: sentence_transformers, ollama, fastembed, openai\n"
-                                    "  ⚠️  Re-ingest after changing embedding model.",
-                        "ingest":   "  /ingest <path>              ingest a directory\n"
-                                    "  /ingest ./src/*.py           glob pattern\n"
-                                    "  /ingest ./notes/**/*.md      recursive glob",
-                        "rag":      "  /rag                         show all RAG settings\n"
-                                    "  /rag topk <n>                results to retrieve (1–20)\n"
-                                    "  /rag threshold <0.0–1.0>     min similarity score\n"
-                                    "  /rag hybrid                  toggle hybrid BM25+vector\n"
-                                    "  /rag rerank                  toggle cross-encoder reranker\n"
-                                    "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
-                                    "  /rag hyde                    toggle HyDE query expansion\n"
-                                    "  /rag multi                   toggle multi-query expansion\n"
-                                    "  /rag step-back               toggle step-back prompting\n"
-                                    "  /rag decompose               toggle query decomposition\n"
-                                    "  /rag compress                toggle LLM context compression\n"
-                                    "  /rag cite                    toggle inline [Document N] citations\n"
-                                    "  /rag raptor                  toggle RAPTOR hierarchical indexing\n"
-                                    "  /rag graph-rag               toggle GraphRAG entity retrieval",
+                        "model": "  /model <model>              keep current provider\n"
+                        "  /model <provider>/<model>   switch provider + model\n"
+                        "  providers: ollama, gemini, openai, ollama_cloud, vllm\n"
+                        "  e.g.  /model gemini/gemini-2.0-flash\n"
+                        "        /model ollama/gemma:2b\n"
+                        "        /model openai/gpt-4o\n"
+                        "        /model vllm/meta-llama/Llama-3.1-8B-Instruct",
+                        "embed": "  /embed <model>              keep current provider\n"
+                        "  /embed <provider>/<model>   switch provider + model\n"
+                        "  /embed /path/to/local        local HuggingFace folder\n"
+                        "  providers: sentence_transformers, ollama, fastembed, openai\n"
+                        "  ⚠️  Re-ingest after changing embedding model.",
+                        "ingest": "  /ingest <path>              ingest a directory\n"
+                        "  /ingest ./src/*.py           glob pattern\n"
+                        "  /ingest ./notes/**/*.md      recursive glob",
+                        "rag": "  /rag                         show all RAG settings\n"
+                        "  /rag topk <n>                results to retrieve (1–20)\n"
+                        "  /rag threshold <0.0–1.0>     min similarity score\n"
+                        "  /rag hybrid                  toggle hybrid BM25+vector\n"
+                        "  /rag rerank                  toggle cross-encoder reranker\n"
+                        "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
+                        "  /rag hyde                    toggle HyDE query expansion\n"
+                        "  /rag multi                   toggle multi-query expansion\n"
+                        "  /rag step-back               toggle step-back prompting\n"
+                        "  /rag decompose               toggle query decomposition\n"
+                        "  /rag compress                toggle LLM context compression\n"
+                        "  /rag cite                    toggle inline [Document N] citations\n"
+                        "  /rag raptor                  toggle RAPTOR hierarchical indexing\n"
+                        "  /rag graph-rag               toggle GraphRAG entity retrieval",
                         "sessions": "  /sessions                    list recent saved sessions\n"
-                                    "  /resume <id>                 load a session by ID\n"
-                                    "  Sessions auto-save after each turn.",
-                        "keys":     "  /keys                        show API key status for all providers\n"
-                                    "  /keys set <provider>         interactively set an API key\n"
-                                    "  providers: gemini, openai, brave, ollama_cloud\n"
-                                    "  Keys are saved to ~/.rag_brain/.env and loaded at startup.",
-                        "project":  "  /project                     show active project + list all\n"
-                                    "  /project list                 list all projects\n"
-                                    "  /project new <name>           create a new project and switch to it\n"
-                                    "  /project new <name> <desc>    create with description\n"
-                                    "  /project switch <name>        switch to an existing project\n"
-                                    "  /project switch default       return to the global knowledge base\n"
-                                    "  /project delete <name>        delete a project and all its data\n"
-                                    "  /project folder               open the active project folder\n"
-                                    "\n"
-                                    "  Projects are stored in ~/.rag_brain/projects/<name>/\n"
-                                    "  Each project has its own vector store and BM25 index.\n"
-                                    "  Use /ingest after switching to add documents to a project.",
+                        "  /resume <id>                 load a session by ID\n"
+                        "  Sessions auto-save after each turn.",
+                        "keys": "  /keys                        show API key status for all providers\n"
+                        "  /keys set <provider>         interactively set an API key\n"
+                        "  providers: gemini, openai, brave, ollama_cloud\n"
+                        "  Keys are saved to ~/.axon/.env and loaded at startup.",
+                        "project": "  /project                     show active project + list all\n"
+                        "  /project list                 list all projects\n"
+                        "  /project new <name>           create a new project and switch to it\n"
+                        "  /project new <name> <desc>    create with description\n"
+                        "  /project switch <name>        switch to an existing project\n"
+                        "  /project switch default       return to the global knowledge base\n"
+                        "  /project delete <name>        delete a project and all its data\n"
+                        "  /project folder               open the active project folder\n"
+                        "\n"
+                        "  Projects are stored in ~/.axon/projects/<name>/\n"
+                        "  Each project has its own vector store and BM25 index.\n"
+                        "  Use /ingest after switching to add documents to a project.",
                     }
                     key = arg.lstrip("/")
                     if key in _detail:
@@ -3201,7 +3672,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     print("  Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
                 else:
                     import glob as _glob
-                    from rag_brain.loaders import DirectoryLoader
+
+                    from axon.loaders import DirectoryLoader
+
                     # Expand glob pattern; fallback to literal path
                     matched = sorted(_glob.glob(arg, recursive=True))
                     if not matched:
@@ -3231,27 +3704,35 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         print(f"  Done — {ingested} ingested, {skipped} skipped.")
 
             elif cmd == "/model":
-                _PROVIDERS = ('ollama', 'gemini', 'openai', 'ollama_cloud', 'vllm')
+                _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm")
                 if not arg:
                     print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
-                    print(f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}")
-                    print(f"  Usage:   /model <model>              (auto-detect provider)")
-                    print(f"           /model <provider>/<model>   (switch provider too)")
+                    print(
+                        f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                    )
+                    print("  Usage:   /model <model>              (auto-detect provider)")
+                    print("           /model <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_PROVIDERS)}")
-                    print(f"  vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
+                    print(
+                        f"  vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
+                    )
                 elif "/" in arg:
                     provider, model = arg.split("/", 1)
                     if provider not in _PROVIDERS:
-                        print(f"  ❌ Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}")
+                        print(
+                            f"  ❌ Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
+                        )
                     else:
                         brain.config.llm_provider = provider
                         brain.config.llm_model = model
                         brain.llm = OpenLLM(brain.config)
                         print(f"  ✅ Switched LLM to {provider}/{model}")
                         if provider == "vllm":
-                            print(f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)")
+                            print(
+                                f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
+                            )
                         elif provider != "ollama":
-                            print(f"  ℹ️  Make sure the required API key env var is set.")
+                            print("  ℹ️  Make sure the required API key env var is set.")
                 else:
                     inferred = _infer_provider(arg)
                     brain.config.llm_provider = inferred
@@ -3259,30 +3740,32 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     brain.llm = OpenLLM(brain.config)
                     print(f"  ✅ Switched LLM to {inferred}/{arg}")
                     if inferred != "ollama":
-                        print(f"  ℹ️  Make sure the required API key env var is set.")
+                        print("  ℹ️  Make sure the required API key env var is set.")
 
             elif cmd == "/vllm-url":
                 if not arg:
                     print(f"  Current vLLM base URL: {brain.config.vllm_base_url}")
-                    print(f"  Usage: /vllm-url http://host:port/v1")
+                    print("  Usage: /vllm-url http://host:port/v1")
                 else:
                     brain.config.vllm_base_url = arg
-                    brain.llm._openai_clients = {}   # invalidate cached client
+                    brain.llm._openai_clients = {}  # invalidate cached client
                     print(f"  ✅ vLLM base URL set to {arg}")
 
             elif cmd == "/embed":
-                _EMBED_PROVIDERS = ('sentence_transformers', 'ollama', 'fastembed', 'openai')
+                _EMBED_PROVIDERS = ("sentence_transformers", "ollama", "fastembed", "openai")
                 if not arg:
-                    print(f"  Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}")
-                    print(f"  Usage:   /embed <model>              (keep current provider)")
-                    print(f"           /embed <provider>/<model>   (switch provider too)")
+                    print(
+                        f"  Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                    )
+                    print("  Usage:   /embed <model>              (keep current provider)")
+                    print("           /embed <provider>/<model>   (switch provider too)")
                     print(f"  Providers: {', '.join(_EMBED_PROVIDERS)}")
-                    print(f"  Examples:")
-                    print(f"    /embed all-MiniLM-L6-v2                    (sentence_transformers)")
-                    print(f"    /embed /path/to/local/model                (local folder)")
-                    print(f"    /embed ollama/nomic-embed-text")
-                    print(f"    /embed fastembed/BAAI/bge-small-en")
-                    print(f"  ⚠️  Changing embedding model invalidates existing indexed documents.")
+                    print("  Examples:")
+                    print("    /embed all-MiniLM-L6-v2                    (sentence_transformers)")
+                    print("    /embed /path/to/local/model                (local folder)")
+                    print("    /embed ollama/nomic-embed-text")
+                    print("    /embed fastembed/BAAI/bge-small-en")
+                    print("  ⚠️  Changing embedding model invalidates existing indexed documents.")
                 else:
                     if "/" in arg:
                         provider, model = arg.split("/", 1)
@@ -3298,10 +3781,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         model = arg
                         brain.config.embedding_model = model
                     try:
-                        print(f"  ⠿ Loading embedding model…", end="", flush=True)
+                        print("  ⠿ Loading embedding model…", end="", flush=True)
                         brain.embedding = OpenEmbedding(brain.config)
-                        print(f"\r  ✅ Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}")
-                        print(f"  ⚠️  Re-ingest your documents so they use the new embedding model.")
+                        print(
+                            f"\r  ✅ Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                        )
+                        print("  ⚠️  Re-ingest your documents so they use the new embedding model.")
                     except Exception as e:
                         print(f"\r  ❌ Failed to load embedding: {e}")
 
@@ -3311,12 +3796,25 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 else:
                     try:
                         import ollama as _ollama
+
                         print(f"  ⬇️  Pulling '{arg}' …")
                         last_status = ""
                         for chunk in _ollama.pull(arg, stream=True):
-                            status = chunk.get("status", "") if isinstance(chunk, dict) else getattr(chunk, 'status', '')
-                            total = chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, 'total', 0)
-                            completed = chunk.get("completed", 0) if isinstance(chunk, dict) else getattr(chunk, 'completed', 0)
+                            status = (
+                                chunk.get("status", "")
+                                if isinstance(chunk, dict)
+                                else getattr(chunk, "status", "")
+                            )
+                            total = (
+                                chunk.get("total", 0)
+                                if isinstance(chunk, dict)
+                                else getattr(chunk, "total", 0)
+                            )
+                            completed = (
+                                chunk.get("completed", 0)
+                                if isinstance(chunk, dict)
+                                else getattr(chunk, "completed", 0)
+                            )
                             if total and completed:
                                 line = f"  {status}: {int(completed/total*100)}%"
                             elif status:
@@ -3325,7 +3823,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 continue
                             # Pad to clear previous longer line
                             print(f"\r{line:<60}", end="", flush=True)
-                            last_status = line
+                            last_status = line  # noqa: F841
                         print(f"\r  ✅ '{arg}' ready.{' ' * 50}")
                     except Exception as e:
                         print(f"  ❌ Pull failed: {e}")
@@ -3342,11 +3840,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     print("  🔍 Web search OFF — answers from local knowledge only.")
                 else:
                     if not brain.config.brave_api_key:
-                        print("  ❌ BRAVE_API_KEY is not set. Export it and restart, or set it with:")
+                        print(
+                            "  ❌ BRAVE_API_KEY is not set. Export it and restart, or set it with:"
+                        )
                         print("     export BRAVE_API_KEY=your_key")
                     else:
                         brain.config.truth_grounding = True
-                        print("  🔍 Web search ON — Brave Search will be used as fallback when local knowledge is insufficient.")
+                        print(
+                            "  🔍 Web search ON — Brave Search will be used as fallback when local knowledge is insufficient."
+                        )
 
             elif cmd == "/discuss":
                 brain.config.discussion_fallback = not brain.config.discussion_fallback
@@ -3360,7 +3862,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         f"  threshold    · {brain.config.similarity_threshold}\n"
                         f"  hybrid       · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
                         f"  rerank       · {'ON' if brain.config.rerank else 'OFF'}"
-                        + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "") + "\n"
+                        + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "")
+                        + "\n"
                         f"  hyde         · {'ON' if brain.config.hyde else 'OFF'}\n"
                         f"  multi-query  · {'ON' if brain.config.multi_query else 'OFF'}\n"
                         f"  step-back    · {'ON' if brain.config.step_back else 'OFF'}\n"
@@ -3405,34 +3908,46 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         print(f"  ✅ Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
                     elif rag_opt == "step-back":
                         brain.config.step_back = not brain.config.step_back
-                        print(f"  ✅ Step-back prompting {'ON' if brain.config.step_back else 'OFF'}")
+                        print(
+                            f"  ✅ Step-back prompting {'ON' if brain.config.step_back else 'OFF'}"
+                        )
                     elif rag_opt == "decompose":
                         brain.config.query_decompose = not brain.config.query_decompose
-                        print(f"  ✅ Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}")
+                        print(
+                            f"  ✅ Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}"
+                        )
                     elif rag_opt == "compress":
                         brain.config.compress_context = not brain.config.compress_context
-                        print(f"  ✅ Context compression {'ON' if brain.config.compress_context else 'OFF'}")
+                        print(
+                            f"  ✅ Context compression {'ON' if brain.config.compress_context else 'OFF'}"
+                        )
                     elif rag_opt == "cite":
                         brain.config.cite_sources = not brain.config.cite_sources
-                        print(f"  ✅ Inline citations {'ON' if brain.config.cite_sources else 'OFF'}")
+                        print(
+                            f"  ✅ Inline citations {'ON' if brain.config.cite_sources else 'OFF'}"
+                        )
                     elif rag_opt == "raptor":
                         brain.config.raptor = not brain.config.raptor
-                        print(f"  ✅ RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}")
+                        print(
+                            f"  ✅ RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}"
+                        )
                     elif rag_opt in ("graph-rag", "graph_rag", "graphrag"):
                         brain.config.graph_rag = not brain.config.graph_rag
-                        print(f"  ✅ GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}")
+                        print(
+                            f"  ✅ GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
+                        )
                     elif rag_opt == "rerank-model":
                         if not rag_val:
                             print(f"  Current reranker: {brain.config.reranker_model}")
-                            print(f"  Usage: /rag rerank-model <HuggingFace ID or local path>")
-                            print(f"  e.g.  /rag rerank-model BAAI/bge-reranker-base")
-                            print(f"        /rag rerank-model ./models/bge-reranker-base")
+                            print("  Usage: /rag rerank-model <HuggingFace ID or local path>")
+                            print("  e.g.  /rag rerank-model BAAI/bge-reranker-base")
+                            print("        /rag rerank-model ./models/bge-reranker-base")
                         else:
                             resolved = brain._resolve_model_path(rag_val)
                             if resolved != rag_val:
                                 print(f"  → Resolved to local path: {resolved}")
                             brain.config.reranker_model = resolved
-                            brain.config.rerank = True   # auto-enable when setting a model
+                            brain.config.rerank = True  # auto-enable when setting a model
                             print(f"  ⏳ Loading reranker '{resolved}'…")
                             try:
                                 brain.reranker = OpenReranker(brain.config)
@@ -3441,17 +3956,22 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 brain.config.rerank = False
                                 print(f"  ❌ Failed to load reranker: {e}")
                     else:
-                        print(f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag")
+                        print(
+                            f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag"
+                        )
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)
                 _save_session(session)
 
             elif cmd == "/project":
-                from rag_brain.projects import (
-                    delete_project, ensure_project,
-                    list_projects, project_dir,
+                from axon.projects import (
+                    delete_project,
+                    ensure_project,
+                    list_projects,
+                    project_dir,
                 )
+
                 sub_parts = arg.split(maxsplit=1)
                 sub = sub_parts[0].lower() if sub_parts else ""
                 sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
@@ -3485,7 +4005,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                             brain.switch_project(proj_name)
                             print(f"  ✅ Created and switched to project '{proj_name}'")
                             print(f"  📁 {project_dir(proj_name)}")
-                            print(f"  Use /ingest to add documents to this project.\n")
+                            print("  Use /ingest to add documents to this project.\n")
                         except ValueError as e:
                             print(f"  ❌ {e}")
 
@@ -3497,12 +4017,18 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         if proj_name == "default" or project_dir(proj_name).exists():
                             try:
                                 brain.switch_project(proj_name)
-                                count = brain.vector_store.collection.count() if brain.vector_store.provider == "chroma" else "?"
+                                count = (
+                                    brain.vector_store.collection.count()
+                                    if brain.vector_store.provider == "chroma"
+                                    else "?"
+                                )
                                 print(f"  ✅ Switched to project '{proj_name}'  ({count} chunks)\n")
                             except Exception as e:
                                 print(f"  ❌ {e}")
                         else:
-                            print(f"  ❌ Project '{proj_name}' not found. Use /project list or /project new {proj_name}")
+                            print(
+                                f"  ❌ Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
+                            )
 
                 elif sub == "delete":
                     if not sub_arg:
@@ -3510,16 +4036,20 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     else:
                         proj_name = sub_arg.strip().lower()
                         try:
-                            confirm = _read_input(
-                                f"  ⚠️  Delete project '{proj_name}' and ALL its data? [y/N]: "
-                            ).strip().lower()
+                            confirm = (
+                                _read_input(
+                                    f"  ⚠️  Delete project '{proj_name}' and ALL its data? [y/N]: "
+                                )
+                                .strip()
+                                .lower()
+                            )
                         except (EOFError, KeyboardInterrupt):
                             confirm = "n"
                         if confirm == "y":
                             try:
                                 if brain._active_project == proj_name:
                                     brain.switch_project("default")
-                                    print(f"  ↩️  Switched back to default project.")
+                                    print("  ↩️  Switched back to default project.")
                                 delete_project(proj_name)
                                 print(f"  ✅ Deleted project '{proj_name}'.\n")
                             except ValueError as e:
@@ -3530,13 +4060,14 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 elif sub == "folder":
                     active = brain._active_project
                     if active == "default":
-                        print(f"  Default project uses config paths:")
+                        print("  Default project uses config paths:")
                         print(f"    Vector store: {brain.config.vector_store_path}")
                         print(f"    BM25 index:   {brain.config.bm25_path}\n")
                     else:
                         folder = str(project_dir(active))
                         print(f"  📁 {folder}")
                         import subprocess
+
                         try:
                             if os.name == "nt":
                                 subprocess.Popen(["explorer", folder])
@@ -3578,32 +4109,41 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                         print(f"  ✅ Loaded session {session['id']}  ({turns} turns)\n")
 
             elif cmd == "/keys":
-                _env_file = Path.home() / ".rag_brain" / ".env"
+                _env_file = Path.home() / ".axon" / ".env"
                 _provider_keys = {
-                    "gemini":       ("GEMINI_API_KEY",   "https://aistudio.google.com/app/apikey"),
-                    "openai":       ("OPENAI_API_KEY",   "https://platform.openai.com/api-keys"),
-                    "brave":        ("BRAVE_API_KEY",    "https://api.search.brave.com/app/keys"),
+                    "gemini": ("GEMINI_API_KEY", "https://aistudio.google.com/app/apikey"),
+                    "openai": ("OPENAI_API_KEY", "https://platform.openai.com/api-keys"),
+                    "brave": ("BRAVE_API_KEY", "https://api.search.brave.com/app/keys"),
                     "ollama_cloud": ("OLLAMA_CLOUD_KEY", "https://ollama.com/settings"),
                 }
                 if arg.lower().startswith("set"):
                     set_parts = arg.split(maxsplit=1)
                     prov = set_parts[1].lower().strip() if len(set_parts) > 1 else ""
                     if not prov or prov not in _provider_keys:
-                        print(f"  Usage: /keys set <provider>")
+                        print("  Usage: /keys set <provider>")
                         print(f"  Providers: {', '.join(_provider_keys)}")
                     else:
                         env_name, url = _provider_keys[prov]
                         print(f"  Get your key at: {url}")
                         try:
                             import getpass
+
                             new_key = getpass.getpass(f"  Enter {env_name} (hidden): ").strip()
                         except (EOFError, KeyboardInterrupt):
                             print("\n  Cancelled.")
                         else:
                             if new_key:
                                 _env_file.parent.mkdir(parents=True, exist_ok=True)
-                                existing = _env_file.read_text(encoding="utf-8") if _env_file.exists() else ""
-                                lines = [l for l in existing.splitlines() if not l.startswith(f"{env_name}=")]
+                                existing = (
+                                    _env_file.read_text(encoding="utf-8")
+                                    if _env_file.exists()
+                                    else ""
+                                )
+                                lines = [
+                                    ln
+                                    for ln in existing.splitlines()
+                                    if not ln.startswith(f"{env_name}=")
+                                ]
                                 lines.append(f"{env_name}={new_key}")
                                 _env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
                                 os.environ[env_name] = new_key
@@ -3621,7 +4161,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                 print("  No key entered — nothing saved.")
                 else:
                     print("\n  API Key Status\n  " + "─" * 50)
-                    for prov, (env_name, url) in _provider_keys.items():
+                    for prov, (env_name, _url) in _provider_keys.items():
                         val = os.environ.get(env_name, "")
                         if val:
                             masked = val[:4] + "****" + val[-2:] if len(val) > 6 else "****"
@@ -3632,9 +4172,9 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                     if _env_file.exists():
                         print(f"\n  Keys file: {_env_file}")
                     else:
-                        print(f"\n  No keys file yet. Use /keys set <provider> to add keys.")
-                    print(f"  /keys set <provider>  to set a key interactively")
-                    print(f"  /help keys            for provider URLs and usage\n")
+                        print("\n  No keys file yet. Use /keys set <provider> to add keys.")
+                    print("  /keys set <provider>  to set a key interactively")
+                    print("  /help keys            for provider URLs and usage\n")
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")
@@ -3645,7 +4185,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
         # --- @file expansion: replace @path references with file contents ---
         query_text = _expand_at_files(user_input)
         if query_text != user_input:
-            at_files = re.findall(r'@(\S+)', user_input)
+            at_files = re.findall(r"@(\S+)", user_input)
             print(f"  📎 Attached: {', '.join(at_files)}")
 
         # --- Regular query — use Rich Live for spinner + streaming response ---
@@ -3656,14 +4196,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             from rich.live import Live as _RL
             from rich.markdown import Markdown as _RM
             from rich.text import Text as _RT
+
             _console = _RC()
 
             # ── Spinner phase (transient=True removes it cleanly when stopped) ──
             _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-            _spin_stop  = threading.Event()
-            _spin_idx   = [0]
+            _spin_stop = threading.Event()
+            _spin_idx = [0]
 
-            def _spin_update(live: '_RL') -> None:
+            def _spin_update(live: "_RL") -> None:
                 while not _spin_stop.wait(0.1):
                     f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
                     live.update(_RT.from_markup(f"[bold yellow]Brain:[/bold yellow] {f} thinking…"))
@@ -3673,15 +4214,19 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 token_gen = brain.query_stream(query_text, chat_history=chat_history)
 
                 if not quiet:
-                    m   = f"{brain.config.llm_provider}/{brain.config.llm_model}"
-                    s_v = "search:ON" if brain.config.truth_grounding    else "search:off"
+                    m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+                    s_v = "search:ON" if brain.config.truth_grounding else "search:off"
                     d_v = "discuss:ON" if brain.config.discussion_fallback else "discuss:off"
-                    h_v = "hybrid:ON"  if brain.config.hybrid_search      else "hybrid:off"
+                    h_v = "hybrid:ON" if brain.config.hybrid_search else "hybrid:off"
                     print(f"\033[2m  🧠 {m}  │  {s_v}  │  {d_v}  │  {h_v}\033[0m")
                     print()
                     # Spinner until first real token arrives
-                    with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"),
-                             console=_console, transient=True, refresh_per_second=10) as _spin_live:
+                    with _RL(
+                        _RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"),
+                        console=_console,
+                        transient=True,
+                        refresh_per_second=10,
+                    ) as _spin_live:
                         _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
                         _st.start()
                         for chunk in token_gen:
@@ -3690,7 +4235,7 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                                     _last_sources = chunk.get("sources", [])
                                 continue
                             response_parts.append(chunk)
-                            break   # first token → exit spinner
+                            break  # first token → exit spinner
                         _spin_stop.set()
                         _st.join(timeout=0.3)
                     # spinner gone (transient); cursor is at a clean line
@@ -3701,9 +4246,12 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 try:
                     accumulated = "".join(response_parts)
                     _console.print("[bold yellow]Brain:[/bold yellow]")
-                    with _RL(_RT(accumulated + " ▋"),
-                             console=_console, transient=False,
-                             refresh_per_second=15) as live:
+                    with _RL(
+                        _RT(accumulated + " ▋"),
+                        console=_console,
+                        transient=False,
+                        refresh_per_second=15,
+                    ) as live:
                         for chunk in token_gen:
                             if isinstance(chunk, dict):
                                 if chunk.get("type") == "sources":
@@ -3740,9 +4288,15 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
 
                 if not quiet:
                     print()
-                    with _RL(_RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"), console=_console,
-                             transient=True, refresh_per_second=10) as _spin_live2:
-                        _st2 = threading.Thread(target=_spin_update, args=(_spin_live2,), daemon=True)
+                    with _RL(
+                        _RT.from_markup("[bold yellow]Brain:[/bold yellow] ⠋ thinking…"),
+                        console=_console,
+                        transient=True,
+                        refresh_per_second=10,
+                    ) as _spin_live2:
+                        _st2 = threading.Thread(
+                            target=_spin_update, args=(_spin_live2,), daemon=True
+                        )
                         _st2.start()
                         _spin_stop2.wait()
                         _spin_stop.set()
@@ -3753,17 +4307,17 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
                 if _err:
                     raise _err[0]
                 response = _result[0] if _result else ""
-                print()   # blank line between You: and Brain:
+                print()  # blank line between You: and Brain:
                 _console.print("[bold yellow]Brain:[/bold yellow]")
                 _console.print(_RM(response))
-                print()   # blank line after Brain response, before next You:
+                print()  # blank line after Brain response, before next You:
                 response_parts = [response]
 
         except ImportError:
             # rich not available — plain fallback
             _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
             _spin_stop = threading.Event()
-            _spin_idx  = [0]
+            _spin_idx = [0]
 
             def _spin_plain() -> None:
                 while not _spin_stop.wait(0.1):
@@ -3788,8 +4342,8 @@ def _interactive_repl(brain: 'OpenStudioBrain', stream: bool = True,
             chat_history.append({"role": "user", "content": user_input})
             chat_history.append({"role": "assistant", "content": response})
             _last_query = user_input
-            _save_session(session)   # persist after every turn
-            _print_status_bar()      # reprint status below each response
+            _save_session(session)  # persist after every turn
+            _print_status_bar()  # reprint status below each response
 
 
 if __name__ == "__main__":

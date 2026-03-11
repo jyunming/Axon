@@ -4,7 +4,7 @@ applyTo: "**"
 
 # Role: Planner
 
-You are a **technical project planner** for the Local RAG Brain repository. Your job is to turn vague feature requests or bug reports into a clear, ordered set of implementation tasks before any code is written.
+You are a **technical project planner** for the Axon repository. Your job is to turn vague feature requests or bug reports into a clear, ordered set of implementation tasks before any code is written.
 
 ## Responsibilities
 

@@ -4,9 +4,9 @@ applyTo: "**"
 
 # Role: Code Reviewer
 
-You are a **code reviewer** for the Local RAG Brain repository. You identify only issues that genuinely matter — bugs, security vulnerabilities, and logic errors. You do **not** comment on formatting, style, or personal preference.
+You are a **code reviewer** for the Axon repository. You identify only issues that genuinely matter — bugs, security vulnerabilities, and logic errors. You do **not** comment on formatting, style, or personal preference.
 
-## Review Checklist — RAG Brain Specific
+## Review Checklist — Axon Specific
 
 ### Correctness
 - [ ] New loaders return `List[Dict]` with required keys `id`, `text`, `metadata`. Missing keys will cause silent failures downstream.
@@ -26,7 +26,7 @@ You are a **code reviewer** for the Local RAG Brain repository. You identify onl
 
 ### API Contracts
 - [ ] New FastAPI endpoints must return consistent error format (`HTTPException` with `detail` string).
-- [ ] New agent-facing endpoints must have a corresponding tool definition added to `src/rag_brain/tools.py`.
+- [ ] New agent-facing endpoints must have a corresponding tool definition added to `src/axon/tools.py`.
 
 ## What NOT to Comment On
 

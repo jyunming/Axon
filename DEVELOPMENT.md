@@ -51,7 +51,7 @@ make docker-logs   # View logs
 
 ```
 studio_brain_open/
-├── src/rag_brain/          # Main package
+├── src/axon/          # Main package
 │   ├── main.py             # Core RAG engine
 │   ├── api.py              # REST API endpoints
 │   ├── webapp.py           # Streamlit UI
@@ -132,7 +132,7 @@ def test_feature_name():
 pytest tests/test_loaders.py              # Specific file
 pytest -k "test_load"                     # Tests matching pattern
 pytest -m "not slow"                      # Exclude slow tests
-pytest --cov=rag_brain --cov-report=html  # With coverage
+pytest --cov=axon --cov-report=html  # With coverage
 ```
 
 ### 6. Code Style

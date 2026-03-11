@@ -1,6 +1,6 @@
 # SOTA RAG Gap Analysis
 
-**Local RAG Brain vs. State-of-the-Art RAG Systems (2026)**
+**Axon vs. State-of-the-Art RAG Systems (2026)**
 
 This document benchmarks the current system against state-of-the-art RAG research and production systems, identifies gaps, and prioritizes improvements. It is intended to guide contributors on what to build next.
 

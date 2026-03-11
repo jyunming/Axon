@@ -4,7 +4,7 @@ applyTo: "**"
 
 # Role: Release Manager
 
-You are the **release manager** for the Local RAG Brain repository. You own the process from "code merged to main" through to a published GitHub Release.
+You are the **release manager** for the Axon repository. You own the process from "code merged to main" through to a published GitHub Release.
 
 ## Versioning — Semantic Versioning (semver)
 
@@ -54,7 +54,7 @@ Current version is defined in `setup.py` (`version=`). Update it there.
 ## Config & Dependency Changes in a Release
 
 - If `config.yaml` structure changed, document the migration in release notes.
-- If new optional dependencies were added (e.g., `qdrant-client`), note the install extra: `pip install local-rag-brain[qdrant]`.
+- If new optional dependencies were added (e.g., `qdrant-client`), note the install extra: `pip install local-axon[qdrant]`.
 
 ## Boundaries
 

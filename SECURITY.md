@@ -44,7 +44,7 @@ When reporting a security vulnerability, please include:
 
 ## Security Best Practices
 
-### When Using Local RAG Brain
+### When Using Axon
 
 1. **Input Validation**
    - Sanitize file paths before ingestion
@@ -152,4 +152,4 @@ Before submitting code:
 - [FastAPI Security](https://fastapi.tiangolo.com/tutorial/security/)
 - [Docker Security Best Practices](https://docs.docker.com/develop/security-best-practices/)
 
-Thank you for helping keep Local RAG Brain secure! 🔒
+Thank you for helping keep Axon secure! 🔒

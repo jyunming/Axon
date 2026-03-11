@@ -1,6 +1,6 @@
-# Docker Compose for Local RAG Brain
+# Docker Compose for Axon
 services:
-  rag-brain-api:
+  axon-api:
     build: .
     ports:
       - "8000:8000"
@@ -20,11 +20,11 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  rag-brain-ui:
+  axon-ui:
     build: .
     ports:
       - "8501:8501"
-    command: ["rag-brain-ui"]
+    command: ["axon-ui"]
     volumes:
       - ./src:/app/src
       - ./chroma_data:/app/chroma_data
@@ -33,13 +33,13 @@ services:
       - ./.streamlit:/app/.streamlit
     environment:
       - OLLAMA_HOST=http://ollama:11434
-      - RAG_BRAIN_API_URL=http://rag-brain-api:8000
+      - AXON_API_URL=http://axon-api:8000
     env_file:
       - path: .env
         required: false
     depends_on:
       - ollama
-      - rag-brain-api
+      - axon-api
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

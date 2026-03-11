@@ -3,24 +3,25 @@ tests/test_streaming.py
 
 Tests for OpenLLM.stream() and OpenStudioBrain.query_stream().
 """
-import pytest
-from unittest.mock import patch, MagicMock, call
 
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_brain(config):
     """Construct an OpenStudioBrain with all heavy dependencies mocked."""
     with (
-        patch("rag_brain.main.OpenEmbedding"),
-        patch("rag_brain.main.OpenLLM"),
-        patch("rag_brain.main.OpenVectorStore"),
-        patch("rag_brain.main.OpenReranker"),
-        patch("rag_brain.retrievers.BM25Retriever"),
+        patch("axon.main.OpenEmbedding"),
+        patch("axon.main.OpenLLM"),
+        patch("axon.main.OpenVectorStore"),
+        patch("axon.main.OpenReranker"),
+        patch("axon.retrievers.BM25Retriever"),
     ):
-        from rag_brain.main import OpenStudioBrain
+        from axon.main import OpenStudioBrain
+
         return OpenStudioBrain(config)
 
 
@@ -28,10 +29,11 @@ def _make_brain(config):
 # OpenLLM.stream() — all 4 providers
 # ---------------------------------------------------------------------------
 
+
 class TestOpenLLMStream:
     @patch("ollama.Client")
     def test_ollama_stream_yields_strings(self, MockOllama):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="ollama")
         llm = OpenLLM(config)
@@ -46,7 +48,7 @@ class TestOpenLLMStream:
     @patch("google.generativeai.GenerativeModel")
     @patch("google.generativeai.configure")
     def test_gemini_stream_yields_strings(self, _cfg, MockModel):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="gemini", llm_model="gemini-2.0-flash")
         llm = OpenLLM(config)
@@ -61,7 +63,8 @@ class TestOpenLLMStream:
     @patch("httpx.Client")
     def test_ollama_cloud_stream_yields_strings(self, MockHttpx):
         import json as _json
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="ollama_cloud", ollama_cloud_key="k", llm_model="m")
         llm = OpenLLM(config)
@@ -83,7 +86,7 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_openai_stream_yields_strings(self, MockOpenAI):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(llm_provider="openai", api_key="sk-test", llm_model="gpt-4o")
         llm = OpenLLM(config)
@@ -101,7 +104,7 @@ class TestOpenLLMStream:
 
     @patch("openai.OpenAI")
     def test_vllm_stream_yields_strings(self, MockOpenAI):
-        from rag_brain.main import OpenLLM, OpenStudioConfig
+        from axon.main import OpenLLM, OpenStudioConfig
 
         config = OpenStudioConfig(
             llm_provider="vllm",
@@ -128,19 +131,21 @@ class TestOpenLLMStream:
 # OpenStudioBrain.query_stream()
 # ---------------------------------------------------------------------------
 
+
 class TestQueryStream:
     def _make_brain_with_mocks(self):
-        from rag_brain.main import OpenStudioConfig
+        from axon.main import OpenStudioConfig
 
         config = OpenStudioConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
         with (
-            patch("rag_brain.main.OpenEmbedding"),
-            patch("rag_brain.main.OpenLLM"),
-            patch("rag_brain.main.OpenVectorStore"),
-            patch("rag_brain.main.OpenReranker"),
-            patch("rag_brain.retrievers.BM25Retriever"),
+            patch("axon.main.OpenEmbedding"),
+            patch("axon.main.OpenLLM"),
+            patch("axon.main.OpenVectorStore"),
+            patch("axon.main.OpenReranker"),
+            patch("axon.retrievers.BM25Retriever"),
         ):
-            from rag_brain.main import OpenStudioBrain
+            from axon.main import OpenStudioBrain
+
             brain = OpenStudioBrain(config)
         return brain
 
@@ -148,14 +153,16 @@ class TestQueryStream:
         brain = self._make_brain_with_mocks()
 
         docs = [{"id": "d1", "text": "hello", "score": 0.9, "metadata": {}}]
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": docs,
-            "vector_count": 1,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 1,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": docs,
+                "vector_count": 1,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 1,
+                "transforms": {},
+            }
+        )
         brain.llm.stream = MagicMock(return_value=iter(["tok1", " tok2"]))
 
         chunks = list(brain.query_stream("my question"))
@@ -170,14 +177,16 @@ class TestQueryStream:
         brain = self._make_brain_with_mocks()
         brain.config.discussion_fallback = False
 
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": [],
-            "vector_count": 0,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 0,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": [],
+                "vector_count": 0,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 0,
+                "transforms": {},
+            }
+        )
 
         chunks = list(brain.query_stream("unknown"))
         text = "".join(c for c in chunks if isinstance(c, str))
@@ -187,14 +196,16 @@ class TestQueryStream:
         brain = self._make_brain_with_mocks()
         brain.config.discussion_fallback = True
 
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": [],
-            "vector_count": 0,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 0,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": [],
+                "vector_count": 0,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 0,
+                "transforms": {},
+            }
+        )
         brain.llm.stream = MagicMock(return_value=iter(["fallback answer"]))
 
         chunks = list(brain.query_stream("orphan query"))
@@ -204,14 +215,16 @@ class TestQueryStream:
     def test_completes_without_exception(self):
         brain = self._make_brain_with_mocks()
 
-        brain._execute_retrieval = MagicMock(return_value={
-            "results": [{"id": "x", "text": "ctx", "score": 1.0, "metadata": {}}],
-            "vector_count": 1,
-            "bm25_count": 0,
-            "web_count": 0,
-            "filtered_count": 1,
-            "transforms": {},
-        })
+        brain._execute_retrieval = MagicMock(
+            return_value={
+                "results": [{"id": "x", "text": "ctx", "score": 1.0, "metadata": {}}],
+                "vector_count": 1,
+                "bm25_count": 0,
+                "web_count": 0,
+                "filtered_count": 1,
+                "transforms": {},
+            }
+        )
         brain.llm.stream = MagicMock(return_value=iter(["done"]))
 
         # Should not raise

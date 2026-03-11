@@ -1,6 +1,6 @@
-# Contributing to Local RAG Brain
+# Contributing to Axon
 
-Thank you for your interest in contributing to Local RAG Brain! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to Axon! This document provides guidelines and instructions for contributing.
 
 ## Development Setup
 
@@ -44,7 +44,7 @@ pytest
 
 Run with coverage:
 ```bash
-pytest --cov=rag_brain --cov-report=html
+pytest --cov=axon --cov-report=html
 ```
 
 Run specific tests:
@@ -70,7 +70,7 @@ ruff check --fix src/ tests/  # Auto-fix issues
 
 **Type checking with MyPy:**
 ```bash
-mypy src/rag_brain/
+mypy src/axon/
 ```
 
 **Pre-commit checks:**
@@ -84,7 +84,7 @@ pre-commit run --all-files  # Run manually
 ```
 studio_brain_open/
 ├── src/
-│   └── rag_brain/          # Main package
+│   └── axon/          # Main package
 │       ├── main.py         # Core RAG engine
 │       ├── api.py          # FastAPI endpoints
 │       ├── webapp.py       # Streamlit UI
@@ -235,4 +235,4 @@ We welcome feature requests! Please:
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
 
-Thank you for contributing to Local RAG Brain! 🧠
+Thank you for contributing to Axon! 🧠

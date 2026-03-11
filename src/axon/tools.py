@@ -1,11 +1,12 @@
 """
 Tool definitions for Agent Orchestration.
-These can be used to describe the Local RAG Brain to an LLM.
+These can be used to describe the Axon to an LLM.
 """
 
-from typing import Dict, Any, List
+from typing import Any
 
-def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List[Dict[str, Any]]:
+
+def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list[dict[str, Any]]:
     """
     Returns tool definitions compatible with OpenAI/Ollama/Anthropic tool calling.
     """
@@ -20,16 +21,16 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "The question to ask the knowledge base."
+                            "description": "The question to ask the knowledge base.",
                         },
                         "filters": {
                             "type": "object",
-                            "description": "Optional metadata filters (e.g. {'type': 'text'})"
-                        }
+                            "description": "Optional metadata filters (e.g. {'type': 'text'})",
+                        },
                     },
-                    "required": ["query"]
-                }
-            }
+                    "required": ["query"],
+                },
+            },
         },
         {
             "type": "function",
@@ -39,19 +40,16 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query."
-                        },
+                        "query": {"type": "string", "description": "The search query."},
                         "top_k": {
                             "type": "integer",
                             "description": "Number of results to return.",
-                            "default": 5
-                        }
+                            "default": 5,
+                        },
                     },
-                    "required": ["query"]
-                }
-            }
+                    "required": ["query"],
+                },
+            },
         },
         {
             "type": "function",
@@ -61,18 +59,15 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "text": {
-                            "type": "string",
-                            "description": "The information to save."
-                        },
+                        "text": {"type": "string", "description": "The information to save."},
                         "metadata": {
                             "type": "object",
-                            "description": "Optional metadata like {'source': 'web', 'topic': 'finance'}"
-                        }
+                            "description": "Optional metadata like {'source': 'web', 'topic': 'finance'}",
+                        },
                     },
-                    "required": ["text"]
-                }
-            }
+                    "required": ["text"],
+                },
+            },
         },
         {
             "type": "function",
@@ -82,11 +77,15 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "doc_ids": {"type": "array", "items": {"type": "string"}, "description": "List of document IDs to delete."}
+                        "doc_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of document IDs to delete.",
+                        }
                     },
-                    "required": ["doc_ids"]
-                }
-            }
+                    "required": ["doc_ids"],
+                },
+            },
         },
         {
             "type": "function",
@@ -98,12 +97,12 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Absolute or relative path to a file or directory to ingest."
+                            "description": "Absolute or relative path to a file or directory to ingest.",
                         }
                     },
-                    "required": ["path"]
-                }
-            }
+                    "required": ["path"],
+                },
+            },
         },
         {
             "type": "function",
@@ -114,25 +113,22 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> List
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "The question to ask."},
-                        "filters": {"type": "object", "description": "Optional metadata filters."}
+                        "filters": {"type": "object", "description": "Optional metadata filters."},
                     },
-                    "required": ["query"]
-                }
-            }
+                    "required": ["query"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "list_knowledge_base",
                 "description": "List all unique source files ingested into the knowledge base, with chunk counts. Calls GET /collection.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-        }
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
     ]
+
 
 # Implementation of tool logic for a simple agent framework could go here
 # or the user can just call the API.

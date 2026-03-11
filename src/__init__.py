@@ -1,17 +1,5 @@
-# Local RAG Brain source package
-from rag_brain.main import (
-    OpenStudioBrain,
-    OpenStudioConfig,
-    OpenEmbedding,
-    OpenLLM,
-    OpenVectorStore
-)
+# Axon source package
+from axon.main import OpenEmbedding, OpenLLM, OpenStudioBrain, OpenStudioConfig, OpenVectorStore
 
 __version__ = "2.0.0"
-__all__ = [
-    "OpenStudioBrain",
-    "OpenStudioConfig",
-    "OpenEmbedding",
-    "OpenLLM",
-    "OpenVectorStore"
-]
+__all__ = ["OpenStudioBrain", "OpenStudioConfig", "OpenEmbedding", "OpenLLM", "OpenVectorStore"]

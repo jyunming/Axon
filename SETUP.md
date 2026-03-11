@@ -1,4 +1,4 @@
-# Setup Guide — Local RAG Brain
+# Setup Guide — Axon
 
 This guide walks through setting up the application from scratch, including detailed steps for configuring every LLM and embedding model option.
 
@@ -78,7 +78,7 @@ pip install -e ".[all]"
 Verify the install:
 
 ```bash
-rag-brain --help
+axon --help
 ```
 
 You should see the CLI help output. If you get a `command not found` error, ensure your virtual environment is activated.
@@ -521,9 +521,9 @@ OLLAMA_MODEL=llama3.1
 OLLAMA_EMBED_MODEL=nomic-embed-text
 
 # API server settings
-# Bind to localhost by default for local setups. For Docker/Compose deployments, set RAG_BRAIN_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
-RAG_BRAIN_HOST=127.0.0.1
-RAG_BRAIN_PORT=8000
+# Bind to localhost by default for local setups. For Docker/Compose deployments, set AXON_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
+AXON_HOST=127.0.0.1
+AXON_PORT=8000
 
 # Where ChromaDB stores its data
 CHROMA_DATA_PATH=./chroma_data
@@ -551,7 +551,7 @@ STREAMLIT_SERVER_ADDRESS=0.0.0.0
 ### Step 1: Start the API server
 
 ```bash
-rag-brain-api
+axon-api
 # Or with make:
 make run-api
 ```
@@ -608,7 +608,7 @@ Expected response includes the answer "Paris" synthesized from the ingested docu
 
 In a separate terminal:
 ```bash
-rag-brain-ui
+axon-ui
 # Or:
 make run-ui
 ```
@@ -660,7 +660,7 @@ lsof -i :8000       # Linux / macOS
 netstat -ano | findstr :8000  # Windows
 
 # Change the port in .env
-RAG_BRAIN_PORT=8001
+AXON_PORT=8001
 ```
 
 ---
@@ -688,7 +688,7 @@ This happens when you change embedding providers/models after already ingesting 
 rm -rf chroma_data/
 rm -rf bm25_index/
 # Then re-ingest your documents
-rag-brain --ingest ./your_documents/
+axon --ingest ./your_documents/
 ```
 
 ---
@@ -762,11 +762,11 @@ If the API service can't reach Ollama, check the `OLLAMA_HOST` environment varia
 | Pull embeddings (Ollama) | `ollama pull nomic-embed-text` |
 | Pull vision model | `ollama pull llava` |
 | List pulled models | `ollama list` |
-| Start API | `rag-brain-api` or `make run-api` |
-| Start UI | `rag-brain-ui` or `make run-ui` |
+| Start API | `axon-api` or `make run-api` |
+| Start UI | `axon-ui` or `make run-ui` |
 | Health check | `curl http://localhost:8000/health` |
-| Ingest a file | `rag-brain --ingest ./path/to/file` |
-| Run a query | `rag-brain "your question"` |
+| Ingest a file | `axon --ingest ./path/to/file` |
+| Run a query | `axon "your question"` |
 
 ---
 

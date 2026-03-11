@@ -1,16 +1,17 @@
-import streamlit as st
+import json
+import logging
 import os
 import sys
-import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-import logging
+
+import streamlit as st
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+from axon.main import OpenStudioBrain
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -259,7 +260,7 @@ SESSIONS_FILE = "sessions.json"
 def load_sessions():
     if os.path.exists(SESSIONS_FILE):
         try:
-            with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
+            with open(SESSIONS_FILE, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
@@ -383,7 +384,9 @@ with st.sidebar:
         "vllm": "⚡ vLLM (local)",
     }
     llm_providers = list(provider_labels.keys())
-    current_provider_idx = llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0
+    current_provider_idx = (
+        llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0
+    )
     config.llm_provider = st.selectbox(
         "Provider",
         options=llm_providers,
@@ -394,54 +397,107 @@ with st.sidebar:
 
     if config.llm_provider == "ollama":
         config.ollama_base_url = st.text_input(
-            "Ollama URL", value=config.ollama_base_url, label_visibility="collapsed",
+            "Ollama URL",
+            value=config.ollama_base_url,
+            label_visibility="collapsed",
             placeholder="http://localhost:11434",
         )
         ollama_models = []
         try:
             from ollama import Client
+
             client = Client(host=config.ollama_base_url)
-            ollama_models = [m.model for m in client.list().models if not m.model.startswith("embeddinggemma")]
+            ollama_models = [
+                m.model for m in client.list().models if not m.model.startswith("embeddinggemma")
+            ]
         except Exception:
             pass
         if ollama_models:
-            current_idx = ollama_models.index(config.llm_model) if config.llm_model in ollama_models else 0
-            config.llm_model = st.selectbox("Model", ollama_models, index=current_idx, label_visibility="collapsed")
+            current_idx = (
+                ollama_models.index(config.llm_model) if config.llm_model in ollama_models else 0
+            )
+            config.llm_model = st.selectbox(
+                "Model", ollama_models, index=current_idx, label_visibility="collapsed"
+            )
         else:
-            config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="model name")
+            config.llm_model = st.text_input(
+                "Model", config.llm_model, label_visibility="collapsed", placeholder="model name"
+            )
             st.caption("No models found — run `ollama pull <model>`")
 
     elif config.llm_provider == "gemini":
-        config.gemini_api_key = st.text_input("API Key", value=config.gemini_api_key, type="password", label_visibility="collapsed", placeholder="Gemini API key")
+        config.gemini_api_key = st.text_input(
+            "API Key",
+            value=config.gemini_api_key,
+            type="password",
+            label_visibility="collapsed",
+            placeholder="Gemini API key",
+        )
         gemini_models = _list_gemini_models(config.gemini_api_key)
         config.llm_model = st.selectbox(
-            "Model", gemini_models, label_visibility="collapsed",
-            index=0 if config.llm_model not in gemini_models else gemini_models.index(config.llm_model),
+            "Model",
+            gemini_models,
+            label_visibility="collapsed",
+            index=(
+                0
+                if config.llm_model not in gemini_models
+                else gemini_models.index(config.llm_model)
+            ),
         )
 
     elif config.llm_provider == "ollama_cloud":
-        config.ollama_cloud_key = st.text_input("API Key", value=config.ollama_cloud_key, type="password", label_visibility="collapsed", placeholder="Ollama Cloud key")
+        config.ollama_cloud_key = st.text_input(
+            "API Key",
+            value=config.ollama_cloud_key,
+            type="password",
+            label_visibility="collapsed",
+            placeholder="Ollama Cloud key",
+        )
         col_m, col_f = st.columns([4, 1])
         with col_m:
-            config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="model name")
+            config.llm_model = st.text_input(
+                "Model", config.llm_model, label_visibility="collapsed", placeholder="model name"
+            )
         with col_f:
             if st.button("↻", type="tertiary", help="Fetch models from Ollama Cloud"):
-                fetched = _list_ollama_cloud_models(config.ollama_cloud_key, config.ollama_cloud_url)
+                fetched = _list_ollama_cloud_models(
+                    config.ollama_cloud_key, config.ollama_cloud_url
+                )
                 if fetched:
                     st.session_state["_ollama_cloud_models"] = fetched
                     st.rerun()
                 else:
                     st.warning("Could not fetch models.")
         if st.session_state.get("_ollama_cloud_models"):
-            config.llm_model = st.selectbox("Available", st.session_state["_ollama_cloud_models"], label_visibility="collapsed")
+            config.llm_model = st.selectbox(
+                "Available", st.session_state["_ollama_cloud_models"], label_visibility="collapsed"
+            )
 
     elif config.llm_provider == "openai":
-        config.api_key = st.text_input("API Key", value=config.api_key, type="password", label_visibility="collapsed", placeholder="OpenAI API key")
-        config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. gpt-4o")
+        config.api_key = st.text_input(
+            "API Key",
+            value=config.api_key,
+            type="password",
+            label_visibility="collapsed",
+            placeholder="OpenAI API key",
+        )
+        config.llm_model = st.text_input(
+            "Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. gpt-4o"
+        )
 
     elif config.llm_provider == "vllm":
-        config.vllm_base_url = st.text_input("Base URL", value=config.vllm_base_url, label_visibility="collapsed", placeholder="http://localhost:8000/v1")
-        config.llm_model = st.text_input("Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. mistralai/Mistral-7B-Instruct-v0.2")
+        config.vllm_base_url = st.text_input(
+            "Base URL",
+            value=config.vllm_base_url,
+            label_visibility="collapsed",
+            placeholder="http://localhost:8000/v1",
+        )
+        config.llm_model = st.text_input(
+            "Model",
+            config.llm_model,
+            label_visibility="collapsed",
+            placeholder="e.g. mistralai/Mistral-7B-Instruct-v0.2",
+        )
 
     # ── EMBEDDING ──
     st.markdown('<div class="sb-section">Embedding</div>', unsafe_allow_html=True)
@@ -464,14 +520,20 @@ with st.sidebar:
         "Embedding provider",
         options=emb_providers,
         format_func=lambda x: _EMB_PROVIDER_LABELS[x],
-        index=emb_providers.index(config.embedding_provider) if config.embedding_provider in emb_providers else 0,
+        index=(
+            emb_providers.index(config.embedding_provider)
+            if config.embedding_provider in emb_providers
+            else 0
+        ),
         label_visibility="collapsed",
     )
 
     # Ollama base URL (shared with LLM when embedding also uses Ollama)
     if config.embedding_provider == "ollama" and config.llm_provider != "ollama":
         config.ollama_base_url = st.text_input(
-            "Ollama URL (embed)", value=config.ollama_base_url, label_visibility="collapsed",
+            "Ollama URL (embed)",
+            value=config.ollama_base_url,
+            label_visibility="collapsed",
             placeholder="http://localhost:11434",
         )
 
@@ -504,7 +566,8 @@ with st.sidebar:
             )
         with st.spinner("Loading embedding model…"):
             try:
-                from rag_brain.main import OpenEmbedding
+                from axon.main import OpenEmbedding
+
                 st.session_state.brain.embedding = OpenEmbedding(config)
                 st.session_state["_emb_provider"] = config.embedding_provider
                 st.session_state["_emb_model"] = config.embedding_model
@@ -518,7 +581,9 @@ with st.sidebar:
     st.markdown('<div class="sb-section">Settings</div>', unsafe_allow_html=True)
 
     # Temperature on one row with its value
-    config.llm_temperature = st.slider("Temperature", 0.0, 1.0, config.llm_temperature, step=0.05, label_visibility="collapsed")
+    config.llm_temperature = st.slider(
+        "Temperature", 0.0, 1.0, config.llm_temperature, step=0.05, label_visibility="collapsed"
+    )
     st.caption(f"Temperature: {config.llm_temperature:.2f}")
 
     # Hybrid + Web on same row
@@ -529,12 +594,20 @@ with st.sidebar:
         config.truth_grounding = st.checkbox("Web search", config.truth_grounding)
 
     if config.truth_grounding:
-        config.brave_api_key = st.text_input("Brave API Key", value=config.brave_api_key, type="password", label_visibility="collapsed", placeholder="Brave API key")
+        config.brave_api_key = st.text_input(
+            "Brave API Key",
+            value=config.brave_api_key,
+            type="password",
+            label_visibility="collapsed",
+            placeholder="Brave API key",
+        )
 
     # ── ADVANCED (collapsed) ──
     with st.expander("⚙ Advanced"):
         config.top_k = st.slider("Top K results", 1, 20, config.top_k)
-        config.similarity_threshold = st.slider("Similarity threshold", 0.0, 1.0, config.similarity_threshold, step=0.05)
+        config.similarity_threshold = st.slider(
+            "Similarity threshold", 0.0, 1.0, config.similarity_threshold, step=0.05
+        )
         config.discussion_fallback = st.checkbox("Discussion fallback", config.discussion_fallback)
         config.multi_query = st.checkbox(
             "Multi-query",
@@ -579,7 +652,8 @@ with st.sidebar:
         config.rerank = st.checkbox("Re-ranking", config.rerank)
         if config.rerank:
             config.reranker_provider = st.selectbox(
-                "Re-ranker", ["cross-encoder", "llm"],
+                "Re-ranker",
+                ["cross-encoder", "llm"],
                 index=0 if config.reranker_provider == "cross-encoder" else 1,
             )
 
@@ -588,18 +662,26 @@ with st.sidebar:
         if "ingested_files" not in st.session_state:
             st.session_state.ingested_files = []
         if st.session_state.ingested_files:
-            st.caption("Recent: " + ", ".join(f"`{f}`" for f in st.session_state.ingested_files[-3:]))
+            st.caption(
+                "Recent: " + ", ".join(f"`{f}`" for f in st.session_state.ingested_files[-3:])
+            )
 
-        uploaded_file = st.file_uploader("File", type=["txt", "md", "pdf", "csv", "json"], label_visibility="collapsed")
+        uploaded_file = st.file_uploader(
+            "File", type=["txt", "md", "pdf", "csv", "json"], label_visibility="collapsed"
+        )
         if uploaded_file is not None:
             if st.button("⬆ Ingest", use_container_width=True, type="tertiary"):
                 import tempfile
+
                 with st.spinner(f"Ingesting {uploaded_file.name}…"):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{uploaded_file.name}") as tmp_file:
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=f"_{uploaded_file.name}"
+                    ) as tmp_file:
                         tmp_file.write(uploaded_file.getvalue())
                         tmp_path = tmp_file.name
                     try:
-                        from rag_brain.loaders import DirectoryLoader
+                        from axon.loaders import DirectoryLoader
+
                         ext = os.path.splitext(uploaded_file.name)[1].lower()
                         loader_mgr = DirectoryLoader()
                         if ext in loader_mgr.loaders:
@@ -617,7 +699,9 @@ with st.sidebar:
                         if os.path.exists(tmp_path):
                             os.remove(tmp_path)
 
-        ingest_dir = st.text_input("Directory", placeholder="/my/docs", label_visibility="collapsed")
+        ingest_dir = st.text_input(
+            "Directory", placeholder="/my/docs", label_visibility="collapsed"
+        )
         if st.button("📂 Ingest Directory", use_container_width=True, type="tertiary"):
             if os.path.isdir(ingest_dir):
                 allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
@@ -627,6 +711,7 @@ with st.sidebar:
                     st.stop()
                 with st.spinner(f"Ingesting {abs_path}…"):
                     import asyncio
+
                     asyncio.run(st.session_state.brain.load_directory(abs_path))
                     st.success("Done!")
             else:

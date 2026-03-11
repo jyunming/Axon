@@ -1,12 +1,14 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+import logging
 import os
 import pathlib
+from typing import Any
+
 import uvicorn
-import logging
-from rag_brain.main import OpenStudioBrain, OpenStudioConfig
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
+
+from axon.main import OpenStudioBrain, OpenStudioConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -20,18 +22,20 @@ def _validate_ingest_path(path: str) -> str:
     if not abs_path.startswith(allowed_base):
         raise HTTPException(
             status_code=403,
-            detail=f"Path '{path}' is outside the allowed ingest directory. Set RAG_INGEST_BASE to permit additional paths."
+            detail=f"Path '{path}' is outside the allowed ingest directory. Set RAG_INGEST_BASE to permit additional paths.",
         )
     return abs_path
 
+
 app = FastAPI(
-    title="Local RAG Brain API",
+    title="Axon API",
     description="REST API for agent orchestration and document retrieval",
-    version="2.0.0"
+    version="2.0.0",
 )
 
 # Optional API key authentication — enabled when RAG_API_KEY env var is set
-_RAG_API_KEY: Optional[str] = os.getenv("RAG_API_KEY")
+_RAG_API_KEY: str | None = os.getenv("RAG_API_KEY")
+
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
@@ -47,8 +51,10 @@ async def api_key_middleware(request: Request, call_next):
                 )
     return await call_next(request)
 
+
 # Global Brain Instance
-brain: Optional[OpenStudioBrain] = None
+brain: OpenStudioBrain | None = None
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -56,57 +62,77 @@ async def startup_event():
     try:
         config = OpenStudioConfig.load()
         brain = OpenStudioBrain(config)
-        logger.info("✅ RAG Brain initialized successfully")
+        logger.info("✅ Axon initialized successfully")
     except Exception as e:
-        logger.error(f"❌ Failed to initialize RAG Brain: {e}")
+        logger.error(f"❌ Failed to initialize Axon: {e}")
+
 
 # Models
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The question or prompt to ask the brain")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Metadata filters for retrieval")
-    stream: bool = Field(False, description="Whether to stream the response (not fully implemented in REST yet)")
+    filters: dict[str, Any] | None = Field(None, description="Metadata filters for retrieval")
+    stream: bool = Field(
+        False, description="Whether to stream the response (not fully implemented in REST yet)"
+    )
     # Per-request RAG overrides (match CLI flags exactly)
-    top_k: Optional[int] = Field(None, ge=1, description="Override number of chunks to retrieve")
-    threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Override similarity threshold (0.0–1.0)")
-    hybrid: Optional[bool] = Field(None, description="Override hybrid BM25+vector search toggle")
-    rerank: Optional[bool] = Field(None, description="Override cross-encoder re-ranking toggle")
-    hyde: Optional[bool] = Field(None, description="Override HyDE query transformation toggle")
-    multi_query: Optional[bool] = Field(None, description="Override multi-query retrieval toggle")
-    step_back: Optional[bool] = Field(None, description="Override step-back prompting toggle")
-    decompose: Optional[bool] = Field(None, description="Override query decomposition toggle")
-    compress: Optional[bool] = Field(None, description="Override LLM context compression toggle")
-    discuss: Optional[bool] = Field(None, description="Override discussion fallback toggle")
-    cite: Optional[bool] = Field(None, description="Override inline source citation toggle")
+    top_k: int | None = Field(None, ge=1, description="Override number of chunks to retrieve")
+    threshold: float | None = Field(
+        None, ge=0.0, le=1.0, description="Override similarity threshold (0.0–1.0)"
+    )
+    hybrid: bool | None = Field(None, description="Override hybrid BM25+vector search toggle")
+    rerank: bool | None = Field(None, description="Override cross-encoder re-ranking toggle")
+    hyde: bool | None = Field(None, description="Override HyDE query transformation toggle")
+    multi_query: bool | None = Field(None, description="Override multi-query retrieval toggle")
+    step_back: bool | None = Field(None, description="Override step-back prompting toggle")
+    decompose: bool | None = Field(None, description="Override query decomposition toggle")
+    compress: bool | None = Field(None, description="Override LLM context compression toggle")
+    discuss: bool | None = Field(None, description="Override discussion fallback toggle")
+    cite: bool | None = Field(None, description="Override inline source citation toggle")
+
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="The query string for semantic search")
-    top_k: Optional[int] = Field(None, description="Number of documents to return")
-    filters: Optional[Dict[str, Any]] = Field(None, description="Metadata filters")
+    top_k: int | None = Field(None, description="Number of documents to return")
+    filters: dict[str, Any] | None = Field(None, description="Metadata filters")
+
 
 class IngestRequest(BaseModel):
-    path: str = Field(..., description="Path to a file or directory to ingest. Must be within RAG_INGEST_BASE (default: current working directory).")
+    path: str = Field(
+        ...,
+        description="Path to a file or directory to ingest. Must be within RAG_INGEST_BASE (default: current working directory).",
+    )
+
 
 class TextIngestRequest(BaseModel):
     text: str = Field(..., description="The content to ingest")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Metadata for the document")
-    doc_id: Optional[str] = Field(None, description="Optional unique ID for the document")
+    metadata: dict[str, Any] | None = Field(
+        default_factory=dict, description="Metadata for the document"
+    )
+    doc_id: str | None = Field(None, description="Optional unique ID for the document")
+
 
 class DeleteRequest(BaseModel):
-    doc_ids: List[str] = Field(..., description="List of document IDs to delete")
+    doc_ids: list[str] = Field(..., description="List of document IDs to delete")
+
 
 class ProjectSwitchRequest(BaseModel):
-    project_name: str = Field(..., description="Project name to switch to, or 'default' for the global knowledge base")
+    project_name: str = Field(
+        ..., description="Project name to switch to, or 'default' for the global knowledge base"
+    )
+
 
 class SearchResult(BaseModel):
     id: str
     text: str
     score: float
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
+
 
 # Endpoints
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "brain_ready": brain is not None}
+
 
 @app.post("/query")
 async def query_brain(request: QueryRequest):
@@ -145,6 +171,7 @@ async def query_brain(request: QueryRequest):
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/query/stream")
 async def query_brain_stream(request: QueryRequest):
     if not brain:
@@ -167,7 +194,10 @@ async def query_brain_stream(request: QueryRequest):
     def generate():
         try:
             import json
-            for chunk in brain.query_stream(request.query, filters=request.filters, overrides=overrides):
+
+            for chunk in brain.query_stream(
+                request.query, filters=request.filters, overrides=overrides
+            ):
                 if isinstance(chunk, dict):
                     yield f"data: {json.dumps(chunk)}\n\n"
                 else:
@@ -177,7 +207,8 @@ async def query_brain_stream(request: QueryRequest):
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
-@app.post("/search", response_model=List[SearchResult])
+
+@app.post("/search", response_model=list[SearchResult])
 async def search_brain(request: SearchRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
@@ -187,16 +218,15 @@ async def search_brain(request: SearchRequest):
         # For agentic use, we'll implement a search flow here.
         query_embedding = brain.embedding.embed_query(request.query)
         top_k = request.top_k or brain.config.top_k
-        
+
         results = brain.vector_store.search(
-            query_embedding, 
-            top_k=top_k, 
-            filter_dict=request.filters
+            query_embedding, top_k=top_k, filter_dict=request.filters
         )
         return results
     except Exception as e:
         logger.error(f"Error during search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/ingest")
 async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks):
@@ -214,11 +244,13 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
 
     def process_ingestion():
         import asyncio
+
         try:
             if requested_path.is_dir():
                 asyncio.run(brain.load_directory(str(requested_path)))
             else:
-                from rag_brain.loaders import DirectoryLoader
+                from axon.loaders import DirectoryLoader
+
                 ext = requested_path.suffix.lower()
                 loader_mgr = DirectoryLoader()
                 if ext in loader_mgr.loaders:
@@ -232,26 +264,29 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     background_tasks.add_task(process_ingestion)
     return {"message": f"Ingestion started for {validated_path}", "status": "processing"}
 
+
 @app.post("/add_text")
 async def add_text(request: TextIngestRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    
+
     import uuid
+
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
-    
+
     doc = {
         "id": doc_id,
         "text": request.text,
-        "metadata": request.metadata or {"source": "api_agent", "type": "agent_input"}
+        "metadata": request.metadata or {"source": "api_agent", "type": "agent_input"},
     }
-    
+
     try:
         brain.ingest([doc])
         return {"status": "success", "doc_id": doc_id}
     except Exception as e:
         logger.error(f"Error adding text: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/collection")
 async def get_collection():
@@ -269,6 +304,7 @@ async def get_collection():
         logger.error(f"Error listing collection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/delete")
 async def delete_documents(request: DeleteRequest):
     if brain is None:
@@ -282,6 +318,7 @@ async def delete_documents(request: DeleteRequest):
     except Exception as e:
         logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/project/switch")
 async def switch_project(request: ProjectSwitchRequest):
@@ -299,10 +336,11 @@ async def switch_project(request: ProjectSwitchRequest):
 
 
 def main():
-    """Main entry point for rag-brain-api command."""
-    host = os.getenv("RAG_BRAIN_HOST", "0.0.0.0")
-    port = int(os.getenv("RAG_BRAIN_PORT", "8000"))
+    """Main entry point for axon-api command."""
+    host = os.getenv("AXON_HOST", "0.0.0.0")
+    port = int(os.getenv("AXON_PORT", "8000"))
     uvicorn.run(app, host=host, port=port)
+
 
 if __name__ == "__main__":
     main()

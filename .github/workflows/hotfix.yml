@@ -32,7 +32,7 @@ jobs:
 
       - name: Syntax check
         run: |
-          find src/rag_brain -name "*.py" | xargs python -m py_compile
+          find src/axon -name "*.py" | xargs python -m py_compile
           echo "Syntax OK"
 
       - name: Run tests (fail-fast)

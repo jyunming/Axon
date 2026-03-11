@@ -19,7 +19,6 @@ Metrics covered
 
 from __future__ import annotations
 
-from typing import List, Dict
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,15 +34,17 @@ pytestmark = pytest.mark.eval
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_config(**overrides):
-    from rag_brain.main import OpenStudioConfig
+    from axon.main import OpenStudioConfig
+
     cfg = OpenStudioConfig()
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return cfg
 
 
-def _relevant_ids(corpus: List[Dict], keyword: str) -> List[str]:
+def _relevant_ids(corpus: list[dict], keyword: str) -> list[str]:
     """Return IDs of corpus docs whose text contains keyword (ground truth)."""
     return [d["id"] for d in corpus if keyword.lower() in d["text"].lower()]
 
@@ -53,11 +54,36 @@ def _relevant_ids(corpus: List[Dict], keyword: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 CORPUS = [
-    {"id": "doc1", "text": "The transformer architecture uses attention mechanisms for NLP tasks.", "score": 0.95, "metadata": {"source": "ml_guide.txt"}},
-    {"id": "doc2", "text": "BERT is a bidirectional transformer pre-trained on masked language modelling.", "score": 0.87, "metadata": {"source": "ml_guide.txt"}},
-    {"id": "doc3", "text": "Python is a high-level programming language popular for data science.", "score": 0.42, "metadata": {"source": "prog_guide.txt"}},
-    {"id": "doc4", "text": "Attention mechanisms allow the model to focus on different parts of the input.", "score": 0.91, "metadata": {"source": "ml_guide.txt"}},
-    {"id": "doc5", "text": "pip is the package installer for Python.", "score": 0.30, "metadata": {"source": "prog_guide.txt"}},
+    {
+        "id": "doc1",
+        "text": "The transformer architecture uses attention mechanisms for NLP tasks.",
+        "score": 0.95,
+        "metadata": {"source": "ml_guide.txt"},
+    },
+    {
+        "id": "doc2",
+        "text": "BERT is a bidirectional transformer pre-trained on masked language modelling.",
+        "score": 0.87,
+        "metadata": {"source": "ml_guide.txt"},
+    },
+    {
+        "id": "doc3",
+        "text": "Python is a high-level programming language popular for data science.",
+        "score": 0.42,
+        "metadata": {"source": "prog_guide.txt"},
+    },
+    {
+        "id": "doc4",
+        "text": "Attention mechanisms allow the model to focus on different parts of the input.",
+        "score": 0.91,
+        "metadata": {"source": "ml_guide.txt"},
+    },
+    {
+        "id": "doc5",
+        "text": "pip is the package installer for Python.",
+        "score": 0.30,
+        "metadata": {"source": "prog_guide.txt"},
+    },
 ]
 
 
@@ -65,10 +91,11 @@ CORPUS = [
 # Precision@k
 # ---------------------------------------------------------------------------
 
+
 class TestPrecisionAtK:
     """Fraction of top-k retrieved results that are actually relevant."""
 
-    def _precision(self, retrieved_ids: List[str], relevant_ids: List[str]) -> float:
+    def _precision(self, retrieved_ids: list[str], relevant_ids: list[str]) -> float:
         if not retrieved_ids:
             return 0.0
         hits = sum(1 for rid in retrieved_ids if rid in relevant_ids)
@@ -111,17 +138,18 @@ class TestPrecisionAtK:
 # Context Relevance
 # ---------------------------------------------------------------------------
 
+
 class TestContextRelevance:
     """Retrieved context should contain keywords expected for the query."""
 
-    def _context_relevance(self, context: str, expected_keywords: List[str]) -> float:
+    def _context_relevance(self, context: str, expected_keywords: list[str]) -> float:
         """Fraction of expected keywords found in context (simple keyword overlap)."""
         if not expected_keywords:
             return 0.0
         found = sum(1 for kw in expected_keywords if kw.lower() in context.lower())
         return found / len(expected_keywords)
 
-    def _build_context(self, docs: List[Dict]) -> str:
+    def _build_context(self, docs: list[dict]) -> str:
         return "\n\n".join(f"[Document {i+1}]\n{d['text']}" for i, d in enumerate(docs))
 
     def test_relevant_context_high_score(self):
@@ -134,7 +162,9 @@ class TestContextRelevance:
 
     def test_irrelevant_context_low_score(self):
         """Context built from Python docs scores low for ML-specific keywords."""
-        python_docs = [d for d in CORPUS if "python" in d["text"].lower() or "pip" in d["text"].lower()]
+        python_docs = [
+            d for d in CORPUS if "python" in d["text"].lower() or "pip" in d["text"].lower()
+        ]
         context = self._build_context(python_docs)
         ml_keywords = ["transformer", "bert", "attention"]
         score = self._context_relevance(context, ml_keywords)
@@ -154,6 +184,7 @@ class TestContextRelevance:
 # Answer Faithfulness
 # ---------------------------------------------------------------------------
 
+
 class TestAnswerFaithfulness:
     """Final answer should be grounded in (entailed by) the retrieved context."""
 
@@ -166,7 +197,8 @@ class TestAnswerFaithfulness:
         if not sentences:
             return 0.0
         grounded = sum(
-            1 for s in sentences
+            1
+            for s in sentences
             if any(word.lower() in context.lower() for word in s.split() if len(word) > 4)
         )
         return grounded / len(sentences)
@@ -193,10 +225,11 @@ class TestAnswerFaithfulness:
 # Recall@k
 # ---------------------------------------------------------------------------
 
+
 class TestRecallAtK:
     """All truly relevant documents should appear in the top-k results."""
 
-    def _recall(self, retrieved_ids: List[str], relevant_ids: List[str]) -> float:
+    def _recall(self, retrieved_ids: list[str], relevant_ids: list[str]) -> float:
         if not relevant_ids:
             return 1.0  # nothing to recall
         hits = sum(1 for rid in relevant_ids if rid in retrieved_ids)
@@ -230,12 +263,13 @@ class TestRecallAtK:
 # Integration smoke: pipeline produces non-empty answers for known queries
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineIntegrationSmoke:
     """End-to-end pipeline smoke test with fully mocked dependencies."""
 
     def _make_brain(self):
         """Construct a mocked OpenStudioBrain that uses CORPUS for retrieval."""
-        import rag_brain.main as m
+        import axon.main as m
 
         cfg = _make_config(
             top_k=3,
@@ -252,7 +286,7 @@ class TestPipelineIntegrationSmoke:
             patch.object(m, "OpenLLM"),
             patch.object(m, "OpenVectorStore"),
             patch.object(m, "OpenReranker"),
-            patch("rag_brain.retrievers.BM25Retriever"),
+            patch("axon.retrievers.BM25Retriever"),
         ):
             brain = m.OpenStudioBrain.__new__(m.OpenStudioBrain)
             brain.config = cfg
@@ -298,7 +332,11 @@ class TestPipelineIntegrationSmoke:
         brain.query("What is a transformer?")
         call_args = brain.llm.complete.call_args
         system_prompt = call_args[0][1] if call_args[0] else call_args[1].get("system_prompt", "")
-        assert "[Doc" in system_prompt or "citation" in system_prompt.lower() or "cite" in system_prompt.lower()
+        assert (
+            "[Doc" in system_prompt
+            or "citation" in system_prompt.lower()
+            or "cite" in system_prompt.lower()
+        )
 
     def test_precision_of_pipeline_results(self):
         """The mocked pipeline returns docs 1-3; compute precision for 'attention'."""

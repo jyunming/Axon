@@ -1,9 +1,9 @@
 """
 tests/conftest.py
 
-Project-level pytest fixtures for the Local RAG Brain test suite.
+Project-level pytest fixtures for the Axon test suite.
 """
-import os
+
 import shutil
 import tempfile
 from pathlib import Path

@@ -1,13 +1,13 @@
 """
-Project management for Local RAG Brain.
+Project management for Axon.
 
 Each project gets its own isolated vector store and BM25 index under:
-    ~/.rag_brain/projects/<name>/
+    ~/.axon/projects/<name>/
         chroma_data/   — ChromaDB collection
         bm25_index/    — BM25 JSON corpus
         meta.json      — project metadata (name, description, created_at)
 
-REPL sessions are stored globally at ~/.rag_brain/sessions/ (not per-project).
+REPL sessions are stored globally at ~/.axon/sessions/ (not per-project).
 The special name "default" is a sentinel that uses the paths from config.yaml.
 """
 
@@ -16,11 +16,10 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
 
-PROJECTS_ROOT: Path = Path.home() / ".rag_brain" / "projects"
-_ACTIVE_FILE: Path = Path.home() / ".rag_brain" / ".active_project"
-_NAME_RE: re.Pattern = re.compile(r'^[a-z0-9][a-z0-9_-]{0,49}$')
+PROJECTS_ROOT: Path = Path.home() / ".axon" / "projects"
+_ACTIVE_FILE: Path = Path.home() / ".axon" / ".active_project"
+_NAME_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 
 
 def _validate_name(name: str) -> None:
@@ -71,15 +70,20 @@ def ensure_project(name: str, description: str = "") -> Path:
     (root / "sessions").mkdir(parents=True, exist_ok=True)
     meta_file = root / "meta.json"
     if not meta_file.exists():
-        meta_file.write_text(json.dumps({
-            "name": name,
-            "description": description,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }, indent=2))
+        meta_file.write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "description": description,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            )
+        )
     return root
 
 
-def list_projects() -> List[dict]:
+def list_projects() -> list[dict]:
     """Return all projects sorted by creation time (newest first).
 
     Returns:
@@ -99,12 +103,14 @@ def list_projects() -> List[dict]:
                 meta = {}
         else:
             meta = {}
-        result.append({
-            "name": entry.name,
-            "description": meta.get("description", ""),
-            "created_at": meta.get("created_at", ""),
-            "path": str(entry),
-        })
+        result.append(
+            {
+                "name": entry.name,
+                "description": meta.get("description", ""),
+                "created_at": meta.get("created_at", ""),
+                "path": str(entry),
+            }
+        )
     result.sort(key=lambda p: p["created_at"], reverse=True)
     return result
 
