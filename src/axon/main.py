@@ -4706,9 +4706,17 @@ def _interactive_repl(
                     tk = f"top-k:{brain.config.top_k}"
                     thr = f"thr:{brain.config.similarity_threshold}"
                     _snap = (m, s_v, d_v, h_v, tk, thr)
+
                     if _snap != _last_config_snapshot:
-                        print(f"\033[2m  {m}  │  {s_v}  │  {d_v}  │  {h_v}  │  {tk}  │  {thr}\033[0m")
+                        # Only show the parts that changed
+                        changes = []
+                        for i, val in enumerate(_snap):
+                            if i >= len(_last_config_snapshot) or val != _last_config_snapshot[i]:
+                                changes.append(val)
+                        if changes:
+                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
                         _last_config_snapshot = _snap
+
                     print()
                     # Spinner until first real token arrives
                     with _RL(
@@ -4772,8 +4780,15 @@ def _interactive_repl(
                     tk = f"top-k:{brain.config.top_k}"
                     thr = f"thr:{brain.config.similarity_threshold}"
                     _snap = (m, s_v, d_v, h_v, tk, thr)
+
                     if _snap != _last_config_snapshot:
-                        print(f"\033[2m  {m}  │  {s_v}  │  {d_v}  │  {h_v}  │  {tk}  │  {thr}\033[0m")
+                        # Only show the parts that changed
+                        changes = []
+                        for i, val in enumerate(_snap):
+                            if i >= len(_last_config_snapshot) or val != _last_config_snapshot[i]:
+                                changes.append(val)
+                        if changes:
+                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
                         _last_config_snapshot = _snap
 
                 def _run_query() -> None:
@@ -4808,7 +4823,7 @@ def _interactive_repl(
                 if _err:
                     raise _err[0]
                 response = _result[0] if _result else ""
-                print()  # blank line between You: and Brain:
+                print()  # blank line between You: and Axon:
                 _console.print("[bold yellow]Axon:[/bold yellow]")
                 _console.print(_RM(response))
                 print()  # blank line after Brain response, before next You:
