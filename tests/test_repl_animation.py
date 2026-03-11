@@ -44,9 +44,9 @@ def test_brain_art_content():
 
 
 def test_open_studio_config_path_defaults():
-    from axon.main import OpenStudioConfig
-    import os
     from pathlib import Path
+
+    from axon.main import OpenStudioConfig
 
     # Mock or check defaults
     config = OpenStudioConfig()
