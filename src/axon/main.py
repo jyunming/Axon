@@ -43,9 +43,9 @@ class OpenStudioConfig:
     """Configuration for Axon."""
 
     # Embedding
-    embedding_provider: Literal["sentence_transformers", "ollama", "fastembed", "openai"] = (
-        "sentence_transformers"
-    )
+    embedding_provider: Literal[
+        "sentence_transformers", "ollama", "fastembed", "openai"
+    ] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
     ollama_base_url: str = "http://localhost:11434"
 
@@ -2937,9 +2937,7 @@ def _do_compact(brain: "OpenStudioBrain", chat_history: list) -> None:
         chat_history.clear()
         chat_history.append({"role": "assistant", "content": f"[Conversation summary]: {summary}"})
         tokens_saved = _estimate_tokens(conversation) - _estimate_tokens(summary)
-        print(
-            f"\r  ✅ Compacted {turns_before} turns → 1 summary  (~{tokens_saved:,} tokens freed)"
-        )
+        print(f"\r  ✅ Compacted {turns_before} turns → 1 summary  (~{tokens_saved:,} tokens freed)")
     except Exception as e:
         print(f"\r  ❌ Compact failed: {e}")
 
