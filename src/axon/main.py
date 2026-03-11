@@ -3753,6 +3753,7 @@ def _interactive_repl(
     import logging as _logging
 
     for _log in (
+        "Axon",
         "RAGBrain",
         "StudioBrainOpen.Retrievers",
         "httpx",
