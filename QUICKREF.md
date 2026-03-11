@@ -91,7 +91,30 @@ axon --pull gemma:2b
 
 # CLI — see all providers and locally available models
 axon --list-models
+
+# CLI — advanced RAG flags (can be combined)
+axon --cite "Summarise my documents"        # inline source citations
+axon --decompose "Complex multi-part query" # split into sub-questions
+axon --compress "Your question"             # compress retrieved context
+axon --raptor --ingest ./docs/              # hierarchical indexing on ingest
+axon --graph-rag "Your question"            # entity-graph retrieval
+
+# CLI — project management
+axon --project myproject "Your question"    # use a named project
+axon --project-new myproject                # create project + ingest
+axon --project-list                         # list all projects
+axon --project-delete myproject             # delete a project
 ```
+
+**@file / @folder context (REPL only):**
+
+Attach file or directory contents inline to any query — Axon reads and embeds them before answering:
+```
+You: Explain this code @./src/axon/main.py
+You: What changed in @./src/axon/
+You: Compare @report.pdf with @notes.docx
+```
+Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, images (`.png`, `.bmp`, `.tif`, `.pgm`)
 
 **REPL slash commands (interactive mode):**
 
@@ -121,7 +144,7 @@ axon --list-models
 ```bash
 # Build image
 make docker-build
-docker build -t local-axon:latest .
+docker build -t axon:latest .
 
 # Run with docker-compose
 make docker-run
@@ -267,9 +290,7 @@ curl -X POST http://localhost:8000/ingest \
 # Solution
 pip install -e .
 # Or reinstall
-pip uninstall axon  # main package name
-# If you previously installed the old name, also run:
-pip uninstall local-axon || true
+pip uninstall axon
 pip install -e .
 ```
 
