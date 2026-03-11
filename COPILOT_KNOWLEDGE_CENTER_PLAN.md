@@ -1,6 +1,6 @@
 # Copilot Knowledge Center — Implementation Plan
 
-A plan to equip GitHub Copilot agent to ingest knowledge into the RAG Brain
+A plan to equip GitHub Copilot agent to ingest knowledge into the Axon
 via MCP tools, closing all identified API gaps and wiring in the workflow
 instruction layer.
 
@@ -13,7 +13,7 @@ instruction layer.
 GitHub Copilot charges per request, not per token — meaning a single request
 can read a 500-page docs site at the same cost as renaming a variable. The
 strategy is to use Copilot for the expensive "reading" step, then hand off to
-the RAG Brain for all embedding, storage, and retrieval — which stays 100%
+the Axon for all embedding, storage, and retrieval — which stays 100%
 local and free at query time.
 
 ```
@@ -27,7 +27,7 @@ Copilot Agent Mode (VS Code)
         │
         │  HTTP calls
         ▼
-  RAG Brain API  ── already exists at localhost:8000
+  Axon API  ── already exists at localhost:8000
   (FastAPI)
         │
         ├── Vector store (default: ChromaDB; also Qdrant, LanceDB) ← free, local
@@ -139,7 +139,7 @@ python -c "import mcp; print(mcp.__version__)"
 If this fails, Phase 2 is fully blocked. `mcp` is not in `requirements.txt`
 yet — it will be added as part of Phase 2.
 
-### P0-D: Confirm RAG Brain API Boots
+### P0-D: Confirm Axon API Boots
 
 ```bash
 axon-api &

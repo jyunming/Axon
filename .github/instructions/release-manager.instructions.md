@@ -54,7 +54,7 @@ Current version is defined in `setup.py` (`version=`). Update it there.
 ## Config & Dependency Changes in a Release
 
 - If `config.yaml` structure changed, document the migration in release notes.
-- If new optional dependencies were added (e.g., `qdrant-client`), note the install extra: `pip install local-axon[qdrant]`.
+- If new optional dependencies were added (e.g., `qdrant-client`), note the install extra: `pip install axon[qdrant]`.
 
 ## Boundaries
 

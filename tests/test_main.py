@@ -49,6 +49,85 @@ class TestOpenStudioConfig:
         assert config.truth_grounding is True
         assert config.brave_api_key == "test_key"
 
+    def test_load_projects_root_from_yaml(self, tmp_path):
+        from axon.main import OpenStudioConfig
+
+        cfg = {"projects_root": str(tmp_path / "myprojects")}
+        cfg_path = tmp_path / "config.yaml"
+        with open(cfg_path, "w") as f:
+            yaml.dump(cfg, f)
+
+        config = OpenStudioConfig.load(str(cfg_path))
+        assert config.projects_root == str(tmp_path / "myprojects")
+
+    def test_env_var_overrides_yaml_projects_root(self, tmp_path, monkeypatch):
+        from axon.main import OpenStudioConfig
+
+        cfg = {"projects_root": str(tmp_path / "yaml_root")}
+        cfg_path = tmp_path / "config.yaml"
+        with open(cfg_path, "w") as f:
+            yaml.dump(cfg, f)
+
+        env_root = str(tmp_path / "env_root")
+        monkeypatch.setenv("AXON_PROJECTS_ROOT", env_root)
+        config = OpenStudioConfig.load(str(cfg_path))
+        assert config.projects_root == env_root
+
+    def test_projects_root_defaults_to_empty(self):
+        from axon.main import OpenStudioConfig
+
+        config = OpenStudioConfig()
+        assert config.projects_root == ""
+
+
+class TestMultiStoreWriteErrors:
+    """Merged parent-project views must raise on all write / delete operations."""
+
+    def test_multi_vector_store_add_raises(self):
+        from axon.main import MultiVectorStore
+
+        ms = MultiVectorStore([])
+        import pytest
+
+        with pytest.raises(RuntimeError, match="merged"):
+            ms.add("id", [0.1], {}, "text")
+
+    def test_multi_vector_store_delete_by_ids_raises(self):
+        from axon.main import MultiVectorStore
+
+        ms = MultiVectorStore([])
+        import pytest
+
+        with pytest.raises(RuntimeError, match="merged"):
+            ms.delete_by_ids(["doc-1"])
+
+    def test_multi_vector_store_delete_documents_raises(self):
+        from axon.main import MultiVectorStore
+
+        ms = MultiVectorStore([])
+        import pytest
+
+        with pytest.raises(RuntimeError, match="merged"):
+            ms.delete_documents(["doc-1"])
+
+    def test_multi_bm25_add_documents_raises(self):
+        from axon.main import MultiBM25Retriever
+
+        mb = MultiBM25Retriever([])
+        import pytest
+
+        with pytest.raises(RuntimeError, match="merged"):
+            mb.add_documents([{"id": "x", "content": "y"}])
+
+    def test_multi_bm25_delete_documents_raises(self):
+        from axon.main import MultiBM25Retriever
+
+        mb = MultiBM25Retriever([])
+        import pytest
+
+        with pytest.raises(RuntimeError, match="merged"):
+            mb.delete_documents(["doc-1"])
+
 
 @patch("axon.retrievers.BM25Retriever")
 @patch("axon.main.OpenVectorStore")

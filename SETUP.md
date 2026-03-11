@@ -531,6 +531,10 @@ CHROMA_DATA_PATH=./chroma_data
 # Where BM25 index is stored
 BM25_INDEX_PATH=./bm25_index
 
+# Custom root directory for named projects (optional)
+# Defaults to ~/.axon/projects — useful for shared drives or multiple workspaces
+# AXON_PROJECTS_ROOT=/mnt/nas/axon-projects
+
 # Log verbosity: DEBUG, INFO, WARNING, ERROR
 LOG_LEVEL=INFO
 

@@ -1,6 +1,15 @@
 # Axon Configuration
 # Copy to config.yaml and customize
 
+# Projects root directory (where named projects are stored).
+# Defaults to ~/.axon/projects (Linux/macOS) or %USERPROFILE%\.axon\projects (Windows).
+# Override here or via the AXON_PROJECTS_ROOT environment variable (env var takes priority).
+# Useful for shared network drives, external disks, or CI environments.
+# Examples:
+#   Linux/macOS: /mnt/nas/axon-projects
+#   Windows:     C:/axon-projects
+# projects_root: ~/.axon/projects
+
 embedding:
   # Provider: sentence_transformers, ollama, fastembed, openai
   provider: sentence_transformers
