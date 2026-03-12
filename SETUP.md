@@ -670,6 +670,61 @@ This file is gitignored — create it locally:
 > `/mnt/c/Users/<you>/AppData/Local/Programs/Python/Python313/python.exe`,
 > with `args: ["-m", "axon.mcp_server"]`, instead of `axon-mcp`.
 
+> **Linux (venv) users:** VS Code spawns `axon-mcp` without activating your
+> virtualenv, so `"command": "axon-mcp"` will not be found. Use the full path
+> to the binary inside your venv instead:
+>
+> **Option A — Private venv (per user)**
+> Each user has their own venv. Use the absolute path to that venv's binary:
+> ```jsonc
+> {
+>   "servers": {
+>     "axon": {
+>       "type": "stdio",
+>       "command": "/home/<you>/Axon/venv/bin/axon-mcp",
+>       "args": [],
+>       "env": {
+>         "RAG_API_BASE": "http://localhost:8000",
+>         "RAG_API_KEY": ""
+>       }
+>     }
+>   }
+> }
+> ```
+> Replace `/home/<you>/Axon/venv` with the actual path to your venv.
+> Alternatively use Python directly:
+> `"command": "/home/<you>/Axon/venv/bin/python", "args": ["-m", "axon.mcp_server"]`
+>
+> **Option B — Shared venv (multi-user, one install)**
+> An admin creates a venv in a shared location and sets read+execute permissions
+> for all users. Each user's `.vscode/mcp.json` then points to the same binary.
+>
+> Admin sets it up once:
+> ```bash
+> python -m venv /opt/axon/venv
+> /opt/axon/venv/bin/pip install -e /path/to/Axon
+> chmod -R 755 /opt/axon/venv   # owner writes; everyone else reads + executes
+> ```
+>
+> Each user's `.vscode/mcp.json`:
+> ```jsonc
+> {
+>   "servers": {
+>     "axon": {
+>       "type": "stdio",
+>       "command": "/opt/axon/venv/bin/axon-mcp",
+>       "args": [],
+>       "env": {
+>         "RAG_API_BASE": "http://localhost:8000",
+>         "RAG_API_KEY": ""
+>       }
+>     }
+>   }
+> }
+> ```
+> Each user still spawns their own lightweight `axon-mcp` proxy process;
+> only the binary is shared. Only the admin should run `pip install` to update.
+
 ### 2. Enable MCP in VS Code workspace settings
 
 Create `.vscode/settings.json` (also gitignored):
