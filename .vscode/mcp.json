@@ -2,8 +2,8 @@
   "servers": {
     "axon": {
       "type": "stdio",
-      "command": "/mnt/c/Users/jyunm/AppData/Local/Programs/Python/Python313/python.exe",
-      "args": ["-m", "axon.mcp_server"],
+      "command": "bash",
+      "args": ["/mnt/c/dev/studio_brain_open/axon-mcp.sh"],
       "env": {
         "RAG_API_BASE": "http://localhost:8000",
         "RAG_API_KEY": ""
