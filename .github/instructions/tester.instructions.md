@@ -10,7 +10,7 @@ You are a **test engineer** for the Axon repository. You write `pytest` tests th
 
 - All tests live in `tests/`.
 - Use one file per module: `test_main.py`, `test_api.py`, `test_loaders.py`, `test_retrievers.py`, `test_splitters.py`.
-- Use `pytest` fixtures for shared setup (e.g., a default `OpenStudioConfig`, a temporary directory).
+- Use `pytest` fixtures for shared setup (e.g., a default `AxonConfig`, a temporary directory).
 
 ## What to Mock
 
@@ -22,7 +22,7 @@ The system has external dependencies that must be mocked in unit tests:
 
 ## Coverage Targets per Module
 
-### `main.py` (`OpenStudioConfig`, `OpenStudioBrain`)
+### `main.py` (`AxonConfig`, `AxonBrain`)
 - Config loads from YAML correctly (all nested sections map to flat fields).
 - Config falls back to defaults when `config.yaml` is missing.
 - `query()` returns a string; calls `embed_query`, `vector_store.search`, `llm.complete`.
@@ -42,8 +42,8 @@ The system has external dependencies that must be mocked in unit tests:
 - `reciprocal_rank_fusion()` merges two ranked lists; top result is the one ranked high in both.
 
 ### `api.py`
-- `GET /health` returns `{"status": "healthy", "brain_ready": true/false}`.
-- `POST /query` returns 503 when `brain` is `None`.
+- `GET /health` returns `{"status": "healthy", "axon_ready": true/false}`.
+- `POST /query` returns 503 when `AxonBrain` is `None`.
 - `POST /add_text` auto-generates `doc_id` when not provided.
 - `POST /ingest` returns 404 when path does not exist.
 
@@ -54,8 +54,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 def test_config_defaults():
-    from axon.main import OpenStudioConfig
-    config = OpenStudioConfig()
+    from axon.main import AxonConfig
+    config = AxonConfig()
     assert config.embedding_provider == "sentence_transformers"
     assert config.hybrid_search is True
 ```

@@ -17,8 +17,8 @@ The `id` must be unique. Duplicate IDs silently overwrite in ChromaDB.
 
 ### config.yaml → dataclass mapping
 When adding a config option:
-1. Add the field to `OpenStudioConfig` in `src/axon/main.py`.
-2. Add the YAML flattening logic to `OpenStudioConfig.load()` — the method manually maps nested YAML keys to flat dataclass field names.
+1. Add the field to `AxonConfig` in `src/axon/main.py`.
+2. Add the YAML flattening logic to `AxonConfig.load()` — the method manually maps nested YAML keys to flat dataclass field names.
 3. Add the corresponding entry to `config.yaml`.
 
 Pattern example:
@@ -43,7 +43,8 @@ Add the client as an optional install extra in `setup.py`.
 In `OpenLLM` (`src/axon/main.py`), add branches to `complete()` and `stream()`.
 
 ### API endpoints
-FastAPI endpoints live in `src/axon/api.py`. The global `brain` object is initialized at startup via `@app.on_event("startup")`. Background tasks use FastAPI's `BackgroundTasks`. Agent-facing endpoints should also be reflected in `src/axon/tools.py`.
+FastAPI endpoints live in `src/axon/api.py`. The global `AxonBrain` object is initialized at startup via `@app.on_event("startup")`.
+ Background tasks use FastAPI's `BackgroundTasks`. Agent-facing endpoints should also be reflected in `src/axon/tools.py`.
 
 ### Adding a new MCP tool
 
@@ -54,13 +55,13 @@ optimised for agent-mode ergonomics (e.g. `search_knowledge`, not
 
 Steps:
 1. Add the tool definition to the `@mcp.tool()` decorated section of
-   `mcp_server.py`. Follow the existing pattern: **sync** function, docstring as
+   `mcp_server.py`. Follow the existing pattern: **async** function, docstring as
    the tool description, typed parameters.
-2. Inside the handler, call the REST API via `httpx.Client`. Always
+2. Inside the handler, call the REST API via `httpx.AsyncClient`. Always
    include the `X-API-Key` header (read from the `RAG_API_KEY` env var):
    ```python
-   with httpx.Client(timeout=60.0) as client:
-       resp = client.post(
+   async with httpx.AsyncClient(timeout=60.0) as client:
+       resp = await client.post(
            f"{API_BASE}/your_endpoint",
            json={...},
            headers={"X-API-Key": API_KEY} if API_KEY else {},

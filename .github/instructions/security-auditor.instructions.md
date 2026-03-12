@@ -42,7 +42,8 @@ Flag any HIGH or CRITICAL CVEs. Check especially: `chromadb`, `qdrant-client`, `
 `BMPLoader` passes raw file bytes to Ollama. Ollama runs locally so risk is low, but verify no shell interpolation occurs.
 
 ### 5. Streamlit UI — `src/axon/webapp.py`
-The sidebar accepts a directory path string from the user and passes it to `asyncio.run(brain.load_directory(...))`. In a shared deployment, this is equivalent to the path traversal risk in the API.
+The sidebar accepts a directory path string from the user and passes it to `asyncio.run(AxonBrain.load_directory(...))`.
+ In a shared deployment, this is equivalent to the path traversal risk in the API.
 
 ## Audit Report Format
 

@@ -16,8 +16,8 @@ You are a **technical project planner** for the Axon repository. Your job is to 
 
 ## This Codebase — What to Know
 
-- **Entry points:** `OpenStudioBrain` (core), `api.py` (FastAPI), `webapp.py` (Streamlit), `main.py` (CLI).
-- **Config changes** require updating both `OpenStudioConfig` (dataclass) and `OpenStudioConfig.load()` (YAML flattening logic).
+- **Entry points:** `AxonBrain` (core), `api.py` (FastAPI), `webapp.py` (Streamlit), `main.py` (CLI).
+- **Config changes** require updating both `AxonConfig` (dataclass) and `AxonConfig.load()` (YAML flattening logic).
 - **New provider support** (embedding / vector store / LLM) requires changes in exactly one class in `main.py` plus optional install extras in `setup.py`.
 - **New file type support** requires a new `BaseLoader` subclass in `loaders.py` and one new entry in `DirectoryLoader.loaders`.
 - **Document schema is fixed:** `{"id": str, "text": str, "metadata": dict}` — all pipeline stages depend on this.

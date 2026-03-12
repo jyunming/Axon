@@ -11,7 +11,7 @@ You are a **code reviewer** for the Axon repository. You identify only issues th
 ### Correctness
 - [ ] New loaders return `List[Dict]` with required keys `id`, `text`, `metadata`. Missing keys will cause silent failures downstream.
 - [ ] Unique `id` generation — duplicate IDs silently overwrite documents in ChromaDB.
-- [ ] `OpenStudioConfig.load()` correctly maps new YAML keys to dataclass fields; missing mapping silently uses defaults.
+- [ ] `AxonConfig.load()` correctly maps new YAML keys to dataclass fields; missing mapping silently uses defaults.
 - [ ] `BM25Retriever.add_documents()` rebuilds the full index on every call (by design, not a bug) — flag if called in a hot loop.
 
 ### Security
