@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from axon.loaders import (
     BMPLoader,
     CSVLoader,
@@ -20,6 +22,7 @@ from axon.loaders import (
     JSONLoader,
     TextLoader,
     TSVLoader,
+    URLLoader,
 )
 
 # ---------------------------------------------------------------------------
@@ -511,3 +514,230 @@ class TestDirectoryLoaderAload:
         texts = {d["text"] for d in docs}
         assert "file A content" in texts
         assert "file B content" in texts
+
+
+# ---------------------------------------------------------------------------
+# URLLoader  (P1-B)
+# ---------------------------------------------------------------------------
+
+
+class TestURLLoader:
+    """Tests for URLLoader. All network calls are mocked — no real HTTP."""
+
+    def _make_response(
+        self,
+        text="<html><body>Hello world</body></html>",
+        status=200,
+        content_type="text/html; charset=utf-8",
+    ):
+        """Build a minimal mock httpx.Response."""
+        resp = MagicMock()
+        resp.status_code = status
+        resp.headers = {"content-type": content_type}
+        resp.text = text
+        return resp
+
+    # --- Scheme / SSRF mitigations (no network needed) ---
+
+    def test_blocks_file_scheme(self):
+        """file:// URLs are rejected before any network call."""
+        loader = URLLoader()
+        with pytest.raises(ValueError, match="Scheme 'file'"):
+            loader.load("file:///etc/passwd")
+
+    def test_blocks_ftp_scheme(self):
+        loader = URLLoader()
+        with pytest.raises(ValueError, match="Scheme 'ftp'"):
+            loader.load("ftp://example.com/file.txt")
+
+    def test_blocks_localhost_loopback(self):
+        """127.x addresses are rejected via DNS resolution check."""
+        loader = URLLoader()
+        # Patch socket.getaddrinfo so we don't do real DNS
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai:
+            mock_gai.return_value = [(None, None, None, None, ("127.0.0.1", 0))]
+            with pytest.raises(ValueError, match="blocked private"):
+                loader.load("http://localhost")
+
+    def test_blocks_cloud_metadata_ip(self):
+        """169.254.169.254 (cloud IMDS) is rejected."""
+        loader = URLLoader()
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai:
+            mock_gai.return_value = [(None, None, None, None, ("169.254.169.254", 0))]
+            with pytest.raises(ValueError, match="blocked private"):
+                loader.load("http://metadata.internal")
+
+    def test_blocks_rfc1918_private_10(self):
+        """10.x private range is rejected."""
+        loader = URLLoader()
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai:
+            mock_gai.return_value = [(None, None, None, None, ("10.0.0.1", 0))]
+            with pytest.raises(ValueError, match="blocked private"):
+                loader.load("http://internal.corp")
+
+    # --- Successful fetch ---
+
+    def test_success_html_strips_tags(self):
+        """HTML content is fetched and tags are stripped; doc schema is valid."""
+        loader = URLLoader()
+
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai, patch(
+            "axon.loaders.URLLoader._check_ssrf"
+        ), patch("httpx.Client") as mock_client_cls:
+            mock_gai.return_value = [(None, None, None, None, ("93.184.216.34", 0))]
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(
+                text="<html><head><title>T</title></head><body><p>Hello world</p></body></html>",
+                content_type="text/html; charset=utf-8",
+            )
+            docs = loader.load("https://example.com")
+
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert "Hello world" in docs[0]["text"]
+        assert "<" not in docs[0]["text"], "HTML tags should be stripped"
+        assert docs[0]["metadata"]["source"] == "https://example.com"
+        assert docs[0]["metadata"]["type"] == "url"
+
+    def test_success_plain_text_not_stripped(self):
+        """Plain text responses are returned as-is without HTML stripping."""
+        loader = URLLoader()
+
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(
+                text="raw text content",
+                content_type="text/plain",
+            )
+            docs = loader.load("https://example.com/readme.txt")
+
+        assert docs[0]["text"] == "raw text content"
+
+    # --- Error conditions ---
+
+    def test_non_200_raises_value_error(self):
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(status=404)
+            with pytest.raises(ValueError, match="HTTP 404"):
+                loader.load("https://example.com/missing")
+
+    def test_binary_content_type_raises_value_error(self):
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(content_type="application/pdf")
+            with pytest.raises(ValueError, match="Non-text content type"):
+                loader.load("https://example.com/file.pdf")
+
+    def test_timeout_raises_value_error(self):
+        import httpx
+
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.side_effect = httpx.TimeoutException("timeout", request=None)
+            with pytest.raises(ValueError, match="timed out"):
+                loader.load("https://slow.example.com")
+
+    def test_too_many_redirects_raises_value_error(self):
+        import httpx
+
+        loader = URLLoader()
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.side_effect = httpx.TooManyRedirects("redirects", request=None)
+            with pytest.raises(ValueError, match="redirects"):
+                loader.load("https://redirect.example.com")
+
+    def test_dns_failure_raises_value_error(self):
+        """Unresolvable hostname raises ValueError before any HTTP call."""
+        import socket
+
+        loader = URLLoader()
+        with patch("axon.loaders.socket.getaddrinfo", side_effect=socket.gaierror("NXDOMAIN")):
+            with pytest.raises(ValueError, match="Could not resolve"):
+                loader.load("https://nonexistent.example.invalid")
+
+
+# ---------------------------------------------------------------------------
+# Gap 5 — _rewrite_github_url
+# ---------------------------------------------------------------------------
+
+
+class TestRewriteGithubUrl:
+    """Tests for the _rewrite_github_url helper (Gap 5)."""
+
+    def setup_method(self):
+        from axon.loaders import _rewrite_github_url
+
+        self.rewrite = _rewrite_github_url
+
+    def test_blob_url_rewritten_to_raw(self):
+        url = "https://github.com/openai/gpt-4/blob/main/README.md"
+        result = self.rewrite(url)
+        assert result == "https://raw.githubusercontent.com/openai/gpt-4/main/README.md"
+
+    def test_blob_url_with_subpath_rewritten(self):
+        url = "https://github.com/owner/repo/blob/develop/src/utils/helpers.py"
+        result = self.rewrite(url)
+        assert result == "https://raw.githubusercontent.com/owner/repo/develop/src/utils/helpers.py"
+
+    def test_http_blob_url_still_rewritten(self):
+        url = "http://github.com/owner/repo/blob/main/file.txt"
+        result = self.rewrite(url)
+        assert result == "https://raw.githubusercontent.com/owner/repo/main/file.txt"
+
+    def test_tree_url_raises_value_error(self):
+        url = "https://github.com/owner/repo/tree/main/src"
+        with pytest.raises(ValueError, match="tree"):
+            self.rewrite(url)
+
+    def test_gist_url_rewritten_to_raw(self):
+        url = "https://gist.github.com/torvalds/1234abcd5678ef90"
+        result = self.rewrite(url)
+        assert result == "https://gist.githubusercontent.com/torvalds/1234abcd5678ef90/raw"
+
+    def test_gist_url_with_trailing_slash(self):
+        url = "https://gist.github.com/user/abcdef1234567890/"
+        result = self.rewrite(url)
+        assert result == "https://gist.githubusercontent.com/user/abcdef1234567890/raw"
+
+    def test_non_github_url_unchanged(self):
+        url = "https://example.com/some/page.html"
+        assert self.rewrite(url) == url
+
+    def test_raw_githubusercontent_url_unchanged(self):
+        url = "https://raw.githubusercontent.com/owner/repo/main/file.py"
+        assert self.rewrite(url) == url
+
+    def test_github_releases_url_unchanged(self):
+        """Release asset URLs pass through (not blob/tree/gist)."""
+        url = "https://github.com/owner/repo/releases/download/v1.0/app.tar.gz"
+        assert self.rewrite(url) == url
+
+    def test_load_rewrites_github_blob_url(self):
+        """URLLoader.load() automatically rewrites GitHub blob URLs before fetching."""
+        from unittest.mock import MagicMock, patch
+
+        loader = URLLoader()
+        blob_url = "https://github.com/owner/repo/blob/main/README.md"
+        raw_url = "https://raw.githubusercontent.com/owner/repo/main/README.md"
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/plain"}
+        mock_resp.text = "# Hello World"
+
+        with patch(
+            "axon.loaders.socket.getaddrinfo", return_value=[("", "", "", "", ("1.2.3.4", 0))]
+        ):
+            with patch("httpx.Client") as mock_client_cls:
+                mock_http = mock_client_cls.return_value.__enter__.return_value
+                mock_http.get.return_value = mock_resp
+                docs = loader.load(blob_url)
+                # httpx.Client.get must have been called with the RAW url, not the blob url
+                called_url = mock_http.get.call_args[0][0]
+                assert called_url == raw_url
+        assert docs[0]["text"] == "# Hello World"

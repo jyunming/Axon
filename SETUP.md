@@ -15,7 +15,8 @@ This guide walks through setting up the application from scratch, including deta
 7. [Configure config.yaml](#7-configure-configyaml)
 8. [Configure .env](#8-configure-env)
 9. [Verify the Full Setup](#9-verify-the-full-setup)
-10. [Troubleshooting](#10-troubleshooting)
+10. [MCP Setup (Copilot Agent Mode)](#10-mcp-setup-copilot-agent-mode)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -621,7 +622,137 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ---
 
-## 10. Troubleshooting
+## 10. MCP Setup (Copilot Agent Mode)
+
+The MCP (Model Context Protocol) server lets GitHub Copilot in **agent mode**
+call Axon tools directly — ingesting documents, searching knowledge, switching
+projects — all without leaving VS Code.
+
+### How it works
+
+```
+VS Code (Copilot agent mode)
+  → spawns axon-mcp process (stdio, one per VS Code instance)
+  → axon-mcp proxies calls to the Axon REST API (http://localhost:8000)
+  → Axon handles retrieval; Copilot's LLM synthesises answers
+```
+
+The `axon-mcp` entry point is installed automatically when you
+`pip install -e .`. The REST API (`axon-api`) must be running before Copilot
+can use any MCP tools.
+
+### 1. Create `.vscode/mcp.json` in your workspace
+
+This file is gitignored — create it locally:
+
+```jsonc
+{
+  "servers": {
+    "axon": {
+      "type": "stdio",
+      "command": "axon-mcp",
+      "args": [],
+      "env": {
+        "RAG_API_BASE": "http://localhost:8000",
+        "RAG_API_KEY": ""
+      }
+    }
+  }
+}
+```
+
+> **Windows users:** if `axon-mcp` is not found, use the full path to the
+> entry point script installed in your Python environment's `Scripts/` folder,
+> e.g. `C:\Users\<you>\AppData\Local\Programs\Python\Python313\Scripts\axon-mcp.exe`.
+
+> **WSL users:** VS Code WSL Remote spawns the process inside WSL. Use the
+> WSL-style path to the Windows Python executable, e.g.
+> `/mnt/c/Users/<you>/AppData/Local/Programs/Python/Python313/python.exe`,
+> with `args: ["-m", "axon.mcp_server"]`, instead of `axon-mcp`.
+
+### 2. Enable MCP in VS Code workspace settings
+
+Create `.vscode/settings.json` (also gitignored):
+
+```json
+{
+  "chat.mcp.access": "all"
+}
+```
+
+### 3. Start the Axon API
+
+```bash
+axon-api
+# or: make run-api
+```
+
+### 4. Reload VS Code
+
+Ctrl+Shift+P → **"Reload Window"**. The Axon server will appear in the
+Copilot agent tools list (hammer icon in the chat input).
+
+### Verify the MCP server starts
+
+```bash
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}\n' \
+  | axon-mcp
+```
+
+Expected response:
+```json
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{...},"serverInfo":{"name":"axon","version":"..."}}}
+```
+
+### Shared team knowledge base
+
+For a team where one person owns ingestion and others query:
+
+1. Run `axon-api` on a machine everyone can reach (e.g. Docker, internal server).
+2. Each user creates their own `.vscode/mcp.json` pointing `RAG_API_BASE` at
+   the shared server:
+   ```jsonc
+   {
+     "servers": {
+       "axon": {
+         "type": "stdio",
+         "command": "axon-mcp",
+         "args": [],
+         "env": {
+           "RAG_API_BASE": "http://<server-ip>:8000",
+           "RAG_API_KEY": ""
+         }
+       }
+     }
+   }
+   ```
+3. Each user's VS Code spawns its own lightweight `axon-mcp` proxy; the shared
+   API handles all retrieval. The owner ingests; everyone else queries.
+
+### Available MCP tools (12 total)
+
+| Tool | Purpose |
+|---|---|
+| `ingest_text` | Ingest a single document |
+| `ingest_texts` | Batch ingest (preferred) |
+| `ingest_url` | Fetch a URL and ingest its content |
+| `ingest_path` | Ingest a local file or directory (async) |
+| `get_job_status` | Poll an async ingest job |
+| `search_knowledge` | Raw chunk retrieval (Copilot synthesises) |
+| `query_knowledge` | Retrieval + answer via local Ollama LLM |
+| `list_knowledge` | List indexed sources with chunk counts |
+| `switch_project` | Change active project namespace |
+| `delete_documents` | Remove documents by ID |
+| `list_projects` | List all project namespaces |
+| `get_stale_docs` | Find docs not re-ingested within N days |
+
+> **Recommended:** use `search_knowledge` (not `query_knowledge`) in agent mode.
+> Copilot's LLM synthesises the answer from raw chunks — no Ollama required,
+> no concurrency limit.
+
+---
+
+## 11. Troubleshooting
 
 ### Ollama not running
 

@@ -14,6 +14,11 @@ EXPECTED_TOOL_NAMES = {
     "ingest_directory",
     "stream_query",
     "list_knowledge_base",
+    "add_texts",
+    "ingest_url",
+    "get_job_status",
+    "list_projects",
+    "get_stale_docs",
 }
 
 
@@ -44,7 +49,7 @@ def test_each_tool_has_required_schema_fields():
 
 def test_each_tool_has_at_least_one_required_parameter():
     # Tools that are intentionally zero-argument (no required params) are excluded.
-    zero_arg_tools = {"list_knowledge_base"}
+    zero_arg_tools = {"list_knowledge_base", "list_projects", "get_stale_docs"}
     tools = get_rag_tool_definition()
     for tool in tools:
         fn = tool["function"]

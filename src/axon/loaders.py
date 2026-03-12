@@ -1,8 +1,12 @@
 import asyncio
 import io
+import ipaddress
 import json
 import logging
 import os
+import re
+import socket
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +24,83 @@ def _check_file_size(path: str) -> None:
         raise ValueError(
             f"File '{path}' is {size / (1024 * 1024):.1f} MB, " f"which exceeds the 100 MB limit."
         )
+
+
+def _rewrite_github_url(url: str) -> str:
+    """Rewrite GitHub web URLs to their raw/fetchable equivalents.
+
+    Supported rewrites:
+    - ``github.com/<owner>/<repo>/blob/<ref>/<path>``
+      → ``raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>``
+    - ``gist.github.com/<user>/<gist_id>``
+      → ``gist.githubusercontent.com/<user>/<gist_id>/raw``
+
+    Raises ``ValueError`` for GitHub tree (directory listing) URLs because they
+    cannot be fetched as a single document.  Use a specific file URL
+    (``/blob/...``) or clone the repo and use ``ingest_path`` instead.
+
+    All other URLs are returned unchanged.
+    """
+    # github.com blob URL → raw URL
+    blob_match = re.match(
+        r"^https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$", url, re.IGNORECASE
+    )
+    if blob_match:
+        owner, repo, ref, path = blob_match.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+
+    # github.com tree URL → helpful error (directory listings can't be one doc)
+    if re.match(r"^https?://github\.com/[^/]+/[^/]+/tree/", url, re.IGNORECASE):
+        raise ValueError(
+            "GitHub directory (tree) URLs cannot be fetched as a single document. "
+            "Provide a specific file URL ending in /blob/<ref>/<file>, or clone "
+            "the repository locally and use ingest_path instead."
+        )
+
+    # gist.github.com URL → raw gist URL
+    gist_match = re.match(r"^https?://gist\.github\.com/([^/]+)/([a-f0-9]+)/?$", url, re.IGNORECASE)
+    if gist_match:
+        user, gist_id = gist_match.groups()
+        return f"https://gist.githubusercontent.com/{user}/{gist_id}/raw"
+
+    return url
+
+
+def _extract_html_text(html: str) -> str:
+    """Extract visible text from an HTML string using stdlib html.parser."""
+    from html.parser import HTMLParser
+
+    class _TextExtractor(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._texts = []
+            self._skip_tags = {"script", "style", "head", "meta", "link"}
+            self._current_skip = False
+            self._skip_depth = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag.lower() in self._skip_tags:
+                self._current_skip = True
+                self._skip_depth += 1
+
+        def handle_endtag(self, tag):
+            if tag.lower() in self._skip_tags and self._skip_depth > 0:
+                self._skip_depth -= 1
+                if self._skip_depth == 0:
+                    self._current_skip = False
+
+        def handle_data(self, data):
+            if not self._current_skip:
+                stripped = data.strip()
+                if stripped:
+                    self._texts.append(stripped)
+
+        def get_text(self):
+            return " ".join(self._texts)
+
+    extractor = _TextExtractor()
+    extractor.feed(html)
+    return extractor.get_text()
 
 
 class BaseLoader:
@@ -128,48 +209,115 @@ class HTMLLoader(BaseLoader):
 
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        from html.parser import HTMLParser
-
-        class _TextExtractor(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self._texts = []
-                self._skip_tags = {"script", "style", "head", "meta", "link"}
-                self._current_skip = False
-                self._skip_depth = 0
-
-            def handle_starttag(self, tag, attrs):
-                if tag.lower() in self._skip_tags:
-                    self._current_skip = True
-                    self._skip_depth += 1
-
-            def handle_endtag(self, tag):
-                if tag.lower() in self._skip_tags and self._skip_depth > 0:
-                    self._skip_depth -= 1
-                    if self._skip_depth == 0:
-                        self._current_skip = False
-
-            def handle_data(self, data):
-                if not self._current_skip:
-                    stripped = data.strip()
-                    if stripped:
-                        self._texts.append(stripped)
-
-            def get_text(self):
-                return " ".join(self._texts)
-
         with open(path, encoding="utf-8", errors="ignore") as f:
             content = f.read()
-
-        extractor = _TextExtractor()
-        extractor.feed(content)
-        text = extractor.get_text()
-
+        text = _extract_html_text(content)
         return [
             {
                 "id": os.path.basename(path),
                 "text": text,
                 "metadata": {"source": path, "type": "html"},
+            }
+        ]
+
+
+class URLLoader(BaseLoader):
+    """Loader for HTTP/HTTPS URLs with SSRF mitigations.
+
+    Fetches the URL using httpx (already in project deps), strips HTML if the
+    response is text/html, and returns a single document dict.
+
+    Security:
+    - Only http/https schemes are accepted; all others raise ValueError.
+    - Resolved IP addresses are checked against blocked private/internal ranges
+      to prevent Server-Side Request Forgery (SSRF).
+    - Redirects are capped at 5 hops.
+    - Response content type must be text/*; binary responses are rejected.
+    - Content size is capped at _MAX_FILE_BYTES (100 MB).
+    """
+
+    _BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+        ipaddress.ip_network("127.0.0.0/8"),  # loopback
+        ipaddress.ip_network("10.0.0.0/8"),  # RFC 1918 private
+        ipaddress.ip_network("172.16.0.0/12"),  # RFC 1918 private
+        ipaddress.ip_network("192.168.0.0/16"),  # RFC 1918 private
+        ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud metadata (AWS/GCP/Azure)
+        ipaddress.ip_network("::1/128"),  # IPv6 loopback
+        ipaddress.ip_network("fc00::/7"),  # IPv6 unique local
+        ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ]
+
+    def _check_ssrf(self, url: str) -> None:
+        """Raise ValueError if the URL targets a private/internal address."""
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"Scheme '{parsed.scheme}' is not allowed. Only http and https are permitted."
+            )
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("No hostname found in URL.")
+        try:
+            addrinfos = socket.getaddrinfo(hostname, None)
+        except socket.gaierror as exc:
+            raise ValueError(f"Could not resolve hostname '{hostname}': {exc}")
+        for addrinfo in addrinfos:
+            ip_str = addrinfo[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+            for blocked in self._BLOCKED_NETWORKS:
+                if ip in blocked:
+                    raise ValueError(
+                        f"Host '{hostname}' resolves to a blocked private/internal address ({ip})."
+                    )
+
+    def load(self, url: str) -> list[dict[str, Any]]:
+        """Fetch *url* and return its text content as a single document.
+
+        GitHub ``/blob/`` URLs are automatically rewritten to
+        ``raw.githubusercontent.com`` before any network contact is made.
+        GitHub Gist URLs are rewritten to their raw form.
+        GitHub tree (directory) URLs raise ``ValueError`` immediately.
+        """
+        import uuid
+
+        import httpx
+
+        url = _rewrite_github_url(url)  # Gap-5: rewrite before SSRF check
+        self._check_ssrf(url)
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=True, max_redirects=5) as client:
+                resp = client.get(url)
+        except httpx.TimeoutException:
+            raise ValueError(f"Request to '{url}' timed out.")
+        except httpx.TooManyRedirects:
+            raise ValueError(f"Too many redirects fetching '{url}'.")
+        except httpx.RequestError as exc:
+            raise ValueError(f"Failed to fetch '{url}': {exc}")
+
+        if resp.status_code != 200:
+            raise ValueError(f"'{url}' returned HTTP {resp.status_code}.")
+
+        content_type = resp.headers.get("content-type", "")
+        if not content_type.startswith("text/"):
+            raise ValueError(
+                f"Non-text content type '{content_type}' for '{url}'. Only text/* is accepted."
+            )
+
+        raw = resp.text
+        if len(raw.encode("utf-8")) > _MAX_FILE_BYTES:
+            raise ValueError(
+                f"URL content exceeds the {_MAX_FILE_BYTES // (1024 * 1024)} MB limit."
+            )
+
+        text = _extract_html_text(raw) if "html" in content_type else raw
+        return [
+            {
+                "id": uuid.uuid4().hex,
+                "text": text,
+                "metadata": {"source": url, "type": "url"},
             }
         ]
 
