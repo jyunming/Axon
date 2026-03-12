@@ -374,31 +374,6 @@ class PPTXLoader(BaseLoader):
         ]
 
 
-class LegacyOfficeLoader(BaseLoader):
-    """Loader for legacy binary Office files (.doc, .ppt) using textract."""
-
-    def load(self, path: str) -> list[dict[str, Any]]:
-        _check_file_size(path)
-        try:
-            import textract
-        except ImportError:
-            logger.error("textract not installed. Install with: pip install textract")
-            return []
-
-        try:
-            text = textract.process(path).decode("utf-8")
-            return [
-                {
-                    "id": os.path.basename(path),
-                    "text": text,
-                    "metadata": {"source": path, "type": "legacy_office"},
-                }
-            ]
-        except Exception as e:
-            logger.error(f"Error extracting text from {path}: {e}")
-            return []
-
-
 class ImageLoader(BaseLoader):
     """
     Loader for raster images (BMP, PNG, JPG, TIF/TIFF, PGM) using Ollama VLM for captioning.
@@ -536,7 +511,6 @@ class DirectoryLoader:
 
     def __init__(self, vlm_model: str = "llava"):
         _image_loader = ImageLoader(ollama_model=vlm_model)
-        _legacy_office_loader = LegacyOfficeLoader()
         self.loaders = {
             ".txt": TextLoader(),
             ".md": TextLoader(),
@@ -547,8 +521,6 @@ class DirectoryLoader:
             ".htm": HTMLLoader(),
             ".docx": DOCXLoader(),
             ".pptx": PPTXLoader(),
-            ".doc": _legacy_office_loader,
-            ".ppt": _legacy_office_loader,
             ".bmp": _image_loader,
             ".png": _image_loader,
             ".jpg": _image_loader,

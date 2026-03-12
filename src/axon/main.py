@@ -3733,8 +3733,6 @@ _AT_LOADER_EXTS = {
     ".docx",
     ".pptx",
     ".pdf",
-    ".doc",
-    ".ppt",
     ".bmp",
     ".png",
     ".jpg",
