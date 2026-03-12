@@ -1248,6 +1248,10 @@ class MultiBM25Retriever:
                         seen[doc_id] = doc
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
+    def delete_documents(self, doc_ids: list[str]) -> None:
+        """Disallow deletes in merged read-only views."""
+        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
+
     def add_documents(self, *args, **kwargs):
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 

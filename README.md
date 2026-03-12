@@ -230,11 +230,11 @@ Agents can use Axon as a "Collective Memory."
 | `/delete` | POST | Delete documents by ID. Request body: `{"doc_ids": ["id1","id2"]}`. |
 | `/ingest` | POST | Background directory/file ingestion. Request body: `{"path": "/path/to/docs"}`. Path must be within `RAG_INGEST_BASE`. |
 | `/collection` | GET | List all ingested sources with chunk counts. Returns `{total_files, total_chunks, files:[{source,chunks}]}`. |
-| `/collection/stale` | GET | List ingested sources whose files no longer exist on disk. |
+| `/collection/stale` | GET | List ingested sources that have not been re-ingested within `days` (default 7) based on the in-memory dedup cache; results only cover activity since the last server restart. Optional query: `?days=N`. |
 | `/add_texts` | POST | Batch string ingestion (multiple texts at once). |
 | `/ingest_url` | POST | Ingest a document from a URL. Body: `{"url": "https://..."}`. |
 | `/ingest/status/{job_id}` | GET | Poll background ingest job status by ID. |
-| `/health` | GET | Health check — returns `{"status": "ok"}`. |
+| `/health` | GET | Health check — returns `{"status": "healthy", "axon_ready": <bool>}`. |
 | `/projects` | GET | List all projects and their metadata. |
 | `/project/switch` | POST | Switch the active project. Body: `{"project": "name"}`. |
 
