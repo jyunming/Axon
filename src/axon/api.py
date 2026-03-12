@@ -21,14 +21,16 @@ logger = logging.getLogger("AxonAPI")
 
 def _validate_ingest_path(path: str) -> str:
     """Validate that path is within the allowed base directory."""
-    allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
-    abs_path = os.path.abspath(path)
-    if not abs_path.startswith(allowed_base):
+    allowed_base = pathlib.Path(os.getenv("RAG_INGEST_BASE", ".")).resolve()
+    abs_path = pathlib.Path(path).resolve()
+    try:
+        abs_path.relative_to(allowed_base)
+    except ValueError:
         raise HTTPException(
             status_code=403,
             detail=f"Path '{path}' is outside the allowed ingest directory. Set RAG_INGEST_BASE to permit additional paths.",
         )
-    return abs_path
+    return str(abs_path)
 
 
 app = FastAPI(
@@ -79,7 +81,7 @@ _JOB_TTL_SECONDS = 3600  # 60 minutes
 def _evict_old_jobs() -> None:
     """Remove completed jobs older than _JOB_TTL_SECONDS and cap at _MAX_JOBS."""
     cutoff = datetime.now(timezone.utc).timestamp() - _JOB_TTL_SECONDS
-    expired = [jid for jid, job in _jobs.items() if job.get("started_at_ts", 0) < cutoff]
+    expired = [jid for jid, job in list(_jobs.items()) if job.get("started_at_ts", 0) < cutoff]
     for jid in expired:
         _jobs.pop(jid, None)
     # Hard cap: keep only the most recent _MAX_JOBS by start time
@@ -94,16 +96,16 @@ def _compute_content_hash(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 
-def _check_and_record_dedup(text: str, doc_id: str, project: str = "_global") -> dict | None:
+def _check_dedup(text: str, project: str = "_global") -> dict | None:
     """Check whether *text* was already ingested in *project*.
 
     Returns a ``{status, reason, doc_id}`` dict if the content is a duplicate
     (caller should short-circuit and return that response without ingesting).
-    Returns ``None`` if the content is new — the hash is recorded so future
-    calls for the same content are detected.
+    Returns ``None`` if the content is new — does NOT record the hash; call
+    :func:`_record_dedup` after a successful ingest to do that.
     """
     content_hash = _compute_content_hash(text)
-    bucket = _source_hashes.setdefault(project, {})
+    bucket = _source_hashes.get(project, {})
     if content_hash in bucket:
         existing = bucket[content_hash]
         return {
@@ -111,11 +113,20 @@ def _check_and_record_dedup(text: str, doc_id: str, project: str = "_global") ->
             "reason": "already_ingested",
             "doc_id": existing["doc_id"],
         }
-    bucket[content_hash] = {
+    return None
+
+
+def _record_dedup(text: str, doc_id: str, project: str = "_global") -> None:
+    """Record the content hash *after* a successful ingest.
+
+    Must only be called once ``brain.ingest()`` (or equivalent) has succeeded
+    so that a failed ingest cannot poison the dedup store.
+    """
+    content_hash = _compute_content_hash(text)
+    _source_hashes.setdefault(project, {})[content_hash] = {
         "doc_id": doc_id,
         "last_ingested_at": datetime.now(timezone.utc).isoformat(),
     }
-    return None
 
 
 @app.on_event("startup")
@@ -408,7 +419,7 @@ async def add_text(request: TextIngestRequest):
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
     project_key = request.project or "_global"
 
-    skip = _check_and_record_dedup(request.text, doc_id, project_key)
+    skip = _check_dedup(request.text, project_key)
     if skip:
         return {**skip, "doc_id": skip["doc_id"]}
 
@@ -420,6 +431,7 @@ async def add_text(request: TextIngestRequest):
 
     try:
         brain.ingest([doc])
+        _record_dedup(request.text, doc_id, project_key)
         return {"status": "success", "doc_id": doc_id}
     except Exception as e:
         logger.error(f"Error adding text: {e}")
@@ -442,23 +454,36 @@ async def add_texts(request: BatchTextIngestRequest):
     docs_to_ingest: list[dict] = []
     project_key = request.project or "_global"
 
+    # pending_records maps doc_id → item.text for dedup recording after ingest
+    pending_records: list[tuple[str, str]] = []
+    # within-batch dedup: track content_hash → doc_id for items in this request
+    batch_hashes: dict[str, str] = {}
+
     for item in request.docs:
         doc_id = item.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
-        skip = _check_and_record_dedup(item.text, doc_id, project_key)
+        skip = _check_dedup(item.text, project_key)
         if skip:
             results.append({"id": skip["doc_id"], "status": "skipped", "error": None})
             continue
+        content_hash = _compute_content_hash(item.text)
+        if content_hash in batch_hashes:
+            results.append({"id": batch_hashes[content_hash], "status": "skipped", "error": None})
+            continue
+        batch_hashes[content_hash] = doc_id
         doc = {
             "id": doc_id,
             "text": item.text,
             "metadata": item.metadata or {"source": "api_agent", "type": "agent_input"},
         }
         docs_to_ingest.append(doc)
+        pending_records.append((doc_id, item.text))
         results.append({"id": doc_id, "status": "created", "error": None})
 
     if docs_to_ingest:
         try:
             brain.ingest(docs_to_ingest)
+            for doc_id, text in pending_records:
+                _record_dedup(text, doc_id, project_key)
         except Exception as e:
             logger.error(f"Error batch-ingesting texts: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -496,12 +521,13 @@ async def ingest_url(request: URLIngestRequest):
     if request.metadata:
         doc["metadata"].update(request.metadata)
 
-    skip = _check_and_record_dedup(doc["text"], doc["id"], project_key)
+    skip = _check_dedup(doc["text"], project_key)
     if skip:
-        return {**skip, "id": skip["doc_id"], "url": request.url}
+        return {**skip, "doc_id": skip["doc_id"], "url": request.url}
 
     try:
         brain.ingest([doc])
+        _record_dedup(doc["text"], doc["id"], project_key)
     except Exception as exc:
         logger.error(f"Error ingesting URL content: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))

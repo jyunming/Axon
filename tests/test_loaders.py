@@ -583,9 +583,10 @@ class TestURLLoader:
 
         with patch("axon.loaders.socket.getaddrinfo") as mock_gai, patch(
             "axon.loaders.URLLoader._check_ssrf"
-        ), patch("httpx.get") as mock_get:
+        ), patch("httpx.Client") as mock_client_cls:
             mock_gai.return_value = [(None, None, None, None, ("93.184.216.34", 0))]
-            mock_get.return_value = self._make_response(
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(
                 text="<html><head><title>T</title></head><body><p>Hello world</p></body></html>",
                 content_type="text/html; charset=utf-8",
             )
@@ -602,8 +603,9 @@ class TestURLLoader:
         """Plain text responses are returned as-is without HTML stripping."""
         loader = URLLoader()
 
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.get") as mock_get:
-            mock_get.return_value = self._make_response(
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(
                 text="raw text content",
                 content_type="text/plain",
             )
@@ -615,15 +617,17 @@ class TestURLLoader:
 
     def test_non_200_raises_value_error(self):
         loader = URLLoader()
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.get") as mock_get:
-            mock_get.return_value = self._make_response(status=404)
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(status=404)
             with pytest.raises(ValueError, match="HTTP 404"):
                 loader.load("https://example.com/missing")
 
     def test_binary_content_type_raises_value_error(self):
         loader = URLLoader()
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.get") as mock_get:
-            mock_get.return_value = self._make_response(content_type="application/pdf")
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.return_value = self._make_response(content_type="application/pdf")
             with pytest.raises(ValueError, match="Non-text content type"):
                 loader.load("https://example.com/file.pdf")
 
@@ -631,9 +635,9 @@ class TestURLLoader:
         import httpx
 
         loader = URLLoader()
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch(
-            "httpx.get", side_effect=httpx.TimeoutException("timeout", request=None)
-        ):
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.side_effect = httpx.TimeoutException("timeout", request=None)
             with pytest.raises(ValueError, match="timed out"):
                 loader.load("https://slow.example.com")
 
@@ -641,9 +645,9 @@ class TestURLLoader:
         import httpx
 
         loader = URLLoader()
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch(
-            "httpx.get", side_effect=httpx.TooManyRedirects("redirects", request=None)
-        ):
+        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__enter__.return_value
+            mock_http.get.side_effect = httpx.TooManyRedirects("redirects", request=None)
             with pytest.raises(ValueError, match="redirects"):
                 loader.load("https://redirect.example.com")
 
@@ -729,9 +733,11 @@ class TestRewriteGithubUrl:
         with patch(
             "axon.loaders.socket.getaddrinfo", return_value=[("", "", "", "", ("1.2.3.4", 0))]
         ):
-            with patch("httpx.get", return_value=mock_resp) as mock_get:
+            with patch("httpx.Client") as mock_client_cls:
+                mock_http = mock_client_cls.return_value.__enter__.return_value
+                mock_http.get.return_value = mock_resp
                 docs = loader.load(blob_url)
-                # httpx.get must have been called with the RAW url, not the blob url
-                called_url = mock_get.call_args[0][0]
+                # httpx.Client.get must have been called with the RAW url, not the blob url
+                called_url = mock_http.get.call_args[0][0]
                 assert called_url == raw_url
         assert docs[0]["text"] == "# Hello World"

@@ -288,7 +288,8 @@ class URLLoader(BaseLoader):
         url = _rewrite_github_url(url)  # Gap-5: rewrite before SSRF check
         self._check_ssrf(url)
         try:
-            resp = httpx.get(url, timeout=30.0, max_redirects=5, follow_redirects=True)
+            with httpx.Client(timeout=30.0, follow_redirects=True, max_redirects=5) as client:
+                resp = client.get(url)
         except httpx.TimeoutException:
             raise ValueError(f"Request to '{url}' timed out.")
         except httpx.TooManyRedirects:

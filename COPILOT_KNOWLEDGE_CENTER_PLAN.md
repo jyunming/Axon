@@ -5,7 +5,7 @@ via MCP tools, closing all identified API gaps and wiring in the workflow
 instruction layer.
 
 > **Status: COMPLETE** — All phases implemented across 3 sprints.
-> Last updated: 2026-03-12. 390 tests passing.
+> Last updated: 2026-03-12. 392 tests passing.
 
 ---
 
@@ -44,7 +44,7 @@ instruction layer.
 | Gap 5 GitHub URL rewriting | ✅ | `feature/knowledge-center-gaps` | Sprint 3 |
 | Gap 7 Staleness endpoint | ✅ | `feature/knowledge-center-gaps` | Sprint 3 |
 | Gap 8 Projects listing | ✅ | `feature/knowledge-center-gaps` | Sprint 3 |
-| Phase 4 Tests | ✅ | All branches | 390 tests pass |
+| Phase 4 Tests | ✅ | All branches | 392 tests pass |
 
 ### MCP Tools Inventory (12 tools in `mcp_server.py`)
 

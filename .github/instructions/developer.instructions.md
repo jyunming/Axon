@@ -54,13 +54,13 @@ optimised for agent-mode ergonomics (e.g. `search_knowledge`, not
 
 Steps:
 1. Add the tool definition to the `@mcp.tool()` decorated section of
-   `mcp_server.py`. Follow the existing pattern: async function, docstring as
+   `mcp_server.py`. Follow the existing pattern: **sync** function, docstring as
    the tool description, typed parameters.
-2. Inside the handler, call the REST API via `httpx.AsyncClient`. Always
+2. Inside the handler, call the REST API via `httpx.Client`. Always
    include the `X-API-Key` header (read from the `RAG_API_KEY` env var):
    ```python
-   async with httpx.AsyncClient() as client:
-       resp = await client.post(
+   with httpx.Client(timeout=60.0) as client:
+       resp = client.post(
            f"{API_BASE}/your_endpoint",
            json={...},
            headers={"X-API-Key": API_KEY} if API_KEY else {},
