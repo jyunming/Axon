@@ -1,0 +1,84 @@
+{
+  "name": "axon-copilot",
+  "displayName": "Axon Copilot",
+  "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
+  "version": "0.1.0",
+  "publisher": "axon",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["AI", "Chat"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "axon.chat",
+        "name": "axon",
+        "fullName": "Axon Knowledge Base",
+        "description": "Query your local Axon RAG knowledge base. Copilot synthesizes answers from retrieved chunks.",
+        "isSticky": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "axon.switchProject",
+        "title": "Axon: Switch Project"
+      },
+      {
+        "command": "axon.ingestFile",
+        "title": "Axon: Ingest Current File"
+      },
+      {
+        "command": "axon.startServer",
+        "title": "Axon: Start API Server"
+      },
+      {
+        "command": "axon.stopServer",
+        "title": "Axon: Stop API Server"
+      }
+    ],
+    "configuration": {
+      "title": "Axon",
+      "properties": {
+        "axon.apiBase": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL of the Axon REST API server."
+        },
+        "axon.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional API key for Axon (matches RAG_API_KEY on the server)."
+        },
+        "axon.topK": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of knowledge base chunks to retrieve per query."
+        },
+        "axon.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the Axon API server when VS Code opens (Linux/macOS)."
+        },
+        "axon.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to the Python interpreter that has Axon installed."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.4.5"
+  }
+}
