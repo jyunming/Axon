@@ -74,20 +74,16 @@ def _extract_html_text(html: str) -> str:
         def __init__(self):
             super().__init__()
             self._texts = []
-            self._skip_tags = {"script", "style", "head", "meta", "link"}
+            self._content_skip_tags = {"script", "style"}
             self._current_skip = False
-            self._skip_depth = 0
 
         def handle_starttag(self, tag, attrs):
-            if tag.lower() in self._skip_tags:
+            if tag.lower() in self._content_skip_tags:
                 self._current_skip = True
-                self._skip_depth += 1
 
         def handle_endtag(self, tag):
-            if tag.lower() in self._skip_tags and self._skip_depth > 0:
-                self._skip_depth -= 1
-                if self._skip_depth == 0:
-                    self._current_skip = False
+            if tag.lower() in self._content_skip_tags:
+                self._current_skip = False
 
         def handle_data(self, data):
             if not self._current_skip:
@@ -97,6 +93,10 @@ def _extract_html_text(html: str) -> str:
 
         def get_text(self):
             return " ".join(self._texts)
+
+    parser = _TextExtractor()
+    parser.feed(html)
+    return parser.get_text()
 
     extractor = _TextExtractor()
     extractor.feed(html)
@@ -131,20 +131,35 @@ class TextLoader(BaseLoader):
 
 
 class TSVLoader(BaseLoader):
-    """Loader for tab-delimited files."""
+    """Loader for tab-delimited files. Each row becomes an enriched document chunk."""
 
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        df = pd.read_csv(path, sep="	")
+        import csv
+
+        from axon.splitters import TableSplitter
+
+        rows = []
+        headers = []
+        with open(path, encoding="utf-8", newline="") as f:
+            # Use sniffer or explicit tab delimiter
+            reader = csv.DictReader(f, delimiter="\t")
+            headers = reader.fieldnames or []
+            for row in reader:
+                rows.append(row)
+
+        table_name = os.path.basename(path)
+        splitter = TableSplitter(table_name=table_name)
+        chunks = splitter.transform_rows(rows, headers)
+
         documents = []
-        for i, row in df.iterrows():
-            # Assume first column or 'content' column is the text
-            text_col = "content" if "content" in df.columns else df.columns[0]
-            text = str(row[text_col])
-            metadata = row.drop(text_col).to_dict()
-            metadata.update({"source": path, "type": "tsv", "row": i})
+        for i, text in enumerate(chunks):
             documents.append(
-                {"id": f"{os.path.basename(path)}_row_{i}", "text": text, "metadata": metadata}
+                {
+                    "id": f"{table_name}_row_{i}",
+                    "text": text,
+                    "metadata": {"source": path, "type": "tsv", "row": i},
+                }
             )
         return documents
 
@@ -179,28 +194,36 @@ class JSONLoader(BaseLoader):
 
 
 class CSVLoader(BaseLoader):
-    """Loader for CSV files. Each row becomes a document."""
+    """Loader for CSV files. Each row becomes an enriched document chunk."""
 
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         import csv
 
-        documents = []
+        from axon.splitters import TableSplitter
+
+        rows = []
+        headers = []
         with open(path, encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            for i, row in enumerate(reader):
-                # Use 'text' or 'content' column if present, else join all values
-                text_col = next((c for c in ["text", "content", "body"] if c in row), None)
-                if text_col:
-                    text = row[text_col]
-                    metadata = {k: v for k, v in row.items() if k != text_col}
-                else:
-                    text = " | ".join(f"{k}: {v}" for k, v in row.items())
-                    metadata = {}
-                metadata.update({"source": path, "type": "csv", "row": i})
-                documents.append(
-                    {"id": f"{os.path.basename(path)}_row_{i}", "text": text, "metadata": metadata}
-                )
+            headers = reader.fieldnames or []
+            for row in reader:
+                rows.append(row)
+
+        table_name = os.path.basename(path)
+        # For very large tables, we could increase batch_size here
+        splitter = TableSplitter(table_name=table_name)
+        chunks = splitter.transform_rows(rows, headers)
+
+        documents = []
+        for i, text in enumerate(chunks):
+            documents.append(
+                {
+                    "id": f"{table_name}_row_{i}",
+                    "text": text,
+                    "metadata": {"source": path, "type": "csv", "row": i},
+                }
+            )
         return documents
 
 
@@ -540,6 +563,11 @@ class DirectoryLoader:
                 loader = self.loaders[file_path.suffix.lower()]
                 try:
                     docs = loader.load(str(file_path))
+                    # Native Path Enrichment (Breadcrumbs) for textual docs
+                    for doc in docs:
+                        if doc["metadata"].get("type") not in ("csv", "tsv", "image"):
+                            rel_path = os.path.relpath(str(file_path), directory)
+                            doc["text"] = f"[File Path: {rel_path}]\n{doc['text']}"
                     all_documents.extend(docs)
                 except Exception as e:
                     logger.error(f"Failed to load {file_path}: {e}")

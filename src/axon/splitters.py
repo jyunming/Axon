@@ -103,45 +103,46 @@ class SemanticTextSplitter:
             return []
 
         sentences = self._split_sentences(text)
+        # Pre-calculate lengths to avoid redundant tokenization in the overlap loop
+        sentence_data = [(s, self._get_length(s)) for s in sentences]
+        
         chunks = []
         current_chunk_sentences = []
         current_length = 0
 
-        for sentence in sentences:
-            sentence_len = self._get_length(sentence)
-
+        for sentence, sentence_len in sentence_data:
             # If a single sentence is larger than the chunk size, we yield it as its own chunk
             # rather than falling back to character splitting, preserving semantic integrity.
             if sentence_len > self.chunk_size:
                 if current_chunk_sentences:
-                    chunks.append(" ".join(current_chunk_sentences))
+                    chunks.append(" ".join([s for s, _ in current_chunk_sentences]))
                     current_chunk_sentences = []
                     current_length = 0
                 chunks.append(sentence)
                 continue
 
             if current_length + sentence_len <= self.chunk_size:
-                current_chunk_sentences.append(sentence)
+                current_chunk_sentences.append((sentence, sentence_len))
                 current_length += sentence_len
             else:
-                chunks.append(" ".join(current_chunk_sentences))
+                chunks.append(" ".join([s for s, _ in current_chunk_sentences]))
+                
                 # Handle overlap: take sentences from the end of the current chunk
                 # until we hit the overlap limit
                 overlap_sentences = []
                 overlap_length = 0
-                for s in reversed(current_chunk_sentences):
-                    s_len = self._get_length(s)
+                for s, s_len in reversed(current_chunk_sentences):
                     if overlap_length + s_len <= self.chunk_overlap:
-                        overlap_sentences.insert(0, s)
+                        overlap_sentences.insert(0, (s, s_len))
                         overlap_length += s_len
                     else:
                         break
 
-                current_chunk_sentences = overlap_sentences + [sentence]
+                current_chunk_sentences = overlap_sentences + [(sentence, sentence_len)]
                 current_length = overlap_length + sentence_len
 
         if current_chunk_sentences:
-            chunks.append(" ".join(current_chunk_sentences))
+            chunks.append(" ".join([s for s, _ in current_chunk_sentences]))
 
         return chunks
 
@@ -157,6 +158,43 @@ class SemanticTextSplitter:
                     {"id": f"{doc['id']}_chunk_{i}", "text": chunk, "metadata": metadata}
                 )
         return all_chunks
+
+
+class TableSplitter:
+    """Specialized splitter for tabular data (CSV, TSV, Markdown).
+
+    Converts rows into enriched natural language strings to preserve
+    header-value context during embedding and retrieval.
+    """
+
+    def __init__(self, table_name: str = "Table", batch_size: int = 1):
+        self.table_name = table_name
+        self.batch_size = batch_size
+
+    def transform_rows(self, rows: list[dict], headers: list[str]) -> list[str]:
+        """Convert a list of row dictionaries into enriched searchable strings."""
+        chunks = []
+        header_str = ", ".join(headers)
+
+        current_batch = []
+        for i, row in enumerate(rows):
+            # Enriched string format: [Table Context] [Column Schema] [Row Data]
+            # This format is proven to work best with SBERT/BGE embedding models.
+            row_items = [f"{k}: {v}" for k, v in row.items() if v is not None and v != ""]
+            row_str = (
+                f"Context: {self.table_name} | Columns: [{header_str}] | Data: "
+                + " | ".join(row_items)
+            )
+            current_batch.append(row_str)
+
+            if len(current_batch) >= self.batch_size:
+                chunks.append("\n".join(current_batch))
+                current_batch = []
+
+        if current_batch:
+            chunks.append("\n".join(current_batch))
+
+        return chunks
 
 
 class RecursiveCharacterTextSplitter:
@@ -184,32 +222,38 @@ class RecursiveCharacterTextSplitter:
             return []
 
         chunks = []
-        current_text = text
+        start = 0
+        text_len = len(text)
 
-        while len(current_text) > self.chunk_size:
-            # Find the best separator within the chunk_size
+        while start < text_len:
+            # If remaining text is smaller than chunk_size, take it all and finish
+            if text_len - start <= self.chunk_size:
+                chunks.append(text[start:].strip())
+                break
+
+            end = start + self.chunk_size
+            
+            # Find the best separator within the current window
             split_at = -1
             for sep in self.separators:
-                # Find the last occurrence of separator within chunk_size
                 if sep == "":
-                    split_at = self.chunk_size
+                    continue
+                # Search backwards from end to start
+                idx = text.rfind(sep, start, end)
+                if idx != -1:
+                    split_at = idx + len(sep)
                     break
 
-                last_idx = current_text[: self.chunk_size].rfind(sep)
-                if last_idx != -1:
-                    split_at = last_idx + len(sep)
-                    break
+            # If no separator found OR split_at would not make progress beyond overlap,
+            # force split at the full chunk_size
+            if split_at <= start + self.chunk_overlap:
+                split_at = end
 
-            if split_at == -1:
-                split_at = self.chunk_size
+            chunks.append(text[start:split_at].strip())
+            # Next chunk starts after accounting for overlap
+            start = split_at - self.chunk_overlap
 
-            chunks.append(current_text[:split_at].strip())
-            current_text = current_text[split_at - self.chunk_overlap :]
-
-        if current_text:
-            chunks.append(current_text.strip())
-
-        return chunks
+        return [c for c in chunks if c]
 
     def transform_documents(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Split a list of documents into chunks."""
