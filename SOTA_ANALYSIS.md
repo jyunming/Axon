@@ -25,7 +25,7 @@ The following features are already implemented:
 | **Performance** | In-memory query result cache (`query_cache: true`) with true LRU eviction (`OrderedDict` + move-to-end on hit) |
 | **Web search** | Brave Search fallback when local KB is insufficient (truth grounding) |
 | **Evaluation** | Axon Eval smoke tests (`scripts/evaluate.py`) |
-| **Chunking** | Recursive character text splitter with configurable size/overlap |
+| **Chunking** | State-of-the-Art Semantic text splitter (sentence-boundary aware, tiktoken-based sizing) or Recursive character text splitter |
 | **Projects** | Named knowledge base namespaces with isolated vector/BM25 stores |
 | **REPL @file/@folder** | Inline file/folder context attachment in REPL: `@file.txt`, `@file.docx`, `@file.pdf`, `@folder/` — reads plain text, extracts text from DOCX/PDF via loaders, recursively reads folders (capped at 120 KB total; hidden dirs skipped; unsupported extensions skipped) |
 | **REPL streaming** | Spinner collects first token, then Rich `Live` streams remaining tokens with ▋ cursor; final swap to Markdown render on completion (no scrollback corruption) |

@@ -252,10 +252,9 @@ Customize behavior in `config.yaml`:
 - **Query Transformations:** Enable Multi-Query expansion or HyDE for improved retrieval.
 - **Truth Grounding:** Enable Brave Search API fallback when local knowledge is insufficient.
 - **Discussion Fallback:** Allow the LLM to answer from general knowledge when no documents match (default: enabled).
-- **Chunking:** Adjust document fragment size and overlap (default: 1000 chars, 200 overlap).
-- **Offline / Air-gapped Mode:** Run fully without internet — all models resolved from a local directory, web search disabled automatically.
+- **Chunking:** Adjust document fragment size and overlap, or switch to token-aware Semantic Chunking.
 
-See [Configuration Guide](QUICKREF.md#configuration) for details.
+See the **[Advanced Features Guide](docs/ADVANCED_FEATURES.md)** for detailed explanations of GraphRAG, RAPTOR, Semantic Chunking, Context Compression, and more. See the **[Configuration Guide](QUICKREF.md#configuration)** for all settings.
 
 ## 🔒 Security
 

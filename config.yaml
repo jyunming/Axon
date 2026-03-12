@@ -127,6 +127,7 @@ rag:
 
 # Chunking Settings
 chunk:
+  strategy: recursive
   size: 1000
   overlap: 200
 

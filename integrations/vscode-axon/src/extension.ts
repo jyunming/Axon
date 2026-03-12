@@ -65,9 +65,20 @@ async function ensureServerRunning(apiBase: string, context: vscode.ExtensionCon
   }
   const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
-  outputChannel.appendLine(`Starting Axon API server with: ${pythonPath} -m uvicorn axon.api:app --host 127.0.0.1 --port 8000`);
+  // Parse port from apiBase (e.g. http://localhost:8000 -> 8000)
+  let port = "8000";
+  try {
+    const url = new URL(apiBase);
+    if (url.port) {
+      port = url.port;
+    }
+  } catch (err) {
+    outputChannel.appendLine(`Warning: Could not parse port from apiBase "${apiBase}". Defaulting to 8000.`);
+  }
 
-  serverProcess = spawn(pythonPath, ['-m', 'uvicorn', 'axon.api:app', '--host', '127.0.0.1', '--port', '8000'], {
+  outputChannel.appendLine(`Starting Axon API server with: ${pythonPath} -m uvicorn axon.api:app --host 127.0.0.1 --port ${port}`);
+
+  serverProcess = spawn(pythonPath, ['-m', 'uvicorn', 'axon.api:app', '--host', '127.0.0.1', '--port', port], {
     cwd: workspaceRoot,
     env: {
       ...process.env,

@@ -168,6 +168,7 @@ class AxonConfig:
     hybrid_search: bool = True
 
     # Chunking
+    chunk_strategy: Literal["recursive", "semantic"] = "recursive"
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
@@ -1255,9 +1256,6 @@ class MultiBM25Retriever:
     def add_documents(self, *args, **kwargs):
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
-    def delete_documents(self, doc_ids: list[str]) -> None:
-        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
-
     # Alias used by ingest code
     batch_add_documents = add_documents
 
@@ -1387,11 +1385,18 @@ Your primary goal is to help the user by answering questions based on the provid
         self._own_bm25 = self.bm25
 
         try:
-            from axon.splitters import RecursiveCharacterTextSplitter
+            if self.config.chunk_strategy == "semantic":
+                from axon.splitters import SemanticTextSplitter
 
-            self.splitter = RecursiveCharacterTextSplitter(
-                chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
-            )
+                self.splitter = SemanticTextSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
+            else:
+                from axon.splitters import RecursiveCharacterTextSplitter
+
+                self.splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
         except ImportError:
             self.splitter = None
 
@@ -2569,6 +2574,11 @@ def main():
         help="Disable ingest deduplication (allow re-ingesting identical content)",
     )
     parser.add_argument(
+        "--chunk-strategy",
+        choices=["recursive", "semantic"],
+        help="Chunking strategy for ingest (recursive or semantic)",
+    )
+    parser.add_argument(
         "--parent-chunk-size",
         type=int,
         metavar="N",
@@ -2632,6 +2642,8 @@ def main():
         config.rerank = args.rerank
     if args.reranker_model:
         config.reranker_model = args.reranker_model
+    if args.chunk_strategy:
+        config.chunk_strategy = args.chunk_strategy
     if args.parent_chunk_size is not None:
         config.parent_chunk_size = args.parent_chunk_size
     if args.hyde is not None:

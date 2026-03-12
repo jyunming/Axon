@@ -49,7 +49,7 @@
         "axon.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Optional API key for Axon (matches RAG_API_KEY on the server)."
+          "description": "Optional API key for Axon (matches RAG_API_KEY on the server). Set this in your User settings (not Workspace) to avoid committing secrets to source control."
         },
         "axon.topK": {
           "type": "number",
