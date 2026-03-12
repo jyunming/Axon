@@ -99,6 +99,41 @@ class TestVectorStoreClose:
             assert store.client is None
 
 
+class TestMultiStoreReadOnly:
+    def test_multi_vector_store_delete_raises(self):
+        from axon.main import MultiVectorStore
+
+        ms = MultiVectorStore([])
+        import pytest
+
+        with pytest.raises(RuntimeError, match="merged"):
+            ms.delete_by_ids(["id1"])
+        with pytest.raises(RuntimeError, match="merged"):
+            ms.delete_documents(["id1"])
+
+    def test_multi_bm25_delete_raises(self):
+        from axon.main import MultiBM25Retriever
+
+        mr = MultiBM25Retriever([])
+        import pytest
+
+        with pytest.raises(RuntimeError, match="merged"):
+            mr.delete_documents(["id1"])
+
+
+def test_projects_root_precedence(tmp_path, monkeypatch):
+    from axon.main import AxonConfig
+
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text("projects_root: /path/from/yaml", encoding="utf-8")
+
+    # Env var should win over YAML
+    monkeypatch.setenv("AXON_PROJECTS_ROOT", "/path/from/env")
+
+    config = AxonConfig.load(str(yaml_path))
+    assert config.projects_root == "/path/from/env"
+
+
 class TestMultiStoreWriteErrors:
     """Merged parent-project views must raise on all write / delete operations."""
 

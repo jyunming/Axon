@@ -24,7 +24,7 @@ The following features are already implemented:
 | **Ingest quality** | Hash-based content deduplication on ingest (skips re-ingesting identical chunks) |
 | **Performance** | In-memory query result cache (`query_cache: true`) with true LRU eviction (`OrderedDict` + move-to-end on hit) |
 | **Web search** | Brave Search fallback when local KB is insufficient (truth grounding) |
-| **Evaluation** | RAGAS evaluation script (`scripts/evaluate.py`) |
+| **Evaluation** | Axon Eval smoke tests (`scripts/evaluate.py`) |
 | **Chunking** | Recursive character text splitter with configurable size/overlap |
 | **Projects** | Named knowledge base namespaces with isolated vector/BM25 stores |
 | **REPL @file/@folder** | Inline file/folder context attachment in REPL: `@file.txt`, `@file.docx`, `@file.pdf`, `@folder/` — reads plain text, extracts text from DOCX/PDF via loaders, recursively reads folders (capped at 120 KB total; hidden dirs skipped; unsupported extensions skipped) |
@@ -98,9 +98,9 @@ Standard RAG sends the raw user query directly to the retriever. SOTA systems tr
 - **Default kept as** `ms-marco-MiniLM-L-6-v2` (smaller, faster, already commonly cached). Upgrade when accuracy matters more than speed.
 
 #### 3.3 Contextual Compression ✅ DONE
-- **Status:** Implemented (LLM-based). Enable with `--compress` (CLI) or `"compress": true` (API) or `compress_context: true` in `config.yaml`.
-- **What it does:** After reranking, uses the generation LLM to extract only query-relevant sentences from each retrieved chunk (parallel via ThreadPoolExecutor). Falls back to the original chunk if compression fails or would expand the text. Integrates with small-to-big: compresses the parent passage, not the small child chunk.
-- **Note:** LLMLingua (token-level compression with a separate small LM) would be more efficient at scale but requires an additional model download. The LLM-based approach works out of the box with any configured provider.
+- **Status:** Implemented (LLM-based sentence extraction). Enable with `--compress` (CLI) or `"compress": true` (API) or `compress_context: true` in `config.yaml`.
+- **What it does:** After reranking, uses the generation LLM to extract only query-relevant sentences from each retrieved chunk (parallel via ThreadPoolExecutor). Falls back to the original chunk if extraction fails or would expand the text. Integrates with small-to-big: compresses the parent passage, not the small child chunk.
+- **Note:** This approach provides high readability and works out of the box with any configured LLM provider.
 
 ---
 
@@ -182,12 +182,12 @@ RAGAS script exists but is limited.
 
 | Framework | What It Adds | Status |
 |-----------|-------------|--------|
-| **RAGAS** | Faithfulness, Answer Relevancy, Context Recall, Context Precision | ✅ Implemented — runs in CI (`tests/test_eval_smoke.py`, `@pytest.mark.eval`): precision@k, context relevance, faithfulness, recall@k |
+| **Axon Eval** | Precision@k, Context Relevance, Faithfulness, Recall@k | ✅ Implemented — runs in CI (`tests/test_eval_smoke.py`, `@pytest.mark.eval`) |
 | **ARES** | Fine-tuned LLM judges, statistically confident scores | Missing |
 | **DeepEval** | Pytest-style CI/CD integration, 25+ metrics, MMLU/HumanEval benchmarks | Missing |
 | **TruLens** | OpenTelemetry tracing, RAG Triad, execution-flow inspection | Missing |
 
-Current gap: ARES, DeepEval, and TruLens not yet integrated. RAGAS evaluation runs in CI via `tests/test_eval_smoke.py` with precision@k, context relevance, faithfulness, and recall@k metrics.
+Current gap: ARES, DeepEval, and TruLens not yet integrated. Axon Eval smoke tests run in CI via `tests/test_eval_smoke.py`.
 
 ---
 
@@ -199,7 +199,7 @@ Current gap: ARES, DeepEval, and TruLens not yet integrated. RAGAS evaluation ru
 | Metadata filtering in vector search | Can't filter by date, source, tag | Medium | ✅ DONE — `filters` field on `/query` and `/search` endpoints |
 | Document deduplication on ingest | Re-ingesting same doc creates duplicates | Low | ✅ DONE — hash-based, enabled by default (`dedup_on_ingest: true`) |
 | Async streaming for hybrid path | BM25 runs sync, blocks | Medium | ⬜ Missing |
-| Chunk-level source citations in answers | Answers don't show which chunk they came from | Medium | ⚙️ Partial — sources returned in stream (`type: sources`); not yet inline in text |
+| Mandatory source citations in answers | Answers show exactly which chunk they came from | Medium | ✅ DONE — Mandated in system prompts; citations required for local & web results |
 
 ---
 
@@ -220,11 +220,11 @@ Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
 | ~~9~~ | ~~BGE Reranker v2-m3~~ | Low | Medium | ✅ Shipped — `--reranker-model BAAI/bge-reranker-v2-m3` or config |
 | ~~10~~ | ~~Parent-document / small-to-big retrieval~~ | Medium | High | ✅ Shipped — `parent_chunk_size` config / `--parent-chunk-size` CLI |
 | ~~1~~ | ~~Query decomposition~~ | Medium | Medium | ✅ Shipped — `--decompose` CLI / `"decompose": true` API |
-| ~~2~~ | ~~Context compression (LLMLingua)~~ | Medium | Medium | ✅ Shipped (LLM-based) — `--compress` CLI / `"compress": true` API |
-| ~~3~~ | ~~Inline chunk-level citations in answers~~ | Medium | Medium | ✅ Shipped — `--cite` CLI / `"cite": true` API / `cite_sources` config |
+| ~~2~~ | ~~Context compression (sentence extraction)~~ | Medium | Medium | ✅ Shipped (LLM-based) — `--compress` CLI / `"compress": true` API |
+| ~~3~~ | ~~Mandatory source citations in answers~~ | Medium | Medium | ✅ Shipped — mandated in system prompts |
 | ~~4~~ | ~~RAPTOR hierarchical indexing~~ | High | High | ✅ Shipped — `--raptor` CLI / `rag.raptor` config; LLM summary nodes indexed alongside leaf chunks |
 | ~~5~~ | ~~GraphRAG integration~~ | High | High | ✅ Shipped — `--graph-rag` CLI / `rag.graph_rag` config; entity graph persisted to `.entity_graph.json`; result expansion at query time |
-| ~~6~~ | ~~Evaluation in CI~~ | Medium | Medium | ✅ Shipped — `tests/test_eval_smoke.py` (precision@k, context relevance, faithfulness, recall@k); `@pytest.mark.eval`; dedicated CI step |
+| ~~6~~ | ~~Evaluation in CI~~ | Medium | Medium | ✅ Shipped — `tests/test_eval_smoke.py` (Axon Eval smoke tests); `@pytest.mark.eval`; dedicated CI step |
 
 ---
 

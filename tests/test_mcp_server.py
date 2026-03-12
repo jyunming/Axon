@@ -8,6 +8,7 @@ callable.  They do NOT start an HTTP server or the actual MCP transport — that
 would require integration infrastructure.
 """
 
+
 # Expected tool names as registered on the FastMCP instance
 EXPECTED_MCP_TOOL_NAMES = {
     "ingest_text",
@@ -122,3 +123,33 @@ def test_mcp_protocol_tools_list():
         f"Tool mismatch.\n  Missing: {EXPECTED_MCP_TOOL_NAMES - returned_names}\n"
         f"  Extra:   {returned_names - EXPECTED_MCP_TOOL_NAMES}"
     )
+
+
+def test_mcp_tool_invocation_proxies_to_api():
+    """Verify that calling an MCP tool function directly correctly proxies to the
+    REST API via httpx.AsyncClient."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from axon.mcp_server import ingest_text
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"status": "created", "doc_id": "123"}
+    mock_resp.raise_for_status = MagicMock()
+
+    # Mock httpx.AsyncClient.post
+    async def _run():
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+
+            result = await ingest_text(text="Hello world", project="test-p")
+
+            assert result == {"status": "created", "doc_id": "123"}
+            assert mock_post.called
+            # Check that it called the correct endpoint with correct body
+            args, kwargs = mock_post.call_args
+            assert args[0].endswith("/add_text")
+            assert kwargs["json"]["text"] == "Hello world"
+            assert kwargs["json"]["project"] == "test-p"
+
+    asyncio.run(_run())
