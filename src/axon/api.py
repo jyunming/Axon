@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from axon.main import AxonBrain, AxonConfig
+from axon.projects import list_projects as _list_projects
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -61,11 +62,31 @@ brain: AxonBrain | None = None
 # ---------------------------------------------------------------------------
 # Source-level dedup store
 # Keyed by project name → content_hash → {doc_id, last_ingested_at}.
-# NOTE: v1 uses "_global" as the project key for all endpoints.
-#       P1-D (per-call project targeting) will parameterise this properly.
 # This dict is in-memory only; it is lost on server restart.
 # ---------------------------------------------------------------------------
 _source_hashes: dict[str, dict[str, dict]] = {}
+
+# ---------------------------------------------------------------------------
+# Async ingest job status store  (P1-C)
+# Keyed by job_id.  In-memory only; single-worker deployments only.
+# Max 1000 jobs retained; entries older than 60 min are evicted on each write.
+# ---------------------------------------------------------------------------
+_jobs: dict[str, dict] = {}
+_MAX_JOBS = 1000
+_JOB_TTL_SECONDS = 3600  # 60 minutes
+
+
+def _evict_old_jobs() -> None:
+    """Remove completed jobs older than _JOB_TTL_SECONDS and cap at _MAX_JOBS."""
+    cutoff = datetime.now(timezone.utc).timestamp() - _JOB_TTL_SECONDS
+    expired = [jid for jid, job in _jobs.items() if job.get("started_at_ts", 0) < cutoff]
+    for jid in expired:
+        _jobs.pop(jid, None)
+    # Hard cap: keep only the most recent _MAX_JOBS by start time
+    if len(_jobs) > _MAX_JOBS:
+        oldest = sorted(_jobs, key=lambda j: _jobs[j].get("started_at_ts", 0))
+        for jid in oldest[: len(_jobs) - _MAX_JOBS]:
+            _jobs.pop(jid, None)
 
 
 def _compute_content_hash(text: str) -> str:
@@ -150,6 +171,10 @@ class TextIngestRequest(BaseModel):
         default_factory=dict, description="Metadata for the document"
     )
     doc_id: str | None = Field(None, description="Optional unique ID for the document")
+    project: str | None = Field(
+        None,
+        description="Target project namespace. Defaults to the active project when omitted.",
+    )
 
 
 class BatchDocItem(BaseModel):
@@ -166,6 +191,10 @@ class BatchTextIngestRequest(BaseModel):
     docs: list[BatchDocItem] = Field(
         ..., description="List of documents to ingest in one batch (one embedding call)"
     )
+    project: str | None = Field(
+        None,
+        description="Target project namespace applied to all docs. Defaults to the active project.",
+    )
 
 
 class URLIngestRequest(BaseModel):
@@ -173,6 +202,10 @@ class URLIngestRequest(BaseModel):
     metadata: dict[str, Any] | None = Field(
         default_factory=dict,
         description="Optional extra metadata merged with the loader's source metadata",
+    )
+    project: str | None = Field(
+        None,
+        description="Target project namespace. Defaults to the active project when omitted.",
     )
 
 
@@ -304,6 +337,21 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
 
+    # P1-C: create a tracked job
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now(timezone.utc)
+    _evict_old_jobs()
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "status": "processing",
+        "path": str(requested_path),
+        "started_at": now.isoformat(),
+        "started_at_ts": now.timestamp(),
+        "completed_at": None,
+        "documents_ingested": None,
+        "error": None,
+    }
+
     def process_ingestion():
         import asyncio
 
@@ -320,11 +368,36 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
                     brain.ingest(docs)
                 else:
                     logger.warning(f"Unsupported file type: {ext}")
+            _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = str(e)
+            _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     background_tasks.add_task(process_ingestion)
-    return {"message": f"Ingestion started for {validated_path}", "status": "processing"}
+    return {
+        "message": f"Ingestion started for {validated_path}",
+        "status": "processing",
+        "job_id": job_id,
+    }
+
+
+@app.get("/ingest/status/{job_id}")
+async def get_ingest_status(job_id: str):
+    """Poll the status of an async ingest job started by POST /ingest.
+
+    Returns 404 if the job_id is unknown or has been evicted (TTL: 60 min).
+    """
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job '{job_id}' not found. It may have already been evicted (TTL: 60 min) or the job_id is invalid.",
+        )
+    # Return a clean view without the internal timestamp field
+    return {k: v for k, v in job.items() if k != "started_at_ts"}
 
 
 @app.post("/add_text")
@@ -333,8 +406,9 @@ async def add_text(request: TextIngestRequest):
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
+    project_key = request.project or "_global"
 
-    skip = _check_and_record_dedup(request.text, doc_id)
+    skip = _check_and_record_dedup(request.text, doc_id, project_key)
     if skip:
         return {**skip, "doc_id": skip["doc_id"]}
 
@@ -366,10 +440,11 @@ async def add_texts(request: BatchTextIngestRequest):
 
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
+    project_key = request.project or "_global"
 
     for item in request.docs:
         doc_id = item.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
-        skip = _check_and_record_dedup(item.text, doc_id)
+        skip = _check_and_record_dedup(item.text, doc_id, project_key)
         if skip:
             results.append({"id": skip["doc_id"], "status": "skipped", "error": None})
             continue
@@ -405,6 +480,7 @@ async def ingest_url(request: URLIngestRequest):
     from axon.loaders import URLLoader
 
     loader = URLLoader()
+    project_key = request.project or "_global"
     try:
         docs = loader.load(request.url)
     except ValueError as exc:
@@ -420,7 +496,7 @@ async def ingest_url(request: URLIngestRequest):
     if request.metadata:
         doc["metadata"].update(request.metadata)
 
-    skip = _check_and_record_dedup(doc["text"], doc["id"])
+    skip = _check_and_record_dedup(doc["text"], doc["id"], project_key)
     if skip:
         return {**skip, "id": skip["doc_id"], "url": request.url}
 
@@ -447,6 +523,71 @@ async def get_collection():
     except Exception as e:
         logger.error(f"Error listing collection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/collection/stale")
+async def get_stale_docs(days: int = 7):
+    """Return documents that have not been re-ingested within *days* calendar days.
+
+    Staleness is measured against the ``last_ingested_at`` timestamp recorded in
+    the in-memory dedup store (``_source_hashes``).  Documents ingested before
+    the current server process started will not appear here — restart tracking
+    only begins once the server has seen a document in its current lifetime.
+
+    Query param:
+    - ``days`` (int, default 7): flag docs not re-ingested in this many days.
+    """
+    if days < 0:
+        raise HTTPException(status_code=400, detail="'days' must be >= 0.")
+
+    cutoff = datetime.now(timezone.utc).timestamp() - days * 86_400
+    stale: list[dict] = []
+    for project_name, hashes in _source_hashes.items():
+        for _content_hash, meta in hashes.items():
+            try:
+                ingested_ts = datetime.fromisoformat(meta["last_ingested_at"]).timestamp()
+            except (KeyError, ValueError):
+                continue
+            if ingested_ts < cutoff:
+                stale.append(
+                    {
+                        "doc_id": meta["doc_id"],
+                        "project": project_name,
+                        "last_ingested_at": meta["last_ingested_at"],
+                        "age_days": round(
+                            (datetime.now(timezone.utc).timestamp() - ingested_ts) / 86_400, 1
+                        ),
+                    }
+                )
+    return {"stale_docs": stale, "total": len(stale), "threshold_days": days}
+
+
+@app.get("/projects")
+async def get_projects():
+    """List all projects known to the Axon system.
+
+    Returns the on-disk project list from the projects store merged with
+    in-memory session tracking from the dedup store.
+    """
+    try:
+        on_disk = _list_projects()
+    except Exception as exc:  # projects root may not exist yet in fresh installs
+        logger.warning(f"Could not enumerate on-disk projects: {exc}")
+        on_disk = []
+
+    in_memory = list(_source_hashes.keys())
+    on_disk_names = {p["name"] for p in on_disk}
+    # Surface projects only seen in memory (e.g. via /add_text with project=)
+    memory_only = [
+        {"name": n, "source": "memory_only"}
+        for n in in_memory
+        if n not in on_disk_names and n != "_global"
+    ]
+    return {
+        "projects": on_disk,
+        "memory_only": memory_only,
+        "total": len(on_disk) + len(memory_only),
+    }
 
 
 @app.post("/delete")

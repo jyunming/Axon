@@ -212,6 +212,32 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_projects",
+                "description": "List all knowledge base projects known to the system, including on-disk projects and any project seen only in the current server session.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stale_docs",
+                "description": "Return documents that have not been re-ingested within a given number of days. Useful for identifying knowledge that may be outdated and needs refreshing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "description": "Flag documents not re-ingested within this many days. Defaults to 7.",
+                            "default": 7,
+                        }
+                    },
+                    "required": [],
+                },
+            },
+        },
     ]
 
 

@@ -655,3 +655,83 @@ class TestURLLoader:
         with patch("axon.loaders.socket.getaddrinfo", side_effect=socket.gaierror("NXDOMAIN")):
             with pytest.raises(ValueError, match="Could not resolve"):
                 loader.load("https://nonexistent.example.invalid")
+
+
+# ---------------------------------------------------------------------------
+# Gap 5 — _rewrite_github_url
+# ---------------------------------------------------------------------------
+
+
+class TestRewriteGithubUrl:
+    """Tests for the _rewrite_github_url helper (Gap 5)."""
+
+    def setup_method(self):
+        from axon.loaders import _rewrite_github_url
+
+        self.rewrite = _rewrite_github_url
+
+    def test_blob_url_rewritten_to_raw(self):
+        url = "https://github.com/openai/gpt-4/blob/main/README.md"
+        result = self.rewrite(url)
+        assert result == "https://raw.githubusercontent.com/openai/gpt-4/main/README.md"
+
+    def test_blob_url_with_subpath_rewritten(self):
+        url = "https://github.com/owner/repo/blob/develop/src/utils/helpers.py"
+        result = self.rewrite(url)
+        assert result == "https://raw.githubusercontent.com/owner/repo/develop/src/utils/helpers.py"
+
+    def test_http_blob_url_still_rewritten(self):
+        url = "http://github.com/owner/repo/blob/main/file.txt"
+        result = self.rewrite(url)
+        assert result == "https://raw.githubusercontent.com/owner/repo/main/file.txt"
+
+    def test_tree_url_raises_value_error(self):
+        url = "https://github.com/owner/repo/tree/main/src"
+        with pytest.raises(ValueError, match="tree"):
+            self.rewrite(url)
+
+    def test_gist_url_rewritten_to_raw(self):
+        url = "https://gist.github.com/torvalds/1234abcd5678ef90"
+        result = self.rewrite(url)
+        assert result == "https://gist.githubusercontent.com/torvalds/1234abcd5678ef90/raw"
+
+    def test_gist_url_with_trailing_slash(self):
+        url = "https://gist.github.com/user/abcdef1234567890/"
+        result = self.rewrite(url)
+        assert result == "https://gist.githubusercontent.com/user/abcdef1234567890/raw"
+
+    def test_non_github_url_unchanged(self):
+        url = "https://example.com/some/page.html"
+        assert self.rewrite(url) == url
+
+    def test_raw_githubusercontent_url_unchanged(self):
+        url = "https://raw.githubusercontent.com/owner/repo/main/file.py"
+        assert self.rewrite(url) == url
+
+    def test_github_releases_url_unchanged(self):
+        """Release asset URLs pass through (not blob/tree/gist)."""
+        url = "https://github.com/owner/repo/releases/download/v1.0/app.tar.gz"
+        assert self.rewrite(url) == url
+
+    def test_load_rewrites_github_blob_url(self):
+        """URLLoader.load() automatically rewrites GitHub blob URLs before fetching."""
+        from unittest.mock import MagicMock, patch
+
+        loader = URLLoader()
+        blob_url = "https://github.com/owner/repo/blob/main/README.md"
+        raw_url = "https://raw.githubusercontent.com/owner/repo/main/README.md"
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/plain"}
+        mock_resp.text = "# Hello World"
+
+        with patch(
+            "axon.loaders.socket.getaddrinfo", return_value=[("", "", "", "", ("1.2.3.4", 0))]
+        ):
+            with patch("httpx.get", return_value=mock_resp) as mock_get:
+                docs = loader.load(blob_url)
+                # httpx.get must have been called with the RAW url, not the blob url
+                called_url = mock_get.call_args[0][0]
+                assert called_url == raw_url
+        assert docs[0]["text"] == "# Hello World"

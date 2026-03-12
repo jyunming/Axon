@@ -217,6 +217,31 @@ def delete_documents(doc_ids: list[str]) -> dict:
     return _post("/delete", {"doc_ids": doc_ids})
 
 
+@mcp.tool()
+def list_projects() -> dict:
+    """List all knowledge base projects.
+
+    Returns on-disk projects (with metadata) plus any project seen only in the
+    current server session.  Call this to discover available namespaces before
+    switching or querying a project.
+    """
+    return _get("/projects")
+
+
+@mcp.tool()
+def get_stale_docs(days: int = 7) -> dict:
+    """Return documents that have not been re-ingested within *days* calendar days.
+
+    Use this to identify outdated knowledge that should be refreshed.  Only
+    documents ingested during the current server process lifetime are tracked \u2014
+    restart tracking begins fresh after each server restart.
+
+    Args:
+        days: Flag documents not re-ingested within this many days (default 7).
+    """
+    return _get(f"/collection/stale?days={days}")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

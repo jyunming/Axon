@@ -20,6 +20,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "list_knowledge",
     "switch_project",
     "delete_documents",
+    "list_projects",
+    "get_stale_docs",
 }
 
 

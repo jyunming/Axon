@@ -59,9 +59,11 @@ def reset_brain():
     original = api_module.brain
     api_module.brain = None
     api_module._source_hashes.clear()
+    api_module._jobs.clear()
     yield
     api_module.brain = original
     api_module._source_hashes.clear()
+    api_module._jobs.clear()
 
 
 def test_query_503_no_brain():
@@ -680,3 +682,215 @@ def test_ingest_url_dedup_skips_second_identical_url():
     data2 = resp2.json()
     assert data2["status"] == "skipped"
     assert api_module.brain.ingest.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# P1-C — job status tracking
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_returns_job_id(tmp_path):
+    """POST /ingest must include a job_id in the response."""
+    api_module.brain = _make_brain()
+
+    async def _noop(*_a, **_kw):
+        pass
+
+    api_module.brain.load_directory = _noop
+
+    resp = client.post("/ingest", json={"path": str(tmp_path)})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "job_id" in data
+    assert data["status"] == "processing"
+    assert len(data["job_id"]) == 12  # uuid hex[:12]
+
+
+def test_ingest_status_unknown_job_returns_404():
+    """GET /ingest/status/{job_id} returns 404 for an unrecognised job_id."""
+    resp = client.get("/ingest/status/doesnotexist")
+    assert resp.status_code == 404
+
+
+def test_ingest_status_known_job_returns_processing(tmp_path):
+    """GET /ingest/status/{job_id} returns the job record while pending."""
+    api_module.brain = _make_brain()
+
+    # Keep the background task pending by making load_directory block until
+    # we've had a chance to poll (we inject the job directly for simplicity).
+    job_id = "testjob123abc"
+    import datetime as _dt
+
+    api_module._jobs[job_id] = {
+        "job_id": job_id,
+        "status": "processing",
+        "path": str(tmp_path),
+        "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "started_at_ts": _dt.datetime.now(_dt.timezone.utc).timestamp(),
+        "completed_at": None,
+        "documents_ingested": None,
+        "error": None,
+    }
+
+    resp = client.get(f"/ingest/status/{job_id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["job_id"] == job_id
+    assert data["status"] == "processing"
+    # Internal timestamp field must not be exposed
+    assert "started_at_ts" not in data
+
+
+def test_ingest_status_completed_job():
+    """GET /ingest/status/{job_id} reflects completed status after job finishes."""
+    job_id = "completed999abc"
+    import datetime as _dt
+
+    api_module._jobs[job_id] = {
+        "job_id": job_id,
+        "status": "completed",
+        "path": "/some/path",
+        "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "started_at_ts": _dt.datetime.now(_dt.timezone.utc).timestamp(),
+        "completed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "documents_ingested": None,
+        "error": None,
+    }
+
+    resp = client.get(f"/ingest/status/{job_id}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# P1-D — per-call project targeting in dedup
+# ---------------------------------------------------------------------------
+
+
+def test_add_text_same_content_different_projects_not_skipped():
+    """Same text sent to two different projects must NOT be treated as a duplicate."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    text = "project-scoped dedup test content"
+
+    resp1 = client.post("/add_text", json={"text": text, "project": "alpha"})
+    assert resp1.status_code == 200
+    assert resp1.json()["status"] == "success"
+
+    resp2 = client.post("/add_text", json={"text": text, "project": "beta"})
+    assert resp2.status_code == 200
+    # Different project — must NOT be skipped
+    assert resp2.json()["status"] == "success"
+    assert api_module.brain.ingest.call_count == 2
+
+
+def test_add_text_same_content_same_project_is_skipped():
+    """Same text sent twice to the same project must be skipped on the second call."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    text = "project-scoped dedup same project content"
+
+    resp1 = client.post("/add_text", json={"text": text, "project": "alpha"})
+    assert resp1.json()["status"] == "success"
+
+    resp2 = client.post("/add_text", json={"text": text, "project": "alpha"})
+    assert resp2.json()["status"] == "skipped"
+    assert api_module.brain.ingest.call_count == 1  # only the first call ingested
+
+
+def test_add_text_no_project_defaults_to_global_namespace():
+    """Omitting 'project' must deduplicate against the _global namespace."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    text = "global namespace dedup content"
+
+    client.post("/add_text", json={"text": text})
+    resp2 = client.post("/add_text", json={"text": text})  # no project → _global
+    assert resp2.json()["status"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Gap 7 — GET /collection/stale
+# ---------------------------------------------------------------------------
+
+
+def test_stale_docs_empty_when_no_hashes():
+    """With no ingested docs in the session, stale endpoint returns empty list."""
+    resp = client.get("/collection/stale?days=7")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
+    assert data["stale_docs"] == []
+    assert data["threshold_days"] == 7
+
+
+def test_stale_docs_returns_old_entries():
+    """A doc timestamped in the past must appear in stale results."""
+    import datetime as _dt
+
+    api_module.brain = _make_brain()
+    # Manually plant an old entry in _source_hashes (simulates a doc from 10 days ago)
+    old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=10)).isoformat()
+    api_module._source_hashes["_global"] = {
+        "deadbeefdeadbeef": {"doc_id": "old-doc-1", "last_ingested_at": old_ts}
+    }
+
+    resp = client.get("/collection/stale?days=7")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["stale_docs"][0]["doc_id"] == "old-doc-1"
+    assert data["stale_docs"][0]["age_days"] >= 10
+
+
+def test_stale_docs_excludes_recent_entries():
+    """A doc ingested yesterday must NOT appear when threshold is 7 days."""
+    import datetime as _dt
+
+    api_module.brain = _make_brain()
+    recent_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=1)).isoformat()
+    api_module._source_hashes["_global"] = {
+        "cafebabecafebabe": {"doc_id": "recent-doc", "last_ingested_at": recent_ts}
+    }
+
+    resp = client.get("/collection/stale?days=7")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+
+
+def test_stale_docs_invalid_days_returns_400():
+    """Negative 'days' parameter must return 400."""
+    resp = client.get("/collection/stale?days=-1")
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Gap 8 — GET /projects
+# ---------------------------------------------------------------------------
+
+
+def test_get_projects_returns_structure():
+    """GET /projects returns the expected top-level keys."""
+    resp = client.get("/projects")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "projects" in data
+    assert "memory_only" in data
+    assert "total" in data
+
+
+def test_get_projects_includes_memory_only_projects():
+    """A project created via add_text in-memory should appear in memory_only."""
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+
+    client.post("/add_text", json={"text": "project test doc", "project": "sprint3-test"})
+
+    resp = client.get("/projects")
+    assert resp.status_code == 200
+    data = resp.json()
+    memory_names = [p["name"] for p in data["memory_only"]]
+    assert "sprint3-test" in memory_names

@@ -4,6 +4,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import urllib.parse
 from pathlib import Path
@@ -23,6 +24,46 @@ def _check_file_size(path: str) -> None:
         raise ValueError(
             f"File '{path}' is {size / (1024 * 1024):.1f} MB, " f"which exceeds the 100 MB limit."
         )
+
+
+def _rewrite_github_url(url: str) -> str:
+    """Rewrite GitHub web URLs to their raw/fetchable equivalents.
+
+    Supported rewrites:
+    - ``github.com/<owner>/<repo>/blob/<ref>/<path>``
+      → ``raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>``
+    - ``gist.github.com/<user>/<gist_id>``
+      → ``gist.githubusercontent.com/<user>/<gist_id>/raw``
+
+    Raises ``ValueError`` for GitHub tree (directory listing) URLs because they
+    cannot be fetched as a single document.  Use a specific file URL
+    (``/blob/...``) or clone the repo and use ``ingest_path`` instead.
+
+    All other URLs are returned unchanged.
+    """
+    # github.com blob URL → raw URL
+    blob_match = re.match(
+        r"^https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$", url, re.IGNORECASE
+    )
+    if blob_match:
+        owner, repo, ref, path = blob_match.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+
+    # github.com tree URL → helpful error (directory listings can't be one doc)
+    if re.match(r"^https?://github\.com/[^/]+/[^/]+/tree/", url, re.IGNORECASE):
+        raise ValueError(
+            "GitHub directory (tree) URLs cannot be fetched as a single document. "
+            "Provide a specific file URL ending in /blob/<ref>/<file>, or clone "
+            "the repository locally and use ingest_path instead."
+        )
+
+    # gist.github.com URL → raw gist URL
+    gist_match = re.match(r"^https?://gist\.github\.com/([^/]+)/([a-f0-9]+)/?$", url, re.IGNORECASE)
+    if gist_match:
+        user, gist_id = gist_match.groups()
+        return f"https://gist.githubusercontent.com/{user}/{gist_id}/raw"
+
+    return url
 
 
 def _extract_html_text(html: str) -> str:
@@ -233,11 +274,18 @@ class URLLoader(BaseLoader):
                     )
 
     def load(self, url: str) -> list[dict[str, Any]]:
-        """Fetch *url* and return its text content as a single document."""
+        """Fetch *url* and return its text content as a single document.
+
+        GitHub ``/blob/`` URLs are automatically rewritten to
+        ``raw.githubusercontent.com`` before any network contact is made.
+        GitHub Gist URLs are rewritten to their raw form.
+        GitHub tree (directory) URLs raise ``ValueError`` immediately.
+        """
         import uuid
 
         import httpx
 
+        url = _rewrite_github_url(url)  # Gap-5: rewrite before SSRF check
         self._check_ssrf(url)
         try:
             resp = httpx.get(url, timeout=30.0, max_redirects=5, follow_redirects=True)
