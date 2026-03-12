@@ -4,6 +4,76 @@ A plan to equip GitHub Copilot agent to ingest knowledge into the Axon
 via MCP tools, closing all identified API gaps and wiring in the workflow
 instruction layer.
 
+> **Status: COMPLETE** — All phases implemented across 3 sprints.
+> Last updated: 2026-03-12. 392 tests passing.
+
+---
+
+## Implementation Status
+
+### Gap Resolution
+
+| Gap | Description | Status | Implemented in |
+|-----|-------------|--------|----------------|
+| Gap 1 | No URL/Web Loader | ✅ Done | Sprint 1 — `URLLoader` in `loaders.py` + `POST /ingest_url` |
+| Gap 2 | No Batch Ingestion Endpoint | ✅ Done | Sprint 1 — `POST /add_texts` in `api.py` |
+| Gap 3 | Fire-and-Forget, No Status Tracking | ✅ Done | Sprint 2 — `GET /ingest/status/{job_id}` in `api.py` |
+| Gap 4 | No Source-Level Dedup / Skip Signaling | ✅ Done | Sprint 1 — SHA-256 `_source_hashes` in `api.py` |
+| Gap 5 | No GitHub-Specific Loader | ✅ Done (partial) | Sprint 3 — `_rewrite_github_url()` in `loaders.py`; blob→raw, gist→raw auto-rewrite; tree URLs raise helpful error. GitHub Issues/PRs API not included. |
+| Gap 6 | No Per-Call Project Targeting | ✅ Done | Sprint 2 — `project` field on all ingest models |
+| Gap 7 | No Knowledge Freshness / TTL | ✅ Done | Sprint 3 — `GET /collection/stale?days=N` in `api.py` |
+| Gap 8 | No Cross-Project Search | ✅ Done | `switch_project(parent)` already fans out via `MultiVectorStore` + `MultiBM25Retriever` across all descendants (up to 3 levels). `GET /projects` lists available namespaces. To search unrelated top-level projects, group them under a shared parent (e.g. `docs/react`, `docs/python`). |
+| Gap 9 | No MCP Server | ✅ Done | Sprint 2 — `src/axon/mcp_server.py` (FastMCP, 12 tools) |
+| Gap 10 | No Copilot Workflow Instructions | ✅ Done | Sprint 1 — `.github/copilot-instructions.md` |
+
+### Phase Completion
+
+| Phase | Status | Branch | Commit |
+|-------|--------|--------|--------|
+| P0 (Prerequisites) | ✅ | `feature/knowledge-center-api` | — |
+| P1-A Batch endpoint | ✅ | `feature/knowledge-center-api` | `ee28c30` |
+| P1-B URL loader | ✅ | `feature/knowledge-center-api` | `ee28c30` |
+| P1-C Job status | ✅ | `feature/knowledge-center-mcp` | `e7688cd` |
+| P1-D Per-call project | ✅ | `feature/knowledge-center-mcp` | `e7688cd` |
+| P1-E Source dedup | ✅ | `feature/knowledge-center-api` | `ee28c30` |
+| P2-A MCP server | ✅ | `feature/knowledge-center-mcp` | `e7688cd` |
+| P2-B `.vscode/mcp.json` | ✅ | local-only (gitignored) | — |
+| P2-C Dep updates | ✅ | `feature/knowledge-center-mcp` | `e7688cd` |
+| P3-A Copilot instructions | ✅ | local-only (gitignored) | — |
+| P3-B Dev instructions | ✅ | `feature/knowledge-center-api` | `ee28c30` |
+| Gap 5 GitHub URL rewriting | ✅ | `feature/knowledge-center-gaps` | Sprint 3 |
+| Gap 7 Staleness endpoint | ✅ | `feature/knowledge-center-gaps` | Sprint 3 |
+| Gap 8 Projects listing | ✅ | `feature/knowledge-center-gaps` | Sprint 3 |
+| Phase 4 Tests | ✅ | All branches | 392 tests pass |
+
+### MCP Tools Inventory (12 tools in `mcp_server.py`)
+
+| MCP Tool | Maps to | Notes |
+|----------|---------|-------|
+| `ingest_text` | `POST /add_text` | Single doc + optional project |
+| `ingest_texts` | `POST /add_texts` | Batch, one embedding round-trip |
+| `ingest_url` | `POST /ingest_url` | Auto-rewrites GitHub blob/gist URLs |
+| `ingest_path` | `POST /ingest` | Returns `job_id` for polling |
+| `get_job_status` | `GET /ingest/status/{id}` | 60-min TTL |
+| `search_knowledge` | `POST /search` | Raw chunk retrieval |
+| `query_knowledge` | `POST /query` | Synthesised answer |
+| `list_knowledge` | `GET /collection` | Sources + chunk counts |
+| `switch_project` | `POST /project/switch` | Mutates global state — prefer `project=` param |
+| `delete_documents` | `POST /delete` | Removes from vector store + BM25 |
+| `list_projects` | `GET /projects` | On-disk + in-memory projects |
+| `get_stale_docs` | `GET /collection/stale?days=N` | Freshness tracking |
+
+### Known Limitations (Future Work)
+
+- **GitHub Issues/PRs**: `_rewrite_github_url()` only handles blob file URLs and
+  gists. Fetching GitHub Issues, PRs, or full repo trees requires the GitHub
+  REST API (authentication, pagination) — out of scope for this plan.
+- **Multi-worker job status**: `_jobs` is in-memory only. In a `uvicorn --workers > 1`
+  deployment, job status is inconsistent across workers. Use Redis or a DB for
+  production multi-worker setups.
+- **Knowledge TTL eviction**: `GET /collection/stale` identifies stale docs but
+  does not auto-delete them. Automated staleness eviction is a follow-up feature.
+
 ---
 
 ## Background & Design Rationale

@@ -36,6 +36,7 @@ setup(
         "rank_bm25>=0.2.2",
         "streamlit>=1.30.0",
         "httpx>=0.25.0",
+        "mcp>=1.0.0",
         "pyyaml>=6.0.0",
         "pandas>=2.0.0",
         "Pillow>=10.0.0",
@@ -59,6 +60,7 @@ setup(
             "axon=axon.main:main",
             "axon-ui=axon.webapp:main_ui",
             "axon-api=axon.api:main",
+            "axon-mcp=axon.mcp_server:main",
         ],
     },
 )

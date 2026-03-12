@@ -1,31 +1,39 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 from axon.main import AxonBrain, AxonConfig
 
 
-def test_should_recommend_project_true_when_default_and_no_projects():
-    with patch("axon.projects.list_projects", return_value=[]):
-        config = AxonConfig()
-        brain = AxonBrain(config)
+@pytest.fixture
+def mock_brain():
+    with patch("axon.main.OpenEmbedding"):
+        with patch("axon.main.OpenLLM"):
+            with patch("axon.main.OpenVectorStore"):
+                with patch("axon.retrievers.BM25Retriever"):
+                    config = AxonConfig()
+                    brain = AxonBrain(config)
+                    return brain
+
+
+def test_should_recommend_project_true_when_default_and_no_other_projects(mock_brain):
+    # Simulate list_projects returning only the 'default' project
+    with patch("axon.projects.list_projects", return_value=[{"name": "default"}]):
         # By default brain starts in 'default' project
-        assert brain._active_project == "default"
-        assert brain.should_recommend_project() is True
+        assert mock_brain._active_project == "default"
+        assert mock_brain.should_recommend_project() is True
 
 
-def test_should_recommend_project_false_when_not_default():
-    with patch("axon.projects.list_projects", return_value=[]):
-        config = AxonConfig()
-        brain = AxonBrain(config)
-        brain._active_project = "my-project"
-        assert brain.should_recommend_project() is False
+def test_should_recommend_project_false_when_not_default(mock_brain):
+    with patch("axon.projects.list_projects", return_value=[{"name": "default"}]):
+        mock_brain._active_project = "my-project"
+        assert mock_brain.should_recommend_project() is False
 
 
-def test_should_recommend_project_false_when_projects_exist():
-    with patch("axon.projects.list_projects", return_value=[{"name": "p1"}]):
-        config = AxonConfig()
-        brain = AxonBrain(config)
-        assert brain.should_recommend_project() is False
+def test_should_recommend_project_false_when_other_projects_exist(mock_brain):
+    with patch("axon.projects.list_projects", return_value=[{"name": "default"}, {"name": "p1"}]):
+        assert mock_brain.should_recommend_project() is False
 
 
 def test_wsl_path_resolution_legacy_defaults():

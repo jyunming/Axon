@@ -64,6 +64,10 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                             "type": "object",
                             "description": "Optional metadata like {'source': 'web', 'topic': 'finance'}",
                         },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional project namespace. Defaults to the active project.",
+                        },
                     },
                     "required": ["text"],
                 },
@@ -91,7 +95,7 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
             "type": "function",
             "function": {
                 "name": "ingest_directory",
-                "description": "Ingest a local file or directory into the knowledge base. Triggers background processing. Path must be within the allowed base directory (RAG_INGEST_BASE).",
+                "description": "Ingest a local file or directory into the knowledge base. Returns a job_id for polling via get_job_status. Path must be within the allowed base directory (RAG_INGEST_BASE).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -125,6 +129,113 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                 "name": "list_knowledge_base",
                 "description": "List all unique source files ingested into the knowledge base, with chunk counts. Calls GET /collection.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_job_status",
+                "description": "Poll the status of an async directory ingest job started by ingest_directory. Returns status: processing | completed | failed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {
+                            "type": "string",
+                            "description": "The job_id returned by ingest_directory.",
+                        }
+                    },
+                    "required": ["job_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "add_texts",
+                "description": "Add multiple text documents to the knowledge base in a single batched embedding call. Prefer this over calling add_knowledge repeatedly.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "docs": {
+                            "type": "array",
+                            "description": "List of documents to ingest.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "The text content to ingest.",
+                                    },
+                                    "doc_id": {
+                                        "type": "string",
+                                        "description": "Optional stable ID. A UUID is assigned if omitted.",
+                                    },
+                                    "metadata": {
+                                        "type": "object",
+                                        "description": "Optional metadata dict (e.g. {'source': 'https://...', 'topic': 'react'}).",
+                                    },
+                                },
+                                "required": ["text"],
+                            },
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional project namespace applied to all docs in this batch.",
+                        },
+                    },
+                    "required": ["docs"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ingest_url",
+                "description": "Fetch an HTTP/HTTPS URL and ingest its text content into the knowledge base. HTML is stripped automatically. Private/internal URLs are blocked.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The HTTP or HTTPS URL to fetch and ingest.",
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Optional extra metadata merged with the page's source metadata.",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional project namespace. Defaults to the active project.",
+                        },
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_projects",
+                "description": "List all knowledge base projects known to the system, including on-disk projects and any project seen only in the current server session.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stale_docs",
+                "description": "Return documents that have not been re-ingested within a given number of days. Useful for identifying knowledge that may be outdated and needs refreshing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "description": "Flag documents not re-ingested within this many days. Defaults to 7.",
+                            "default": 7,
+                        }
+                    },
+                    "required": [],
+                },
             },
         },
     ]

@@ -1425,14 +1425,18 @@ Your primary goal is to help the user by answering questions based on the provid
     def should_recommend_project(self) -> bool:
         """Return True if we should recommend creating a dedicated project.
 
-        True if the active project is 'default' AND no named projects exist yet.
+        True if the active project is 'default' AND no OTHER named projects exist yet.
         """
         if self._active_project != "default":
             return False
         from axon.projects import list_projects
 
         try:
-            return not list_projects()
+            # list_projects includes 'default' if it was ensured.
+            # We only recommend if NO OTHER projects exist.
+            projects = list_projects()
+            named_projects = [p for p in projects if p["name"] != "default"]
+            return len(named_projects) == 0
         except Exception:
             return False
 
@@ -3733,8 +3737,6 @@ _AT_LOADER_EXTS = {
     ".docx",
     ".pptx",
     ".pdf",
-    ".doc",
-    ".ppt",
     ".bmp",
     ".png",
     ".jpg",

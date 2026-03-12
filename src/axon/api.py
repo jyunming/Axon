@@ -1,6 +1,9 @@
+import hashlib
 import logging
 import os
 import pathlib
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import uvicorn
@@ -9,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from axon.main import AxonBrain, AxonConfig
+from axon.projects import list_projects as _list_projects
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -17,14 +21,16 @@ logger = logging.getLogger("AxonAPI")
 
 def _validate_ingest_path(path: str) -> str:
     """Validate that path is within the allowed base directory."""
-    allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
-    abs_path = os.path.abspath(path)
-    if not abs_path.startswith(allowed_base):
+    allowed_base = pathlib.Path(os.getenv("RAG_INGEST_BASE", ".")).resolve()
+    abs_path = pathlib.Path(path).resolve()
+    try:
+        abs_path.relative_to(allowed_base)
+    except ValueError:
         raise HTTPException(
             status_code=403,
             detail=f"Path '{path}' is outside the allowed ingest directory. Set RAG_INGEST_BASE to permit additional paths.",
         )
-    return abs_path
+    return str(abs_path)
 
 
 app = FastAPI(
@@ -54,6 +60,73 @@ async def api_key_middleware(request: Request, call_next):
 
 # Global Brain Instance
 brain: AxonBrain | None = None
+
+# ---------------------------------------------------------------------------
+# Source-level dedup store
+# Keyed by project name → content_hash → {doc_id, last_ingested_at}.
+# This dict is in-memory only; it is lost on server restart.
+# ---------------------------------------------------------------------------
+_source_hashes: dict[str, dict[str, dict]] = {}
+
+# ---------------------------------------------------------------------------
+# Async ingest job status store  (P1-C)
+# Keyed by job_id.  In-memory only; single-worker deployments only.
+# Max 1000 jobs retained; entries older than 60 min are evicted on each write.
+# ---------------------------------------------------------------------------
+_jobs: dict[str, dict] = {}
+_MAX_JOBS = 1000
+_JOB_TTL_SECONDS = 3600  # 60 minutes
+
+
+def _evict_old_jobs() -> None:
+    """Remove completed jobs older than _JOB_TTL_SECONDS and cap at _MAX_JOBS."""
+    cutoff = datetime.now(timezone.utc).timestamp() - _JOB_TTL_SECONDS
+    expired = [jid for jid, job in list(_jobs.items()) if job.get("started_at_ts", 0) < cutoff]
+    for jid in expired:
+        _jobs.pop(jid, None)
+    # Hard cap: keep only the most recent _MAX_JOBS by start time
+    if len(_jobs) > _MAX_JOBS:
+        oldest = sorted(_jobs, key=lambda j: _jobs[j].get("started_at_ts", 0))
+        for jid in oldest[: len(_jobs) - _MAX_JOBS]:
+            _jobs.pop(jid, None)
+
+
+def _compute_content_hash(text: str) -> str:
+    """Return a SHA-256 hex digest of the normalised text content."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+def _check_dedup(text: str, project: str = "_global") -> dict | None:
+    """Check whether *text* was already ingested in *project*.
+
+    Returns a ``{status, reason, doc_id}`` dict if the content is a duplicate
+    (caller should short-circuit and return that response without ingesting).
+    Returns ``None`` if the content is new — does NOT record the hash; call
+    :func:`_record_dedup` after a successful ingest to do that.
+    """
+    content_hash = _compute_content_hash(text)
+    bucket = _source_hashes.get(project, {})
+    if content_hash in bucket:
+        existing = bucket[content_hash]
+        return {
+            "status": "skipped",
+            "reason": "already_ingested",
+            "doc_id": existing["doc_id"],
+        }
+    return None
+
+
+def _record_dedup(text: str, doc_id: str, project: str = "_global") -> None:
+    """Record the content hash *after* a successful ingest.
+
+    Must only be called once ``brain.ingest()`` (or equivalent) has succeeded
+    so that a failed ingest cannot poison the dedup store.
+    """
+    content_hash = _compute_content_hash(text)
+    _source_hashes.setdefault(project, {})[content_hash] = {
+        "doc_id": doc_id,
+        "last_ingested_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.on_event("startup")
@@ -109,6 +182,42 @@ class TextIngestRequest(BaseModel):
         default_factory=dict, description="Metadata for the document"
     )
     doc_id: str | None = Field(None, description="Optional unique ID for the document")
+    project: str | None = Field(
+        None,
+        description="Target project namespace. Defaults to the active project when omitted.",
+    )
+
+
+class BatchDocItem(BaseModel):
+    """A single item within a batch ingest request."""
+
+    text: str = Field(..., description="The content to ingest")
+    doc_id: str | None = Field(
+        None, description="Optional unique ID; a UUID4 prefix is assigned if omitted"
+    )
+    metadata: dict[str, Any] | None = Field(default_factory=dict, description="Optional metadata")
+
+
+class BatchTextIngestRequest(BaseModel):
+    docs: list[BatchDocItem] = Field(
+        ..., description="List of documents to ingest in one batch (one embedding call)"
+    )
+    project: str | None = Field(
+        None,
+        description="Target project namespace applied to all docs. Defaults to the active project.",
+    )
+
+
+class URLIngestRequest(BaseModel):
+    url: str = Field(..., description="HTTP or HTTPS URL to fetch and ingest")
+    metadata: dict[str, Any] | None = Field(
+        default_factory=dict,
+        description="Optional extra metadata merged with the loader's source metadata",
+    )
+    project: str | None = Field(
+        None,
+        description="Target project namespace. Defaults to the active project when omitted.",
+    )
 
 
 class DeleteRequest(BaseModel):
@@ -239,6 +348,21 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
 
+    # P1-C: create a tracked job
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now(timezone.utc)
+    _evict_old_jobs()
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "status": "processing",
+        "path": str(requested_path),
+        "started_at": now.isoformat(),
+        "started_at_ts": now.timestamp(),
+        "completed_at": None,
+        "documents_ingested": None,
+        "error": None,
+    }
+
     def process_ingestion():
         import asyncio
 
@@ -255,11 +379,36 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
                     brain.ingest(docs)
                 else:
                     logger.warning(f"Unsupported file type: {ext}")
+            _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = str(e)
+            _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     background_tasks.add_task(process_ingestion)
-    return {"message": f"Ingestion started for {validated_path}", "status": "processing"}
+    return {
+        "message": f"Ingestion started for {validated_path}",
+        "status": "processing",
+        "job_id": job_id,
+    }
+
+
+@app.get("/ingest/status/{job_id}")
+async def get_ingest_status(job_id: str):
+    """Poll the status of an async ingest job started by POST /ingest.
+
+    Returns 404 if the job_id is unknown or has been evicted (TTL: 60 min).
+    """
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job '{job_id}' not found. It may have already been evicted (TTL: 60 min) or the job_id is invalid.",
+        )
+    # Return a clean view without the internal timestamp field
+    return {k: v for k, v in job.items() if k != "started_at_ts"}
 
 
 @app.post("/add_text")
@@ -267,9 +416,12 @@ async def add_text(request: TextIngestRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
-    import uuid
-
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
+    project_key = request.project or "_global"
+
+    skip = _check_dedup(request.text, project_key)
+    if skip:
+        return {**skip, "doc_id": skip["doc_id"]}
 
     doc = {
         "id": doc_id,
@@ -279,15 +431,112 @@ async def add_text(request: TextIngestRequest):
 
     try:
         brain.ingest([doc])
+        _record_dedup(request.text, doc_id, project_key)
         return {"status": "success", "doc_id": doc_id}
     except Exception as e:
         logger.error(f"Error adding text: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/add_texts")
+async def add_texts(request: BatchTextIngestRequest):
+    """Ingest a list of documents in a single embedding batch.
+
+    Each item is checked for duplicate content before ingestion. Duplicate
+    items receive ``status: skipped`` in the response without calling the
+    embedding model. All non-duplicate items are ingested in one
+    ``brain.ingest()`` call (one batched embedding round-trip).
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    results: list[dict] = []
+    docs_to_ingest: list[dict] = []
+    project_key = request.project or "_global"
+
+    # pending_records maps doc_id → item.text for dedup recording after ingest
+    pending_records: list[tuple[str, str]] = []
+    # within-batch dedup: track content_hash → doc_id for items in this request
+    batch_hashes: dict[str, str] = {}
+
+    for item in request.docs:
+        doc_id = item.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
+        skip = _check_dedup(item.text, project_key)
+        if skip:
+            results.append({"id": skip["doc_id"], "status": "skipped", "error": None})
+            continue
+        content_hash = _compute_content_hash(item.text)
+        if content_hash in batch_hashes:
+            results.append({"id": batch_hashes[content_hash], "status": "skipped", "error": None})
+            continue
+        batch_hashes[content_hash] = doc_id
+        doc = {
+            "id": doc_id,
+            "text": item.text,
+            "metadata": item.metadata or {"source": "api_agent", "type": "agent_input"},
+        }
+        docs_to_ingest.append(doc)
+        pending_records.append((doc_id, item.text))
+        results.append({"id": doc_id, "status": "created", "error": None})
+
+    if docs_to_ingest:
+        try:
+            brain.ingest(docs_to_ingest)
+            for doc_id, text in pending_records:
+                _record_dedup(text, doc_id, project_key)
+        except Exception as e:
+            logger.error(f"Error batch-ingesting texts: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return results
+
+
+@app.post("/ingest_url")
+async def ingest_url(request: URLIngestRequest):
+    """Fetch an HTTP/HTTPS URL and ingest its text content.
+
+    The URL is validated for scheme and SSRF-safe IP ranges before any network
+    request is made. Binary or non-text responses are rejected. Duplicate
+    content (same SHA-256 as a previously ingested document) is skipped.
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    from axon.loaders import URLLoader
+
+    loader = URLLoader()
+    project_key = request.project or "_global"
+    try:
+        docs = loader.load(request.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"Unexpected error fetching URL '{request.url}': {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if not docs:
+        raise HTTPException(status_code=422, detail="No content could be extracted from the URL.")
+
+    doc = docs[0]
+    if request.metadata:
+        doc["metadata"].update(request.metadata)
+
+    skip = _check_dedup(doc["text"], project_key)
+    if skip:
+        return {**skip, "doc_id": skip["doc_id"], "url": request.url}
+
+    try:
+        brain.ingest([doc])
+        _record_dedup(doc["text"], doc["id"], project_key)
+    except Exception as exc:
+        logger.error(f"Error ingesting URL content: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"status": "ingested", "doc_id": doc["id"], "url": request.url}
+
+
 @app.get("/collection")
 async def get_collection():
-    """List all unique sources in the knowledge base with chunk counts."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
@@ -300,6 +549,71 @@ async def get_collection():
     except Exception as e:
         logger.error(f"Error listing collection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/collection/stale")
+async def get_stale_docs(days: int = 7):
+    """Return documents that have not been re-ingested within *days* calendar days.
+
+    Staleness is measured against the ``last_ingested_at`` timestamp recorded in
+    the in-memory dedup store (``_source_hashes``).  Documents ingested before
+    the current server process started will not appear here — restart tracking
+    only begins once the server has seen a document in its current lifetime.
+
+    Query param:
+    - ``days`` (int, default 7): flag docs not re-ingested in this many days.
+    """
+    if days < 0:
+        raise HTTPException(status_code=400, detail="'days' must be >= 0.")
+
+    cutoff = datetime.now(timezone.utc).timestamp() - days * 86_400
+    stale: list[dict] = []
+    for project_name, hashes in _source_hashes.items():
+        for _content_hash, meta in hashes.items():
+            try:
+                ingested_ts = datetime.fromisoformat(meta["last_ingested_at"]).timestamp()
+            except (KeyError, ValueError):
+                continue
+            if ingested_ts < cutoff:
+                stale.append(
+                    {
+                        "doc_id": meta["doc_id"],
+                        "project": project_name,
+                        "last_ingested_at": meta["last_ingested_at"],
+                        "age_days": round(
+                            (datetime.now(timezone.utc).timestamp() - ingested_ts) / 86_400, 1
+                        ),
+                    }
+                )
+    return {"stale_docs": stale, "total": len(stale), "threshold_days": days}
+
+
+@app.get("/projects")
+async def get_projects():
+    """List all projects known to the Axon system.
+
+    Returns the on-disk project list from the projects store merged with
+    in-memory session tracking from the dedup store.
+    """
+    try:
+        on_disk = _list_projects()
+    except Exception as exc:  # projects root may not exist yet in fresh installs
+        logger.warning(f"Could not enumerate on-disk projects: {exc}")
+        on_disk = []
+
+    in_memory = list(_source_hashes.keys())
+    on_disk_names = {p["name"] for p in on_disk}
+    # Surface projects only seen in memory (e.g. via /add_text with project=)
+    memory_only = [
+        {"name": n, "source": "memory_only"}
+        for n in in_memory
+        if n not in on_disk_names and n != "_global"
+    ]
+    return {
+        "projects": on_disk,
+        "memory_only": memory_only,
+        "total": len(on_disk) + len(memory_only),
+    }
 
 
 @app.post("/delete")

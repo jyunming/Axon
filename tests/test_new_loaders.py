@@ -1,7 +1,7 @@
 import os
 from unittest.mock import MagicMock, patch
 
-from axon.loaders import DirectoryLoader, ImageLoader, LegacyOfficeLoader, PPTXLoader
+from axon.loaders import DirectoryLoader, ImageLoader, PPTXLoader
 
 
 def test_pptx_loader_mock():
@@ -29,23 +29,6 @@ def test_pptx_loader_mock():
                 os.remove("test.pptx")
 
 
-def test_legacy_office_loader_mock():
-    mock_textract = MagicMock()
-    mock_textract.process.return_value = b"Legacy Content"
-    with patch.dict("sys.modules", {"textract": mock_textract}):
-        loader = LegacyOfficeLoader()
-        with open("test.doc", "w") as f:
-            f.write("dummy")
-        try:
-            docs = loader.load("test.doc")
-            assert len(docs) == 1
-            assert docs[0]["text"] == "Legacy Content"
-            assert docs[0]["metadata"]["type"] == "legacy_office"
-        finally:
-            if os.path.exists("test.doc"):
-                os.remove("test.doc")
-
-
 def test_image_loader_jpg_mock():
     mock_img = MagicMock()
     mock_img.convert.return_value = mock_img
@@ -69,8 +52,6 @@ def test_image_loader_jpg_mock():
 def test_directory_loader_registers_new_extensions():
     loader = DirectoryLoader()
     assert ".pptx" in loader.loaders
-    assert ".doc" in loader.loaders
-    assert ".ppt" in loader.loaders
     assert ".jpg" in loader.loaders
     assert ".jpeg" in loader.loaders
     assert ".png" in loader.loaders
