@@ -22,7 +22,7 @@ instruction layer.
 | Gap 5 | No GitHub-Specific Loader | ✅ Done (partial) | Sprint 3 — `_rewrite_github_url()` in `loaders.py`; blob→raw, gist→raw auto-rewrite; tree URLs raise helpful error. GitHub Issues/PRs API not included. |
 | Gap 6 | No Per-Call Project Targeting | ✅ Done | Sprint 2 — `project` field on all ingest models |
 | Gap 7 | No Knowledge Freshness / TTL | ✅ Done | Sprint 3 — `GET /collection/stale?days=N` in `api.py` |
-| Gap 8 | No Cross-Project Search | ✅ Done (partial) | Sprint 3 — `GET /projects` listing in `api.py`; full cross-project vector search not implemented (requires multi-brain architecture). |
+| Gap 8 | No Cross-Project Search | ✅ Done | `switch_project(parent)` already fans out via `MultiVectorStore` + `MultiBM25Retriever` across all descendants (up to 3 levels). `GET /projects` lists available namespaces. To search unrelated top-level projects, group them under a shared parent (e.g. `docs/react`, `docs/python`). |
 | Gap 9 | No MCP Server | ✅ Done | Sprint 2 — `src/axon/mcp_server.py` (FastMCP, 12 tools) |
 | Gap 10 | No Copilot Workflow Instructions | ✅ Done | Sprint 1 — `.github/copilot-instructions.md` |
 
@@ -68,9 +68,6 @@ instruction layer.
 - **GitHub Issues/PRs**: `_rewrite_github_url()` only handles blob file URLs and
   gists. Fetching GitHub Issues, PRs, or full repo trees requires the GitHub
   REST API (authentication, pagination) — out of scope for this plan.
-- **Cross-project vector search**: `GET /projects` lists projects but search
-  operates on the active project only. True cross-project search requires
-  instantiating multiple `AxonBrain` instances and merging results.
 - **Multi-worker job status**: `_jobs` is in-memory only. In a `uvicorn --workers > 1`
   deployment, job status is inconsistent across workers. Use Redis or a DB for
   production multi-worker setups.
