@@ -633,9 +633,14 @@ class TestURLLoader:
 
     def test_timeout_raises_value_error(self):
         import httpx
+        import socket
 
         loader = URLLoader()
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+        # Patch both SSRF and getaddrinfo to be doubly safe
+        with patch("axon.loaders.URLLoader._check_ssrf"), \
+             patch("axon.loaders.socket.getaddrinfo"), \
+             patch("httpx.Client") as mock_client_cls:
+
             mock_http = mock_client_cls.return_value.__enter__.return_value
             mock_http.get.side_effect = httpx.TimeoutException("timeout", request=None)
             with pytest.raises(ValueError, match="timed out"):
@@ -643,9 +648,13 @@ class TestURLLoader:
 
     def test_too_many_redirects_raises_value_error(self):
         import httpx
+        import socket
 
         loader = URLLoader()
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+        with patch("axon.loaders.URLLoader._check_ssrf"), \
+             patch("axon.loaders.socket.getaddrinfo"), \
+             patch("httpx.Client") as mock_client_cls:
+
             mock_http = mock_client_cls.return_value.__enter__.return_value
             mock_http.get.side_effect = httpx.TooManyRedirects("redirects", request=None)
             with pytest.raises(ValueError, match="redirects"):
