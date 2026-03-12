@@ -240,7 +240,7 @@ class SearchResult(BaseModel):
 # Endpoints
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "brain_ready": brain is not None}
+    return {"status": "healthy", "axon_ready": brain is not None}
 
 
 @app.post("/query")

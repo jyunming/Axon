@@ -43,7 +43,7 @@ The system has external dependencies that must be mocked in unit tests:
 
 ### `api.py`
 - `GET /health` returns `{"status": "healthy", "axon_ready": true/false}`.
-- `POST /query` returns 503 when `AxonBrain` is `None`.
+- `POST /query` returns 503 when the global `brain` instance is `None`.
 - `POST /add_text` auto-generates `doc_id` when not provided.
 - `POST /ingest` returns 404 when path does not exist.
 

@@ -46,6 +46,7 @@ def test_health_returns_200():
     assert resp.status_code == 200
     data = resp.json()
     assert "status" in data
+    assert "axon_ready" in data
 
 
 # ---------------------------------------------------------------------------
