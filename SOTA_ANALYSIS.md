@@ -61,11 +61,10 @@ Standard RAG sends the raw user query directly to the retriever. SOTA systems tr
 
 ---
 
-### 2. Advanced Indexing Strategies — Not Implemented
+### 2. Advanced Indexing Strategies — ✅ Mostly Implemented
 
-Current system indexes fixed-size chunks. SOTA systems use more sophisticated indexing hierarchies.
-
-#### 2.1 RAPTOR — Recursive Abstractive Processing for Tree-Organized Retrieval
+#### 2.1 RAPTOR — Recursive Abstractive Processing for Tree-Organized Retrieval ✅ DONE
+- **Status:** Implemented. Enable with `--raptor` (CLI), `/rag raptor` (REPL), or `rag.raptor: true` in `config.yaml`. LLM summary nodes are indexed alongside leaf chunks.
 - **What it does:** Clusters document chunks, generates LLM summaries for each cluster, then clusters those summaries — building a hierarchical tree. Retrieval can happen at any level.
 - **Why it matters:** Enables both fine-grained chunk retrieval (leaf level) and broad thematic retrieval (summary level). Especially effective for long documents and thematic questions.
 - **Papers:** Sarthi et al., 2024 — "RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval"
@@ -105,15 +104,17 @@ Current system indexes fixed-size chunks. SOTA systems use more sophisticated in
 
 ---
 
-### 4. GraphRAG — Not Implemented
+### 4. GraphRAG — ✅ Implemented
 
-#### 4.1 Microsoft GraphRAG
+#### 4.1 Microsoft GraphRAG ✅ DONE
+- **Status:** Implemented. Enable with `--graph-rag` (CLI), `/rag graph-rag` (REPL), or `rag.graph_rag: true` in `config.yaml`. Entity graph is persisted to `.entity_graph.json` and expanded at query time.
 - **What it does:** Builds a knowledge graph from documents (entity extraction + relationship mapping), then runs community detection (Leiden algorithm) and generates hierarchical community summaries. Retrieval can use either graph traversal ("local" search) or community summaries ("global" search).
 - **Why it matters:** Answers global/thematic questions that chunk-based RAG cannot (e.g., "What are the main themes across all these documents?"). Enables relationship-aware reasoning.
 - **Project:** [microsoft/graphrag](https://github.com/microsoft/graphrag) (MIT License)
 - **Cost note:** Community summary generation requires significant upfront LLM calls — feasible with local Ollama.
 
-#### 4.2 Entity-Centric Retrieval
+#### 4.2 Entity-Centric Retrieval ✅ DONE
+- **Status:** Covered by the GraphRAG implementation above — entity relationships are traversed at query time.
 - **What it does:** Indexes entity-specific knowledge separately; retrieval traverses entity relationships rather than just chunk similarity.
 - **Why it matters:** Supports multi-hop reasoning (e.g., "Who owns the company that acquired X?").
 
@@ -140,9 +141,10 @@ Current system has a static retrieval pipeline. The agent API exposes tools but 
 
 ---
 
-### 6. Context Compression — Not Implemented
+### 6. Context Compression — ✅ Implemented (LLM-based)
 
-#### 6.1 LLMLingua / LLMLingua-2
+#### 6.1 LLMLingua / LLMLingua-2 — ⚙️ Partial
+- **Status:** LLM-based contextual compression is implemented. Enable with `--compress` (CLI), `/rag compress` (REPL), `"compress": true` (API), or `compress_context: true` in `config.yaml`. Token-level compression via LLMLingua (a dedicated small LM) is not yet integrated — the current approach uses the configured generation LLM instead, which works out of the box with any provider.
 - **What it does:** Uses a small LLM (e.g., Llama-2-7B) to score and remove low-information tokens from retrieved context before passing to the main LLM. Achieves 2–20x compression with minimal accuracy loss.
 - **Why it matters:** Allows fitting more retrieved chunks into the context window; reduces latency and cost proportional to compression ratio.
 - **Project:** [microsoft/LLMLingua](https://github.com/microsoft/LLMLingua)
@@ -180,12 +182,12 @@ RAGAS script exists but is limited.
 
 | Framework | What It Adds | Status |
 |-----------|-------------|--------|
-| **RAGAS** | Faithfulness, Answer Relevancy, Context Recall, Context Precision | Implemented (basic) |
+| **RAGAS** | Faithfulness, Answer Relevancy, Context Recall, Context Precision | ✅ Implemented — runs in CI (`tests/test_eval_smoke.py`, `@pytest.mark.eval`): precision@k, context relevance, faithfulness, recall@k |
 | **ARES** | Fine-tuned LLM judges, statistically confident scores | Missing |
 | **DeepEval** | Pytest-style CI/CD integration, 25+ metrics, MMLU/HumanEval benchmarks | Missing |
 | **TruLens** | OpenTelemetry tracing, RAG Triad, execution-flow inspection | Missing |
 
-Current gap: No evaluation runs in CI. No hallucination/groundedness metric is tracked over time.
+Current gap: ARES, DeepEval, and TruLens not yet integrated. RAGAS evaluation runs in CI via `tests/test_eval_smoke.py` with precision@k, context relevance, faithfulness, and recall@k metrics.
 
 ---
 

@@ -22,7 +22,6 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 - **[Contributing](CONTRIBUTING.md)** - How to contribute
 - **[Security Policy](SECURITY.md)** - Security best practices
 - **[SOTA Analysis](SOTA_ANALYSIS.md)** - Gap analysis vs. state-of-the-art RAG systems and roadmap
-- **[Improvements Summary](IMPROVEMENTS.md)** - Recent enhancements
 
 ---
 
@@ -50,7 +49,9 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 *The interactive REPL — always-visible header box with model, search and discuss settings; live Tab autocomplete for all slash commands; pinned two-line status toolbar.*
 
+---
 
+## 🚀 Quick Start
 
 ### 1. Install Dependencies
 
@@ -190,7 +191,7 @@ echo "What is X?" | axon -q
 | `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
 | `/search` | Toggle Brave web search (truth_grounding) for knowledge grounding |
 | `/discuss` | Toggle discuss mode — when OFF the LLM refuses queries with no document match |
-| `/rag [option]` | Show or modify RAG settings: `topk`, `threshold`, `hybrid`, `rerank`, `rerank-model`, `hyde`, `multi` |
+| `/rag [option]` | Show or modify RAG settings: `topk`, `threshold`, `hybrid`, `rerank`, `rerank-model`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `cite`, `raptor`, `graph-rag` |
 | `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
 | `/keys [set provider]` | Show API key status for all providers, or interactively set a key |
 | `/compact` | Summarize chat history via LLM to free context window |
@@ -229,6 +230,13 @@ Agents can use Axon as a "Collective Memory."
 | `/delete` | POST | Delete documents by ID. Request body: `{"doc_ids": ["id1","id2"]}`. |
 | `/ingest` | POST | Background directory/file ingestion. Request body: `{"path": "/path/to/docs"}`. Path must be within `RAG_INGEST_BASE`. |
 | `/collection` | GET | List all ingested sources with chunk counts. Returns `{total_files, total_chunks, files:[{source,chunks}]}`. |
+| `/collection/stale` | GET | List ingested sources whose files no longer exist on disk. |
+| `/add_texts` | POST | Batch string ingestion (multiple texts at once). |
+| `/ingest_url` | POST | Ingest a document from a URL. Body: `{"url": "https://..."}`. |
+| `/ingest/status/{job_id}` | GET | Poll background ingest job status by ID. |
+| `/health` | GET | Health check — returns `{"status": "ok"}`. |
+| `/projects` | GET | List all projects and their metadata. |
+| `/project/switch` | POST | Switch the active project. Body: `{"project": "name"}`. |
 
 ### Tool Definitions
 Standardized JSON schemas for tool-calling are provided in `src/axon/tools.py`. The `get_rag_tool_definition()` function returns 6 OpenAI-compatible tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, and `stream_query`. See `examples/agent_simple.py` for a minimal integration, or `examples/agent_orchestration.py` for a richer multi-step planner-critic loop.
@@ -236,9 +244,9 @@ Standardized JSON schemas for tool-calling are provided in `src/axon/tools.py`. 
 ## ⚙️ Configuration
 
 Customize behavior in `config.yaml`:
-- **LLM Providers:** Ollama (local), Gemini, OpenAI, or Ollama Cloud.
+- **LLM Providers:** Ollama (local), Gemini, OpenAI, Ollama Cloud, or vLLM.
 - **Embedding Providers:** Sentence Transformers (default), Ollama, FastEmbed, or OpenAI.
-- **Vector Stores:** ChromaDB (default) or Qdrant.
+- **Vector Stores:** ChromaDB (default), Qdrant, or LanceDB.
 - **Hybrid Search:** Combine vector + BM25 keyword search for maximum precision.
 - **Re-ranking:** Optional Cross-Encoder or LLM-based second-stage filtering.
 - **Query Transformations:** Enable Multi-Query expansion or HyDE for improved retrieval.
