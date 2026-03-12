@@ -64,6 +64,10 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                             "type": "object",
                             "description": "Optional metadata like {'source': 'web', 'topic': 'finance'}",
                         },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional project namespace. Defaults to the active project.",
+                        },
                     },
                     "required": ["text"],
                 },
@@ -91,7 +95,7 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
             "type": "function",
             "function": {
                 "name": "ingest_directory",
-                "description": "Ingest a local file or directory into the knowledge base. Triggers background processing. Path must be within the allowed base directory (RAG_INGEST_BASE).",
+                "description": "Ingest a local file or directory into the knowledge base. Returns a job_id for polling via get_job_status. Path must be within the allowed base directory (RAG_INGEST_BASE).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -130,6 +134,23 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
         {
             "type": "function",
             "function": {
+                "name": "get_job_status",
+                "description": "Poll the status of an async directory ingest job started by ingest_directory. Returns status: processing | completed | failed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {
+                            "type": "string",
+                            "description": "The job_id returned by ingest_directory.",
+                        }
+                    },
+                    "required": ["job_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "add_texts",
                 "description": "Add multiple text documents to the knowledge base in a single batched embedding call. Prefer this over calling add_knowledge repeatedly.",
                 "parameters": {
@@ -156,7 +177,11 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                                 },
                                 "required": ["text"],
                             },
-                        }
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional project namespace applied to all docs in this batch.",
+                        },
                     },
                     "required": ["docs"],
                 },
@@ -177,6 +202,10 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                         "metadata": {
                             "type": "object",
                             "description": "Optional extra metadata merged with the page's source metadata.",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Optional project namespace. Defaults to the active project.",
                         },
                     },
                     "required": ["url"],

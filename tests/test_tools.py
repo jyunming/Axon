@@ -16,6 +16,7 @@ EXPECTED_TOOL_NAMES = {
     "list_knowledge_base",
     "add_texts",
     "ingest_url",
+    "get_job_status",
 }
 
 

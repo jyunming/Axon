@@ -12,6 +12,7 @@ tqdm>=4.66.0
 rank_bm25>=0.2.2
 streamlit>=1.30.0
 httpx>=0.25.0
+mcp>=1.0.0
 fastapi>=0.100.0
 uvicorn>=0.22.0
 prompt_toolkit>=3.0.0
