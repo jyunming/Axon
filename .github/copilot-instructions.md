@@ -105,7 +105,6 @@ without re-embedding.
 
 `POST /ingest` (directory ingestion) is asynchronous. After posting, poll
 `GET /ingest/status/{job_id}` until `status` is `completed` or `failed`.
-*(Available after P1-C is merged.)*
 
 ---
 
@@ -113,13 +112,22 @@ without re-embedding.
 
 | Scenario | Endpoint / tool |
 |---|---|
-| Direct answer synthesis | `POST /query` |
-| Multi-step reasoning over raw chunks | `POST /search` |
+| **Copilot synthesises** (recommended) | `search_knowledge` / `POST /search` |
+| Axon's local LLM synthesises | `query_knowledge` / `POST /query` |
 | Real-time / streaming output | `POST /query/stream` |
 
-Use `/search` when you need to inspect individual document chunks yourself
-before synthesising an answer. Use `/query` when you want Axon to produce
-the final answer.
+**Prefer `search_knowledge` in agent mode.** This returns raw ranked chunks
+to Copilot, which then synthesises the answer using its own LLM. Axon handles
+only retrieval (ChromaDB + BM25 fan-out); Copilot handles reasoning. This is
+faster, avoids Ollama entirely, and scales naturally — Ollama can only generate
+one response at a time while Copilot's LLM has no such limit.
+
+Use `query_knowledge` / `POST /query` only when you want Axon to be
+self-contained with its local Ollama model (e.g. offline, air-gapped).
+
+**Context window tip:** `search_knowledge` returns `top_k` chunks. Keep
+`top_k` between 5–8 for focused queries, 10–15 for broad/exploratory ones
+to avoid burning the context window.
 
 ---
 
@@ -158,5 +166,4 @@ tool names (they differ deliberately from the OpenAI-format `tools.py` names):
 - **Do** call `list_projects` to discover available namespaces before switching.
 - **Don't** ingest private network URLs — they are blocked server-side.
 - **Don't** call `POST /project/switch` from concurrent request handlers —
-  use the `project` parameter on ingest endpoints instead (available after
-  P1-D is merged).
+  use the `project` parameter on ingest endpoints instead.
