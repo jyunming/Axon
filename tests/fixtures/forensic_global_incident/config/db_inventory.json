@@ -1,0 +1,28 @@
+{
+  "inventory": {
+    "databases": [
+      {
+        "name": "Titan-Primary",
+        "engine": "postgres",
+        "port": 9921,
+        "backup_enabled": true,
+        "encryption": "AES-256",
+        "tags": ["critical", "billing", "pii"]
+      },
+      {
+        "name": "Cache-Layer",
+        "engine": "redis",
+        "port": 6379,
+        "max_memory": "32gb",
+        "eviction": "allkeys-lru"
+      }
+    ],
+    "services": {
+      "auth": {
+        "port": 8080,
+        "protocol": "http2",
+        "health_check": "/v1/health"
+      }
+    }
+  }
+}

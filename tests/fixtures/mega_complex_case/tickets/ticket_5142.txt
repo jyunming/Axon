@@ -1,0 +1,4 @@
+TICKET ID: 5142
+Customer: GlobalEnterprise
+Priority: URGENT
+Description: We are seeing massive latency (3s+) during checkout for all our European users. Our internal monitoring shows trace_9921 is hanging at the payment step. This started 2 hours ago. We are losing $50k/hour. Help!

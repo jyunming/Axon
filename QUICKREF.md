@@ -371,13 +371,18 @@ brain = AxonBrain(config)
 ### Ingest Documents
 ```python
 import asyncio
-from axon.main import AxonBrain
+from axon.main import AxonBrain, AxonConfig
 
-async def ingest_docs():
-    brain = AxonBrain()
-    await brain.load_directory("./my_documents")
+config = AxonConfig(vector_store_path="./chroma", bm25_path="./bm25")
+brain = AxonBrain(config)
 
-asyncio.run(ingest_docs())
+# Ingest a directory (async)
+asyncio.run(brain.load_directory("./my_documents"))
+
+# Or ingest a list of document dicts directly (sync)
+brain.ingest([
+    {"id": "doc1", "text": "Your document text here.", "metadata": {"source": "example.txt"}}
+])
 ```
 
 ### Direct API Usage
@@ -509,5 +514,5 @@ MIT License - See [LICENSE](LICENSE) file.
 
 ---
 
-**Last Updated:** 2026-03-08
+**Last Updated:** 2026-03-13
 **Version:** 2.0.0

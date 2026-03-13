@@ -9,11 +9,15 @@ class TestAxonConfig:
 
         config = AxonConfig()
         assert config.embedding_provider == "sentence_transformers"
+        assert config.embedding_model == "all-MiniLM-L6-v2"
         assert config.llm_provider == "ollama"
         assert config.vector_store == "chroma"
         assert config.hybrid_search is True
         assert config.top_k == 10
         assert config.discussion_fallback is True
+        assert config.max_workers == 8
+        assert config.hybrid_mode == "weighted"
+        assert config.dataset_type == "auto"
 
     def test_load_from_yaml(self, tmp_path):
         from axon.main import AxonConfig
@@ -295,8 +299,9 @@ class TestAxonBrain:
         )
 
         retrieval = brain._execute_retrieval("query")
-        assert retrieval["web_count"] == 1
+        assert len(retrieval["results"]) == 1
         assert retrieval["results"][0]["is_web"] is True
+        assert retrieval["transforms"]["web_search_applied"] is True
 
     # ------------------------------------------------------------------
     # Query caching
@@ -593,11 +598,11 @@ class TestAxonBrain:
     def test_parent_chunk_size_config_defaults_zero(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """parent_chunk_size defaults to 0 (feature disabled by default)."""
+        """parent_chunk_size defaults to 1500 (feature enabled by default)."""
         from axon.main import AxonConfig
 
         config = AxonConfig()
-        assert config.parent_chunk_size == 0
+        assert config.parent_chunk_size == 1500
 
 
 class TestOpenReranker:
@@ -1393,10 +1398,12 @@ class TestRaptor:
         brain.vector_store.add = MagicMock()
         return brain
 
-    def test_raptor_disabled_by_default(
+    def test_raptor_explicitly_disabled(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain = self._make_brain(
+            MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, raptor=False, graph_rag=False
+        )
         docs = [
             {"id": "d1", "text": "chunk one", "metadata": {"source": "a.txt"}},
             {"id": "d2", "text": "chunk two", "metadata": {"source": "a.txt"}},
@@ -1506,10 +1513,12 @@ class TestGraphRAG:
         brain._save_entity_graph = MagicMock()
         return brain
 
-    def test_graph_rag_disabled_by_default(
+    def test_graph_rag_explicitly_disabled(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain = self._make_brain(
+            MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, graph_rag=False
+        )
         docs = [{"id": "d1", "text": "Attention is all you need.", "metadata": {"source": "a.txt"}}]
         brain.embedding.embed = MagicMock(return_value=[[0.1] * 384])
         brain.vector_store.add = MagicMock()

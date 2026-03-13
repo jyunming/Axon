@@ -16,12 +16,12 @@ Format: `MAJOR.MINOR.PATCH`
 | New feature, new loader, new provider support | MINOR |
 | Bug fix, performance improvement, docs update | PATCH |
 
-Current version is defined in `setup.py` (`version=`). Update it there.
+Current version is defined in both `setup.py` (`version=`) and `pyproject.toml` (`version =`). Update both.
 
 ## Release Checklist
 
 1. **Confirm all merged PRs since last tag are intended for this release.**
-2. **Bump version** in `setup.py`.
+2. **Bump version** in `setup.py` and `pyproject.toml`.
 3. **Generate changelog** from git log:
    ```bash
    git log <last-tag>..HEAD --oneline --no-merges
@@ -47,9 +47,8 @@ Current version is defined in `setup.py` (`version=`). Update it there.
 ## Branch Strategy
 
 - `main` — production-ready, tagged releases only
-- `develop` — integration branch for features
-- `feature/<name>` — individual feature branches, PR to `develop`
-- `hotfix/<name>` — emergency fixes, PR to both `main` AND `develop`
+- `feat/<name>` or `fix/<name>` — feature/fix branches, PR directly to `main`
+- `hotfix/<name>` — emergency fixes, PR to `main`
 
 ## Config & Dependency Changes in a Release
 

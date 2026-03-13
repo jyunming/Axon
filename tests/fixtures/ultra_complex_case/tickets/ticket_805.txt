@@ -1,0 +1,5 @@
+TICKET ID: 805
+Status: OPEN
+Customer: AcmeCorp
+Priority: CRITICAL
+Description: We deployed the new v4.2.0 update this morning. Ever since the update, our custom sales reports are completely broken. They are just returning empty rows instead of our historical data. This is impacting our Q1 forecasting. Please investigate immediately.

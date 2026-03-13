@@ -36,16 +36,14 @@ Risk: <what could this change break>
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 ```
 
-### 5. Open PRs to BOTH branches
-A hotfix must be merged to both `main` AND `develop` to prevent the bug from reappearing in the next release.
+### 5. Open PR to `main`
 ```
-PR 1: hotfix/<name> → main
-PR 2: hotfix/<name> → develop
+PR: hotfix/<name> → main
 ```
 
 ### 6. Patch release
 After merging to `main`:
-- Bump the PATCH version in `setup.py` (e.g., `2.0.0` → `2.0.1`).
+- Bump the PATCH version in `setup.py` and `pyproject.toml` (e.g., `2.0.0` → `2.0.1`).
 - Tag and push — this triggers the `release.yml` workflow:
   ```bash
   git tag -a v<version> -m "Hotfix v<version>: <short description>"
@@ -55,7 +53,7 @@ After merging to `main`:
 ## Known High-Risk Areas
 
 If the hotfix touches any of these, require **Security Auditor** sign-off before merging:
-- `src/axon/retrievers.py` — pickle serialization
+- `src/axon/retrievers.py` — BM25 JSON corpus + legacy pickle migration
 - `src/axon/api.py` — path handling in `/ingest`
 - `src/axon/loaders.py` — file I/O and external process calls (BMPLoader)
 
@@ -65,10 +63,10 @@ The Code Reviewer must confirm:
 - [ ] Change is minimal — no refactoring mixed in
 - [ ] The fix addresses root cause, not just symptoms
 - [ ] A regression test exists (or explain why it can't be tested)
-- [ ] Both `main` and `develop` PRs are open
+- [ ] PR to `main` is open
 
 ## Boundaries
 
 - Do **not** add features in a hotfix — open a follow-up issue instead.
 - Do **not** merge without CI passing (the `hotfix.yml` workflow runs automatically).
-- Do **not** skip the dual-PR step — missing the `develop` merge is how bugs come back.
+- Do **not** merge without CI passing (the `hotfix.yml` workflow runs automatically).

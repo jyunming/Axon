@@ -114,6 +114,9 @@ ignore = [
     "B023",  # function-uses-loop-variable — closures intentionally capture outer scope
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["axon"]
+
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]  # unused imports
 "tests/*.py" = ["E402"]   # mid-file imports used for lazy mock patching
@@ -159,6 +162,9 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "eval: marks RAG evaluation smoke tests (precision@k, context relevance, faithfulness)",
+    "demo: marks end-to-end happy-path demo tests",
+    "perf: marks latency/throughput performance tests",
+    "stress: marks high-volume concurrency stress tests",
 ]
 
 [tool.coverage.run]
@@ -167,6 +173,7 @@ omit = [
     "*/tests/*",
     "*/test_*.py",
     "*/__pycache__/*",
+    "*/axon/webapp.py",
 ]
 
 [tool.coverage.report]

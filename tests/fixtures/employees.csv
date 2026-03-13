@@ -1,0 +1,6 @@
+EmployeeID,Name,Department,Salary,JoinDate,Project
+101,Alice Johnson,Engineering,125000,2022-03-15,Axon RAG
+102,Bob Smith,Marketing,95000,2021-11-01,Brand Identity
+103,Charlie Davis,Engineering,130000,2023-01-10,GraphRAG Integration
+104,Diana Prince,Product,115000,2020-06-20,User Experience
+105,Edward Norton,Sales,88000,2022-09-05,Enterprise Outreach

@@ -15,6 +15,7 @@ class TestAxonConfig:
         config = AxonConfig()
 
         assert config.embedding_provider == "sentence_transformers"
+        assert config.embedding_model == "all-MiniLM-L6-v2"
         assert config.llm_provider == "ollama"
         assert config.vector_store == "chroma"
         assert config.top_k == 10

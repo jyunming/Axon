@@ -105,7 +105,7 @@ class SemanticTextSplitter:
         sentences = self._split_sentences(text)
         # Pre-calculate lengths to avoid redundant tokenization in the overlap loop
         sentence_data = [(s, self._get_length(s)) for s in sentences]
-        
+
         chunks = []
         current_chunk_sentences = []
         current_length = 0
@@ -126,7 +126,7 @@ class SemanticTextSplitter:
                 current_length += sentence_len
             else:
                 chunks.append(" ".join([s for s, _ in current_chunk_sentences]))
-                
+
                 # Handle overlap: take sentences from the end of the current chunk
                 # until we hit the overlap limit
                 overlap_sentences = []
@@ -177,13 +177,12 @@ class TableSplitter:
         header_str = ", ".join(headers)
 
         current_batch = []
-        for i, row in enumerate(rows):
+        for row in rows:
             # Enriched string format: [Table Context] [Column Schema] [Row Data]
             # This format is proven to work best with SBERT/BGE embedding models.
             row_items = [f"{k}: {v}" for k, v in row.items() if v is not None and v != ""]
-            row_str = (
-                f"Context: {self.table_name} | Columns: [{header_str}] | Data: "
-                + " | ".join(row_items)
+            row_str = f"Context: {self.table_name} | Columns: [{header_str}] | Data: " + " | ".join(
+                row_items
             )
             current_batch.append(row_str)
 
@@ -232,7 +231,7 @@ class RecursiveCharacterTextSplitter:
                 break
 
             end = start + self.chunk_size
-            
+
             # Find the best separator within the current window
             split_at = -1
             for sep in self.separators:

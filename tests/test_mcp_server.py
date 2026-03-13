@@ -23,6 +23,17 @@ EXPECTED_MCP_TOOL_NAMES = {
     "delete_documents",
     "list_projects",
     "get_stale_docs",
+    "create_project",
+    "delete_project",
+    "clear_knowledge",
+    "get_current_settings",
+    "update_settings",
+    "list_sessions",
+    "get_session",
+    # AxonStore sharing tools
+    "share_project",
+    "redeem_share",
+    "list_shares",
 }
 
 

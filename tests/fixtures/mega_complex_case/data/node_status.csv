@@ -1,0 +1,6 @@
+NodeID,Status,Load,Uptime_Hours
+node_eth_01,READY,52,3685
+node_eth_02,READY,75,2972
+node_eth_03,READY,62,593
+node_eth_04,DRAINED,60,4345
+node_eth_05,READY,11,638

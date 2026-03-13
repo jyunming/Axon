@@ -1,0 +1,5 @@
+Region ID	Region Name	Primary Zone	Failover Zone	Traffic Weight
+R-101	Region North	Zone A	Zone C	0.4
+R-202	Region South	Zone C	Zone A	0.3
+R-303	Region West	Zone B	Zone D	0.2
+R-404	Region East	Zone D	Zone B	0.1

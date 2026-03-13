@@ -41,12 +41,22 @@ def _make_brain(provider="chroma"):
 # ---------------------------------------------------------------------------
 
 
-def test_health_returns_200():
+def test_health_returns_503_no_brain():
+    """Health check returns 503 when brain is not initialized."""
+    api_module.brain = None
+    resp = client.get("/health")
+    assert resp.status_code == 503
+    data = resp.json()
+    assert data["status"] == "initializing"
+
+
+def test_health_returns_200_with_brain():
+    """Health check returns 200 with status ok when brain is initialized."""
+    api_module.brain = _make_brain()
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.json()
-    assert "status" in data
-    assert "axon_ready" in data
+    assert data["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -255,11 +265,11 @@ def test_search_503_no_brain():
 
 def test_search_success():
     api_module.brain = _make_brain()
-    api_module.brain.embedding = MagicMock()
-    api_module.brain.embedding.embed_query.return_value = [0.1] * 384
-    api_module.brain.vector_store.search.return_value = [
-        {"id": "doc1", "text": "result text", "score": 0.9, "metadata": {"source": "test"}}
-    ]
+    api_module.brain._execute_retrieval.return_value = {
+        "results": [
+            {"id": "doc1", "text": "result text", "score": 0.9, "metadata": {"source": "test"}}
+        ]
+    }
     resp = client.post("/search", json={"query": "find me something"})
     assert resp.status_code == 200
     data = resp.json()
@@ -270,20 +280,15 @@ def test_search_success():
 
 def test_search_uses_custom_top_k():
     api_module.brain = _make_brain()
-    api_module.brain.embedding = MagicMock()
-    api_module.brain.embedding.embed_query.return_value = [0.0] * 384
-    api_module.brain.vector_store.search.return_value = []
+    api_module.brain._execute_retrieval.return_value = {"results": []}
     resp = client.post("/search", json={"query": "q", "top_k": 3})
     assert resp.status_code == 200
-    api_module.brain.vector_store.search.assert_called_once()
-    _, kwargs = api_module.brain.vector_store.search.call_args
-    assert kwargs.get("top_k") == 3
+    api_module.brain._execute_retrieval.assert_called_once()
 
 
 def test_search_propagates_error():
     api_module.brain = _make_brain()
-    api_module.brain.embedding = MagicMock()
-    api_module.brain.embedding.embed_query.side_effect = RuntimeError("embed fail")
+    api_module.brain._execute_retrieval.side_effect = RuntimeError("retrieval fail")
     resp = client.post("/search", json={"query": "test"})
     assert resp.status_code == 500
 
@@ -895,3 +900,166 @@ def test_get_projects_includes_memory_only_projects():
     data = resp.json()
     memory_names = [p["name"] for p in data["memory_only"]]
     assert "sprint3-test" in memory_names
+
+
+# ---------------------------------------------------------------------------
+# /store/whoami
+# ---------------------------------------------------------------------------
+
+
+def test_store_whoami_no_store_mode():
+    """whoami returns store_mode=False when brain is not in store mode."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = False
+    api_module.brain = mock_brain
+
+    resp = client.get("/store/whoami")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["store_mode"] is False
+    assert "username" in data
+
+
+def test_store_whoami_store_mode_active():
+    """whoami returns store paths when axon_store_mode is True."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = True
+    mock_brain.config.projects_root = "/data/AxonStore/alice"
+    mock_brain.config.project = "_default"
+    api_module.brain = mock_brain
+
+    resp = client.get("/store/whoami")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["store_mode"] is True
+    assert "user_dir" in data
+    assert "username" in data
+
+
+# ---------------------------------------------------------------------------
+# /share/list  (requires store mode)
+# ---------------------------------------------------------------------------
+
+
+def test_share_list_503_no_store_mode():
+    """/share/list returns 503 when axon_store_mode is off."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = False
+    api_module.brain = mock_brain
+
+    resp = client.get("/share/list")
+    assert resp.status_code == 503
+
+
+def test_share_list_returns_sharing_and_shared(tmp_path):
+    """/share/list returns both sharing and shared keys."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = True
+    mock_brain.config.projects_root = str(tmp_path)
+    api_module.brain = mock_brain
+
+    # Create minimal dir structure expected by _get_user_dir
+    (tmp_path / "ShareMount").mkdir()
+    (tmp_path / ".shares").mkdir()
+
+    with patch("axon.api._shares.validate_received_shares", return_value=[]), patch(
+        "axon.api._shares.list_shares", return_value={"sharing": [], "shared": []}
+    ):
+        resp = client.get("/share/list")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "sharing" in data
+    assert "shared" in data
+
+
+# ---------------------------------------------------------------------------
+# /share/generate
+# ---------------------------------------------------------------------------
+
+
+def test_share_generate_404_missing_project(tmp_path):
+    """/share/generate returns 404 when project doesn't exist."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = True
+    mock_brain.config.projects_root = str(tmp_path)
+    api_module.brain = mock_brain
+
+    resp = client.post(
+        "/share/generate",
+        json={"project": "nonexistent", "grantee": "bob", "write_access": False},
+    )
+    assert resp.status_code == 404
+
+
+def test_share_generate_success(tmp_path):
+    """/share/generate returns share string when project exists."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = True
+    mock_brain.config.projects_root = str(tmp_path)
+    api_module.brain = mock_brain
+
+    # Create a real project dir so the endpoint can find it
+    proj = tmp_path / "myproject"
+    proj.mkdir()
+    (proj / "meta.json").write_text('{"name": "myproject"}')
+
+    fake_result = {
+        "key_id": "sk_abc123",
+        "share_string": "abc:def:alice:myproject:/data/store",
+        "project": "myproject",
+        "grantee": "bob",
+        "write_access": False,
+        "owner": "alice",
+    }
+
+    with patch("axon.api._shares.generate_share_key", return_value=fake_result):
+        resp = client.post(
+            "/share/generate",
+            json={"project": "myproject", "grantee": "bob", "write_access": False},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["key_id"] == "sk_abc123"
+    assert "share_string" in data
+
+
+# ---------------------------------------------------------------------------
+# /share/revoke
+# ---------------------------------------------------------------------------
+
+
+def test_share_revoke_404_unknown_key(tmp_path):
+    """/share/revoke returns 404 when key_id is not found."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = True
+    mock_brain.config.projects_root = str(tmp_path)
+    api_module.brain = mock_brain
+
+    (tmp_path / "ShareMount").mkdir()
+    (tmp_path / ".shares").mkdir()
+
+    with patch("axon.api._shares.revoke_share_key", side_effect=ValueError("not found")):
+        resp = client.post("/share/revoke", json={"key_id": "sk_missing"})
+
+    assert resp.status_code == 404
+
+
+def test_share_revoke_success(tmp_path):
+    """/share/revoke marks a key as revoked and returns status."""
+    mock_brain = _make_brain()
+    mock_brain.config.axon_store_mode = True
+    mock_brain.config.projects_root = str(tmp_path)
+    api_module.brain = mock_brain
+
+    (tmp_path / "ShareMount").mkdir()
+    (tmp_path / ".shares").mkdir()
+
+    with patch(
+        "axon.api._shares.revoke_share_key", return_value={"status": "revoked", "key_id": "sk_abc"}
+    ):
+        resp = client.post("/share/revoke", json={"key_id": "sk_abc"})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "revoked"

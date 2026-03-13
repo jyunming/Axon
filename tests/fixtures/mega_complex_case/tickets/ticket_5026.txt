@@ -1,0 +1,4 @@
+TICKET ID: 5026
+Customer: User_26
+Priority: LOW
+Description: The font size on the login page is too small. I cannot read the 'Forgot Password' link properly. Description: The font size on the login page is too small. I cannot read the 'Forgot Password' link properly. Description: The font size on the login page is too small. I cannot read the 'Forgot Password' link properly. Description: The font size on the login page is too small. I cannot read the 'Forgot Password' link properly. Description: The font size on the login page is too small. I cannot read the 'Forgot Password' link properly.

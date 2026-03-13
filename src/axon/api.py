@@ -1,9 +1,14 @@
+import asyncio
+import getpass
 import hashlib
+import json
 import logging
 import os
 import pathlib
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -11,6 +16,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from axon import shares as _shares
 from axon.main import AxonBrain, AxonConfig
 from axon.projects import list_projects as _list_projects
 
@@ -33,10 +39,27 @@ def _validate_ingest_path(path: str) -> str:
     return str(abs_path)
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global brain
+    try:
+        config_path = os.getenv("AXON_CONFIG_PATH")
+        config = AxonConfig.load(config_path)
+        brain = AxonBrain(config)
+        logger.info("Axon initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Axon: {e}")
+    yield
+    if brain:
+        brain.close()
+        logger.info("Axon shut down cleanly")
+
+
 app = FastAPI(
     title="Axon API",
     description="REST API for agent orchestration and document retrieval",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # Optional API key authentication — enabled when RAG_API_KEY env var is set
@@ -129,24 +152,12 @@ def _record_dedup(text: str, doc_id: str, project: str = "_global") -> None:
     }
 
 
-@app.on_event("startup")
-async def startup_event():
-    global brain
-    try:
-        config_path = os.getenv("AXON_CONFIG_PATH")
-        config = AxonConfig.load(config_path)
-        brain = AxonBrain(config)
-        logger.info("Axon initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize Axon: {e}")
-
-
 # Models
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The question or prompt to ask the brain")
     filters: dict[str, Any] | None = Field(None, description="Metadata filters for retrieval")
     stream: bool = Field(
-        False, description="Whether to stream the response (not fully implemented in REST yet)"
+        False, description="Whether to stream the response (use POST /query/stream instead)"
     )
     # Per-request RAG overrides (match CLI flags exactly)
     top_k: int | None = Field(None, ge=1, description="Override number of chunks to retrieve")
@@ -161,12 +172,16 @@ class QueryRequest(BaseModel):
     decompose: bool | None = Field(None, description="Override query decomposition toggle")
     compress: bool | None = Field(None, description="Override LLM context compression toggle")
     discuss: bool | None = Field(None, description="Override discussion fallback toggle")
+    timeout: float | None = Field(None, gt=0, description="Query timeout in seconds (default 120)")
 
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="The query string for semantic search")
     top_k: int | None = Field(None, description="Number of documents to return")
     filters: dict[str, Any] | None = Field(None, description="Metadata filters")
+    threshold: float | None = Field(
+        None, ge=0.0, le=1.0, description="Override similarity threshold for this request"
+    )
 
 
 class IngestRequest(BaseModel):
@@ -225,9 +240,22 @@ class DeleteRequest(BaseModel):
 
 
 class ProjectSwitchRequest(BaseModel):
-    project_name: str = Field(
-        ..., description="Project name to switch to, or 'default' for the global knowledge base"
+    project_name: str | None = Field(
+        None, description="Project name to switch to, or 'default' for the global knowledge base"
     )
+    name: str | None = Field(None, description="Alias for project_name")
+
+    @property
+    def final_name(self) -> str:
+        val = self.project_name or self.name
+        if not val:
+            raise ValueError("Either 'project_name' or 'name' must be provided")
+        return val
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str = Field(..., description="Name of the new project to create")
+    description: str = Field("", description="Optional description for the project")
 
 
 class SearchResult(BaseModel):
@@ -237,10 +265,449 @@ class SearchResult(BaseModel):
     metadata: dict[str, Any]
 
 
+class StoreInitRequest(BaseModel):
+    base_path: str = Field(
+        ..., description="Base directory under which AxonStore/ will be created."
+    )
+
+
+class ShareGenerateRequest(BaseModel):
+    project: str = Field(..., description="Project name to share.")
+    grantee: str = Field(..., description="OS username of the recipient.")
+    write_access: bool = Field(
+        False, description="Grant write (ingest) access. Default: read-only."
+    )
+
+
+class ShareRedeemRequest(BaseModel):
+    share_string: str = Field(..., description="The base64 share string from the owner.")
+
+
+class ShareRevokeRequest(BaseModel):
+    key_id: str = Field(..., description="The key_id to revoke (e.g. 'sk_a1b2c3d4').")
+
+
+def _get_user_dir() -> Path:
+    """Return the current user's AxonStore directory, or raise 503 if not in store mode."""
+    if not brain or not brain.config.axon_store_mode:
+        raise HTTPException(
+            status_code=503,
+            detail="AxonStore mode is not active. Run POST /store/init first.",
+        )
+    return Path(brain.config.projects_root)
+
+
 # Endpoints
+class CopilotMessage(BaseModel):
+    role: str
+    content: str
+
+
+class CopilotAgentRequest(BaseModel):
+    """Payload sent by GitHub Copilot to the agent endpoint."""
+
+    messages: list[CopilotMessage]
+    copilot_references: list[dict] = Field(default_factory=list)
+    agent_request_id: str | None = None
+
+
+@app.post("/copilot/agent")
+async def copilot_agent_handler(request: Request, body: CopilotAgentRequest):
+    """
+    Handle chat requests from GitHub Copilot.
+    Supports slash commands: /search, /ingest, /projects.
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    user_query = body.messages[-1].content if body.messages else ""
+    if not user_query:
+        return JSONResponse({"error": "Empty query"}, status_code=400)
+
+    # 1. Parse Slash Commands
+    parts = user_query.strip().split(maxsplit=1)
+    command = parts[0].lower() if parts[0].startswith("/") else None
+    args = parts[1] if len(parts) > 1 else ""
+
+    async def response_stream():
+        yield f"data: {json.dumps({'type': 'created', 'id': body.agent_request_id})}\n\n"
+
+        try:
+            if command == "/search":
+                yield f"data: {json.dumps({'type': 'text', 'content': f'🔍 Searching Axon for: {args}...'})}\n\n"
+                retrieval_data = brain._execute_retrieval(args)
+                results = retrieval_data["results"]
+                if not results:
+                    content = "No relevant documents found."
+                else:
+                    content = "### Search Results\n\n"
+                    for i, r in enumerate(results[:5]):
+                        content += f"**{i+1}. {os.path.basename(r['metadata'].get('source', 'unknown'))}** (Score: {r['score']:.2f})\n"
+                        content += f"> {r['text'][:200]}...\n\n"
+                yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+
+            elif command == "/ingest":
+                yield f"data: {json.dumps({'type': 'text', 'content': f'📥 Ingesting URL: {args}...'})}\n\n"
+                # Use existing ingest_url logic
+                from axon.loaders import URLLoader
+
+                loader = URLLoader()
+                docs = loader.load(args)
+                if docs:
+                    brain.ingest(docs)
+                    yield f"data: {json.dumps({'type': 'text', 'content': f'✅ Successfully ingested: {args}'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'text', 'content': f'❌ Failed to ingest: {args}'})}\n\n"
+
+            elif command == "/projects":
+                projects = _list_projects()
+                content = "### Available Axon Projects\n\n"
+                for p in projects:
+                    content += f"- **{p['name']}**: {p.get('description', 'No description')}\n"
+                yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
+
+            else:
+                # Default: RAG query
+                answer = brain.query(
+                    user_query,
+                    chat_history=[
+                        {"role": m.role, "content": m.content} for m in body.messages[:-1]
+                    ],
+                )
+
+                # Yield result with GitHub-compatible formatting
+                yield f"data: {json.dumps({'type': 'text', 'content': answer})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Copilot Agent error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(response_stream(), media_type="text/event-stream")
+
+
+class ConfigUpdateRequest(BaseModel):
+    # Model
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
+    # RAG
+    top_k: int | None = Field(None, ge=1, le=50)
+    similarity_threshold: float | None = Field(None, ge=0.0, le=1.0)
+    hybrid_search: bool | None = None
+    hybrid_weight: float | None = Field(None, ge=0.0, le=1.0)
+    rerank: bool | None = None
+    reranker_model: str | None = None
+    hyde: bool | None = None
+    multi_query: bool | None = None
+    step_back: bool | None = None
+    query_decompose: bool | None = None
+    compress_context: bool | None = None
+    truth_grounding: bool | None = None
+    discussion_fallback: bool | None = None
+    raptor: bool | None = None
+    graph_rag: bool | None = None
+    # Persistence
+    persist: bool = Field(False, description="Whether to save these changes to config.yaml")
+
+
+@app.get("/config")
+async def get_config():
+    """Return the current active configuration."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    return brain.config
+
+
+@app.post("/config/update")
+async def update_config(request: ConfigUpdateRequest):
+    """Update global configuration settings."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    update_data = request.dict(exclude_unset=True)
+    persist = update_data.pop("persist", False)
+
+    reinit_llm = "llm_provider" in update_data or "llm_model" in update_data
+    reinit_embed = "embedding_provider" in update_data or "embedding_model" in update_data
+    reinit_rerank = "reranker_model" in update_data
+
+    for k, v in update_data.items():
+        if hasattr(brain.config, k):
+            setattr(brain.config, k, v)
+
+    if reinit_llm:
+        from axon.main import OpenLLM
+
+        brain.llm = OpenLLM(brain.config)
+    if reinit_embed:
+        from axon.main import OpenEmbedding
+
+        brain.embedding = OpenEmbedding(brain.config)
+    if reinit_rerank and brain.config.rerank:
+        from axon.main import OpenReranker
+
+        brain.reranker = OpenReranker(brain.config)
+
+    if persist:
+        brain.config.save()
+
+    return {"status": "success", "config": brain.config, "persisted": persist}
+
+
+@app.post("/project/delete/{name}")
+async def delete_project_endpoint(name: str):
+    """Delete a project and all its data."""
+    from axon.projects import ProjectHasChildrenError, delete_project
+
+    # Reject attempts to delete ShareMount symlinks (those are not owned data)
+    if name.startswith("ShareMount/") or name == "ShareMount":
+        raise HTTPException(
+            status_code=400,
+            detail="ShareMount entries are symlinks to shared projects and cannot be deleted via this endpoint.",
+        )
+
+    # In store mode: check if project has active (non-revoked) issued share keys
+    if brain and brain.config.axon_store_mode:
+        user_dir = Path(brain.config.projects_root)
+        shares_info = _shares.list_shares(user_dir)
+        active_grantees = [
+            s["grantee"]
+            for s in shares_info.get("sharing", [])
+            if s["project"] == name and not s.get("revoked", False)
+        ]
+        if active_grantees:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Project '{name}' has active shares with: {', '.join(active_grantees)}. Revoke shares before deleting.",
+            )
+
+    if brain and brain._active_project == name:
+        brain.switch_project("default")
+
+    try:
+        delete_project(name)
+        return {"status": "success", "message": f"Project '{name}' deleted."}
+    except ProjectHasChildrenError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/store/init")
+async def store_init(request: StoreInitRequest):
+    """Initialise AxonStore at the given base path and update config.yaml."""
+    global brain
+    base = Path(request.base_path).expanduser().resolve()
+    username = getpass.getuser()
+    store_root = base / "AxonStore"
+    user_dir = store_root / username
+
+    # Create directory structure
+    from axon.projects import ensure_user_namespace
+
+    ensure_user_namespace(user_dir)
+
+    # Update config: set axon_store_base, repoint paths
+    config = brain.config if brain else AxonConfig()
+    config.axon_store_base = str(base)
+    config.axon_store_mode = True
+    config.projects_root = str(user_dir)
+    config.vector_store_path = str(user_dir / "_default" / "chroma_data")
+    config.bm25_path = str(user_dir / "_default" / "bm25_index")
+
+    # Save config — migrate: add store block, remove projects_root if present
+    try:
+        config.save()
+    except Exception as e:
+        logger.warning(f"Could not save config after store init: {e}")
+
+    # Reinitialise brain with new config
+    if brain:
+        brain.close()
+    brain = AxonBrain(config)
+
+    return {
+        "status": "ok",
+        "store_path": str(store_root),
+        "user_dir": str(user_dir),
+        "username": username,
+    }
+
+
+@app.get("/store/whoami")
+async def store_whoami():
+    """Return current user identity and AxonStore status."""
+    username = getpass.getuser()
+    if brain and brain.config.axon_store_mode:
+        return {
+            "username": username,
+            "store_path": str(Path(brain.config.projects_root).parent.parent),
+            "user_dir": brain.config.projects_root,
+            "active_project": brain.config.project
+            if hasattr(brain.config, "project")
+            else "_default",
+            "store_mode": True,
+        }
+    return {"username": username, "store_mode": False}
+
+
+@app.post("/share/generate")
+async def share_generate(request: ShareGenerateRequest):
+    """Generate a share key allowing another user to access one of your projects."""
+    user_dir = _get_user_dir()
+    # Validate project exists
+    project_dir = user_dir / request.project
+    if not project_dir.exists() or not (project_dir / "meta.json").exists():
+        raise HTTPException(status_code=404, detail=f"Project '{request.project}' not found.")
+    result = _shares.generate_share_key(
+        owner_user_dir=user_dir,
+        project=request.project,
+        grantee=request.grantee,
+        write_access=request.write_access,
+    )
+    return result
+
+
+@app.post("/share/redeem")
+async def share_redeem(request: ShareRedeemRequest):
+    """Redeem a share string, mounting the owner's project in your ShareMount/."""
+    user_dir = _get_user_dir()
+    try:
+        result = _shares.redeem_share_key(
+            grantee_user_dir=user_dir,
+            share_string=request.share_string,
+        )
+    except (ValueError, NotImplementedError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
+
+
+@app.post("/share/revoke")
+async def share_revoke(request: ShareRevokeRequest):
+    """Revoke a share key. The grantee's symlink is removed on their next access."""
+    user_dir = _get_user_dir()
+    try:
+        result = _shares.revoke_share_key(owner_user_dir=user_dir, key_id=request.key_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return result
+
+
+@app.get("/share/list")
+async def share_list():
+    """List shares for the current user: both issued (sharing) and received (shared)."""
+    user_dir = _get_user_dir()
+    # Lazily clean up revoked received shares
+    removed = _shares.validate_received_shares(user_dir)
+    result = _shares.list_shares(user_dir)
+    if removed:
+        result["removed_stale"] = removed
+    return result
+
+
+@app.get("/sessions")
+async def list_sessions():
+    """List all saved chat sessions for the active project."""
+    from axon.main import _list_sessions
+
+    return {"sessions": _list_sessions()}
+
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str):
+    """Retrieve a specific session by ID."""
+    from axon.main import _load_session
+
+    session = _load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.post("/clear")
+async def clear_brain():
+    """Clear the active project's vector store and BM25 index."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        brain.vector_store.delete_by_ids([])  # delete_by_ids([]) is a no-op for most providers
+        return {"status": "success", "message": "Collection cleared (if supported by provider)"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CopilotTaskResult(BaseModel):
+    result: str | None = None
+    error: str | None = None
+
+
+@app.get("/llm/copilot/tasks")
+async def get_copilot_tasks():
+    """Poll for pending LLM tasks intended for the VS Code Copilot bridge."""
+    from axon.main import _copilot_bridge_lock, _copilot_task_queue
+
+    with _copilot_bridge_lock:
+        tasks = list(_copilot_task_queue)
+        _copilot_task_queue.clear()
+    return {"tasks": tasks}
+
+
+@app.post("/llm/copilot/result/{task_id}")
+async def submit_copilot_result(task_id: str, body: CopilotTaskResult):
+    """Submit the result of a Copilot LLM task back to the backend."""
+    from axon.main import _copilot_bridge_lock, _copilot_responses
+
+    with _copilot_bridge_lock:
+        if task_id in _copilot_responses:
+            _copilot_responses[task_id]["result"] = body.result
+            _copilot_responses[task_id]["error"] = body.error
+            _copilot_responses[task_id]["event"].set()
+            return {"status": "success"}
+    raise HTTPException(status_code=404, detail="Task not found or expired")
+
+
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "axon_ready": brain is not None}
+    """Return 200 with status 'ok' when the brain is ready; 503 with status 'initializing' when not yet available."""
+    if brain is None:
+        return JSONResponse({"status": "initializing"}, status_code=503)
+    return {"status": "ok", "project": getattr(brain.config, "project", "default")}
+
+
+@app.get("/tracked-docs")
+async def list_tracked_docs():
+    """List all tracked document sources with metadata."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    return {"docs": brain.get_doc_versions()}
+
+
+@app.post("/ingest/refresh")
+async def refresh_docs():
+    """Re-check all tracked files and re-ingest changed ones."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    import hashlib as _hashlib
+
+    versions = brain.get_doc_versions()
+    results = {"skipped": [], "reingest_needed": [], "missing": []}
+    for source_id, record in versions.items():
+        if not os.path.exists(source_id):
+            results["missing"].append(source_id)
+            continue
+        try:
+            with open(source_id, "rb") as f:
+                content_hash = _hashlib.md5(f.read()).hexdigest()
+            if content_hash != record.get("content_hash"):
+                results["reingest_needed"].append(source_id)
+            else:
+                results["skipped"].append(source_id)
+        except Exception:
+            results["missing"].append(source_id)
+    return results
 
 
 @app.post("/query")
@@ -260,7 +727,30 @@ async def query_brain(request: QueryRequest):
             "compress_context": request.compress,
             "discussion_fallback": request.discuss,
         }
-        response = brain.query(request.query, filters=request.filters, overrides=overrides)
+
+        # Offload sync brain.query to a threadpool to keep the event loop free
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+
+        timeout = request.timeout or float(os.getenv("AXON_QUERY_TIMEOUT", "120"))
+        try:
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: brain.query(
+                        request.query, filters=request.filters, overrides=overrides
+                    ),
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=f"Query timed out after {timeout}s. Try disabling HyDE/Rerank or simplifying your query.",
+            )
+
         cfg = brain._apply_overrides(overrides)
         settings = {
             "top_k": cfg.top_k,
@@ -299,8 +789,7 @@ async def query_brain_stream(request: QueryRequest):
 
     def generate():
         try:
-            import json
-
+            # Use query_stream (generator)
             for chunk in brain.query_stream(
                 request.query, filters=request.filters, overrides=overrides
             ):
@@ -319,16 +808,22 @@ async def search_brain(request: SearchRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        # We need to expose the search method from AxonBrain more directly
-        # or use the vector_store directly.
-        # For agentic use, we'll implement a search flow here.
-        query_embedding = brain.embedding.embed_query(request.query)
-        top_k = request.top_k or brain.config.top_k
-
-        results = brain.vector_store.search(
-            query_embedding, top_k=top_k, filter_dict=request.filters
+        # Offload sync retrieval execution to a threadpool
+        loop = asyncio.get_running_loop()
+        overrides = {}
+        if request.top_k is not None:
+            overrides["top_k"] = request.top_k
+        if request.threshold is not None:
+            overrides["similarity_threshold"] = request.threshold
+        cfg = brain._apply_overrides(overrides) if overrides else None
+        retrieval_data = await loop.run_in_executor(
+            None,
+            lambda: brain._execute_retrieval(request.query, filters=request.filters, cfg=cfg),
         )
-        return results
+        results = retrieval_data["results"]
+
+        top_k = request.top_k or brain.config.top_k
+        return results[:top_k]
     except Exception as e:
         logger.error(f"Error during search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -423,16 +918,21 @@ async def add_text(request: TextIngestRequest):
     if skip:
         return {**skip, "doc_id": skip["doc_id"]}
 
-    doc = {
-        "id": doc_id,
-        "text": request.text,
-        "metadata": request.metadata or {"source": "api_agent", "type": "agent_input"},
-    }
+    # Use SmartTextLoader to detect and handle tabular content in raw text
+    from axon.loaders import SmartTextLoader
+
+    loader = SmartTextLoader()
+    documents = loader.load_text(request.text, source=doc_id)
+
+    # Apply metadata to all resulting chunks
+    if request.metadata:
+        for doc in documents:
+            doc["metadata"].update(request.metadata)
 
     try:
-        brain.ingest([doc])
+        brain.ingest(documents)
         _record_dedup(request.text, doc_id, project_key)
-        return {"status": "success", "doc_id": doc_id}
+        return {"status": "success", "doc_id": doc_id, "chunks": len(documents)}
     except Exception as e:
         logger.error(f"Error adding text: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -440,13 +940,7 @@ async def add_text(request: TextIngestRequest):
 
 @app.post("/add_texts")
 async def add_texts(request: BatchTextIngestRequest):
-    """Ingest a list of documents in a single embedding batch.
-
-    Each item is checked for duplicate content before ingestion. Duplicate
-    items receive ``status: skipped`` in the response without calling the
-    embedding model. All non-duplicate items are ingested in one
-    ``brain.ingest()`` call (one batched embedding round-trip).
-    """
+    """Ingest a list of documents in a single embedding batch."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
@@ -459,6 +953,10 @@ async def add_texts(request: BatchTextIngestRequest):
     # within-batch dedup: track content_hash → doc_id for items in this request
     batch_hashes: dict[str, str] = {}
 
+    from axon.loaders import SmartTextLoader
+
+    loader = SmartTextLoader()
+
     for item in request.docs:
         doc_id = item.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
         skip = _check_dedup(item.text, project_key)
@@ -470,14 +968,15 @@ async def add_texts(request: BatchTextIngestRequest):
             results.append({"id": batch_hashes[content_hash], "status": "skipped", "error": None})
             continue
         batch_hashes[content_hash] = doc_id
-        doc = {
-            "id": doc_id,
-            "text": item.text,
-            "metadata": item.metadata or {"source": "api_agent", "type": "agent_input"},
-        }
-        docs_to_ingest.append(doc)
+
+        item_docs = loader.load_text(item.text, source=doc_id)
+        if item.metadata:
+            for d in item_docs:
+                d["metadata"].update(item.metadata)
+
+        docs_to_ingest.extend(item_docs)
         pending_records.append((doc_id, item.text))
-        results.append({"id": doc_id, "status": "created", "error": None})
+        results.append({"id": doc_id, "status": "created", "chunks": len(item_docs)})
 
     if docs_to_ingest:
         try:
@@ -493,12 +992,7 @@ async def add_texts(request: BatchTextIngestRequest):
 
 @app.post("/ingest_url")
 async def ingest_url(request: URLIngestRequest):
-    """Fetch an HTTP/HTTPS URL and ingest its text content.
-
-    The URL is validated for scheme and SSRF-safe IP ranges before any network
-    request is made. Binary or non-text responses are rejected. Duplicate
-    content (same SHA-256 as a previously ingested document) is skipped.
-    """
+    """Fetch an HTTP/HTTPS URL and ingest its text content."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
@@ -553,16 +1047,7 @@ async def get_collection():
 
 @app.get("/collection/stale")
 async def get_stale_docs(days: int = 7):
-    """Return documents that have not been re-ingested within *days* calendar days.
-
-    Staleness is measured against the ``last_ingested_at`` timestamp recorded in
-    the in-memory dedup store (``_source_hashes``).  Documents ingested before
-    the current server process started will not appear here — restart tracking
-    only begins once the server has seen a document in its current lifetime.
-
-    Query param:
-    - ``days`` (int, default 7): flag docs not re-ingested in this many days.
-    """
+    """Return documents that have not been re-ingested within *days* calendar days."""
     if days < 0:
         raise HTTPException(status_code=400, detail="'days' must be >= 0.")
 
@@ -590,29 +1075,56 @@ async def get_stale_docs(days: int = 7):
 
 @app.get("/projects")
 async def get_projects():
-    """List all projects known to the Axon system.
+    """List all projects known to the Axon system."""
+    # In store mode: lazily clean up revoked received shares
+    if brain and brain.config.axon_store_mode:
+        try:
+            user_dir = Path(brain.config.projects_root)
+            _shares.validate_received_shares(user_dir)
+        except Exception as exc:
+            logger.warning(f"Could not validate received shares: {exc}")
 
-    Returns the on-disk project list from the projects store merged with
-    in-memory session tracking from the dedup store.
-    """
     try:
         on_disk = _list_projects()
-    except Exception as exc:  # projects root may not exist yet in fresh installs
+    except Exception as exc:
         logger.warning(f"Could not enumerate on-disk projects: {exc}")
         on_disk = []
 
     in_memory = list(_source_hashes.keys())
     on_disk_names = {p["name"] for p in on_disk}
-    # Surface projects only seen in memory (e.g. via /add_text with project=)
     memory_only = [
         {"name": n, "source": "memory_only"}
         for n in in_memory
         if n not in on_disk_names and n != "_global"
     ]
+
+    # In store mode: include share mount entries
+    shared_mounts = []
+    if brain and brain.config.axon_store_mode:
+        try:
+            from axon.projects import list_share_mounts
+
+            user_dir = Path(brain.config.projects_root)
+            mounts = list_share_mounts(user_dir)
+            shared_mounts = [
+                {
+                    "name": f"ShareMount/{m['name']}",
+                    "owner": m["owner"],
+                    "project": m["project"],
+                    "is_broken": m["is_broken"],
+                    "is_shared": True,
+                }
+                for m in mounts
+                if not m["is_broken"]
+            ]
+        except Exception as exc:
+            logger.warning(f"Could not enumerate share mounts: {exc}")
+
     return {
         "projects": on_disk,
         "memory_only": memory_only,
-        "total": len(on_disk) + len(memory_only),
+        "shared_mounts": shared_mounts,
+        "total": len(on_disk) + len(memory_only) + len(shared_mounts),
     }
 
 
@@ -622,12 +1134,24 @@ async def delete_documents(request: DeleteRequest):
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
         brain.vector_store.delete_by_ids(request.doc_ids)
-        # Delete from BM25
         if brain.bm25 is not None:
             brain.bm25.delete_documents(request.doc_ids)
         return {"status": "success", "deleted": len(request.doc_ids), "doc_ids": request.doc_ids}
     except Exception as e:
         logger.error(f"Delete failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/project/new")
+async def create_project(request: ProjectCreateRequest):
+    """Create a new project directory and metadata."""
+    from axon.projects import ensure_project
+
+    try:
+        ensure_project(request.name, description=request.description)
+        return {"status": "success", "project": request.name}
+    except Exception as e:
+        logger.error(f"Project creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -637,8 +1161,9 @@ async def switch_project(request: ProjectSwitchRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        brain.switch_project(request.project_name)
-        return {"status": "success", "active_project": request.project_name}
+        project_name = request.final_name
+        brain.switch_project(project_name)
+        return {"status": "success", "active_project": project_name}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

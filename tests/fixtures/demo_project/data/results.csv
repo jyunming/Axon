@@ -1,0 +1,6 @@
+Benchmark,Strategy,Score,Latency_ms
+Accuracy,Recursive,0.75,450
+Accuracy,Semantic,0.92,120
+Throughput,Recursive,15,800
+Throughput,Semantic,45,200
+Entity_Extraction,GraphRAG,0.88,1500

@@ -59,8 +59,8 @@ Axon provides several state-of-the-art RAG capabilities to improve retrieval acc
 - **REPL:** `/rag compress`
 - **config.yaml:**
   ```yaml
-  query_transformations:
-    compress_context: true
+  context_compression:
+    enabled: true
   ```
 
 ## 5. Query Transformations
