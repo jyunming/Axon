@@ -81,7 +81,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_getCollection', new AxonGetCollectionTool()),
         (vscode as any).lm.registerTool('axon_clearCollection', new AxonClearCollectionTool()),
         (vscode as any).lm.registerTool('axon_updateSettings', new AxonUpdateSettingsTool()),
-        (vscode as any).lm.registerTool('axon_listShares', new AxonListSharesTool())
+        (vscode as any).lm.registerTool('axon_listShares', new AxonListSharesTool()),
+        (vscode as any).lm.registerTool('axon_ingestImage', new AxonIngestImageTool())
       );
       outputChannel.appendLine('Successfully registered all Axon tools.');
     } else {
@@ -1041,6 +1042,121 @@ class AxonListSharesTool implements vscode.LanguageModelTool<any> {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(text)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error listing shares: ${err}`)]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Image ingestion via Copilot multimodal vision
+// ---------------------------------------------------------------------------
+
+/** Map file extension → MIME type for image ingest. */
+function getImageMimeType(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+  const mimeMap: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    bmp: 'image/bmp',
+    tif: 'image/tiff',
+    tiff: 'image/tiff',
+    webp: 'image/webp',
+  };
+  return mimeMap[ext] ?? 'image/png';
+}
+
+const SUPPORTED_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff', 'webp']);
+
+class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return {
+      invocationMessage: `Describing image "${options.input.imagePath}" with Copilot and ingesting into Axon...`
+    };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, token: vscode.CancellationToken) {
+    const { imagePath, project } = options.input as { imagePath: string; project?: string };
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+
+    // Validate extension
+    const ext = imagePath.split('.').pop()?.toLowerCase() ?? '';
+    if (!SUPPORTED_IMAGE_EXTENSIONS.has(ext)) {
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart(
+          `Unsupported image format ".${ext}". Supported: PNG, JPG, JPEG, BMP, TIF, TIFF, WEBP.`
+        )
+      ]);
+    }
+
+    try {
+      // Read the image file
+      const fs = await import('fs');
+      const imageBuffer = fs.readFileSync(imagePath);
+      const mimeType = getImageMimeType(imagePath);
+
+      // Select a Copilot model with vision capability
+      const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+      if (models.length === 0) {
+        return new (vscode as any).LanguageModelToolResult([
+          new (vscode as any).LanguageModelTextPart('No Copilot language model available. Ensure GitHub Copilot is installed and signed in.')
+        ]);
+      }
+
+      // Prefer a model that supports image input; fall back to first available
+      const model = models.find((m: any) => m.capabilities?.supportsImageToText) ?? models[0];
+
+      // Build the multimodal prompt
+      const prompt = [
+        vscode.LanguageModelChatMessage.User([
+          new (vscode as any).LanguageModelDataPart(mimeType, imageBuffer),
+          new vscode.LanguageModelTextPart(
+            'Describe this image in detail for a searchable knowledge base. ' +
+            'Include all visible text, diagram structure, key concepts, labels, ' +
+            'relationships, and any quantitative data shown. Be thorough and precise.'
+          )
+        ])
+      ];
+
+      // Stream the description
+      const response = await model.sendRequest(prompt, {}, token);
+      let description = '';
+      for await (const chunk of response.text) {
+        description += chunk;
+      }
+
+      if (!description.trim()) {
+        return new (vscode as any).LanguageModelToolResult([
+          new (vscode as any).LanguageModelTextPart('Copilot returned an empty description for the image.')
+        ]);
+      }
+
+      // Ingest the description as text
+      const body: Record<string, any> = {
+        text: description,
+        metadata: { type: 'image', original_path: imagePath, ingested_via: 'copilot_vision' }
+      };
+      if (project) {
+        body['project'] = project;
+      }
+      const result = await httpPost(`${apiBase}/add_text`, body, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([
+          new (vscode as any).LanguageModelTextPart(`Axon Ingest Error (${result.status}): ${data.detail || result.body}`)
+        ]);
+      }
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart(
+          `Image ingested successfully. doc_id: ${data.doc_id}, status: ${data.status}. ` +
+          `Description (${description.length} chars) stored in Axon.`
+        )
+      ]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart(`Error during image ingest: ${err}`)
+      ]);
     }
   }
 }

@@ -19,7 +19,8 @@
     "onLanguageModelTool:axon_ingestUrl",
     "onLanguageModelTool:axon_listProjects",
     "onLanguageModelTool:axon_createProject",
-    "onLanguageModelTool:axon_listShares"
+    "onLanguageModelTool:axon_listShares",
+    "onLanguageModelTool:axon_ingestImage"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -294,6 +295,27 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonListShares",
         "inputSchema": {"type": "object", "properties": {}}
+      },
+      {
+        "name": "axon_ingestImage",
+        "displayName": "Axon: Ingest Image via Copilot",
+        "modelDescription": "Describe an image file (PNG, JPG, JPEG, BMP, TIFF, WEBP) using Copilot's multimodal vision model, then ingest the description into the Axon knowledge base. Requires a Copilot model with image support (e.g. GPT-4o, Claude 3.x). The image path must be an absolute local path accessible to VS Code.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonIngestImage",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "imagePath": {
+              "type": "string",
+              "description": "Absolute path to the image file (PNG, JPG, JPEG, BMP, TIFF, or WEBP)"
+            },
+            "project": {
+              "type": "string",
+              "description": "Target project namespace. Omit to use the active project."
+            }
+          },
+          "required": ["imagePath"]
+        }
       }
     ],
     "commands": [

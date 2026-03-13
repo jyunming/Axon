@@ -187,6 +187,154 @@ class TestHmacTamper:
             shares.redeem_share_key(grantee_dir, tampered)
 
 
+class TestReadWriteJsonInternals:
+    """Cover _read_json corrupt-file and _write_json chmod-failure branches."""
+
+    def test_read_json_corrupt_returns_empty(self, tmp_path):
+        from axon.shares import _read_json
+
+        bad = tmp_path / "bad.json"
+        bad.write_text("{ not valid json !!!", encoding="utf-8")
+        result = _read_json(bad)
+        assert result == {}
+
+    def test_write_json_chmod_oserror_does_not_raise(self, tmp_path, monkeypatch):
+        """_write_json must not propagate OSError from os.chmod."""
+        import axon.shares as sh
+
+        def _failing_chmod(path, mode):
+            raise OSError("permission denied (test)")
+
+        monkeypatch.setattr(sh.os, "chmod", _failing_chmod)
+        p = tmp_path / ".share_manifest.json"
+        # Should not raise even if chmod fails
+        sh._write_json(p, {"issued": []})
+        assert p.exists()
+
+    def test_write_json_chmod_oserror_keys_file(self, tmp_path, monkeypatch):
+        """Same for .share_keys.json (600 branch)."""
+        import axon.shares as sh
+
+        def _failing_chmod(path, mode):
+            raise OSError("permission denied (test)")
+
+        monkeypatch.setattr(sh.os, "chmod", _failing_chmod)
+        p = tmp_path / ".share_keys.json"
+        sh._write_json(p, {"issued": []})
+        assert p.exists()
+
+
+class TestRedeemShareKeyPlatformIndependentErrors:
+    """Test error paths in redeem_share_key that do not require Linux symlinks."""
+
+    def test_invalid_format_raises(self, tmp_path):
+        from axon import shares
+
+        grantee_dir = _make_user_dir(tmp_path, "bob")
+        with pytest.raises(ValueError, match="Invalid share_string"):
+            shares.redeem_share_key(grantee_dir, "definitely-not-valid-base64!!!")
+
+    def test_missing_project_dir_raises(self, tmp_path):
+        """Project directory referenced in the share_string does not exist."""
+        import base64
+
+        from axon import shares
+
+        grantee_dir = _make_user_dir(tmp_path, "bob")
+        owner_store = str(tmp_path / "AxonStore")
+        raw = f"sk_test:faketoken:alice:nonexistent_project:{owner_store}"
+        share_string = base64.urlsafe_b64encode(raw.encode()).decode()
+        with pytest.raises(ValueError, match="does not exist"):
+            shares.redeem_share_key(grantee_dir, share_string)
+
+    def test_key_not_in_manifest_raises(self, tmp_path):
+        """Key ID in share_string is not found in owner's manifest."""
+        import base64
+        import json
+
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        grantee_dir = _make_user_dir(tmp_path, "bob")
+
+        # Create an empty manifest (no issued keys)
+        manifest_path = owner_dir / ".shares" / ".share_manifest.json"
+        manifest_path.write_text(json.dumps({"issued": []}), encoding="utf-8")
+
+        # Build a share_string pointing to alice's store but with an unknown key_id
+        raw = f"sk_unknown:faketoken:alice:myproject:{str(tmp_path / 'AxonStore')}"
+        share_string = base64.urlsafe_b64encode(raw.encode()).decode()
+        with pytest.raises(ValueError, match="not found in owner"):
+            shares.redeem_share_key(grantee_dir, share_string)
+
+    def test_revoked_key_in_manifest_raises(self, tmp_path):
+        """Key exists in manifest but is marked revoked — should raise before symlink."""
+        import base64
+        import json
+
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        grantee_dir = _make_user_dir(tmp_path, "bob")
+
+        key_id = "sk_revoked"
+        manifest = {
+            "issued": [
+                {
+                    "key_id": key_id,
+                    "project": "myproject",
+                    "grantee": "bob",
+                    "write_access": False,
+                    "revoked": True,
+                    "revoked_at": "2026-01-01T00:00:00+00:00",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+        }
+        manifest_path = owner_dir / ".shares" / ".share_manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        raw = f"{key_id}:faketoken:alice:myproject:{str(tmp_path / 'AxonStore')}"
+        share_string = base64.urlsafe_b64encode(raw.encode()).decode()
+        with pytest.raises(ValueError, match="revoked"):
+            shares.redeem_share_key(grantee_dir, share_string)
+
+    def test_key_not_in_key_store_raises(self, tmp_path):
+        """Key is in manifest (not revoked) but absent from private key store."""
+        import base64
+        import json
+
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        grantee_dir = _make_user_dir(tmp_path, "bob")
+
+        key_id = "sk_missing_ks"
+        manifest = {
+            "issued": [
+                {
+                    "key_id": key_id,
+                    "project": "myproject",
+                    "grantee": "bob",
+                    "write_access": False,
+                    "revoked": False,
+                    "revoked_at": None,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+        }
+        manifest_path = owner_dir / ".shares" / ".share_manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        # Write an empty key store (no issued records)
+        keys_path = owner_dir / ".shares" / ".share_keys.json"
+        keys_path.write_text(json.dumps({"issued": []}), encoding="utf-8")
+
+        raw = f"{key_id}:faketoken:alice:myproject:{str(tmp_path / 'AxonStore')}"
+        share_string = base64.urlsafe_b64encode(raw.encode()).decode()
+        with pytest.raises(ValueError, match="not found in owner"):
+            shares.redeem_share_key(grantee_dir, share_string)
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="AxonStore sharing is Linux-only")
 class TestRedeemShareKey:
     def test_creates_symlink(self, tmp_path):
