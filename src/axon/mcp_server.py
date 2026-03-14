@@ -380,9 +380,27 @@ async def list_shares() -> Any:
     status) and 'shared' (projects others have shared with this user, with mount
     names). Use to audit access or troubleshoot missing shared projects.
 
-    Requires AxonStore mode to be active.
+    Requires AxonStore mode to be active. Call init_store() first if not yet
+    initialised.
     """
     return await _get("/share/list")
+
+
+@mcp.tool()
+async def init_store(base_path: str) -> Any:
+    """Initialise AxonStore multi-user mode at the given base directory.
+
+    Must be called once before any share-related tools (list_shares,
+    share_project, redeem_share, revoke_share) will work. Safe to call
+    repeatedly — subsequent calls update the base path and reinitialise
+    the brain.
+
+    Args:
+        base_path: Absolute path to the directory where the AxonStore/
+                   folder will be created (e.g. '/data' creates
+                   '/data/AxonStore/<username>/').
+    """
+    return await _post("/store/init", {"base_path": base_path})
 
 
 # ---------------------------------------------------------------------------

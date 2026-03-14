@@ -141,20 +141,40 @@ def test_query_success():
 
 def test_delete_success():
     api_module.brain = _make_brain()
+    # get_by_ids returns the two docs — both exist
+    api_module.brain.vector_store.get_by_ids.return_value = [
+        {"id": "doc1", "text": "a"},
+        {"id": "doc2", "text": "b"},
+    ]
     resp = client.post("/delete", json={"doc_ids": ["doc1", "doc2"]})
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "success"
     assert data["deleted"] == 2
     assert set(data["doc_ids"]) == {"doc1", "doc2"}
-    # Verify delete_by_ids was called on the vector store
+    assert data["not_found"] == []
+    # Verify delete_by_ids was called on the vector store with only existing IDs
     api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["doc1", "doc2"])
     # Verify BM25 delete was called
     api_module.brain.bm25.delete_documents.assert_called_once_with(["doc1", "doc2"])
 
 
+def test_delete_nonexistent_ids_returns_zero():
+    """Deleting nonexistent IDs must report deleted=0 and list them in not_found."""
+    api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = []  # none exist
+    resp = client.post("/delete", json={"doc_ids": ["fake-id-12345"]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["deleted"] == 0
+    assert "fake-id-12345" in data["not_found"]
+    api_module.brain.vector_store.delete_by_ids.assert_not_called()
+
+
 def test_delete_propagates_error():
     api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = [{"id": "x", "text": "t"}]
     api_module.brain.vector_store.delete_by_ids.side_effect = RuntimeError("store down")
     resp = client.post("/delete", json={"doc_ids": ["x"]})
     assert resp.status_code == 500
@@ -163,6 +183,7 @@ def test_delete_propagates_error():
 def test_delete_calls_delete_by_ids_not_collection_delete():
     """Endpoint must use delete_by_ids (works for all providers) not collection.delete."""
     api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = [{"id": "id1", "text": "t"}]
     resp = client.post("/delete", json={"doc_ids": ["id1"]})
     assert resp.status_code == 200
     api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["id1"])
@@ -251,6 +272,35 @@ def test_add_text_propagates_error():
     api_module.brain.ingest.side_effect = RuntimeError("vector store full")
     resp = client.post("/add_text", json={"text": "hello"})
     assert resp.status_code == 500
+
+
+def test_add_text_empty_string_rejected():
+    """B-05: Empty or whitespace-only text must return 400."""
+    api_module.brain = _make_brain()
+    for bad in ["", "   ", "\t\n"]:
+        resp = client.post("/add_text", json={"text": bad})
+        assert resp.status_code == 400, f"Expected 400 for text={bad!r}"
+
+
+# ---------------------------------------------------------------------------
+# /project/new — project name validation (B-03)
+# ---------------------------------------------------------------------------
+
+
+def test_create_project_invalid_name_returns_400():
+    """B-03: Invalid project names must return 400, not 500."""
+    api_module.brain = _make_brain()
+    for bad_name in ["test/plan:beta!", "", "name with spaces", "a" * 65]:
+        resp = client.post("/project/new", json={"name": bad_name})
+        assert resp.status_code == 400, f"Expected 400 for name={bad_name!r}"
+
+
+def test_create_project_valid_name_succeeds():
+    """B-03: Valid project names pass name validation."""
+    api_module.brain = _make_brain()
+    with patch("axon.projects.ensure_project"):
+        resp = client.post("/project/new", json={"name": "valid-project_01"})
+    assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

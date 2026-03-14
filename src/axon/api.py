@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -911,6 +912,9 @@ async def add_text(request: TextIngestRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
+    if not request.text or not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text must not be empty.")
+
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
     project_key = request.project or "_global"
 
@@ -1133,13 +1137,25 @@ async def delete_documents(request: DeleteRequest):
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        brain.vector_store.delete_by_ids(request.doc_ids)
+        # Resolve which IDs actually exist before deleting so the count is accurate
+        existing = brain.vector_store.get_by_ids(request.doc_ids)
+        existing_ids = [doc["id"] for doc in existing]
+        if existing_ids:
+            brain.vector_store.delete_by_ids(existing_ids)
         if brain.bm25 is not None:
-            brain.bm25.delete_documents(request.doc_ids)
-        return {"status": "success", "deleted": len(request.doc_ids), "doc_ids": request.doc_ids}
+            brain.bm25.delete_documents(existing_ids)
+        return {
+            "status": "success",
+            "deleted": len(existing_ids),
+            "doc_ids": existing_ids,
+            "not_found": [i for i in request.doc_ids if i not in existing_ids],
+        }
     except Exception as e:
         logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
 @app.post("/project/new")
@@ -1147,9 +1163,19 @@ async def create_project(request: ProjectCreateRequest):
     """Create a new project directory and metadata."""
     from axon.projects import ensure_project
 
+    if not request.name or not _VALID_PROJECT_NAME_RE.match(request.name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid project name. Use 1-64 alphanumeric characters, "
+                "hyphens, or underscores only."
+            ),
+        )
     try:
         ensure_project(request.name, description=request.description)
         return {"status": "success", "project": request.name}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Project creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
