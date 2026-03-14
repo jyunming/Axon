@@ -133,3 +133,9 @@ sessions.json
 pr_comments.json
 tests/fixtures/raptor_paper.pdf
 tests/fixtures/climate_change.html
+
+# VS Code extension build artifacts
+integrations/vscode-axon/node_modules/
+integrations/vscode-axon/out/
+integrations/vscode-axon/package-lock.json
+integrations/vscode-axon/*.vsix
