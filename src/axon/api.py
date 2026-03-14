@@ -829,6 +829,8 @@ async def query_brain(request: QueryRequest):
             "discuss": cfg.discussion_fallback,
         }
         return {"query": request.query, "response": response, "settings": settings}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
