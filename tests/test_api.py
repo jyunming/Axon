@@ -105,6 +105,35 @@ def test_ingest_403_path_traversal(tmp_path):
     assert resp.status_code in (403, 404)  # 403 preferred; 404 if path resolves differently
 
 
+def test_ingest_blocks_windows_system_path(tmp_path):
+    """SEC-01: C:\\Windows paths must be blocked even when RAG_INGEST_BASE covers them."""
+    api_module.brain = _make_brain()
+    # Simulate the extension setting RAG_INGEST_BASE to filesystem root ("C:\\" or "/")
+    fs_root = "C:\\" if os.name == "nt" else "/"
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": fs_root}):
+        for blocked in ["C:/Windows/win.ini", "C:\\Windows\\System32\\drivers\\etc\\hosts"]:
+            resp = client.post("/ingest", json={"path": blocked})
+            assert resp.status_code == 403, f"Expected 403 for blocked path: {blocked}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix system paths only meaningful on non-Windows")
+def test_ingest_blocks_unix_system_path(tmp_path):
+    """SEC-01: /etc paths must be blocked even when RAG_INGEST_BASE covers them."""
+    api_module.brain = _make_brain()
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": "/"}):
+        for blocked in ["/etc/passwd", "/etc/shadow", "/proc/version"]:
+            resp = client.post("/ingest", json={"path": blocked})
+            assert resp.status_code == 403, f"Expected 403 for blocked path: {blocked}"
+
+
+def test_ingest_traversal_dotdot_blocked(tmp_path):
+    """SEC-01: ../ traversal from workspace root is blocked."""
+    api_module.brain = _make_brain()
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": str(tmp_path)}):
+        resp = client.post("/ingest", json={"path": str(tmp_path / ".." / ".." / "etc" / "passwd")})
+    assert resp.status_code == 403
+
+
 def test_ingest_valid_path(tmp_path):
     api_module.brain = _make_brain()
     # Create a file inside the allowed base

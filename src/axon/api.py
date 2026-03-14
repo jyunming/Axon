@@ -26,10 +26,45 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AxonAPI")
 
 
+_BLOCKED_PATH_PREFIXES: tuple[pathlib.Path, ...] = tuple(
+    pathlib.Path(p)
+    for p in [
+        # Windows system roots
+        "C:/Windows",
+        "C:/Windows/System32",
+        "C:/Windows/SysWOW64",
+        "C:/Program Files",
+        "C:/Program Files (x86)",
+        # Unix system roots
+        "/etc",
+        "/proc",
+        "/sys",
+        "/boot",
+        "/root",
+        "/usr/bin",
+        "/usr/sbin",
+        "/bin",
+        "/sbin",
+    ]
+)
+
+
 def _validate_ingest_path(path: str) -> str:
-    """Validate that path is within the allowed base directory."""
+    """Validate that path is within the allowed base directory and not a blocked system path."""
     allowed_base = pathlib.Path(os.getenv("RAG_INGEST_BASE", ".")).resolve()
     abs_path = pathlib.Path(path).resolve()
+
+    # Reject blocked system directories regardless of RAG_INGEST_BASE
+    for blocked in _BLOCKED_PATH_PREFIXES:
+        try:
+            abs_path.relative_to(blocked)
+            raise HTTPException(
+                status_code=403,
+                detail=f"Path '{path}' resolves to a blocked system directory.",
+            )
+        except ValueError:
+            pass
+
     try:
         abs_path.relative_to(allowed_base)
     except ValueError:

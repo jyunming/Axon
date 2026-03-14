@@ -140,7 +140,10 @@ class AxonQueryTool implements vscode.LanguageModelTool<any> {
     const { query, top_k } = options.input;
 
     try {
-      const body: any = { query };
+      // discuss: false disables the general-knowledge fallback so the tool
+      // returns a definitive "no data" message instead of a hallucinated answer
+      // when the knowledge base has no matching content.
+      const body: any = { query, discuss: false };
       if (top_k != null) { body.top_k = top_k; }
       const result = await httpPost(`${apiBase}/query`, body, apiKey);
       const data = JSON.parse(result.body);
@@ -1099,9 +1102,10 @@ class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
     }
 
     try {
-      // Read the image file
+      // Read the image file as Uint8Array (LanguageModelDataPart requires Uint8Array, not Buffer)
       const fs = await import('fs');
-      const imageBuffer = fs.readFileSync(imagePath);
+      const rawBuffer = fs.readFileSync(imagePath);
+      const imageBuffer = new Uint8Array(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength);
       const mimeType = getImageMimeType(imagePath);
 
       // Select a Copilot model with vision capability
@@ -1118,7 +1122,7 @@ class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
       // Build the multimodal prompt
       const prompt = [
         vscode.LanguageModelChatMessage.User([
-          new (vscode as any).LanguageModelDataPart(mimeType, imageBuffer),
+          new (vscode as any).LanguageModelDataPart(imageBuffer, mimeType),
           new vscode.LanguageModelTextPart(
             'Describe this image in detail for a searchable knowledge base. ' +
             'Include all visible text, diagram structure, key concepts, labels, ' +
