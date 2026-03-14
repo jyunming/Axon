@@ -222,6 +222,56 @@ def test_delete_calls_delete_by_ids_not_collection_delete():
 
 
 # ---------------------------------------------------------------------------
+# /clear
+# ---------------------------------------------------------------------------
+
+
+def test_clear_actually_clears_chroma():
+    """EXEC-009: /clear must delete and recreate the ChromaDB collection, not be a no-op."""
+    brain = _make_brain()
+    api_module.brain = brain
+    # Simulate the chroma provider path
+    brain.vector_store.provider = "chroma"
+    brain.vector_store.client = MagicMock()
+    brain.vector_store.client.create_collection.return_value = MagicMock()
+
+    resp = client.post("/clear")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    # The collection must have been deleted, not left intact
+    brain.vector_store.client.delete_collection.assert_called_once_with("axon")
+    brain.vector_store.client.create_collection.assert_called_once()
+
+
+def test_clear_resets_bm25_and_hashes():
+    """/clear must wipe BM25 corpus and ingested hash store."""
+    brain = _make_brain()
+    api_module.brain = brain
+    brain.vector_store.provider = "chroma"
+    brain.vector_store.client = MagicMock()
+    brain.vector_store.client.create_collection.return_value = MagicMock()
+
+    # Inject non-empty BM25 and hash state
+    brain.bm25 = MagicMock()
+    brain.bm25.corpus = ["fake_chunk"]
+    brain._ingested_hashes = {"abc123"}
+    brain._entity_graph = {"entity": ["neighbor"]}
+
+    with patch.object(brain, "_save_hash_store") as mock_save_hash, patch.object(
+        brain, "_save_entity_graph"
+    ) as mock_save_graph:
+        resp = client.post("/clear")
+
+    assert resp.status_code == 200
+    assert brain._ingested_hashes == set()
+    assert brain._entity_graph == {}
+    mock_save_hash.assert_called_once()
+    mock_save_graph.assert_called_once()
+    brain.bm25.save.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # /query/stream
 # ---------------------------------------------------------------------------
 

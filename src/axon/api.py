@@ -665,12 +665,41 @@ async def get_session(session_id: str):
 
 @app.post("/clear")
 async def clear_brain():
-    """Clear the active project's vector store and BM25 index."""
+    """Clear the active project's vector store, BM25 index, hash store, and entity graph."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        brain.vector_store.delete_by_ids([])  # delete_by_ids([]) is a no-op for most providers
-        return {"status": "success", "message": "Collection cleared (if supported by provider)"}
+        vs = brain.vector_store
+        provider = vs.provider
+        if provider == "chroma" and vs.client is not None:
+            vs.client.delete_collection("axon")
+            vs.collection = vs.client.create_collection(
+                name="axon", metadata={"hnsw:space": "cosine"}
+            )
+        elif provider == "qdrant" and vs.client is not None:
+            try:
+                vs.client.delete_collection("axon")
+            except Exception:
+                pass
+            vs._init_store()
+        elif provider == "lancedb" and vs.client is not None:
+            try:
+                vs.client.drop_table("axon")
+            except Exception:
+                pass
+            vs.collection = None
+
+        if brain.bm25 is not None:
+            brain.bm25.corpus.clear()
+            brain.bm25.bm25 = None
+            brain.bm25.save()
+
+        brain._ingested_hashes = set()
+        brain._save_hash_store()
+        brain._entity_graph = {}
+        brain._save_entity_graph()
+
+        return {"status": "success", "message": "Collection cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
