@@ -11,9 +11,6 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     ("webapp.py", ""),
     # main.py — all errors here are pre-existing tech debt in the REPL/CLI layer.
     ("main.py", ""),
-    # loaders.py — optional heavy imports (docx, pymupdf) assigned None at module load.
-    ("loaders.py:550", ""),
-    ("loaders.py:557", ""),
 ]
 
 

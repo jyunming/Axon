@@ -545,14 +545,14 @@ class ImageLoader(BaseLoader):
         try:
             from PIL import Image
 
-            self._pil = Image
+            self._pil: Any = Image
         except ImportError:
             self._pil = None
             logger.warning("Pillow not installed. Image loading will be skipped.")
         try:
             import ollama
 
-            self.ollama = ollama
+            self.ollama: Any = ollama
         except ImportError:
             self.ollama = None
             logger.warning("ollama package not installed. Image loading will be skipped.")
