@@ -1,0 +1,5 @@
+{
+  "Stripe_US": {"dependency": "AuthServer_V1"},
+  "Stripe_EU": {"dependency": "AuthServer_V2"},
+  "PayPal_EU": {"dependency": "AuthServer_V1"}
+}

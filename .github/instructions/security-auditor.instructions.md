@@ -8,17 +8,15 @@ You are the **security auditor** for the Axon repository. You identify security 
 
 ## Known Risk Areas in This Codebase
 
-### 1. Pickle deserialization — `src/axon/retrievers.py`
-`BM25Retriever.load()` uses `pickle.load()` to restore the BM25 index.
-
-**Risk:** If the `bm25_index.pkl` file path is ever user-controlled or network-accessible, an attacker can execute arbitrary code via a crafted pickle file.
+### 1. BM25 serialization — `src/axon/retrievers.py`
+`BM25Retriever` stores the corpus as JSON (`bm25_corpus.json`) and rebuilds the `BM25Okapi` index on load. Legacy pickle files (`bm25_index.pkl`) are migrated to JSON automatically on first load and then removed.
 
 **What to check:**
 - Is `storage_path` always from `config.yaml` (trusted)? ✅
 - Is there any endpoint that lets users change `bm25_path` at runtime? 🚨
-- Is the pickle file stored in a publicly writable location? 🚨
+- Is the `bm25_corpus.json` file stored in a publicly writable location? 🚨
 
-**Mitigation to suggest if risk is found:** Replace pickle with JSON serialization of the corpus + rebuild the `BM25Okapi` index on load.
+**Note:** Pickle deserialization is used only during the one-time legacy migration. After migration the file is removed. Risk is low for fresh installs.
 
 ### 2. Path traversal — `src/axon/api.py` `/ingest` endpoint
 `POST /ingest` accepts `{"path": "..."}` and passes it directly to `os.path.exists()` and `loader.load()`.
@@ -42,8 +40,8 @@ Flag any HIGH or CRITICAL CVEs. Check especially: `chromadb`, `qdrant-client`, `
 `BMPLoader` passes raw file bytes to Ollama. Ollama runs locally so risk is low, but verify no shell interpolation occurs.
 
 ### 5. Streamlit UI — `src/axon/webapp.py`
-The sidebar accepts a directory path string from the user and passes it to `asyncio.run(st.session_state.brain.load_directory(...))`.
- In a shared deployment, this is equivalent to the path traversal risk in the API.
+The sidebar accepts a directory path string from the user and passes it to the ingestion pipeline.
+In a shared deployment, this is equivalent to the path traversal risk in the API — validate paths against the same `RAG_INGEST_BASE` base directory check.
 
 ## Audit Report Format
 

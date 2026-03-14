@@ -577,7 +577,7 @@ curl http://localhost:8000/health
 
 Expected:
 ```json
-{"status": "healthy", "brain_ready": true}
+{"status": "ok", "project": "default"}
 ```
 
 ### Step 3: Ingest a test document

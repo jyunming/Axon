@@ -47,7 +47,7 @@ This project provides a fully open-source, local-first retrieval-augmented gener
 
 ![Axon REPL](docs/assets/repl-demo.png)
 
-*The interactive REPL — always-visible header box with model, search and discuss settings; live Tab autocomplete for all slash commands; pinned two-line status toolbar.*
+*The interactive REPL — live Tab autocomplete for all slash commands; pinned two-line status bar at the bottom.*
 
 ---
 
@@ -234,7 +234,7 @@ Agents can use Axon as a "Collective Memory."
 | `/add_texts` | POST | Batch string ingestion (multiple texts at once). |
 | `/ingest_url` | POST | Ingest a document from a URL. Body: `{"url": "https://..."}`. |
 | `/ingest/status/{job_id}` | GET | Poll background ingest job status by ID. |
-| `/health` | GET | Health check — returns `{"status": "healthy", "axon_ready": <bool>}`. |
+| `/health` | GET | Health check — returns `{"status": "ok", "project": "<name>"}` (200) or `{"status": "initializing"}` (503 while starting). |
 | `/projects` | GET | List all projects and their metadata. |
 | `/project/switch` | POST | Switch the active project. Body: `{"project": "name"}`. |
 
@@ -252,10 +252,9 @@ Customize behavior in `config.yaml`:
 - **Query Transformations:** Enable Multi-Query expansion or HyDE for improved retrieval.
 - **Truth Grounding:** Enable Brave Search API fallback when local knowledge is insufficient.
 - **Discussion Fallback:** Allow the LLM to answer from general knowledge when no documents match (default: enabled).
-- **Chunking:** Adjust document fragment size and overlap (default: 1000 chars, 200 overlap).
-- **Offline / Air-gapped Mode:** Run fully without internet — all models resolved from a local directory, web search disabled automatically.
+- **Chunking:** Adjust document fragment size and overlap, or switch to token-aware Semantic Chunking.
 
-See [Configuration Guide](QUICKREF.md#configuration) for details.
+See the **[Advanced Features Guide](docs/ADVANCED_FEATURES.md)** for detailed explanations of GraphRAG, RAPTOR, Semantic Chunking, Context Compression, and more. See the **[Configuration Guide](QUICKREF.md#configuration)** for all settings.
 
 ## 🔒 Security
 

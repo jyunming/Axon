@@ -1,0 +1,8 @@
+PROJECT ALPHA EXECUTIVE SUMMARY
+This project aims to redefine RAG benchmarks.
+The semantic strategy is significantly faster than the recursive one.
+Deployment will happen in three phases:
+Phase 1: Ingestion
+Phase 2: Retrieval
+Phase 3: Integration
+Refer to `specs.md` for lead architect details.

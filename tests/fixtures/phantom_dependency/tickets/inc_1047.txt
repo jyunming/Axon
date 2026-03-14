@@ -1,0 +1,4 @@
+TICKET ID: 1047
+Customer: Random_47
+Region: US
+Issue: Checkout button is blue instead of red. Checkout button styling is off. Checkout button is misaligned.

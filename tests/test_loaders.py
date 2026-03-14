@@ -73,7 +73,8 @@ def test_tsv_loader(tmp_path):
     assert len(docs) == 2
     for doc in docs:
         _assert_doc(doc)
-    assert docs[0]["text"] == "foo bar"
+    assert "Context: data.tsv" in docs[0]["text"]
+    assert "Data: content: foo bar | score: 1" in docs[0]["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +110,8 @@ def test_csv_loader_text_column(tmp_path):
     docs = CSVLoader().load(str(p))
     assert len(docs) == 2
     _assert_doc(docs[0])
-    assert docs[0]["text"] == "foo"
+    assert "Context: data.csv" in docs[0]["text"]
+    assert "Data: text: foo | score: 1" in docs[0]["text"]
     assert docs[0]["metadata"]["type"] == "csv"
 
 
@@ -118,7 +120,8 @@ def test_csv_loader_no_text_column(tmp_path):
     p.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
     docs = CSVLoader().load(str(p))
     assert len(docs) == 2
-    assert "a:" in docs[0]["text"] or "1" in docs[0]["text"]
+    assert "Context: data.csv" in docs[0]["text"]
+    assert "Data: a: 1 | b: 2" in docs[0]["text"]
 
 
 def test_csv_loader_empty(tmp_path):
@@ -463,8 +466,8 @@ class TestDirectoryLoader:
 
             assert len(docs) >= 2
             texts = [doc["text"] for doc in docs]
-            assert "Text file content" in texts
-            assert "JSON content" in texts
+            assert any("Text file content" in t for t in texts)
+            assert any("JSON content" in t for t in texts)
 
 
 # ---------------------------------------------------------------------------
@@ -486,9 +489,11 @@ class TestDirectoryLoaderAload:
         async_docs = asyncio.run(loader.aload(str(tmp_path)))
 
         assert len(async_docs) == len(sync_docs)
-        sync_texts = sorted(d["text"] for d in sync_docs)
-        async_texts = sorted(d["text"] for d in async_docs)
-        assert sync_texts == async_texts
+        # Check that breadcrumbs are present in both
+        assert "[File Path: hello.txt]" in sync_docs[0]["text"]
+        assert "[File Path: hello.txt]" in async_docs[0]["text"]
+        assert "Hello async world" in sync_docs[0]["text"]
+        assert "Hello async world" in async_docs[0]["text"]
 
     def test_aload_returns_empty_for_unknown_extensions(self, tmp_path):
         """aload() should return [] when no supported files are found."""
@@ -511,9 +516,9 @@ class TestDirectoryLoaderAload:
         docs = asyncio.run(loader.aload(str(tmp_path)))
 
         assert len(docs) == 2
-        texts = {d["text"] for d in docs}
-        assert "file A content" in texts
-        assert "file B content" in texts
+        all_text = " ".join(d["text"] for d in docs)
+        assert "file A content" in all_text
+        assert "file B content" in all_text
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import re  # noqa: E402
 import sys  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
+import uuid  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, Literal  # noqa: E402
@@ -46,6 +47,9 @@ _USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "co
 class AxonConfig:
     """Configuration for Axon."""
 
+    # Internal tracking
+    _loaded_path: str | None = None
+
     # Embedding
     embedding_provider: Literal[
         "sentence_transformers", "ollama", "fastembed", "openai"
@@ -54,7 +58,9 @@ class AxonConfig:
     ollama_base_url: str = "http://localhost:11434"
 
     # LLM
-    llm_provider: Literal["ollama", "gemini", "ollama_cloud", "openai", "vllm"] = "ollama"
+    llm_provider: Literal[
+        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot"
+    ] = "ollama"
     llm_model: str = "gemma"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
@@ -82,7 +88,7 @@ class AxonConfig:
     )
 
     def __post_init__(self) -> None:
-        """Populate API-related fields from environment variables when not set."""
+        """Populate fields from environment variables and resolve storage paths."""
         # 1. API Keys and URLs
         if not self.api_key:
             self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
@@ -162,12 +168,30 @@ class AxonConfig:
         self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma_data")
         self.bm25_path = _resolve_safe(self.bm25_path, "bm25_index")
 
+        # AxonStore mode: derive projects_root from store base
+        env_store_base = os.getenv("AXON_STORE_BASE", "")
+        if env_store_base and not self.axon_store_base:
+            self.axon_store_base = env_store_base
+        if self.axon_store_base:
+            import getpass
+
+            username = getpass.getuser()
+            store_root = Path(self.axon_store_base).expanduser().resolve() / "AxonStore"
+            user_dir = store_root / username
+            self.projects_root = str(user_dir)
+            self.vector_store_path = str(user_dir / "_default" / "chroma_data")
+            self.bm25_path = str(user_dir / "_default" / "bm25_index")
+            self.axon_store_mode = True
+
     # RAG Settings
     top_k: int = 10
     similarity_threshold: float = 0.3
     hybrid_search: bool = True
+    hybrid_weight: float = 0.7  # 1.0 = Pure Semantic, 0.0 = Pure Keyword
+    hybrid_mode: Literal["weighted", "rrf"] = "weighted"  # Hybrid fusion mode
 
     # Chunking
+    chunk_strategy: Literal["recursive", "semantic"] = "semantic"
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
@@ -179,10 +203,11 @@ class AxonConfig:
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     # Parent-Document / Small-to-Big Retrieval
-    # Set parent_chunk_size > chunk_size to enable. Child chunks (chunk_size)
-    # are indexed for precise retrieval; parent chunks are returned as context.
-    # 0 = disabled (use retrieval chunks directly).
-    parent_chunk_size: int = 0
+    # Child chunks (chunk_size tokens) are indexed for precise retrieval;
+    # parent chunks (parent_chunk_size tokens) are returned as LLM context.
+    # Must be > chunk_size to have any effect.
+    # 0 = disabled (retrieval chunks are used directly as LLM context).
+    parent_chunk_size: int = 1500
 
     # Query Transformations
     multi_query: bool = False
@@ -211,23 +236,44 @@ class AxonConfig:
     offline_mode: bool = False
     local_models_dir: str = ""
 
-    # Inline Source Citations
     # RAPTOR Hierarchical Indexing
     # During ingest, groups every raptor_chunk_group_size consecutive chunks per source
     # and generates a summarisation node that is indexed alongside the leaf chunks.
     # At retrieval time these summary nodes surface high-level context for multi-hop
     # questions that no single leaf chunk can answer.
-    raptor: bool = False
+    raptor: bool = True
     raptor_chunk_group_size: int = 5
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
     # stored in an entity→doc_id map.  At retrieval time, entities found in the
     # query are used to expand the result set with graph-connected documents.
-    graph_rag: bool = False
+    graph_rag: bool = True
 
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
+
+    # Maximum parallel worker threads for background ingestion and query tasks
+    max_workers: int = 8
+
+    # Dataset type for type-specific chunking. "auto" uses content-based heuristics.
+    dataset_type: Literal["auto", "codebase", "paper", "doc", "discussion", "knowledge"] = "auto"
+
+    # Smart re-ingest: track doc versions and re-ingest only changed documents
+    smart_ingest: bool = False
+
+    # Qdrant remote connection settings (leave empty for local file mode)
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+
+    # AxonStore — multi-user shared storage
+    # When axon_store_base is set, projects_root is derived as:
+    #   {axon_store_base}/AxonStore/{os_username}/
+    # and the AxonStore namespace is initialised on first use.
+    # Set via config.yaml store.base or AXON_STORE_BASE env var.
+    axon_store_base: str = ""
+    # Internal flag set by __post_init__ when store mode is active. Do not set directly.
+    axon_store_mode: bool = False
 
     @classmethod
     def load(cls, path: str | None = None) -> "AxonConfig":
@@ -371,6 +417,22 @@ offline:
         if "projects_root" in data:
             config_dict["projects_root"] = data["projects_root"]
 
+        if "max_workers" in data:
+            config_dict["max_workers"] = data["max_workers"]
+
+        if "projects_base" in data:
+            config_dict["projects_root"] = data["projects_base"]
+
+        if "store" in data:
+            store_section = data["store"]
+            if isinstance(store_section, dict) and store_section.get("base"):
+                config_dict["axon_store_base"] = store_section["base"]
+
+        if "qdrant_url" in data:
+            config_dict["qdrant_url"] = data["qdrant_url"]
+        if "qdrant_api_key" in data:
+            config_dict["qdrant_api_key"] = data["qdrant_api_key"]
+
         # Environment Variable Overrides (High Priority — wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -386,12 +448,109 @@ offline:
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_dict = {k: v for k, v in config_dict.items() if k in valid_fields}
 
-        return cls(**filtered_dict)
+        cfg = cls(**filtered_dict)
+        cfg._loaded_path = path
+        return cfg
+
+    def save(self, path: str | None = None) -> None:
+        """Persist current configuration to disk in a structured format."""
+        target = path or self._loaded_path or str(_USER_CONFIG_PATH)
+
+        # Structure the data back into the expected nested groups
+        from dataclasses import asdict
+
+        flat = asdict(self)
+
+        data = {
+            "embedding": {
+                "provider": flat["embedding_provider"],
+                "model": flat["embedding_model"],
+            },
+            "llm": {
+                "provider": flat["llm_provider"],
+                "model": flat["llm_model"],
+                "temperature": flat["llm_temperature"],
+                "max_tokens": flat["llm_max_tokens"],
+            },
+            "vector_store": {
+                "provider": flat["vector_store"],
+                "path": flat["vector_store_path"],
+            },
+            "bm25": {
+                "path": flat["bm25_path"],
+            },
+            "rag": {
+                "top_k": flat["top_k"],
+                "similarity_threshold": flat["similarity_threshold"],
+                "hybrid_search": flat["hybrid_search"],
+                "hybrid_weight": flat["hybrid_weight"],
+                "parent_chunk_size": flat["parent_chunk_size"],
+                "raptor": flat["raptor"],
+                "raptor_chunk_group_size": flat["raptor_chunk_group_size"],
+                "graph_rag": flat["graph_rag"],
+                "dedup_on_ingest": flat["dedup_on_ingest"],
+            },
+            "chunk": {
+                "strategy": flat["chunk_strategy"],
+                "size": flat["chunk_size"],
+                "overlap": flat["chunk_overlap"],
+            },
+            "rerank": {
+                "enabled": flat["rerank"],
+                "provider": flat["reranker_provider"],
+                "model": flat["reranker_model"],
+            },
+            "query_transformations": {
+                "multi_query": flat["multi_query"],
+                "hyde": flat["hyde"],
+                "step_back": flat["step_back"],
+                "query_decompose": flat["query_decompose"],
+                "discussion_fallback": flat["discussion_fallback"],
+            },
+            "context_compression": {
+                "enabled": flat["compress_context"],
+            },
+            "web_search": {
+                "enabled": flat["truth_grounding"],
+                "brave_api_key": flat["brave_api_key"],
+            },
+            "offline": {
+                "enabled": flat["offline_mode"],
+                "local_models_dir": flat["local_models_dir"],
+            },
+            "projects_root": flat["projects_root"],
+        }
+
+        if flat.get("axon_store_base"):
+            data["store"] = {"base": flat["axon_store_base"]}
+            data.pop("projects_root", None)
+
+        # Add provider-specific extras
+        if flat["api_key"]:
+            data["llm"]["api_key"] = flat["api_key"]
+        if flat["gemini_api_key"]:
+            data["llm"]["gemini_api_key"] = flat["gemini_api_key"]
+        if flat["ollama_cloud_key"]:
+            data["llm"]["ollama_cloud_key"] = flat["ollama_cloud_key"]
+        if flat["ollama_cloud_url"]:
+            data["llm"]["ollama_cloud_url"] = flat["ollama_cloud_url"]
+        if flat["vllm_base_url"]:
+            data["llm"]["vllm_base_url"] = flat["vllm_base_url"]
+        if flat["llm_timeout"]:
+            data["llm"]["timeout"] = flat["llm_timeout"]
+
+        os.makedirs(os.path.dirname(os.path.expanduser(target)), exist_ok=True)
+        with open(os.path.expanduser(target), "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        logger.info(f"Configuration saved to {target}")
 
 
 class OpenReranker:
-    """
-    Open-source reranking using Cross-Encoders.
+    """Document reranker supporting cross-encoder and LLM (RankGPT) providers.
+
+    When ``reranker_provider="cross-encoder"`` a sentence-transformers CrossEncoder
+    scores each (query, document) pair.  When ``reranker_provider="llm"`` the
+    active LLM rates each document on a 1–10 scale in parallel threads.
     """
 
     def __init__(self, config: AxonConfig):
@@ -465,9 +624,24 @@ class OpenReranker:
         return reranked_docs
 
 
+_KNOWN_DIMS: dict[str, int] = {
+    "BAAI/bge-large-en-v1.5": 1024,
+    "BAAI/bge-base-en-v1.5": 768,
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-m3": 1024,
+    "all-MiniLM-L6-v2": 384,
+    "all-MiniLM-L12-v2": 384,
+    "all-mpnet-base-v2": 768,
+    "nomic-embed-text": 768,
+    "mxbai-embed-large": 1024,
+}
+
+
 class OpenEmbedding:
-    """
-    Open-source embedding provider.
+    """Unified embedding client supporting sentence_transformers, ollama, fastembed, and openai.
+
+    Embedding dimensions for known models are resolved via :data:`_KNOWN_DIMS`
+    without requiring a model download (useful for Ollama and FastEmbed).
     """
 
     def __init__(self, config: AxonConfig):
@@ -488,17 +662,14 @@ class OpenEmbedding:
 
         elif self.provider == "ollama":
             logger.info(f"Using Ollama Embedding: {self.config.embedding_model}")
-            self.dimension = 768  # nomic-embed-text dimension
+            self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 768)
 
         elif self.provider == "fastembed":
             from fastembed import TextEmbedding
 
             logger.info(f"Loading FastEmbed: {self.config.embedding_model}")
             self.model = TextEmbedding(model_name=self.config.embedding_model)
-            if "bge-m3" in self.config.embedding_model.lower():
-                self.dimension = 1024
-            else:
-                self.dimension = 384
+            self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 384)
 
         elif self.provider == "openai":
             from openai import OpenAI
@@ -507,6 +678,7 @@ class OpenEmbedding:
             kwargs = (
                 {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
             )
+            # ollama_base_url doubles as the generic base_url for OpenAI-compatible servers
             if (
                 self.config.ollama_base_url
                 and self.config.ollama_base_url != "http://localhost:11434"
@@ -547,9 +719,18 @@ class OpenEmbedding:
         return self.embed([query])[0]
 
 
+# Bridge for VS Code Copilot LLM tasks
+_copilot_task_queue: list[dict] = []
+_copilot_responses: dict[str, dict] = {}
+_copilot_bridge_lock = threading.Lock()
+
+
 class OpenLLM:
-    """
-    Open-source LLM provider.
+    """Unified LLM client supporting ollama, gemini, ollama_cloud, openai, vllm, and copilot.
+
+    The ``copilot`` provider routes completions through the VS Code extension
+    bridge (poll ``GET /llm/copilot/tasks``, submit results via
+    ``POST /llm/copilot/result/<task_id>``).
     """
 
     def __init__(self, config: AxonConfig):
@@ -705,6 +886,40 @@ class OpenLLM:
                 timeout=self.config.llm_timeout,
             )
             return response.choices[0].message.content
+
+        elif provider == "copilot":
+            task_id = f"task_{uuid.uuid4().hex[:12]}"
+            event = threading.Event()
+
+            with _copilot_bridge_lock:
+                _copilot_task_queue.append(
+                    {
+                        "id": task_id,
+                        "prompt": prompt,
+                        "history": history,
+                        "system_prompt": system_prompt,
+                        "model": self.config.llm_model,
+                        "temperature": self.config.llm_temperature,
+                        "max_tokens": self.config.llm_max_tokens,
+                    }
+                )
+                _copilot_responses[task_id] = {"event": event, "result": None, "error": None}
+
+            # Wait for extension to fulfill (timeout from config)
+            if event.wait(timeout=self.config.llm_timeout):
+                res = _copilot_responses.get(task_id)
+                if not res:
+                    return "Error: Task response lost."
+                if res["error"]:
+                    return f"Error from Copilot: {res['error']}"
+                result = res["result"] or ""
+                with _copilot_bridge_lock:
+                    _copilot_responses.pop(task_id, None)
+                return result
+            else:
+                with _copilot_bridge_lock:
+                    _copilot_responses.pop(task_id, None)
+                return "Error: Copilot LLM bridge timed out."
 
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
@@ -864,10 +1079,19 @@ class OpenLLM:
                 if chunk.choices[0].delta.content is not None:
                     yield chunk.choices[0].delta.content
 
+        elif provider == "copilot":
+            # For streaming, we'll just use the blocking complete() logic but yield it as one chunk.
+            # True streaming via the bridge would require a more complex WebSocket setup.
+            yield self.complete(prompt, system_prompt, chat_history)
+
 
 class OpenVectorStore:
-    """
-    Open-source vector store interface.
+    """Unified interface over ChromaDB, Qdrant, and LanceDB vector stores.
+
+    Initialized via :class:`AxonConfig`.  Supports ``add``, ``search``,
+    ``get_by_ids``, ``delete_by_ids``, and ``list_documents`` operations
+    across all three backends.  Qdrant can operate in local file mode or
+    remote mode (set ``qdrant_url`` in config).
     """
 
     def __init__(self, config: AxonConfig):
@@ -908,8 +1132,15 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             from qdrant_client import QdrantClient
 
-            logger.info(f"Initializing Qdrant: {self.config.vector_store_path}")
-            self.client = QdrantClient(path=self.config.vector_store_path)
+            if getattr(self.config, "qdrant_url", ""):
+                logger.info(f"Initializing Qdrant (remote): {self.config.qdrant_url}")
+                self.client = QdrantClient(
+                    url=self.config.qdrant_url,
+                    api_key=self.config.qdrant_api_key or None,
+                )
+            else:
+                logger.info(f"Initializing Qdrant (local): {self.config.vector_store_path}")
+                self.client = QdrantClient(path=self.config.vector_store_path)
         elif self.provider == "lancedb":
             import lancedb
 
@@ -945,9 +1176,17 @@ class OpenVectorStore:
         metadatas: list[dict] = None,
     ):
         if self.provider == "chroma":
-            self.collection.add(
-                ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas
-            )
+            try:
+                self.collection.add(
+                    ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas
+                )
+            except Exception as e:
+                if "dimension" in str(e).lower():
+                    logger.error(
+                        f"Embedding dimension mismatch in ChromaDB! Expected: {self.config.embedding_model}. "
+                        "Try clearing the project data or switch to a different project."
+                    )
+                raise
         elif self.provider == "qdrant":
             from qdrant_client.models import PointStruct
 
@@ -1158,6 +1397,11 @@ class OpenVectorStore:
             self.collection.delete(f"id IN ({id_str})")
 
 
+_MERGED_VIEW_WRITE_ERROR = (
+    "Cannot write to a merged parent project view. " "Switch to a specific sub-project first."
+)
+
+
 class MultiVectorStore:
     """Read-only fan-out wrapper over multiple OpenVectorStore instances.
 
@@ -1255,16 +1499,17 @@ class MultiBM25Retriever:
     def add_documents(self, *args, **kwargs):
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
-    def delete_documents(self, doc_ids: list[str]) -> None:
-        raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
-
     # Alias used by ingest code
     batch_add_documents = add_documents
 
 
 class AxonBrain:
-    """
-    Main interface for Axon.
+    """Core RAG engine that wires together embedding, vector store, BM25, reranker, and LLM.
+
+    Instantiate with an :class:`AxonConfig` (or omit to load from the default
+    config path).  Call :meth:`ingest` to add documents and :meth:`query` to
+    retrieve and synthesise answers.  Use :meth:`switch_project` to change the
+    active knowledge-base namespace at runtime.
     """
 
     SYSTEM_PROMPT = """You are the 'Axon', a highly capable and friendly AI assistant.
@@ -1355,6 +1600,12 @@ Your primary goal is to help the user by answering questions based on the provid
             _proj_mod.set_projects_root(self.config.projects_root)
             logger.info(f"Projects root: {_proj_mod.PROJECTS_ROOT}")
 
+        # In AxonStore mode, ensure the user namespace directories exist
+        if self.config.axon_store_mode:
+            from axon.projects import ensure_user_namespace
+
+            ensure_user_namespace(Path(self.config.projects_root))
+
         # Ensure the 'default' project directory exists
         from axon.projects import ensure_project
 
@@ -1387,11 +1638,18 @@ Your primary goal is to help the user by answering questions based on the provid
         self._own_bm25 = self.bm25
 
         try:
-            from axon.splitters import RecursiveCharacterTextSplitter
+            if self.config.chunk_strategy == "semantic":
+                from axon.splitters import SemanticTextSplitter
 
-            self.splitter = RecursiveCharacterTextSplitter(
-                chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
-            )
+                self.splitter = SemanticTextSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
+            else:
+                from axon.splitters import RecursiveCharacterTextSplitter
+
+                self.splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
         except ImportError:
             self.splitter = None
 
@@ -1406,13 +1664,25 @@ Your primary goal is to help the user by answering questions based on the provid
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
 
+        # Doc versions store for smart re-ingest
+        self._doc_versions: dict = {}
+        self._doc_versions_path = os.path.join(self.config.bm25_path, ".doc_versions.json")
+        self._load_doc_versions()
+
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
+
+        # Shared executor for background/parallel tasks
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._executor = ThreadPoolExecutor(max_workers=self.config.max_workers)
 
         logger.info("Axon ready!")
 
     def close(self):
         """Explicitly release all resources (connections, file handles)."""
+        if hasattr(self, "_executor") and self._executor:
+            self._executor.shutdown(wait=False)
         if hasattr(self, "vector_store") and self.vector_store:
             if hasattr(self.vector_store, "close"):
                 self.vector_store.close()
@@ -1484,6 +1754,11 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # Close existing stores before replacing them
         self.close()
+
+        # Recreate the executor — close() shuts it down and it cannot be reused
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._executor = ThreadPoolExecutor(max_workers=self.config.max_workers)
 
         # Own store: always the project's own data (used for writes / dedup / GraphRAG)
         own_vs = OpenVectorStore(self.config)
@@ -1560,6 +1835,35 @@ Your primary goal is to help the user by answering questions based on the provid
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(self._ingested_hashes), encoding="utf-8")
 
+    def _load_doc_versions(self) -> None:
+        """Load doc versions from disk."""
+        if os.path.exists(self._doc_versions_path):
+            try:
+                import json as _json
+
+                with open(self._doc_versions_path, encoding="utf-8") as f:
+                    self._doc_versions = _json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not load doc versions: {e}")
+                self._doc_versions = {}
+        else:
+            self._doc_versions = {}
+
+    def _save_doc_versions(self) -> None:
+        """Persist doc versions to disk."""
+        try:
+            import json as _json
+
+            os.makedirs(os.path.dirname(self._doc_versions_path), exist_ok=True)
+            with open(self._doc_versions_path, "w", encoding="utf-8") as f:
+                _json.dump(self._doc_versions, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save doc versions: {e}")
+
+    def get_doc_versions(self) -> dict:
+        """Return all tracked document versions."""
+        return dict(self._doc_versions)
+
     def _load_entity_graph(self) -> dict[str, list[str]]:
         """Load persisted entity→doc_id graph from disk."""
         import json
@@ -1593,8 +1897,8 @@ Your primary goal is to help the user by answering questions based on the provid
     def _extract_entities(self, text: str) -> list[str]:
         """Extract named entities from text using the LLM.
 
-        Returns a list of entity strings (people, organisations, places, concepts).
-        Returns an empty list on failure.
+        Returns a list of entity strings (people, organisations, places, products, technical concepts).
+        Returns an empty list on failure or when the LLM produces no output.
         """
         prompt = (
             "Extract the key named entities (people, organisations, places, products, "
@@ -1612,69 +1916,68 @@ Your primary goal is to help the user by answering questions based on the provid
             return []
 
     def _generate_raptor_summaries(self, documents: list[dict]) -> list[dict]:
-        """Generate RAPTOR summary nodes for a list of already-split chunks.
-
-        Groups consecutive chunks by source in windows of raptor_chunk_group_size,
-        then calls the LLM to produce a summary passage.  Each summary is returned
-        as a new synthetic document (raptor_level=1 in metadata) that will be
-        embedded and stored alongside the leaf chunks.
-        """
+        """Generate RAPTOR summary nodes for a list of already-split chunks."""
         from itertools import groupby
 
         n = self.config.raptor_chunk_group_size
         if n < 1:
             logger.warning("raptor_chunk_group_size must be >= 1, skipping RAPTOR")
             return []
-        summaries = []
 
-        # Group chunks by their source file so we only summarise within one document
         def _source(doc):
             return doc.get("metadata", {}).get("source", doc["id"])
 
         sorted_docs = sorted(documents, key=_source)
+        windows = []
         for source, group in groupby(sorted_docs, key=_source):
             chunks = list(group)
             for i in range(0, len(chunks), n):
-                window = chunks[i : i + n]
-                combined = "\n\n".join(c["text"] for c in window)
-                prompt = (
-                    "Summarise the following passage into a concise but comprehensive paragraph "
-                    "that captures all key facts and concepts. "
-                    "Output only the summary paragraph.\n\n" + combined[:4000]
+                windows.append((source, i, chunks[i : i + n]))
+
+        if not windows:
+            return []
+
+        logger.info(f"   RAPTOR: Generating summaries for {len(windows)} groups...")
+
+        def _proc_window(item):
+            source, i, window = item
+            combined = "\n\n".join(c["text"] for c in window)
+            prompt = (
+                "Summarise the following passage into a concise but comprehensive paragraph "
+                "that captures all key facts and concepts. "
+                "Output only the summary paragraph.\n\n" + combined[:4000]
+            )
+            try:
+                summary_text = self.llm.complete(
+                    prompt,
+                    system_prompt="You are an expert at summarising technical documents.",
                 )
-                try:
-                    summary_text = self.llm.complete(
-                        prompt,
-                        system_prompt="You are an expert at summarising technical documents.",
-                    )
-                    if not summary_text or not summary_text.strip():
-                        continue
-                    # Build a deterministic ID from source + window position + content
-                    # so that re-ingesting updated content produces a new ID and
-                    # does not silently collide with a stale RAPTOR node in the store.
-                    import hashlib
+                if not summary_text or not summary_text.strip():
+                    return None
 
-                    content_sig = hashlib.md5(
-                        summary_text.strip().encode("utf-8", errors="replace")
-                    ).hexdigest()[:8]
-                    uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[
-                        :12
-                    ]
-                    summaries.append(
-                        {
-                            "id": f"raptor_{uid}",
-                            "text": summary_text.strip(),
-                            "metadata": {
-                                "source": source,
-                                "raptor_level": 1,
-                                "window_start": i,
-                                "window_end": i + len(window) - 1,
-                            },
-                        }
-                    )
-                except Exception as e:
-                    logger.debug(f"RAPTOR summary failed for {source}[{i}]: {e}")
+                import hashlib
 
+                content_sig = hashlib.md5(
+                    summary_text.strip().encode("utf-8", errors="replace")
+                ).hexdigest()[:8]
+                uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
+                return {
+                    "id": f"raptor_{uid}",
+                    "text": summary_text.strip(),
+                    "metadata": {
+                        "source": source,
+                        "raptor_level": 1,
+                        "window_start": i,
+                        "window_end": i + len(window) - 1,
+                    },
+                }
+            except Exception as e:
+                logger.debug(f"RAPTOR summary failed for {source}[{i}]: {e}")
+                return None
+
+        results = list(self._executor.map(_proc_window, windows))
+
+        summaries = [r for r in results if r]
         if summaries:
             logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
         return summaries
@@ -1794,6 +2097,129 @@ Your primary goal is to help the user by answering questions based on the provid
             }
         )
 
+    # ── Dataset type detection ────────────────────────────────────────────────
+    _CODE_EXTENSIONS = {
+        ".py",
+        ".ts",
+        ".js",
+        ".go",
+        ".rs",
+        ".java",
+        ".cpp",
+        ".c",
+        ".sh",
+        ".rb",
+        ".kt",
+        ".swift",
+        ".jsx",
+        ".tsx",
+        ".cs",
+        ".php",
+        ".scala",
+    }
+    _CODE_LINE_PATTERNS = re.compile(
+        r"^(def |class |import |from |fn |func |//|#!|public |private |protected |package |using |namespace )"
+    )
+    _PAPER_SIGNALS = re.compile(
+        r"\b(Abstract|Introduction|References|DOI|arXiv|Figure \d|Conclusion|Methodology)\b"
+    )
+    _DOC_SIGNALS = re.compile(
+        r"(^#{1,3} |\*\*\w|\bChapter\b|\bNote:\b|\bStep \d|^\d+\.\s)", re.MULTILINE
+    )
+
+    def _detect_dataset_type(self, doc: dict) -> tuple[str, bool]:
+        """Detect the dataset type for a document using content-based heuristics.
+
+        Returns:
+            Tuple of (dataset_type, has_code) where dataset_type is one of
+            'codebase', 'paper', 'doc', 'discussion', 'knowledge'
+            and has_code is True when a doc-type document also contains code blocks.
+        """
+        # Use configured override if not "auto"
+        if self.config.dataset_type != "auto":
+            return self.config.dataset_type, False
+
+        text = doc.get("text", "")
+        source = doc.get("metadata", {}).get("source", "") or doc.get("id", "")
+
+        # Priority 1: Code file extensions
+        if source:
+            ext = os.path.splitext(source)[1].lower()
+            if ext in self._CODE_EXTENSIONS:
+                return "codebase", False
+
+        # Priority 2: JSON with discussion keys
+        if text.strip().startswith("{") or text.strip().startswith("["):
+            try:
+                import json as _json
+
+                parsed = _json.loads(text[:2000])
+                if isinstance(parsed, dict):
+                    if any(k in parsed for k in ("role", "turn", "messages", "speaker")):
+                        return "discussion", False
+                elif isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                    if any(k in parsed[0] for k in ("role", "turn", "messages", "speaker")):
+                        return "discussion", False
+            except Exception:
+                pass
+
+        lines = text.splitlines()
+        if not lines:
+            return "doc", False
+
+        # Priority 3: Tabular detection (avg commas or tabs per line)
+        non_empty = [ln for ln in lines if ln.strip()]
+        if non_empty:
+            avg_commas = sum(ln.count(",") for ln in non_empty) / len(non_empty)
+            avg_tabs = sum(ln.count("\t") for ln in non_empty) / len(non_empty)
+            if avg_commas > 2.0 or avg_tabs > 1.5:
+                return "knowledge", False
+
+        # Priority 4: Code content heuristic (>15% of lines match code patterns)
+        code_lines = sum(1 for ln in non_empty if self._CODE_LINE_PATTERNS.match(ln.strip()))
+        code_ratio = code_lines / len(non_empty) if non_empty else 0.0
+        if code_ratio > 0.15:
+            # Mixed doc with heavy code
+            if code_ratio < 0.5:
+                return "doc", True
+            return "codebase", False
+
+        # Priority 5: Academic paper signals in first 2000 chars
+        preview = text[:2000]
+        paper_matches = len(self._PAPER_SIGNALS.findall(preview))
+        if paper_matches >= 2:
+            return "paper", False
+
+        # Priority 6: Doc signals (markdown, numbered steps)
+        if self._DOC_SIGNALS.search(text[:3000]):
+            has_code = "```" in text or "    def " in text or "    class " in text
+            return "doc", has_code
+
+        # Priority 7: Extension-based fallback for common doc types
+        if source:
+            ext = os.path.splitext(source)[1].lower()
+            if ext in (".pdf", ".docx", ".html", ".pptx", ".md", ".rst", ".txt"):
+                return "doc", False
+
+        return "doc", False
+
+    def _get_splitter_for_type(self, dataset_type: str, has_code: bool):
+        """Return a splitter configured for the detected document type."""
+        from axon.splitters import RecursiveCharacterTextSplitter, SemanticTextSplitter
+
+        if dataset_type == "codebase":
+            return RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+        elif dataset_type == "paper":
+            return SemanticTextSplitter(chunk_size=600, chunk_overlap=100)
+        elif dataset_type == "discussion":
+            return RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=30)
+        elif dataset_type == "knowledge":
+            return SemanticTextSplitter(chunk_size=400, chunk_overlap=50)
+        elif dataset_type == "doc" and has_code:
+            return SemanticTextSplitter(chunk_size=500, chunk_overlap=75)
+        else:  # doc default
+            return self.splitter  # Use default configured splitter
+
     def _split_with_parents(self, documents: list[dict]) -> list[dict]:
         """Split documents using parent-document (small-to-big) strategy.
 
@@ -1811,6 +2237,12 @@ Your primary goal is to help the user by answering questions based on the provid
         )
         all_chunks = []
         for doc in documents:
+            # Detect and annotate dataset type before splitting
+            dataset_type, has_code = self._detect_dataset_type(doc)
+            doc.setdefault("metadata", {})["dataset_type"] = dataset_type
+            if has_code:
+                doc["metadata"]["has_code"] = True
+
             parent_texts = parent_splitter.split(doc["text"])
             for p_idx, parent_text in enumerate(parent_texts):
                 p_doc = {
@@ -1824,7 +2256,15 @@ Your primary goal is to help the user by answering questions based on the provid
                 all_chunks.extend(child_chunks)
         return all_chunks
 
-    def ingest(self, documents: list[dict[str, Any]]):
+    def ingest(self, documents: list[dict[str, Any]]) -> None:
+        """Chunk, deduplicate, embed, and store *documents* in the knowledge base.
+
+        Each document must be a dict with keys ``id`` (str), ``text`` (str), and
+        optionally ``metadata`` (dict).  Chunking strategy and deduplication are
+        governed by the active :class:`AxonConfig`.  When ``raptor=True``,
+        summary nodes are generated and indexed alongside leaf chunks.  When
+        ``graph_rag=True``, entities are extracted and added to the entity graph.
+        """
         if not documents:
             return
         t0 = time.time()
@@ -1834,7 +2274,20 @@ Your primary goal is to help the user by answering questions based on the provid
         if self.splitter and self.config.parent_chunk_size > 0:
             documents = self._split_with_parents(documents)
         elif self.splitter:
-            documents = self.splitter.transform_documents(documents)
+            # Type-specific chunking: detect per-document and apply the right splitter
+            chunked: list[dict] = []
+            for doc in documents:
+                dataset_type, has_code = self._detect_dataset_type(doc)
+                # Store type metadata in each document
+                doc.setdefault("metadata", {})["dataset_type"] = dataset_type
+                if has_code:
+                    doc["metadata"]["has_code"] = True
+                splitter = self._get_splitter_for_type(dataset_type, has_code)
+                if splitter is not None:
+                    chunked.extend(splitter.transform_documents([doc]))
+                else:
+                    chunked.append(doc)
+            documents = chunked
 
         if self.config.dedup_on_ingest:
             before = len(documents)
@@ -1864,16 +2317,25 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG: extract entities from new chunks and update entity graph
         if self.config.graph_rag:
             updated = False
-            for doc in documents:
-                if doc.get("metadata", {}).get("raptor_level"):
-                    continue  # skip synthetic RAPTOR nodes
-                entities = self._extract_entities(doc["text"])
+            # Only extract entities from actual document chunks
+            chunks_to_process = [
+                doc for doc in documents if not doc.get("metadata", {}).get("raptor_level")
+            ]
+
+            logger.info(f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks...")
+
+            def _proc(doc):
+                return doc["id"], self._extract_entities(doc["text"])
+
+            results = list(self._executor.map(_proc, chunks_to_process))
+
+            for doc_id, entities in results:
                 for entity in entities:
                     key = entity.lower()
                     if key not in self._entity_graph:
                         self._entity_graph[key] = []
-                    if doc["id"] not in self._entity_graph[key]:
-                        self._entity_graph[key].append(doc["id"])
+                    if doc_id not in self._entity_graph[key]:
+                        self._entity_graph[key].append(doc_id)
                         updated = True
             if updated:
                 self._save_entity_graph()
@@ -2039,7 +2501,7 @@ Your primary goal is to help the user by answering questions based on the provid
             return []
 
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
-        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search."""
+        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
         if cfg is None:
             cfg = self.config
         transforms = {
@@ -2051,37 +2513,45 @@ Your primary goal is to help the user by answering questions based on the provid
             "queries": [query],
         }
 
+        # --- Phase 1: Parallel Query Transformation ---
+        future_to_task = {}
+        if cfg.multi_query:
+            future_to_task[self._executor.submit(self._get_multi_queries, query)] = "multi"
+        if cfg.step_back:
+            future_to_task[self._executor.submit(self._get_step_back_query, query)] = "step_back"
+        if cfg.query_decompose:
+            future_to_task[self._executor.submit(self._decompose_query, query)] = "decompose"
+        if cfg.hyde:
+            future_to_task[self._executor.submit(self._get_hyde_document, query)] = "hyde"
+
         search_queries = [query]
         vector_query = query
 
-        if cfg.multi_query:
-            search_queries = self._get_multi_queries(query)
-            transforms["multi_query_applied"] = True
-            transforms["queries"] = search_queries
+        from concurrent.futures import as_completed
 
-        if cfg.step_back:
-            abstract_query = self._get_step_back_query(query)
-            if abstract_query not in search_queries:
-                search_queries = search_queries + [abstract_query]
-            transforms["step_back_applied"] = True
-            transforms["queries"] = search_queries
+        for future in as_completed(future_to_task):
+            task = future_to_task[future]
+            try:
+                res = future.result()
+                if task == "multi":
+                    search_queries.extend([q for q in res if q not in search_queries])
+                    transforms["multi_query_applied"] = True
+                elif task == "step_back":
+                    if res not in search_queries:
+                        search_queries.append(res)
+                    transforms["step_back_applied"] = True
+                elif task == "decompose":
+                    search_queries.extend([q for q in res if q not in search_queries])
+                    transforms["decompose_applied"] = True
+                elif task == "hyde":
+                    vector_query = res
+                    transforms["hyde_applied"] = True
+            except Exception as e:
+                logger.warning(f"Retrieval transformation '{task}' failed: {e}")
 
-        if cfg.query_decompose:
-            sub_questions = self._decompose_query(query)
-            # Merge without duplicates, preserving order
-            existing = set(search_queries)
-            for sq in sub_questions:
-                if sq not in existing:
-                    search_queries = search_queries + [sq]
-                    existing.add(sq)
-            transforms["decompose_applied"] = True
-            transforms["queries"] = search_queries
+        transforms["queries"] = search_queries
 
-        if cfg.hyde:
-            # We construct a single hypothetical document based on the primary query
-            vector_query = self._get_hyde_document(query)
-            transforms["hyde_applied"] = True
-
+        # --- Phase 2: Retrieval ---
         fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
 
         all_vector_results = []
@@ -2096,13 +2566,13 @@ Your primary goal is to help the user by answering questions based on the provid
                 )
             )
         else:
-            # When multi_query is enabled, batch embed all queries to avoid
-            # multiple sequential embedding calls (latency/cost optimization).
+            # Batch embed all unique queries
             if len(search_queries) == 1:
-                sq = search_queries[0]
                 all_vector_results.extend(
                     self.vector_store.search(
-                        self.embedding.embed_query(sq), top_k=fetch_k, filter_dict=filters
+                        self.embedding.embed_query(search_queries[0]),
+                        top_k=fetch_k,
+                        filter_dict=filters,
                     )
                 )
             else:
@@ -2120,11 +2590,16 @@ Your primary goal is to help the user by answering questions based on the provid
         vector_results = list(dedup_vector.values())
         vector_count = len(vector_results)
 
-        # Hybrid Search
+        # Hybrid Search (Keyword component)
         bm25_count = 0
         if cfg.hybrid_search and self.bm25:
-            for sq in search_queries:
-                all_bm25_results.extend(self.bm25.search(sq, top_k=fetch_k))
+            # Parallelize BM25 searches across multiple queries
+            def _bm25_search(q):
+                return self.bm25.search(q, top_k=fetch_k)
+
+            all_bm25_lists = list(self._executor.map(_bm25_search, search_queries))
+            for b_list in all_bm25_lists:
+                all_bm25_results.extend(b_list)
 
             dedup_bm25 = {}
             for r in all_bm25_results:
@@ -2133,45 +2608,41 @@ Your primary goal is to help the user by answering questions based on the provid
             bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
 
-            from axon.retrievers import reciprocal_rank_fusion
+            if cfg.hybrid_mode == "rrf":
+                from axon.retrievers import reciprocal_rank_fusion
 
-            results = reciprocal_rank_fusion(vector_results, bm25_results)
+                results = reciprocal_rank_fusion(vector_results, bm25_results)
+            else:
+                from axon.retrievers import weighted_score_fusion
+
+                results = weighted_score_fusion(
+                    vector_results, bm25_results, weight=cfg.hybrid_weight
+                )
         else:
             results = vector_results
 
-        results = [
-            r
-            for r in results
-            if r.get("score", 1.0) >= cfg.similarity_threshold or "fused_only" in r
-        ]
+        # Web Search Fallback (if enabled and local results are insufficient)
+        filtered_results = []
+        for r in results:
+            v_sig = r.get("vector_score", r.get("score", 0.0))
+            if v_sig >= cfg.similarity_threshold:
+                filtered_results.append(r)
+
+        if not filtered_results and cfg.truth_grounding:
+            transforms["web_search_applied"] = True
+            web_results = self._execute_web_search(query, count=5)
+            results = web_results
+        else:
+            results = filtered_results
 
         # GraphRAG: expand results with entity-linked documents
         if cfg.graph_rag and self._entity_graph:
             results = self._expand_with_entity_graph(query, results, cfg=cfg)
 
-        # Web Search (Truth Grounding)
-        # Trigger when the best cosine similarity from vector search is below the threshold,
-        # meaning local knowledge is genuinely insufficient (even if BM25 returned fused_only docs).
-        web_count = 0
-        if cfg.truth_grounding and cfg.brave_api_key:
-            max_vector_score = max((r["score"] for r in vector_results), default=0.0)
-            local_sufficient = max_vector_score >= cfg.similarity_threshold
-            if not local_sufficient:
-                logger.info(
-                    f"Local knowledge insufficient (best vector score {max_vector_score:.3f} < "
-                    f"threshold {cfg.similarity_threshold}) — falling back to Brave web search"
-                )
-                web_results = self._execute_web_search(query)
-                web_count = len(web_results)
-                # Replace low-relevance local results with web results
-                results = web_results
-                transforms["web_search_applied"] = True
-
         return {
             "results": results,
             "vector_count": vector_count,
             "bm25_count": bm25_count,
-            "web_count": web_count,
             "filtered_count": len(results),
             "transforms": transforms,
         }
@@ -2237,6 +2708,19 @@ Your primary goal is to help the user by answering questions based on the provid
         chat_history: list[dict[str, str]] = None,
         overrides: dict = None,
     ) -> str:
+        """Retrieve relevant context and synthesise a natural-language answer.
+
+        Args:
+            query: The question or prompt to answer.
+            filters: Optional metadata filters applied to vector search.
+            chat_history: Previous conversation turns as ``[{"role": ..., "content": ...}]``.
+                When non-empty, the query cache is bypassed.
+            overrides: Per-request config overrides (e.g. ``{"top_k": 5, "rerank": True}``).
+                Keys must match :class:`AxonConfig` field names.
+
+        Returns:
+            A synthesised answer string from the LLM.
+        """
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
@@ -2320,6 +2804,12 @@ Your primary goal is to help the user by answering questions based on the provid
         chat_history: list[dict[str, str]] = None,
         overrides: dict = None,
     ):
+        """Streaming variant of :meth:`query` — yields text chunks as they arrive.
+
+        The first yielded item is always a ``{"type": "sources", "sources": [...]}``
+        dict so callers can display source attribution before streaming begins.
+        Subsequent items are plain string chunks from the LLM stream.
+        """
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
@@ -2377,10 +2867,6 @@ Your primary goal is to help the user by answering questions based on the provid
 # ---------------------------------------------------------------------------
 # Shared helpers used by both CLI (main()) and REPL
 # ---------------------------------------------------------------------------
-
-_MERGED_VIEW_WRITE_ERROR = (
-    "Cannot write to a merged parent project view. " "Switch to a specific sub-project first."
-)
 
 
 def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
@@ -2569,6 +3055,11 @@ def main():
         help="Disable ingest deduplication (allow re-ingesting identical content)",
     )
     parser.add_argument(
+        "--chunk-strategy",
+        choices=["recursive", "semantic"],
+        help="Chunking strategy for ingest (recursive or semantic)",
+    )
+    parser.add_argument(
         "--parent-chunk-size",
         type=int,
         metavar="N",
@@ -2632,6 +3123,8 @@ def main():
         config.rerank = args.rerank
     if args.reranker_model:
         config.reranker_model = args.reranker_model
+    if args.chunk_strategy:
+        config.chunk_strategy = args.chunk_strategy
     if args.parent_chunk_size is not None:
         config.parent_chunk_size = args.parent_chunk_size
     if args.hyde is not None:

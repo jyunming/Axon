@@ -1,0 +1,29 @@
+{
+  "ExchangeRateCluster": [
+    {
+      "id": "node_eth_01",
+      "region": "US-EAST",
+      "type": "primary"
+    },
+    {
+      "id": "node_eth_02",
+      "region": "US-WEST",
+      "type": "replica"
+    },
+    {
+      "id": "node_eth_03",
+      "region": "APAC",
+      "type": "primary"
+    },
+    {
+      "id": "node_eth_04",
+      "region": "EMEA",
+      "type": "primary"
+    },
+    {
+      "id": "node_eth_05",
+      "region": "EMEA",
+      "type": "replica"
+    }
+  ]
+}

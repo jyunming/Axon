@@ -46,6 +46,7 @@ setup(
         "pypdf>=4.0.0",
         "prompt_toolkit>=3.0.0",
         "rich>=13.0.0",
+        "tiktoken>=0.7.0",
     ],
     extras_require={
         "qdrant": ["qdrant-client>=1.7.0"],

@@ -239,7 +239,7 @@ make lint
 
 ### 10. Release Process
 
-1. Update version in `setup.py`
+1. Update version in `setup.py` and `pyproject.toml`
 2. Run all tests: `make ci`
 3. Create git tag: `git tag v2.0.0`
 4. Push tag: `git push --tags`

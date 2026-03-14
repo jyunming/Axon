@@ -1,0 +1,430 @@
+{
+  "name": "axon-copilot",
+  "displayName": "Axon Copilot",
+  "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
+  "version": "0.1.0",
+  "publisher": "axon",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguageModelTool:axon_searchKnowledge",
+    "onLanguageModelTool:axon_queryKnowledge",
+    "onLanguageModelTool:axon_ingestText",
+    "onLanguageModelTool:axon_ingestUrl",
+    "onLanguageModelTool:axon_listProjects",
+    "onLanguageModelTool:axon_createProject",
+    "onLanguageModelTool:axon_listShares",
+    "onLanguageModelTool:axon_ingestImage"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "axon.chat",
+        "name": "axon",
+        "fullName": "Axon Knowledge Base",
+        "description": "Query your local Axon RAG knowledge base. Copilot synthesizes answers from retrieved chunks.",
+        "isSticky": true
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "axon_searchKnowledge",
+        "displayName": "Axon: Search Knowledge Base",
+        "modelDescription": "Retrieve raw document chunks from the Axon knowledge base. Use this first for exploratory or discovery tasks (e.g. 'find the latest ticket', 'list incidents') — set topK=20 or higher for broad searches. Prefer this over axon_queryKnowledge when you need to inspect multiple documents before synthesising an answer.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonSearch",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The search query"
+            },
+            "topK": {
+              "type": "number",
+              "description": "Number of chunks to return (default 5). Use 20+ for broad discovery."
+            },
+            "threshold": {
+              "type": "number",
+              "description": "Minimum similarity score 0.0–1.0 (default 0.3). Lower to 0.1 if search returns no results."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "axon_queryKnowledge",
+        "displayName": "Axon: Ask a Question",
+        "modelDescription": "Get a synthesized answer from the local Axon RAG knowledge base. Use this when the question is well-defined and a direct answer is needed. For discovery tasks (finding the latest item, listing incidents), use axon_searchKnowledge first. Supports top_k to widen retrieval context.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonQuery",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The question to ask"
+            },
+            "top_k": {
+              "type": "number",
+              "description": "Number of chunks to retrieve for context (default uses global setting; increase for broad questions)"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "axon_ingestText",
+        "displayName": "Axon: Ingest Text",
+        "modelDescription": "Ingest a raw text snippet into the Axon knowledge base.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonIngestText",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "The content to ingest"
+            },
+            "source": {
+              "type": "string",
+              "description": "Label for the source (e.g. filename)"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "axon_ingestUrl",
+        "displayName": "Axon: Ingest URL",
+        "modelDescription": "Fetch and ingest a web page into the Axon knowledge base.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonIngestUrl",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The HTTP/HTTPS URL to ingest"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "axon_ingestPath",
+        "displayName": "Axon: Ingest Local Path",
+        "modelDescription": "Ingest a local directory or file into the Axon knowledge base. Accepts any absolute path on the local machine (e.g. /home/user/docs or C:\\Users\\user\\docs) or a path relative to the workspace root.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonIngestPath",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "The local file or directory path to ingest"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "name": "axon_listProjects",
+        "displayName": "Axon: List Projects",
+        "modelDescription": "List all available Axon knowledge base projects. Call this first if search returns no results — the data may be in a different project (e.g. 'engineering' or 'research'). Then use axon_switchProject to switch context.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonList",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "axon_switchProject",
+        "displayName": "Axon: Switch Project",
+        "modelDescription": "Switch the active Axon knowledge base project. All subsequent searches and queries will run against the new project. Use after axon_listProjects discovers that relevant documents are in a non-default project.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonSwitch",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The project name to switch to (e.g. 'engineering', 'research', 'default')"
+            }
+          },
+          "required": ["name"]
+        }
+      },
+      {
+        "name": "axon_createProject",
+        "displayName": "Axon: Create Project",
+        "modelDescription": "Create a new knowledge base project in Axon.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonCreate",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The name of the new project"
+            },
+            "description": {
+              "type": "string",
+              "description": "Optional description"
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      {
+        "name": "axon_deleteProject",
+        "displayName": "Axon: Delete Project",
+        "modelDescription": "Delete an existing Axon project and all its stored data.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonDeleteProj",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The name of the project to delete"
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      {
+        "name": "axon_deleteDocuments",
+        "displayName": "Axon: Delete Documents",
+        "modelDescription": "Remove specific document(s) from the active project using their IDs.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonDeleteDocs",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "docIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of document IDs to delete"
+            }
+          },
+          "required": [
+            "docIds"
+          ]
+        }
+      },
+      {
+        "name": "axon_getCollection",
+        "displayName": "Axon: Get Collection Status",
+        "modelDescription": "List all ingested files and total chunk counts in the active project.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonCollection",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "axon_clearCollection",
+        "displayName": "Axon: Clear All Data",
+        "modelDescription": "Wipe all data from the active project's vector store and index.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonClear",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "axon_updateSettings",
+        "displayName": "Axon: Update Settings",
+        "modelDescription": "Modify Axon RAG settings (top_k, threshold, hybrid, etc.) globally for the current session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonSettings",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "top_k": {
+              "type": "number",
+              "description": "Results to retrieve (1-50)"
+            },
+            "similarity_threshold": {
+              "type": "number",
+              "description": "Min similarity score (0.0-1.0)"
+            },
+            "hybrid_search": {
+              "type": "boolean"
+            },
+            "rerank": {
+              "type": "boolean"
+            },
+            "hyde": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      {
+        "name": "axon_listShares",
+        "displayName": "Axon: List Active Shares",
+        "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonListShares",
+        "inputSchema": {"type": "object", "properties": {}}
+      },
+      {
+        "name": "axon_ingestImage",
+        "displayName": "Axon: Ingest Image via Copilot",
+        "modelDescription": "Describe an image file (PNG, JPG, JPEG, BMP, TIFF, WEBP) using Copilot's multimodal vision model, then ingest the description into the Axon knowledge base. Requires a Copilot model with image support (e.g. GPT-4o, Claude 3.x). The image path must be an absolute local path accessible to VS Code.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonIngestImage",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "imagePath": {
+              "type": "string",
+              "description": "Absolute path to the image file (PNG, JPG, JPEG, BMP, TIFF, or WEBP)"
+            },
+            "project": {
+              "type": "string",
+              "description": "Target project namespace. Omit to use the active project."
+            }
+          },
+          "required": ["imagePath"]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "axon.switchProject",
+        "title": "Axon: Switch Project"
+      },
+      {
+        "command": "axon.createProject",
+        "title": "Axon: Create New Project"
+      },
+      {
+        "command": "axon.ingestFile",
+        "title": "Axon: Ingest Current File"
+      },
+      {
+        "command": "axon.ingestWorkspace",
+        "title": "Axon: Ingest Workspace Folder"
+      },
+      {
+        "command": "axon.ingestFolder",
+        "title": "Axon: Ingest Folder or File..."
+      },
+      {
+        "command": "axon.startServer",
+        "title": "Axon: Start API Server"
+      },
+      {
+        "command": "axon.stopServer",
+        "title": "Axon: Stop API Server"
+      },
+      {
+        "command": "axon.initStore",
+        "title": "Axon: Initialize AxonStore"
+      },
+      {
+        "command": "axon.shareProject",
+        "title": "Axon: Share Project (Generate Key)"
+      },
+      {
+        "command": "axon.redeemShare",
+        "title": "Axon: Redeem Shared Project (Enter Key)"
+      },
+      {
+        "command": "axon.revokeShare",
+        "title": "Axon: Revoke Share Access"
+      },
+      {
+        "command": "axon.listShares",
+        "title": "Axon: List Active Shares"
+      }
+    ],
+    "configuration": {
+      "title": "Axon",
+      "properties": {
+        "axon.apiBase": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL of the Axon REST API server."
+        },
+        "axon.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional API key for Axon (matches RAG_API_KEY on the server). Set this in your User settings (not Workspace) to avoid committing secrets to source control."
+        },
+        "axon.topK": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of knowledge base chunks to retrieve per query."
+        },
+        "axon.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the Axon API server when VS Code opens (Linux/macOS)."
+        },
+        "axon.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to the Python interpreter that has Axon installed."
+        },
+        "axon.useCopilotLlm": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use GitHub Copilot's Language Model as the primary LLM provider for Axon. This enables RAPTOR and GraphRAG ingestion without needing a local Ollama instance."
+        },
+        "axon.ingestBase": {
+          "type": "string",
+          "default": "",
+          "description": "Restrict ingestion to paths under this directory (sets RAG_INGEST_BASE on the server). Leave empty to allow any local path (default). Set to a specific directory to limit where the server can read files from."
+        },
+        "axon.storeBase": {
+          "type": "string",
+          "default": "",
+          "description": "Base path for AxonStore (e.g. /data or ~/axon-data). When set, all projects are stored under <storeBase>/AxonStore/<os-username>/. Leave empty for single-user mode (~/.axon/projects)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/vscode": "^1.93.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.4.5"
+  }
+}

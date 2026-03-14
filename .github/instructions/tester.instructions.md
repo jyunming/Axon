@@ -42,7 +42,7 @@ The system has external dependencies that must be mocked in unit tests:
 - `reciprocal_rank_fusion()` merges two ranked lists; top result is the one ranked high in both.
 
 ### `api.py`
-- `GET /health` returns `{"status": "healthy", "axon_ready": true/false}`.
+- `GET /health` returns `{"status": "ok", "project": "<name>"}` (200) when ready, or `{"status": "initializing"}` (503) when brain is not yet initialized.
 - `POST /query` returns 503 when the global `brain` instance is `None`.
 - `POST /add_text` auto-generates `doc_id` when not provided.
 - `POST /ingest` returns 404 when path does not exist.

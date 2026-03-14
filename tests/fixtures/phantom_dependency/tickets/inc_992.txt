@@ -1,0 +1,4 @@
+TICKET ID: 992
+Customer: MegaCorp
+Region: UK
+Issue: The checkout button is completely grayed out on our portal. We cannot process any transactions. Please fix ASAP.

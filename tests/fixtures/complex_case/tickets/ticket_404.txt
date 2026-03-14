@@ -1,0 +1,5 @@
+TICKET ID: 404
+Severity: HIGH
+Customer: jdoe@example.com
+Description: I am trying to buy the new VR headset, but every time I click "Complete Order", it spins for about half a second and then shows a "504 Gateway Timeout" error. I have tried three different credit cards. Please fix this, I need it for my son's birthday!
+Status: ESCALATED TO ENGINEERING

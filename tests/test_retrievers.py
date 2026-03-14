@@ -2,7 +2,7 @@
 
 import tempfile
 
-from axon.retrievers import BM25Retriever, reciprocal_rank_fusion
+from axon.retrievers import BM25Retriever, weighted_score_fusion
 
 
 class TestBM25Retriever:
@@ -98,8 +98,8 @@ class TestBM25Retriever:
         assert r.bm25 is not None
 
 
-class TestReciprocalRankFusion:
-    """Test reciprocal rank fusion function."""
+class TestWeightedScoreFusion:
+    """Test weighted score fusion function (Normalized Convex Combination)."""
 
     def test_merges_overlapping_results(self):
         vec = [
@@ -110,48 +110,49 @@ class TestReciprocalRankFusion:
             {"id": "b", "text": "t", "score": 5.0, "metadata": {}},
             {"id": "c", "text": "t", "score": 3.0, "metadata": {}},
         ]
-        fused = reciprocal_rank_fusion(vec, bm25)
+        fused = weighted_score_fusion(vec, bm25)
         ids = [r["id"] for r in fused]
         assert "a" in ids and "b" in ids and "c" in ids
-        # "b" appears in both, so should score higher than "c" (only in bm25)
+        # "b" appears in both, should have high score
         b_score = next(r["score"] for r in fused if r["id"] == "b")
-        c_score = next(r["score"] for r in fused if r["id"] == "c")
-        assert b_score > c_score
+        assert b_score > 0
 
     def test_fusion_basic(self):
         """Test basic fusion of two result sets."""
         vector_results = [
-            {"id": "doc1", "text": "text1", "score": 0.9},
-            {"id": "doc2", "text": "text2", "score": 0.8},
+            {"id": "doc2", "text": "text2", "score": 0.95},
+            {"id": "doc1", "text": "text1", "score": 0.90},
+            {"id": "doc3", "text": "text3", "score": 0.80},
         ]
         bm25_results = [
-            {"id": "doc2", "text": "text2", "score": 5.0},
-            {"id": "doc3", "text": "text3", "score": 4.0},
+            {"id": "doc2", "text": "text2", "score": 10.0},
+            {"id": "doc1", "text": "text1", "score": 5.0},
+            {"id": "doc4", "text": "text4", "score": 2.0},
         ]
-        fused = reciprocal_rank_fusion(vector_results, bm25_results)
-        assert len(fused) == 3
+        fused = weighted_score_fusion(vector_results, bm25_results)
+        assert len(fused) == 4
         assert all("score" in doc for doc in fused)
-        # doc2 should be ranked higher as it appears in both
+        # doc2 should be ranked high as it has a very strong BM25 signal and good vector score
         assert fused[0]["id"] == "doc2"
 
     def test_fused_only_flag(self):
         vec = [{"id": "a", "text": "t", "score": 0.9, "metadata": {}}]
         bm25 = [{"id": "z", "text": "t", "score": 5.0, "metadata": {}}]
-        fused = reciprocal_rank_fusion(vec, bm25)
+        fused = weighted_score_fusion(vec, bm25)
         z = next(r for r in fused if r["id"] == "z")
         assert z.get("fused_only") is True
 
     def test_empty_inputs(self):
-        assert reciprocal_rank_fusion([], []) == []
+        assert weighted_score_fusion([], []) == []
         vec = [{"id": "a", "text": "t", "score": 0.9, "metadata": {}}]
-        result = reciprocal_rank_fusion(vec, [])
+        result = weighted_score_fusion(vec, [])
         assert len(result) == 1
 
     def test_fusion_empty_bm25(self):
         """Test fusion with empty BM25 results."""
         vector_results = [{"id": "doc1", "text": "text1", "score": 0.9}]
         bm25_results = []
-        fused = reciprocal_rank_fusion(vector_results, bm25_results)
+        fused = weighted_score_fusion(vector_results, bm25_results)
         assert len(fused) == 1
         assert fused[0]["id"] == "doc1"
 

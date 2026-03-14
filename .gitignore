@@ -131,3 +131,5 @@ CLAUDE.md
 # Runtime data
 sessions.json
 pr_comments.json
+tests/fixtures/raptor_paper.pdf
+tests/fixtures/climate_change.html

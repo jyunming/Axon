@@ -203,8 +203,10 @@ class TestSubProjectPaths:
     def test_four_levels_raises(self, tmp_projects):
         from axon.projects import _validate_name
 
+        # _MAX_DEPTH is now 5, so 4 levels are valid; 6 levels should raise
+        _validate_name("a/b/c/d")  # should not raise (4 levels <= 5)
         with pytest.raises(ValueError, match="maximum depth"):
-            _validate_name("a/b/c/d")
+            _validate_name("a/b/c/d/e/f")  # 6 levels > 5
 
     def test_slash_with_invalid_segment_raises(self, tmp_projects):
         from axon.projects import _validate_name
@@ -355,3 +357,110 @@ class TestSetProjectsRoot:
         custom = tmp_path / "env_root"
         monkeypatch.setattr(_p, "PROJECTS_ROOT", custom)
         assert _p.project_dir("proj") == custom / "proj"
+
+
+# ---------------------------------------------------------------------------
+# AxonStore: ensure_user_namespace
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureUserNamespace:
+    def test_creates_expected_directories(self, tmp_path):
+        """ensure_user_namespace creates _default, ShareMount, .shares."""
+        from axon.projects import ensure_user_namespace
+
+        user_dir = tmp_path / "AxonStore" / "alice"
+        ensure_user_namespace(user_dir)
+
+        assert (user_dir / "_default").is_dir()
+        assert (user_dir / "ShareMount").is_dir()
+        assert (user_dir / ".shares").is_dir()
+
+    def test_idempotent(self, tmp_path):
+        """Calling ensure_user_namespace twice does not raise."""
+        from axon.projects import ensure_user_namespace
+
+        user_dir = tmp_path / "AxonStore" / "alice"
+        ensure_user_namespace(user_dir)
+        ensure_user_namespace(user_dir)  # should not raise
+
+    def test_creates_default_meta_json(self, tmp_path):
+        """ensure_user_namespace creates meta.json in _default."""
+        import json
+
+        from axon.projects import ensure_user_namespace
+
+        user_dir = tmp_path / "AxonStore" / "alice"
+        ensure_user_namespace(user_dir)
+
+        meta_path = user_dir / "_default" / "meta.json"
+        assert meta_path.exists()
+        meta = json.loads(meta_path.read_text())
+        assert meta["name"] == "_default"
+
+
+# ---------------------------------------------------------------------------
+# AxonStore: reserved names
+# ---------------------------------------------------------------------------
+
+
+class TestReservedNames:
+    def test_sharemount_is_reserved(self, tmp_projects):
+        """'sharemount' cannot be used as a project name."""
+        from axon.projects import ensure_project
+
+        with pytest.raises(ValueError, match="reserved"):
+            ensure_project("sharemount")
+
+    def test_default_internal_is_reserved(self, tmp_projects):
+        """'_default' starts with '_' so it fails the segment regex."""
+        from axon.projects import ensure_project
+
+        with pytest.raises(ValueError):
+            ensure_project("_default")
+
+    def test_shares_dir_is_reserved(self, tmp_projects):
+        """'.shares' starts with '.' so it fails the segment regex."""
+        from axon.projects import ensure_project
+
+        with pytest.raises(ValueError):
+            ensure_project(".shares")
+
+
+# ---------------------------------------------------------------------------
+# AxonStore: list_share_mounts
+# ---------------------------------------------------------------------------
+
+
+class TestListShareMounts:
+    def test_empty_when_no_mounts(self, tmp_path):
+        """list_share_mounts returns [] when ShareMount dir is empty."""
+        from axon.projects import list_share_mounts
+
+        user_dir = tmp_path / "AxonStore" / "alice"
+        (user_dir / "ShareMount").mkdir(parents=True)
+
+        result = list_share_mounts(user_dir)
+        assert result == []
+
+    @pytest.mark.skipif(not hasattr(__import__("os"), "symlink"), reason="symlinks not supported")
+    def test_returns_mount_entries(self, tmp_path):
+        """list_share_mounts returns dicts for symlinks in ShareMount."""
+        import os
+
+        from axon.projects import list_share_mounts
+
+        user_dir = tmp_path / "AxonStore" / "alice"
+        share_mount = user_dir / "ShareMount"
+        share_mount.mkdir(parents=True)
+
+        target = tmp_path / "AxonStore" / "bob" / "research"
+        target.mkdir(parents=True)
+        try:
+            os.symlink(str(target), str(share_mount / "bob_research"))
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation not available")
+
+        result = list_share_mounts(user_dir)
+        names = [entry["name"] for entry in result]
+        assert "bob_research" in names

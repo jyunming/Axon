@@ -69,6 +69,17 @@ vector_store:
 # BM25 Keyword Search
 bm25:
   path: ~/.axon/projects/default/bm25_index
+
+# Maximum parallel worker threads for background ingestion and query tasks
+max_workers: 8
+
+# Remote Qdrant (uncomment to use instead of local ChromaDB)
+# qdrant_url: http://localhost:6333   # Qdrant HTTP endpoint
+# qdrant_api_key: ""                  # leave empty for local Docker
+
+# HPC multi-user: set this to shared storage mount point
+# projects_base: /data/dbstore
+
 rag:
   # Number of documents to retrieve
   top_k: 10
@@ -83,16 +94,14 @@ rag:
   # Enable hybrid search (vector + keyword)
   hybrid_search: true
 
+  # Hybrid fusion mode: "weighted" (default) or "rrf" (Reciprocal Rank Fusion)
+  hybrid_mode: weighted
+
   # Parent-document / small-to-big retrieval.
   # Set to a value larger than chunk.size (e.g. 3000) to index small child chunks
   # for precision but return the richer parent passage to the LLM as context.
   # 0 = disabled (use retrieval chunks directly).
   # parent_chunk_size: 0
-
-  # Inline source citations in LLM answers.
-  # When enabled the LLM is instructed to cite [Document N (ID: ...)] inline in its response.
-  # Also: --cite CLI flag, "cite": true API override.
-  # cite_sources: false
 
   # Query decomposition — break complex multi-part questions into 2–4 atomic sub-questions,
   # run retrieval for each, and merge results before generation.
@@ -108,13 +117,13 @@ rag:
   # RAPTOR hierarchical indexing (requires LLM during ingest — adds latency).
   # Groups consecutive chunks per source and generates LLM summary nodes
   # that are indexed alongside leaf chunks for multi-hop questions.
-  # raptor: false
-  # raptor_chunk_group_size: 5
+  raptor: false
+  raptor_chunk_group_size: 5
 
   # GraphRAG entity-centric retrieval (requires LLM during ingest — adds latency).
   # Extracts named entities from each chunk; expands query results at retrieval
   # time using an entity→doc_id graph persisted to {bm25_path}/.entity_graph.json.
-  # graph_rag: false
+  graph_rag: false
 
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.
@@ -127,6 +136,7 @@ rag:
 
 # Chunking Settings
 chunk:
+  strategy: semantic
   size: 1000
   overlap: 200
 

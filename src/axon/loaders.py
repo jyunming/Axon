@@ -10,8 +10,6 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 logger = logging.getLogger("Axon.Loaders")
 
 _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
@@ -74,20 +72,16 @@ def _extract_html_text(html: str) -> str:
         def __init__(self):
             super().__init__()
             self._texts = []
-            self._skip_tags = {"script", "style", "head", "meta", "link"}
+            self._content_skip_tags = {"script", "style"}
             self._current_skip = False
-            self._skip_depth = 0
 
         def handle_starttag(self, tag, attrs):
-            if tag.lower() in self._skip_tags:
+            if tag.lower() in self._content_skip_tags:
                 self._current_skip = True
-                self._skip_depth += 1
 
         def handle_endtag(self, tag):
-            if tag.lower() in self._skip_tags and self._skip_depth > 0:
-                self._skip_depth -= 1
-                if self._skip_depth == 0:
-                    self._current_skip = False
+            if tag.lower() in self._content_skip_tags:
+                self._current_skip = False
 
         def handle_data(self, data):
             if not self._current_skip:
@@ -95,12 +89,12 @@ def _extract_html_text(html: str) -> str:
                 if stripped:
                     self._texts.append(stripped)
 
-        def get_text(self):
+        def get_text(self) -> str:
             return " ".join(self._texts)
 
-    extractor = _TextExtractor()
-    extractor.feed(html)
-    return extractor.get_text()
+    parser = _TextExtractor()
+    parser.feed(html)
+    return parser.get_text()
 
 
 class BaseLoader:
@@ -112,6 +106,137 @@ class BaseLoader:
     async def aload(self, path: str) -> list[dict[str, Any]]:
         """Async version of load."""
         return await asyncio.to_thread(self.load, path)
+
+
+class FlexibleTableLoader(BaseLoader):
+    """
+    Robust loader for tabular data (CSV, TSV, etc.) that handles:
+    1. Automatic delimiter detection (sniffing).
+    2. Ragged/jagged rows (varying column counts).
+    3. Missing or present headers.
+    """
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        return self.load_text(content, source=path)
+
+    def load_text(self, text: str, source: str = "raw_text") -> list[dict[str, Any]]:
+        """Process raw text as a table."""
+        import csv
+        import io
+
+        from axon.splitters import TableSplitter
+
+        sample = text[:8192]
+
+        # Detect delimiter
+        try:
+            # Priority 1: Sniffer
+            dialect = csv.Sniffer().sniff(sample, delimiters=",\t|;")
+            delimiter = dialect.delimiter
+        except Exception:
+            # Priority 2: Simple heuristics
+            counts = {"\t": sample.count("\t"), ",": sample.count(","), "|": sample.count("|")}
+            delimiter = max(counts, key=lambda k: counts[k])
+            # If everything is 0, default to comma
+            if counts[delimiter] == 0:
+                delimiter = ","
+
+        # Detect header
+        try:
+            has_header = csv.Sniffer().has_header(sample)
+        except Exception:
+            has_header = True
+
+        f = io.StringIO(text)
+        reader = csv.reader(f, delimiter=delimiter)
+        all_rows = [r for r in reader if r]  # Skip empty rows
+
+        if not all_rows:
+            return []
+
+        # Find the max column count across ALL rows
+        max_cols = max(len(row) for row in all_rows)
+
+        # Determine headers and data
+        if has_header:
+            base_headers = all_rows[0]
+            data_rows = all_rows[1:]
+        else:
+            base_headers = [f"Col_{i}" for i in range(len(all_rows[0]))]
+            data_rows = all_rows
+
+        # Ensure header count matches max_cols
+        headers = list(base_headers)
+        while len(headers) < max_cols:
+            headers.append(f"Extra_Col_{len(headers)}")
+        # If actual headers were shorter than row 0, handle that
+        headers = headers[:max_cols]
+
+        final_rows = []
+        for row in data_rows:
+            row_dict = {}
+            for i, val in enumerate(row):
+                if i < len(headers):
+                    row_dict[headers[i]] = val.strip()
+            final_rows.append(row_dict)
+
+        table_name = os.path.basename(source)
+        splitter = TableSplitter(table_name=table_name)
+        chunks = splitter.transform_rows(final_rows, headers)
+
+        documents = []
+        for i, text_chunk in enumerate(chunks):
+            documents.append(
+                {
+                    "id": f"{table_name}_row_{i}",
+                    "text": text_chunk,
+                    "metadata": {"source": source, "type": "table", "row": i},
+                }
+            )
+        return documents
+
+
+class SmartTextLoader(BaseLoader):
+    """
+    Delegates to FlexibleTableLoader if the file looks structured,
+    otherwise uses TextLoader.
+    """
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        return self.load_text(content, source=path)
+
+    def load_text(self, text: str, source: str = "raw_text") -> list[dict[str, Any]]:
+        """Intelligently detect if text is a table or prose and load accordingly."""
+        # Check if it looks like a table (multiple tabs or commas per line)
+        sample = text[:2048]
+        lines = sample.strip().split("\n")
+        tab_count = sample.count("\t")
+        comma_count = sample.count(",")
+
+        is_likely_table = False
+        if len(lines) > 1:
+            avg_tabs = tab_count / len(lines)
+            avg_commas = comma_count / len(lines)
+            if avg_tabs > 1.5 or avg_commas > 2.0:
+                is_likely_table = True
+
+        if is_likely_table:
+            return FlexibleTableLoader().load_text(text, source=source)
+        else:
+            # Fallback to standard document dictionary format
+            return [
+                {
+                    "id": os.path.basename(source),
+                    "text": text,
+                    "metadata": {"source": source, "type": "text"},
+                }
+            ]
 
 
 class TextLoader(BaseLoader):
@@ -131,26 +256,50 @@ class TextLoader(BaseLoader):
 
 
 class TSVLoader(BaseLoader):
-    """Loader for tab-delimited files."""
+    """Loader for tab-delimited files. Each row becomes an enriched document chunk."""
 
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        df = pd.read_csv(path, sep="	")
+        import csv
+
+        from axon.splitters import TableSplitter
+
+        rows = []
+        headers: list[str] = []
+        with open(path, encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            headers = list(reader.fieldnames or [])
+            for row in reader:
+                rows.append(row)
+
+        table_name = os.path.basename(path)
+        splitter = TableSplitter(table_name=table_name)
+        chunks = splitter.transform_rows(rows, headers)
+
         documents = []
-        for i, row in df.iterrows():
-            # Assume first column or 'content' column is the text
-            text_col = "content" if "content" in df.columns else df.columns[0]
-            text = str(row[text_col])
-            metadata = row.drop(text_col).to_dict()
-            metadata.update({"source": path, "type": "tsv", "row": i})
+        for i, text in enumerate(chunks):
             documents.append(
-                {"id": f"{os.path.basename(path)}_row_{i}", "text": text, "metadata": metadata}
+                {
+                    "id": f"{table_name}_row_{i}",
+                    "text": text,
+                    "metadata": {"source": path, "type": "tsv", "row": i},
+                }
             )
         return documents
 
 
 class JSONLoader(BaseLoader):
     """Loader for JSON files."""
+
+    def _sanitize_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Ensure metadata values are scalar (str, int, float, bool)."""
+        sanitized = {}
+        for k, v in metadata.items():
+            if isinstance(v, dict | list):
+                sanitized[k] = json.dumps(v)
+            else:
+                sanitized[k] = v
+        return sanitized
 
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
@@ -166,6 +315,7 @@ class JSONLoader(BaseLoader):
             for i, item in enumerate(data):
                 text = item.get("text", item.get("content", json.dumps(item)))
                 metadata = {k: v for k, v in item.items() if k not in ["text", "content"]}
+                metadata = self._sanitize_metadata(metadata)
                 metadata.update({"source": path, "type": "json", "index": i})
                 documents.append(
                     {"id": f"{os.path.basename(path)}_{i}", "text": text, "metadata": metadata}
@@ -174,33 +324,41 @@ class JSONLoader(BaseLoader):
         else:
             text = data.get("text", data.get("content", json.dumps(data)))
             metadata = {k: v for k, v in data.items() if k not in ["text", "content"]}
+            metadata = self._sanitize_metadata(metadata)
             metadata.update({"source": path, "type": "json"})
             return [{"id": os.path.basename(path), "text": text, "metadata": metadata}]
 
 
 class CSVLoader(BaseLoader):
-    """Loader for CSV files. Each row becomes a document."""
+    """Loader for CSV files. Each row becomes an enriched document chunk."""
 
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
         import csv
 
-        documents = []
+        from axon.splitters import TableSplitter
+
+        rows = []
+        headers: list[str] = []
         with open(path, encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            for i, row in enumerate(reader):
-                # Use 'text' or 'content' column if present, else join all values
-                text_col = next((c for c in ["text", "content", "body"] if c in row), None)
-                if text_col:
-                    text = row[text_col]
-                    metadata = {k: v for k, v in row.items() if k != text_col}
-                else:
-                    text = " | ".join(f"{k}: {v}" for k, v in row.items())
-                    metadata = {}
-                metadata.update({"source": path, "type": "csv", "row": i})
-                documents.append(
-                    {"id": f"{os.path.basename(path)}_row_{i}", "text": text, "metadata": metadata}
-                )
+            headers = list(reader.fieldnames or [])
+            for row in reader:
+                rows.append(row)
+
+        table_name = os.path.basename(path)
+        splitter = TableSplitter(table_name=table_name)
+        chunks = splitter.transform_rows(rows, headers)
+
+        documents = []
+        for i, text in enumerate(chunks):
+            documents.append(
+                {
+                    "id": f"{table_name}_row_{i}",
+                    "text": text,
+                    "metadata": {"source": path, "type": "csv", "row": i},
+                }
+            )
         return documents
 
 
@@ -387,14 +545,14 @@ class ImageLoader(BaseLoader):
         try:
             from PIL import Image
 
-            self._pil = Image
+            self._pil: Any = Image
         except ImportError:
             self._pil = None
             logger.warning("Pillow not installed. Image loading will be skipped.")
         try:
             import ollama
 
-            self.ollama = ollama
+            self.ollama: Any = ollama
         except ImportError:
             self.ollama = None
             logger.warning("ollama package not installed. Image loading will be skipped.")
@@ -512,11 +670,11 @@ class DirectoryLoader:
     def __init__(self, vlm_model: str = "llava"):
         _image_loader = ImageLoader(ollama_model=vlm_model)
         self.loaders = {
-            ".txt": TextLoader(),
+            ".txt": SmartTextLoader(),
             ".md": TextLoader(),
-            ".tsv": TSVLoader(),
+            ".tsv": FlexibleTableLoader(),
             ".json": JSONLoader(),
-            ".csv": CSVLoader(),
+            ".csv": FlexibleTableLoader(),
             ".html": HTMLLoader(),
             ".htm": HTMLLoader(),
             ".docx": DOCXLoader(),
@@ -540,6 +698,11 @@ class DirectoryLoader:
                 loader = self.loaders[file_path.suffix.lower()]
                 try:
                     docs = loader.load(str(file_path))
+                    # Native Path Enrichment (Breadcrumbs) for textual docs
+                    for doc in docs:
+                        if doc["metadata"].get("type") not in ("csv", "tsv", "image"):
+                            rel_path = os.path.relpath(str(file_path), directory)
+                            doc["text"] = f"[File Path: {rel_path}]\n{doc['text']}"
                     all_documents.extend(docs)
                 except Exception as e:
                     logger.error(f"Failed to load {file_path}: {e}")
@@ -556,23 +719,29 @@ class DirectoryLoader:
                 return await loader.aload(file_path)
 
         tasks = []
+        file_paths_for_tasks = []
         for file_path in path.rglob("*"):
             suffix = file_path.suffix.lower()
             if suffix in self.loaders:
                 loader = self.loaders[suffix]
                 tasks.append(_load_with_semaphore(loader, str(file_path)))
+                file_paths_for_tasks.append(file_path)
 
         if not tasks:
             return []
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         all_documents = []
-        for res in results:
+        for file_path, res in zip(file_paths_for_tasks, results):
             if isinstance(res, BaseException):
                 if isinstance(res, asyncio.CancelledError):
                     raise res
                 logger.warning("async file load failed: %s", res)
                 continue
+            for doc in res:
+                if doc["metadata"].get("type") not in ("csv", "tsv", "image"):
+                    rel_path = os.path.relpath(str(file_path), directory)
+                    doc["text"] = f"[File Path: {rel_path}]\n{doc['text']}"
             all_documents.extend(res)
 
         return all_documents

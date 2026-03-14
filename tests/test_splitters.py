@@ -1,6 +1,43 @@
 """Tests for text splitters."""
 
-from axon.splitters import RecursiveCharacterTextSplitter
+from axon.splitters import RecursiveCharacterTextSplitter, SemanticTextSplitter
+
+
+class TestSemanticTextSplitter:
+    def test_sentence_boundaries_preserved(self):
+        # 10 tokens (~40 chars). Enough for 1-2 short sentences.
+        splitter = SemanticTextSplitter(chunk_size=10, chunk_overlap=0)
+        text = "This is the first sentence. This is the second sentence! Is this the third?"
+        chunks = splitter.split(text)
+        assert len(chunks) > 1
+        assert "first sentence." in chunks[0]
+        assert "second sentence!" in chunks[1]
+
+    def test_abbreviations_not_split(self):
+        splitter = SemanticTextSplitter(chunk_size=100, chunk_overlap=0)
+        text = "Dr. Smith went to Washington, D.C. He bought a 1.5 L bottle."
+        chunks = splitter.split(text)
+        assert len(chunks) == 1
+        assert chunks[0] == text
+
+    def test_chunk_overlap(self):
+        # 12 tokens per chunk, 4 token overlap
+        splitter = SemanticTextSplitter(chunk_size=12, chunk_overlap=4)
+        text = "Sentence one. Sentence two. Sentence three. Sentence four. Sentence five."
+        chunks = splitter.split(text)
+        assert len(chunks) > 1
+        # Overlap should ensure a sentence is repeated in subsequent chunks
+        assert "Sentence four." in chunks[0]
+        assert "Sentence four." in chunks[1]
+
+    def test_giant_sentence_fallback(self):
+        # A single sentence larger than chunk_size should not be split mid-word.
+        # It should just be yielded as a single oversized chunk to preserve semantic integrity.
+        splitter = SemanticTextSplitter(chunk_size=5, chunk_overlap=1)
+        text = "This is a ridiculously long single sentence that goes on forever without any punctuation marks whatsoever"
+        chunks = splitter.split(text)
+        assert len(chunks) == 1
+        assert chunks[0] == text
 
 
 class TestRecursiveCharacterTextSplitter:

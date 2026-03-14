@@ -1,0 +1,10 @@
+Date: 2026-03-12
+Attendees: Alice, Bob, Charlie
+
+Agenda: Incident Response for recent Gateway Timeouts.
+
+Notes:
+- Alice reported that we are seeing a spike in 504 errors from the API Gateway.
+- Bob investigated and found that the gateway is functioning normally, but the downstream service is exceeding the 500ms timeout threshold.
+- Charlie confirmed that the issue is isolated to the service handling billing. It appears the database queries are hanging because the underlying table index is broken, resulting in full table scans that take over 2000ms.
+- Action Item: Charlie to rebuild the index on the affected table immediately.

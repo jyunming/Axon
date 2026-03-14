@@ -18,7 +18,7 @@ class BM25Retriever:
     def __init__(self, storage_path: str = "./bm25_index"):
         self.storage_path = storage_path
         self.corpus_file = os.path.join(storage_path, "bm25_corpus.json")
-        # Legacy alias — used only during pickle→JSON migration
+        # Kept for reference; the pickle path is also derived locally in load() during migration.
         self.index_file = os.path.join(storage_path, "bm25_index.pkl")
         self.bm25 = None
         self.corpus: list[
@@ -131,6 +131,61 @@ class BM25Retriever:
                 self.bm25 = None
 
 
+def _min_max_normalize(scores: list[float]) -> list[float]:
+    """Normalize a list of scores to [0.0, 1.0]."""
+    if not scores:
+        return []
+    min_val = min(scores)
+    max_val = max(scores)
+    if max_val == min_val:
+        return [1.0] * len(scores) if max_val > 0 else [0.0] * len(scores)
+    return [(s - min_val) / (max_val - min_val) for s in scores]
+
+
+def weighted_score_fusion(
+    vector_results: list[dict], bm25_results: list[dict], weight: float = 0.7
+) -> list[dict]:
+    """Merge results using a normalized convex combination of scores.
+
+    weight: 1.0 = Pure Semantic, 0.0 = Pure Lexical.
+    """
+    all_docs = {}
+
+    # 1. Extract and normalize Vector scores
+    v_scores = [doc.get("score", 0.0) for doc in vector_results]
+    v_norm = _min_max_normalize(v_scores)
+
+    for i, doc in enumerate(vector_results):
+        doc_id = doc["id"]
+        all_docs[doc_id] = doc.copy()
+        # Keep original vector score for thresholding
+        all_docs[doc_id]["vector_score"] = doc.get("score", 0.0)
+        # Initialize fused score with weighted vector component
+        all_docs[doc_id]["score"] = v_norm[i] * weight
+
+    # 2. Extract and normalize BM25 scores
+    b_scores = [doc.get("score", 0.0) for doc in bm25_results]
+    b_norm = _min_max_normalize(b_scores)
+
+    for i, doc in enumerate(bm25_results):
+        doc_id = doc["id"]
+        if doc_id not in all_docs:
+            all_docs[doc_id] = doc.copy()
+            # If not found in vector search, assume 0.0 semantic similarity
+            all_docs[doc_id]["vector_score"] = 0.0
+            all_docs[doc_id]["score"] = 0.0
+            all_docs[doc_id]["fused_only"] = True
+
+        # Add weighted BM25 component
+        all_docs[doc_id]["score"] += b_norm[i] * (1.0 - weight)
+
+    # 3. Sort by final fused score
+    final_results = list(all_docs.values())
+    final_results.sort(key=lambda x: x["score"], reverse=True)
+
+    return final_results
+
+
 def reciprocal_rank_fusion(
     vector_results: list[dict], bm25_results: list[dict], k: int = 60
 ) -> list[dict]:
@@ -140,7 +195,7 @@ def reciprocal_rank_fusion(
     ``vector_score`` field so the UI can display a meaningful relevance value.
     The RRF-fused score (used only for ranking) is stored in ``score``.
     """
-    fused_scores = {}
+    fused_scores: dict[str, float] = {}
 
     # Preserve original cosine scores keyed by doc_id
     vector_scores = {doc["id"]: doc.get("score", 0.0) for doc in vector_results}

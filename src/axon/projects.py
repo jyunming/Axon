@@ -14,9 +14,17 @@ Sub-projects use nested 'subs/' directories:
     research/papers       → ~/.axon/projects/research/subs/papers/
     research/papers/2024  → ~/.axon/projects/research/subs/papers/subs/2024/
 
-Maximum hierarchy depth is 3 levels.
+Maximum hierarchy depth is 5 levels.
 
 The special name "default" is a sentinel that uses the paths from config.yaml.
+
+AxonStore multi-user shared storage
+------------------------------------
+When AxonStore mode is active (axon_store_base is set), each OS user gets a
+namespace under {axon_store_base}/AxonStore/{username}/ containing:
+    ShareMount/  — symlinks to other users' shared projects
+    .shares/     — share key manifests
+    _default/    — the user's default project
 """
 
 import json
@@ -50,7 +58,8 @@ def set_projects_root(path: str | Path) -> None:
 
 
 _SEGMENT_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
-_MAX_DEPTH: int = 3
+_MAX_DEPTH: int = 5
+_RESERVED_NAMES: set = {"sharemount", "_default", ".shares"}
 
 
 class ProjectHasChildrenError(ValueError):
@@ -61,7 +70,7 @@ def _parse_name(name: str) -> list[str]:
     """Parse a slash-separated project name into validated segments.
 
     Returns:
-        List of 1–3 segment strings.
+        List of 1–5 segment strings.
 
     Raises:
         ValueError: If any segment is invalid or depth exceeds _MAX_DEPTH.
@@ -71,14 +80,19 @@ def _parse_name(name: str) -> list[str]:
     segments = name.split("/")
     if len(segments) > _MAX_DEPTH:
         raise ValueError(
-            f"Project name '{name}' has {len(segments)} levels; " f"maximum depth is {_MAX_DEPTH}."
+            f"Project name '{name}' has {len(segments)} levels; " f"maximum depth is 5."
         )
-    for seg in segments:
+    for i, seg in enumerate(segments):
         if not _SEGMENT_RE.match(seg):
             raise ValueError(
                 f"Invalid project name segment '{seg}'. "
                 "Use lowercase letters, digits, hyphens, and underscores "
                 "(1–50 chars, must start with a letter or digit)."
+            )
+        # Check reserved names for top-level segment only
+        if i == 0 and seg.lower() in _RESERVED_NAMES:
+            raise ValueError(
+                f"Project name '{seg}' is reserved and cannot be used as a top-level project name."
             )
     return segments
 
@@ -106,7 +120,7 @@ def project_dir(name: str) -> Path:
 
 
 def project_vector_path(name: str) -> str:
-    """Return the absolute path to the project's ChromaDB directory."""
+    """Return the absolute path to the project's vector store directory (``chroma_data/``)."""
     return str(project_dir(name) / "chroma_data")
 
 
@@ -165,35 +179,43 @@ def _ensure_single_project(name: str, description: str) -> Path:
     return root
 
 
-def list_descendants(name: str) -> list[str]:
+def list_descendants(name: str, visited: set[str] | None = None) -> list[str]:
     """Return the full slash-separated names of all descendant projects.
 
-    Traverses at most two levels deep (since max total depth is 3).
+    Uses a recursive DFS that supports up to _MAX_DEPTH levels and includes
+    cycle detection via Path.resolve() to guard against symlinks in subs/.
 
     Args:
         name: Slash-separated project name (e.g. 'research').
+        visited: Set of resolved path strings already seen (cycle detection).
 
     Returns:
         Sorted list of descendant names (e.g. ['research/papers', 'research/papers/2024']).
     """
+    if visited is None:
+        visited = set()
+
     root = project_dir(name)
+    resolved_root = str(root.resolve())
+    if resolved_root in visited:
+        return []
+    visited.add(resolved_root)
+
     subs_dir = root / "subs"
     if not subs_dir.exists():
         return []
 
     result: list[str] = []
     for sub_entry in sorted(subs_dir.iterdir()):
+        # Skip symlinks in subs/ — subs should never contain symlinks
+        if sub_entry.is_symlink():
+            continue
         if not sub_entry.is_dir() or not (sub_entry / "meta.json").exists():
             continue
         child_name = f"{name}/{sub_entry.name}"
         result.append(child_name)
-        # One more level (grandchildren)
-        gc_subs = sub_entry / "subs"
-        if gc_subs.exists():
-            for gc_entry in sorted(gc_subs.iterdir()):
-                if not gc_entry.is_dir() or not (gc_entry / "meta.json").exists():
-                    continue
-                result.append(f"{child_name}/{gc_entry.name}")
+        # Recurse for deeper levels
+        result.extend(list_descendants(child_name, visited=visited))
     return result
 
 
@@ -324,3 +346,89 @@ def delete_project(name: str) -> None:
     # If this was the active project, reset to default
     if get_active_project() == name:
         set_active_project("default")
+
+
+def ensure_user_namespace(user_dir: Path) -> None:
+    """Create the standard subdirectories under a user's AxonStore namespace.
+
+    Creates: ShareMount/, .shares/, and _default project.
+    Safe to call multiple times (idempotent).
+    """
+    (user_dir / "ShareMount").mkdir(parents=True, exist_ok=True)
+    (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
+    # _default project
+    _ensure_single_project_at(user_dir / "_default", "_default", "Default project")
+
+
+def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
+    """Create directories and meta.json for a project at an explicit path."""
+    (root / "chroma_data").mkdir(parents=True, exist_ok=True)
+    (root / "bm25_index").mkdir(parents=True, exist_ok=True)
+    (root / "sessions").mkdir(parents=True, exist_ok=True)
+    meta_file = root / "meta.json"
+    if not meta_file.exists():
+        meta_file.write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "description": description,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            )
+        )
+    return root
+
+
+def _make_share_link(target: Path, link: Path) -> None:
+    """Create a symlink from link -> target (Linux only).
+
+    Raises:
+        OSError: If symlink creation fails.
+        NotImplementedError: If called on non-Linux platform.
+    """
+    import sys
+
+    if sys.platform != "linux":
+        raise NotImplementedError("AxonStore sharing is currently only supported on Linux.")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    os.symlink(target.resolve(), link)
+
+
+def _remove_share_link(link: Path) -> bool:
+    """Remove a symlink from ShareMount/. Returns True if removed, False if not found."""
+    if link.is_symlink():
+        link.unlink()
+        return True
+    return False
+
+
+def list_share_mounts(user_dir: Path) -> list[dict]:
+    """List all symlinks under user_dir/ShareMount/.
+
+    Returns list of dicts with: name, target, is_broken, owner, project.
+    """
+    mount_dir = user_dir / "ShareMount"
+    if not mount_dir.exists():
+        return []
+    results = []
+    for entry in sorted(mount_dir.iterdir()):
+        if not entry.is_symlink():
+            continue
+        raw_target = os.readlink(str(entry))
+        is_broken = not Path(raw_target).exists()
+        parts = entry.name.split("_", 1)
+        owner = parts[0] if len(parts) == 2 else ""
+        project = parts[1] if len(parts) == 2 else entry.name
+        results.append(
+            {
+                "name": entry.name,
+                "target": raw_target,
+                "is_broken": is_broken,
+                "owner": owner,
+                "project": project,
+            }
+        )
+    return results

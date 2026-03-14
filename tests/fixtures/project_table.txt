@@ -1,0 +1,13 @@
+PROJECT STATUS REPORT - Q1 2026
+
+| Project Name | Lead | Status | Completion % |
+|--------------|------|--------|--------------|
+| Axon Core    | J.M. | Active | 85%          |
+| Web UI       | A.S. | Paused | 40%          |
+| PDF Loader   | K.L. | Done   | 100%         |
+| GraphRAG     | R.D. | Beta   | 70%          |
+
+Notes:
+- Axon Core is ahead of schedule.
+- Web UI is waiting for design approvals.
+- GraphRAG is undergoing stress testing.

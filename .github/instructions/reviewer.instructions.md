@@ -17,7 +17,7 @@ You are a **code reviewer** for the Axon repository. You identify only issues th
 ### Security
 - [ ] `/ingest` endpoint in `api.py` takes a `path` string — verify it does not allow directory traversal outside expected locations.
 - [ ] `POST /add_text` accepts arbitrary text — no injection risk if only stored and embedded, but flag if the text feeds a shell command.
-- [ ] `pickle.load` in `BM25Retriever.load()` — flag if the pickle file path is user-controlled.
+- [ ] `BM25Retriever.load()` now uses JSON (`bm25_corpus.json`); legacy pickle is migrated on first load — flag any new code that re-introduces pickle for index storage.
 - [ ] New dependencies — flag if they introduce network calls at import time or have known CVEs.
 
 ### Performance
