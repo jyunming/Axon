@@ -774,9 +774,13 @@ class TestSmartTextLoaderIdFix:
         assert docs[0]["id"] == "/data/myproject/file.txt"
 
     def test_windows_path_source_not_mangled(self):
-        """Windows-style paths must not be mangled by os.path.basename."""
+        """Windows-style paths must not be mangled — use mixed separators so the test
+        is meaningful on all platforms (os.path.basename of a backslash-only path is
+        a no-op on POSIX, so we include a forward slash to force a detectable split)."""
         from axon.loaders import SmartTextLoader
 
         loader = SmartTextLoader()
-        docs = loader.load_text("Some content.", source=r"C:\data\project\notes.txt")
-        assert docs[0]["id"] == r"C:\data\project\notes.txt"
+        # Mixed separator: os.path.basename would return 'notes.txt' if the bug were present.
+        source = r"C:\data/project\notes.txt"
+        docs = loader.load_text("Some content.", source=source)
+        assert docs[0]["id"] == source

@@ -97,11 +97,13 @@ class BM25Retriever:
         except PermissionError:
             import shutil
 
-            shutil.copy2(tmp_file, self.corpus_file)
             try:
-                os.remove(tmp_file)
-            except OSError:
-                pass
+                shutil.copy2(tmp_file, self.corpus_file)
+            finally:
+                try:
+                    os.remove(tmp_file)
+                except OSError:
+                    pass
         logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
 
     def load(self):

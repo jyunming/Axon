@@ -1174,7 +1174,10 @@ async def delete_documents(request: DeleteRequest):
     try:
         # Resolve which IDs actually exist before deleting so the count is accurate
         existing = brain.vector_store.get_by_ids(request.doc_ids)
-        existing_ids = [doc["id"] for doc in existing]
+        existing_ids_set = {doc["id"] for doc in existing}
+        # Preserve original request order for the response
+        existing_ids = [i for i in request.doc_ids if i in existing_ids_set]
+        not_found = [i for i in request.doc_ids if i not in existing_ids_set]
         if existing_ids:
             brain.vector_store.delete_by_ids(existing_ids)
         if brain.bm25 is not None:
@@ -1183,14 +1186,14 @@ async def delete_documents(request: DeleteRequest):
             "status": "success",
             "deleted": len(existing_ids),
             "doc_ids": existing_ids,
-            "not_found": [i for i in request.doc_ids if i not in existing_ids],
+            "not_found": not_found,
         }
     except Exception as e:
         logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}(?:/[A-Za-z0-9_\-]{1,64}){0,2}$")
 
 
 @app.post("/project/new")

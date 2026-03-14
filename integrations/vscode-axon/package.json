@@ -262,7 +262,7 @@
       {
         "name": "axon_updateSettings",
         "displayName": "Axon: Update Settings",
-        "modelDescription": "Modify Axon RAG settings (top_k, threshold, hybrid, etc.) globally for the current session.",
+        "modelDescription": "Modify Axon RAG retrieval settings globally for the current session. Supports all retrieval flags: top_k, threshold, hybrid_search, rerank, hyde, multi_query, step_back, query_decompose, compress_context, raptor, graph_rag.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonSettings",
         "inputSchema": {
@@ -270,20 +270,47 @@
           "properties": {
             "top_k": {
               "type": "number",
-              "description": "Results to retrieve (1-50)"
+              "description": "Number of chunks to retrieve (1-50)"
             },
             "similarity_threshold": {
               "type": "number",
-              "description": "Min similarity score (0.0-1.0)"
+              "description": "Minimum similarity score (0.0-1.0)"
             },
             "hybrid_search": {
-              "type": "boolean"
+              "type": "boolean",
+              "description": "Enable hybrid BM25 + vector search"
             },
             "rerank": {
-              "type": "boolean"
+              "type": "boolean",
+              "description": "Enable cross-encoder reranking of retrieved chunks"
             },
             "hyde": {
-              "type": "boolean"
+              "type": "boolean",
+              "description": "Enable Hypothetical Document Embeddings (HyDE)"
+            },
+            "multi_query": {
+              "type": "boolean",
+              "description": "Enable multi-query retrieval (3 rephrased queries merged)"
+            },
+            "step_back": {
+              "type": "boolean",
+              "description": "Enable step-back prompting (abstract query before retrieval)"
+            },
+            "query_decompose": {
+              "type": "boolean",
+              "description": "Enable query decomposition into atomic sub-questions"
+            },
+            "compress_context": {
+              "type": "boolean",
+              "description": "Enable LLM context compression before generation"
+            },
+            "raptor": {
+              "type": "boolean",
+              "description": "Enable RAPTOR hierarchical summary nodes during retrieval"
+            },
+            "graph_rag": {
+              "type": "boolean",
+              "description": "Enable GraphRAG entity-graph expansion during retrieval"
             }
           }
         }
@@ -291,10 +318,27 @@
       {
         "name": "axon_listShares",
         "displayName": "Axon: List Active Shares",
-        "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects.",
+        "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects. Requires AxonStore mode — call axon_initStore first if not yet initialised.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonListShares",
         "inputSchema": {"type": "object", "properties": {}}
+      },
+      {
+        "name": "axon_initStore",
+        "displayName": "Axon: Initialize AxonStore",
+        "modelDescription": "Initialise AxonStore multi-user mode at a given base directory. Must be called once before share-related tools (axon_listShares) will work. Safe to call repeatedly. After calling this, AxonStore is active and sharing tools become available.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonInitStore",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "base_path": {
+              "type": "string",
+              "description": "Absolute path to the directory where AxonStore/ will be created (e.g. '/data' creates '/data/AxonStore/<username>/')"
+            }
+          },
+          "required": ["base_path"]
+        }
       },
       {
         "name": "axon_ingestImage",

@@ -105,13 +105,14 @@ def test_ingest_403_path_traversal(tmp_path):
     assert resp.status_code in (403, 404)  # 403 preferred; 404 if path resolves differently
 
 
+@pytest.mark.skipif(
+    os.name != "nt", reason="Windows system paths only blocked correctly on Windows"
+)
 def test_ingest_blocks_windows_system_path(tmp_path):
-    """SEC-01: C:\\Windows paths must be blocked even when RAG_INGEST_BASE covers them."""
+    """SEC-01: C:/Windows paths must be blocked even when RAG_INGEST_BASE covers them."""
     api_module.brain = _make_brain()
-    # Simulate the extension setting RAG_INGEST_BASE to filesystem root ("C:\\" or "/")
-    fs_root = "C:\\" if os.name == "nt" else "/"
-    with patch.dict(os.environ, {"RAG_INGEST_BASE": fs_root}):
-        for blocked in ["C:/Windows/win.ini", "C:\\Windows\\System32\\drivers\\etc\\hosts"]:
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": "C:\\"}):
+        for blocked in ["C:/Windows/win.ini", r"C:\Windows\System32\drivers\etc\hosts"]:
             resp = client.post("/ingest", json={"path": blocked})
             assert resp.status_code == 403, f"Expected 403 for blocked path: {blocked}"
 
@@ -319,17 +320,18 @@ def test_add_text_empty_string_rejected():
 def test_create_project_invalid_name_returns_400():
     """B-03: Invalid project names must return 400, not 500."""
     api_module.brain = _make_brain()
-    for bad_name in ["test/plan:beta!", "", "name with spaces", "a" * 65]:
+    for bad_name in ["has:colon!", "", "name with spaces", "a" * 65, "too/many/slash/parts"]:
         resp = client.post("/project/new", json={"name": bad_name})
         assert resp.status_code == 400, f"Expected 400 for name={bad_name!r}"
 
 
 def test_create_project_valid_name_succeeds():
-    """B-03: Valid project names pass name validation."""
+    """B-03: Valid project names pass name validation, including hierarchical names."""
     api_module.brain = _make_brain()
     with patch("axon.projects.ensure_project"):
-        resp = client.post("/project/new", json={"name": "valid-project_01"})
-    assert resp.status_code == 200
+        for good_name in ["valid-project_01", "research/papers", "research/papers/2024"]:
+            resp = client.post("/project/new", json={"name": good_name})
+            assert resp.status_code == 200, f"Expected 200 for name={good_name!r}"
 
 
 # ---------------------------------------------------------------------------

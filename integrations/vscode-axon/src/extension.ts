@@ -82,6 +82,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_clearCollection', new AxonClearCollectionTool()),
         (vscode as any).lm.registerTool('axon_updateSettings', new AxonUpdateSettingsTool()),
         (vscode as any).lm.registerTool('axon_listShares', new AxonListSharesTool()),
+        (vscode as any).lm.registerTool('axon_initStore', new AxonInitStoreTool()),
         (vscode as any).lm.registerTool('axon_ingestImage', new AxonIngestImageTool())
       );
       outputChannel.appendLine('Successfully registered all Axon tools.');
@@ -1053,6 +1054,33 @@ class AxonListSharesTool implements vscode.LanguageModelTool<any> {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(text)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error listing shares: ${err}`)]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AxonStore initialisation tool
+// ---------------------------------------------------------------------------
+
+class AxonInitStoreTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Initialising AxonStore at "${options.input.base_path}"...` };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { base_path } = options.input;
+    try {
+      const result = await httpPost(`${apiBase}/store/init`, { base_path }, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`AxonStore init error (${result.status}): ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`AxonStore initialised at ${data.store_path} (user: ${data.username}). Share tools are now available.`)]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error initialising AxonStore: ${err}`)]);
     }
   }
 }
