@@ -195,7 +195,7 @@ def reciprocal_rank_fusion(
     ``vector_score`` field so the UI can display a meaningful relevance value.
     The RRF-fused score (used only for ranking) is stored in ``score``.
     """
-    fused_scores = {}
+    fused_scores: dict[str, float] = {}
 
     # Preserve original cosine scores keyed by doc_id
     vector_scores = {doc["id"]: doc.get("score", 0.0) for doc in vector_results}

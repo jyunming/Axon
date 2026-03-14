@@ -693,7 +693,7 @@ async def refresh_docs():
     import hashlib as _hashlib
 
     versions = brain.get_doc_versions()
-    results = {"skipped": [], "reingest_needed": [], "missing": []}
+    results: dict[str, list[str]] = {"skipped": [], "reingest_needed": [], "missing": []}
     for source_id, record in versions.items():
         if not os.path.exists(source_id):
             results["missing"].append(source_id)
@@ -810,11 +810,11 @@ async def search_brain(request: SearchRequest):
     try:
         # Offload sync retrieval execution to a threadpool
         loop = asyncio.get_running_loop()
-        overrides = {}
+        overrides: dict[str, Any] = {}
         if request.top_k is not None:
-            overrides["top_k"] = request.top_k
+            overrides["top_k"] = int(request.top_k)
         if request.threshold is not None:
-            overrides["similarity_threshold"] = request.threshold
+            overrides["similarity_threshold"] = float(request.threshold)
         cfg = brain._apply_overrides(overrides) if overrides else None
         retrieval_data = await loop.run_in_executor(
             None,

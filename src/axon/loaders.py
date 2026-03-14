@@ -89,7 +89,7 @@ def _extract_html_text(html: str) -> str:
                 if stripped:
                     self._texts.append(stripped)
 
-        def get_text(self):
+        def get_text(self) -> str:
             return " ".join(self._texts)
 
     parser = _TextExtractor()
@@ -139,7 +139,7 @@ class FlexibleTableLoader(BaseLoader):
         except Exception:
             # Priority 2: Simple heuristics
             counts = {"\t": sample.count("\t"), ",": sample.count(","), "|": sample.count("|")}
-            delimiter = max(counts, key=counts.get)
+            delimiter = max(counts, key=lambda k: counts[k])
             # If everything is 0, default to comma
             if counts[delimiter] == 0:
                 delimiter = ","
@@ -265,10 +265,10 @@ class TSVLoader(BaseLoader):
         from axon.splitters import TableSplitter
 
         rows = []
-        headers = []
+        headers: list[str] = []
         with open(path, encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f, delimiter="\t")
-            headers = reader.fieldnames or []
+            headers = list(reader.fieldnames or [])
             for row in reader:
                 rows.append(row)
 
@@ -339,10 +339,10 @@ class CSVLoader(BaseLoader):
         from axon.splitters import TableSplitter
 
         rows = []
-        headers = []
+        headers: list[str] = []
         with open(path, encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            headers = reader.fieldnames or []
+            headers = list(reader.fieldnames or [])
             for row in reader:
                 rows.append(row)
 

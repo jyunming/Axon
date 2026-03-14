@@ -32,7 +32,7 @@ class SemanticTextSplitter:
             logger.warning(
                 "tiktoken not found, falling back to character counts (//4 heuristic) for SemanticTextSplitter."
             )
-            self.encoder = None
+            self.encoder = None  # type: ignore[assignment]
 
     def _get_length(self, text: str) -> int:
         if self.encoder:
@@ -107,7 +107,7 @@ class SemanticTextSplitter:
         sentence_data = [(s, self._get_length(s)) for s in sentences]
 
         chunks = []
-        current_chunk_sentences = []
+        current_chunk_sentences: list[tuple[str, int]] = []
         current_length = 0
 
         for sentence, sentence_len in sentence_data:
@@ -129,7 +129,7 @@ class SemanticTextSplitter:
 
                 # Handle overlap: take sentences from the end of the current chunk
                 # until we hit the overlap limit
-                overlap_sentences = []
+                overlap_sentences: list[tuple[str, int]] = []
                 overlap_length = 0
                 for s, s_len in reversed(current_chunk_sentences):
                     if overlap_length + s_len <= self.chunk_overlap:

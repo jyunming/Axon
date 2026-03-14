@@ -64,7 +64,7 @@ async def _post(path: str, body: dict) -> Any:
 
 
 @mcp.tool()
-async def ingest_text(text: str, metadata: dict | None = None, project: str | None = None) -> dict:
+async def ingest_text(text: str, metadata: dict | None = None, project: str | None = None) -> Any:
     """Ingest a single text document into the Axon knowledge base.
 
     Prefer ingest_texts for multiple documents — it uses one embedding call.
@@ -85,7 +85,7 @@ async def ingest_text(text: str, metadata: dict | None = None, project: str | No
 
 
 @mcp.tool()
-async def ingest_texts(docs: list[dict], project: str | None = None) -> list[dict]:
+async def ingest_texts(docs: list[dict], project: str | None = None) -> Any:
     """Ingest multiple documents in a single batched embedding call.
 
     Each item must have at least a "text" key. Optional keys: "doc_id", "metadata".
@@ -102,7 +102,7 @@ async def ingest_texts(docs: list[dict], project: str | None = None) -> list[dic
 
 
 @mcp.tool()
-async def ingest_url(url: str, metadata: dict | None = None, project: str | None = None) -> dict:
+async def ingest_url(url: str, metadata: dict | None = None, project: str | None = None) -> Any:
     """Fetch an HTTP/HTTPS URL and ingest its text content.
 
     HTML is stripped automatically. Private/internal URLs (127.x, 10.x,
@@ -122,7 +122,7 @@ async def ingest_url(url: str, metadata: dict | None = None, project: str | None
 
 
 @mcp.tool()
-async def ingest_path(path: str) -> dict:
+async def ingest_path(path: str) -> Any:
     """Ingest a local file or directory into the knowledge base (async).
 
     Returns immediately with a job_id. Poll get_job_status(job_id) until
@@ -135,7 +135,7 @@ async def ingest_path(path: str) -> dict:
 
 
 @mcp.tool()
-async def get_job_status(job_id: str) -> dict:
+async def get_job_status(job_id: str) -> Any:
     """Poll the status of an async ingest job started by ingest_path.
 
     Returns a dict with: job_id, status (processing|completed|failed),
@@ -148,7 +148,7 @@ async def get_job_status(job_id: str) -> dict:
 
 
 @mcp.tool()
-async def search_knowledge(query: str, top_k: int = 5, filters: dict | None = None) -> list[dict]:
+async def search_knowledge(query: str, top_k: int = 5, filters: dict | None = None) -> Any:
     """Retrieve raw document chunks from the knowledge base.
 
     Best for multi-step reasoning where you want to inspect individual chunks
@@ -166,9 +166,7 @@ async def search_knowledge(query: str, top_k: int = 5, filters: dict | None = No
 
 
 @mcp.tool()
-async def query_knowledge(
-    query: str, top_k: int | None = None, filters: dict | None = None
-) -> dict:
+async def query_knowledge(query: str, top_k: int | None = None, filters: dict | None = None) -> Any:
     """Ask a question and get a synthesised answer from the knowledge base.
 
     Performs retrieval + generation in one call. Use search_knowledge instead
@@ -188,7 +186,7 @@ async def query_knowledge(
 
 
 @mcp.tool()
-async def list_knowledge() -> dict:
+async def list_knowledge() -> Any:
     """List all indexed sources in the active project with chunk counts.
 
     Call this before a large ingest to check what's already indexed and avoid
@@ -198,7 +196,7 @@ async def list_knowledge() -> dict:
 
 
 @mcp.tool()
-async def switch_project(project_name: str) -> dict:
+async def switch_project(project_name: str) -> Any:
     """Switch the knowledge base to a different project namespace.
 
     WARNING: This mutates global server state. Do not call from concurrent
@@ -211,7 +209,7 @@ async def switch_project(project_name: str) -> dict:
 
 
 @mcp.tool()
-async def delete_documents(doc_ids: list[str]) -> dict:
+async def delete_documents(doc_ids: list[str]) -> Any:
     """Remove documents from the knowledge base by their IDs.
 
     Deletes from both the vector store and the BM25 index.
@@ -223,7 +221,7 @@ async def delete_documents(doc_ids: list[str]) -> dict:
 
 
 @mcp.tool()
-async def list_projects() -> dict:
+async def list_projects() -> Any:
     """List all knowledge base projects.
 
     Returns on-disk projects (with metadata) plus any project seen only in the
@@ -234,7 +232,7 @@ async def list_projects() -> dict:
 
 
 @mcp.tool()
-async def get_stale_docs(days: int = 7) -> dict:
+async def get_stale_docs(days: int = 7) -> Any:
     """Return documents that have not been re-ingested within *days* calendar days.
 
     Use this to identify outdated knowledge that should be refreshed.  Only
@@ -248,7 +246,7 @@ async def get_stale_docs(days: int = 7) -> dict:
 
 
 @mcp.tool()
-async def create_project(name: str, description: str = "") -> dict:
+async def create_project(name: str, description: str = "") -> Any:
     """Create a new knowledge base project namespace.
 
     Args:
@@ -259,7 +257,7 @@ async def create_project(name: str, description: str = "") -> dict:
 
 
 @mcp.tool()
-async def delete_project(name: str) -> dict:
+async def delete_project(name: str) -> Any:
     """Delete a knowledge base project and all its data.
 
     DANGER: This action is irreversible. It deletes all vectors and local files
@@ -272,7 +270,7 @@ async def delete_project(name: str) -> dict:
 
 
 @mcp.tool()
-async def clear_knowledge() -> dict:
+async def clear_knowledge() -> Any:
     """Wipe all data from the active project's vector store and index.
 
     Use this to reset a project without deleting the namespace itself.
@@ -281,7 +279,7 @@ async def clear_knowledge() -> dict:
 
 
 @mcp.tool()
-async def get_current_settings() -> dict:
+async def get_current_settings() -> Any:
     """Return the active Axon RAG and model configuration.
 
     Call this to check current top_k, threshold, and strategy settings.
@@ -302,7 +300,7 @@ async def update_settings(
     compress_context: bool | None = None,
     graph_rag: bool | None = None,
     raptor: bool | None = None,
-) -> dict:
+) -> Any:
     """Update global Axon RAG and retrieval settings for the current session.
 
     Args:
@@ -323,13 +321,13 @@ async def update_settings(
 
 
 @mcp.tool()
-async def list_sessions() -> dict:
+async def list_sessions() -> Any:
     """List all saved chat sessions for the active project."""
     return await _get("/sessions")
 
 
 @mcp.tool()
-async def get_session(session_id: str) -> dict:
+async def get_session(session_id: str) -> Any:
     """Retrieve a specific chat session by its ID.
 
     Args:
@@ -343,7 +341,7 @@ async def share_project(
     project: str,
     grantee: str,
     write_access: bool = False,
-) -> dict:
+) -> Any:
     """Generate a share key allowing another user to access one of your projects.
 
     Requires AxonStore mode to be active. The returned share_string should be
@@ -362,7 +360,7 @@ async def share_project(
 
 
 @mcp.tool()
-async def redeem_share(share_string: str) -> dict:
+async def redeem_share(share_string: str) -> Any:
     """Redeem a share string, mounting the owner's project in your ShareMount/.
 
     Requires AxonStore mode to be active. After redemption, the shared project
@@ -375,7 +373,7 @@ async def redeem_share(share_string: str) -> dict:
 
 
 @mcp.tool()
-async def list_shares() -> dict:
+async def list_shares() -> Any:
     """List all active shares for the current AxonStore user.
 
     Returns 'sharing' (projects this user has shared with others, with revocation
