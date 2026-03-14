@@ -1,5 +1,6 @@
 """Tests for retriever modules."""
 
+import os
 import tempfile
 
 from axon.retrievers import BM25Retriever, weighted_score_fusion
@@ -267,3 +268,43 @@ class TestBM25RetrieverSaveLoad:
         r2 = BM25Retriever(storage_path=str(tmp_path))
         assert r2.corpus == []
         assert r2.bm25 is None
+
+    def test_save_overwrites_existing_file(self, tmp_path):
+        """Second save must not raise [Errno 22] on Windows (os.replace race)."""
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [{"id": "a", "text": "first save", "metadata": {}}]
+        r.add_documents(docs)
+        r.save()  # creates the corpus file
+
+        # A second save while the file already exists must succeed
+        r.corpus[0]["text"] = "second save"
+        r.save()
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        assert r2.corpus[0]["text"] == "second save"
+
+    def test_save_fallback_on_permission_error(self, tmp_path, monkeypatch):
+        """save() must survive PermissionError from os.replace (Windows file-lock)."""
+        import shutil
+
+        r = BM25Retriever(storage_path=str(tmp_path))
+        r.add_documents([{"id": "z", "text": "locked file", "metadata": {}}])
+
+        replace_called = []
+        copy_called = []
+        real_copy = shutil.copy2
+
+        def mock_replace(src, dst):
+            replace_called.append(True)
+            raise PermissionError("file in use")
+
+        def mock_copy(src, dst):
+            copy_called.append(True)
+            real_copy(src, dst)
+
+        monkeypatch.setattr(os, "replace", mock_replace)
+        monkeypatch.setattr("shutil.copy2", mock_copy)
+
+        r.save()  # must not raise
+        assert replace_called, "os.replace should have been attempted"
+        assert copy_called, "shutil.copy2 fallback should have been used"

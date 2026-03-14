@@ -139,3 +139,6 @@ integrations/vscode-axon/node_modules/
 integrations/vscode-axon/out/
 integrations/vscode-axon/package-lock.json
 integrations/vscode-axon/*.vsix
+
+# Test temp directories
+tests/.test_tmp/

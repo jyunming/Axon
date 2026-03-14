@@ -89,15 +89,19 @@ class BM25Retriever:
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(self.corpus, f, ensure_ascii=False)
 
-        # Atomic-ish replace (os.replace can fail on Windows if file is held)
-        if os.path.exists(self.corpus_file):
+        # os.replace is atomic on POSIX and uses MoveFileEx(REPLACE_EXISTING) on
+        # Windows — safe even when the destination already exists. Fall back to a
+        # direct copy only if another process holds an exclusive lock (PermissionError).
+        try:
+            os.replace(tmp_file, self.corpus_file)
+        except PermissionError:
+            import shutil
+
+            shutil.copy2(tmp_file, self.corpus_file)
             try:
-                os.remove(self.corpus_file)
-            except PermissionError:
-                os.replace(tmp_file, self.corpus_file)
-                logger.info(f"💾 BM25 corpus saved to {self.corpus_file} (via replace)")
-                return
-        os.rename(tmp_file, self.corpus_file)
+                os.remove(tmp_file)
+            except OSError:
+                pass
         logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
 
     def load(self):
