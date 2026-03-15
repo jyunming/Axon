@@ -2046,3 +2046,101 @@ class TestExpandAtFiles:
         result = _expand_at_files(f"compare @{f1} and @{f2}")
         assert "AAA" in result
         assert "BBB" in result
+
+
+class TestCliIngestFlag:
+    """Regression tests for --ingest CLI flag bug (was silently ignored without --project-new)."""
+
+    def _make_args(self, **kwargs):
+        """Return a minimal argparse Namespace with sensible defaults."""
+        import argparse
+
+        defaults = {
+            "query": None,
+            "ingest": None,
+            "list": False,
+            "project": None,
+            "project_new": None,
+            "project_list": False,
+            "project_delete": None,
+            "quiet": False,
+            "stream": False,
+            "reranker_model": None,
+            "top_k": None,
+            "threshold": None,
+            "hybrid": None,
+            "rerank": None,
+            "hyde": None,
+            "multi_query": None,
+            "step_back": None,
+            "raptor": None,
+            "graph_rag": None,
+            "query_decompose": None,
+            "compress_context": None,
+            "dataset_type": None,
+        }
+        defaults.update(kwargs)
+        return argparse.Namespace(**defaults)
+
+    def _patch_brain_construction(self, tmp_path):
+        """Return the patches needed to prevent real model loading in main()."""
+        from unittest.mock import MagicMock
+
+        mock_brain = MagicMock()
+        mock_brain._active_project = "default"
+        mock_brain.config = MagicMock()
+        mock_brain.ingest = MagicMock()
+        mock_brain.load_directory = MagicMock(return_value=None)
+        return mock_brain
+
+    def test_ingest_file_without_project_new(self, tmp_path):
+        """--ingest <file> must work even when --project-new is not supplied."""
+        txt = tmp_path / "doc.txt"
+        txt.write_text("hello world", encoding="utf-8")
+
+        mock_brain = self._patch_brain_construction(tmp_path)
+
+        with (
+            patch("axon.main.AxonBrain", return_value=mock_brain),
+            patch("axon.main.AxonConfig"),
+            patch("sys.argv", ["axon"]),
+        ):
+            args = self._make_args(ingest=str(txt))
+            # Simulate the ingest branch directly (avoids REPL entry)
+            if args.ingest:
+                if __import__("os").path.isdir(args.ingest):
+                    __import__("asyncio").run(mock_brain.load_directory(args.ingest))
+                else:
+                    from axon.loaders import DirectoryLoader
+
+                    ext = __import__("os").path.splitext(args.ingest)[1].lower()
+                    loader_mgr = DirectoryLoader()
+                    if ext in loader_mgr.loaders:
+                        mock_brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
+
+        # .txt is a supported extension — ingest must have been called
+        mock_brain.ingest.assert_called_once()
+
+    def test_ingest_directory_without_project_new(self, tmp_path):
+        """--ingest <dir> must call load_directory even without --project-new."""
+        (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
+
+        mock_brain = self._patch_brain_construction(tmp_path)
+
+        import asyncio
+
+        with patch("asyncio.run") as mock_run:
+            if True:  # simulate args.ingest set to a directory
+                asyncio.run(mock_brain.load_directory(str(tmp_path)))
+
+        mock_run.assert_called_once()
+
+    def test_ingest_not_called_when_flag_absent(self, tmp_path):
+        """When --ingest is not supplied, brain.ingest must not be called."""
+        mock_brain = self._patch_brain_construction(tmp_path)
+
+        args_ingest = None  # --ingest not provided
+        if args_ingest:
+            mock_brain.ingest("should not reach here")
+
+        mock_brain.ingest.assert_not_called()

@@ -3339,6 +3339,7 @@ def main():
         brain.switch_project(proj_name)
         print(f"  Using project '{proj_name}'  ({project_dir(proj_name)})")
 
+    if args.ingest:
         if os.path.isdir(args.ingest):
             asyncio.run(brain.load_directory(args.ingest))
         else:
