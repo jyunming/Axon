@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main, master, develop]
-  pull_request:  # all PRs, regardless of target branch
+  pull_request:
+    branches: [main, master]  # only PRs targeting main/master trigger CI
 
 jobs:
   test:
