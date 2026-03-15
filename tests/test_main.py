@@ -2193,3 +2193,180 @@ class TestCliIngestFlag:
             mock_brain.ingest("should not reach here")
 
         mock_brain.ingest.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Embedding model safeguard
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore", autospec=True)
+@patch("axon.main.OpenLLM", autospec=True)
+@patch("axon.main.OpenEmbedding", autospec=True)
+@patch("axon.main.OpenReranker", autospec=True)
+class TestEmbeddingMetaSafeguard:
+    """Validates that .embedding_meta.json prevents silent collection corruption."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path, **kw):
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(
+            bm25_path=str(tmp_path / "bm25"),
+            vector_store_path=str(tmp_path / "chroma"),
+            **kw,
+        )
+        brain = AxonBrain(config)
+        brain.embedding.dimension = 384
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]])
+        brain._own_vector_store.add = MagicMock()
+        brain.vector_store.add = MagicMock()
+        return brain
+
+    def test_meta_written_after_first_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """After a successful ingest, .embedding_meta.json is written."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        brain.ingest([{"id": "d1", "text": "hello"}])
+        meta_path = tmp_path / "bm25" / ".embedding_meta.json"
+        assert meta_path.exists()
+        import json
+
+        meta = json.loads(meta_path.read_text())
+        assert meta["embedding_provider"] == "sentence_transformers"
+        assert meta["embedding_model"] == "all-MiniLM-L6-v2"
+        assert meta["dimension"] == 384
+
+    def test_same_model_ingest_succeeds(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Ingesting again with the same model passes validation."""
+        import json
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        # Should not raise
+        brain.ingest([{"id": "d1", "text": "hello"}])
+        brain._own_vector_store.add.assert_called_once()
+
+    def test_different_model_ingest_raises(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Ingesting with a different model raises ValueError to prevent corruption."""
+        import json
+
+        import pytest
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            tmp_path,
+            embedding_model="bge-small-en-v1.5",
+        )
+        with pytest.raises(ValueError, match="Embedding model mismatch"):
+            brain.ingest([{"id": "d1", "text": "hello"}])
+        # Store must NOT have been called — no data written
+        brain._own_vector_store.add.assert_not_called()
+
+    def test_different_provider_ingest_raises(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Switching provider (e.g. sentence_transformers → fastembed) also raises."""
+        import json
+
+        import pytest
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            tmp_path,
+            embedding_provider="fastembed",
+            embedding_model="all-MiniLM-L6-v2",
+        )
+        with pytest.raises(ValueError, match="Embedding model mismatch"):
+            brain.ingest([{"id": "d1", "text": "hello"}])
+
+    def test_no_meta_file_allows_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """When no meta file exists (new collection), ingest proceeds without error."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        # No meta file present — should not raise
+        brain.ingest([{"id": "d1", "text": "hello"}])
+        brain._own_vector_store.add.assert_called_once()
+
+    def test_query_warns_on_mismatch(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """query() logs a warning on model mismatch but does not raise."""
+        import json
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            tmp_path,
+            embedding_model="bge-small-en-v1.5",
+        )
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[])
+
+        with patch("axon.main.logger") as mock_logger:
+            brain.query("test question")
+            warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+            assert any("mismatch" in w.lower() for w in warning_calls)

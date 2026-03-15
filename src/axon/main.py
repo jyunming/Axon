@@ -1896,6 +1896,85 @@ Your primary goal is to help the user by answering questions based on the provid
         """Return all tracked document versions."""
         return dict(self._doc_versions)
 
+    # ------------------------------------------------------------------
+    # Embedding model metadata — guards against silent collection corruption
+    # when the embedding model is changed after documents have been ingested.
+    # ------------------------------------------------------------------
+
+    @property
+    def _embedding_meta_path(self) -> str:
+        import pathlib
+
+        return str(pathlib.Path(self.config.bm25_path) / ".embedding_meta.json")
+
+    def _load_embedding_meta(self) -> dict | None:
+        """Return the persisted embedding meta for this project, or None if absent."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self._embedding_meta_path)
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+        return None
+
+    def _save_embedding_meta(self) -> None:
+        """Persist the current embedding provider/model to disk."""
+        import json
+        import pathlib
+        from datetime import datetime, timezone
+
+        try:
+            dimension = int(self.embedding.dimension)
+        except (TypeError, ValueError):
+            dimension = 0
+
+        meta = {
+            "embedding_provider": self.config.embedding_provider,
+            "embedding_model": self.config.embedding_model,
+            "dimension": dimension,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        path = pathlib.Path(self._embedding_meta_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    def _validate_embedding_meta(self, *, on_mismatch: str = "raise") -> None:
+        """Compare the current embedding config against the persisted collection meta.
+
+        Args:
+            on_mismatch: ``"raise"`` (default, used before ingest) raises
+                ``ValueError`` to prevent silent collection corruption.
+                ``"warn"`` logs a warning but allows the operation to continue
+                (used at query time so existing data is still accessible).
+        """
+        meta = self._load_embedding_meta()
+        if meta is None:
+            return  # New collection — nothing to validate yet
+
+        stored_provider = meta.get("embedding_provider", "")
+        stored_model = meta.get("embedding_model", "")
+        current_provider = self.config.embedding_provider
+        current_model = self.config.embedding_model
+
+        if stored_provider == current_provider and stored_model == current_model:
+            return  # All good
+
+        msg = (
+            f"Embedding model mismatch: this project's collection was built with "
+            f"'{stored_provider}/{stored_model}' "
+            f"but the current config uses '{current_provider}/{current_model}'. "
+            f"Mixing embedding models corrupts retrieval even when dimensions match. "
+            f"To switch models: delete the project data and re-ingest all documents, "
+            f"or revert embedding_provider/embedding_model in config.yaml."
+        )
+        if on_mismatch == "raise":
+            raise ValueError(msg)
+        else:
+            logger.warning(msg)
+
     def _load_entity_graph(self) -> dict[str, list[str]]:
         """Load persisted entity→doc_id graph from disk."""
         import json
@@ -2307,6 +2386,11 @@ Your primary goal is to help the user by answering questions based on the provid
         """
         if not documents:
             return
+
+        # Guard: raise immediately if the embedding model has changed since this
+        # collection was created — mixing models silently corrupts retrieval.
+        self._validate_embedding_meta(on_mismatch="raise")
+
         t0 = time.time()
         from tqdm import tqdm
 
@@ -2407,6 +2491,9 @@ Your primary goal is to help the user by answering questions based on the provid
         t_store = time.time()
         self._own_vector_store.add(ids, texts, all_embeddings, metadatas)
         store_ms = (time.time() - t_store) * 1000
+
+        # Persist embedding meta after first successful ingest (idempotent on subsequent calls)
+        self._save_embedding_meta()
 
         logger.info(
             {
@@ -2781,6 +2868,10 @@ Your primary goal is to help the user by answering questions based on the provid
         Returns:
             A synthesised answer string from the LLM.
         """
+        # Warn (don't block) if the embedding model has changed — retrieval
+        # results will be degraded but the user can still access existing data.
+        self._validate_embedding_meta(on_mismatch="warn")
+
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
@@ -2870,6 +2961,7 @@ Your primary goal is to help the user by answering questions based on the provid
         dict so callers can display source attribution before streaming begins.
         Subsequent items are plain string chunks from the LLM stream.
         """
+        self._validate_embedding_meta(on_mismatch="warn")
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
