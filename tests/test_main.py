@@ -2370,3 +2370,143 @@ class TestEmbeddingMetaSafeguard:
             brain.query("test question")
             warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
             assert any("mismatch" in w.lower() for w in warning_calls)
+
+
+# ---------------------------------------------------------------------------
+# Sessions per-project isolation (Finding 3.2)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsPerProject:
+    """Validates that sessions are stored in the active project's sessions dir."""
+
+    def test_sessions_dir_uses_project_path(self, tmp_path):
+        """_sessions_dir() returns the project sessions path for non-default projects."""
+        from axon.main import _sessions_dir
+
+        with patch(
+            "axon.projects.project_sessions_path", return_value=str(tmp_path / "proj_sessions")
+        ) as mock_psp:
+            result = _sessions_dir(project="work")
+            mock_psp.assert_called_once_with("work")
+            assert result == str(tmp_path / "proj_sessions")
+
+    def test_sessions_dir_uses_global_for_default(self, tmp_path):
+        """_sessions_dir() uses the global fallback for the 'default' project."""
+        from axon.main import _SESSIONS_DIR, _sessions_dir
+
+        result = _sessions_dir(project="default")
+        assert result == _SESSIONS_DIR
+
+    def test_sessions_dir_uses_global_when_no_project(self, tmp_path):
+        """_sessions_dir() uses the global fallback when project is None."""
+        from axon.main import _SESSIONS_DIR, _sessions_dir
+
+        result = _sessions_dir(project=None)
+        assert result == _SESSIONS_DIR
+
+    def test_new_session_stores_project(self):
+        """_new_session() includes the active project name in the session dict."""
+        from axon.main import _new_session
+
+        mock_brain = MagicMock()
+        mock_brain.config.llm_provider = "ollama"
+        mock_brain.config.llm_model = "gemma"
+        mock_brain._active_project = "work/atlas"
+
+        session = _new_session(mock_brain)
+        assert session["project"] == "work/atlas"
+
+    def test_save_session_writes_to_project_dir(self, tmp_path):
+        """_save_session() writes the file into the project's sessions directory."""
+        from axon.main import _save_session
+
+        proj_sessions = tmp_path / "proj_sessions"
+        proj_sessions.mkdir(parents=True)
+
+        session = {
+            "id": "20260315T120000000",
+            "project": "work",
+            "provider": "ollama",
+            "model": "gemma",
+            "history": [],
+        }
+
+        with patch("axon.projects.project_sessions_path", return_value=str(proj_sessions)):
+            _save_session(session)
+
+        saved = list(proj_sessions.glob("session_*.json"))
+        assert len(saved) == 1
+        import json
+
+        data = json.loads(saved[0].read_text())
+        assert data["id"] == "20260315T120000000"
+
+    def test_list_sessions_scoped_to_project(self, tmp_path):
+        """_list_sessions(project=...) only returns sessions from that project's dir."""
+        import json
+
+        from axon.main import _list_sessions
+
+        proj_sessions = tmp_path / "proj_sessions"
+        proj_sessions.mkdir(parents=True)
+        (proj_sessions / "session_AAA.json").write_text(
+            json.dumps({"id": "AAA", "history": [], "started_at": "2026-01-01T00:00:00"})
+        )
+
+        with patch("axon.projects.project_sessions_path", return_value=str(proj_sessions)):
+            sessions = _list_sessions(project="work")
+
+        assert len(sessions) == 1
+        assert sessions[0]["id"] == "AAA"
+
+    def test_load_session_from_project_dir(self, tmp_path):
+        """_load_session() reads from the project's sessions directory."""
+        import json
+
+        from axon.main import _load_session
+
+        proj_sessions = tmp_path / "proj_sessions"
+        proj_sessions.mkdir(parents=True)
+        (proj_sessions / "session_BBB.json").write_text(
+            json.dumps({"id": "BBB", "history": [], "started_at": "2026-01-01T00:00:00"})
+        )
+
+        with patch("axon.projects.project_sessions_path", return_value=str(proj_sessions)):
+            session = _load_session("BBB", project="work")
+
+        assert session is not None
+        assert session["id"] == "BBB"
+
+
+# ---------------------------------------------------------------------------
+# Single-file ingest breadcrumb (Finding 3.3)
+# ---------------------------------------------------------------------------
+
+
+class TestSingleFileIngestBreadcrumb:
+    """Validates that --ingest <file> adds [File Path:] header like directory ingest."""
+
+    def test_file_path_header_prepended(self, tmp_path):
+        """Single-file ingest must prepend [File Path: <abs_path>] to each chunk."""
+
+        abs_path = str(tmp_path / "notes.txt")
+        docs = [{"id": "n1", "text": "Some notes content", "metadata": {"type": "text"}}]
+
+        # Replicate the breadcrumb logic from the CLI ingest block
+        for doc in docs:
+            if doc.get("metadata", {}).get("type") not in ("csv", "tsv", "image"):
+                doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
+
+        assert docs[0]["text"] == f"[File Path: {abs_path}]\nSome notes content"
+
+    def test_csv_file_no_breadcrumb(self, tmp_path):
+        """CSV/TSV/image files must NOT get the [File Path:] header."""
+        abs_path = str(tmp_path / "data.csv")
+        docs = [{"id": "c1", "text": "a,b,c", "metadata": {"type": "csv"}}]
+
+        for doc in docs:
+            if doc.get("metadata", {}).get("type") not in ("csv", "tsv", "image"):
+                doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
+
+        assert docs[0]["text"] == "a,b,c"

@@ -3500,7 +3500,13 @@ def main():
             ext = os.path.splitext(args.ingest)[1].lower()
             loader_mgr = DirectoryLoader()
             if ext in loader_mgr.loaders:
-                brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
+                docs = loader_mgr.loaders[ext].load(args.ingest)
+                # Add [File Path:] breadcrumb to match directory ingest metadata
+                abs_path = os.path.abspath(args.ingest)
+                for doc in docs:
+                    if doc.get("metadata", {}).get("type") not in ("csv", "tsv", "image"):
+                        doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
+                brain.ingest(docs)
 
     if args.list:
         docs = brain.list_documents()
@@ -3628,9 +3634,16 @@ from datetime import timezone as _tz  # noqa: E402
 _SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".axon", "sessions")
 
 
-def _sessions_dir() -> str:
-    os.makedirs(_SESSIONS_DIR, exist_ok=True)
-    return _SESSIONS_DIR
+def _sessions_dir(project: str | None = None) -> str:
+    """Return the sessions directory for *project*, or the global fallback."""
+    if project and project != "default":
+        from axon.projects import project_sessions_path
+
+        d = project_sessions_path(project)
+    else:
+        d = _SESSIONS_DIR
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _new_session(brain: "AxonBrain") -> dict:
@@ -3639,24 +3652,26 @@ def _new_session(brain: "AxonBrain") -> dict:
         "started_at": _dt.now(_tz.utc).isoformat(),
         "provider": brain.config.llm_provider,
         "model": brain.config.llm_model,
+        "project": getattr(brain, "_active_project", "default"),
         "history": [],
     }
 
 
-def _session_path(session_id: str) -> str:
-    return os.path.join(_sessions_dir(), f"session_{session_id}.json")
+def _session_path(session_id: str, project: str | None = None) -> str:
+    return os.path.join(_sessions_dir(project), f"session_{session_id}.json")
 
 
 def _save_session(session: dict) -> None:
     try:
-        with open(_session_path(session["id"]), "w", encoding="utf-8") as f:
+        project = session.get("project")
+        with open(_session_path(session["id"], project), "w", encoding="utf-8") as f:
             _json.dump(session, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
-def _list_sessions(limit: int = 20) -> list:
-    d = _sessions_dir()
+def _list_sessions(limit: int = 20, project: str | None = None) -> list:
+    d = _sessions_dir(project)
     files = sorted(
         [f for f in os.listdir(d) if f.startswith("session_") and f.endswith(".json")],
         reverse=True,
@@ -3672,8 +3687,8 @@ def _list_sessions(limit: int = 20) -> list:
     return sessions
 
 
-def _load_session(session_id: str) -> dict | None:
-    p = _session_path(session_id)
+def _load_session(session_id: str, project: str | None = None) -> dict | None:
+    p = _session_path(session_id, project)
     if not os.path.exists(p):
         return None
     try:
@@ -4584,7 +4599,7 @@ def _interactive_repl(
                 # ── /resume <session-id> ──────────────────────────────────
                 elif text.startswith("/resume "):
                     prefix = text[len("/resume ") :]
-                    for s in _list_sessions():
+                    for s in _list_sessions(project=brain._active_project):
                         sid = s["id"]
                         if sid.startswith(prefix):
                             turns = len(s.get("history", [])) // 2
@@ -5360,13 +5375,13 @@ def _interactive_repl(
                 _show_context(brain, chat_history, _last_sources, _last_query)
 
             elif cmd == "/sessions":
-                _print_sessions(_list_sessions())
+                _print_sessions(_list_sessions(project=brain._active_project))
 
             elif cmd == "/resume":
                 if not arg:
                     print("  Usage: /resume <session-id>")
                 else:
-                    loaded = _load_session(arg)
+                    loaded = _load_session(arg, project=brain._active_project)
                     if loaded is None:
                         print(f"  Session '{arg}' not found. Use /sessions to list.")
                     else:

@@ -239,7 +239,7 @@ Agents can use Axon as a "Collective Memory."
 | `/project/switch` | POST | Switch the active project. Body: `{"name": "<project_name>"}` (also accepts `"project_name"` as an alias). |
 
 ### Tool Definitions
-Standardized JSON schemas for tool-calling are provided in `src/axon/tools.py`. The `get_rag_tool_definition()` function returns 6 OpenAI-compatible tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, and `stream_query`. See `examples/agent_simple.py` for a minimal integration, or `examples/agent_orchestration.py` for a richer multi-step planner-critic loop.
+Standardized JSON schemas for tool-calling are provided in `src/axon/tools.py`. The `get_rag_tool_definition()` function returns 12 OpenAI-compatible tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `add_texts`, `delete_documents`, `ingest_directory`, `ingest_url`, `stream_query`, `list_knowledge_base`, `get_job_status`, `list_projects`, and `get_stale_docs`. See `examples/agent_simple.py` for a minimal integration, or `examples/agent_orchestration.py` for a richer multi-step planner-critic loop.
 
 ## ⚙️ Configuration
 
