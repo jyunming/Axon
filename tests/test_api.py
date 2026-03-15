@@ -59,6 +59,30 @@ def test_health_returns_200_with_brain():
     assert data["status"] == "ok"
 
 
+def test_health_reports_active_project():
+    """Health endpoint must report brain._active_project, not brain.config.project."""
+    brain = _make_brain()
+    brain._active_project = "work/atlas"
+    # Ensure brain.config has no 'project' attribute (mirrors real AxonConfig)
+    del brain.config.project
+    api_module.brain = brain
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["project"] == "work/atlas"
+
+
+def test_health_reports_default_when_no_active_project():
+    """Health endpoint falls back to 'default' when _active_project is absent."""
+    brain = _make_brain()
+    # Remove _active_project to test fallback
+    if hasattr(brain, "_active_project"):
+        del brain._active_project
+    api_module.brain = brain
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["project"] == "default"
+
+
 # ---------------------------------------------------------------------------
 # 503 when brain is None
 # ---------------------------------------------------------------------------

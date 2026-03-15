@@ -2510,3 +2510,85 @@ class TestSingleFileIngestBreadcrumb:
                 doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
 
         assert docs[0]["text"] == "a,b,c"
+
+
+# ---------------------------------------------------------------------------
+# Hybrid threshold filtering (CodexQual fix)
+# ---------------------------------------------------------------------------
+
+
+class TestHybridThresholdFiltering:
+    """Validates that the similarity threshold is applied to the fused score when
+    hybrid_search=True, so exact-token BM25 hits are not suppressed by a low
+    vector_score alone.
+
+    The filtering logic being tested (from main.py):
+
+        if r.get("fused_only"):
+            filtered_results.append(r)
+            continue
+        if cfg.hybrid_search:
+            sig = r.get("score", r.get("vector_score", 0.0))
+        else:
+            sig = r.get("vector_score", r.get("score", 0.0))
+        if sig >= cfg.similarity_threshold:
+            filtered_results.append(r)
+    """
+
+    def _filter(self, results, hybrid_search, threshold):
+        """Mirror of the filtering loop in AxonBrain._query_core()."""
+
+        class _Cfg:
+            pass
+
+        cfg = _Cfg()
+        cfg.hybrid_search = hybrid_search
+        cfg.similarity_threshold = threshold
+
+        filtered = []
+        for r in results:
+            if r.get("fused_only"):
+                filtered.append(r)
+                continue
+            if cfg.hybrid_search:
+                sig = r.get("score", r.get("vector_score", 0.0))
+            else:
+                sig = r.get("vector_score", r.get("score", 0.0))
+            if sig >= cfg.similarity_threshold:
+                filtered.append(r)
+        return filtered
+
+    def test_fused_only_always_passes_threshold(self):
+        """BM25-only hits (fused_only=True) must pass regardless of threshold."""
+        results = [{"id": "bm25_hit", "fused_only": True, "score": 0.0, "vector_score": 0.0}]
+        out = self._filter(results, hybrid_search=True, threshold=0.9)
+        assert len(out) == 1
+
+    def test_hybrid_uses_fused_score_not_vector_score(self):
+        """When hybrid=True, a doc with high fused score but low vector_score must pass."""
+        # Exact-token BM25 match: fused score 0.6, vector_score 0.1
+        results = [{"id": "exact_match", "score": 0.6, "vector_score": 0.1, "fused_only": False}]
+        # With old (broken) logic: vector_score 0.1 < threshold 0.3 → filtered out
+        # With new logic: fused score 0.6 >= threshold 0.3 → kept
+        out = self._filter(results, hybrid_search=True, threshold=0.3)
+        assert len(out) == 1
+        assert out[0]["id"] == "exact_match"
+
+    def test_hybrid_filters_low_fused_score(self):
+        """When hybrid=True, docs below the fused-score threshold are still filtered."""
+        results = [{"id": "weak", "score": 0.2, "vector_score": 0.1, "fused_only": False}]
+        out = self._filter(results, hybrid_search=True, threshold=0.3)
+        assert len(out) == 0
+
+    def test_non_hybrid_uses_vector_score(self):
+        """When hybrid=False, threshold is applied to vector_score."""
+        results = [{"id": "doc", "score": 0.8, "vector_score": 0.25, "fused_only": False}]
+        # vector_score 0.25 < threshold 0.3 → filtered out despite high fused score
+        out = self._filter(results, hybrid_search=False, threshold=0.3)
+        assert len(out) == 0
+
+    def test_non_hybrid_passes_high_vector_score(self):
+        """When hybrid=False, docs with vector_score above threshold pass."""
+        results = [{"id": "doc", "score": 0.4, "vector_score": 0.5, "fused_only": False}]
+        out = self._filter(results, hybrid_search=False, threshold=0.3)
+        assert len(out) == 1

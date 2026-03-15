@@ -2764,8 +2764,14 @@ Your primary goal is to help the user by answering questions based on the provid
             if r.get("fused_only"):
                 filtered_results.append(r)
                 continue
-            v_sig = r.get("vector_score", r.get("score", 0.0))
-            if v_sig >= cfg.similarity_threshold:
+            # When hybrid search is active, apply threshold to the fused score so that
+            # docs with strong BM25 scores (e.g. exact-token matches like INC-44721) are
+            # not silently suppressed by a low vector_score alone.
+            if cfg.hybrid_search:
+                sig = r.get("score", r.get("vector_score", 0.0))
+            else:
+                sig = r.get("vector_score", r.get("score", 0.0))
+            if sig >= cfg.similarity_threshold:
                 filtered_results.append(r)
 
         if not filtered_results and cfg.truth_grounding:

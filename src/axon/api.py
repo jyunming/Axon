@@ -739,7 +739,7 @@ async def health_check():
     """Return 200 with status 'ok' when the brain is ready; 503 with status 'initializing' when not yet available."""
     if brain is None:
         return JSONResponse({"status": "initializing"}, status_code=503)
-    return {"status": "ok", "project": getattr(brain.config, "project", "default")}
+    return {"status": "ok", "project": getattr(brain, "_active_project", "default")}
 
 
 @app.get("/tracked-docs")

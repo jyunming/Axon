@@ -39,7 +39,7 @@ The following features are already implemented:
 Standard RAG sends the raw user query directly to the retriever. SOTA systems transform the query first.
 
 #### 1.1 HyDE — Hypothetical Document Embeddings ✅ DONE
-- **Status:** Fully implemented. Enable with `--hyde` (CLI), `/rag hyde on` (REPL), or `"hyde": true` (API).
+- **Status:** Fully implemented. Enable with `--hyde` (CLI), `/rag hyde` (REPL toggle), or `"hyde": true` (API).
 - **What it does:** Generates a hypothetical "ideal" answer to the query using the LLM, then embeds that answer (not the original query) for retrieval.
 - **Impact:** ~5–15% recall improvement on knowledge-intensive tasks.
 - **Papers:** Gao et al., 2022 — "Precise Zero-Shot Dense Retrieval without Relevance Labels"
