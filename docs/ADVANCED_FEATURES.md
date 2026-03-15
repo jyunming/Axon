@@ -75,3 +75,36 @@ Axon can rewrite your queries behind the scenes to find better matches:
   - Enable: `--step-back` or `/rag step-back`
 - **Decompose:** Breaks a complex question with "and" into multiple simple questions, searches them independently.
   - Enable: `--decompose` or `/rag decompose`
+
+## 6. LLM Temperature Control
+
+**What it does:** Controls how creative (high) vs. deterministic (low) the LLM's answers are. Temperature 0.0 always picks the most likely next token; 2.0 allows wild variation. Default is `0.7`.
+
+**How to use:**
+- **CLI one-shot:** `axon --temperature 0.2 "Explain quantum entanglement"`
+- **REPL:** `/llm temperature 0.2` (takes effect for the rest of the session)
+- **REPL info:** `/llm` — shows current temperature, provider, and model
+- **API per-request:** include `"temperature": 0.2` in the `POST /query` body
+- **config.yaml:**
+  ```yaml
+  llm:
+    temperature: 0.7  # default; override per-request via API or per-session via /llm
+  ```
+
+**Tip:** Lower temperature (0.1–0.3) produces more factual, consistent answers from your knowledge base. Higher temperature (0.8–1.5) is better for brainstorming or creative summaries.
+
+## 7. VS Code Extension: axon_getIngestStatus Tool
+
+**What it does:** After calling `axon_ingestPath` to ingest a directory (which returns a `job_id` immediately), use `axon_getIngestStatus` to poll whether ingestion has finished before searching.
+
+**Why it matters:** Ingestion of large directories runs as a background job. If you search before it completes, you'll get no results. This tool lets Copilot wait for completion automatically.
+
+**Usage in Copilot Agent mode:**
+1. `@axon #axonIngestPath` `/path/to/documents` → returns `job_id`
+2. `@axon #axonIngestStatus` `<job_id>` → returns `processing`, `completed`, or `failed`
+3. Repeat step 2 until `completed`, then search
+
+**Status values:**
+- `processing` — still running; wait and poll again
+- `completed` — ingestion finished; documents are now searchable
+- `failed` — ingestion encountered an error; check the `error` field

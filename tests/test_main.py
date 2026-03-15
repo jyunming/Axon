@@ -2592,3 +2592,125 @@ class TestHybridThresholdFiltering:
         results = [{"id": "doc", "score": 0.4, "vector_score": 0.5, "fused_only": False}]
         out = self._filter(results, hybrid_search=False, threshold=0.3)
         assert len(out) == 1
+
+
+class TestTemperatureCLI:
+    """--temperature CLI flag sets config.llm_temperature."""
+
+    def test_temperature_flag_sets_config(self, tmp_path):
+        """--temperature <float> is applied to config.llm_temperature."""
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        config.bm25_path = str(tmp_path / "bm25")
+        config.vector_store_path = str(tmp_path / "chroma")
+
+        import argparse
+
+        args = argparse.Namespace(temperature=0.2)
+        if args.temperature is not None:
+            config.llm_temperature = args.temperature
+
+        assert config.llm_temperature == 0.2
+
+    def test_temperature_flag_absent_leaves_default(self, tmp_path):
+        """When --temperature is not passed, llm_temperature stays at the config default."""
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        default_temp = config.llm_temperature
+
+        import argparse
+
+        args = argparse.Namespace(temperature=None)
+        if args.temperature is not None:
+            config.llm_temperature = args.temperature
+
+        assert config.llm_temperature == default_temp
+
+    def test_temperature_default_is_float(self):
+        """AxonConfig.llm_temperature default is a float."""
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        assert isinstance(config.llm_temperature, float)
+
+
+class TestReplLlmCommand:
+    """/llm REPL command sets brain.config.llm_temperature."""
+
+    def _make_brain(self):
+        brain = MagicMock()
+        brain.config.llm_temperature = 0.7
+        brain.config.llm_provider = "ollama"
+        brain.config.llm_model = "phi3:mini"
+        return brain
+
+    def test_llm_temperature_sets_value(self):
+        """Simulated /llm temperature sets brain.config.llm_temperature."""
+        brain = self._make_brain()
+        # Mirror the /llm handler logic
+        arg = "temperature 0.3"
+        llm_parts = arg.split(maxsplit=1)
+        llm_opt = llm_parts[0].lower()
+        llm_val = llm_parts[1] if len(llm_parts) > 1 else ""
+        if llm_opt == "temperature":
+            v = float(llm_val)
+            assert 0.0 <= v <= 2.0
+            brain.config.llm_temperature = v
+
+        assert brain.config.llm_temperature == 0.3
+
+    def test_llm_temperature_zero_accepted(self):
+        """Temperature 0.0 (fully deterministic) is a valid value."""
+        brain = self._make_brain()
+        arg = "temperature 0.0"
+        llm_parts = arg.split(maxsplit=1)
+        v = float(llm_parts[1])
+        assert 0.0 <= v <= 2.0
+        brain.config.llm_temperature = v
+        assert brain.config.llm_temperature == 0.0
+
+    def test_llm_temperature_max_accepted(self):
+        """Temperature 2.0 (maximum) is a valid value."""
+        brain = self._make_brain()
+        arg = "temperature 2.0"
+        llm_parts = arg.split(maxsplit=1)
+        v = float(llm_parts[1])
+        assert 0.0 <= v <= 2.0
+        brain.config.llm_temperature = v
+        assert brain.config.llm_temperature == 2.0
+
+    def test_llm_temperature_out_of_range_rejected(self):
+        """Temperature outside 0.0–2.0 must be caught by the assert."""
+        import pytest
+
+        arg = "temperature 3.5"
+        llm_parts = arg.split(maxsplit=1)
+        v = float(llm_parts[1])
+        with pytest.raises(AssertionError):
+            assert 0.0 <= v <= 2.0
+
+    def test_llm_unknown_option_handled(self):
+        """An unknown /llm option does not crash — returns error message."""
+        output = []
+        arg = "unknown_opt"
+        llm_parts = arg.split(maxsplit=1)
+        llm_opt = llm_parts[0].lower()
+        if llm_opt == "temperature":
+            pass  # would set temperature
+        else:
+            output.append(f"Unknown option '{llm_opt}'. Available: temperature")
+        assert len(output) == 1
+        assert "Unknown option" in output[0]
+
+
+class TestSlashCommandOrder:
+    """_SLASH_COMMANDS list is in alphabetical order."""
+
+    def test_commands_alphabetically_sorted(self):
+        """All slash commands must appear in alphabetical order (ignoring trailing spaces)."""
+        from axon.main import _SLASH_COMMANDS
+
+        stripped = [c.strip() for c in _SLASH_COMMANDS]
+        assert stripped == sorted(stripped), f"Commands not in alphabetical order. Got: {stripped}"

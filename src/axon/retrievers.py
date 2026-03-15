@@ -91,10 +91,11 @@ class BM25Retriever:
 
         # os.replace is atomic on POSIX and uses MoveFileEx(REPLACE_EXISTING) on
         # Windows — safe even when the destination already exists. Fall back to a
-        # direct copy only if another process holds an exclusive lock (PermissionError).
+        # direct copy if os.replace fails (PermissionError from an exclusive lock,
+        # or OSError/WinError 87 EINVAL on some Windows file systems).
         try:
             os.replace(tmp_file, self.corpus_file)
-        except PermissionError:
+        except OSError:
             import shutil
 
             try:

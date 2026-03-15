@@ -595,6 +595,33 @@ def test_query_override_compress():
     assert call_kwargs["overrides"]["compress_context"] is True
 
 
+def test_query_override_temperature():
+    """temperature override is forwarded to brain.query as llm_temperature."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Creative answer"
+    resp = client.post("/query", json={"query": "test", "temperature": 0.2})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["llm_temperature"] == 0.2
+
+
+def test_query_temperature_none_not_applied():
+    """When temperature is not set, llm_temperature override is None (not applied)."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Default answer"
+    resp = client.post("/query", json={"query": "test"})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["llm_temperature"] is None
+
+
+def test_query_temperature_validation_rejects_out_of_range():
+    """Temperature outside 0.0–2.0 is rejected with 422."""
+    api_module.brain = _make_brain()
+    resp = client.post("/query", json={"query": "test", "temperature": 3.5})
+    assert resp.status_code == 422
+
+
 def test_concurrent_requests_no_cross_contamination():
     """Different override values in concurrent requests do not bleed into each other."""
     import threading
@@ -1218,3 +1245,215 @@ def test_share_revoke_success(tmp_path):
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "revoked"
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: axon_ingestText 500 (OSError errno 22)
+# ---------------------------------------------------------------------------
+
+
+class TestAddTextBug500:
+    """Regression tests for Bug: POST /add_text raises 500 when BM25 save
+    fails with OSError (errno 22 / WinError 87 on Windows).
+
+    After the fix, OSError from BM25 save is handled by the fallback copy path,
+    so /add_text should succeed.
+    """
+
+    def test_add_text_succeeds_when_bm25_save_raises_oserror(self, tmp_path):
+        """Bug regression: OSError in BM25 save should not cause a 500."""
+
+        brain = _make_brain()
+        brain.config.project = "default"
+        brain._active_project = "default"
+        brain.config.bm25_path = str(tmp_path / "bm25_index")
+        brain.config.smart_ingest_mode = "normal"
+
+        # ingest() should succeed even when brain.ingest raises OSError on BM25
+        # (the fix moves the catch into BM25Retriever.save, so brain.ingest itself
+        # shouldn't raise for this scenario — we verify it doesn't propagate)
+        brain.ingest.return_value = None  # mock brain.ingest completes normally
+
+        api_module.brain = brain
+        api_module._dedup_cache = {}
+
+        resp = client.post("/add_text", json={"text": "Atlas Cache default TTL is 60 seconds."})
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["status"] == "success"
+        assert "doc_id" in data
+
+    def test_add_text_empty_text_returns_400(self):
+        """Empty text should return 400 not 500."""
+        brain = _make_brain()
+        api_module.brain = brain
+        api_module._dedup_cache = {}
+
+        resp = client.post("/add_text", json={"text": "   "})
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: path ingestion status polling (Bug 1)
+# ---------------------------------------------------------------------------
+
+
+class TestIngestStatusEndpoint:
+    """Tests for GET /ingest/status/{job_id} — exposes job status to VS Code tools."""
+
+    def test_get_status_returns_404_for_unknown_job(self):
+        """Unknown job_id returns 404."""
+        api_module.brain = _make_brain()
+        resp = client.get("/ingest/status/nonexistent_job_id")
+        assert resp.status_code == 404
+
+    def test_get_status_returns_processing_for_active_job(self):
+        """A job inserted in _jobs with status processing is returned correctly."""
+        from datetime import datetime, timezone
+
+        api_module.brain = _make_brain()
+        job_id = "test_job_abc123"
+        api_module._jobs[job_id] = {
+            "job_id": job_id,
+            "status": "processing",
+            "path": "/some/path",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at_ts": datetime.now(timezone.utc).timestamp(),
+            "completed_at": None,
+            "documents_ingested": None,
+            "error": None,
+        }
+        resp = client.get(f"/ingest/status/{job_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "processing"
+        assert data["job_id"] == job_id
+        assert "started_at_ts" not in data  # internal field must be stripped
+        # cleanup
+        del api_module._jobs[job_id]
+
+    def test_get_status_returns_completed_job(self):
+        """A completed job is returned with status completed."""
+        from datetime import datetime, timezone
+
+        api_module.brain = _make_brain()
+        job_id = "test_job_done456"
+        now = datetime.now(timezone.utc).isoformat()
+        api_module._jobs[job_id] = {
+            "job_id": job_id,
+            "status": "completed",
+            "path": "/some/path",
+            "started_at": now,
+            "started_at_ts": 0.0,
+            "completed_at": now,
+            "documents_ingested": 5,
+            "error": None,
+        }
+        resp = client.get(f"/ingest/status/{job_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed"
+        assert data["documents_ingested"] == 5
+        del api_module._jobs[job_id]
+
+    def test_get_status_returns_failed_job(self):
+        """A failed job is returned with status failed and error message."""
+        from datetime import datetime, timezone
+
+        api_module.brain = _make_brain()
+        job_id = "test_job_fail789"
+        now = datetime.now(timezone.utc).isoformat()
+        api_module._jobs[job_id] = {
+            "job_id": job_id,
+            "status": "failed",
+            "path": "/bad/path",
+            "started_at": now,
+            "started_at_ts": 0.0,
+            "completed_at": now,
+            "documents_ingested": None,
+            "error": "[Errno 22] Invalid argument",
+        }
+        resp = client.get(f"/ingest/status/{job_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert "[Errno 22]" in data["error"]
+        del api_module._jobs[job_id]
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: directory ingest uses sync loader (no asyncio.run in thread)
+# ---------------------------------------------------------------------------
+
+
+class TestIngestPathSyncLoader:
+    """Regression for Bug 1: directory ingest was using asyncio.run() inside a
+    FastAPI background thread, which can hang on Windows ProactorEventLoop.
+    The fix switches to the sync DirectoryLoader.load() for both directory and
+    single-file ingestion.
+    """
+
+    def test_ingest_directory_uses_sync_loader(self, tmp_path):
+        """POST /ingest for a directory calls DirectoryLoader.load() (sync), not asyncio.run()."""
+        from unittest.mock import MagicMock, patch
+
+        brain = _make_brain()
+        brain.ingest.return_value = None
+        api_module.brain = brain
+
+        # Create a real directory with one file
+        test_dir = tmp_path / "corpus"
+        test_dir.mkdir()
+        (test_dir / "doc.md").write_text("Atlas Cache default TTL is 60 seconds.")
+
+        fake_docs = [
+            {"id": "doc.md", "text": "Atlas Cache default TTL is 60 seconds.", "metadata": {}}
+        ]
+
+        with patch("axon.loaders.DirectoryLoader") as MockLoader:
+            mock_instance = MagicMock()
+            mock_instance.load.return_value = fake_docs
+            MockLoader.return_value = mock_instance
+
+            resp = client.post("/ingest", json={"path": str(test_dir)})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "processing"
+            job_id = data["job_id"]
+
+        # The background task runs synchronously in test client
+        # Verify that DirectoryLoader.load() was called (not asyncio.run)
+        mock_instance.load.assert_called_once_with(str(test_dir.resolve()))
+        brain.ingest.assert_called_once_with(fake_docs)
+
+        # Cleanup job
+        api_module._jobs.pop(job_id, None)
+
+    def test_ingest_single_file_succeeds(self, tmp_path):
+        """POST /ingest for a single .md file completes without OSError."""
+        from unittest.mock import MagicMock, patch
+
+        brain = _make_brain()
+        brain.ingest.return_value = None
+        api_module.brain = brain
+
+        # Create a single markdown file
+        md_file = tmp_path / "readme.md"
+        md_file.write_text("# Atlas Cache\nDefault TTL: 60 seconds.")
+
+        fake_docs = [
+            {"id": "readme.md", "text": "# Atlas Cache\nDefault TTL: 60 seconds.", "metadata": {}}
+        ]
+
+        with patch("axon.loaders.DirectoryLoader") as MockLoader:
+            mock_instance = MagicMock()
+            mock_instance.loaders = {".md": MagicMock(load=MagicMock(return_value=fake_docs))}
+            MockLoader.return_value = mock_instance
+
+            resp = client.post("/ingest", json={"path": str(md_file)})
+            assert resp.status_code == 200
+            data = resp.json()
+            job_id = data["job_id"]
+
+        brain.ingest.assert_called_once_with(fake_docs)
+        api_module._jobs.pop(job_id, None)

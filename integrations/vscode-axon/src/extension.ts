@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 import { spawn, ChildProcess } from 'child_process';
 
 let serverProcess: ChildProcess | undefined;
@@ -73,6 +75,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_ingestText', new AxonIngestTextTool()),
         (vscode as any).lm.registerTool('axon_ingestUrl', new AxonIngestUrlTool()),
         (vscode as any).lm.registerTool('axon_ingestPath', new AxonIngestPathTool()),
+        (vscode as any).lm.registerTool('axon_getIngestStatus', new AxonGetIngestStatusTool()),
         (vscode as any).lm.registerTool('axon_listProjects', new AxonListProjectsTool()),
         (vscode as any).lm.registerTool('axon_switchProject', new AxonSwitchProjectTool()),
         (vscode as any).lm.registerTool('axon_createProject', new AxonCreateProjectTool()),
@@ -220,6 +223,36 @@ class AxonIngestPathTool implements vscode.LanguageModelTool<any> {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}, JobID: ${data.job_id}`)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error during path ingest: ${err}`)]);
+    }
+  }
+}
+
+class AxonGetIngestStatusTool implements vscode.LanguageModelTool<any> {
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { job_id } = options.input;
+
+    try {
+      const result = await httpGet(`${apiBase}/ingest/status/${encodeURIComponent(job_id)}`, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status === 404) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Job not found: ${job_id}`)]);
+      }
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error checking status (${result.status}): ${formatDetail(data, result.body)}`)]);
+      }
+      const status = data.status;
+      if (status === 'completed') {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingestion complete. Status: completed. You can now search the ingested documents.`)]);
+      } else if (status === 'failed') {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingestion failed. Error: ${data.error || 'unknown error'}`)]);
+      } else {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingestion still in progress (status: ${status}). Wait a moment and check again.`)]);
+      }
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error checking ingest status: ${err}`)]);
     }
   }
 }
@@ -439,6 +472,82 @@ async function getPortPid(port: number): Promise<number | undefined> {
   }
 }
 
+/**
+ * Discover the Python interpreter that has Axon installed.
+ *
+ * Probe order:
+ *   1. axon.pythonPath VS Code setting (explicit user override)
+ *   2. ~/.axon/.python_path written by the `axon` CLI on first run (pip / venv / pipx)
+ *   3. pipx isolated venv (predictable fixed path for `pipx install axon`)
+ *   4. .venv / venv / env inside the open workspace folder
+ *   5. System Python (python3 → python)
+ *
+ * Shows a one-time notification if nothing is found with axon importable.
+ */
+async function discoverPythonPath(): Promise<string> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const isWin = process.platform === 'win32';
+
+  // 1. Explicit user setting
+  const explicit = config.get<string>('pythonPath', '');
+  if (explicit) {
+    return explicit;
+  }
+
+  // 2. ~/.axon/.python_path written by `axon` CLI on first run
+  const discoveryFile = path.join(os.homedir(), '.axon', '.python_path');
+  if (fs.existsSync(discoveryFile)) {
+    const discovered = fs.readFileSync(discoveryFile, 'utf8').trim();
+    if (discovered && fs.existsSync(discovered)) {
+      outputChannel.appendLine(`Python auto-detected via ~/.axon/.python_path: ${discovered}`);
+      return discovered;
+    }
+  }
+
+  // 3. pipx isolated venv (fixed path for `pipx install axon`)
+  const pipxPython = isWin
+    ? path.join(os.homedir(), '.local', 'pipx', 'venvs', 'axon', 'Scripts', 'python.exe')
+    : path.join(os.homedir(), '.local', 'pipx', 'venvs', 'axon', 'bin', 'python');
+  if (fs.existsSync(pipxPython)) {
+    outputChannel.appendLine(`Python auto-detected via pipx venv: ${pipxPython}`);
+    return pipxPython;
+  }
+
+  // 4. Workspace venv (.venv, venv, env)
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders) {
+    for (const folder of workspaceFolders) {
+      for (const venvDir of ['.venv', 'venv', 'env']) {
+        const candidate = isWin
+          ? path.join(folder.uri.fsPath, venvDir, 'Scripts', 'python.exe')
+          : path.join(folder.uri.fsPath, venvDir, 'bin', 'python');
+        if (fs.existsSync(candidate)) {
+          outputChannel.appendLine(`Python auto-detected via workspace venv (${venvDir}): ${candidate}`);
+          return candidate;
+        }
+      }
+    }
+  }
+
+  // 5. System Python fallback
+  const systemPython = isWin ? 'python' : 'python3';
+  outputChannel.appendLine(
+    `Python auto-detection: no venv found. Falling back to system ${systemPython}. ` +
+    `If Axon is not found, run \`axon\` once after installation, or set axon.pythonPath.`
+  );
+
+  // Show a one-time notification so users know what to do
+  const msg = 'Axon: Python auto-detection did not find an Axon installation. ' +
+    'Run `axon` once after installing, or set the `axon.pythonPath` setting.';
+  vscode.window.showWarningMessage(msg, 'Open Settings').then(choice => {
+    if (choice === 'Open Settings') {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'axon.pythonPath');
+    }
+  });
+
+  return systemPython;
+}
+
 async function ensureServerRunning(apiBase: string, context: vscode.ExtensionContext): Promise<void> {
   if (await isAxonRunning(apiBase)) {
     outputChannel.appendLine('Axon API already running.');
@@ -453,7 +562,7 @@ async function ensureServerRunning(apiBase: string, context: vscode.ExtensionCon
   }
 
   const config = vscode.workspace.getConfiguration('axon');
-  const pythonPath = config.get<string>('pythonPath', 'python');
+  const pythonPath = await discoverPythonPath();
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {

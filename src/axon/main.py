@@ -3044,6 +3044,21 @@ def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
         _print_project_tree(p.get("children", []), active, indent + 1)
 
 
+def _write_python_discovery() -> None:
+    """Write current Python executable path to ~/.axon/.python_path.
+
+    Called once at startup so the VS Code extension can auto-detect the Python
+    interpreter regardless of whether axon was installed via pip, venv, or pipx.
+    Failures are silently ignored — this is a best-effort helper.
+    """
+    try:
+        discovery_dir = Path.home() / ".axon"
+        discovery_dir.mkdir(parents=True, exist_ok=True)
+        (discovery_dir / ".python_path").write_text(sys.executable, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def main():
     import argparse
 
@@ -3058,6 +3073,7 @@ def main():
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    _write_python_discovery()
     parser = argparse.ArgumentParser(description="Axon CLI")
     parser.add_argument("query", nargs="?", help="Question to ask")
     parser.add_argument("--ingest", help="Path to file or directory to ingest")
@@ -3108,6 +3124,13 @@ def main():
         "--embed",
         metavar="MODEL",
         help="Embedding model to use, e.g. all-MiniLM-L6-v2 or ollama/nomic-embed-text",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        metavar="F",
+        help="LLM temperature for generation (0.0–2.0, default: from config, usually 0.7). "
+        "Lower = more deterministic, higher = more creative.",
     )
     parser.add_argument(
         "--discuss",
@@ -3267,6 +3290,8 @@ def main():
         else:
             config.embedding_model = args.embed
 
+    if args.temperature is not None:
+        config.llm_temperature = args.temperature
     if args.discuss is not None:
         config.discussion_fallback = args.discuss
     if args.search is not None:
@@ -3558,26 +3583,27 @@ def main():
 
 
 _SLASH_COMMANDS = [
-    "/help",
-    "/list",
-    "/ingest ",
-    "/model ",
-    "/embed ",
-    "/pull ",
-    "/search",
-    "/discuss",
-    "/rag ",
+    "/clear",
     "/compact",
     "/context",
-    "/sessions",
-    "/resume ",
-    "/clear",
-    "/retry",
-    "/project ",
-    "/keys",
-    "/vllm-url ",
-    "/quit",
+    "/discuss",
+    "/embed ",
     "/exit",
+    "/help",
+    "/ingest ",
+    "/keys",
+    "/list",
+    "/llm ",
+    "/model ",
+    "/project ",
+    "/pull ",
+    "/quit",
+    "/rag ",
+    "/resume ",
+    "/retry",
+    "/search",
+    "/sessions",
+    "/vllm-url ",
 ]
 
 
@@ -4612,6 +4638,13 @@ def _interactive_repl(
                             yield Completion(
                                 sid[len(prefix) :], display=sid, display_meta=f"{turns} turns"
                             )
+                # ── /llm <option> ─────────────────────────────────────────
+                elif text.startswith("/llm "):
+                    opts = ["temperature "]
+                    prefix = text[len("/llm ") :]
+                    for o in opts:
+                        if o.startswith(prefix):
+                            yield Completion(o[len(prefix) :], display=o)
                 # ── /rag <option> ─────────────────────────────────────────
                 elif text.startswith("/rag "):
                     opts = [
@@ -4861,6 +4894,9 @@ def _interactive_repl(
                         "ingest": "  /ingest <path>              ingest a directory\n"
                         "  /ingest ./src/*.py           glob pattern\n"
                         "  /ingest ./notes/**/*.md      recursive glob",
+                        "llm": "  /llm                         show LLM settings (provider, model, temperature)\n"
+                        "  /llm temperature <0.0–2.0>   set generation temperature\n"
+                        "  Lower temperature = more deterministic; higher = more creative.",
                         "rag": "  /rag                         show all RAG settings\n"
                         "  /rag topk <n>                results to retrieve (1–20)\n"
                         "  /rag threshold <0.0–1.0>     min similarity score\n"
@@ -4906,17 +4942,30 @@ def _interactive_repl(
                 else:
                     print(
                         "\n"
-                        "  Knowledge:  /list   /ingest <path>   /clear\n"
-                        "  Model:      /model [<prov/>model]   /embed [<prov/>model]   /pull <name>\n"
-                        "  Mode:       /search   /discuss   /rag [option value]\n"
-                        "  Session:    /sessions   /resume <id>   /compact   /context   /retry\n"
-                        "  Projects:   /project [list|new|switch|delete|folder]\n"
-                        "  API Keys:   /keys   /keys set <provider>\n"
-                        "  Other:      /help [cmd]   /quit\n"
-                        "  Shell:      !<cmd>  run a shell command  ·  @<file>  attach file  ·  @<folder>/  attach all text files in folder\n"
+                        "  /clear          clear knowledge base for current project\n"
+                        "  /compact        summarise conversation to free context\n"
+                        "  /context        show current conversation context size\n"
+                        "  /discuss        toggle discussion fallback (general knowledge)\n"
+                        "  /embed [model]  show or switch embedding model\n"
+                        "  /help [cmd]     show this help or details for a command\n"
+                        "  /ingest <path>  ingest a file, directory, or glob\n"
+                        "  /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
+                        "  /list           list ingested documents\n"
+                        "  /llm [opt val]  show or set LLM settings (temperature)\n"
+                        "  /model [model]  show or switch LLM model\n"
+                        "  /project [sub]  manage projects (list, new, switch, delete, folder)\n"
+                        "  /pull <name>    pull an Ollama model\n"
+                        "  /quit           exit Axon\n"
+                        "  /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
+                        "  /resume <id>    load a saved session\n"
+                        "  /retry          retry the last query\n"
+                        "  /search         toggle Brave web search fallback\n"
+                        "  /sessions       list recent saved sessions\n"
                         "\n"
-                        "  /help <cmd>  for details (model, embed, ingest, rag, sessions, keys, project)\n"
-                        "  /<cmd> help  also works  ·  e.g. /project help   /rag help\n"
+                        "  Shell:   !<cmd>  run a shell command\n"
+                        "  Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
+                        "\n"
+                        "  /help <cmd>  for details  ·  e.g.  /help rag   /help llm   /help project\n"
                         "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
                     )
 
@@ -5242,6 +5291,29 @@ def _interactive_repl(
                         print(
                             f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag"
                         )
+
+            elif cmd == "/llm":
+                if not arg:
+                    print(
+                        f"\n  temperature  · {brain.config.llm_temperature}\n"
+                        f"  provider     · {brain.config.llm_provider}\n"
+                        f"  model        · {brain.config.llm_model}\n"
+                        f"\n  /llm temperature <0.0–2.0>   set generation temperature\n"
+                    )
+                else:
+                    llm_parts = arg.split(maxsplit=1)
+                    llm_opt = llm_parts[0].lower()
+                    llm_val = llm_parts[1] if len(llm_parts) > 1 else ""
+                    if llm_opt == "temperature":
+                        try:
+                            v = float(llm_val)
+                            assert 0.0 <= v <= 2.0
+                            brain.config.llm_temperature = v
+                            print(f"  Temperature set to {v}")
+                        except Exception:
+                            print("  Usage: /llm temperature <float 0.0–2.0>")
+                    else:
+                        print(f"  Unknown option '{llm_opt}'. Available: temperature")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)

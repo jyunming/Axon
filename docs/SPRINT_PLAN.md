@@ -113,8 +113,54 @@ consistency, performance tuning, content-aware chunking, and smart ingestion.
 - Added project tests for `ensure_user_namespace`, reserved names, `list_share_mounts`
 - Test suite: 504 passing, 6 skipped (Linux symlink), 0 failing
 
+## ITEM 12 — Temperature Control (CLI / REPL / API) (Priority: Low)
+
+**Date:** 2026-03-15
+
+- Added `--temperature <float>` CLI argument to `axon` command
+- Added `/llm temperature <0.0–2.0>` REPL command (separate from `/rag`)
+- Added `/llm` tab completion to `_PTCompleter`
+- Added `temperature: float | None` field to `QueryRequest` in `api.py`
+- API maps `temperature` to `overrides["llm_temperature"]` for per-request override
+- `/` commands list in REPL and `/help` output sorted alphabetically
+- Tests: `TestTemperatureCLI`, `TestReplLlmCommand`, `TestSlashCommandOrder` in `test_main.py`; `TestQueryTemperature` in `test_api.py`
+
+## ITEM 13 — VS Code Extension: Python Auto-Detection (Priority: Medium)
+
+**Date:** 2026-03-15
+
+- Added `_write_python_discovery()` to `main.py` — writes interpreter path to `~/.axon/.python_path` on first `axon` CLI run
+- Added `discoverPythonPath()` to `extension.ts` — priority chain: explicit `axon.pythonPath` setting → `~/.axon/.python_path` → pipx venv → workspace venv → system Python with warning notification
+- Changed `axon.pythonPath` default from `"python"` to `""` in `package.json`
+- Supports pip, pipx, venv, virtualenv install scenarios without user configuration
+
+## ITEM 14 — Version Alignment (Priority: Low)
+
+**Date:** 2026-03-15
+
+- Python package: `pyproject.toml` `version` set to `1.0.0` (was `2.0.0`)
+- VS Code extension: `package.json` `version` set to `1.0.0` (was `0.1.0`)
+- Repacked as `axon-copilot-1.0.0.vsix`
+- Updated `QUICKREF.md` version footer
+
+## ITEM 15 — Bug Fixes (Priority: High)
+
+**Date:** 2026-03-15
+
+### Bug 2: axon_ingestText 500 [Errno 22] Invalid argument
+
+- **Root cause:** `BM25Retriever.save()` only caught `PermissionError`; Windows `os.replace()` can raise `OSError` (errno 22 / WinError 87 ERROR_INVALID_PARAMETER) on some file systems
+- **Fix:** Changed `except PermissionError:` to `except OSError:` in `BM25Retriever.save()` — the shutil.copy2 fallback now activates for any OS-level replace failure
+- **Tests:** `TestBM25SaveOsError.test_save_falls_back_on_oserror`, `test_save_falls_back_on_permission_error` in `test_retrievers.py`
+
+### Bug 1: Path ingestion accepted but content not retrievable
+
+- **Root cause:** `axon_ingestPath` returns a `job_id` immediately (background job) but the VS Code extension had no tool to poll job status; Copilot proceeded to search before ingestion completed
+- **Fix:** Added `axon_getIngestStatus` language model tool to `extension.ts` and `package.json` — polls `GET /ingest/status/{job_id}` and returns `processing` / `completed` / `failed`; updated `axon_ingestPath` model description to require polling before searching
+- **Tests:** `TestIngestStatusEndpoint` (4 tests) in `test_api.py`; `TestAddTextBug500` (2 tests) in `test_api.py`
+
 ## Test Status
 
 Run with: `python -m pytest tests/ -v --tb=short`
 
-Current counts (2026-03-13): **504 passed, 6 skipped, 0 failed**
+Current counts (2026-03-15): **~526 passed, 6 skipped, 0 failed**

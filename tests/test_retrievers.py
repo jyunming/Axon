@@ -351,3 +351,59 @@ class TestHybridThresholdBug:
         assert "vec_good" in ids
         assert "vec_bad" not in ids
         assert "bm25_only" in ids  # must survive despite vector_score=0.0
+
+
+class TestBM25SaveOsError:
+    """Regression tests for Bug: BM25 save raises OSError (errno 22 / WinError 87) on Windows.
+
+    os.replace() on Windows can raise OSError (not just PermissionError) in some
+    filesystem configurations.  The fallback path must activate for any OSError.
+    """
+
+    def test_save_falls_back_on_oserror(self, tmp_path, monkeypatch):
+        """When os.replace raises OSError (errno 22), shutil.copy2 fallback is used."""
+        import shutil
+        import unittest.mock as mock
+
+        r = BM25Retriever(storage_path=str(tmp_path))
+        r.add_documents([{"id": "d1", "text": "hello world", "metadata": {}}])
+
+        # Make the next save fail with OSError (simulates WinError 87 / errno 22)
+        with mock.patch("os.replace", side_effect=OSError(22, "Invalid argument")):
+            copy2_called = []
+            real_copy2 = shutil.copy2
+
+            def _fake_copy2(src, dst):
+                copy2_called.append((src, dst))
+                return real_copy2(src, dst)
+
+            with mock.patch("shutil.copy2", side_effect=_fake_copy2):
+                # Should not raise
+                r.save()
+
+        assert len(copy2_called) == 1, "shutil.copy2 fallback should have been called"
+        # Verify corpus still readable from disk
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        assert len(r2.corpus) == 1
+        assert r2.corpus[0]["id"] == "d1"
+
+    def test_save_falls_back_on_permission_error(self, tmp_path, monkeypatch):
+        """PermissionError is still handled (subset of OSError)."""
+        import shutil
+        import unittest.mock as mock
+
+        r = BM25Retriever(storage_path=str(tmp_path))
+        r.add_documents([{"id": "d1", "text": "test", "metadata": {}}])
+
+        with mock.patch("os.replace", side_effect=PermissionError("locked")):
+            copy2_called = []
+            real_copy2 = shutil.copy2
+
+            def _fake_copy2(src, dst):
+                copy2_called.append((src, dst))
+                return real_copy2(src, dst)
+
+            with mock.patch("shutil.copy2", side_effect=_fake_copy2):
+                r.save()
+
+        assert len(copy2_called) == 1

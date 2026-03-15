@@ -2,7 +2,7 @@
   "name": "axon-copilot",
   "displayName": "Axon Copilot",
   "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "axon",
   "engines": {
     "vscode": "^1.93.0"
@@ -129,7 +129,7 @@
       {
         "name": "axon_ingestPath",
         "displayName": "Axon: Ingest Local Path",
-        "modelDescription": "Ingest a local directory or file into the Axon knowledge base. Accepts any absolute path on the local machine (e.g. /home/user/docs or C:\\Users\\user\\docs) or a path relative to the workspace root.",
+        "modelDescription": "Ingest a local directory or file into the Axon knowledge base. Returns a job_id immediately — ingestion runs in the background. Always call axon_getIngestStatus with the returned job_id and wait until status is 'completed' before searching. Accepts any absolute path on the local machine (e.g. /home/user/docs or C:\\Users\\user\\docs) or a path relative to the workspace root.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonIngestPath",
         "inputSchema": {
@@ -142,6 +142,25 @@
           },
           "required": [
             "path"
+          ]
+        }
+      },
+      {
+        "name": "axon_getIngestStatus",
+        "displayName": "Axon: Get Ingest Job Status",
+        "modelDescription": "Poll the status of a background ingest job started by axon_ingestPath. Returns 'processing', 'completed', or 'failed'. Always call this after axon_ingestPath and wait for 'completed' before running searches.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonIngestStatus",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "job_id": {
+              "type": "string",
+              "description": "The job_id returned by axon_ingestPath"
+            }
+          },
+          "required": [
+            "job_id"
           ]
         }
       },
@@ -439,8 +458,8 @@
         },
         "axon.pythonPath": {
           "type": "string",
-          "default": "python",
-          "description": "Path to the Python interpreter that has Axon installed."
+          "default": "",
+          "description": "Path to the Python interpreter that has Axon installed. Leave empty for auto-detection: the extension checks ~/.axon/.python_path (written by the axon CLI on first run), then the pipx venv, then .venv/venv in the workspace, then system Python."
         },
         "axon.useCopilotLlm": {
           "type": "boolean",

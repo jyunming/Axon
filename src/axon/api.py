@@ -208,6 +208,9 @@ class QueryRequest(BaseModel):
     decompose: bool | None = Field(None, description="Override query decomposition toggle")
     compress: bool | None = Field(None, description="Override LLM context compression toggle")
     discuss: bool | None = Field(None, description="Override discussion fallback toggle")
+    temperature: float | None = Field(
+        None, ge=0.0, le=2.0, description="Override LLM temperature for this request (0.0–2.0)"
+    )
     timeout: float | None = Field(None, gt=0, description="Query timeout in seconds (default 120)")
 
 
@@ -791,6 +794,7 @@ async def query_brain(request: QueryRequest):
             "query_decompose": request.decompose,
             "compress_context": request.compress,
             "discussion_fallback": request.discuss,
+            "llm_temperature": request.temperature,
         }
 
         # Offload sync brain.query to a threadpool to keep the event loop free
@@ -852,6 +856,7 @@ async def query_brain_stream(request: QueryRequest):
         "query_decompose": request.decompose,
         "compress_context": request.compress,
         "discussion_fallback": request.discuss,
+        "llm_temperature": request.temperature,
     }
 
     def generate():
@@ -926,22 +931,26 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     }
 
     def process_ingestion():
-        import asyncio
+        from axon.loaders import DirectoryLoader
 
         try:
+            loader_mgr = DirectoryLoader()
             if requested_path.is_dir():
-                asyncio.run(brain.load_directory(str(requested_path)))
+                # Use the sync loader to avoid asyncio.run() inside a background
+                # thread — on Windows, ProactorEventLoop created by asyncio.run()
+                # in a non-main thread can hang indefinitely.
+                docs = loader_mgr.load(str(requested_path))
             else:
-                from axon.loaders import DirectoryLoader
-
                 ext = requested_path.suffix.lower()
-                loader_mgr = DirectoryLoader()
                 if ext in loader_mgr.loaders:
                     docs = loader_mgr.loaders[ext].load(str(requested_path))
-                    brain.ingest(docs)
                 else:
                     logger.warning(f"Unsupported file type: {ext}")
+                    docs = []
+            if docs:
+                brain.ingest(docs)
             _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["documents_ingested"] = len(docs)
             _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
