@@ -38,9 +38,13 @@ flowchart LR
 ## Install
 
 ```bash
+# From source (recommended for development)
 git clone https://github.com/jyunming/Axon.git
 cd Axon
 pip install -e .
+
+# Or install as a standalone CLI tool via pipx (no venv management needed)
+pipx install git+https://github.com/jyunming/Axon.git
 ```
 
 Pull a local model (or bring your own API key for Gemini / OpenAI):

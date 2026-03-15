@@ -846,7 +846,27 @@ npm run package   # produces axon-copilot-1.0.0.vsix
 
 Then install the generated `.vsix` as above.
 
-### 2. Configure extension settings
+### 2. How the extension finds Python
+
+The extension needs to know which Python executable to use to start `axon-api` (when `autoStart` is enabled). It tries the following in order — **no configuration is usually needed**:
+
+| Priority | Where it looks | When this applies |
+|---|---|---|
+| 1 | `axon.pythonPath` VS Code setting | You explicitly set a path — always wins |
+| 2 | `~/.axon/.python_path` | Written automatically the first time you run `axon` in a terminal; covers pip/venv installs |
+| 3 | pipx venv (`~/.local/pipx/venvs/axon/`) | You installed with `pipx install axon` |
+| 4 | Workspace `.venv` / `venv` / `env` | A virtual environment exists in your open VS Code folder |
+| 5 | System `python3` / `python` | Global install fallback; shows a warning if Axon is not found on this Python |
+
+**The simplest path:**
+
+- **Installed via pip into a venv?** Run `axon` once from that terminal → `~/.axon/.python_path` is written → done. No VS Code config needed.
+- **Installed via pipx?** Nothing to do — the extension finds the pipx venv automatically.
+- **Custom install location?** Set `axon.pythonPath` explicitly in VS Code Settings (Ctrl+,).
+
+If auto-detection fails, VS Code shows a notification with a link to open the `axon.pythonPath` setting directly.
+
+### 3. Configure extension settings
 
 Open VS Code Settings (Ctrl+,) and search for `axon`:
 
@@ -856,7 +876,7 @@ Open VS Code Settings (Ctrl+,) and search for `axon`:
 | `axon.apiKey` | *(empty)* | API key if `RAG_API_KEY` is set on the server |
 | `axon.topK` | `5` | Default number of chunks returned per query |
 | `axon.autoStart` | `true` | Auto-start `axon-api` on extension activate (Linux/macOS only) |
-| `axon.pythonPath` | *(auto-detect)* | Path to Python executable; auto-detects from `~/.axon/.python_path`, pipx, workspace venv, or system Python |
+| `axon.pythonPath` | *(auto-detect)* | Explicit Python path override — leave blank for auto-detection (see above) |
 | `axon.useCopilotLlm` | `false` | Use Copilot's LLM (GPT-4o / Claude) for RAPTOR/GraphRAG instead of Ollama |
 | `axon.ingestBase` | *(empty)* | Restrict ingestion paths to a specific directory |
 | `axon.storeBase` | *(empty)* | Base path for AxonStore multi-user mode |
@@ -871,7 +891,7 @@ Or edit `settings.json` directly:
 }
 ```
 
-### 3. Start the Axon API
+### 4. Start the Axon API
 
 The API must be running before using any Copilot tools. On Linux/macOS with `autoStart: true` the extension starts it automatically. On Windows, start it manually:
 
@@ -879,7 +899,7 @@ The API must be running before using any Copilot tools. On Linux/macOS with `aut
 axon-api
 ```
 
-### 4. Verify in Copilot Chat
+### 5. Verify in Copilot Chat
 
 Open Copilot Chat (Ctrl+Shift+I or the chat icon in the Activity Bar). Type a message:
 

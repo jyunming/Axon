@@ -43,6 +43,17 @@ The VSIX ships with the repo — no download needed:
 4. Reload VS Code  (Ctrl+Shift+P → "Reload Window")
 ```
 
+**How the extension finds Python** (for `autoStart` — starting `axon-api` automatically):
+
+| Your install method | What to do |
+|---|---|
+| `pip install` into a venv | Run `axon` once from the terminal → auto-detected via `~/.axon/.python_path` |
+| `pipx install axon` | Nothing — extension finds the pipx venv automatically |
+| Workspace venv (`.venv/`) | Nothing — extension checks the open folder automatically |
+| Custom / unusual path | Set `axon.pythonPath` in VS Code Settings (Ctrl+,) |
+
+No configuration needed for the most common cases. If auto-detection fails, VS Code shows a notification linking directly to the setting.
+
 ---
 
 ## How Ingestion Works
