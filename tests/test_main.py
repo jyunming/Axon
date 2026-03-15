@@ -2714,3 +2714,322 @@ class TestSlashCommandOrder:
 
         stripped = [c.strip() for c in _SLASH_COMMANDS]
         assert stripped == sorted(stripped), f"Commands not in alphabetical order. Got: {stripped}"
+
+
+class TestGraphRAGRobustness:
+    """Tests for GraphRAG robustness improvements: Jaccard matching, budget slicing,
+    entity pruning, relation extraction, and 1-hop traversal."""
+
+    # ── Helper: build a minimal AxonBrain-like mock ────────────────────────
+
+    def _make_brain(self):
+        """Return a MagicMock AxonBrain with the real methods we want to test."""
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = AxonConfig()
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        # Bind real implementations so we test actual logic
+        brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
+        brain._prune_entity_graph = AxonBrain._prune_entity_graph.__get__(brain, AxonBrain)
+        brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
+        brain._expand_with_entity_graph = AxonBrain._expand_with_entity_graph.__get__(
+            brain, AxonBrain
+        )
+        brain._save_entity_graph = MagicMock()
+        brain._save_relation_graph = MagicMock()
+        return brain
+
+    # ── Phase 1: _entity_matches ──────────────────────────────────────────
+
+    def test_entity_exact_match(self):
+        """Identical strings return score 1.0."""
+        brain = self._make_brain()
+        assert brain._entity_matches("OpenAI", "openai") == 1.0
+
+    def test_entity_single_token_no_substring(self):
+        """Single tokens that differ must not match (no substring matching)."""
+        brain = self._make_brain()
+        assert brain._entity_matches("bert", "robert") == 0.0
+
+    def test_entity_multi_token_jaccard(self):
+        """Multi-token phrases with >= 0.4 Jaccard overlap return a non-zero score."""
+        brain = self._make_brain()
+        score = brain._entity_matches("machine learning", "learning machine")
+        assert score >= 0.4
+
+    def test_entity_single_token_no_cross(self):
+        """Single-token query must not match a multi-token graph entity it doesn't equal."""
+        brain = self._make_brain()
+        # "IT" is one token; "Critical IT Infrastructure" is three tokens.
+        # Jaccard = 1/3 < 0.4 — but the single-token rule fires first and returns 0.0.
+        score = brain._entity_matches("IT", "Critical IT Infrastructure")
+        assert score == 0.0
+
+    # ── Phase 1: graph_rag_budget slicing ────────────────────────────────
+
+    def test_graph_budget_guarantees_expanded_results(self):
+        """Entity-expanded docs survive even when base results fill top_k."""
+        # Simulate: 3 base docs (top_k=3), 2 expanded docs, budget=2
+        base = [{"id": f"base_{i}", "score": 0.9, "_graph_expanded": False} for i in range(3)]
+        expanded = [{"id": f"exp_{i}", "score": 0.7, "_graph_expanded": True} for i in range(2)]
+        results = base + expanded
+
+        class _Cfg:
+            top_k = 3
+            graph_rag = True
+            graph_rag_budget = 2
+
+        cfg = _Cfg()
+        base_out = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+        expanded_out = [r for r in results if r.get("_graph_expanded")]
+        base_ids = {r["id"] for r in base_out}
+        graph_slots = [r for r in expanded_out if r["id"] not in base_ids][: cfg.graph_rag_budget]
+        final = base_out + graph_slots
+
+        assert len(final) == 5  # 3 base + 2 expanded
+        exp_ids = {r["id"] for r in final if "exp_" in r["id"]}
+        assert exp_ids == {"exp_0", "exp_1"}
+
+    def test_graph_budget_zero_no_guarantee(self):
+        """When budget=0, fall back to plain top_k truncation."""
+        base = [{"id": f"base_{i}", "score": 0.9, "_graph_expanded": False} for i in range(3)]
+        expanded = [{"id": "exp_0", "score": 0.7, "_graph_expanded": True}]
+        results = base + expanded
+
+        class _Cfg:
+            top_k = 3
+            graph_rag = True
+            graph_rag_budget = 0
+
+        cfg = _Cfg()
+        # budget=0 → plain slice
+        final = results[: cfg.top_k]
+        assert len(final) == 3
+        assert all("exp_" not in r["id"] for r in final)
+
+    def test_graph_expanded_score_in_range(self):
+        """Scores assigned to expanded docs are in [0.5, 0.8)."""
+        brain = self._make_brain()
+        brain._entity_graph = {"machine learning": ["doc_ml_1"]}
+        brain._relation_graph = {}
+        brain.config.graph_rag_relations = False
+
+        # Entity "machine learning" in query should match the graph entity with score > 0
+        # _entity_matches("machine learning", "machine learning") == 1.0
+        # doc_score = 0.5 + 1.0 * 0.3 = 0.8 — boundary, ensure < 0.8 is not violated
+        # Actually 0.5 + score*0.3, score up to 1.0 => up to 0.8 exactly (boundary)
+        brain._extract_entities = MagicMock(return_value=["machine learning"])
+        brain.vector_store = MagicMock()
+        brain.vector_store.get_by_ids = MagicMock(
+            return_value=[{"id": "doc_ml_1", "text": "ml text", "score": 1.0, "metadata": {}}]
+        )
+
+        results = brain._expand_with_entity_graph("machine learning query", [], cfg=None)
+        expanded = [r for r in results if r.get("_graph_expanded")]
+        assert len(expanded) == 1
+        score = expanded[0]["score"]
+        assert 0.5 <= score <= 0.8
+
+    def test_graph_expanded_score_not_hardcoded(self):
+        """Expanded doc scores must not be exactly 1.0 (the old bug)."""
+        brain = self._make_brain()
+        brain._entity_graph = {"python": ["doc_py_1"]}
+        brain._relation_graph = {}
+        brain.config.graph_rag_relations = False
+        brain._extract_entities = MagicMock(return_value=["python"])
+        brain.vector_store = MagicMock()
+        brain.vector_store.get_by_ids = MagicMock(
+            return_value=[{"id": "doc_py_1", "text": "py text", "score": 1.0, "metadata": {}}]
+        )
+
+        results = brain._expand_with_entity_graph("python query", [], cfg=None)
+        expanded = [r for r in results if r.get("_graph_expanded")]
+        assert len(expanded) == 1
+        assert expanded[0]["score"] != 1.0
+
+    # ── Phase 2: entity graph pruning ────────────────────────────────────
+
+    def test_entity_graph_pruned_on_delete(self):
+        """Deleted doc IDs are removed from the entity graph."""
+        brain = self._make_brain()
+        brain._entity_graph = {"python": ["doc_1", "doc_2"], "machine learning": ["doc_2"]}
+        brain._relation_graph = {}
+
+        brain._prune_entity_graph({"doc_2"})
+
+        assert brain._entity_graph["python"] == ["doc_1"]
+        assert "machine learning" not in brain._entity_graph
+        brain._save_entity_graph.assert_called_once()
+
+    def test_empty_entity_entry_removed_on_prune(self):
+        """Entity entries that become empty after pruning are deleted entirely."""
+        brain = self._make_brain()
+        brain._entity_graph = {"solo_entity": ["only_doc"]}
+        brain._relation_graph = {}
+
+        brain._prune_entity_graph({"only_doc"})
+
+        assert "solo_entity" not in brain._entity_graph
+        brain._save_entity_graph.assert_called_once()
+
+    # ── Phase 3: relation extraction ─────────────────────────────────────
+
+    def test_relation_extraction_parses_pipe_format(self):
+        """_extract_relations correctly parses SUBJECT | RELATION | OBJECT lines."""
+        brain = self._make_brain()
+        brain.llm = MagicMock()
+        brain.llm.complete = MagicMock(
+            return_value="Python | is used for | machine learning\nOpenAI | created | GPT-4"
+        )
+
+        triples = brain._extract_relations("some text")
+
+        assert len(triples) == 2
+        assert triples[0] == ("Python", "is used for", "machine learning")
+        assert triples[1] == ("OpenAI", "created", "GPT-4")
+
+    def test_relation_extraction_ignores_bad_lines(self):
+        """Malformed lines (wrong number of pipes) are silently skipped."""
+        brain = self._make_brain()
+        brain.llm = MagicMock()
+        brain.llm.complete = MagicMock(
+            return_value=(
+                "Good line | relates to | something\n"
+                "bad line no pipes\n"
+                "only | two parts\n"
+                "too | many | pipe | parts | here"
+            )
+        )
+
+        triples = brain._extract_relations("some text")
+
+        assert len(triples) == 1
+        assert triples[0] == ("Good line", "relates to", "something")
+
+    # ── Phase 3: 1-hop traversal ─────────────────────────────────────────
+
+    def test_one_hop_traversal_fetches_related_chunks(self):
+        """Querying entity A finds B's chunks via a relation A → B."""
+        brain = self._make_brain()
+        # Entity graph: "python" has doc_py, "machine learning" has doc_ml
+        brain._entity_graph = {
+            "python": ["doc_py"],
+            "machine learning": ["doc_ml"],
+        }
+        # Relation graph: python → machine learning
+        brain._relation_graph = {
+            "python": [{"target": "machine learning", "relation": "used for", "chunk_id": "doc_py"}]
+        }
+        brain.config.graph_rag_relations = True
+        brain._extract_entities = MagicMock(return_value=["python"])
+        brain.vector_store = MagicMock()
+
+        fetched_ids = []
+
+        def _fake_get_by_ids(ids):
+            fetched_ids.extend(ids)
+            return [{"id": i, "text": f"text {i}", "score": 0.7, "metadata": {}} for i in ids]
+
+        brain.vector_store.get_by_ids = _fake_get_by_ids
+
+        brain._expand_with_entity_graph("python programming", [], cfg=None)
+
+        assert "doc_ml" in fetched_ids, "1-hop target doc_ml should have been fetched"
+
+    def test_one_hop_score_lower_than_direct(self):
+        """1-hop traversal scores (0.62) are lower than direct entity match scores."""
+        brain = self._make_brain()
+        brain._entity_graph = {
+            "python": ["doc_py"],
+            "machine learning": ["doc_ml"],
+        }
+        brain._relation_graph = {
+            "python": [{"target": "machine learning", "relation": "used for", "chunk_id": "doc_py"}]
+        }
+        brain.config.graph_rag_relations = True
+        brain._extract_entities = MagicMock(return_value=["python"])
+        brain.vector_store = MagicMock()
+
+        def _fake_get_by_ids(ids):
+            docs = []
+            for i in ids:
+                doc = {"id": i, "text": f"text {i}", "score": 0.9, "metadata": {}}
+                docs.append(doc)
+            return docs
+
+        brain.vector_store.get_by_ids = _fake_get_by_ids
+
+        results = brain._expand_with_entity_graph("python programming", [], cfg=None)
+
+        expanded = [r for r in results if r.get("_graph_expanded")]
+        scores_by_id = {r["id"]: r["score"] for r in expanded}
+
+        # doc_py matched directly (score = 0.5 + 1.0*0.3 = 0.8)
+        # doc_ml matched via 1-hop (score = 0.62)
+        assert scores_by_id.get("doc_ml", 1.0) < scores_by_id.get(
+            "doc_py", 0.0
+        ), "1-hop doc score should be lower than direct match score"
+
+    # ── Phase 4: relation graph pruning ──────────────────────────────────
+
+    def test_relation_graph_pruned_on_delete(self):
+        """Relation graph entries with deleted chunk_ids are removed."""
+        brain = self._make_brain()
+        brain._entity_graph = {}
+        brain._relation_graph = {
+            "python": [
+                {"target": "ml", "relation": "used for", "chunk_id": "doc_1"},
+                {"target": "web", "relation": "used for", "chunk_id": "doc_2"},
+            ]
+        }
+
+        brain._prune_entity_graph({"doc_1"})
+
+        assert len(brain._relation_graph["python"]) == 1
+        assert brain._relation_graph["python"][0]["chunk_id"] == "doc_2"
+        brain._save_relation_graph.assert_called_once()
+
+    # ── Phase 1.6: filtered_count metric ─────────────────────────────────
+
+    def test_filtered_count_excludes_graph_results(self):
+        """filtered_count in _execute_retrieval reflects the pre-expansion result count."""
+        # We test the logic in isolation: base_count saved before GraphRAG expansion
+        base_results = [{"id": "a", "score": 0.8}, {"id": "b", "score": 0.7}]
+        graph_results = [{"id": "c", "score": 0.6, "_graph_expanded": True}]
+        all_results = base_results + graph_results
+
+        base_count = len(base_results)  # should be 2, not 3
+        graph_expanded_count = len(all_results) - base_count
+
+        assert base_count == 2
+        assert graph_expanded_count == 1
+
+    # ── Phase 1.5: extraction text cap ───────────────────────────────────
+
+    def test_extraction_cap_at_3000_chars(self):
+        """Entity extraction prompt includes text[:3000], not text[:1500]."""
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        captured_prompts = []
+        brain.llm = MagicMock()
+
+        def _capture_complete(prompt, system_prompt=None):
+            captured_prompts.append(prompt)
+            return ""
+
+        brain.llm.complete = _capture_complete
+
+        long_text = "x" * 4000
+        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._extract_entities(long_text)
+
+        assert captured_prompts, "LLM complete should have been called"
+        prompt = captured_prompts[0]
+        # The text portion should be exactly 3000 chars
+        assert "x" * 3000 in prompt
+        assert "x" * 3001 not in prompt

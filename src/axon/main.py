@@ -255,6 +255,15 @@ class AxonConfig:
     # query are used to expand the result set with graph-connected documents.
     graph_rag: bool = True
 
+    # Maximum number of graph-expanded (entity-linked) documents to inject beyond
+    # the normal top_k slice.  Set to 0 to disable the guarantee and fall back to
+    # the old behaviour of truncating the combined list to top_k.
+    graph_rag_budget: int = 3
+
+    # Relation extraction: extract SUBJECT | RELATION | OBJECT triples during ingest
+    # and use 1-hop traversal at retrieval time for richer context expansion.
+    graph_rag_relations: bool = True
+
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
 
@@ -1677,6 +1686,9 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
 
+        # GraphRAG relation graph: {source_entity_lower: [{target, relation, chunk_id}]}
+        self._relation_graph: dict = self._load_relation_graph()
+
         # Shared executor for background/parallel tasks
         from concurrent.futures import ThreadPoolExecutor
 
@@ -1818,6 +1830,7 @@ Your primary goal is to help the user by answering questions based on the provid
             self._query_cache = OrderedDict()
         self._ingested_hashes = self._load_hash_store()
         self._entity_graph = self._load_entity_graph()
+        self._relation_graph = self._load_relation_graph()
 
         # Merge entity graphs from all descendant projects so that GraphRAG
         # relationship expansion works when querying from a parent project.
@@ -2005,6 +2018,61 @@ Your primary goal is to help the user by answering questions based on the provid
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
 
+    def _load_relation_graph(self) -> dict:
+        """Load persisted relation graph from disk.
+
+        Shape: {source_entity_lower: [{target: str, relation: str, chunk_id: str}]}
+        """
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict):
+                    return {}
+                cleaned: dict = {}
+                for key, value in raw.items():
+                    if not isinstance(key, str) or not isinstance(value, list):
+                        continue
+                    cleaned[key] = [
+                        entry
+                        for entry in value
+                        if isinstance(entry, dict)
+                        and "target" in entry
+                        and "relation" in entry
+                        and "chunk_id" in entry
+                    ]
+                return cleaned
+            except Exception:
+                pass
+        return {}
+
+    def _save_relation_graph(self) -> None:
+        """Persist relation graph to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._relation_graph), encoding="utf-8")
+
+    def _entity_matches(self, q_entity: str, g_entity: str) -> float:
+        """Return Jaccard-based match score between 0.0 and 1.0."""
+        q = q_entity.lower().strip()
+        g = g_entity.lower().strip()
+        if q == g:
+            return 1.0
+        q_tokens = set(q.split())
+        g_tokens = set(g.split())
+        if len(q_tokens) == 1 and len(g_tokens) == 1:
+            return 0.0  # single tokens must match exactly
+        intersection = q_tokens & g_tokens
+        union = q_tokens | g_tokens
+        jaccard = len(intersection) / len(union) if union else 0.0
+        return jaccard if jaccard >= 0.4 else 0.0
+
     def _extract_entities(self, text: str) -> list[str]:
         """Extract named entities from text using the LLM.
 
@@ -2016,7 +2084,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "technical concepts) from the following text. "
             "Output one entity per line, no bullets or numbering. "
             "If there are no entities, output nothing.\n\n"
-            + text[:1500]  # cap to avoid huge prompts
+            + text[:3000]  # cap to avoid huge prompts
         )
         try:
             raw = self.llm.complete(
@@ -2033,6 +2101,65 @@ Your primary goal is to help the user by answering questions based on the provid
             return entities[:20]
         except Exception:
             return []
+
+    def _extract_relations(self, text: str) -> list[tuple[str, str, str]]:
+        """Extract SUBJECT | RELATION | OBJECT triples from text via the LLM.
+
+        Returns up to 15 triples as (subject, relation, object) tuples.
+        Returns an empty list on failure or when the LLM produces no output.
+        """
+        prompt = (
+            "Extract key relationships from the following text. "
+            "Output each relationship as: SUBJECT | RELATION | OBJECT\n"
+            "One relationship per line. No bullets, numbering, or extra text. "
+            "If there are no clear relationships, output nothing.\n\n" + text[:3000]
+        )
+        try:
+            raw = self.llm.complete(
+                prompt, system_prompt="You are a knowledge graph extraction specialist."
+            )
+            triples = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) == 3 and all(parts):
+                    triples.append((parts[0], parts[1], parts[2]))
+            return triples[:15]
+        except Exception:
+            return []
+
+    def _prune_entity_graph(self, deleted_ids: set) -> None:
+        """Remove deleted chunk IDs from entity graph and relation graph.
+
+        Entries that become empty are deleted entirely.  Persists changes to disk.
+        """
+        eg_changed = False
+        for entity in list(self._entity_graph):
+            before = self._entity_graph[entity]
+            after = [d for d in before if d not in deleted_ids]
+            if len(after) != len(before):
+                eg_changed = True
+                if after:
+                    self._entity_graph[entity] = after
+                else:
+                    del self._entity_graph[entity]
+        if eg_changed:
+            self._save_entity_graph()
+
+        rg_changed = False
+        for src in list(self._relation_graph):
+            before = self._relation_graph[src]
+            after = [entry for entry in before if entry.get("chunk_id") not in deleted_ids]
+            if len(after) != len(before):
+                rg_changed = True
+                if after:
+                    self._relation_graph[src] = after
+                else:
+                    del self._relation_graph[src]
+        if rg_changed:
+            self._save_relation_graph()
 
     def _generate_raptor_summaries(self, documents: list[dict]) -> list[dict]:
         """Generate RAPTOR summary nodes for a list of already-split chunks."""
@@ -2105,35 +2232,67 @@ Your primary goal is to help the user by answering questions based on the provid
         """Expand retrieval results using GraphRAG entity linkage.
 
         1. Extract entities from the query.
-        2. Look up all chunk IDs linked to those entities in the entity graph.
-        3. Fetch any chunks not already in results from the vector store.
-        4. Append them (capped to avoid bloat), returning the expanded list.
+        2. Match query entities against the entity graph using Jaccard similarity.
+        3. Perform 1-hop traversal via the relation graph (when enabled).
+        4. Fetch any chunks not already in results, tag with _graph_expanded.
+        5. Return the expanded list (top_k slicing is deferred to the caller).
         """
         query_entities = self._extract_entities(query)
         if not query_entities:
             return results
 
         active_top_k = (cfg.top_k if cfg is not None else None) or self.config.top_k
+        active_cfg = cfg if cfg is not None else self.config
 
         existing_ids = {r["id"] for r in results}
-        extra_ids: list[str] = []
-        for entity in query_entities:
-            for eid, doc_ids in self._entity_graph.items():
-                if entity.lower() in eid.lower() or eid.lower() in entity.lower():
-                    for did in doc_ids:
-                        if did not in existing_ids and did not in extra_ids:
-                            extra_ids.append(did)
+        # {doc_id: best_score} so we don't lower a score if the same ID matches again
+        extra_id_scores: dict[str, float] = {}
 
-        if not extra_ids:
+        matched_entities: set[str] = set()
+
+        for query_entity in query_entities:
+            for eid, doc_ids in self._entity_graph.items():
+                score = self._entity_matches(query_entity, eid)
+                if score <= 0.0:
+                    continue
+                matched_entities.add(eid)
+                # Scale matched score into [0.5, 0.8) range so it is clearly below
+                # a direct vector-match score but still meaningfully ranked.
+                doc_score = 0.5 + score * 0.3
+                for did in doc_ids:
+                    if did not in existing_ids:
+                        if extra_id_scores.get(did, 0.0) < doc_score:
+                            extra_id_scores[did] = doc_score
+
+        # 1-hop traversal via relation graph
+        use_relations = getattr(active_cfg, "graph_rag_relations", True) and self._relation_graph
+        if use_relations and matched_entities:
+            for src_entity in matched_entities:
+                for entry in self._relation_graph.get(src_entity, []):
+                    target = entry.get("target", "").lower()
+                    if not target:
+                        continue
+                    for did in self._entity_graph.get(target, []):
+                        if did not in existing_ids:
+                            # 1-hop score: lower than direct match
+                            hop_score = 0.62
+                            if extra_id_scores.get(did, 0.0) < hop_score:
+                                extra_id_scores[did] = hop_score
+
+        if not extra_id_scores:
             return results
 
-        # Fetch the extra chunks from the vector store (capped to the active top_k)
+        # Fetch the extra chunks from the vector store (capped to avoid huge fetches)
+        extra_ids = list(extra_id_scores.keys())[:active_top_k]
         try:
-            extra_results = self.vector_store.get_by_ids(extra_ids[:active_top_k])
+            extra_results = self.vector_store.get_by_ids(extra_ids)
             if extra_results:
                 logger.info(
                     f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)"
                 )
+                for r in extra_results:
+                    r["score"] = extra_id_scores.get(r["id"], 0.65)
+                    r["_graph_expanded"] = True
                 results = list(results) + extra_results
         except Exception as e:
             logger.debug(f"GraphRAG expansion failed: {e}")
@@ -2472,6 +2631,36 @@ Your primary goal is to help the user by answering questions based on the provid
                     "GraphRAG relationship expansion will have no effect for this ingestion."
                 )
 
+            # Relation extraction: build SUBJECT | RELATION | OBJECT triples
+            if self.config.graph_rag_relations:
+                logger.info(
+                    f"   GraphRAG: Extracting relations from {len(chunks_to_process)} chunks..."
+                )
+
+                def _proc_rel(doc):
+                    return doc["id"], self._extract_relations(doc["text"])
+
+                rel_results = list(self._executor.map(_proc_rel, chunks_to_process))
+                rg_updated = False
+                for doc_id, triples in rel_results:
+                    for subject, relation, obj in triples:
+                        src_lower = subject.lower().strip()
+                        if not src_lower:
+                            continue
+                        entry = {
+                            "target": obj.lower().strip(),
+                            "relation": relation.strip(),
+                            "chunk_id": doc_id,
+                        }
+                        if src_lower not in self._relation_graph:
+                            self._relation_graph[src_lower] = []
+                        # Avoid duplicate entries for the same chunk
+                        if entry not in self._relation_graph[src_lower]:
+                            self._relation_graph[src_lower].append(entry)
+                            rg_updated = True
+                if rg_updated:
+                    self._save_relation_graph()
+
         n_chunks = len(documents)
         if self._own_bm25:
             self._own_bm25.add_documents(documents)
@@ -2781,6 +2970,9 @@ Your primary goal is to help the user by answering questions based on the provid
         else:
             results = filtered_results
 
+        # Save base count before GraphRAG expansion for accurate metrics
+        base_count = len(results)
+
         # GraphRAG: expand results with entity-linked documents
         if cfg.graph_rag and self._entity_graph:
             results = self._expand_with_entity_graph(query, results, cfg=cfg)
@@ -2789,7 +2981,8 @@ Your primary goal is to help the user by answering questions based on the provid
             "results": results,
             "vector_count": vector_count,
             "bm25_count": bm25_count,
-            "filtered_count": len(results),
+            "filtered_count": base_count,
+            "graph_expanded_count": len(results) - base_count,
             "transforms": transforms,
         }
 
@@ -2919,7 +3112,17 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
-        results = results[: cfg.top_k]
+        if cfg.graph_rag and cfg.graph_rag_budget > 0:
+            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            expanded = [r for r in results if r.get("_graph_expanded")]
+            base_ids = {r["id"] for r in base}
+            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
+            results = base + graph_slots
+        else:
+            results = results[: cfg.top_k]
+        for r in results:
+            r.pop("_graph_expanded", None)
+
         if cfg.compress_context:
             results = self._compress_context(query, results)
         final_count = len(results)
@@ -2985,7 +3188,17 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
-        results = results[: cfg.top_k]
+        if cfg.graph_rag and cfg.graph_rag_budget > 0:
+            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            expanded = [r for r in results if r.get("_graph_expanded")]
+            base_ids = {r["id"] for r in base}
+            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
+            results = base + graph_slots
+        else:
+            results = results[: cfg.top_k]
+        for r in results:
+            r.pop("_graph_expanded", None)
+
         if cfg.compress_context:
             results = self._compress_context(query, results)
         context, has_web = self._build_context(results)

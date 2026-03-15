@@ -117,6 +117,27 @@ The `.env` file is optional — Docker Compose won't fail if it's missing.
 
 ---
 
+## GraphRAG Adds No Extra Results
+
+**Symptom:** GraphRAG is enabled and ingestion succeeded (entities were extracted), but query results never include any entity-linked documents beyond the normal top_k.
+
+**Cause:** One of the following:
+- `graph_rag_budget` is set to `0`, which disables the guaranteed expansion slots.
+- Entity extraction worked but entity matching at query time finds no overlap (e.g. the query uses different terminology than the indexed entities).
+- The entity graph is empty — see the section below.
+
+**Fix:**
+- Confirm `graph_rag_budget > 0` in `config.yaml` (default is `3`):
+  ```yaml
+  rag:
+    graph_rag: true
+    graph_rag_budget: 3
+  ```
+- Check server logs for `GraphRAG: entity extraction returned 0 entities` — if present, see the section below.
+- Try the REPL: `/rag graph-rag` to verify the flag is on at runtime.
+
+---
+
 ## GraphRAG: Entity Graph Empty After Ingestion
 
 **Symptom:** GraphRAG is enabled but retrieval does not expand with entity-connected documents. Logs show: `GraphRAG: entity extraction returned 0 entities across all chunks.`

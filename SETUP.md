@@ -457,6 +457,13 @@ rag:
   similarity_threshold: 0.3
   hybrid_search: true
 
+  # GraphRAG entity-graph retrieval expansion (requires LLM during ingest).
+  # Set graph_rag: true to enable.  graph_rag_budget controls how many
+  # entity-linked documents are injected beyond the normal top_k slice.
+  # graph_rag: false
+  # graph_rag_budget: 3
+  # graph_rag_relations: true
+
 chunk:
   size: 1000
   overlap: 200

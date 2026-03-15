@@ -97,7 +97,7 @@ axon --cite "Summarise my documents"        # inline source citations
 axon --decompose "Complex multi-part query" # split into sub-questions
 axon --compress "Your question"             # compress retrieved context
 axon --raptor --ingest ./docs/              # hierarchical indexing on ingest
-axon --graph-rag "Your question"            # entity-graph retrieval
+axon --graph-rag "Your question"            # entity-graph retrieval expansion
 
 # CLI — project management
 axon --project myproject "Your question"    # use a named project
@@ -213,6 +213,14 @@ llm:
 rag:
   top_k: 10
   hybrid_search: true
+
+  # GraphRAG — entity-graph retrieval expansion (not full Microsoft GraphRAG).
+  # During ingest, named entities are extracted from each chunk and stored in an
+  # entity→doc_id map.  At query time, query entities are matched (Jaccard) and
+  # entity-linked documents are injected as extra context slots.
+  graph_rag: false
+  graph_rag_budget: 3       # extra entity-linked docs added beyond top_k
+  graph_rag_relations: true # extract SUBJECT|RELATION|OBJECT triples for 1-hop traversal
 ```
 
 ### Offline / Air-gapped Mode

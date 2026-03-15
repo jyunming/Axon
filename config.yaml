@@ -125,6 +125,14 @@ rag:
   # time using an entity→doc_id graph persisted to {bm25_path}/.entity_graph.json.
   graph_rag: false
 
+  # Maximum number of graph-expanded documents added beyond the normal top_k slice.
+  # Set to 0 to disable the guarantee and fall back to simple top_k truncation.
+  graph_rag_budget: 3
+
+  # Relation extraction: extract SUBJECT | RELATION | OBJECT triples during ingest
+  # and use 1-hop graph traversal at retrieval time for richer context expansion.
+  graph_rag_relations: true
+
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.
   # query_cache: false
