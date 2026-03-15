@@ -471,7 +471,8 @@ rerank:
 embedding:
   provider: ollama
   model: nomic-embed-text
-  base_url: http://localhost:11434
+  # Ollama endpoint is shared with the LLM — set base_url under llm: below,
+  # or set the OLLAMA_HOST env var to override globally.
 
 llm:
   provider: ollama
