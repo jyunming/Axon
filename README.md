@@ -8,7 +8,7 @@
 
 Axon lets you ingest your documents and ask questions about them using a local LLM — no cloud, no API keys required for the default setup. It also exposes a REST API and MCP server so agents (GitHub Copilot, custom bots) can query your knowledge base as a tool.
 
-![Axon demo](docs/assets/demo.gif)
+![Axon Copilot demo](docs/assets/AxonCopilot.gif)
 
 ---
 

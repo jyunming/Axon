@@ -53,21 +53,21 @@ st.markdown(
     [data-testid="stSidebar"] > div:first-child {
         padding: 0.75rem 0.85rem 0.75rem !important;
     }
-    /* Collapse vertical gaps between all sidebar elements */
+    /* Moderate vertical gaps between sidebar elements */
     [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-        gap: 0.15rem !important;
+        gap: 0.3rem !important;
     }
 
     /* ── Sidebar section headers ── */
     .sb-section {
-        font-size: 0.63rem;
+        font-size: 0.68rem;
         font-weight: 700;
-        letter-spacing: 0.13em;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
-        color: rgba(255,255,255,0.28);
-        margin: 10px 0 4px;
-        padding-top: 10px;
-        border-top: 1px solid rgba(255,255,255,0.07);
+        color: rgba(255,255,255,0.50);
+        margin: 16px 0 6px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(255,255,255,0.10);
     }
 
     /* ── All sidebar buttons: list-row style ── */
@@ -124,23 +124,23 @@ st.markdown(
 
     /* ── Small action buttons (Clear, Delete, Summarize) ── */
     [data-testid="stSidebar"] .stButton > button[kind="tertiary"] {
-        font-size: 0.75rem !important;
-        color: rgba(228,228,231,0.40) !important;
-        padding: 2px 6px !important;
-        min-height: 26px !important;
+        font-size: 0.77rem !important;
+        color: rgba(228,228,231,0.62) !important;
+        padding: 3px 6px !important;
+        min-height: 28px !important;
         justify-content: center !important;
         transition: background 0.2s, color 0.2s !important;
     }
     [data-testid="stSidebar"] .stButton > button[kind="tertiary"]:hover {
-        color: rgba(228,228,231,0.80) !important;
-        background: rgba(255,255,255,0.05) !important;
+        color: rgba(228,228,231,0.92) !important;
+        background: rgba(255,255,255,0.07) !important;
     }
 
-    /* ── Sidebar widget labels — compact, muted ── */
+    /* ── Sidebar widget labels — compact, readable ── */
     [data-testid="stSidebar"] label,
     [data-testid="stSidebar"] .stWidgetLabel p {
-        font-size: 0.77rem !important;
-        color: rgba(228,228,231,0.50) !important;
+        font-size: 0.79rem !important;
+        color: rgba(228,228,231,0.65) !important;
         margin-bottom: 2px !important;
     }
 
@@ -150,13 +150,13 @@ st.markdown(
         background: transparent !important;
     }
     [data-testid="stSidebar"] [data-testid="stExpander"] summary {
-        font-size: 0.75rem !important;
+        font-size: 0.77rem !important;
         font-weight: 600 !important;
-        color: rgba(228,228,231,0.45) !important;
-        padding: 3px 0 !important;
+        color: rgba(228,228,231,0.62) !important;
+        padding: 4px 0 !important;
     }
     [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
-        color: rgba(228,228,231,0.85) !important;
+        color: rgba(228,228,231,0.92) !important;
     }
 
     /* ── Sidebar widgets: match sidebar background (#1c1c2a) ── */
@@ -551,7 +551,7 @@ with st.sidebar:
                 st.rerun()
         with ac2:
             if st.button(
-                "🗜 Sum", use_container_width=True, type="tertiary", key="summarize_history"
+                "✦ Sum", use_container_width=True, type="tertiary", key="summarize_history"
             ):
                 if messages:
                     formatted = "\n".join(
@@ -580,256 +580,287 @@ with st.sidebar:
                     st.warning("Cannot delete the only session.")
 
     # =========================================================================
-    # BRAIN HUB
+    # MODEL & SETTINGS (collapsed — show active model as status line)
     # =========================================================================
-    st.markdown('<div class="sb-section">🧠 Brain Hub</div>', unsafe_allow_html=True)
-
-    # ── LLM Provider ──
     provider_labels = {
-        "ollama": "🤖 Ollama (local)",
+        "ollama": "🤖 Ollama",
         "gemini": "✨ Gemini",
         "ollama_cloud": "☁️ Ollama Cloud",
-        "openai": "🔑 OpenAI-compatible",
-        "vllm": "⚡ vLLM (local)",
+        "openai": "🔑 OpenAI",
+        "vllm": "⚡ vLLM",
     }
-    llm_providers = list(provider_labels.keys())
-    current_provider_idx = (
-        llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0
-    )
-    config.llm_provider = st.selectbox(
-        "Provider",
-        options=llm_providers,
-        format_func=lambda x: provider_labels[x],
-        index=current_provider_idx,
-        label_visibility="collapsed",
-    )
+    _model_short = config.llm_model[:22] + "…" if len(config.llm_model) > 22 else config.llm_model
+    st.caption(f"{provider_labels.get(config.llm_provider, config.llm_provider)} · {_model_short}")
 
-    if config.llm_provider == "ollama":
-        config.ollama_base_url = st.text_input(
-            "Ollama URL",
-            value=config.ollama_base_url,
-            label_visibility="collapsed",
-            placeholder="http://localhost:11434",
+    with st.expander("⚙ Model & Settings"):
+        st.caption("LLM")
+        llm_providers = list(provider_labels.keys())
+        current_provider_idx = (
+            llm_providers.index(config.llm_provider) if config.llm_provider in llm_providers else 0
         )
-        ollama_models = []
-        ollama_conn_error = None
-        try:
-            from ollama import Client
+        config.llm_provider = st.selectbox(
+            "Provider",
+            options=llm_providers,
+            format_func=lambda x: provider_labels[x],
+            index=current_provider_idx,
+            label_visibility="collapsed",
+        )
 
-            client = Client(host=config.ollama_base_url)
-            ollama_models = [
-                m.model for m in client.list().models if not m.model.startswith("embeddinggemma")
-            ]
-        except Exception as exc:
-            ollama_conn_error = str(exc)
+        if config.llm_provider == "ollama":
+            config.ollama_base_url = st.text_input(
+                "Ollama URL",
+                value=config.ollama_base_url,
+                label_visibility="collapsed",
+                placeholder="http://localhost:11434",
+            )
+            ollama_models = []
+            ollama_conn_error = None
+            try:
+                from ollama import Client
 
-        if ollama_models:
-            current_idx = (
-                ollama_models.index(config.llm_model) if config.llm_model in ollama_models else 0
-            )
-            config.llm_model = st.selectbox(
-                "Model", ollama_models, index=current_idx, label_visibility="collapsed"
-            )
-        else:
-            config.llm_model = st.text_input(
-                "Model", config.llm_model, label_visibility="collapsed", placeholder="model name"
-            )
-            if ollama_conn_error:
-                st.warning(
-                    f"Cannot connect to Ollama at `{config.ollama_base_url}`. "
-                    "Run `ollama serve` to start the server, then pull a model with "
-                    "`ollama pull llama3.2:3b`."
+                client = Client(host=config.ollama_base_url)
+                ollama_models = [
+                    m.model
+                    for m in client.list().models
+                    if not m.model.startswith("embeddinggemma")
+                ]
+            except Exception as exc:
+                ollama_conn_error = str(exc)
+
+            if ollama_models:
+                current_idx = (
+                    ollama_models.index(config.llm_model)
+                    if config.llm_model in ollama_models
+                    else 0
+                )
+                config.llm_model = st.selectbox(
+                    "Model", ollama_models, index=current_idx, label_visibility="collapsed"
                 )
             else:
-                st.warning("No models found. Pull a model with: `ollama pull llama3.2:3b`")
-
-        # Pull model expander (Ollama only)
-        with st.expander("⬇ Pull model"):
-            pull_name = st.text_input(
-                "Model name",
-                placeholder="e.g. llama3.2:3b",
-                key="pull_model_name",
-                label_visibility="collapsed",
-            )
-            if st.button("Pull", type="tertiary", key="do_pull"):
-                try:
-                    from ollama import Client as OllamaClient
-
-                    pull_client = OllamaClient(host=config.ollama_base_url)
-                    prog = st.progress(0, text=f"Pulling {pull_name}...")
-                    for resp in pull_client.pull(pull_name, stream=True):
-                        if hasattr(resp, "completed") and hasattr(resp, "total") and resp.total:
-                            pct = min(int(resp.completed / resp.total * 100), 100)
-                            mb_done = resp.completed // 1024 // 1024
-                            mb_total = resp.total // 1024 // 1024
-                            prog.progress(
-                                pct,
-                                text=f"Pulling {pull_name}... {mb_done}MB/{mb_total}MB",
-                            )
-                    prog.progress(100, text="Done!")
-                    st.toast(f"⬇ Model '{pull_name}' ready")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Pull failed: {e}")
-
-    elif config.llm_provider == "gemini":
-        config.gemini_api_key = st.text_input(
-            "API Key",
-            value=config.gemini_api_key,
-            type="password",
-            label_visibility="collapsed",
-            placeholder="Gemini API key",
-        )
-        gemini_models = _list_gemini_models(config.gemini_api_key)
-        config.llm_model = st.selectbox(
-            "Model",
-            gemini_models,
-            label_visibility="collapsed",
-            index=(
-                0
-                if config.llm_model not in gemini_models
-                else gemini_models.index(config.llm_model)
-            ),
-        )
-
-    elif config.llm_provider == "ollama_cloud":
-        config.ollama_cloud_key = st.text_input(
-            "API Key",
-            value=config.ollama_cloud_key,
-            type="password",
-            label_visibility="collapsed",
-            placeholder="Ollama Cloud key",
-        )
-        col_m, col_f = st.columns([4, 1])
-        with col_m:
-            config.llm_model = st.text_input(
-                "Model", config.llm_model, label_visibility="collapsed", placeholder="model name"
-            )
-        with col_f:
-            if st.button("↻", type="tertiary", help="Fetch models from Ollama Cloud"):
-                fetched = _list_ollama_cloud_models(
-                    config.ollama_cloud_key, config.ollama_cloud_url
+                config.llm_model = st.text_input(
+                    "Model",
+                    config.llm_model,
+                    label_visibility="collapsed",
+                    placeholder="model name",
                 )
-                if fetched:
-                    st.session_state["_ollama_cloud_models"] = fetched
-                    st.rerun()
+                if ollama_conn_error:
+                    st.warning(
+                        f"Cannot connect to Ollama at `{config.ollama_base_url}`. "
+                        "Run `ollama serve` to start the server, then pull a model with "
+                        "`ollama pull llama3.2:3b`."
+                    )
                 else:
-                    st.warning("Could not fetch models.")
-        if st.session_state.get("_ollama_cloud_models"):
+                    st.warning("No models found. Pull a model with: `ollama pull llama3.2:3b`")
+
+            with st.expander("⬇ Pull model"):
+                pull_name = st.text_input(
+                    "Model name",
+                    placeholder="e.g. llama3.2:3b",
+                    key="pull_model_name",
+                    label_visibility="collapsed",
+                )
+                if st.button("Pull", type="tertiary", key="do_pull"):
+                    try:
+                        from ollama import Client as OllamaClient
+
+                        pull_client = OllamaClient(host=config.ollama_base_url)
+                        prog = st.progress(0, text=f"Pulling {pull_name}...")
+                        for resp in pull_client.pull(pull_name, stream=True):
+                            if hasattr(resp, "completed") and hasattr(resp, "total") and resp.total:
+                                pct = min(int(resp.completed / resp.total * 100), 100)
+                                mb_done = resp.completed // 1024 // 1024
+                                mb_total = resp.total // 1024 // 1024
+                                prog.progress(
+                                    pct,
+                                    text=f"Pulling {pull_name}... {mb_done}MB/{mb_total}MB",
+                                )
+                        prog.progress(100, text="Done!")
+                        st.toast(f"⬇ Model '{pull_name}' ready")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Pull failed: {e}")
+
+        elif config.llm_provider == "gemini":
+            config.gemini_api_key = st.text_input(
+                "API Key",
+                value=config.gemini_api_key,
+                type="password",
+                label_visibility="collapsed",
+                placeholder="Gemini API key",
+            )
+            gemini_models = _list_gemini_models(config.gemini_api_key)
             config.llm_model = st.selectbox(
-                "Available",
-                st.session_state["_ollama_cloud_models"],
+                "Model",
+                gemini_models,
+                label_visibility="collapsed",
+                index=(
+                    0
+                    if config.llm_model not in gemini_models
+                    else gemini_models.index(config.llm_model)
+                ),
+            )
+
+        elif config.llm_provider == "ollama_cloud":
+            config.ollama_cloud_key = st.text_input(
+                "API Key",
+                value=config.ollama_cloud_key,
+                type="password",
+                label_visibility="collapsed",
+                placeholder="Ollama Cloud key",
+            )
+            col_m, col_f = st.columns([4, 1])
+            with col_m:
+                config.llm_model = st.text_input(
+                    "Model",
+                    config.llm_model,
+                    label_visibility="collapsed",
+                    placeholder="model name",
+                )
+            with col_f:
+                if st.button("↻", type="tertiary", help="Fetch models from Ollama Cloud"):
+                    fetched = _list_ollama_cloud_models(
+                        config.ollama_cloud_key, config.ollama_cloud_url
+                    )
+                    if fetched:
+                        st.session_state["_ollama_cloud_models"] = fetched
+                        st.rerun()
+                    else:
+                        st.warning("Could not fetch models.")
+            if st.session_state.get("_ollama_cloud_models"):
+                config.llm_model = st.selectbox(
+                    "Available",
+                    st.session_state["_ollama_cloud_models"],
+                    label_visibility="collapsed",
+                )
+
+        elif config.llm_provider == "openai":
+            config.api_key = st.text_input(
+                "API Key",
+                value=config.api_key,
+                type="password",
+                label_visibility="collapsed",
+                placeholder="OpenAI API key",
+            )
+            config.llm_model = st.text_input(
+                "Model",
+                config.llm_model,
+                label_visibility="collapsed",
+                placeholder="e.g. gpt-4o",
+            )
+
+        elif config.llm_provider == "vllm":
+            config.vllm_base_url = st.text_input(
+                "Base URL",
+                value=config.vllm_base_url,
+                label_visibility="collapsed",
+                placeholder="http://localhost:8000/v1",
+            )
+            config.llm_model = st.text_input(
+                "Model",
+                config.llm_model,
+                label_visibility="collapsed",
+                placeholder="e.g. mistralai/Mistral-7B-Instruct-v0.2",
+            )
+
+        # ── Embedding ──
+        st.caption("Embedding")
+        _EMB_PROVIDER_LABELS = {
+            "sentence_transformers": "🤗 Sentence Transformers",
+            "ollama": "🤖 Ollama (local)",
+            "fastembed": "⚡ FastEmbed",
+            "openai": "🔑 OpenAI-compatible",
+        }
+        _EMB_MODELS: dict = {
+            "sentence_transformers": [
+                "all-MiniLM-L6-v2",
+                "BAAI/bge-large-en",
+                "all-mpnet-base-v2",
+            ],
+            "ollama": ["nomic-embed-text", "mxbai-embed-large"],
+            "fastembed": ["BAAI/bge-small-en-v1.5", "BAAI/bge-m3"],
+            "openai": [
+                "text-embedding-3-small",
+                "text-embedding-3-large",
+                "text-embedding-ada-002",
+            ],
+        }
+        emb_providers = list(_EMB_PROVIDER_LABELS.keys())
+        config.embedding_provider = st.selectbox(
+            "Embedding provider",
+            options=emb_providers,
+            format_func=lambda x: _EMB_PROVIDER_LABELS[x],
+            index=(
+                emb_providers.index(config.embedding_provider)
+                if config.embedding_provider in emb_providers
+                else 0
+            ),
+            label_visibility="collapsed",
+        )
+        if config.embedding_provider == "ollama" and config.llm_provider != "ollama":
+            config.ollama_base_url = st.text_input(
+                "Ollama URL (embed)",
+                value=config.ollama_base_url,
+                label_visibility="collapsed",
+                placeholder="http://localhost:11434",
+            )
+        suggestions = _EMB_MODELS.get(config.embedding_provider, [])
+        if suggestions and config.embedding_model not in suggestions:
+            config.embedding_model = suggestions[0]
+        if suggestions:
+            config.embedding_model = st.selectbox(
+                "Embedding model",
+                options=suggestions,
+                index=suggestions.index(config.embedding_model),
                 label_visibility="collapsed",
             )
-
-    elif config.llm_provider == "openai":
-        config.api_key = st.text_input(
-            "API Key",
-            value=config.api_key,
-            type="password",
-            label_visibility="collapsed",
-            placeholder="OpenAI API key",
-        )
-        config.llm_model = st.text_input(
-            "Model", config.llm_model, label_visibility="collapsed", placeholder="e.g. gpt-4o"
-        )
-
-    elif config.llm_provider == "vllm":
-        config.vllm_base_url = st.text_input(
-            "Base URL",
-            value=config.vllm_base_url,
-            label_visibility="collapsed",
-            placeholder="http://localhost:8000/v1",
-        )
-        config.llm_model = st.text_input(
-            "Model",
-            config.llm_model,
-            label_visibility="collapsed",
-            placeholder="e.g. mistralai/Mistral-7B-Instruct-v0.2",
-        )
-
-    # ── EMBEDDING (under Brain Hub) ──
-    st.caption("Embedding")
-
-    _EMB_PROVIDER_LABELS = {
-        "sentence_transformers": "🤗 Sentence Transformers",
-        "ollama": "🤖 Ollama (local)",
-        "fastembed": "⚡ FastEmbed",
-        "openai": "🔑 OpenAI-compatible",
-    }
-    _EMB_MODELS: dict = {
-        "sentence_transformers": ["all-MiniLM-L6-v2", "BAAI/bge-large-en", "all-mpnet-base-v2"],
-        "ollama": ["nomic-embed-text", "mxbai-embed-large"],
-        "fastembed": ["BAAI/bge-small-en-v1.5", "BAAI/bge-m3"],
-        "openai": ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
-    }
-
-    emb_providers = list(_EMB_PROVIDER_LABELS.keys())
-    config.embedding_provider = st.selectbox(
-        "Embedding provider",
-        options=emb_providers,
-        format_func=lambda x: _EMB_PROVIDER_LABELS[x],
-        index=(
-            emb_providers.index(config.embedding_provider)
-            if config.embedding_provider in emb_providers
-            else 0
-        ),
-        label_visibility="collapsed",
-    )
-
-    if config.embedding_provider == "ollama" and config.llm_provider != "ollama":
-        config.ollama_base_url = st.text_input(
-            "Ollama URL (embed)",
-            value=config.ollama_base_url,
-            label_visibility="collapsed",
-            placeholder="http://localhost:11434",
-        )
-
-    suggestions = _EMB_MODELS.get(config.embedding_provider, [])
-    if suggestions and config.embedding_model not in suggestions:
-        config.embedding_model = suggestions[0]
-
-    if suggestions:
-        config.embedding_model = st.selectbox(
-            "Embedding model",
-            options=suggestions,
-            index=suggestions.index(config.embedding_model),
-            label_visibility="collapsed",
-        )
-    else:
-        config.embedding_model = st.text_input(
-            "Embedding model", value=config.embedding_model, label_visibility="collapsed"
-        )
-
-    # Hot-swap brain.embedding when provider or model changes
-    _prev_emb_provider = st.session_state.get("_emb_provider", config.embedding_provider)
-    _prev_emb_model = st.session_state.get("_emb_model", config.embedding_model)
-    if config.embedding_provider != _prev_emb_provider or config.embedding_model != _prev_emb_model:
-        if st.session_state.get("ingested_files"):
-            st.caption(
-                "⚠️ Changing embedding model after ingestion may cause dimension errors. "
-                "Clear ChromaDB data or start fresh if queries fail."
+        else:
+            config.embedding_model = st.text_input(
+                "Embedding model", value=config.embedding_model, label_visibility="collapsed"
             )
-        with st.spinner("Loading embedding model…"):
-            try:
-                from axon.main import OpenEmbedding
 
-                st.session_state.brain.embedding = OpenEmbedding(config)
-                st.session_state["_emb_provider"] = config.embedding_provider
-                st.session_state["_emb_model"] = config.embedding_model
-            except Exception as e:
-                st.error(f"Failed to load embedding model: {e}")
-                config.embedding_provider = _prev_emb_provider
-                config.embedding_model = _prev_emb_model
+        # Hot-swap brain.embedding when provider or model changes
+        _prev_emb_provider = st.session_state.get("_emb_provider", config.embedding_provider)
+        _prev_emb_model = st.session_state.get("_emb_model", config.embedding_model)
+        if (
+            config.embedding_provider != _prev_emb_provider
+            or config.embedding_model != _prev_emb_model
+        ):
+            if st.session_state.get("ingested_files"):
+                st.caption(
+                    "⚠️ Changing embedding model after ingestion may cause dimension errors. "
+                    "Clear ChromaDB data or start fresh if queries fail."
+                )
+            with st.spinner("Loading embedding model…"):
+                try:
+                    from axon.main import OpenEmbedding
 
-    # ── Temperature (under Brain Hub) ──
-    config.llm_temperature = st.slider(
-        "Temperature", 0.0, 1.0, config.llm_temperature, step=0.05, label_visibility="collapsed"
-    )
-    st.caption(f"Temperature: {config.llm_temperature:.2f}")
+                    st.session_state.brain.embedding = OpenEmbedding(config)
+                    st.session_state["_emb_provider"] = config.embedding_provider
+                    st.session_state["_emb_model"] = config.embedding_model
+                except Exception as e:
+                    st.error(f"Failed to load embedding model: {e}")
+                    config.embedding_provider = _prev_emb_provider
+                    config.embedding_model = _prev_emb_model
 
-    # ── Web search (under Brain Hub) ──
-    config.truth_grounding = st.checkbox("🌐 Web search", config.truth_grounding)
+    # ── Temperature & Web search — visible below model status ──
+    _t_col, _t_val = st.columns([3, 1])
+    with _t_col:
+        config.llm_temperature = st.slider(
+            "Temperature",
+            0.0,
+            1.0,
+            config.llm_temperature,
+            step=0.05,
+            label_visibility="collapsed",
+        )
+    with _t_val:
+        st.caption(f"{config.llm_temperature:.2f}")
+
+    _ws_col, _ws_lbl = st.columns([1, 4])
+    with _ws_col:
+        config.truth_grounding = st.checkbox("", config.truth_grounding, key="ws_toggle")
+    with _ws_lbl:
+        st.caption("🌐 Web search")
     if config.truth_grounding:
         config.brave_api_key = st.text_input(
             "Brave API Key",
@@ -844,53 +875,57 @@ with st.sidebar:
     # =========================================================================
     st.markdown('<div class="sb-section">⚡ RAG Intelligence</div>', unsafe_allow_html=True)
 
+    # Always-visible basics
     config.hybrid_search = st.checkbox("Hybrid search", config.hybrid_search)
-    config.top_k = st.slider("Top K results", 1, 20, config.top_k)
+    config.top_k = st.slider("Top-K", 1, 20, config.top_k)
     config.similarity_threshold = st.slider(
         "Similarity threshold", 0.0, 1.0, config.similarity_threshold, step=0.05
     )
     config.discussion_fallback = st.checkbox("Discussion fallback", config.discussion_fallback)
-    config.multi_query = st.checkbox(
-        "Multi-query",
-        config.multi_query,
-        help="Generate 3 rephrased queries and merge their results for broader recall",
-    )
-    config.hyde = st.checkbox(
-        "HyDE",
-        config.hyde,
-        help="Generate a hypothetical answer document and embed that instead of the raw query",
-    )
-    config.step_back = st.checkbox(
-        "Step-back prompting",
-        config.step_back,
-        help="Abstract the query to a more general form before retrieval to surface background knowledge",
-    )
-    config.query_decompose = st.checkbox(
-        "Query decomposition",
-        config.query_decompose,
-        help="Break complex questions into simpler sub-questions for independent retrieval",
-    )
-    config.compress_context = st.checkbox(
-        "Context compression",
-        config.compress_context,
-        help="Use the LLM to extract only query-relevant sentences from each retrieved chunk",
-    )
-    config.raptor = st.checkbox(
-        "RAPTOR",
-        config.raptor,
-        help="Generate hierarchical summary nodes during ingest for multi-hop question answering",
-    )
-    config.graph_rag = st.checkbox(
-        "GraphRAG",
-        config.graph_rag,
-        help="Extract entities during ingest and expand retrieval results via entity-linked documents",
-    )
     config.rerank = st.checkbox("Re-ranking", config.rerank)
     if config.rerank:
         config.reranker_provider = st.selectbox(
             "Re-ranker",
             ["cross-encoder", "llm"],
             index=0 if config.reranker_provider == "cross-encoder" else 1,
+        )
+
+    # Advanced query transformations — collapsed by default
+    with st.expander("Advanced retrieval"):
+        config.multi_query = st.checkbox(
+            "Multi-query",
+            config.multi_query,
+            help="Generate 3 rephrased queries and merge their results for broader recall",
+        )
+        config.hyde = st.checkbox(
+            "HyDE",
+            config.hyde,
+            help="Generate a hypothetical answer document and embed that instead of the raw query",
+        )
+        config.step_back = st.checkbox(
+            "Step-back prompting",
+            config.step_back,
+            help="Abstract the query to a more general form before retrieval to surface background knowledge",
+        )
+        config.query_decompose = st.checkbox(
+            "Query decomposition",
+            config.query_decompose,
+            help="Break complex questions into simpler sub-questions for independent retrieval",
+        )
+        config.compress_context = st.checkbox(
+            "Context compression",
+            config.compress_context,
+            help="Use the LLM to extract only query-relevant sentences from each retrieved chunk",
+        )
+        config.raptor = st.checkbox(
+            "RAPTOR",
+            config.raptor,
+            help="Generate hierarchical summary nodes during ingest for multi-hop question answering",
+        )
+        config.graph_rag = st.checkbox(
+            "GraphRAG",
+            config.graph_rag,
+            help="Extract entities during ingest and expand retrieval results via entity-linked documents",
         )
 
     # =========================================================================

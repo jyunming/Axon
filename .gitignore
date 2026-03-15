@@ -142,3 +142,6 @@ integrations/vscode-axon/*.vsix
 
 # Test temp directories
 tests/.test_tmp/
+
+# Qualification artifacts
+Qualification/
