@@ -3,18 +3,12 @@
 ## Quick Start for Developers
 
 ### 1. Setup Environment
+
+See [SETUP.md](SETUP.md) for platform-specific installation steps. Quick start:
+
 ```bash
-# Clone the repository
-git clone https://github.com/jyunming/Axon.git
-cd Axon
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install with dev dependencies
-make install-dev
-# Or: pip install -e ".[dev]"
+git clone https://github.com/jyunming/Axon.git && cd Axon
+pip install -e ".[dev]"
 ```
 
 ### 2. Common Development Tasks
@@ -58,7 +52,10 @@ Axon/
 │   ├── loaders.py          # Document loaders
 │   ├── retrievers.py       # Search implementations
 │   ├── splitters.py        # Text chunking
-│   └── tools.py            # Agent tool definitions
+│   ├── tools.py            # Agent tool definitions
+│   ├── projects.py         # Multi-user project namespace management
+│   ├── shares.py           # HMAC share key generation and redemption
+│   └── mcp_server.py       # MCP stdio server for Copilot agent mode
 ├── tests/                  # Test suite
 │   ├── conftest.py         # Shared fixtures (overrides tmp_path for Windows compat)
 │   ├── test_api.py         # FastAPI endpoint tests
@@ -79,10 +76,10 @@ Axon/
 
 ### 4. Development Workflow
 
-1. **Create a feature branch from `master`:**
-   > ⚠️ **Never commit directly to `master`.** Always branch first.
+1. **Create a feature branch from `main`:**
+   > ⚠️ **Never commit directly to `main`.** Always branch first.
    ```bash
-   git checkout master && git pull
+   git checkout main && git pull
    git checkout -b feature/your-feature
    ```
 
@@ -100,10 +97,10 @@ Axon/
    # Pre-commit hooks will run automatically
    ```
 
-4. **Push and create PR targeting `master`:**
+4. **Push and create PR targeting `main`:**
    ```bash
    git push origin feature/your-feature
-   # Create pull request on GitHub targeting master
+   # Create pull request on GitHub targeting main
    ```
 
 ### 5. Testing Guidelines

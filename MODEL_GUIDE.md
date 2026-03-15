@@ -124,6 +124,7 @@ The system supports cloud providers in addition to local Ollama models. Set `llm
 | **OpenAI** | `openai` | `gpt-4o`, `gpt-3.5-turbo` | Requires `OPENAI_API_KEY` |
 | **Ollama Cloud** | `ollama_cloud` | Any Ollama-hosted model | Requires `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` |
 | **vLLM** | `vllm` | Any vLLM-served model | Self-hosted OpenAI-compatible endpoint; set `vllm_base_url` in `config.yaml` |
+| **GitHub Copilot** | `copilot` | Any active Copilot model | VS Code only — routes LLM calls through the Copilot extension bridge; no Ollama required. Enable via `axon.useCopilotLlm: true` in VS Code settings or `provider: copilot` in `config.yaml`. |
 
 Example `config.yaml` for Gemini:
 ```yaml
@@ -375,7 +376,7 @@ ollama pull nomic-embed-text  # Optional, for better quality
 
 3. **Import and test:**
 ```python
-from axon import AxonBrain, AxonConfig
+from axon.main import AxonBrain, AxonConfig
 
 config = AxonConfig(
     embedding_provider="sentence_transformers",

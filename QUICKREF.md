@@ -173,9 +173,9 @@ git commit -m "feat: add new feature"
 # Push
 git push origin feature/new-feature
 
-# Update from master
+# Update from main
 git fetch origin
-git rebase origin/master
+git rebase origin/main
 ```
 
 ## Configuration
@@ -319,12 +319,12 @@ curl -X POST http://localhost:8000/store/init \
 # Generate a share key
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
-  -d '{"project": "my-project", "expires_in_hours": 48}'
+  -d '{"project": "my-project", "grantee": "<os-username>", "write_access": false}'
 
 # Redeem a share key
 curl -X POST http://localhost:8000/share/redeem \
   -H "Content-Type: application/json" \
-  -d '{"key": "axon-share-..."}'
+  -d '{"share_string": "axon-share-..."}'
 
 # List active shares
 curl http://localhost:8000/share/list
@@ -332,7 +332,7 @@ curl http://localhost:8000/share/list
 # Revoke a share
 curl -X POST http://localhost:8000/share/revoke \
   -H "Content-Type: application/json" \
-  -d '{"key": "axon-share-..."}'
+  -d '{"key_id": "sk_a1b2c3d4"}'
 ```
 
 ### OpenAPI / Swagger UI
@@ -343,66 +343,7 @@ http://localhost:8000/docs
 
 ## Troubleshooting
 
-### Common Issues
-
-**Issue: Import errors**
-```bash
-# Solution
-pip install -e .
-# Or reinstall
-pip uninstall axon
-pip install -e .
-```
-
-**Issue: Tests fail**
-```bash
-# Solution
-pip install -e ".[dev]"
-pytest -v  # Verbose mode to see details
-```
-
-**Issue: Ollama connection failed**
-```bash
-# Check Ollama is running
-ollama list
-
-# Start Ollama service
-# On Linux/Mac: ollama serve
-# On Windows: Start Ollama application
-
-# Test connection
-curl http://localhost:11434/api/tags
-```
-
-**Issue: ChromaDB errors**
-```bash
-# Clear and rebuild
-rm -rf chroma_data/
-rm -rf bm25_index/
-# Re-ingest documents
-```
-
-**Issue: Port already in use**
-```bash
-# Find process using port
-lsof -i :8000  # Mac/Linux
-netstat -ano | findstr :8000  # Windows
-
-# Change port
-export AXON_PORT=8001
-axon-api
-```
-
-### Debug Mode
-```bash
-# Enable debug logging
-export LOG_LEVEL=DEBUG
-axon-api
-
-# Or in Python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
+For common errors and fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Code Examples
 

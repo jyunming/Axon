@@ -420,7 +420,7 @@ bm25:
 
 rag:
   top_k: 10
-  similarity_threshold: 0.5
+  similarity_threshold: 0.3
   hybrid_search: true
 
 chunk:
@@ -454,7 +454,7 @@ bm25:
 
 rag:
   top_k: 10
-  similarity_threshold: 0.5
+  similarity_threshold: 0.3
   hybrid_search: true
 
 chunk:
@@ -470,7 +470,8 @@ rerank:
 ```yaml
 embedding:
   provider: ollama
-  model: nomic-embed-text  # Ollama uses the OLLAMA_HOST env var, not base_url
+  model: nomic-embed-text
+  base_url: http://localhost:11434
 
 llm:
   provider: ollama
@@ -785,7 +786,7 @@ For a team where one person owns ingestion and others query:
 3. Each user's VS Code spawns its own lightweight `axon-mcp` proxy; the shared
    API handles all retrieval. The owner ingests; everyone else queries.
 
-### Available MCP tools (12 total)
+### Available MCP tools (23 total)
 
 | Tool | Purpose |
 |---|---|
@@ -801,6 +802,17 @@ For a team where one person owns ingestion and others query:
 | `delete_documents` | Remove documents by ID |
 | `list_projects` | List all project namespaces |
 | `get_stale_docs` | Find docs not re-ingested within N days |
+| `create_project` | Create a new project namespace |
+| `delete_project` | Delete a project and all its data |
+| `clear_knowledge` | Clear all vectors and BM25 index |
+| `get_current_settings` | Return current RAG configuration |
+| `update_settings` | Update RAG flags (top_k, rerank, hyde, etc.) |
+| `list_sessions` | List saved conversation sessions |
+| `get_session` | Retrieve a saved conversation session |
+| `share_project` | Generate a share key for a project |
+| `redeem_share` | Redeem a share key to mount a shared project |
+| `list_shares` | List active outbound shares |
+| `init_store` | Initialise AxonStore multi-user mode |
 
 > **Recommended:** use `search_knowledge` (not `query_knowledge`) in agent mode.
 > Copilot's LLM synthesises the answer from raw chunks — no Ollama required,
@@ -989,137 +1001,7 @@ Access via Ctrl+Shift+P:
 
 ## 12. Troubleshooting
 
-### Ollama not running
-
-**Symptom:** `ConnectionRefusedError` or `httpx.ConnectError` when starting the API.
-
-```bash
-# Check if Ollama is running
-curl http://localhost:11434/api/tags
-
-# If not running, start it:
-ollama serve
-```
-
----
-
-### Model not found
-
-**Symptom:** `model 'llama3.1' not found` error.
-
-```bash
-# List pulled models
-ollama list
-
-# Pull the model
-ollama pull llama3.1:8b
-
-# Make sure config.yaml model name matches exactly
-# e.g., use "llama3.1:8b" not "llama3.1"
-```
-
----
-
-### Port already in use
-
-**Symptom:** `Address already in use` on port 8000 or 8501.
-
-```bash
-# Find what's using the port
-lsof -i :8000       # Linux / macOS
-netstat -ano | findstr :8000  # Windows
-
-# Change the port in .env
-AXON_PORT=8001
-```
-
----
-
-### ChromaDB errors / corrupted index
-
-**Symptom:** `chromadb.errors.InvalidCollectionException` or similar.
-
-```bash
-# Clear and rebuild the index (you will need to re-ingest documents)
-rm -rf chroma_data/
-rm -rf bm25_index/
-```
-
----
-
-### Embedding shape mismatch
-
-**Symptom:** Error about vector dimension mismatch after changing the embedding model.
-
-This happens when you change embedding providers/models after already ingesting documents. The existing vectors in ChromaDB have different dimensions than what the new model produces.
-
-**Fix:** Clear the vector store and re-ingest:
-```bash
-rm -rf chroma_data/
-rm -rf bm25_index/
-# Then re-ingest your documents
-axon --ingest ./your_documents/
-```
-
----
-
-### sentence-transformers model download fails
-
-**Symptom:** Timeout or SSL error when downloading `all-MiniLM-L6-v2`.
-
-```bash
-# Pre-download with explicit cache dir
-python -c "
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer('all-MiniLM-L6-v2')
-print('Downloaded successfully')
-"
-
-# If behind a proxy, set environment variables:
-export HTTPS_PROXY=http://your-proxy:port
-export HTTP_PROXY=http://your-proxy:port
-```
-
----
-
-### FastEmbed import error
-
-**Symptom:** `ModuleNotFoundError: No module named 'fastembed'`
-
-```bash
-pip install fastembed
-# Or reinstall with extras:
-pip install -e ".[fastembed]"
-```
-
----
-
-### Memory error / OOM when running LLM
-
-**Symptom:** Process killed, OOM error, or system becomes unresponsive.
-
-Options:
-1. Use a smaller LLM (e.g., `phi3:mini` instead of `llama3.1:8b`)
-2. Reduce `max_tokens` in `config.yaml`
-3. Enable GPU if available (Ollama detects it automatically)
-4. Close other applications to free RAM
-
----
-
-### Docker setup
-
-If using Docker Compose, Ollama runs as a separate service. The `docker-compose.yml` handles networking automatically:
-
-```bash
-docker-compose up --build
-```
-
-Check that all services are healthy:
-```bash
-docker-compose ps
-```
-
-If the API service can't reach Ollama, check the `OLLAMA_HOST` environment variable in `docker-compose.yml` — it should reference the Ollama service name, not `localhost`.
+For common errors and step-by-step fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ---
 

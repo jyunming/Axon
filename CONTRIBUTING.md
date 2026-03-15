@@ -11,27 +11,12 @@ Thank you for your interest in contributing to Axon! This document provides guid
 
 ### Setting Up Your Development Environment
 
-1. **Fork and clone the repository**
-   ```bash
-   git clone https://github.com/jyunming/Axon.git
-   cd Axon
-   ```
+See [SETUP.md](SETUP.md) for platform-specific installation steps. Quick start:
 
-2. **Create a virtual environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install development dependencies**
-   ```bash
-   pip install -e ".[dev]"
-   ```
-
-4. **Install pre-commit hooks**
-   ```bash
-   pre-commit install
-   ```
+```bash
+git clone https://github.com/jyunming/Axon.git && cd Axon
+pip install -e ".[dev]"
+```
 
 ## Development Workflow
 
@@ -159,10 +144,10 @@ def test_add_and_search():
 
 ## Pull Request Process
 
-1. **Create a feature branch from `master`**
-   > ⚠️ **Never commit directly to `master`.** All changes go through PRs.
+1. **Create a feature branch from `main`**
+   > ⚠️ **Never commit directly to `main`.** All changes go through PRs.
    ```bash
-   git checkout master && git pull
+   git checkout main && git pull
    git checkout -b feature/your-feature-name
    ```
 
@@ -184,7 +169,7 @@ def test_add_and_search():
    git commit -m "Add feature: description"
    ```
 
-5. **Push to your fork and open a PR targeting `master`**
+5. **Push to your fork and open a PR targeting `main`**
    ```bash
    git push origin feature/your-feature-name
    ```

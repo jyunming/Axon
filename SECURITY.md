@@ -117,9 +117,9 @@ cursor.execute(query, (user_id,))
 - Path validation for file operations
 - YAML safe loading (no arbitrary code execution)
 - Dependency pinning with version ranges
+- **Optional API key authentication** — set the `RAG_API_KEY` environment variable to enable. When set, every request to `axon-api` must include the header `X-API-Key: <your-value>`. Axon does not generate the key; you choose and set it yourself (treat it like a password). Unset by default — suitable for local/LAN use without auth.
 
 ### Planned Improvements
-- [ ] Add authentication to API endpoints
 - [ ] Implement rate limiting
 - [ ] Add input validation middleware
 - [ ] Security audit of file operations
