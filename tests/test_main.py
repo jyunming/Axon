@@ -1610,6 +1610,55 @@ class TestGraphRAG:
 
 
 # ---------------------------------------------------------------------------
+# Entity extraction: bullet/markdown stripping regression
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestExtractEntitiesStripping:
+    """Regression: LLM may return bullets despite the 'no bullets' prompt."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(AxonConfig(graph_rag=False))
+        brain._entity_graph = {}
+        return brain
+
+    def test_markdown_bullets_stripped(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(
+            return_value="- Axon\n* OpenAI\n• Qdrant\n1. Python\n2) FastAPI"
+        )
+        entities = brain._extract_entities("some text")
+        assert entities == ["Axon", "OpenAI", "Qdrant", "Python", "FastAPI"]
+
+    def test_clean_lines_unchanged(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="Axon\nOpenAI\nQdrant")
+        entities = brain._extract_entities("some text")
+        assert entities == ["Axon", "OpenAI", "Qdrant"]
+
+    def test_empty_response_returns_empty_list(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="")
+        assert brain._extract_entities("some text") == []
+
+    def test_llm_exception_returns_empty_list(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(side_effect=RuntimeError("llm down"))
+        assert brain._extract_entities("some text") == []
+
+
+# ---------------------------------------------------------------------------
 # Cache: LRU eviction & make_cache_key completeness
 # ---------------------------------------------------------------------------
 

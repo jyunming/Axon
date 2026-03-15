@@ -1428,8 +1428,10 @@ class MultiVectorStore:
                 ex.submit(store.search, query_embedding, top_k, filter_dict)
                 for store in self._stores
             ]
-            for fut in futures:
-                for doc in fut.result():
+            for i, fut in enumerate(futures):
+                res = fut.result()
+                print(f"DEBUG: Store {i} returned {len(res)} results")
+                for doc in res:
                     doc_id = doc["id"]
                     if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
                         seen[doc_id] = doc
@@ -1911,7 +1913,15 @@ Your primary goal is to help the user by answering questions based on the provid
             raw = self.llm.complete(
                 prompt, system_prompt="You are a named entity extraction specialist."
             )
-            return [e.strip() for e in raw.splitlines() if e.strip()][:20]
+            import re as _re
+
+            entities = []
+            for line in raw.splitlines():
+                # Strip leading markdown bullets/numbering the LLM may add despite the prompt
+                cleaned = _re.sub(r"^(?:[-*•]\s+|\d+[.)]\s*)", "", line).strip()
+                if cleaned:
+                    entities.append(cleaned)
+            return entities[:20]
         except Exception:
             return []
 
