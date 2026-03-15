@@ -272,13 +272,73 @@ curl -X POST http://localhost:8000/add_text \
   }'
 ```
 
-### Ingest Files
+### Ingest Files (async — returns job_id immediately)
 ```bash
 curl -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
-  -d '{
-    "path": "/path/to/documents"
-  }'
+  -d '{"path": "/path/to/documents"}'
+# Response: {"message": "Ingestion started", "job_id": "abc123", "status": "processing"}
+```
+
+### Poll Ingest Status
+```bash
+curl http://localhost:8000/ingest/status/abc123
+# Response: {"job_id": "abc123", "status": "completed", "documents_ingested": 12}
+```
+
+### List Tracked Documents
+```bash
+curl http://localhost:8000/tracked-docs
+# Response: {"sources": [{"source_id": "/path/file.txt", "chunks": 5, "ingested_at": "..."}]}
+```
+
+### Refresh (Re-check Changed Files)
+```bash
+curl -X POST http://localhost:8000/ingest/refresh
+# Re-ingests any files whose content has changed since last ingest
+```
+
+### Projects
+```bash
+# List all projects
+curl http://localhost:8000/projects
+
+# Switch project (pass project param on any request)
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is RAG?", "project": "my-project"}'
+```
+
+### AxonStore (Multi-User Sharing)
+```bash
+# Initialise store for a user
+curl -X POST http://localhost:8000/store/init \
+  -H "Content-Type: application/json" \
+  -d '{"base_path": "/data/axon-store"}'
+
+# Generate a share key
+curl -X POST http://localhost:8000/share/generate \
+  -H "Content-Type: application/json" \
+  -d '{"project": "my-project", "expires_in_hours": 48}'
+
+# Redeem a share key
+curl -X POST http://localhost:8000/share/redeem \
+  -H "Content-Type: application/json" \
+  -d '{"key": "axon-share-..."}'
+
+# List active shares
+curl http://localhost:8000/share/list
+
+# Revoke a share
+curl -X POST http://localhost:8000/share/revoke \
+  -H "Content-Type: application/json" \
+  -d '{"key": "axon-share-..."}'
+```
+
+### OpenAPI / Swagger UI
+The full interactive API reference is available at:
+```
+http://localhost:8000/docs
 ```
 
 ## Troubleshooting
@@ -470,9 +530,9 @@ chunk:
 
 ## Useful Links
 
-- **Repository:** https://github.com/jyunming/studio_brain_open
-- **Issues:** https://github.com/jyunming/studio_brain_open/issues
-- **Discussions:** https://github.com/jyunming/studio_brain_open/discussions
+- **Repository:** https://github.com/jyunming/Axon
+- **Issues:** https://github.com/jyunming/Axon/issues
+- **Discussions:** https://github.com/jyunming/Axon/discussions
 - **Ollama:** https://ollama.ai/
 - **ChromaDB:** https://www.trychroma.com/
 - **FastAPI:** https://fastapi.tiangolo.com/
@@ -515,4 +575,4 @@ MIT License - See [LICENSE](LICENSE) file.
 ---
 
 **Last Updated:** 2026-03-13
-**Version:** 2.0.0
+**Version:** 1.0.0

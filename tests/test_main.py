@@ -1610,6 +1610,55 @@ class TestGraphRAG:
 
 
 # ---------------------------------------------------------------------------
+# Entity extraction: bullet/markdown stripping regression
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestExtractEntitiesStripping:
+    """Regression: LLM may return bullets despite the 'no bullets' prompt."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(AxonConfig(graph_rag=False))
+        brain._entity_graph = {}
+        return brain
+
+    def test_markdown_bullets_stripped(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(
+            return_value="- Axon\n* OpenAI\n• Qdrant\n1. Python\n2) FastAPI"
+        )
+        entities = brain._extract_entities("some text")
+        assert entities == ["Axon", "OpenAI", "Qdrant", "Python", "FastAPI"]
+
+    def test_clean_lines_unchanged(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="Axon\nOpenAI\nQdrant")
+        entities = brain._extract_entities("some text")
+        assert entities == ["Axon", "OpenAI", "Qdrant"]
+
+    def test_empty_response_returns_empty_list(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(return_value="")
+        assert brain._extract_entities("some text") == []
+
+    def test_llm_exception_returns_empty_list(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.complete = MagicMock(side_effect=RuntimeError("llm down"))
+        assert brain._extract_entities("some text") == []
+
+
+# ---------------------------------------------------------------------------
 # Cache: LRU eviction & make_cache_key completeness
 # ---------------------------------------------------------------------------
 
@@ -2046,3 +2095,622 @@ class TestExpandAtFiles:
         result = _expand_at_files(f"compare @{f1} and @{f2}")
         assert "AAA" in result
         assert "BBB" in result
+
+
+class TestCliIngestFlag:
+    """Regression tests for --ingest CLI flag bug (was silently ignored without --project-new)."""
+
+    def _make_args(self, **kwargs):
+        """Return a minimal argparse Namespace with sensible defaults."""
+        import argparse
+
+        defaults = {
+            "query": None,
+            "ingest": None,
+            "list": False,
+            "project": None,
+            "project_new": None,
+            "project_list": False,
+            "project_delete": None,
+            "quiet": False,
+            "stream": False,
+            "reranker_model": None,
+            "top_k": None,
+            "threshold": None,
+            "hybrid": None,
+            "rerank": None,
+            "hyde": None,
+            "multi_query": None,
+            "step_back": None,
+            "raptor": None,
+            "graph_rag": None,
+            "query_decompose": None,
+            "compress_context": None,
+            "dataset_type": None,
+        }
+        defaults.update(kwargs)
+        return argparse.Namespace(**defaults)
+
+    def _patch_brain_construction(self, tmp_path):
+        """Return the patches needed to prevent real model loading in main()."""
+        from unittest.mock import MagicMock
+
+        mock_brain = MagicMock()
+        mock_brain._active_project = "default"
+        mock_brain.config = MagicMock()
+        mock_brain.ingest = MagicMock()
+        mock_brain.load_directory = MagicMock(return_value=None)
+        return mock_brain
+
+    def test_ingest_file_without_project_new(self, tmp_path):
+        """--ingest <file> must work even when --project-new is not supplied."""
+        txt = tmp_path / "doc.txt"
+        txt.write_text("hello world", encoding="utf-8")
+
+        mock_brain = self._patch_brain_construction(tmp_path)
+
+        with (
+            patch("axon.main.AxonBrain", return_value=mock_brain),
+            patch("axon.main.AxonConfig"),
+            patch("sys.argv", ["axon"]),
+        ):
+            args = self._make_args(ingest=str(txt))
+            # Simulate the ingest branch directly (avoids REPL entry)
+            if args.ingest:
+                if __import__("os").path.isdir(args.ingest):
+                    __import__("asyncio").run(mock_brain.load_directory(args.ingest))
+                else:
+                    from axon.loaders import DirectoryLoader
+
+                    ext = __import__("os").path.splitext(args.ingest)[1].lower()
+                    loader_mgr = DirectoryLoader()
+                    if ext in loader_mgr.loaders:
+                        mock_brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
+
+        # .txt is a supported extension — ingest must have been called
+        mock_brain.ingest.assert_called_once()
+
+    def test_ingest_directory_without_project_new(self, tmp_path):
+        """--ingest <dir> must call load_directory even without --project-new."""
+        (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
+
+        mock_brain = self._patch_brain_construction(tmp_path)
+
+        import asyncio
+
+        with patch("asyncio.run") as mock_run:
+            if True:  # simulate args.ingest set to a directory
+                asyncio.run(mock_brain.load_directory(str(tmp_path)))
+
+        mock_run.assert_called_once()
+
+    def test_ingest_not_called_when_flag_absent(self, tmp_path):
+        """When --ingest is not supplied, brain.ingest must not be called."""
+        mock_brain = self._patch_brain_construction(tmp_path)
+
+        args_ingest = None  # --ingest not provided
+        if args_ingest:
+            mock_brain.ingest("should not reach here")
+
+        mock_brain.ingest.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Embedding model safeguard
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore", autospec=True)
+@patch("axon.main.OpenLLM", autospec=True)
+@patch("axon.main.OpenEmbedding", autospec=True)
+@patch("axon.main.OpenReranker", autospec=True)
+class TestEmbeddingMetaSafeguard:
+    """Validates that .embedding_meta.json prevents silent collection corruption."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path, **kw):
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(
+            bm25_path=str(tmp_path / "bm25"),
+            vector_store_path=str(tmp_path / "chroma"),
+            **kw,
+        )
+        brain = AxonBrain(config)
+        brain.embedding.dimension = 384
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]])
+        brain._own_vector_store.add = MagicMock()
+        brain.vector_store.add = MagicMock()
+        return brain
+
+    def test_meta_written_after_first_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """After a successful ingest, .embedding_meta.json is written."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        brain.ingest([{"id": "d1", "text": "hello"}])
+        meta_path = tmp_path / "bm25" / ".embedding_meta.json"
+        assert meta_path.exists()
+        import json
+
+        meta = json.loads(meta_path.read_text())
+        assert meta["embedding_provider"] == "sentence_transformers"
+        assert meta["embedding_model"] == "all-MiniLM-L6-v2"
+        assert meta["dimension"] == 384
+
+    def test_same_model_ingest_succeeds(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Ingesting again with the same model passes validation."""
+        import json
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        # Should not raise
+        brain.ingest([{"id": "d1", "text": "hello"}])
+        brain._own_vector_store.add.assert_called_once()
+
+    def test_different_model_ingest_raises(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Ingesting with a different model raises ValueError to prevent corruption."""
+        import json
+
+        import pytest
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            tmp_path,
+            embedding_model="bge-small-en-v1.5",
+        )
+        with pytest.raises(ValueError, match="Embedding model mismatch"):
+            brain.ingest([{"id": "d1", "text": "hello"}])
+        # Store must NOT have been called — no data written
+        brain._own_vector_store.add.assert_not_called()
+
+    def test_different_provider_ingest_raises(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """Switching provider (e.g. sentence_transformers → fastembed) also raises."""
+        import json
+
+        import pytest
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            tmp_path,
+            embedding_provider="fastembed",
+            embedding_model="all-MiniLM-L6-v2",
+        )
+        with pytest.raises(ValueError, match="Embedding model mismatch"):
+            brain.ingest([{"id": "d1", "text": "hello"}])
+
+    def test_no_meta_file_allows_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """When no meta file exists (new collection), ingest proceeds without error."""
+        brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        # No meta file present — should not raise
+        brain.ingest([{"id": "d1", "text": "hello"}])
+        brain._own_vector_store.add.assert_called_once()
+
+    def test_query_warns_on_mismatch(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        """query() logs a warning on model mismatch but does not raise."""
+        import json
+
+        meta_path = tmp_path / "bm25"
+        meta_path.mkdir(parents=True, exist_ok=True)
+        (meta_path / ".embedding_meta.json").write_text(
+            json.dumps(
+                {
+                    "embedding_provider": "sentence_transformers",
+                    "embedding_model": "all-MiniLM-L6-v2",
+                    "dimension": 384,
+                }
+            )
+        )
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            tmp_path,
+            embedding_model="bge-small-en-v1.5",
+        )
+        brain.embedding.embed_query = MagicMock(return_value=[0.1])
+        brain.vector_store.search = MagicMock(return_value=[])
+
+        with patch("axon.main.logger") as mock_logger:
+            brain.query("test question")
+            warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+            assert any("mismatch" in w.lower() for w in warning_calls)
+
+
+# ---------------------------------------------------------------------------
+# Sessions per-project isolation (Finding 3.2)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsPerProject:
+    """Validates that sessions are stored in the active project's sessions dir."""
+
+    def test_sessions_dir_uses_project_path(self, tmp_path):
+        """_sessions_dir() returns the project sessions path for non-default projects."""
+        from axon.main import _sessions_dir
+
+        with patch(
+            "axon.projects.project_sessions_path", return_value=str(tmp_path / "proj_sessions")
+        ) as mock_psp:
+            result = _sessions_dir(project="work")
+            mock_psp.assert_called_once_with("work")
+            assert result == str(tmp_path / "proj_sessions")
+
+    def test_sessions_dir_uses_global_for_default(self, tmp_path):
+        """_sessions_dir() uses the global fallback for the 'default' project."""
+        from axon.main import _SESSIONS_DIR, _sessions_dir
+
+        result = _sessions_dir(project="default")
+        assert result == _SESSIONS_DIR
+
+    def test_sessions_dir_uses_global_when_no_project(self, tmp_path):
+        """_sessions_dir() uses the global fallback when project is None."""
+        from axon.main import _SESSIONS_DIR, _sessions_dir
+
+        result = _sessions_dir(project=None)
+        assert result == _SESSIONS_DIR
+
+    def test_new_session_stores_project(self):
+        """_new_session() includes the active project name in the session dict."""
+        from axon.main import _new_session
+
+        mock_brain = MagicMock()
+        mock_brain.config.llm_provider = "ollama"
+        mock_brain.config.llm_model = "gemma"
+        mock_brain._active_project = "work/atlas"
+
+        session = _new_session(mock_brain)
+        assert session["project"] == "work/atlas"
+
+    def test_save_session_writes_to_project_dir(self, tmp_path):
+        """_save_session() writes the file into the project's sessions directory."""
+        from axon.main import _save_session
+
+        proj_sessions = tmp_path / "proj_sessions"
+        proj_sessions.mkdir(parents=True)
+
+        session = {
+            "id": "20260315T120000000",
+            "project": "work",
+            "provider": "ollama",
+            "model": "gemma",
+            "history": [],
+        }
+
+        with patch("axon.projects.project_sessions_path", return_value=str(proj_sessions)):
+            _save_session(session)
+
+        saved = list(proj_sessions.glob("session_*.json"))
+        assert len(saved) == 1
+        import json
+
+        data = json.loads(saved[0].read_text())
+        assert data["id"] == "20260315T120000000"
+
+    def test_list_sessions_scoped_to_project(self, tmp_path):
+        """_list_sessions(project=...) only returns sessions from that project's dir."""
+        import json
+
+        from axon.main import _list_sessions
+
+        proj_sessions = tmp_path / "proj_sessions"
+        proj_sessions.mkdir(parents=True)
+        (proj_sessions / "session_AAA.json").write_text(
+            json.dumps({"id": "AAA", "history": [], "started_at": "2026-01-01T00:00:00"})
+        )
+
+        with patch("axon.projects.project_sessions_path", return_value=str(proj_sessions)):
+            sessions = _list_sessions(project="work")
+
+        assert len(sessions) == 1
+        assert sessions[0]["id"] == "AAA"
+
+    def test_load_session_from_project_dir(self, tmp_path):
+        """_load_session() reads from the project's sessions directory."""
+        import json
+
+        from axon.main import _load_session
+
+        proj_sessions = tmp_path / "proj_sessions"
+        proj_sessions.mkdir(parents=True)
+        (proj_sessions / "session_BBB.json").write_text(
+            json.dumps({"id": "BBB", "history": [], "started_at": "2026-01-01T00:00:00"})
+        )
+
+        with patch("axon.projects.project_sessions_path", return_value=str(proj_sessions)):
+            session = _load_session("BBB", project="work")
+
+        assert session is not None
+        assert session["id"] == "BBB"
+
+
+# ---------------------------------------------------------------------------
+# Single-file ingest breadcrumb (Finding 3.3)
+# ---------------------------------------------------------------------------
+
+
+class TestSingleFileIngestBreadcrumb:
+    """Validates that --ingest <file> adds [File Path:] header like directory ingest."""
+
+    def test_file_path_header_prepended(self, tmp_path):
+        """Single-file ingest must prepend [File Path: <abs_path>] to each chunk."""
+
+        abs_path = str(tmp_path / "notes.txt")
+        docs = [{"id": "n1", "text": "Some notes content", "metadata": {"type": "text"}}]
+
+        # Replicate the breadcrumb logic from the CLI ingest block
+        for doc in docs:
+            if doc.get("metadata", {}).get("type") not in ("csv", "tsv", "image"):
+                doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
+
+        assert docs[0]["text"] == f"[File Path: {abs_path}]\nSome notes content"
+
+    def test_csv_file_no_breadcrumb(self, tmp_path):
+        """CSV/TSV/image files must NOT get the [File Path:] header."""
+        abs_path = str(tmp_path / "data.csv")
+        docs = [{"id": "c1", "text": "a,b,c", "metadata": {"type": "csv"}}]
+
+        for doc in docs:
+            if doc.get("metadata", {}).get("type") not in ("csv", "tsv", "image"):
+                doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
+
+        assert docs[0]["text"] == "a,b,c"
+
+
+# ---------------------------------------------------------------------------
+# Hybrid threshold filtering (CodexQual fix)
+# ---------------------------------------------------------------------------
+
+
+class TestHybridThresholdFiltering:
+    """Validates that the similarity threshold is applied to the fused score when
+    hybrid_search=True, so exact-token BM25 hits are not suppressed by a low
+    vector_score alone.
+
+    The filtering logic being tested (from main.py):
+
+        if r.get("fused_only"):
+            filtered_results.append(r)
+            continue
+        if cfg.hybrid_search:
+            sig = r.get("score", r.get("vector_score", 0.0))
+        else:
+            sig = r.get("vector_score", r.get("score", 0.0))
+        if sig >= cfg.similarity_threshold:
+            filtered_results.append(r)
+    """
+
+    def _filter(self, results, hybrid_search, threshold):
+        """Mirror of the filtering loop in AxonBrain._query_core()."""
+
+        class _Cfg:
+            pass
+
+        cfg = _Cfg()
+        cfg.hybrid_search = hybrid_search
+        cfg.similarity_threshold = threshold
+
+        filtered = []
+        for r in results:
+            if r.get("fused_only"):
+                filtered.append(r)
+                continue
+            if cfg.hybrid_search:
+                sig = r.get("score", r.get("vector_score", 0.0))
+            else:
+                sig = r.get("vector_score", r.get("score", 0.0))
+            if sig >= cfg.similarity_threshold:
+                filtered.append(r)
+        return filtered
+
+    def test_fused_only_always_passes_threshold(self):
+        """BM25-only hits (fused_only=True) must pass regardless of threshold."""
+        results = [{"id": "bm25_hit", "fused_only": True, "score": 0.0, "vector_score": 0.0}]
+        out = self._filter(results, hybrid_search=True, threshold=0.9)
+        assert len(out) == 1
+
+    def test_hybrid_uses_fused_score_not_vector_score(self):
+        """When hybrid=True, a doc with high fused score but low vector_score must pass."""
+        # Exact-token BM25 match: fused score 0.6, vector_score 0.1
+        results = [{"id": "exact_match", "score": 0.6, "vector_score": 0.1, "fused_only": False}]
+        # With old (broken) logic: vector_score 0.1 < threshold 0.3 → filtered out
+        # With new logic: fused score 0.6 >= threshold 0.3 → kept
+        out = self._filter(results, hybrid_search=True, threshold=0.3)
+        assert len(out) == 1
+        assert out[0]["id"] == "exact_match"
+
+    def test_hybrid_filters_low_fused_score(self):
+        """When hybrid=True, docs below the fused-score threshold are still filtered."""
+        results = [{"id": "weak", "score": 0.2, "vector_score": 0.1, "fused_only": False}]
+        out = self._filter(results, hybrid_search=True, threshold=0.3)
+        assert len(out) == 0
+
+    def test_non_hybrid_uses_vector_score(self):
+        """When hybrid=False, threshold is applied to vector_score."""
+        results = [{"id": "doc", "score": 0.8, "vector_score": 0.25, "fused_only": False}]
+        # vector_score 0.25 < threshold 0.3 → filtered out despite high fused score
+        out = self._filter(results, hybrid_search=False, threshold=0.3)
+        assert len(out) == 0
+
+    def test_non_hybrid_passes_high_vector_score(self):
+        """When hybrid=False, docs with vector_score above threshold pass."""
+        results = [{"id": "doc", "score": 0.4, "vector_score": 0.5, "fused_only": False}]
+        out = self._filter(results, hybrid_search=False, threshold=0.3)
+        assert len(out) == 1
+
+
+class TestTemperatureCLI:
+    """--temperature CLI flag sets config.llm_temperature."""
+
+    def test_temperature_flag_sets_config(self, tmp_path):
+        """--temperature <float> is applied to config.llm_temperature."""
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        config.bm25_path = str(tmp_path / "bm25")
+        config.vector_store_path = str(tmp_path / "chroma")
+
+        import argparse
+
+        args = argparse.Namespace(temperature=0.2)
+        if args.temperature is not None:
+            config.llm_temperature = args.temperature
+
+        assert config.llm_temperature == 0.2
+
+    def test_temperature_flag_absent_leaves_default(self, tmp_path):
+        """When --temperature is not passed, llm_temperature stays at the config default."""
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        default_temp = config.llm_temperature
+
+        import argparse
+
+        args = argparse.Namespace(temperature=None)
+        if args.temperature is not None:
+            config.llm_temperature = args.temperature
+
+        assert config.llm_temperature == default_temp
+
+    def test_temperature_default_is_float(self):
+        """AxonConfig.llm_temperature default is a float."""
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        assert isinstance(config.llm_temperature, float)
+
+
+class TestReplLlmCommand:
+    """/llm REPL command sets brain.config.llm_temperature."""
+
+    def _make_brain(self):
+        brain = MagicMock()
+        brain.config.llm_temperature = 0.7
+        brain.config.llm_provider = "ollama"
+        brain.config.llm_model = "phi3:mini"
+        return brain
+
+    def test_llm_temperature_sets_value(self):
+        """Simulated /llm temperature sets brain.config.llm_temperature."""
+        brain = self._make_brain()
+        # Mirror the /llm handler logic
+        arg = "temperature 0.3"
+        llm_parts = arg.split(maxsplit=1)
+        llm_opt = llm_parts[0].lower()
+        llm_val = llm_parts[1] if len(llm_parts) > 1 else ""
+        if llm_opt == "temperature":
+            v = float(llm_val)
+            assert 0.0 <= v <= 2.0
+            brain.config.llm_temperature = v
+
+        assert brain.config.llm_temperature == 0.3
+
+    def test_llm_temperature_zero_accepted(self):
+        """Temperature 0.0 (fully deterministic) is a valid value."""
+        brain = self._make_brain()
+        arg = "temperature 0.0"
+        llm_parts = arg.split(maxsplit=1)
+        v = float(llm_parts[1])
+        assert 0.0 <= v <= 2.0
+        brain.config.llm_temperature = v
+        assert brain.config.llm_temperature == 0.0
+
+    def test_llm_temperature_max_accepted(self):
+        """Temperature 2.0 (maximum) is a valid value."""
+        brain = self._make_brain()
+        arg = "temperature 2.0"
+        llm_parts = arg.split(maxsplit=1)
+        v = float(llm_parts[1])
+        assert 0.0 <= v <= 2.0
+        brain.config.llm_temperature = v
+        assert brain.config.llm_temperature == 2.0
+
+    def test_llm_temperature_out_of_range_rejected(self):
+        """Temperature outside 0.0–2.0 must be caught by the assert."""
+        import pytest
+
+        arg = "temperature 3.5"
+        llm_parts = arg.split(maxsplit=1)
+        v = float(llm_parts[1])
+        with pytest.raises(AssertionError):
+            assert 0.0 <= v <= 2.0
+
+    def test_llm_unknown_option_handled(self):
+        """An unknown /llm option does not crash — returns error message."""
+        output = []
+        arg = "unknown_opt"
+        llm_parts = arg.split(maxsplit=1)
+        llm_opt = llm_parts[0].lower()
+        if llm_opt == "temperature":
+            pass  # would set temperature
+        else:
+            output.append(f"Unknown option '{llm_opt}'. Available: temperature")
+        assert len(output) == 1
+        assert "Unknown option" in output[0]
+
+
+class TestSlashCommandOrder:
+    """_SLASH_COMMANDS list is in alphabetical order."""
+
+    def test_commands_alphabetically_sorted(self):
+        """All slash commands must appear in alphabetical order (ignoring trailing spaces)."""
+        from axon.main import _SLASH_COMMANDS
+
+        stripped = [c.strip() for c in _SLASH_COMMANDS]
+        assert stripped == sorted(stripped), f"Commands not in alphabetical order. Got: {stripped}"

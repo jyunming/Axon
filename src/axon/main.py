@@ -221,6 +221,11 @@ class AxonConfig:
     # retrieved chunk before passing context to the final answer generation step.
     compress_context: bool = False
 
+    # Inline Citations
+    # When True, instructs the LLM to include [Document N (ID: ...)] citations in
+    # its answers whenever it draws from retrieved context.
+    cite: bool = True
+
     # Web Search / Truth Grounding
     truth_grounding: bool = False
     brave_api_key: str = ""
@@ -1814,6 +1819,33 @@ Your primary goal is to help the user by answering questions based on the provid
         self._ingested_hashes = self._load_hash_store()
         self._entity_graph = self._load_entity_graph()
 
+        # Merge entity graphs from all descendant projects so that GraphRAG
+        # relationship expansion works when querying from a parent project.
+        if descendants:
+            import pathlib
+
+            for desc in descendants:
+                desc_bm25_path = project_bm25_path(desc)
+                desc_graph_path = pathlib.Path(desc_bm25_path) / ".entity_graph.json"
+                if desc_graph_path.exists():
+                    try:
+                        import json as _json
+
+                        raw = _json.loads(desc_graph_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            for entity, doc_ids in raw.items():
+                                if isinstance(entity, str) and isinstance(doc_ids, list):
+                                    if entity not in self._entity_graph:
+                                        self._entity_graph[entity] = []
+                                    for doc_id in doc_ids:
+                                        if (
+                                            isinstance(doc_id, str)
+                                            and doc_id not in self._entity_graph[entity]
+                                        ):
+                                            self._entity_graph[entity].append(doc_id)
+                    except Exception as e:
+                        logger.warning(f"Could not merge entity graph for '{desc}': {e}")
+
         self._active_project = name
         set_active_project(name)
         logger.info(f"Switched to project '{name}'")
@@ -1864,6 +1896,85 @@ Your primary goal is to help the user by answering questions based on the provid
         """Return all tracked document versions."""
         return dict(self._doc_versions)
 
+    # ------------------------------------------------------------------
+    # Embedding model metadata — guards against silent collection corruption
+    # when the embedding model is changed after documents have been ingested.
+    # ------------------------------------------------------------------
+
+    @property
+    def _embedding_meta_path(self) -> str:
+        import pathlib
+
+        return str(pathlib.Path(self.config.bm25_path) / ".embedding_meta.json")
+
+    def _load_embedding_meta(self) -> dict | None:
+        """Return the persisted embedding meta for this project, or None if absent."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self._embedding_meta_path)
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+        return None
+
+    def _save_embedding_meta(self) -> None:
+        """Persist the current embedding provider/model to disk."""
+        import json
+        import pathlib
+        from datetime import datetime, timezone
+
+        try:
+            dimension = int(self.embedding.dimension)
+        except (TypeError, ValueError):
+            dimension = 0
+
+        meta = {
+            "embedding_provider": self.config.embedding_provider,
+            "embedding_model": self.config.embedding_model,
+            "dimension": dimension,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        path = pathlib.Path(self._embedding_meta_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    def _validate_embedding_meta(self, *, on_mismatch: str = "raise") -> None:
+        """Compare the current embedding config against the persisted collection meta.
+
+        Args:
+            on_mismatch: ``"raise"`` (default, used before ingest) raises
+                ``ValueError`` to prevent silent collection corruption.
+                ``"warn"`` logs a warning but allows the operation to continue
+                (used at query time so existing data is still accessible).
+        """
+        meta = self._load_embedding_meta()
+        if meta is None:
+            return  # New collection — nothing to validate yet
+
+        stored_provider = meta.get("embedding_provider", "")
+        stored_model = meta.get("embedding_model", "")
+        current_provider = self.config.embedding_provider
+        current_model = self.config.embedding_model
+
+        if stored_provider == current_provider and stored_model == current_model:
+            return  # All good
+
+        msg = (
+            f"Embedding model mismatch: this project's collection was built with "
+            f"'{stored_provider}/{stored_model}' "
+            f"but the current config uses '{current_provider}/{current_model}'. "
+            f"Mixing embedding models corrupts retrieval even when dimensions match. "
+            f"To switch models: delete the project data and re-ingest all documents, "
+            f"or revert embedding_provider/embedding_model in config.yaml."
+        )
+        if on_mismatch == "raise":
+            raise ValueError(msg)
+        else:
+            logger.warning(msg)
+
     def _load_entity_graph(self) -> dict[str, list[str]]:
         """Load persisted entity→doc_id graph from disk."""
         import json
@@ -1911,7 +2022,15 @@ Your primary goal is to help the user by answering questions based on the provid
             raw = self.llm.complete(
                 prompt, system_prompt="You are a named entity extraction specialist."
             )
-            return [e.strip() for e in raw.splitlines() if e.strip()][:20]
+            import re as _re
+
+            entities = []
+            for line in raw.splitlines():
+                # Strip leading markdown bullets/numbering the LLM may add despite the prompt
+                cleaned = _re.sub(r"^(?:[-*•]\s+|\d+[.)]\s*)", "", line).strip()
+                if cleaned:
+                    entities.append(cleaned)
+            return entities[:20]
         except Exception:
             return []
 
@@ -2267,6 +2386,11 @@ Your primary goal is to help the user by answering questions based on the provid
         """
         if not documents:
             return
+
+        # Guard: raise immediately if the embedding model has changed since this
+        # collection was created — mixing models silently corrupts retrieval.
+        self._validate_embedding_meta(on_mismatch="raise")
+
         t0 = time.time()
         from tqdm import tqdm
 
@@ -2329,7 +2453,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
             results = list(self._executor.map(_proc, chunks_to_process))
 
+            total_entities = 0
             for doc_id, entities in results:
+                total_entities += len(entities)
                 for entity in entities:
                     key = entity.lower()
                     if key not in self._entity_graph:
@@ -2339,6 +2465,12 @@ Your primary goal is to help the user by answering questions based on the provid
                         updated = True
             if updated:
                 self._save_entity_graph()
+            if total_entities == 0:
+                logger.warning(
+                    "GraphRAG: entity extraction returned 0 entities across all chunks. "
+                    "This may be caused by an LLM that is too small or refused to extract entities. "
+                    "GraphRAG relationship expansion will have no effect for this ingestion."
+                )
 
         n_chunks = len(documents)
         if self._own_bm25:
@@ -2359,6 +2491,9 @@ Your primary goal is to help the user by answering questions based on the provid
         t_store = time.time()
         self._own_vector_store.add(ids, texts, all_embeddings, metadatas)
         store_ms = (time.time() - t_store) * 1000
+
+        # Persist embedding meta after first successful ingest (idempotent on subsequent calls)
+        self._save_embedding_meta()
 
         logger.info(
             {
@@ -2624,8 +2759,19 @@ Your primary goal is to help the user by answering questions based on the provid
         # Web Search Fallback (if enabled and local results are insufficient)
         filtered_results = []
         for r in results:
-            v_sig = r.get("vector_score", r.get("score", 0.0))
-            if v_sig >= cfg.similarity_threshold:
+            # BM25-only hits (fused_only=True) have no meaningful vector_score;
+            # skip threshold for them so lexical-exact matches always surface.
+            if r.get("fused_only"):
+                filtered_results.append(r)
+                continue
+            # When hybrid search is active, apply threshold to the fused score so that
+            # docs with strong BM25 scores (e.g. exact-token matches like INC-44721) are
+            # not silently suppressed by a low vector_score alone.
+            if cfg.hybrid_search:
+                sig = r.get("score", r.get("vector_score", 0.0))
+            else:
+                sig = r.get("vector_score", r.get("score", 0.0))
+            if sig >= cfg.similarity_threshold:
                 filtered_results.append(r)
 
         if not filtered_results and cfg.truth_grounding:
@@ -2671,10 +2817,17 @@ Your primary goal is to help the user by answering questions based on the provid
 
         When discussion_fallback is False, uses a strict context-only prompt.
         When True, uses the permissive prompt.
+        When cite is False, the citation instruction is removed from the prompt.
         """
         if cfg is None:
             cfg = self.config
         base = self.SYSTEM_PROMPT if cfg.discussion_fallback else self.SYSTEM_PROMPT_STRICT
+
+        if not cfg.cite:
+            # Strip citation instruction lines from the prompt
+            import re as _re
+
+            base = _re.sub(r"\d+\. \*\*Mandatory Citations\*\*:.*?\n", "", base)
 
         if not cfg.truth_grounding:
             return base
@@ -2721,6 +2874,10 @@ Your primary goal is to help the user by answering questions based on the provid
         Returns:
             A synthesised answer string from the LLM.
         """
+        # Warn (don't block) if the embedding model has changed — retrieval
+        # results will be degraded but the user can still access existing data.
+        self._validate_embedding_meta(on_mismatch="warn")
+
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
@@ -2810,6 +2967,7 @@ Your primary goal is to help the user by answering questions based on the provid
         dict so callers can display source attribution before streaming begins.
         Subsequent items are plain string chunks from the LLM stream.
         """
+        self._validate_embedding_meta(on_mismatch="warn")
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
@@ -2886,6 +3044,21 @@ def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
         _print_project_tree(p.get("children", []), active, indent + 1)
 
 
+def _write_python_discovery() -> None:
+    """Write current Python executable path to ~/.axon/.python_path.
+
+    Called once at startup so the VS Code extension can auto-detect the Python
+    interpreter regardless of whether axon was installed via pip, venv, or pipx.
+    Failures are silently ignored — this is a best-effort helper.
+    """
+    try:
+        discovery_dir = Path.home() / ".axon"
+        discovery_dir.mkdir(parents=True, exist_ok=True)
+        (discovery_dir / ".python_path").write_text(sys.executable, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def main():
     import argparse
 
@@ -2900,6 +3073,7 @@ def main():
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    _write_python_discovery()
     parser = argparse.ArgumentParser(description="Axon CLI")
     parser.add_argument("query", nargs="?", help="Question to ask")
     parser.add_argument("--ingest", help="Path to file or directory to ingest")
@@ -2950,6 +3124,13 @@ def main():
         "--embed",
         metavar="MODEL",
         help="Embedding model to use, e.g. all-MiniLM-L6-v2 or ollama/nomic-embed-text",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        metavar="F",
+        help="LLM temperature for generation (0.0–2.0, default: from config, usually 0.7). "
+        "Lower = more deterministic, higher = more creative.",
     )
     parser.add_argument(
         "--discuss",
@@ -3109,6 +3290,8 @@ def main():
         else:
             config.embedding_model = args.embed
 
+    if args.temperature is not None:
+        config.llm_temperature = args.temperature
     if args.discuss is not None:
         config.discussion_fallback = args.discuss
     if args.search is not None:
@@ -3339,6 +3522,7 @@ def main():
         brain.switch_project(proj_name)
         print(f"  Using project '{proj_name}'  ({project_dir(proj_name)})")
 
+    if args.ingest:
         if os.path.isdir(args.ingest):
             asyncio.run(brain.load_directory(args.ingest))
         else:
@@ -3347,7 +3531,13 @@ def main():
             ext = os.path.splitext(args.ingest)[1].lower()
             loader_mgr = DirectoryLoader()
             if ext in loader_mgr.loaders:
-                brain.ingest(loader_mgr.loaders[ext].load(args.ingest))
+                docs = loader_mgr.loaders[ext].load(args.ingest)
+                # Add [File Path:] breadcrumb to match directory ingest metadata
+                abs_path = os.path.abspath(args.ingest)
+                for doc in docs:
+                    if doc.get("metadata", {}).get("type") not in ("csv", "tsv", "image"):
+                        doc["text"] = f"[File Path: {abs_path}]\n{doc['text']}"
+                brain.ingest(docs)
 
     if args.list:
         docs = brain.list_documents()
@@ -3393,26 +3583,27 @@ def main():
 
 
 _SLASH_COMMANDS = [
-    "/help",
-    "/list",
-    "/ingest ",
-    "/model ",
-    "/embed ",
-    "/pull ",
-    "/search",
-    "/discuss",
-    "/rag ",
+    "/clear",
     "/compact",
     "/context",
-    "/sessions",
-    "/resume ",
-    "/clear",
-    "/retry",
-    "/project ",
-    "/keys",
-    "/vllm-url ",
-    "/quit",
+    "/discuss",
+    "/embed ",
     "/exit",
+    "/help",
+    "/ingest ",
+    "/keys",
+    "/list",
+    "/llm ",
+    "/model ",
+    "/project ",
+    "/pull ",
+    "/quit",
+    "/rag ",
+    "/resume ",
+    "/retry",
+    "/search",
+    "/sessions",
+    "/vllm-url ",
 ]
 
 
@@ -3475,9 +3666,16 @@ from datetime import timezone as _tz  # noqa: E402
 _SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".axon", "sessions")
 
 
-def _sessions_dir() -> str:
-    os.makedirs(_SESSIONS_DIR, exist_ok=True)
-    return _SESSIONS_DIR
+def _sessions_dir(project: str | None = None) -> str:
+    """Return the sessions directory for *project*, or the global fallback."""
+    if project and project != "default":
+        from axon.projects import project_sessions_path
+
+        d = project_sessions_path(project)
+    else:
+        d = _SESSIONS_DIR
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _new_session(brain: "AxonBrain") -> dict:
@@ -3486,24 +3684,26 @@ def _new_session(brain: "AxonBrain") -> dict:
         "started_at": _dt.now(_tz.utc).isoformat(),
         "provider": brain.config.llm_provider,
         "model": brain.config.llm_model,
+        "project": getattr(brain, "_active_project", "default"),
         "history": [],
     }
 
 
-def _session_path(session_id: str) -> str:
-    return os.path.join(_sessions_dir(), f"session_{session_id}.json")
+def _session_path(session_id: str, project: str | None = None) -> str:
+    return os.path.join(_sessions_dir(project), f"session_{session_id}.json")
 
 
 def _save_session(session: dict) -> None:
     try:
-        with open(_session_path(session["id"]), "w", encoding="utf-8") as f:
+        project = session.get("project")
+        with open(_session_path(session["id"], project), "w", encoding="utf-8") as f:
             _json.dump(session, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
-def _list_sessions(limit: int = 20) -> list:
-    d = _sessions_dir()
+def _list_sessions(limit: int = 20, project: str | None = None) -> list:
+    d = _sessions_dir(project)
     files = sorted(
         [f for f in os.listdir(d) if f.startswith("session_") and f.endswith(".json")],
         reverse=True,
@@ -3519,8 +3719,8 @@ def _list_sessions(limit: int = 20) -> list:
     return sessions
 
 
-def _load_session(session_id: str) -> dict | None:
-    p = _session_path(session_id)
+def _load_session(session_id: str, project: str | None = None) -> dict | None:
+    p = _session_path(session_id, project)
     if not os.path.exists(p):
         return None
     try:
@@ -4431,13 +4631,20 @@ def _interactive_repl(
                 # ── /resume <session-id> ──────────────────────────────────
                 elif text.startswith("/resume "):
                     prefix = text[len("/resume ") :]
-                    for s in _list_sessions():
+                    for s in _list_sessions(project=brain._active_project):
                         sid = s["id"]
                         if sid.startswith(prefix):
                             turns = len(s.get("history", [])) // 2
                             yield Completion(
                                 sid[len(prefix) :], display=sid, display_meta=f"{turns} turns"
                             )
+                # ── /llm <option> ─────────────────────────────────────────
+                elif text.startswith("/llm "):
+                    opts = ["temperature "]
+                    prefix = text[len("/llm ") :]
+                    for o in opts:
+                        if o.startswith(prefix):
+                            yield Completion(o[len(prefix) :], display=o)
                 # ── /rag <option> ─────────────────────────────────────────
                 elif text.startswith("/rag "):
                     opts = [
@@ -4687,6 +4894,9 @@ def _interactive_repl(
                         "ingest": "  /ingest <path>              ingest a directory\n"
                         "  /ingest ./src/*.py           glob pattern\n"
                         "  /ingest ./notes/**/*.md      recursive glob",
+                        "llm": "  /llm                         show LLM settings (provider, model, temperature)\n"
+                        "  /llm temperature <0.0–2.0>   set generation temperature\n"
+                        "  Lower temperature = more deterministic; higher = more creative.",
                         "rag": "  /rag                         show all RAG settings\n"
                         "  /rag topk <n>                results to retrieve (1–20)\n"
                         "  /rag threshold <0.0–1.0>     min similarity score\n"
@@ -4732,17 +4942,30 @@ def _interactive_repl(
                 else:
                     print(
                         "\n"
-                        "  Knowledge:  /list   /ingest <path>   /clear\n"
-                        "  Model:      /model [<prov/>model]   /embed [<prov/>model]   /pull <name>\n"
-                        "  Mode:       /search   /discuss   /rag [option value]\n"
-                        "  Session:    /sessions   /resume <id>   /compact   /context   /retry\n"
-                        "  Projects:   /project [list|new|switch|delete|folder]\n"
-                        "  API Keys:   /keys   /keys set <provider>\n"
-                        "  Other:      /help [cmd]   /quit\n"
-                        "  Shell:      !<cmd>  run a shell command  ·  @<file>  attach file  ·  @<folder>/  attach all text files in folder\n"
+                        "  /clear          clear knowledge base for current project\n"
+                        "  /compact        summarise conversation to free context\n"
+                        "  /context        show current conversation context size\n"
+                        "  /discuss        toggle discussion fallback (general knowledge)\n"
+                        "  /embed [model]  show or switch embedding model\n"
+                        "  /help [cmd]     show this help or details for a command\n"
+                        "  /ingest <path>  ingest a file, directory, or glob\n"
+                        "  /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
+                        "  /list           list ingested documents\n"
+                        "  /llm [opt val]  show or set LLM settings (temperature)\n"
+                        "  /model [model]  show or switch LLM model\n"
+                        "  /project [sub]  manage projects (list, new, switch, delete, folder)\n"
+                        "  /pull <name>    pull an Ollama model\n"
+                        "  /quit           exit Axon\n"
+                        "  /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
+                        "  /resume <id>    load a saved session\n"
+                        "  /retry          retry the last query\n"
+                        "  /search         toggle Brave web search fallback\n"
+                        "  /sessions       list recent saved sessions\n"
                         "\n"
-                        "  /help <cmd>  for details (model, embed, ingest, rag, sessions, keys, project)\n"
-                        "  /<cmd> help  also works  ·  e.g. /project help   /rag help\n"
+                        "  Shell:   !<cmd>  run a shell command\n"
+                        "  Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
+                        "\n"
+                        "  /help <cmd>  for details  ·  e.g.  /help rag   /help llm   /help project\n"
                         "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
                     )
 
@@ -5032,6 +5255,9 @@ def _interactive_repl(
                         print(
                             f"  Context compression {'ON' if brain.config.compress_context else 'OFF'}"
                         )
+                    elif rag_opt == "cite":
+                        brain.config.cite = not brain.config.cite
+                        print(f"  Inline citations {'ON' if brain.config.cite else 'OFF'}")
                     elif rag_opt == "raptor":
                         brain.config.raptor = not brain.config.raptor
                         print(
@@ -5065,6 +5291,29 @@ def _interactive_repl(
                         print(
                             f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag"
                         )
+
+            elif cmd == "/llm":
+                if not arg:
+                    print(
+                        f"\n  temperature  · {brain.config.llm_temperature}\n"
+                        f"  provider     · {brain.config.llm_provider}\n"
+                        f"  model        · {brain.config.llm_model}\n"
+                        f"\n  /llm temperature <0.0–2.0>   set generation temperature\n"
+                    )
+                else:
+                    llm_parts = arg.split(maxsplit=1)
+                    llm_opt = llm_parts[0].lower()
+                    llm_val = llm_parts[1] if len(llm_parts) > 1 else ""
+                    if llm_opt == "temperature":
+                        try:
+                            v = float(llm_val)
+                            assert 0.0 <= v <= 2.0
+                            brain.config.llm_temperature = v
+                            print(f"  Temperature set to {v}")
+                        except Exception:
+                            print("  Usage: /llm temperature <float 0.0–2.0>")
+                    else:
+                        print(f"  Unknown option '{llm_opt}'. Available: temperature")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)
@@ -5204,13 +5453,13 @@ def _interactive_repl(
                 _show_context(brain, chat_history, _last_sources, _last_query)
 
             elif cmd == "/sessions":
-                _print_sessions(_list_sessions())
+                _print_sessions(_list_sessions(project=brain._active_project))
 
             elif cmd == "/resume":
                 if not arg:
                     print("  Usage: /resume <session-id>")
                 else:
-                    loaded = _load_session(arg)
+                    loaded = _load_session(arg, project=brain._active_project)
                     if loaded is None:
                         print(f"  Session '{arg}' not found. Use /sessions to list.")
                     else:

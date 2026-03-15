@@ -751,3 +751,36 @@ class TestRewriteGithubUrl:
                 called_url = mock_http.get.call_args[0][0]
                 assert called_url == raw_url
         assert docs[0]["text"] == "# Hello World"
+
+
+class TestSmartTextLoaderIdFix:
+    """SmartTextLoader must use the full source string as the doc id, not basename."""
+
+    def test_agent_doc_id_preserved(self):
+        """source='agent_doc_abc12345' must become id='agent_doc_abc12345', not 'agent_doc_abc12345'."""
+        from axon.loaders import SmartTextLoader
+
+        loader = SmartTextLoader()
+        docs = loader.load_text("Hello world ingestion test.", source="agent_doc_abc12345")
+        assert len(docs) == 1
+        assert docs[0]["id"] == "agent_doc_abc12345"
+
+    def test_full_path_source_uses_full_string(self):
+        """For file-path sources, full path is the id (consistent with other loaders)."""
+        from axon.loaders import SmartTextLoader
+
+        loader = SmartTextLoader()
+        docs = loader.load_text("Some content.", source="/data/myproject/file.txt")
+        assert docs[0]["id"] == "/data/myproject/file.txt"
+
+    def test_windows_path_source_not_mangled(self):
+        """Windows-style paths must not be mangled — use mixed separators so the test
+        is meaningful on all platforms (os.path.basename of a backslash-only path is
+        a no-op on POSIX, so we include a forward slash to force a detectable split)."""
+        from axon.loaders import SmartTextLoader
+
+        loader = SmartTextLoader()
+        # Mixed separator: os.path.basename would return 'notes.txt' if the bug were present.
+        source = r"C:\data/project\notes.txt"
+        docs = loader.load_text("Some content.", source=source)
+        assert docs[0]["id"] == source

@@ -7,6 +7,7 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
+        exclude: '\.(gif|mp4|webm|png|jpg|jpeg|svg)$'
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict
@@ -34,7 +35,7 @@ repos:
 
       - id: pytest-check
         name: pytest
-        entry: python -m pytest tests/ -v --tb=short
+        entry: python -m pytest tests/ -v --tb=short --no-cov
         language: system
         pass_filenames: false
         always_run: true

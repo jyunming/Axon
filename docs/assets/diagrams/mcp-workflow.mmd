@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant User
+    participant Copilot
+    participant axon-mcp
+    participant axon-api
+
+    User->>Copilot: "Ingest my docs at /path/to/docs"
+    Copilot->>axon-mcp: ingest_path(path)
+    axon-mcp->>axon-api: POST /ingest
+    axon-api-->>axon-mcp: {job_id: "abc123"}
+    axon-mcp-->>Copilot: "Started — job abc123"
+    Copilot->>axon-mcp: get_job_status("abc123")
+    axon-mcp->>axon-api: GET /ingest/status/abc123
+    axon-api-->>axon-mcp: {status: "completed"}
+    axon-mcp-->>Copilot: "Ingested 12 documents"
+    User->>Copilot: "What does the project do?"
+    Copilot->>axon-mcp: search_knowledge(query)
+    axon-mcp->>axon-api: POST /search
+    axon-api-->>axon-mcp: [chunks]
+    axon-mcp-->>Copilot: [chunks]
+    Copilot-->>User: synthesised answer

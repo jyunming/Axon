@@ -229,10 +229,13 @@ class SmartTextLoader(BaseLoader):
         if is_likely_table:
             return FlexibleTableLoader().load_text(text, source=source)
         else:
-            # Fallback to standard document dictionary format
+            # Fallback to standard document dictionary format.
+            # Use the full source as the id (already unique when source is a
+            # UUID doc_id); os.path.basename strips directory context and can
+            # produce duplicate ids for non-path sources on Windows.
             return [
                 {
-                    "id": os.path.basename(source),
+                    "id": source,
                     "text": text,
                     "metadata": {"source": source, "type": "text"},
                 }

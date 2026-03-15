@@ -59,6 +59,30 @@ def test_health_returns_200_with_brain():
     assert data["status"] == "ok"
 
 
+def test_health_reports_active_project():
+    """Health endpoint must report brain._active_project, not brain.config.project."""
+    brain = _make_brain()
+    brain._active_project = "work/atlas"
+    # Ensure brain.config has no 'project' attribute (mirrors real AxonConfig)
+    del brain.config.project
+    api_module.brain = brain
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["project"] == "work/atlas"
+
+
+def test_health_reports_default_when_no_active_project():
+    """Health endpoint falls back to 'default' when _active_project is absent."""
+    brain = _make_brain()
+    # Remove _active_project to test fallback
+    if hasattr(brain, "_active_project"):
+        del brain._active_project
+    api_module.brain = brain
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["project"] == "default"
+
+
 # ---------------------------------------------------------------------------
 # 503 when brain is None
 # ---------------------------------------------------------------------------
@@ -105,6 +129,36 @@ def test_ingest_403_path_traversal(tmp_path):
     assert resp.status_code in (403, 404)  # 403 preferred; 404 if path resolves differently
 
 
+@pytest.mark.skipif(
+    os.name != "nt", reason="Windows system paths only blocked correctly on Windows"
+)
+def test_ingest_blocks_windows_system_path(tmp_path):
+    """SEC-01: C:/Windows paths must be blocked even when RAG_INGEST_BASE covers them."""
+    api_module.brain = _make_brain()
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": "C:\\"}):
+        for blocked in ["C:/Windows/win.ini", r"C:\Windows\System32\drivers\etc\hosts"]:
+            resp = client.post("/ingest", json={"path": blocked})
+            assert resp.status_code == 403, f"Expected 403 for blocked path: {blocked}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix system paths only meaningful on non-Windows")
+def test_ingest_blocks_unix_system_path(tmp_path):
+    """SEC-01: /etc paths must be blocked even when RAG_INGEST_BASE covers them."""
+    api_module.brain = _make_brain()
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": "/"}):
+        for blocked in ["/etc/passwd", "/etc/shadow", "/proc/version"]:
+            resp = client.post("/ingest", json={"path": blocked})
+            assert resp.status_code == 403, f"Expected 403 for blocked path: {blocked}"
+
+
+def test_ingest_traversal_dotdot_blocked(tmp_path):
+    """SEC-01: ../ traversal from workspace root is blocked."""
+    api_module.brain = _make_brain()
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": str(tmp_path)}):
+        resp = client.post("/ingest", json={"path": str(tmp_path / ".." / ".." / "etc" / "passwd")})
+    assert resp.status_code == 403
+
+
 def test_ingest_valid_path(tmp_path):
     api_module.brain = _make_brain()
     # Create a file inside the allowed base
@@ -141,20 +195,40 @@ def test_query_success():
 
 def test_delete_success():
     api_module.brain = _make_brain()
+    # get_by_ids returns the two docs — both exist
+    api_module.brain.vector_store.get_by_ids.return_value = [
+        {"id": "doc1", "text": "a"},
+        {"id": "doc2", "text": "b"},
+    ]
     resp = client.post("/delete", json={"doc_ids": ["doc1", "doc2"]})
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "success"
     assert data["deleted"] == 2
     assert set(data["doc_ids"]) == {"doc1", "doc2"}
-    # Verify delete_by_ids was called on the vector store
+    assert data["not_found"] == []
+    # Verify delete_by_ids was called on the vector store with only existing IDs
     api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["doc1", "doc2"])
     # Verify BM25 delete was called
     api_module.brain.bm25.delete_documents.assert_called_once_with(["doc1", "doc2"])
 
 
+def test_delete_nonexistent_ids_returns_zero():
+    """Deleting nonexistent IDs must report deleted=0 and list them in not_found."""
+    api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = []  # none exist
+    resp = client.post("/delete", json={"doc_ids": ["fake-id-12345"]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    assert data["deleted"] == 0
+    assert "fake-id-12345" in data["not_found"]
+    api_module.brain.vector_store.delete_by_ids.assert_not_called()
+
+
 def test_delete_propagates_error():
     api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = [{"id": "x", "text": "t"}]
     api_module.brain.vector_store.delete_by_ids.side_effect = RuntimeError("store down")
     resp = client.post("/delete", json={"doc_ids": ["x"]})
     assert resp.status_code == 500
@@ -163,11 +237,83 @@ def test_delete_propagates_error():
 def test_delete_calls_delete_by_ids_not_collection_delete():
     """Endpoint must use delete_by_ids (works for all providers) not collection.delete."""
     api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = [{"id": "id1", "text": "t"}]
     resp = client.post("/delete", json={"doc_ids": ["id1"]})
     assert resp.status_code == 200
     api_module.brain.vector_store.delete_by_ids.assert_called_once_with(["id1"])
     # collection.delete should NOT be called directly by the endpoint
     api_module.brain.vector_store.collection.delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# /clear
+# ---------------------------------------------------------------------------
+
+
+def test_clear_actually_clears_chroma():
+    """EXEC-009: /clear must delete and recreate the ChromaDB collection, not be a no-op."""
+    brain = _make_brain()
+    api_module.brain = brain
+    # Simulate the chroma provider path
+    brain.vector_store.provider = "chroma"
+    brain.vector_store.client = MagicMock()
+    brain.vector_store.client.create_collection.return_value = MagicMock()
+
+    resp = client.post("/clear")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    # The collection must have been deleted, not left intact
+    brain.vector_store.client.delete_collection.assert_called_once_with("axon")
+    brain.vector_store.client.create_collection.assert_called_once()
+
+
+def test_clear_resets_bm25_and_hashes():
+    """/clear must wipe BM25 corpus and ingested hash store."""
+    brain = _make_brain()
+    api_module.brain = brain
+    brain.vector_store.provider = "chroma"
+    brain.vector_store.client = MagicMock()
+    brain.vector_store.client.create_collection.return_value = MagicMock()
+
+    # Inject non-empty BM25 and hash state
+    brain.bm25 = MagicMock()
+    brain.bm25.corpus = ["fake_chunk"]
+    brain._ingested_hashes = {"abc123"}
+    brain._entity_graph = {"entity": ["neighbor"]}
+
+    with patch.object(brain, "_save_hash_store") as mock_save_hash, patch.object(
+        brain, "_save_entity_graph"
+    ) as mock_save_graph:
+        resp = client.post("/clear")
+
+    assert resp.status_code == 200
+    assert brain._ingested_hashes == set()
+    assert brain._entity_graph == {}
+    mock_save_hash.assert_called_once()
+    mock_save_graph.assert_called_once()
+    brain.bm25.save.assert_called_once()
+
+
+def test_clear_deletes_embedding_meta(tmp_path):
+    """/clear must remove .embedding_meta.json so a new model can be used after clear."""
+    brain = _make_brain()
+    api_module.brain = brain
+    brain.vector_store.provider = "chroma"
+    brain.vector_store.client = MagicMock()
+    brain.vector_store.client.create_collection.return_value = MagicMock()
+    brain.bm25 = None
+
+    # Create a fake embedding meta file and point the brain mock at it
+    meta_file = tmp_path / ".embedding_meta.json"
+    meta_file.write_text('{"provider":"fastembed","model":"BAAI/bge-large-en-v1.5"}')
+    brain._embedding_meta_path = str(meta_file)
+
+    with patch.object(brain, "_save_hash_store"), patch.object(brain, "_save_entity_graph"):
+        resp = client.post("/clear")
+
+    assert resp.status_code == 200
+    assert not meta_file.exists(), "embedding meta file must be deleted on /clear"
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +397,43 @@ def test_add_text_propagates_error():
     api_module.brain.ingest.side_effect = RuntimeError("vector store full")
     resp = client.post("/add_text", json={"text": "hello"})
     assert resp.status_code == 500
+
+
+def test_add_text_empty_string_rejected():
+    """B-05: Empty or whitespace-only text must return 400."""
+    api_module.brain = _make_brain()
+    for bad in ["", "   ", "\t\n"]:
+        resp = client.post("/add_text", json={"text": bad})
+        assert resp.status_code == 400, f"Expected 400 for text={bad!r}"
+
+
+# ---------------------------------------------------------------------------
+# /project/new — project name validation (B-03)
+# ---------------------------------------------------------------------------
+
+
+def test_create_project_invalid_name_returns_400():
+    """B-03: Invalid project names must return 400, not 500."""
+    api_module.brain = _make_brain()
+    # 6-segment path exceeds _MAX_DEPTH=5; other cases have illegal characters / empty
+    for bad_name in ["has:colon!", "", "name with spaces", "a" * 65, "a/b/c/d/e/f"]:
+        resp = client.post("/project/new", json={"name": bad_name})
+        assert resp.status_code == 400, f"Expected 400 for name={bad_name!r}"
+
+
+def test_create_project_valid_name_succeeds():
+    """B-03: Valid project names pass name validation, including deep hierarchical names."""
+    api_module.brain = _make_brain()
+    with patch("axon.projects.ensure_project"):
+        for good_name in [
+            "valid-project_01",
+            "research/papers",
+            "research/papers/2024",
+            "research/papers/2024/q1",  # 4 segments
+            "a/b/c/d/e",  # 5 segments (max depth)
+        ]:
+            resp = client.post("/project/new", json={"name": good_name})
+            assert resp.status_code == 200, f"Expected 200 for name={good_name!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +621,33 @@ def test_query_override_compress():
     assert resp.status_code == 200
     call_kwargs = api_module.brain.query.call_args[1]
     assert call_kwargs["overrides"]["compress_context"] is True
+
+
+def test_query_override_temperature():
+    """temperature override is forwarded to brain.query as llm_temperature."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Creative answer"
+    resp = client.post("/query", json={"query": "test", "temperature": 0.2})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["llm_temperature"] == 0.2
+
+
+def test_query_temperature_none_not_applied():
+    """When temperature is not set, llm_temperature override is None (not applied)."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Default answer"
+    resp = client.post("/query", json={"query": "test"})
+    assert resp.status_code == 200
+    call_kwargs = api_module.brain.query.call_args[1]
+    assert call_kwargs["overrides"]["llm_temperature"] is None
+
+
+def test_query_temperature_validation_rejects_out_of_range():
+    """Temperature outside 0.0–2.0 is rejected with 422."""
+    api_module.brain = _make_brain()
+    resp = client.post("/query", json={"query": "test", "temperature": 3.5})
+    assert resp.status_code == 422
 
 
 def test_concurrent_requests_no_cross_contamination():
@@ -1063,3 +1273,215 @@ def test_share_revoke_success(tmp_path):
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "revoked"
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: axon_ingestText 500 (OSError errno 22)
+# ---------------------------------------------------------------------------
+
+
+class TestAddTextBug500:
+    """Regression tests for Bug: POST /add_text raises 500 when BM25 save
+    fails with OSError (errno 22 / WinError 87 on Windows).
+
+    After the fix, OSError from BM25 save is handled by the fallback copy path,
+    so /add_text should succeed.
+    """
+
+    def test_add_text_succeeds_when_bm25_save_raises_oserror(self, tmp_path):
+        """Bug regression: OSError in BM25 save should not cause a 500."""
+
+        brain = _make_brain()
+        brain.config.project = "default"
+        brain._active_project = "default"
+        brain.config.bm25_path = str(tmp_path / "bm25_index")
+        brain.config.smart_ingest_mode = "normal"
+
+        # ingest() should succeed even when brain.ingest raises OSError on BM25
+        # (the fix moves the catch into BM25Retriever.save, so brain.ingest itself
+        # shouldn't raise for this scenario — we verify it doesn't propagate)
+        brain.ingest.return_value = None  # mock brain.ingest completes normally
+
+        api_module.brain = brain
+        api_module._dedup_cache = {}
+
+        resp = client.post("/add_text", json={"text": "Atlas Cache default TTL is 60 seconds."})
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["status"] == "success"
+        assert "doc_id" in data
+
+    def test_add_text_empty_text_returns_400(self):
+        """Empty text should return 400 not 500."""
+        brain = _make_brain()
+        api_module.brain = brain
+        api_module._dedup_cache = {}
+
+        resp = client.post("/add_text", json={"text": "   "})
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: path ingestion status polling (Bug 1)
+# ---------------------------------------------------------------------------
+
+
+class TestIngestStatusEndpoint:
+    """Tests for GET /ingest/status/{job_id} — exposes job status to VS Code tools."""
+
+    def test_get_status_returns_404_for_unknown_job(self):
+        """Unknown job_id returns 404."""
+        api_module.brain = _make_brain()
+        resp = client.get("/ingest/status/nonexistent_job_id")
+        assert resp.status_code == 404
+
+    def test_get_status_returns_processing_for_active_job(self):
+        """A job inserted in _jobs with status processing is returned correctly."""
+        from datetime import datetime, timezone
+
+        api_module.brain = _make_brain()
+        job_id = "test_job_abc123"
+        api_module._jobs[job_id] = {
+            "job_id": job_id,
+            "status": "processing",
+            "path": "/some/path",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at_ts": datetime.now(timezone.utc).timestamp(),
+            "completed_at": None,
+            "documents_ingested": None,
+            "error": None,
+        }
+        resp = client.get(f"/ingest/status/{job_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "processing"
+        assert data["job_id"] == job_id
+        assert "started_at_ts" not in data  # internal field must be stripped
+        # cleanup
+        del api_module._jobs[job_id]
+
+    def test_get_status_returns_completed_job(self):
+        """A completed job is returned with status completed."""
+        from datetime import datetime, timezone
+
+        api_module.brain = _make_brain()
+        job_id = "test_job_done456"
+        now = datetime.now(timezone.utc).isoformat()
+        api_module._jobs[job_id] = {
+            "job_id": job_id,
+            "status": "completed",
+            "path": "/some/path",
+            "started_at": now,
+            "started_at_ts": 0.0,
+            "completed_at": now,
+            "documents_ingested": 5,
+            "error": None,
+        }
+        resp = client.get(f"/ingest/status/{job_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed"
+        assert data["documents_ingested"] == 5
+        del api_module._jobs[job_id]
+
+    def test_get_status_returns_failed_job(self):
+        """A failed job is returned with status failed and error message."""
+        from datetime import datetime, timezone
+
+        api_module.brain = _make_brain()
+        job_id = "test_job_fail789"
+        now = datetime.now(timezone.utc).isoformat()
+        api_module._jobs[job_id] = {
+            "job_id": job_id,
+            "status": "failed",
+            "path": "/bad/path",
+            "started_at": now,
+            "started_at_ts": 0.0,
+            "completed_at": now,
+            "documents_ingested": None,
+            "error": "[Errno 22] Invalid argument",
+        }
+        resp = client.get(f"/ingest/status/{job_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert "[Errno 22]" in data["error"]
+        del api_module._jobs[job_id]
+
+
+# ---------------------------------------------------------------------------
+# Bug regression: directory ingest uses sync loader (no asyncio.run in thread)
+# ---------------------------------------------------------------------------
+
+
+class TestIngestPathSyncLoader:
+    """Regression for Bug 1: directory ingest was using asyncio.run() inside a
+    FastAPI background thread, which can hang on Windows ProactorEventLoop.
+    The fix switches to the sync DirectoryLoader.load() for both directory and
+    single-file ingestion.
+    """
+
+    def test_ingest_directory_uses_sync_loader(self, tmp_path):
+        """POST /ingest for a directory calls DirectoryLoader.load() (sync), not asyncio.run()."""
+        from unittest.mock import MagicMock, patch
+
+        brain = _make_brain()
+        brain.ingest.return_value = None
+        api_module.brain = brain
+
+        # Create a real directory with one file
+        test_dir = tmp_path / "corpus"
+        test_dir.mkdir()
+        (test_dir / "doc.md").write_text("Atlas Cache default TTL is 60 seconds.")
+
+        fake_docs = [
+            {"id": "doc.md", "text": "Atlas Cache default TTL is 60 seconds.", "metadata": {}}
+        ]
+
+        with patch("axon.loaders.DirectoryLoader") as MockLoader:
+            mock_instance = MagicMock()
+            mock_instance.load.return_value = fake_docs
+            MockLoader.return_value = mock_instance
+
+            resp = client.post("/ingest", json={"path": str(test_dir)})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "processing"
+            job_id = data["job_id"]
+
+        # The background task runs synchronously in test client
+        # Verify that DirectoryLoader.load() was called (not asyncio.run)
+        mock_instance.load.assert_called_once_with(str(test_dir.resolve()))
+        brain.ingest.assert_called_once_with(fake_docs)
+
+        # Cleanup job
+        api_module._jobs.pop(job_id, None)
+
+    def test_ingest_single_file_succeeds(self, tmp_path):
+        """POST /ingest for a single .md file completes without OSError."""
+        from unittest.mock import MagicMock, patch
+
+        brain = _make_brain()
+        brain.ingest.return_value = None
+        api_module.brain = brain
+
+        # Create a single markdown file
+        md_file = tmp_path / "readme.md"
+        md_file.write_text("# Atlas Cache\nDefault TTL: 60 seconds.")
+
+        fake_docs = [
+            {"id": "readme.md", "text": "# Atlas Cache\nDefault TTL: 60 seconds.", "metadata": {}}
+        ]
+
+        with patch("axon.loaders.DirectoryLoader") as MockLoader:
+            mock_instance = MagicMock()
+            mock_instance.loaders = {".md": MagicMock(load=MagicMock(return_value=fake_docs))}
+            MockLoader.return_value = mock_instance
+
+            resp = client.post("/ingest", json={"path": str(md_file)})
+            assert resp.status_code == 200
+            data = resp.json()
+            job_id = data["job_id"]
+
+        brain.ingest.assert_called_once_with(fake_docs)
+        api_module._jobs.pop(job_id, None)

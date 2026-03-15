@@ -464,3 +464,26 @@ class TestListShareMounts:
         result = list_share_mounts(user_dir)
         names = [entry["name"] for entry in result]
         assert "bob_research" in names
+
+
+class TestSetActiveProjectPermissionError:
+    """Regression: set_active_project must be non-fatal when home dir is not writable."""
+
+    def test_permission_error_is_swallowed(self, tmp_path, monkeypatch):
+        import axon.projects as _p
+
+        # Point _ACTIVE_FILE to a read-only location
+        ro_dir = tmp_path / "readonly"
+        ro_dir.mkdir()
+        fake_file = ro_dir / ".active_project"
+
+        # Make mkdir and write_text raise PermissionError
+
+        def boom(*a, **kw):
+            raise PermissionError("permission denied")
+
+        monkeypatch.setattr(_p, "_ACTIVE_FILE", fake_file)
+        monkeypatch.setattr(type(fake_file.parent), "mkdir", lambda *a, **kw: boom())
+
+        # Must not raise
+        _p.set_active_project("myproject")

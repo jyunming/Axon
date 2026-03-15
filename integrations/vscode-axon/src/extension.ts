@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 import { spawn, ChildProcess } from 'child_process';
 
 let serverProcess: ChildProcess | undefined;
@@ -73,6 +75,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_ingestText', new AxonIngestTextTool()),
         (vscode as any).lm.registerTool('axon_ingestUrl', new AxonIngestUrlTool()),
         (vscode as any).lm.registerTool('axon_ingestPath', new AxonIngestPathTool()),
+        (vscode as any).lm.registerTool('axon_getIngestStatus', new AxonGetIngestStatusTool()),
         (vscode as any).lm.registerTool('axon_listProjects', new AxonListProjectsTool()),
         (vscode as any).lm.registerTool('axon_switchProject', new AxonSwitchProjectTool()),
         (vscode as any).lm.registerTool('axon_createProject', new AxonCreateProjectTool()),
@@ -82,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_clearCollection', new AxonClearCollectionTool()),
         (vscode as any).lm.registerTool('axon_updateSettings', new AxonUpdateSettingsTool()),
         (vscode as any).lm.registerTool('axon_listShares', new AxonListSharesTool()),
+        (vscode as any).lm.registerTool('axon_initStore', new AxonInitStoreTool()),
         (vscode as any).lm.registerTool('axon_ingestImage', new AxonIngestImageTool())
       );
       outputChannel.appendLine('Successfully registered all Axon tools.');
@@ -140,12 +144,15 @@ class AxonQueryTool implements vscode.LanguageModelTool<any> {
     const { query, top_k } = options.input;
 
     try {
-      const body: any = { query };
+      // discuss: false disables the general-knowledge fallback so the tool
+      // returns a definitive "no data" message instead of a hallucinated answer
+      // when the knowledge base has no matching content.
+      const body: any = { query, discuss: false };
       if (top_k != null) { body.top_k = top_k; }
       const result = await httpPost(`${apiBase}/query`, body, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(data.response || 'No answer generated.')]);
     } catch (err) {
@@ -165,7 +172,7 @@ class AxonIngestTextTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/add_text`, { text, metadata: { source } }, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Ingest Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Success: ${data.status}, ID: ${data.doc_id}`)]);
     } catch (err) {
@@ -185,7 +192,7 @@ class AxonIngestUrlTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/ingest_url`, { url }, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon URL Ingest Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon URL Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, URL: ${data.url}`)]);
     } catch (err) {
@@ -211,11 +218,41 @@ class AxonIngestPathTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/ingest`, { path }, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Path Ingest Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Path Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}, JobID: ${data.job_id}`)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error during path ingest: ${err}`)]);
+    }
+  }
+}
+
+class AxonGetIngestStatusTool implements vscode.LanguageModelTool<any> {
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { job_id } = options.input;
+
+    try {
+      const result = await httpGet(`${apiBase}/ingest/status/${encodeURIComponent(job_id)}`, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status === 404) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Job not found: ${job_id}`)]);
+      }
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error checking status (${result.status}): ${formatDetail(data, result.body)}`)]);
+      }
+      const status = data.status;
+      if (status === 'completed') {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingestion complete. Status: completed. You can now search the ingested documents.`)]);
+      } else if (status === 'failed') {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingestion failed. Error: ${data.error || 'unknown error'}`)]);
+      } else {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingestion still in progress (status: ${status}). Wait a moment and check again.`)]);
+      }
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error checking ingest status: ${err}`)]);
     }
   }
 }
@@ -230,7 +267,7 @@ class AxonListProjectsTool implements vscode.LanguageModelTool<any> {
       const result = await httpGet(`${apiBase}/projects`, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       const names = (data.projects || []).map((p: any) => p.name).join(', ');
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Projects: ${names || 'None'}`)]);
@@ -257,7 +294,7 @@ class AxonSwitchProjectTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/project/switch`, { name }, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Switched to project: ${data.active_project || name}`)]);
     } catch (err) {
@@ -283,7 +320,7 @@ class AxonCreateProjectTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/project/new`, { name, description }, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Project Creation Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Project Creation Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Project: ${data.project}`)]);
     } catch (err) {
@@ -309,7 +346,7 @@ class AxonDeleteProjectTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/project/delete/${name}`, {}, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Project Deletion Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Project Deletion Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}`)]);
     } catch (err) {
@@ -335,7 +372,7 @@ class AxonDeleteDocumentsTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/delete`, { doc_ids: docIds }, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Document Deletion Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Document Deletion Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Deleted: ${data.deleted}`)]);
     } catch (err) {
@@ -354,7 +391,7 @@ class AxonGetCollectionTool implements vscode.LanguageModelTool<any> {
       const result = await httpGet(`${apiBase}/collection`, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       const files = (data.files || []).map((f: any) => `${f.source} (${f.chunks} chunks)`).join('\n');
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Total Files: ${data.total_files}\nTotal Chunks: ${data.total_chunks}\n\nFiles:\n${files}`)]);
@@ -380,7 +417,7 @@ class AxonClearCollectionTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/clear`, {}, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Clear Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Clear Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}`)]);
     } catch (err) {
@@ -405,7 +442,7 @@ class AxonUpdateSettingsTool implements vscode.LanguageModelTool<any> {
       const result = await httpPost(`${apiBase}/config/update`, options.input, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Configuration Error (${result.status}): ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Configuration Error (${result.status}): ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Settings Applied.`)]);
     } catch (err) {
@@ -435,6 +472,82 @@ async function getPortPid(port: number): Promise<number | undefined> {
   }
 }
 
+/**
+ * Discover the Python interpreter that has Axon installed.
+ *
+ * Probe order:
+ *   1. axon.pythonPath VS Code setting (explicit user override)
+ *   2. ~/.axon/.python_path written by the `axon` CLI on first run (pip / venv / pipx)
+ *   3. pipx isolated venv (predictable fixed path for `pipx install axon`)
+ *   4. .venv / venv / env inside the open workspace folder
+ *   5. System Python (python3 → python)
+ *
+ * Shows a one-time notification if nothing is found with axon importable.
+ */
+async function discoverPythonPath(): Promise<string> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const isWin = process.platform === 'win32';
+
+  // 1. Explicit user setting
+  const explicit = config.get<string>('pythonPath', '');
+  if (explicit) {
+    return explicit;
+  }
+
+  // 2. ~/.axon/.python_path written by `axon` CLI on first run
+  const discoveryFile = path.join(os.homedir(), '.axon', '.python_path');
+  if (fs.existsSync(discoveryFile)) {
+    const discovered = fs.readFileSync(discoveryFile, 'utf8').trim();
+    if (discovered && fs.existsSync(discovered)) {
+      outputChannel.appendLine(`Python auto-detected via ~/.axon/.python_path: ${discovered}`);
+      return discovered;
+    }
+  }
+
+  // 3. pipx isolated venv (fixed path for `pipx install axon`)
+  const pipxPython = isWin
+    ? path.join(os.homedir(), '.local', 'pipx', 'venvs', 'axon', 'Scripts', 'python.exe')
+    : path.join(os.homedir(), '.local', 'pipx', 'venvs', 'axon', 'bin', 'python');
+  if (fs.existsSync(pipxPython)) {
+    outputChannel.appendLine(`Python auto-detected via pipx venv: ${pipxPython}`);
+    return pipxPython;
+  }
+
+  // 4. Workspace venv (.venv, venv, env)
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders) {
+    for (const folder of workspaceFolders) {
+      for (const venvDir of ['.venv', 'venv', 'env']) {
+        const candidate = isWin
+          ? path.join(folder.uri.fsPath, venvDir, 'Scripts', 'python.exe')
+          : path.join(folder.uri.fsPath, venvDir, 'bin', 'python');
+        if (fs.existsSync(candidate)) {
+          outputChannel.appendLine(`Python auto-detected via workspace venv (${venvDir}): ${candidate}`);
+          return candidate;
+        }
+      }
+    }
+  }
+
+  // 5. System Python fallback
+  const systemPython = isWin ? 'python' : 'python3';
+  outputChannel.appendLine(
+    `Python auto-detection: no venv found. Falling back to system ${systemPython}. ` +
+    `If Axon is not found, run \`axon\` once after installation, or set axon.pythonPath.`
+  );
+
+  // Show a one-time notification so users know what to do
+  const msg = 'Axon: Python auto-detection did not find an Axon installation. ' +
+    'Run `axon` once after installing, or set the `axon.pythonPath` setting.';
+  vscode.window.showWarningMessage(msg, 'Open Settings').then(choice => {
+    if (choice === 'Open Settings') {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'axon.pythonPath');
+    }
+  });
+
+  return systemPython;
+}
+
 async function ensureServerRunning(apiBase: string, context: vscode.ExtensionContext): Promise<void> {
   if (await isAxonRunning(apiBase)) {
     outputChannel.appendLine('Axon API already running.');
@@ -449,7 +562,7 @@ async function ensureServerRunning(apiBase: string, context: vscode.ExtensionCon
   }
 
   const config = vscode.workspace.getConfiguration('axon');
-  const pythonPath = config.get<string>('pythonPath', 'python');
+  const pythonPath = await discoverPythonPath();
 
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -700,7 +813,7 @@ async function ingestWorkspaceFolder(apiBase: string): Promise<void> {
     const result = await httpPost(`${apiBase}/ingest`, { path: folderPath }, apiKey);
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
-      vscode.window.showErrorMessage(`Axon: Ingest failed — ${data.detail || result.body}`);
+      vscode.window.showErrorMessage(`Axon: Ingest failed — ${formatDetail(data, result.body)}`);
       return;
     }
     vscode.window.showInformationMessage(
@@ -733,7 +846,7 @@ async function ingestPickedFolder(apiBase: string): Promise<void> {
     const result = await httpPost(`${apiBase}/ingest`, { path: selectedPath }, apiKey);
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
-      vscode.window.showErrorMessage(`Axon: Ingest failed — ${data.detail || result.body}`);
+      vscode.window.showErrorMessage(`Axon: Ingest failed — ${formatDetail(data, result.body)}`);
       return;
     }
     vscode.window.showInformationMessage(
@@ -777,6 +890,14 @@ async function ingestCurrentFile(apiBase: string): Promise<void> {
 interface HttpResult {
   status: number;
   body: string;
+}
+
+/** Safely serialize a FastAPI error detail, which may be a string, array, or object. */
+function formatDetail(data: any, fallback: string): string {
+  const d = data?.detail;
+  if (d === undefined || d === null) { return fallback; }
+  if (typeof d === 'string') { return d; }
+  return JSON.stringify(d);
 }
 
 function httpGet(url: string, apiKey?: string): Promise<HttpResult> {
@@ -910,7 +1031,7 @@ async function initStore(apiBase: string): Promise<void> {
     const result = await httpPost(`${apiBase}/store/init`, { base_path: basePath }, apiKey);
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
-      vscode.window.showErrorMessage(`Axon: Store init failed — ${data.detail || result.body}`);
+      vscode.window.showErrorMessage(`Axon: Store init failed — ${formatDetail(data, result.body)}`);
       return;
     }
     vscode.window.showInformationMessage(
@@ -935,7 +1056,7 @@ async function shareProject(apiBase: string): Promise<void> {
     const result = await httpPost(`${apiBase}/share/generate`, { project, grantee, write_access }, apiKey);
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
-      vscode.window.showErrorMessage(`Axon: Share generation failed — ${data.detail || result.body}`);
+      vscode.window.showErrorMessage(`Axon: Share generation failed — ${formatDetail(data, result.body)}`);
       return;
     }
     await vscode.env.clipboard.writeText(data.share_string);
@@ -959,7 +1080,7 @@ async function redeemShare(apiBase: string): Promise<void> {
     const result = await httpPost(`${apiBase}/share/redeem`, { share_string }, apiKey);
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
-      vscode.window.showErrorMessage(`Axon: Redeem failed — ${data.detail || result.body}`);
+      vscode.window.showErrorMessage(`Axon: Redeem failed — ${formatDetail(data, result.body)}`);
       return;
     }
     vscode.window.showInformationMessage(
@@ -1036,12 +1157,39 @@ class AxonListSharesTool implements vscode.LanguageModelTool<any> {
       const result = await httpGet(`${apiBase}/share/list`, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
-        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Share list error: ${data.detail || result.body}`)]);
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Share list error: ${formatDetail(data, result.body)}`)]);
       }
       const text = JSON.stringify(data, null, 2);
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(text)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error listing shares: ${err}`)]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AxonStore initialisation tool
+// ---------------------------------------------------------------------------
+
+class AxonInitStoreTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Initialising AxonStore at "${options.input.base_path}"...` };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { base_path } = options.input;
+    try {
+      const result = await httpPost(`${apiBase}/store/init`, { base_path }, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`AxonStore init error (${result.status}): ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`AxonStore initialised at ${data.store_path} (user: ${data.username}). Share tools are now available.`)]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error initialising AxonStore: ${err}`)]);
     }
   }
 }
@@ -1091,9 +1239,10 @@ class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
     }
 
     try {
-      // Read the image file
+      // Read the image file as Uint8Array (LanguageModelDataPart requires Uint8Array, not Buffer)
       const fs = await import('fs');
-      const imageBuffer = fs.readFileSync(imagePath);
+      const rawBuffer = fs.readFileSync(imagePath);
+      const imageBuffer = new Uint8Array(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength);
       const mimeType = getImageMimeType(imagePath);
 
       // Select a Copilot model with vision capability
@@ -1110,7 +1259,7 @@ class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
       // Build the multimodal prompt
       const prompt = [
         vscode.LanguageModelChatMessage.User([
-          new (vscode as any).LanguageModelDataPart(mimeType, imageBuffer),
+          new (vscode as any).LanguageModelDataPart(imageBuffer, mimeType),
           new vscode.LanguageModelTextPart(
             'Describe this image in detail for a searchable knowledge base. ' +
             'Include all visible text, diagram structure, key concepts, labels, ' +
@@ -1144,7 +1293,7 @@ class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([
-          new (vscode as any).LanguageModelTextPart(`Axon Ingest Error (${result.status}): ${data.detail || result.body}`)
+          new (vscode as any).LanguageModelTextPart(`Axon Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)
         ]);
       }
       return new (vscode as any).LanguageModelToolResult([

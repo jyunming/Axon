@@ -1,249 +1,110 @@
-# SOTA RAG Gap Analysis
+# SOTA RAG — Open Gaps
 
-**Axon vs. State-of-the-Art RAG Systems (2026)**
+**Last updated: March 2026**
 
-This document benchmarks the current system against state-of-the-art RAG research and production systems, identifies gaps, and prioritizes improvements. It is intended to guide contributors on what to build next.
-
----
-
-## Current System Capabilities (Baseline)
-
-The following features are already implemented:
-
-| Category | What We Have |
-|----------|-------------|
-| **Retrieval** | Hybrid search: dense vector + BM25 keyword, fused via Reciprocal Rank Fusion (RRF) |
-| **Re-ranking** | Cross-encoder re-ranking (`cross-encoder/ms-marco-MiniLM-L-6-v2`) **and** LLM-based pointwise re-ranking via `reranker_provider: llm` |
-| **Query transformations** | HyDE, Multi-Query, Step-Back, Query Decomposition — all available via CLI flags, REPL slash commands (`/rag hyde`, `/rag multi`, `/rag step-back`, `/rag decompose`, `/rag compress`, `/rag cite`), and REST API overrides |
-| **Embedding providers** | sentence-transformers (`all-MiniLM-L6-v2`), Ollama (`nomic-embed-text`), FastEmbed (`BAAI/bge-small-en-v1.5`, BGE-M3 via fastembed), OpenAI |
-| **LLM** | Ollama (local), Gemini, OpenAI, Ollama Cloud, vLLM — all with streaming |
-| **Vector stores** | ChromaDB (default), Qdrant, LanceDB |
-| **Document formats** | PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, BMP/PNG/TIF/TIFF/PGM images |
-| **Multimodal** | Raster image ingestion (BMP/PNG/TIF/PGM) with VLM auto-captioning (llava) |
-| **Agent interface** | FastAPI with per-request RAG flag overrides (full CLI parity); 8+ REST endpoints |
-| **Ingest quality** | Hash-based content deduplication on ingest (skips re-ingesting identical chunks) |
-| **Performance** | In-memory query result cache (`query_cache: true`) with true LRU eviction (`OrderedDict` + move-to-end on hit) |
-| **Web search** | Brave Search fallback when local KB is insufficient (truth grounding) |
-| **Evaluation** | Axon Eval smoke tests (`scripts/evaluate.py`) |
-| **Chunking** | State-of-the-Art Semantic text splitter (sentence-boundary aware, tiktoken-based sizing) or Recursive character text splitter |
-| **Projects** | Named knowledge base namespaces with isolated vector/BM25 stores |
-| **REPL @file/@folder** | Inline file/folder context attachment in REPL: `@file.txt`, `@file.docx`, `@file.pdf`, `@folder/` — reads plain text, extracts text from DOCX/PDF via loaders, recursively reads folders (capped at 120 KB total; hidden dirs skipped; unsupported extensions skipped) |
-| **REPL streaming** | Spinner collects first token, then Rich `Live` streams remaining tokens with ▋ cursor; final swap to Markdown render on completion (no scrollback corruption) |
+Everything in the original gap analysis has shipped except the items below. This document is the living backlog for what remains.
 
 ---
 
-## Gaps vs. State of the Art
+## 1. Indexing
 
-### 1. Query Transformation — ✅ Mostly Implemented
+### Sentence-Window Retrieval
+Embed individual sentences for precise semantic matching, but return a sliding window of ±2–3 surrounding sentences as the actual LLM context.
 
-Standard RAG sends the raw user query directly to the retriever. SOTA systems transform the query first.
+- **Why:** Sentence embeddings capture meaning more precisely than passage embeddings; the window keeps answers coherent.
+- **Effort:** Medium — needs a separate sentence-index alongside the chunk index.
 
-#### 1.1 HyDE — Hypothetical Document Embeddings ✅ DONE
-- **Status:** Fully implemented. Enable with `--hyde` (CLI), `/rag hyde on` (REPL), or `"hyde": true` (API).
-- **What it does:** Generates a hypothetical "ideal" answer to the query using the LLM, then embeds that answer (not the original query) for retrieval.
-- **Impact:** ~5–15% recall improvement on knowledge-intensive tasks.
-- **Papers:** Gao et al., 2022 — "Precise Zero-Shot Dense Retrieval without Relevance Labels"
+### Proposition Indexing
+Use an LLM to decompose each chunk into discrete factual claims ("propositions") before indexing. Each proposition is indexed independently.
 
-#### 1.2 Multi-Query Retrieval ✅ DONE
-- **Status:** Fully implemented. Enable with `--multi-query` (CLI) or `"multi_query": true` (API).
-- **What it does:** Generates 3 alternative phrasings of the user query, runs retrieval for each, deduplicates and merges with the original.
-- **Impact:** Consistently improves recall with minimal added latency.
-
-#### 1.3 Step-Back Prompting ✅ DONE
-- **Status:** Fully implemented. Enable with `--step-back` (CLI), `/rag step-back` (REPL), or `"step_back": true` (API).
-- **What it does:** Generates an abstract, higher-level version of the query and runs retrieval for both the specific and abstract queries. Useful when KB has general background but query is highly specific.
-- **Papers:** Zheng et al., 2023 — "Take a Step Back: Evoking Reasoning via Abstraction in Large Language Models"
-
-#### 1.4 Query Decomposition ✅ DONE
-- **Status:** Implemented. Enable with `--decompose` (CLI), `/rag decompose` (REPL), `"decompose": true` (API), or `query_decompose: true` in `config.yaml` under `query_transformations:`.
-- **What it does:** Uses the LLM to break complex multi-part questions into 2–4 atomic sub-questions, runs retrieval for each, merges and deduplicates results. Composes naturally with `multi_query` and `step_back`.
-- **Synthesis:** Retrieval merges across all sub-questions; a single LLM call generates the answer with the combined context (no extra LLM calls beyond decomposition itself).
+- **Why:** Factual propositions are semantically denser than raw passages; retrieval precision improves significantly.
+- **Effort:** High — extra LLM pass at ingest time; cost scales with corpus size.
+- **Paper:** Chen et al., 2023 — "Dense X Retrieval: What Retrieval Granularity Should We Use?"
 
 ---
 
-### 2. Advanced Indexing Strategies — ✅ Mostly Implemented
+## 2. Agentic / Adaptive Retrieval
 
-#### 2.1 RAPTOR — Recursive Abstractive Processing for Tree-Organized Retrieval ✅ DONE
-- **Status:** Implemented. Enable with `--raptor` (CLI), `/rag raptor` (REPL), or `rag.raptor: true` in `config.yaml`. LLM summary nodes are indexed alongside leaf chunks.
-- **What it does:** Clusters document chunks, generates LLM summaries for each cluster, then clusters those summaries — building a hierarchical tree. Retrieval can happen at any level.
-- **Why it matters:** Enables both fine-grained chunk retrieval (leaf level) and broad thematic retrieval (summary level). Especially effective for long documents and thematic questions.
-- **Papers:** Sarthi et al., 2024 — "RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval"
+The current pipeline is static (retrieve once, then generate). These techniques make retrieval dynamic.
 
-#### 2.2 Parent-Document / Small-to-Big Retrieval ✅ DONE
-- **Status:** Implemented. Set `parent_chunk_size: 2000` (or any value > `chunk_size`) in `config.yaml` under `rag:`, or use `--parent-chunk-size 2000` CLI flag.
-- **What it does:** Indexes small child chunks (`chunk_size`) for precise semantic matching. At generation time, returns the full parent passage (`parent_chunk_size`) as LLM context. Parent text stored in chunk metadata — no separate store needed.
-- **Typical config:** `chunk_size: 256`, `parent_chunk_size: 1500` gives precise retrieval with rich context windows.
+### Self-RAG
+Fine-tune the LLM to emit reflection tokens (`[Retrieve]`, `[IsRel]`, `[IsSup]`, `[IsUse]`) that control whether to retrieve at all, whether retrieved docs are relevant, and whether the answer is grounded.
 
-#### 2.3 Sentence-Window Retrieval
-- **What it does:** Embeds individual sentences for retrieval, but returns a sliding window of ±2–3 surrounding sentences as the actual context.
-- **Why it matters:** Embedding single sentences captures semantic meaning precisely; the window provides enough context for coherent answers.
+- **Why:** Avoids unnecessary retrieval for questions the LLM can answer directly; filters irrelevant docs before generation.
+- **Effort:** High — requires fine-tuning; not plug-and-play with any model.
+- **Paper:** Asai et al., 2023 — "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection"
 
-#### 2.4 Proposition Indexing
-- **What it does:** Uses an LLM to extract discrete factual claims ("propositions") from document chunks before indexing. Each proposition is indexed independently.
-- **Why it matters:** Factual propositions are more semantically dense and precise than raw passage chunks. Retrieval quality improves significantly.
-- **Papers:** Chen et al., 2023 — "Dense X Retrieval: What Retrieval Granularity Should We Use?"
+### Corrective RAG (CRAG)
+Evaluate retrieved document relevance with a lightweight classifier. If confidence is low, trigger web search as a supplement.
 
----
+- **Why:** Gracefully handles KB gaps without hallucination.
+- **Effort:** Medium — classifier + fallback routing.
+- **Paper:** Yan et al., 2024 — "Corrective Retrieval Augmented Generation"
 
-### 3. Advanced Re-ranking — ✅ Partially Implemented
+### FLARE — Forward-Looking Active Retrieval
+During generation, monitor token probabilities. When the model becomes uncertain (low-probability next tokens), pause and retrieve additional context before continuing.
 
-#### 3.1 LLM-Based Pointwise Re-ranking (RankGPT) ✅ DONE
-- **Status:** Implemented. Set `reranker_provider: llm` in config and pass `"rerank": true` to the API (or CLI). Uses the configured LLM to score each document with a ThreadPoolExecutor for speed.
-- **Note:** The `"rerank": true` API/CLI flag enables or disables re-ranking but does **not** change the `reranker_provider`. LLM-based RankGPT requires `reranker_provider: llm` set in `config.yaml`; the default provider is `cross-encoder`.
-- **Papers:** Sun et al., 2023 — "Is ChatGPT Good at Search? Investigating Large Language Models as Re-Ranking Agents"
-
-#### 3.2 BGE Reranker v2-m3 ✅ DONE
-- **Status:** Fully accessible. Use `--reranker-model BAAI/bge-reranker-v2-m3` (CLI) or set `reranker_model: "BAAI/bge-reranker-v2-m3"` in `config.yaml` under `rerank:`. No code changes needed; `sentence-transformers` CrossEncoder loads it automatically.
-- **Why it matters:** Significantly outperforms the default `ms-marco-MiniLM-L-6-v2` on BEIR benchmarks; supports 100+ languages.
-- **Default kept as** `ms-marco-MiniLM-L-6-v2` (smaller, faster, already commonly cached). Upgrade when accuracy matters more than speed.
-
-#### 3.3 Contextual Compression ✅ DONE
-- **Status:** Implemented (LLM-based sentence extraction). Enable with `--compress` (CLI) or `"compress": true` (API) or `compress_context: true` in `config.yaml`.
-- **What it does:** After reranking, uses the generation LLM to extract only query-relevant sentences from each retrieved chunk (parallel via ThreadPoolExecutor). Falls back to the original chunk if extraction fails or would expand the text. Integrates with small-to-big: compresses the parent passage, not the small child chunk.
-- **Note:** This approach provides high readability and works out of the box with any configured LLM provider.
+- **Why:** Retrieves exactly when and what is needed — mid-generation retrieval instead of a single upfront search.
+- **Effort:** High — requires streaming token probability access (not available in all providers).
+- **Paper:** Jiang et al., 2023 — "Active Retrieval Augmented Generation"
 
 ---
 
-### 4. GraphRAG — ✅ Implemented
+## 3. Context Compression — Token-Level (LLMLingua)
 
-#### 4.1 Microsoft GraphRAG ✅ DONE
-- **Status:** Implemented. Enable with `--graph-rag` (CLI), `/rag graph-rag` (REPL), or `rag.graph_rag: true` in `config.yaml`. Entity graph is persisted to `.entity_graph.json` and expanded at query time.
-- **What it does:** Builds a knowledge graph from documents (entity extraction + relationship mapping), then runs community detection (Leiden algorithm) and generates hierarchical community summaries. Retrieval can use either graph traversal ("local" search) or community summaries ("global" search).
-- **Why it matters:** Answers global/thematic questions that chunk-based RAG cannot (e.g., "What are the main themes across all these documents?"). Enables relationship-aware reasoning.
-- **Project:** [microsoft/graphrag](https://github.com/microsoft/graphrag) (MIT License)
-- **Cost note:** Community summary generation requires significant upfront LLM calls — feasible with local Ollama.
+LLM-based sentence extraction is implemented (`--compress`). What's missing is **token-level** compression.
 
-#### 4.2 Entity-Centric Retrieval ✅ DONE
-- **Status:** Covered by the GraphRAG implementation above — entity relationships are traversed at query time.
-- **What it does:** Indexes entity-specific knowledge separately; retrieval traverses entity relationships rather than just chunk similarity.
-- **Why it matters:** Supports multi-hop reasoning (e.g., "Who owns the company that acquired X?").
+LLMLingua uses a small dedicated LM to score and drop low-information tokens from retrieved context before passing to the main LLM. Achieves 2–20× compression with minimal accuracy loss.
 
----
-
-### 5. Agentic / Adaptive RAG — Partially Implemented
-
-Current system has a static retrieval pipeline. The agent API exposes tools but doesn't make autonomous retrieval decisions.
-
-#### 5.1 Self-RAG
-- **What it does:** Fine-tunes the LLM to generate special reflection tokens (`[Retrieve]`, `[IsRel]`, `[IsSup]`, `[IsUse]`) that control whether to retrieve, whether retrieved docs are relevant, and whether the generation is grounded.
-- **Why it matters:** Removes unnecessary retrieval for queries the LLM can answer directly; filters out irrelevant documents before generation.
-- **Papers:** Asai et al., 2023 — "Self-RAG: Learning to Retrieve, Generate, and Critique through Self-Reflection"
-
-#### 5.2 Corrective RAG (CRAG)
-- **What it does:** Evaluates the relevance of retrieved documents with a lightweight classifier. If confidence is low, triggers web search as a fallback to supplement the local KB.
-- **Why it matters:** Gracefully handles KB gaps without hallucination.
-- **Papers:** Yan et al., 2024 — "Corrective Retrieval Augmented Generation"
-
-#### 5.3 FLARE — Forward-Looking Active Retrieval
-- **What it does:** During generation, monitors token probabilities. When the model becomes uncertain (low-probability next tokens), it pauses and retrieves additional context before continuing.
-- **Why it matters:** Retrieves exactly when and what is needed — dynamic, mid-generation retrieval rather than a single upfront search.
-- **Papers:** Jiang et al., 2023 — "Active Retrieval Augmented Generation"
-
----
-
-### 6. Context Compression — ✅ Implemented (LLM-based)
-
-#### 6.1 LLMLingua / LLMLingua-2 — ⚙️ Partial
-- **Status:** LLM-based contextual compression is implemented. Enable with `--compress` (CLI), `/rag compress` (REPL), `"compress": true` (API), or `compress_context: true` in `config.yaml`. Token-level compression via LLMLingua (a dedicated small LM) is not yet integrated — the current approach uses the configured generation LLM instead, which works out of the box with any provider.
-- **What it does:** Uses a small LLM (e.g., Llama-2-7B) to score and remove low-information tokens from retrieved context before passing to the main LLM. Achieves 2–20x compression with minimal accuracy loss.
-- **Why it matters:** Allows fitting more retrieved chunks into the context window; reduces latency and cost proportional to compression ratio.
+- **Why:** Fits more retrieved chunks into the context window; reduces latency and cost proportional to compression ratio.
+- **Effort:** Medium — add optional dependency; runs as a pre-generation pass.
 - **Project:** [microsoft/LLMLingua](https://github.com/microsoft/LLMLingua)
 
 ---
 
-### 7. Better Local Embedding Models — Partially Covered
+## 4. Embedding Models
 
-Current embedding options are good but not SOTA. Higher-quality models are available locally.
+Current defaults (`all-MiniLM-L6-v2` / `BAAI/bge-small-en-v1.5`) are good but not top-of-leaderboard. Two models stand out:
 
-| Model | Context | Dims | MTEB Avg | Notes |
-|-------|---------|------|----------|-------|
-| `all-MiniLM-L6-v2` *(current default)* | 256 | 384 | ~56 | Fast, small |
-| `BAAI/bge-small-en-v1.5` *(current FastEmbed)* | 512 | 384 | ~62 | Balanced |
-| `nomic-embed-text` *(current Ollama option)* | 8192 | 768 | ~62 | Long context |
-| **`BAAI/bge-m3`** *(missing)* | 8192 | 1024 | ~65 | Multi-lingual, dense+sparse+ColBERT |
-| **`intfloat/e5-mistral-7b-instruct`** *(missing)* | 32768 | 4096 | ~66 | LLM-based, SOTA local |
+| Model | Dims | MTEB Avg | Notes |
+|-------|------|----------|-------|
+| **`BAAI/bge-m3`** | 1024 | ~65 | Dense + sparse + ColBERT from one model; 100+ languages; 8192 ctx |
+| **`intfloat/e5-mistral-7b-instruct`** | 4096 | ~66 | LLM-based; SOTA local; requires ~14 GB VRAM |
 
-#### 7.1 BGE-M3
-- **Multi-functionality:** Produces dense vectors (for vector search), sparse vectors (for keyword search — replaces BM25), and multi-vector ColBERT representations (late interaction) — all from a single model.
-- **Multi-lingual:** 100+ languages.
-- **Long context:** 8192 token context window.
-- **Adding BGE-M3 could replace BM25 with a learned sparse retriever**, which is typically more accurate.
+**BGE-M3** is the higher-priority target — its sparse vector output could replace BM25 with a learned sparse retriever, which is typically more accurate. FastEmbed already supports it; the gap is wiring it through `OpenEmbedding` and updating the hybrid retriever to consume its sparse vectors.
 
-#### 7.2 E5-Mistral-7b-Instruct
-- LLM-based embedder — follows task-specific instructions before encoding.
-- SOTA on MTEB for local (non-API) models but requires ~14GB VRAM.
-- Better suited for GPU setups.
+**E5-Mistral** is SOTA but GPU-only; lower priority for the local-first use case.
 
 ---
 
-### 8. Evaluation Framework — Partially Implemented
+## 5. Evaluation Frameworks
 
-RAGAS script exists but is limited.
+Axon Eval smoke tests run in CI. The following richer frameworks are not yet integrated:
 
-| Framework | What It Adds | Status |
-|-----------|-------------|--------|
-| **Axon Eval** | Precision@k, Context Relevance, Faithfulness, Recall@k | ✅ Implemented — runs in CI (`tests/test_eval_smoke.py`, `@pytest.mark.eval`) |
-| **ARES** | Fine-tuned LLM judges, statistically confident scores | Missing |
-| **DeepEval** | Pytest-style CI/CD integration, 25+ metrics, MMLU/HumanEval benchmarks | Missing |
-| **TruLens** | OpenTelemetry tracing, RAG Triad, execution-flow inspection | Missing |
-
-Current gap: ARES, DeepEval, and TruLens not yet integrated. Axon Eval smoke tests run in CI via `tests/test_eval_smoke.py`.
+| Framework | What It Adds |
+|-----------|-------------|
+| **ARES** | Fine-tuned LLM judges; statistically confident scores |
+| **DeepEval** | Pytest-style CI integration; 25+ metrics; MMLU/HumanEval benchmarks |
+| **TruLens** | OpenTelemetry tracing; RAG Triad; execution-flow inspection |
 
 ---
 
-### 9. Infrastructure Gaps
+## 6. Infrastructure
 
-| Gap | Impact | Effort | Status |
-|-----|--------|--------|--------|
-| Query result caching | Every identical query hits the LLM | Low | ✅ DONE — `query_cache: true` in config or `--cache` CLI |
-| Metadata filtering in vector search | Can't filter by date, source, tag | Medium | ✅ DONE — `filters` field on `/query` and `/search` endpoints |
-| Document deduplication on ingest | Re-ingesting same doc creates duplicates | Low | ✅ DONE — hash-based, enabled by default (`dedup_on_ingest: true`) |
-| Async streaming for hybrid path | BM25 runs sync, blocks | Medium | ⬜ Missing |
-| Mandatory source citations in answers | Answers show exactly which chunk they came from | Medium | ✅ DONE — Mandated in system prompts; citations required for local & web results |
+### Async Streaming for Hybrid Search
+BM25 currently runs synchronously and blocks the async event loop on the API path. Moving it to a thread pool or making it truly async would improve throughput under concurrent load.
 
----
-
-## Priority Roadmap
-
-Ordered by **impact / effort** ratio. ✅ = shipped, ⬜ = open.
-
-| Priority | Feature | Effort | Impact | Status |
-|----------|---------|--------|--------|--------|
-| ~~1~~ | ~~Multi-query retrieval~~ | Low | High | ✅ Shipped |
-| ~~2~~ | ~~BGE-M3 embedding support~~ | Low | High | ✅ Via FastEmbed |
-| ~~3~~ | ~~HyDE query transformation~~ | Medium | High | ✅ Shipped |
-| ~~4~~ | ~~LLM-based re-ranking (RankGPT)~~ | Medium | High | ✅ Shipped |
-| ~~5~~ | ~~Query result caching~~ | Low | Medium | ✅ Shipped |
-| ~~6~~ | ~~Ingest deduplication~~ | Low | Medium | ✅ Shipped (default on) |
-| ~~7~~ | ~~API parity with CLI~~ | Low | High | ✅ Shipped |
-| ~~8~~ | ~~Step-back prompting~~ | Low | Medium | ✅ Shipped |
-| ~~9~~ | ~~BGE Reranker v2-m3~~ | Low | Medium | ✅ Shipped — `--reranker-model BAAI/bge-reranker-v2-m3` or config |
-| ~~10~~ | ~~Parent-document / small-to-big retrieval~~ | Medium | High | ✅ Shipped — `parent_chunk_size` config / `--parent-chunk-size` CLI |
-| ~~1~~ | ~~Query decomposition~~ | Medium | Medium | ✅ Shipped — `--decompose` CLI / `"decompose": true` API |
-| ~~2~~ | ~~Context compression (sentence extraction)~~ | Medium | Medium | ✅ Shipped (LLM-based) — `--compress` CLI / `"compress": true` API |
-| ~~3~~ | ~~Mandatory source citations in answers~~ | Medium | Medium | ✅ Shipped — mandated in system prompts |
-| ~~4~~ | ~~RAPTOR hierarchical indexing~~ | High | High | ✅ Shipped — `--raptor` CLI / `rag.raptor` config; LLM summary nodes indexed alongside leaf chunks |
-| ~~5~~ | ~~GraphRAG integration~~ | High | High | ✅ Shipped — `--graph-rag` CLI / `rag.graph_rag` config; entity graph persisted to `.entity_graph.json`; result expansion at query time |
-| ~~6~~ | ~~Evaluation in CI~~ | Medium | Medium | ✅ Shipped — `tests/test_eval_smoke.py` (Axon Eval smoke tests); `@pytest.mark.eval`; dedicated CI step |
+- **Effort:** Low-Medium — `run_in_executor` wrapper or rewrite `BM25Retriever.search()` as async.
 
 ---
 
 ## References
 
-- [RAPTOR Paper (2024)](https://arxiv.org/abs/2401.18059)
-- [HyDE Paper (2022)](https://arxiv.org/abs/2212.10496)
-- [Self-RAG Paper (2023)](https://arxiv.org/abs/2310.11511)
-- [CRAG Paper (2024)](https://arxiv.org/abs/2401.15884)
-- [FLARE Paper (2023)](https://arxiv.org/abs/2305.06983)
-- [RankGPT Paper (2023)](https://arxiv.org/abs/2304.09542)
+- [Self-RAG (2023)](https://arxiv.org/abs/2310.11511)
+- [CRAG (2024)](https://arxiv.org/abs/2401.15884)
+- [FLARE (2023)](https://arxiv.org/abs/2305.06983)
 - [Dense X Retrieval / Propositions (2023)](https://arxiv.org/abs/2312.06648)
-- [Microsoft GraphRAG](https://github.com/microsoft/graphrag)
 - [LLMLingua](https://github.com/microsoft/LLMLingua)
-- [BGE-M3 Model](https://huggingface.co/BAAI/bge-m3)
+- [BGE-M3](https://huggingface.co/BAAI/bge-m3)
 - [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard)
-- [RAGAS Framework](https://github.com/explodinggradients/ragas)
-- [DeepEval Framework](https://github.com/confident-ai/deepeval)
-
----
-
-*Last updated: March 2026 — Sprint 5 (@file/@folder REPL context attachment + streaming Markdown render)*
+- [DeepEval](https://github.com/confident-ai/deepeval)

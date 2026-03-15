@@ -16,7 +16,8 @@ This guide walks through setting up the application from scratch, including deta
 8. [Configure .env](#8-configure-env)
 9. [Verify the Full Setup](#9-verify-the-full-setup)
 10. [MCP Setup (Copilot Agent Mode)](#10-mcp-setup-copilot-agent-mode)
-11. [Troubleshooting](#11-troubleshooting)
+11. [VS Code Extension (GitHub Copilot Integration)](#11-vs-code-extension-github-copilot-integration)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
@@ -37,8 +38,8 @@ Before starting, ensure you have:
 Clone the repository if you haven't already:
 
 ```bash
-git clone https://github.com/jyunming/studio_brain_open.git
-cd studio_brain_open
+git clone https://github.com/jyunming/Axon.git
+cd Axon
 ```
 
 ---
@@ -807,7 +808,186 @@ For a team where one person owns ingestion and others query:
 
 ---
 
-## 11. Troubleshooting
+## 11. VS Code Extension (GitHub Copilot Integration)
+
+The Axon VS Code extension (`axon-copilot`) gives GitHub Copilot direct access to your knowledge base as **language model tools** — available in Copilot Chat, inline chat, and agent mode. It also provides VS Code commands for project management, ingestion, and sharing.
+
+> **Difference from MCP:** The VS Code extension runs entirely inside VS Code using the VS Code Language Model API. The MCP server (Section 10) uses the Model Context Protocol and works with any MCP-compatible host. Both require `axon-api` to be running. Choose based on your workflow — both can coexist.
+
+### Prerequisites
+
+- **VS Code** 1.93 or later
+- **GitHub Copilot** extension installed and signed in (free tier works; Copilot Chat required for tool use)
+- **Axon API** running (`axon-api`) — the extension connects to it at `http://localhost:8000` by default
+
+### 1. Install the VSIX
+
+**Option A — Install from release (recommended)**
+
+Download `axon-copilot-1.0.0.vsix` from the [GitHub Releases](https://github.com/jyunming/Axon/releases) page or find it in `integrations/vscode-axon/` in the repo.
+
+Open VS Code and install:
+
+```
+1. Open the Extensions panel (Ctrl+Shift+X)
+2. Click the "..." (More Actions) button at the top-right of the panel
+3. Select "Install from VSIX..."
+4. Navigate to axon-copilot-1.0.0.vsix and click Install
+5. Reload VS Code when prompted (Ctrl+Shift+P → "Reload Window")
+```
+
+**Option B — Build from source**
+
+```bash
+cd integrations/vscode-axon
+npm install
+npm run package   # produces axon-copilot-1.0.0.vsix
+```
+
+Then install the generated `.vsix` as above.
+
+### 2. How the extension finds Python
+
+The extension needs to know which Python executable to use to start `axon-api` (when `autoStart` is enabled). It tries the following in order — **no configuration is usually needed**:
+
+| Priority | Where it looks | When this applies |
+|---|---|---|
+| 1 | `axon.pythonPath` VS Code setting | You explicitly set a path — always wins |
+| 2 | `~/.axon/.python_path` | Written automatically the first time you run `axon` in a terminal; covers pip/venv installs |
+| 3 | pipx venv (`~/.local/pipx/venvs/axon/`) | You installed with `pipx install axon` |
+| 4 | Workspace `.venv` / `venv` / `env` | A virtual environment exists in your open VS Code folder |
+| 5 | System `python3` / `python` | Global install fallback; shows a warning if Axon is not found on this Python |
+
+**The simplest path:**
+
+- **Installed via pip into a venv?** Run `axon` once from that terminal → `~/.axon/.python_path` is written → done. No VS Code config needed.
+- **Installed via pipx?** Nothing to do — the extension finds the pipx venv automatically.
+- **Custom install location?** Set `axon.pythonPath` explicitly in VS Code Settings (Ctrl+,).
+
+If auto-detection fails, VS Code shows a notification with a link to open the `axon.pythonPath` setting directly.
+
+### 3. Configure extension settings
+
+Open VS Code Settings (Ctrl+,) and search for `axon`:
+
+| Setting | Default | Description |
+|---|---|---|
+| `axon.apiBase` | `http://localhost:8000` | URL of your running `axon-api` server |
+| `axon.apiKey` | *(empty)* | API key if `RAG_API_KEY` is set on the server |
+| `axon.topK` | `5` | Default number of chunks returned per query |
+| `axon.autoStart` | `true` | Auto-start `axon-api` on extension activate (Linux/macOS only) |
+| `axon.pythonPath` | *(auto-detect)* | Explicit Python path override — leave blank for auto-detection (see above) |
+| `axon.useCopilotLlm` | `false` | Use Copilot's LLM (GPT-4o / Claude) for RAPTOR/GraphRAG instead of Ollama |
+| `axon.ingestBase` | *(empty)* | Restrict ingestion paths to a specific directory |
+| `axon.storeBase` | *(empty)* | Base path for AxonStore multi-user mode |
+
+Or edit `settings.json` directly:
+
+```json
+{
+  "axon.apiBase": "http://localhost:8000",
+  "axon.topK": 10,
+  "axon.autoStart": true
+}
+```
+
+### 4. Start the Axon API
+
+The API must be running before using any Copilot tools. On Linux/macOS with `autoStart: true` the extension starts it automatically. On Windows, start it manually:
+
+```bash
+axon-api
+```
+
+### 5. Verify in Copilot Chat
+
+Open Copilot Chat (Ctrl+Shift+I or the chat icon in the Activity Bar). Type a message:
+
+```
+@workspace What does my knowledge base contain?
+```
+
+Copilot will automatically call `axon_getCollection` or `axon_listProjects` to answer. You can also use tools explicitly:
+
+```
+Search my Axon knowledge base for information about neural networks.
+```
+
+### Available tools (17 total)
+
+| Tool | What it does |
+|---|---|
+| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer |
+| `axon_queryKnowledge` | Retrieval + answer via local LLM (requires Ollama) |
+| `axon_ingestText` | Ingest a text snippet directly |
+| `axon_ingestUrl` | Fetch and ingest a web page |
+| `axon_ingestPath` | Ingest a local file or directory (async; returns `job_id`) |
+| `axon_getIngestStatus` | Poll an ingest job by `job_id` — call after `axon_ingestPath` before searching |
+| `axon_listProjects` | List available project namespaces |
+| `axon_switchProject` | Switch active project |
+| `axon_createProject` | Create a new project namespace |
+| `axon_deleteProject` | Delete a project and all its data |
+| `axon_deleteDocuments` | Remove specific documents by ID |
+| `axon_getCollection` | List all ingested files with chunk counts |
+| `axon_clearCollection` | Wipe all data from the current project |
+| `axon_updateSettings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
+| `axon_listShares` | List active project shares (AxonStore mode) |
+| `axon_initStore` | Initialise AxonStore multi-user mode |
+| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+
+### Available VS Code commands
+
+Access via Ctrl+Shift+P:
+
+| Command | Description |
+|---|---|
+| `Axon: Switch Project` | Change active project namespace |
+| `Axon: Create Project` | Create a new project |
+| `Axon: Ingest File` | Browse and ingest a single file |
+| `Axon: Ingest Workspace` | Ingest the entire VS Code workspace |
+| `Axon: Ingest Folder` | Browse and ingest a folder |
+| `Axon: Start Server` | Start `axon-api` manually |
+| `Axon: Stop Server` | Stop the managed `axon-api` process |
+| `Axon: Init Store` | Initialise AxonStore multi-user mode |
+| `Axon: Share Project` | Generate a share key for a project |
+| `Axon: Redeem Share` | Join a project shared by another user |
+| `Axon: Revoke Share` | Revoke an active share |
+| `Axon: List Shares` | View all active shares |
+
+### Typical workflow
+
+```
+1. axon-api starts (auto or manual)
+2. Copilot Chat: "Ingest my documents at /path/to/docs"
+   → extension calls axon_ingestPath → returns job_id
+3. Copilot Chat: "Check if ingest is done" (or wait a moment)
+   → extension calls axon_getIngestStatus(job_id) → "completed"
+4. Copilot Chat: "What are the main topics in those docs?"
+   → extension calls axon_searchKnowledge → Copilot synthesises answer
+```
+
+### Troubleshooting the extension
+
+**Copilot says it cannot find Axon tools**
+- Ensure the VSIX is installed and VS Code has been reloaded after install
+- Check the extension is enabled (Extensions panel → search "Axon Copilot")
+- Confirm `axon-api` is running: `curl http://localhost:8000/health`
+
+**Tools appear but requests fail with connection errors**
+- Verify `axon.apiBase` matches where `axon-api` is listening
+- On Windows, `axon-api` may bind to `127.0.0.1` — make sure `axon.apiBase` uses `http://localhost:8000` (not `http://0.0.0.0:8000`)
+
+**`autoStart` does not work (Linux/macOS)**
+- Check `axon.pythonPath` is set correctly, or run `axon` once from the terminal to write `~/.axon/.python_path`
+- The extension reads that file to discover Python automatically
+
+**Image ingest fails with "model does not support images"**
+- Switch your Copilot model to one with vision capability (GPT-4o or Claude 3.x Sonnet/Opus)
+- In Copilot Chat, click the model selector and choose a multimodal model
+
+---
+
+## 12. Troubleshooting
 
 ### Ollama not running
 

@@ -28,14 +28,15 @@ store collection and BM25 index are read and written.
 Switch the active project with `POST /project/switch` before ingesting if the
 content belongs to a specific namespace.
 
-### Hierarchical projects (up to 3 levels)
+### Hierarchical projects (up to 5 levels)
 
-Projects support slash-separated nesting up to 3 levels deep:
+Projects support slash-separated nesting up to 5 levels deep:
 
 ```
 research/               ← top-level parent
 research/papers/        ← child
-research/papers/2024    ← grandchild (max depth)
+research/papers/2024    ← grandchild
+research/papers/2024/q1 ← great-grandchild (max depth: 5 segments total)
 ```
 
 **Searching a parent automatically searches all its descendants.** When you

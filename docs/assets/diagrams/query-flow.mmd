@@ -1,0 +1,9 @@
+flowchart LR
+    Q["❓ Question"]
+    Transform["Transform\nHyDE · Multi-Query · Step-Back"]
+    Retrieve["Hybrid Retrieve\nVector + BM25 → fuse"]
+    Rerank["Rerank\nBGE cross-encoder\n(optional)"]
+    LLM["🤖 Local LLM\nOllama · Gemini · OpenAI"]
+    Answer["✅ Answer\n+ Citations"]
+
+    Q --> Transform --> Retrieve --> Rerank --> LLM --> Answer

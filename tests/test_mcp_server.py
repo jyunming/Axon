@@ -34,6 +34,7 @@ EXPECTED_MCP_TOOL_NAMES = {
     "share_project",
     "redeem_share",
     "list_shares",
+    "init_store",
 }
 
 
@@ -820,5 +821,25 @@ class TestMcpToolCoverage:
                 assert args[0].endswith("/share/list")
                 assert "sharing" in result
                 assert "shared" in result
+
+        asyncio.run(_run())
+
+    # init_store
+    # ------------------------------------------------------------------
+    def test_init_store_mcp(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from axon.mcp_server import init_store
+
+        async def _run():
+            with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+                mock_post.return_value = _make_mock_resp(
+                    {"status": "ok", "store_path": "/data/AxonStore", "username": "alice"}
+                )
+                result = await init_store(base_path="/data")
+                _, kwargs = mock_post.call_args
+                assert kwargs["json"]["base_path"] == "/data"
+                assert result["status"] == "ok"
 
         asyncio.run(_run())

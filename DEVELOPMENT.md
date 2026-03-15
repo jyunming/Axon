@@ -187,7 +187,7 @@ import pdb; pdb.set_trace()  # Insert breakpoint
 
 **Check API responses:**
 ```bash
-curl -X POST http://localhost:8000/health
+curl http://localhost:8000/health
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "test query"}'

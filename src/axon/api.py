@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -25,10 +26,45 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AxonAPI")
 
 
+_BLOCKED_PATH_PREFIXES: tuple[pathlib.Path, ...] = tuple(
+    pathlib.Path(p)
+    for p in [
+        # Windows system roots
+        "C:/Windows",
+        "C:/Windows/System32",
+        "C:/Windows/SysWOW64",
+        "C:/Program Files",
+        "C:/Program Files (x86)",
+        # Unix system roots
+        "/etc",
+        "/proc",
+        "/sys",
+        "/boot",
+        "/root",
+        "/usr/bin",
+        "/usr/sbin",
+        "/bin",
+        "/sbin",
+    ]
+)
+
+
 def _validate_ingest_path(path: str) -> str:
-    """Validate that path is within the allowed base directory."""
+    """Validate that path is within the allowed base directory and not a blocked system path."""
     allowed_base = pathlib.Path(os.getenv("RAG_INGEST_BASE", ".")).resolve()
     abs_path = pathlib.Path(path).resolve()
+
+    # Reject blocked system directories regardless of RAG_INGEST_BASE
+    for blocked in _BLOCKED_PATH_PREFIXES:
+        try:
+            abs_path.relative_to(blocked)
+            raise HTTPException(
+                status_code=403,
+                detail=f"Path '{path}' resolves to a blocked system directory.",
+            )
+        except ValueError:
+            pass
+
     try:
         abs_path.relative_to(allowed_base)
     except ValueError:
@@ -172,6 +208,9 @@ class QueryRequest(BaseModel):
     decompose: bool | None = Field(None, description="Override query decomposition toggle")
     compress: bool | None = Field(None, description="Override LLM context compression toggle")
     discuss: bool | None = Field(None, description="Override discussion fallback toggle")
+    temperature: float | None = Field(
+        None, ge=0.0, le=2.0, description="Override LLM temperature for this request (0.0–2.0)"
+    )
     timeout: float | None = Field(None, gt=0, description="Query timeout in seconds (default 120)")
 
 
@@ -629,12 +668,50 @@ async def get_session(session_id: str):
 
 @app.post("/clear")
 async def clear_brain():
-    """Clear the active project's vector store and BM25 index."""
+    """Clear the active project's vector store, BM25 index, hash store, and entity graph."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        brain.vector_store.delete_by_ids([])  # delete_by_ids([]) is a no-op for most providers
-        return {"status": "success", "message": "Collection cleared (if supported by provider)"}
+        vs = brain.vector_store
+        provider = vs.provider
+        if provider == "chroma" and vs.client is not None:
+            vs.client.delete_collection("axon")
+            vs.collection = vs.client.create_collection(
+                name="axon", metadata={"hnsw:space": "cosine"}
+            )
+        elif provider == "qdrant" and vs.client is not None:
+            try:
+                vs.client.delete_collection("axon")
+            except Exception:
+                pass
+            vs._init_store()
+        elif provider == "lancedb" and vs.client is not None:
+            try:
+                vs.client.drop_table("axon")
+            except Exception:
+                pass
+            vs.collection = None
+
+        if brain.bm25 is not None:
+            brain.bm25.corpus.clear()
+            brain.bm25.bm25 = None
+            brain.bm25.save()
+
+        brain._ingested_hashes = set()
+        brain._save_hash_store()
+        brain._entity_graph = {}
+        brain._save_entity_graph()
+
+        # Delete embedding metadata so the project can be re-ingested with a
+        # different embedding model without hitting a stale mismatch error.
+        _meta_path = pathlib.Path(brain._embedding_meta_path)
+        if _meta_path.exists():
+            try:
+                _meta_path.unlink()
+            except OSError:
+                pass
+
+        return {"status": "success", "message": "Collection cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -674,7 +751,7 @@ async def health_check():
     """Return 200 with status 'ok' when the brain is ready; 503 with status 'initializing' when not yet available."""
     if brain is None:
         return JSONResponse({"status": "initializing"}, status_code=503)
-    return {"status": "ok", "project": getattr(brain.config, "project", "default")}
+    return {"status": "ok", "project": getattr(brain, "_active_project", "default")}
 
 
 @app.get("/tracked-docs")
@@ -726,6 +803,7 @@ async def query_brain(request: QueryRequest):
             "query_decompose": request.decompose,
             "compress_context": request.compress,
             "discussion_fallback": request.discuss,
+            "llm_temperature": request.temperature,
         }
 
         # Offload sync brain.query to a threadpool to keep the event loop free
@@ -764,6 +842,8 @@ async def query_brain(request: QueryRequest):
             "discuss": cfg.discussion_fallback,
         }
         return {"query": request.query, "response": response, "settings": settings}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -785,6 +865,7 @@ async def query_brain_stream(request: QueryRequest):
         "query_decompose": request.decompose,
         "compress_context": request.compress,
         "discussion_fallback": request.discuss,
+        "llm_temperature": request.temperature,
     }
 
     def generate():
@@ -859,22 +940,26 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     }
 
     def process_ingestion():
-        import asyncio
+        from axon.loaders import DirectoryLoader
 
         try:
+            loader_mgr = DirectoryLoader()
             if requested_path.is_dir():
-                asyncio.run(brain.load_directory(str(requested_path)))
+                # Use the sync loader to avoid asyncio.run() inside a background
+                # thread — on Windows, ProactorEventLoop created by asyncio.run()
+                # in a non-main thread can hang indefinitely.
+                docs = loader_mgr.load(str(requested_path))
             else:
-                from axon.loaders import DirectoryLoader
-
                 ext = requested_path.suffix.lower()
-                loader_mgr = DirectoryLoader()
                 if ext in loader_mgr.loaders:
                     docs = loader_mgr.loaders[ext].load(str(requested_path))
-                    brain.ingest(docs)
                 else:
                     logger.warning(f"Unsupported file type: {ext}")
+                    docs = []
+            if docs:
+                brain.ingest(docs)
             _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["documents_ingested"] = len(docs)
             _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
@@ -911,8 +996,11 @@ async def add_text(request: TextIngestRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
+    if not request.text or not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text must not be empty.")
+
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
-    project_key = request.project or "_global"
+    project_key = request.project or brain._active_project
 
     skip = _check_dedup(request.text, project_key)
     if skip:
@@ -946,7 +1034,7 @@ async def add_texts(request: BatchTextIngestRequest):
 
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
-    project_key = request.project or "_global"
+    project_key = request.project or brain._active_project
 
     # pending_records maps doc_id → item.text for dedup recording after ingest
     pending_records: list[tuple[str, str]] = []
@@ -999,7 +1087,7 @@ async def ingest_url(request: URLIngestRequest):
     from axon.loaders import URLLoader
 
     loader = URLLoader()
-    project_key = request.project or "_global"
+    project_key = request.project or brain._active_project
     try:
         docs = loader.load(request.url)
     except ValueError as exc:
@@ -1133,13 +1221,28 @@ async def delete_documents(request: DeleteRequest):
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        brain.vector_store.delete_by_ids(request.doc_ids)
-        if brain.bm25 is not None:
-            brain.bm25.delete_documents(request.doc_ids)
-        return {"status": "success", "deleted": len(request.doc_ids), "doc_ids": request.doc_ids}
+        # Resolve which IDs actually exist before deleting so the count is accurate
+        existing = brain.vector_store.get_by_ids(request.doc_ids)
+        existing_ids_set = {doc["id"] for doc in existing}
+        # Preserve original request order for the response
+        existing_ids = [i for i in request.doc_ids if i in existing_ids_set]
+        not_found = [i for i in request.doc_ids if i not in existing_ids_set]
+        if existing_ids:
+            brain.vector_store.delete_by_ids(existing_ids)
+            if brain.bm25 is not None:
+                brain.bm25.delete_documents(existing_ids)
+        return {
+            "status": "success",
+            "deleted": len(existing_ids),
+            "doc_ids": existing_ids,
+            "not_found": not_found,
+        }
     except Exception as e:
         logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}(?:/[A-Za-z0-9_\-]{1,64}){0,4}$")
 
 
 @app.post("/project/new")
@@ -1147,9 +1250,20 @@ async def create_project(request: ProjectCreateRequest):
     """Create a new project directory and metadata."""
     from axon.projects import ensure_project
 
+    if not request.name or not _VALID_PROJECT_NAME_RE.match(request.name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid project name. Use 1-5 slash-separated segments of "
+                "1-64 alphanumeric characters, hyphens, or underscores "
+                "(e.g. 'research/papers/2024')."
+            ),
+        )
     try:
         ensure_project(request.name, description=request.description)
         return {"status": "success", "project": request.name}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Project creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

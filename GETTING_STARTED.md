@@ -1,151 +1,258 @@
 # Getting Started with Axon
 
-Axon is a local RAG (Retrieval-Augmented Generation) assistant. You point it at documents, and it lets you ask questions about them — using an LLM running on your own machine.
+Axon has five entry points that all share the same knowledge base. Ingest once, query from anywhere.
 
-This guide covers the core ideas and the most common workflows.
-
----
-
-## The core idea
-
-LLMs are good at reasoning but they don't know your documents.
-RAG fixes that by:
-
-1. **Ingesting** your documents — splitting them into chunks and storing them as vector embeddings
-2. **Retrieving** relevant chunks when you ask a question
-3. **Answering** using the retrieved text as context
-
-Axon does all three, locally, with no data leaving your machine.
+![Axon entry points](docs/assets/diagrams/entry-points.png)
 
 ---
 
-## Install
+## Quick Install
 
 ```bash
-pip install -e ".[dev]"
+git clone https://github.com/jyunming/Axon.git && cd Axon
+pip install -e .
+
+# Pull a local LLM (pick one)
+ollama pull llama3.1:8b   # recommended — 4.7 GB, ~8 GB RAM
+ollama pull phi3:mini     # minimal  — 2.3 GB, ~4 GB RAM
 ```
 
-You also need [Ollama](https://ollama.ai/) running with at least one model pulled:
+## Install the VS Code Extension
 
-```bash
-ollama pull gemma
+The VSIX ships with the repo — no download needed:
+
 ```
+1. Open Extensions panel  (Ctrl+Shift+X)
+2. Click  "..."  →  "Install from VSIX..."
+3. Select  integrations/vscode-axon/axon-copilot-1.0.0.vsix
+4. Reload VS Code  (Ctrl+Shift+P → "Reload Window")
+```
+
+**How the extension finds Python** (for `autoStart` — starting `axon-api` automatically):
+
+| Your install method | What to do |
+|---|---|
+| `pip install` into a venv | Run `axon` once from the terminal → auto-detected via `~/.axon/.python_path` |
+| `pipx install axon` | Nothing — extension finds the pipx venv automatically |
+| Workspace venv (`.venv/`) | Nothing — extension checks the open folder automatically |
+| Custom / unusual path | Set `axon.pythonPath` in VS Code Settings (Ctrl+,) |
+
+No configuration needed for the most common cases. If auto-detection fails, VS Code shows a notification linking directly to the setting.
 
 ---
 
-## The three entry points
+## How Ingestion Works
+
+![Ingestion flow](docs/assets/diagrams/ingestion-flow.png)
+
+## How Querying Works
+
+![Query flow](docs/assets/diagrams/query-flow.png)
+
+---
+
+## Entry Point 1 — CLI / REPL
+
+**Launch:**
+```bash
+axon
+```
+
+**Ingest:**
+```
+/ingest ./my-documents/       # ingest a folder
+/ingest ./report.pdf          # ingest a single file
+```
+
+**Query:**
+```
+You: What are the main topics in these documents?
+You: Summarise the Q3 report
+You: Explain this code @./src/main.py
+```
+
+**Useful commands:**
 
 | Command | What it does |
 |---|---|
-| `axon` | Interactive REPL — best for exploring |
-| `axon-api` | FastAPI server — use when integrating with other tools |
-| `axon-ui` | Streamlit web UI — visual chat interface |
-
-For day-to-day use, `axon` is the starting point.
-
----
-
-## Ingest documents, then ask questions
-
-```bash
-# Start the REPL
-axon
-
-# Inside the REPL, ingest a folder
-/ingest ./my-documents/
-
-# Ask a question
-You: What is the main topic of these documents?
-```
-
-You can also attach files inline without ingesting:
-
-```
-You: Explain this code @./src/axon/main.py
-You: What changed in @./src/axon/
-```
-
----
-
-## Projects — keeping knowledge bases separate
-
-A **project** is an isolated knowledge base. Documents ingested into one project are not visible in another.
-
-```bash
-axon --project work "Summarise the Q3 report"
-axon --project personal "What did I write about sleep?"
-```
-
-You can nest projects up to 3 levels deep:
-
-```
-research
-research/papers
-research/papers/2024
-```
-
-When you switch to a parent project (e.g. `research`), Axon automatically searches across all its sub-projects too.
-
-```bash
-# Inside the REPL
-/project new research/papers
-/project switch research       # searches research + all children
-/project list                  # shows the full tree
-```
-
----
-
-## Switching models at runtime
-
-```bash
-# Switch to a different Ollama model
-/model llama3.1:8b
-
-# Switch to a cloud model (needs API key)
-/model gemini-1.5-flash
-/model gpt-4o
-```
-
----
-
-## Useful REPL commands
-
-| Command | Purpose |
-|---|---|
-| `/help` | Full command reference |
-| `/ingest <path>` | Add documents to the current project |
+| `/ingest <path>` | Ingest file or folder |
 | `/list` | Show all ingested documents |
-| `/model` | Switch LLM |
-| `/rag topk 5` | Retrieve fewer chunks (faster, less context) |
-| `/context` | Show current settings and token usage |
-| `/sessions` | Browse saved sessions |
+| `/model <name>` | Switch LLM on the fly (`llama3.1:8b`, `gemini-1.5-flash`, `gpt-4o`) |
+| `/project switch <name>` | Change knowledge base |
+| `/rag topk 10` | Retrieve more chunks |
+| `/rag rerank` | Toggle BGE reranker |
+| `/rag hyde` | Toggle HyDE query expansion |
+| `/llm temperature 0.2` | Set LLM temperature (0.0–2.0) |
+| `/sessions` | Browse saved conversation sessions |
+| `/context` | Show current config and token usage |
 | `/clear` | Start a fresh conversation |
+| `/help` | Full command list |
 
 ---
 
-## Configuration
+## Entry Point 2 — Web UI
 
-Copy `config.yaml` and edit it to set your default model, embedding provider, and storage paths.
+**Launch:**
+```bash
+axon-ui   # opens http://localhost:8501
+```
 
-The most commonly changed settings:
+**Ingest:**
+- Left sidebar → **Knowledge Hub** → paste a URL, enter a path, or upload a file
 
-```yaml
-llm:
-  model: gemma        # any Ollama model you have pulled
+**Query:**
+- Type in the chat input → Enter
 
-rag:
-  top_k: 10           # how many chunks to retrieve per query
-  hybrid_search: true # combine vector + keyword search
+**Settings:**
+- Left sidebar → **Model & Settings** → toggle hybrid search, reranking, HyDE, RAPTOR, GraphRAG, temperature
 
-# Custom storage location (optional)
-# projects_root: /path/to/your/projects
+---
+
+## Entry Point 3 — REST API
+
+**Launch:**
+```bash
+axon-api   # starts at http://localhost:8000
+```
+
+**Full interactive reference:** `http://localhost:8000/docs`
+
+**Ingest (async):**
+```bash
+# Start ingest — returns job_id immediately
+curl -X POST http://localhost:8000/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/path/to/docs"}'
+# → {"job_id": "abc123", "status": "processing"}
+
+# Poll until complete
+curl http://localhost:8000/ingest/status/abc123
+# → {"status": "completed", "documents_ingested": 12}
+```
+
+**Ingest text directly:**
+```bash
+curl -X POST http://localhost:8000/add_text \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Important note to remember.", "metadata": {"source": "notes"}}'
+```
+
+**Query (with answer synthesis):**
+```bash
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the main topics?"}'
+```
+
+**Search (raw chunks, no LLM):**
+```bash
+curl -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "authentication flow", "top_k": 5}'
+```
+
+---
+
+## Entry Point 4 — MCP Server (Copilot Agent Mode)
+
+The MCP server gives GitHub Copilot direct tool access in **agent mode** (hammer icon in Copilot Chat).
+
+![MCP workflow](docs/assets/diagrams/mcp-workflow.png)
+
+**Setup (one-time):** Create `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "servers": {
+    "axon": {
+      "type": "stdio",
+      "command": "axon-mcp",
+      "env": {
+        "RAG_API_BASE": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+Create `.vscode/settings.json`:
+```json
+{
+  "chat.mcp.access": "all"
+}
+```
+
+**Launch:**
+```bash
+axon-api   # must be running
+```
+Reload VS Code → Copilot agent mode → Axon tools appear automatically.
+
+> **Windows:** if `axon-mcp` is not on PATH, use the full path: `C:\Users\<you>\AppData\Local\Programs\Python\Python313\Scripts\axon-mcp.exe`
+
+---
+
+## Entry Point 5 — VS Code Extension (Copilot Chat)
+
+After installing the VSIX and starting `axon-api`, use Copilot Chat (Ctrl+Shift+I):
+
+![VS Code extension workflow](docs/assets/diagrams/vscode-workflow.png)
+
+**Ingest:**
+```
+Ingest my documents at /path/to/docs
+Add this URL to my knowledge base: https://docs.example.com
+```
+
+**Query:**
+```
+Search my knowledge base for information about the login flow.
+What does the authentication module do?
+```
+
+**Manage:**
+```
+List all my projects
+Switch to the "work" project
+What files have I ingested?
+```
+
+**Image ingest** (requires GPT-4o or Claude model in Copilot):
+```
+Describe and ingest this diagram: /path/to/architecture.png
+```
+
+---
+
+## Projects — Multiple Knowledge Bases
+
+Isolate documents by project. Parent projects automatically search all children.
+
+![Projects hierarchy](docs/assets/diagrams/projects-hierarchy.png)
+
+```bash
+# REPL
+/project new research/papers
+/project switch work
+/project list
+
+# CLI
+axon --project work "Summarise the Q3 report"
+axon --project research "What papers discuss attention mechanisms?"
+
+# API
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the main topics?", "project": "work"}'
 ```
 
 ---
 
 ## Where to go next
 
-- `QUICKREF.md` — complete command reference
-- `SETUP.md` — detailed installation and configuration options
-- `TROUBLESHOOTING.md` — common issues and fixes
-- `MODEL_GUIDE.md` — choosing models for different use cases
+| Guide | What it covers |
+|---|---|
+| [SETUP.md](SETUP.md) | Full platform install, all model options, VS Code extension config, MCP setup |
+| [QUICKREF.md](QUICKREF.md) | All CLI flags, REPL commands, API endpoints at a glance |
+| [MODEL_GUIDE.md](MODEL_GUIDE.md) | Choosing an LLM and embedding model for your hardware |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common errors and fixes |

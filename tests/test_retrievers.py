@@ -1,5 +1,6 @@
 """Tests for retriever modules."""
 
+import os
 import tempfile
 
 from axon.retrievers import BM25Retriever, weighted_score_fusion
@@ -267,3 +268,142 @@ class TestBM25RetrieverSaveLoad:
         r2 = BM25Retriever(storage_path=str(tmp_path))
         assert r2.corpus == []
         assert r2.bm25 is None
+
+    def test_save_overwrites_existing_file(self, tmp_path):
+        """Second save must not raise [Errno 22] on Windows (os.replace race)."""
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [{"id": "a", "text": "first save", "metadata": {}}]
+        r.add_documents(docs)
+        r.save()  # creates the corpus file
+
+        # A second save while the file already exists must succeed
+        r.corpus[0]["text"] = "second save"
+        r.save()
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        assert r2.corpus[0]["text"] == "second save"
+
+    def test_save_fallback_on_permission_error(self, tmp_path, monkeypatch):
+        """save() must survive PermissionError from os.replace (Windows file-lock)."""
+        import shutil
+
+        r = BM25Retriever(storage_path=str(tmp_path))
+        r.add_documents([{"id": "z", "text": "locked file", "metadata": {}}])
+
+        replace_called = []
+        copy_called = []
+        real_copy = shutil.copy2
+
+        def mock_replace(src, dst):
+            replace_called.append(True)
+            raise PermissionError("file in use")
+
+        def mock_copy(src, dst):
+            copy_called.append(True)
+            real_copy(src, dst)
+
+        monkeypatch.setattr(os, "replace", mock_replace)
+        monkeypatch.setattr("shutil.copy2", mock_copy)
+
+        r.save()  # must not raise
+        assert replace_called, "os.replace should have been attempted"
+        assert copy_called, "shutil.copy2 fallback should have been used"
+
+
+class TestHybridThresholdBug:
+    """Regression: BM25-only hits must not be filtered by vector similarity threshold."""
+
+    def test_fused_only_hit_passes_threshold(self):
+        """A BM25-only fused hit (fused_only=True, vector_score=0.0) must survive
+        the similarity threshold filter that would otherwise drop it."""
+        from axon.retrievers import weighted_score_fusion
+
+        vector_results = []
+        bm25_results = [
+            {"id": "bm25doc", "text": "INC-44721 exact match", "score": 1.0, "metadata": {}}
+        ]
+        fused = weighted_score_fusion(vector_results, bm25_results, weight=0.7)
+        assert len(fused) == 1
+        bm25_hit = fused[0]
+        # fused_only flag must be set so the threshold filter skips it
+        assert bm25_hit.get("fused_only") is True
+        # vector_score must be 0.0 (no vector contribution)
+        assert bm25_hit.get("vector_score", 0.0) == 0.0
+
+    def test_mixed_results_only_low_vector_score_filtered(self):
+        """Vector results below threshold should be filtered; BM25-only hits kept."""
+        # This directly tests the filtering logic in main.py
+        threshold = 0.4
+        results = [
+            {"id": "vec_good", "vector_score": 0.8, "fused_only": False},
+            {"id": "vec_bad", "vector_score": 0.1, "fused_only": False},
+            {"id": "bm25_only", "vector_score": 0.0, "fused_only": True},
+        ]
+        filtered = []
+        for r in results:
+            if r.get("fused_only"):
+                filtered.append(r)
+                continue
+            if r.get("vector_score", r.get("score", 0.0)) >= threshold:
+                filtered.append(r)
+
+        ids = [r["id"] for r in filtered]
+        assert "vec_good" in ids
+        assert "vec_bad" not in ids
+        assert "bm25_only" in ids  # must survive despite vector_score=0.0
+
+
+class TestBM25SaveOsError:
+    """Regression tests for Bug: BM25 save raises OSError (errno 22 / WinError 87) on Windows.
+
+    os.replace() on Windows can raise OSError (not just PermissionError) in some
+    filesystem configurations.  The fallback path must activate for any OSError.
+    """
+
+    def test_save_falls_back_on_oserror(self, tmp_path, monkeypatch):
+        """When os.replace raises OSError (errno 22), shutil.copy2 fallback is used."""
+        import shutil
+        import unittest.mock as mock
+
+        r = BM25Retriever(storage_path=str(tmp_path))
+        r.add_documents([{"id": "d1", "text": "hello world", "metadata": {}}])
+
+        # Make the next save fail with OSError (simulates WinError 87 / errno 22)
+        with mock.patch("os.replace", side_effect=OSError(22, "Invalid argument")):
+            copy2_called = []
+            real_copy2 = shutil.copy2
+
+            def _fake_copy2(src, dst):
+                copy2_called.append((src, dst))
+                return real_copy2(src, dst)
+
+            with mock.patch("shutil.copy2", side_effect=_fake_copy2):
+                # Should not raise
+                r.save()
+
+        assert len(copy2_called) == 1, "shutil.copy2 fallback should have been called"
+        # Verify corpus still readable from disk
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        assert len(r2.corpus) == 1
+        assert r2.corpus[0]["id"] == "d1"
+
+    def test_save_falls_back_on_permission_error(self, tmp_path, monkeypatch):
+        """PermissionError is still handled (subset of OSError)."""
+        import shutil
+        import unittest.mock as mock
+
+        r = BM25Retriever(storage_path=str(tmp_path))
+        r.add_documents([{"id": "d1", "text": "test", "metadata": {}}])
+
+        with mock.patch("os.replace", side_effect=PermissionError("locked")):
+            copy2_called = []
+            real_copy2 = shutil.copy2
+
+            def _fake_copy2(src, dst):
+                copy2_called.append((src, dst))
+                return real_copy2(src, dst)
+
+            with mock.patch("shutil.copy2", side_effect=_fake_copy2):
+                r.save()
+
+        assert len(copy2_called) == 1
