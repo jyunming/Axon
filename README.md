@@ -236,7 +236,7 @@ Agents can use Axon as a "Collective Memory."
 | `/ingest/status/{job_id}` | GET | Poll background ingest job status by ID. |
 | `/health` | GET | Health check — returns `{"status": "ok", "project": "<name>"}` (200) or `{"status": "initializing"}` (503 while starting). |
 | `/projects` | GET | List all projects and their metadata. |
-| `/project/switch` | POST | Switch the active project. Body: `{"project": "name"}`. |
+| `/project/switch` | POST | Switch the active project. Body: `{"name": "<project_name>"}` (also accepts `"project_name"` as an alias). |
 
 ### Tool Definitions
 Standardized JSON schemas for tool-calling are provided in `src/axon/tools.py`. The `get_rag_tool_definition()` function returns 6 OpenAI-compatible tools: `query_knowledge_base`, `search_documents`, `add_knowledge`, `delete_documents`, `ingest_directory`, and `stream_query`. See `examples/agent_simple.py` for a minimal integration, or `examples/agent_orchestration.py` for a richer multi-step planner-critic loop.

@@ -76,7 +76,7 @@ axon --project work "Summarise the Q3 report"
 axon --project personal "What did I write about sleep?"
 ```
 
-You can nest projects up to 3 levels deep:
+You can nest projects up to 5 levels deep:
 
 ```
 research
@@ -134,7 +134,7 @@ llm:
   model: gemma        # any Ollama model you have pulled
 
 rag:
-  top_k: 10           # how many chunks to retrieve per query
+  top_k: 10           # max chunks passed to the LLM (retrieval may fetch more internally for reranking)
   hybrid_search: true # combine vector + keyword search
 
 # Custom storage location (optional)

@@ -221,6 +221,11 @@ class AxonConfig:
     # retrieved chunk before passing context to the final answer generation step.
     compress_context: bool = False
 
+    # Inline Citations
+    # When True, instructs the LLM to include [Document N (ID: ...)] citations in
+    # its answers whenever it draws from retrieved context.
+    cite: bool = True
+
     # Web Search / Truth Grounding
     truth_grounding: bool = False
     brave_api_key: str = ""
@@ -1428,10 +1433,8 @@ class MultiVectorStore:
                 ex.submit(store.search, query_embedding, top_k, filter_dict)
                 for store in self._stores
             ]
-            for i, fut in enumerate(futures):
-                res = fut.result()
-                print(f"DEBUG: Store {i} returned {len(res)} results")
-                for doc in res:
+            for fut in futures:
+                for doc in fut.result():
                     doc_id = doc["id"]
                     if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
                         seen[doc_id] = doc
@@ -1815,6 +1818,33 @@ Your primary goal is to help the user by answering questions based on the provid
             self._query_cache = OrderedDict()
         self._ingested_hashes = self._load_hash_store()
         self._entity_graph = self._load_entity_graph()
+
+        # Merge entity graphs from all descendant projects so that GraphRAG
+        # relationship expansion works when querying from a parent project.
+        if descendants:
+            import pathlib
+
+            for desc in descendants:
+                desc_bm25_path = project_bm25_path(desc)
+                desc_graph_path = pathlib.Path(desc_bm25_path) / ".entity_graph.json"
+                if desc_graph_path.exists():
+                    try:
+                        import json as _json
+
+                        raw = _json.loads(desc_graph_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            for entity, doc_ids in raw.items():
+                                if isinstance(entity, str) and isinstance(doc_ids, list):
+                                    if entity not in self._entity_graph:
+                                        self._entity_graph[entity] = []
+                                    for doc_id in doc_ids:
+                                        if (
+                                            isinstance(doc_id, str)
+                                            and doc_id not in self._entity_graph[entity]
+                                        ):
+                                            self._entity_graph[entity].append(doc_id)
+                    except Exception as e:
+                        logger.warning(f"Could not merge entity graph for '{desc}': {e}")
 
         self._active_project = name
         set_active_project(name)
@@ -2339,7 +2369,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
             results = list(self._executor.map(_proc, chunks_to_process))
 
+            total_entities = 0
             for doc_id, entities in results:
+                total_entities += len(entities)
                 for entity in entities:
                     key = entity.lower()
                     if key not in self._entity_graph:
@@ -2349,6 +2381,12 @@ Your primary goal is to help the user by answering questions based on the provid
                         updated = True
             if updated:
                 self._save_entity_graph()
+            if total_entities == 0:
+                logger.warning(
+                    "GraphRAG: entity extraction returned 0 entities across all chunks. "
+                    "This may be caused by an LLM that is too small or refused to extract entities. "
+                    "GraphRAG relationship expansion will have no effect for this ingestion."
+                )
 
         n_chunks = len(documents)
         if self._own_bm25:
@@ -2686,10 +2724,17 @@ Your primary goal is to help the user by answering questions based on the provid
 
         When discussion_fallback is False, uses a strict context-only prompt.
         When True, uses the permissive prompt.
+        When cite is False, the citation instruction is removed from the prompt.
         """
         if cfg is None:
             cfg = self.config
         base = self.SYSTEM_PROMPT if cfg.discussion_fallback else self.SYSTEM_PROMPT_STRICT
+
+        if not cfg.cite:
+            # Strip citation instruction lines from the prompt
+            import re as _re
+
+            base = _re.sub(r"\d+\. \*\*Mandatory Citations\*\*:.*?\n", "", base)
 
         if not cfg.truth_grounding:
             return base
@@ -5048,6 +5093,9 @@ def _interactive_repl(
                         print(
                             f"  Context compression {'ON' if brain.config.compress_context else 'OFF'}"
                         )
+                    elif rag_opt == "cite":
+                        brain.config.cite = not brain.config.cite
+                        print(f"  Inline citations {'ON' if brain.config.cite else 'OFF'}")
                     elif rag_opt == "raptor":
                         brain.config.raptor = not brain.config.raptor
                         print(
