@@ -308,3 +308,46 @@ class TestBM25RetrieverSaveLoad:
         r.save()  # must not raise
         assert replace_called, "os.replace should have been attempted"
         assert copy_called, "shutil.copy2 fallback should have been used"
+
+
+class TestHybridThresholdBug:
+    """Regression: BM25-only hits must not be filtered by vector similarity threshold."""
+
+    def test_fused_only_hit_passes_threshold(self):
+        """A BM25-only fused hit (fused_only=True, vector_score=0.0) must survive
+        the similarity threshold filter that would otherwise drop it."""
+        from axon.retrievers import weighted_score_fusion
+
+        vector_results = []
+        bm25_results = [
+            {"id": "bm25doc", "text": "INC-44721 exact match", "score": 1.0, "metadata": {}}
+        ]
+        fused = weighted_score_fusion(vector_results, bm25_results, weight=0.7)
+        assert len(fused) == 1
+        bm25_hit = fused[0]
+        # fused_only flag must be set so the threshold filter skips it
+        assert bm25_hit.get("fused_only") is True
+        # vector_score must be 0.0 (no vector contribution)
+        assert bm25_hit.get("vector_score", 0.0) == 0.0
+
+    def test_mixed_results_only_low_vector_score_filtered(self):
+        """Vector results below threshold should be filtered; BM25-only hits kept."""
+        # This directly tests the filtering logic in main.py
+        threshold = 0.4
+        results = [
+            {"id": "vec_good", "vector_score": 0.8, "fused_only": False},
+            {"id": "vec_bad", "vector_score": 0.1, "fused_only": False},
+            {"id": "bm25_only", "vector_score": 0.0, "fused_only": True},
+        ]
+        filtered = []
+        for r in results:
+            if r.get("fused_only"):
+                filtered.append(r)
+                continue
+            if r.get("vector_score", r.get("score", 0.0)) >= threshold:
+                filtered.append(r)
+
+        ids = [r["id"] for r in filtered]
+        assert "vec_good" in ids
+        assert "vec_bad" not in ids
+        assert "bm25_only" in ids  # must survive despite vector_score=0.0

@@ -440,3 +440,37 @@ def test_stale_docs_malformed_timestamp_skipped():
     assert resp.status_code == 200
     assert resp.json()["total"] == 0
     api_module._source_hashes.clear()
+
+
+# ---------------------------------------------------------------------------
+# Dedup namespace regression: project fallback from _global to active project
+# ---------------------------------------------------------------------------
+
+
+def test_add_text_dedup_uses_active_project_not_global():
+    """When project field is omitted, dedup key should use brain._active_project
+    not the literal string '_global', preventing cross-project dedup skips.
+    """
+    brain = _make_brain()
+    brain._active_project = "work"
+    api_module.brain = brain
+
+    import hashlib
+
+    import axon.api as api_mod
+
+    # Prime the dedup store with a hash under "work" namespace
+    text = "unique dedup regression text xyz123"
+    h = hashlib.sha256(text.strip().encode()).hexdigest()
+    api_mod._source_hashes.setdefault("work", {})[h] = {
+        "doc_id": "existing_doc",
+        "ingested_at": "2026-01-01T00:00:00Z",
+    }
+
+    resp = client.post("/add_text", json={"text": text})
+    # Should be detected as duplicate (skipped), not ingested again
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "skipped"
+
+    # Cleanup
+    api_mod._source_hashes.pop("work", None)

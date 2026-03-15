@@ -307,8 +307,13 @@ def set_active_project(name: str) -> None:
     Args:
         name: Project name to set as active.
     """
-    _ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _ACTIVE_FILE.write_text(name)
+    try:
+        _ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _ACTIVE_FILE.write_text(name)
+    except OSError:
+        # Non-fatal: isolated/test environments may not have write access to
+        # the home directory. The in-memory switch still takes effect.
+        pass
 
 
 def delete_project(name: str) -> None:

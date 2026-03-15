@@ -2624,6 +2624,11 @@ Your primary goal is to help the user by answering questions based on the provid
         # Web Search Fallback (if enabled and local results are insufficient)
         filtered_results = []
         for r in results:
+            # BM25-only hits (fused_only=True) have no meaningful vector_score;
+            # skip threshold for them so lexical-exact matches always surface.
+            if r.get("fused_only"):
+                filtered_results.append(r)
+                continue
             v_sig = r.get("vector_score", r.get("score", 0.0))
             if v_sig >= cfg.similarity_threshold:
                 filtered_results.append(r)

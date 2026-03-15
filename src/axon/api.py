@@ -982,7 +982,7 @@ async def add_text(request: TextIngestRequest):
         raise HTTPException(status_code=400, detail="Text must not be empty.")
 
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
-    project_key = request.project or "_global"
+    project_key = request.project or brain._active_project
 
     skip = _check_dedup(request.text, project_key)
     if skip:
@@ -1016,7 +1016,7 @@ async def add_texts(request: BatchTextIngestRequest):
 
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
-    project_key = request.project or "_global"
+    project_key = request.project or brain._active_project
 
     # pending_records maps doc_id → item.text for dedup recording after ingest
     pending_records: list[tuple[str, str]] = []
@@ -1069,7 +1069,7 @@ async def ingest_url(request: URLIngestRequest):
     from axon.loaders import URLLoader
 
     loader = URLLoader()
-    project_key = request.project or "_global"
+    project_key = request.project or brain._active_project
     try:
         docs = loader.load(request.url)
     except ValueError as exc:
