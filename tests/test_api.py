@@ -295,6 +295,27 @@ def test_clear_resets_bm25_and_hashes():
     brain.bm25.save.assert_called_once()
 
 
+def test_clear_deletes_embedding_meta(tmp_path):
+    """/clear must remove .embedding_meta.json so a new model can be used after clear."""
+    brain = _make_brain()
+    api_module.brain = brain
+    brain.vector_store.provider = "chroma"
+    brain.vector_store.client = MagicMock()
+    brain.vector_store.client.create_collection.return_value = MagicMock()
+    brain.bm25 = None
+
+    # Create a fake embedding meta file and point the brain mock at it
+    meta_file = tmp_path / ".embedding_meta.json"
+    meta_file.write_text('{"provider":"fastembed","model":"BAAI/bge-large-en-v1.5"}')
+    brain._embedding_meta_path = str(meta_file)
+
+    with patch.object(brain, "_save_hash_store"), patch.object(brain, "_save_entity_graph"):
+        resp = client.post("/clear")
+
+    assert resp.status_code == 200
+    assert not meta_file.exists(), "embedding meta file must be deleted on /clear"
+
+
 # ---------------------------------------------------------------------------
 # /query/stream
 # ---------------------------------------------------------------------------
@@ -394,16 +415,23 @@ def test_add_text_empty_string_rejected():
 def test_create_project_invalid_name_returns_400():
     """B-03: Invalid project names must return 400, not 500."""
     api_module.brain = _make_brain()
-    for bad_name in ["has:colon!", "", "name with spaces", "a" * 65, "too/many/slash/parts"]:
+    # 6-segment path exceeds _MAX_DEPTH=5; other cases have illegal characters / empty
+    for bad_name in ["has:colon!", "", "name with spaces", "a" * 65, "a/b/c/d/e/f"]:
         resp = client.post("/project/new", json={"name": bad_name})
         assert resp.status_code == 400, f"Expected 400 for name={bad_name!r}"
 
 
 def test_create_project_valid_name_succeeds():
-    """B-03: Valid project names pass name validation, including hierarchical names."""
+    """B-03: Valid project names pass name validation, including deep hierarchical names."""
     api_module.brain = _make_brain()
     with patch("axon.projects.ensure_project"):
-        for good_name in ["valid-project_01", "research/papers", "research/papers/2024"]:
+        for good_name in [
+            "valid-project_01",
+            "research/papers",
+            "research/papers/2024",
+            "research/papers/2024/q1",  # 4 segments
+            "a/b/c/d/e",  # 5 segments (max depth)
+        ]:
             resp = client.post("/project/new", json={"name": good_name})
             assert resp.status_code == 200, f"Expected 200 for name={good_name!r}"
 

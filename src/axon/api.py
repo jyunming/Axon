@@ -702,6 +702,15 @@ async def clear_brain():
         brain._entity_graph = {}
         brain._save_entity_graph()
 
+        # Delete embedding metadata so the project can be re-ingested with a
+        # different embedding model without hitting a stale mismatch error.
+        _meta_path = pathlib.Path(brain._embedding_meta_path)
+        if _meta_path.exists():
+            try:
+                _meta_path.unlink()
+            except OSError:
+                pass
+
         return {"status": "success", "message": "Collection cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1220,8 +1229,8 @@ async def delete_documents(request: DeleteRequest):
         not_found = [i for i in request.doc_ids if i not in existing_ids_set]
         if existing_ids:
             brain.vector_store.delete_by_ids(existing_ids)
-        if brain.bm25 is not None:
-            brain.bm25.delete_documents(existing_ids)
+            if brain.bm25 is not None:
+                brain.bm25.delete_documents(existing_ids)
         return {
             "status": "success",
             "deleted": len(existing_ids),
@@ -1233,7 +1242,7 @@ async def delete_documents(request: DeleteRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}(?:/[A-Za-z0-9_\-]{1,64}){0,2}$")
+_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}(?:/[A-Za-z0-9_\-]{1,64}){0,4}$")
 
 
 @app.post("/project/new")
@@ -1245,8 +1254,9 @@ async def create_project(request: ProjectCreateRequest):
         raise HTTPException(
             status_code=400,
             detail=(
-                "Invalid project name. Use 1-64 alphanumeric characters, "
-                "hyphens, or underscores only."
+                "Invalid project name. Use 1-5 slash-separated segments of "
+                "1-64 alphanumeric characters, hyphens, or underscores "
+                "(e.g. 'research/papers/2024')."
             ),
         )
     try:
