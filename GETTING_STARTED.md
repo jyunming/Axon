@@ -19,14 +19,9 @@ ollama pull phi3:mini     # minimal  — 2.3 GB, ~4 GB RAM
 
 ## Install the VS Code Extension
 
-The VSIX ships with the repo — no download needed:
+Install the bundled extension: open Extensions panel (`Ctrl+Shift+X`) → `···` → **Install from VSIX** → select `integrations/vscode-axon/axon-copilot-1.0.0.vsix` → reload VS Code.
 
-```
-1. Open Extensions panel  (Ctrl+Shift+X)
-2. Click  "..."  →  "Install from VSIX..."
-3. Select  integrations/vscode-axon/axon-copilot-1.0.0.vsix
-4. Reload VS Code  (Ctrl+Shift+P → "Reload Window")
-```
+> Full setup guide including Python discovery, settings, and troubleshooting: [SETUP.md § 11](SETUP.md#11-vs-code-extension-github-copilot-integration)
 
 **How the extension finds Python** (for `autoStart` — starting `axon-api` automatically):
 
@@ -189,6 +184,8 @@ axon-api   # must be running
 Reload VS Code → Copilot agent mode → Axon tools appear automatically.
 
 > **Windows:** if `axon-mcp` is not on PATH, use the full path: `C:\Users\<you>\AppData\Local\Programs\Python\Python313\Scripts\axon-mcp.exe`
+
+> Full MCP setup including Linux/WSL paths, team sharing, and Windows workarounds: [SETUP.md § 10](SETUP.md#10-mcp-setup-copilot-agent-mode)
 
 ---
 
