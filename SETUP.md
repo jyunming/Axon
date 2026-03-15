@@ -38,8 +38,8 @@ Before starting, ensure you have:
 Clone the repository if you haven't already:
 
 ```bash
-git clone https://github.com/jyunming/studio_brain_open.git
-cd studio_brain_open
+git clone https://github.com/jyunming/Axon.git
+cd Axon
 ```
 
 ---

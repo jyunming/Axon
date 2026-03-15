@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant User
+    participant Copilot
+    participant Extension
+    participant axon-api
+
+    User->>Copilot: "Ingest /path/to/docs"
+    Copilot->>Extension: axon_ingestPath(path)
+    Extension->>axon-api: POST /ingest
+    axon-api-->>Extension: {job_id: "abc123"}
+    Extension-->>Copilot: "Started — job abc123"
+    Copilot->>Extension: axon_getIngestStatus("abc123")
+    Extension->>axon-api: GET /ingest/status/abc123
+    axon-api-->>Extension: {status: "completed"}
+    Extension-->>Copilot: "Ingested 12 documents"
+    User->>Copilot: "What does this codebase do?"
+    Copilot->>Extension: axon_searchKnowledge(query)
+    Extension->>axon-api: POST /search
+    axon-api-->>Extension: [chunks]
+    Extension-->>Copilot: [chunks]
+    Copilot-->>User: synthesised answer

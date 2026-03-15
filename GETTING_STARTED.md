@@ -2,22 +2,7 @@
 
 Axon has five entry points that all share the same knowledge base. Ingest once, query from anywhere.
 
-```mermaid
-flowchart TB
-    KB["🧠 Axon Knowledge Base\n(Vector Index + BM25)"]
-
-    REPL["💻 CLI / REPL\n`axon`"]
-    UI["🖥️ Web UI\n`axon-ui`"]
-    API["🔌 REST API\n`axon-api`"]
-    MCP["🤖 MCP Server\n`axon-mcp`"]
-    EXT["🧩 VS Code Extension\naxon-copilot.vsix"]
-
-    REPL <-->|direct| KB
-    UI <-->|direct| KB
-    API <-->|HTTP :8000| KB
-    MCP <-->|stdio → HTTP| API
-    EXT <-->|HTTP :8000| API
-```
+![Axon entry points](docs/assets/diagrams/entry-points.png)
 
 ---
 
@@ -58,31 +43,11 @@ No configuration needed for the most common cases. If auto-detection fails, VS C
 
 ## How Ingestion Works
 
-```mermaid
-flowchart LR
-    Source["📄 Source\nFile · Folder · URL · Text · Image"]
-    Parse["Parse & Load"]
-    Detect["Detect Type\ncode · paper · doc · table · discussion"]
-    Chunk["Chunk\ntype-specific splitter"]
-    Embed["Embed\nsentence-transformers / Ollama / FastEmbed"]
-    Store["Store\nVector DB + BM25 Index"]
-
-    Source --> Parse --> Detect --> Chunk --> Embed --> Store
-```
+![Ingestion flow](docs/assets/diagrams/ingestion-flow.png)
 
 ## How Querying Works
 
-```mermaid
-flowchart LR
-    Q["❓ Question"]
-    Transform["Transform\nHyDE · Multi-Query · Step-Back"]
-    Retrieve["Hybrid Retrieve\nVector + BM25 → fuse"]
-    Rerank["Rerank\nBGE cross-encoder\n(optional)"]
-    LLM["🤖 Local LLM\nOllama · Gemini · OpenAI"]
-    Answer["✅ Answer\n+ Citations"]
-
-    Q --> Transform --> Retrieve --> Rerank --> LLM --> Answer
-```
+![Query flow](docs/assets/diagrams/query-flow.png)
 
 ---
 
@@ -192,29 +157,7 @@ curl -X POST http://localhost:8000/search \
 
 The MCP server gives GitHub Copilot direct tool access in **agent mode** (hammer icon in Copilot Chat).
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Copilot
-    participant axon-mcp
-    participant axon-api
-
-    User->>Copilot: "Ingest my docs at /path/to/docs"
-    Copilot->>axon-mcp: ingest_path(path)
-    axon-mcp->>axon-api: POST /ingest
-    axon-api-->>axon-mcp: {job_id: "abc123"}
-    axon-mcp-->>Copilot: "Started — job abc123"
-    Copilot->>axon-mcp: get_job_status("abc123")
-    axon-mcp->>axon-api: GET /ingest/status/abc123
-    axon-api-->>axon-mcp: {status: "completed"}
-    axon-mcp-->>Copilot: "Ingested 12 documents"
-    User->>Copilot: "What does the project do?"
-    Copilot->>axon-mcp: search_knowledge(query)
-    axon-mcp->>axon-api: POST /search
-    axon-api-->>axon-mcp: [chunks]
-    axon-mcp-->>Copilot: [chunks]
-    Copilot-->>User: synthesised answer
-```
+![MCP workflow](docs/assets/diagrams/mcp-workflow.png)
 
 **Setup (one-time):** Create `.vscode/mcp.json` in your workspace:
 
@@ -253,29 +196,7 @@ Reload VS Code → Copilot agent mode → Axon tools appear automatically.
 
 After installing the VSIX and starting `axon-api`, use Copilot Chat (Ctrl+Shift+I):
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Copilot
-    participant Extension
-    participant axon-api
-
-    User->>Copilot: "Ingest /path/to/docs"
-    Copilot->>Extension: axon_ingestPath(path)
-    Extension->>axon-api: POST /ingest
-    axon-api-->>Extension: {job_id: "abc123"}
-    Extension-->>Copilot: "Started — job abc123"
-    Copilot->>Extension: axon_getIngestStatus("abc123")
-    Extension->>axon-api: GET /ingest/status/abc123
-    axon-api-->>Extension: {status: "completed"}
-    Extension-->>Copilot: "Ingested 12 documents"
-    User->>Copilot: "What does this codebase do?"
-    Copilot->>Extension: axon_searchKnowledge(query)
-    Extension->>axon-api: POST /search
-    axon-api-->>Extension: [chunks]
-    Extension-->>Copilot: [chunks]
-    Copilot-->>User: synthesised answer
-```
+![VS Code extension workflow](docs/assets/diagrams/vscode-workflow.png)
 
 **Ingest:**
 ```
@@ -307,19 +228,7 @@ Describe and ingest this diagram: /path/to/architecture.png
 
 Isolate documents by project. Parent projects automatically search all children.
 
-```mermaid
-flowchart TB
-    root["default"]
-    work["work"]
-    personal["personal"]
-    papers["research/papers"]
-    y2024["research/papers/2024"]
-
-    root --- work
-    root --- personal
-    root --- papers
-    papers --- y2024
-```
+![Projects hierarchy](docs/assets/diagrams/projects-hierarchy.png)
 
 ```bash
 # REPL

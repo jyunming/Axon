@@ -1,0 +1,9 @@
+flowchart LR
+    Source["📄 Source\nFile · Folder · URL · Text · Image"]
+    Parse["Parse & Load"]
+    Detect["Detect Type\ncode · paper · doc · table · discussion"]
+    Chunk["Chunk\ntype-specific splitter"]
+    Embed["Embed\nsentence-transformers / Ollama / FastEmbed"]
+    Store["Store\nVector DB + BM25 Index"]
+
+    Source --> Parse --> Detect --> Chunk --> Embed --> Store

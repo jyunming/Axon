@@ -18,20 +18,7 @@ Point Axon at your documents. Ask questions. Get answers — using a local LLM w
 
 ## How it works
 
-```mermaid
-flowchart LR
-    Docs["📄 Your Documents\nPDF · DOCX · TXT · CSV · Code · Images"]
-    Axon["🧠 Axon\nChunk → Embed → Index"]
-    Q["❓ Your Question"]
-    Retrieve["🔍 Hybrid Retrieval\nVector + BM25"]
-    LLM["🤖 Local LLM\nOllama / Gemini / OpenAI"]
-    Answer["✅ Answer with Citations"]
-
-    Docs -->|ingest| Axon
-    Q --> Retrieve
-    Axon -.->|stored index| Retrieve
-    Retrieve --> LLM --> Answer
-```
+![Axon architecture](docs/assets/diagrams/arch-overview.png)
 
 ---
 

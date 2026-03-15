@@ -530,9 +530,9 @@ chunk:
 
 ## Useful Links
 
-- **Repository:** https://github.com/jyunming/studio_brain_open
-- **Issues:** https://github.com/jyunming/studio_brain_open/issues
-- **Discussions:** https://github.com/jyunming/studio_brain_open/discussions
+- **Repository:** https://github.com/jyunming/Axon
+- **Issues:** https://github.com/jyunming/Axon/issues
+- **Discussions:** https://github.com/jyunming/Axon/discussions
 - **Ollama:** https://ollama.ai/
 - **ChromaDB:** https://www.trychroma.com/
 - **FastAPI:** https://fastapi.tiangolo.com/
