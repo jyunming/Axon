@@ -1,7 +1,7 @@
 # Axon
 
 <p align="center">
-  <img src="docs/assets/axon-mark.png" alt="Axon" width="300" />
+  <img src="docs/assets/axon-mark.png" alt="Axon" width="350" />
 </p>
 
 <p align="center">
@@ -12,7 +12,106 @@
 
 **A local-first RAG platform for humans and AI agents.**
 
-Axon lets you ingest your documents and ask questions about them using a local LLM — no cloud, no API keys required for the default setup. It also exposes a REST API and MCP server so agents (GitHub Copilot, custom bots) can query your knowledge base as a tool.
+Point Axon at your documents. Ask questions. Get answers — using a local LLM with no cloud, no API keys required.
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    Docs["📄 Your Documents\nPDF · DOCX · TXT · CSV · Code · Images"]
+    Axon["🧠 Axon\nChunk → Embed → Index"]
+    Q["❓ Your Question"]
+    Retrieve["🔍 Hybrid Retrieval\nVector + BM25"]
+    LLM["🤖 Local LLM\nOllama / Gemini / OpenAI"]
+    Answer["✅ Answer with Citations"]
+
+    Docs -->|ingest| Axon
+    Q --> Retrieve
+    Axon -.->|stored index| Retrieve
+    Retrieve --> LLM --> Answer
+```
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/jyunming/Axon.git
+cd Axon
+pip install -e .
+```
+
+Pull a local model (or bring your own API key for Gemini / OpenAI):
+
+```bash
+ollama pull llama3.1:8b   # recommended — 4.7 GB, ~8 GB RAM
+ollama pull phi3:mini     # minimal — 2.3 GB, ~4 GB RAM
+```
+
+> **Windows:** Use [Windows Terminal](https://aka.ms/terminal) and set `$env:PYTHONUTF8=1` in your PowerShell profile.
+
+---
+
+## Launch
+
+| Command | Entry Point | Best For |
+|---|---|---|
+| `axon` | Interactive REPL | Day-to-day exploration |
+| `axon-ui` | Streamlit Web UI | Visual interface at [localhost:8501](http://localhost:8501) |
+| `axon-api` | FastAPI REST API | Agents, scripts, Copilot |
+| `axon-mcp` | MCP Server | GitHub Copilot agent mode |
+
+---
+
+## GitHub Copilot Integration
+
+There are two ways to connect Axon to GitHub Copilot — pick one or use both:
+
+### Option A — VS Code Extension (Copilot Chat tools)
+
+The VSIX ships with the repo — no download needed:
+
+```
+1. Extensions panel (Ctrl+Shift+X) → "..." → Install from VSIX...
+2. Select:  integrations/vscode-axon/axon-copilot-1.0.0.vsix
+3. Reload VS Code  (Ctrl+Shift+P → "Reload Window")
+```
+
+Start `axon-api`, then ask Copilot in chat:
+
+```
+Search my knowledge base for information about the authentication module.
+Ingest my project docs at /path/to/docs
+```
+
+### Option B — MCP Server (Copilot agent mode)
+
+Create `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "servers": {
+    "axon": {
+      "type": "stdio",
+      "command": "axon-mcp",
+      "env": { "RAG_API_BASE": "http://localhost:8000" }
+    }
+  }
+}
+```
+
+Create `.vscode/settings.json`:
+```json
+{ "chat.mcp.access": "all" }
+```
+
+Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (hammer icon).
+
+> See **[Getting Started](GETTING_STARTED.md)** for full setup details, workflow diagrams, and per-entry-point examples.
+
+![Axon Copilot demo](docs/assets/AxonCopilot.gif)
 
 ---
 
@@ -22,31 +121,9 @@ Axon lets you ingest your documents and ask questions about them using a local L
 
 ---
 
-## GitHub Copilot Integration
-
-Use Axon as a tool directly inside VS Code with GitHub Copilot:
-
-![Axon Copilot demo](docs/assets/AxonCopilot.gif)
-
----
-
 ## Web UI
 
 ![Axon Web UI](docs/assets/webapp-screenshot.png)
-
----
-
-## Documentation
-
-| Guide | What it covers |
-|---|---|
-| **[Getting Started](GETTING_STARTED.md)** | Core concepts, first ingest, REPL basics |
-| **[Setup Guide](SETUP.md)** | Full install for Windows / Linux / macOS, all model options, MCP setup |
-| **[Quick Reference](QUICKREF.md)** | All CLI flags, REPL slash commands, API endpoints |
-| **[Model Guide](MODEL_GUIDE.md)** | Choosing an LLM and embedding model |
-| **[Troubleshooting](TROUBLESHOOTING.md)** | Common errors and fixes |
-| **[Development Guide](DEVELOPMENT.md)** | Running tests, contributing |
-| **[SOTA Gaps](SOTA_ANALYSIS.md)** | What's not yet implemented and why |
 
 ---
 
@@ -57,77 +134,31 @@ Use Axon as a tool directly inside VS Code with GitHub Copilot:
 - **Multi-embedding** — sentence-transformers, Ollama, FastEmbed
 - **Vector stores** — ChromaDB (default), Qdrant, LanceDB
 - **Rich document support** — PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, images (BMP/PNG/TIF/PGM with VLM auto-captioning)
-- **Project namespaces** — isolated vector stores per named project; nested projects search children automatically
+- **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
 - **Advanced indexing** — RAPTOR hierarchical summaries, GraphRAG entity graph
-- **Reranking** — cross-encoder (BGE) and LLM-based pointwise reranking
+- **Reranking** — cross-encoder (BGE) reranking
 - **Agent-ready** — FastAPI REST API + MCP server for Copilot agent mode
-- **Interactive REPL** — tab completion, streaming Markdown, `@file` context attachment, pinned status bar
 
 ---
 
-## Quick start
+## Guides
 
-### 1. Install
-
-```bash
-# Clone and install
-git clone https://github.com/jyunming/Axon.git
-cd Axon
-pip install -e .
-```
-
-> **Windows:** Use [Windows Terminal](https://aka.ms/terminal) for correct rendering, and set `$env:PYTHONUTF8=1` in your PowerShell profile.
-
-### 2. Pull a model (Ollama)
-
-**Linux:**
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama serve &
-```
-
-**Windows / macOS:** Download and run the installer from [ollama.com/download](https://ollama.com/download) — Ollama starts automatically.
-
-```bash
-# Pull a model (pick one)
-ollama pull llama3.1:8b     # recommended (4.7 GB, ~6-8 GB RAM)
-ollama pull phi3:mini        # minimal (2.3 GB, ~4-6 GB RAM)
-```
-
-### 3. Run
-
-```bash
-axon              # interactive REPL
-axon-api          # REST API on :8000 (for agents / Copilot)
-axon-ui           # Streamlit web UI on :8501
-```
-
-**First session:**
-```
-axon
-/ingest ./my-documents/
-You: What is the main topic of these documents?
-```
-
-> For Docker Compose, embedding model options, Qdrant, MCP/Copilot setup, and multi-user HPC deployment, see the **[Setup Guide](SETUP.md)**.
-
----
-
-## Entry points
-
-| Command | Purpose |
+| Guide | What it covers |
 |---|---|
-| `axon` | Interactive REPL — start here |
-| `axon-api` | FastAPI server — for integrations and agents |
-| `axon-ui` | Streamlit web UI |
-| `axon-mcp` | MCP server — for GitHub Copilot agent mode |
+| **[Getting Started](GETTING_STARTED.md)** | Ingest/query workflow for every entry point — with diagrams |
+| **[Setup Guide](SETUP.md)** | Full install for all platforms, models, VS Code extension config, MCP |
+| **[Quick Reference](QUICKREF.md)** | All CLI flags, REPL commands, API endpoints |
+| **[Model Guide](MODEL_GUIDE.md)** | Choosing an LLM and embedding model |
+| **[Troubleshooting](TROUBLESHOOTING.md)** | Common errors and fixes |
+| **[Development Guide](DEVELOPMENT.md)** | Running tests, contributing |
+| **[SOTA Gaps](SOTA_ANALYSIS.md)** | What's not yet implemented and why |
 
 ---
 
 ## Security
 
-File ingestion is restricted to a configurable base directory (`RAG_INGEST_BASE`, defaults to the current working directory). Requests for paths outside this directory are rejected with 403. See [SECURITY.md](SECURITY.md) for details.
+File ingestion is restricted to a configurable base directory (`RAG_INGEST_BASE`, defaults to the current working directory). Requests outside this directory are rejected with 403. See [SECURITY.md](SECURITY.md) for details.
 
 ---
 

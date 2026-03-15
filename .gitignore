@@ -138,7 +138,10 @@ tests/fixtures/climate_change.html
 integrations/vscode-axon/node_modules/
 integrations/vscode-axon/out/
 integrations/vscode-axon/package-lock.json
-integrations/vscode-axon/*.vsix
+# Note: *.vsix is tracked so users can install directly from the repo
+
+# Intermediate docs (internal planning/sprint artifacts)
+docs/*.md
 
 # Test temp directories
 tests/.test_tmp/

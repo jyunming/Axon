@@ -146,6 +146,55 @@ llm:
 
 ---
 
+## VS Code Extension: Tools Not Appearing in Copilot Chat
+
+**Symptom:** After installing the VSIX, no `axon_*` tools appear in Copilot Chat.
+
+**Cause:** Extension not loaded or VS Code not reloaded after install.
+
+**Fix:**
+1. Open Extensions panel (Ctrl+Shift+X) and confirm "Axon Copilot" shows as **enabled**.
+2. Reload VS Code: Ctrl+Shift+P → "Reload Window".
+3. Open Copilot Chat (Ctrl+Shift+I) — tools are registered on activation.
+
+---
+
+## VS Code Extension: Requests Fail with Connection Error
+
+**Symptom:** Copilot tools return `Failed to fetch` or `ECONNREFUSED`.
+
+**Fix:**
+1. Confirm `axon-api` is running: `curl http://localhost:8000/health`
+2. Check `axon.apiBase` in VS Code settings matches the server address exactly (default: `http://localhost:8000`).
+3. On Windows, ensure the API is bound to `localhost`, not `0.0.0.0` — both should work from the same machine, but double-check `AXON_HOST` in `.env`.
+
+---
+
+## VS Code Extension: `axon_ingestPath` Stuck in "processing"
+
+**Symptom:** After calling `axon_ingestPath`, the status never reaches `completed`.
+
+**Cause:** The ingest job is async. Poll `axon_getIngestStatus(job_id)` until it returns `completed` or `failed`. Large directories (many files) may take minutes.
+
+**Fix:** Ask Copilot to check the status: *"Check if my ingest job `<job_id>` is done"* — or wait and retry. If permanently stuck, check `axon-api` logs for errors.
+
+---
+
+## VS Code Extension: `autoStart` Does Not Start the Server
+
+**Symptom:** The extension shows as active but `axon-api` is not running and `autoStart` is `true`.
+
+**Cause:** Python executable not found. The extension discovers Python via (in order):
+1. `axon.pythonPath` setting
+2. `~/.axon/.python_path` (written by the `axon` CLI on first run)
+3. `pipx` installation
+4. Workspace virtual environment
+5. System `python3` / `python`
+
+**Fix:** Run `axon` once from the terminal (the CLI writes its Python path to `~/.axon/.python_path`), or set `axon.pythonPath` explicitly in VS Code settings.
+
+---
+
 ## `top_k` and Raw Retrieval Count
 
 **Symptom:** The API or internal retrieval returns more chunks than the configured `top_k` value.
