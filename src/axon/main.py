@@ -1832,14 +1832,17 @@ Your primary goal is to help the user by answering questions based on the provid
         self._entity_graph = self._load_entity_graph()
         self._relation_graph = self._load_relation_graph()
 
-        # Merge entity graphs from all descendant projects so that GraphRAG
-        # relationship expansion works when querying from a parent project.
+        # Merge entity graphs and relation graphs from all descendant projects so
+        # that GraphRAG expansion is coherent when querying from a parent project.
         if descendants:
             import pathlib
 
             for desc in descendants:
                 desc_bm25_path = project_bm25_path(desc)
-                desc_graph_path = pathlib.Path(desc_bm25_path) / ".entity_graph.json"
+                desc_base = pathlib.Path(desc_bm25_path)
+
+                # --- entity graph ---
+                desc_graph_path = desc_base / ".entity_graph.json"
                 if desc_graph_path.exists():
                     try:
                         import json as _json
@@ -1858,6 +1861,35 @@ Your primary goal is to help the user by answering questions based on the provid
                                             self._entity_graph[entity].append(doc_id)
                     except Exception as e:
                         logger.warning(f"Could not merge entity graph for '{desc}': {e}")
+
+                # --- relation graph ---
+                desc_rel_path = desc_base / ".relation_graph.json"
+                if desc_rel_path.exists():
+                    try:
+                        import json as _json
+
+                        raw = _json.loads(desc_rel_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            for src, entries in raw.items():
+                                if isinstance(src, str) and isinstance(entries, list):
+                                    if src not in self._relation_graph:
+                                        self._relation_graph[src] = []
+                                    existing = {
+                                        (e.get("target"), e.get("relation"), e.get("chunk_id"))
+                                        for e in self._relation_graph[src]
+                                    }
+                                    for entry in entries:
+                                        if isinstance(entry, dict):
+                                            key = (
+                                                entry.get("target"),
+                                                entry.get("relation"),
+                                                entry.get("chunk_id"),
+                                            )
+                                            if key not in existing:
+                                                self._relation_graph[src].append(entry)
+                                                existing.add(key)
+                    except Exception as e:
+                        logger.warning(f"Could not merge relation graph for '{desc}': {e}")
 
         self._active_project = name
         set_active_project(name)
