@@ -457,12 +457,16 @@ rag:
   similarity_threshold: 0.3
   hybrid_search: true
 
-  # GraphRAG entity-graph retrieval expansion (requires LLM during ingest).
-  # Set graph_rag: true to enable.  graph_rag_budget controls how many
-  # entity-linked documents are injected beyond the normal top_k slice.
+  # Graph-augmented retrieval expansion (inspired by GraphRAG; not the full
+  # Microsoft GraphRAG method — no community detection or global search).
+  # Extracts entities and optionally relation triples from each chunk at ingest
+  # time; at query time, entity-matched and 1-hop-related chunks are injected as
+  # extra context slots beyond the normal top_k.
+  # Requires a capable LLM at ingest; adds per-chunk latency.
+  # Limits: shallow graph, heuristic scoring, no entity canonicalisation.
   # graph_rag: false
-  # graph_rag_budget: 3
-  # graph_rag_relations: true
+  # graph_rag_budget: 3       # extra slots beyond top_k (0 = no guarantee)
+  # graph_rag_relations: true # enable 1-hop relation traversal
 
 chunk:
   size: 1000

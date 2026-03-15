@@ -117,6 +117,23 @@ The `.env` file is optional — Docker Compose won't fail if it's missing.
 
 ---
 
+## About the GraphRAG Feature
+
+Axon's `graph_rag` option is a **graph-augmented retrieval expansion** feature — it is **not** the full Microsoft GraphRAG method. It does not implement community detection, community summaries, global search, or local search over a community hierarchy.
+
+What it does do:
+- Extracts named entities from each chunk at ingest time and stores an entity→chunk-id map.
+- Optionally extracts `SUBJECT | RELATION | OBJECT` triples and stores a relation graph.
+- At query time, matches query entities (token-Jaccard) and injects directly matched chunks plus 1-hop relation neighbours as guaranteed extra context slots (`graph_rag_budget`).
+
+Known limits that will not be automatically resolved by enabling the feature:
+- The graph is shallow (lowercased strings, no entity canonicalisation or deduplication across chunks).
+- Scoring of expanded docs is heuristic (0.5–0.8 range), not calibrated against vector or lexical similarity.
+- Extraction quality depends entirely on the configured LLM's ability to follow extraction instructions. A weak or small model will produce a noisy or empty graph.
+- Entity matching uses exact match for single tokens and token-Jaccard for multi-token phrases. Aliases, acronyms, and spelling variants are not resolved.
+
+---
+
 ## GraphRAG Adds No Extra Results
 
 **Symptom:** GraphRAG is enabled and ingestion succeeded (entities were extracted), but query results never include any entity-linked documents beyond the normal top_k.

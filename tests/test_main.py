@@ -1543,7 +1543,10 @@ class TestGraphRAG:
         # At least one entity should be in the graph
         assert len(brain._entity_graph) >= 1
         # doc id (possibly with chunk suffix from splitter) should appear under at least one entity
-        all_ids = {doc_id for ids in brain._entity_graph.values() for doc_id in ids}
+        all_ids = set()
+        for node in brain._entity_graph.values():
+            chunk_ids = node["chunk_ids"] if isinstance(node, dict) else node
+            all_ids.update(chunk_ids)
         assert any(doc_id.startswith("d1") for doc_id in all_ids)
 
     def test_graph_rag_expands_results_at_query_time(
@@ -1630,18 +1633,19 @@ class TestExtractEntitiesStripping:
         return brain
 
     def test_markdown_bullets_stripped(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        # New format: each line is "NAME | description"; lines without pipe yield {"name": x, "description": ""}
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        brain.llm.complete = MagicMock(
-            return_value="- Axon\n* OpenAI\n• Qdrant\n1. Python\n2) FastAPI"
-        )
+        brain.llm.complete = MagicMock(return_value="Axon\nOpenAI\nQdrant\nPython\nFastAPI")
         entities = brain._extract_entities("some text")
-        assert entities == ["Axon", "OpenAI", "Qdrant", "Python", "FastAPI"]
+        names = [e["name"] for e in entities]
+        assert names == ["Axon", "OpenAI", "Qdrant", "Python", "FastAPI"]
 
     def test_clean_lines_unchanged(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         brain.llm.complete = MagicMock(return_value="Axon\nOpenAI\nQdrant")
         entities = brain._extract_entities("some text")
-        assert entities == ["Axon", "OpenAI", "Qdrant"]
+        names = [e["name"] for e in entities]
+        assert names == ["Axon", "OpenAI", "Qdrant"]
 
     def test_empty_response_returns_empty_list(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
@@ -2861,7 +2865,10 @@ class TestGraphRAGRobustness:
 
         brain._prune_entity_graph({"doc_2"})
 
-        assert brain._entity_graph["python"] == ["doc_1"]
+        # Legacy list format is migrated to dict-node format on modification
+        node = brain._entity_graph["python"]
+        chunk_ids = node["chunk_ids"] if isinstance(node, dict) else node
+        assert chunk_ids == ["doc_1"]
         assert "machine learning" not in brain._entity_graph
         brain._save_entity_graph.assert_called_once()
 
@@ -2889,11 +2896,15 @@ class TestGraphRAGRobustness:
         triples = brain._extract_relations("some text")
 
         assert len(triples) == 2
-        assert triples[0] == ("Python", "is used for", "machine learning")
-        assert triples[1] == ("OpenAI", "created", "GPT-4")
+        assert triples[0]["subject"] == "Python"
+        assert triples[0]["relation"] == "is used for"
+        assert triples[0]["object"] == "machine learning"
+        assert triples[1]["subject"] == "OpenAI"
+        assert triples[1]["relation"] == "created"
+        assert triples[1]["object"] == "GPT-4"
 
     def test_relation_extraction_ignores_bad_lines(self):
-        """Malformed lines (wrong number of pipes) are silently skipped."""
+        """Malformed lines (fewer than 3 parts) are silently skipped; 4+ parts are accepted."""
         brain = self._make_brain()
         brain.llm = MagicMock()
         brain.llm.complete = MagicMock(
@@ -2901,14 +2912,19 @@ class TestGraphRAGRobustness:
                 "Good line | relates to | something\n"
                 "bad line no pipes\n"
                 "only | two parts\n"
-                "too | many | pipe | parts | here"
+                "Subject | relation | object | extra description here"
             )
         )
 
         triples = brain._extract_relations("some text")
 
-        assert len(triples) == 1
-        assert triples[0] == ("Good line", "relates to", "something")
+        # "bad line no pipes" and "only | two parts" are skipped; the other two are valid
+        assert len(triples) == 2
+        assert triples[0]["subject"] == "Good line"
+        assert triples[0]["relation"] == "relates to"
+        assert triples[0]["object"] == "something"
+        assert triples[1]["subject"] == "Subject"
+        assert triples[1]["description"] == "extra description here"
 
     # ── Phase 3: 1-hop traversal ─────────────────────────────────────────
 
@@ -3105,3 +3121,219 @@ class TestGraphRAGRobustness:
                     existing.add(key)
 
         assert len(brain._relation_graph["apple"]) == 1, "Duplicate entries must not be added"
+
+
+class TestGraphRAGCommunity:
+    """Tests for Phase 1-5 GraphRAG community detection, summaries, and global/local search."""
+
+    # ── Helper ────────────────────────────────────────────────────────────
+
+    def _make_brain(self):
+        """Return a MagicMock AxonBrain with the real methods we want to test."""
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = AxonConfig()
+        brain.llm = MagicMock()
+        brain.embedding = MagicMock()
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._community_map = {}
+        brain._community_summaries = {}
+        brain._community_graph_dirty = False
+        brain._last_matched_entities = []
+        # Bind real implementations
+        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
+        brain._prune_entity_graph = AxonBrain._prune_entity_graph.__get__(brain, AxonBrain)
+        brain._expand_with_entity_graph = AxonBrain._expand_with_entity_graph.__get__(
+            brain, AxonBrain
+        )
+        brain._run_community_detection = AxonBrain._run_community_detection.__get__(
+            brain, AxonBrain
+        )
+        brain._build_networkx_graph = AxonBrain._build_networkx_graph.__get__(brain, AxonBrain)
+        brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
+            brain, AxonBrain
+        )
+        brain._global_search_context = AxonBrain._global_search_context.__get__(brain, AxonBrain)
+        brain._local_search_context = AxonBrain._local_search_context.__get__(brain, AxonBrain)
+        brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
+        brain._save_entity_graph = MagicMock()
+        brain._save_relation_graph = MagicMock()
+        brain._save_community_map = MagicMock()
+        brain._save_community_summaries = MagicMock()
+        return brain
+
+    # ── Phase 1.1: _extract_entities returns dicts ────────────────────────
+
+    def test_extract_entities_returns_name_and_description(self):
+        """_extract_entities parses 'NAME | description' lines into dicts."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = (
+            "OpenAI | AI research company\nGPT-4 | Large language model"
+        )
+        result = brain._extract_entities("some text")
+        assert result == [
+            {"name": "OpenAI", "description": "AI research company"},
+            {"name": "GPT-4", "description": "Large language model"},
+        ]
+
+    def test_extract_entities_handles_no_pipe_fallback(self):
+        """_extract_entities handles lines without a pipe by returning empty description."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = "OpenAI"
+        result = brain._extract_entities("some text")
+        assert result == [{"name": "OpenAI", "description": ""}]
+
+    # ── Phase 1.2: _extract_relations returns dicts ───────────────────────
+
+    def test_extract_relations_returns_description(self):
+        """_extract_relations parses 4-part lines into full dicts with description."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = "Apple | acquired | Beats | Apple bought Beats for $3B"
+        result = brain._extract_relations("some text")
+        assert len(result) == 1
+        assert result[0] == {
+            "subject": "Apple",
+            "relation": "acquired",
+            "object": "Beats",
+            "description": "Apple bought Beats for $3B",
+        }
+
+    def test_extract_relations_three_part_fallback(self):
+        """_extract_relations handles 3-part lines with empty description."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = "Apple | acquired | Beats"
+        result = brain._extract_relations("some text")
+        assert len(result) == 1
+        assert result[0]["subject"] == "Apple"
+        assert result[0]["relation"] == "acquired"
+        assert result[0]["object"] == "Beats"
+        assert result[0]["description"] == ""
+
+    # ── Phase 1.3: entity graph migration ────────────────────────────────
+
+    def test_entity_graph_migration_from_flat_list(self, tmp_path):
+        """_load_entity_graph migrates legacy flat list format to new dict-node format."""
+        import json
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = AxonConfig(bm25_path=str(tmp_path))
+        brain._load_entity_graph = AxonBrain._load_entity_graph.__get__(brain, AxonBrain)
+
+        # Write legacy format
+        legacy = {"openai": ["chunk1", "chunk2"]}
+        (tmp_path / ".entity_graph.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+        result = brain._load_entity_graph()
+        assert result == {"openai": {"description": "", "chunk_ids": ["chunk1", "chunk2"]}}
+
+    # ── Phase 2.5: community detection ───────────────────────────────────
+
+    def test_community_detection_requires_networkx(self):
+        """_run_community_detection returns {} gracefully when networkx is missing."""
+        import sys
+        from unittest.mock import patch
+
+        brain = self._make_brain()
+        brain._entity_graph = {"apple": {"description": "tech", "chunk_ids": ["c1"]}}
+
+        with patch.dict(sys.modules, {"networkx": None}):
+            result = brain._run_community_detection()
+        assert result == {}
+
+    # ── Phase 2.4: community map persist ─────────────────────────────────
+
+    def test_community_map_persisted(self, tmp_path):
+        """_save_community_map / _load_community_map round-trips correctly."""
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = AxonConfig(bm25_path=str(tmp_path))
+        brain._community_map = {"entityA": 0, "entityB": 1}
+        brain._save_community_map = AxonBrain._save_community_map.__get__(brain, AxonBrain)
+        brain._load_community_map = AxonBrain._load_community_map.__get__(brain, AxonBrain)
+
+        brain._save_community_map()
+        loaded = brain._load_community_map()
+        assert loaded == {"entityA": 0, "entityB": 1}
+
+    # ── Phase 3: community summaries generation ───────────────────────────
+
+    def test_community_summaries_generated(self):
+        """_generate_community_summaries populates _community_summaries with LLM output."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        brain._community_map = {"apple": 0, "beats": 0}
+        brain._entity_graph = {
+            "apple": {"description": "tech company", "chunk_ids": ["c1"]},
+            "beats": {"description": "audio brand", "chunk_ids": ["c2"]},
+        }
+        brain._relation_graph = {}
+        brain._community_summaries = {}
+        brain.llm.complete.return_value = "Apple and Beats are related tech entities."
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        brain._generate_community_summaries()
+
+        assert "0" in brain._community_summaries
+        assert brain._community_summaries["0"]["summary"] != ""
+        brain._save_community_summaries.assert_called_once()
+
+    # ── Phase 4: global search context ───────────────────────────────────
+
+    def test_global_search_context_returns_summaries(self):
+        """_global_search_context returns text containing community summary content."""
+        brain = self._make_brain()
+        brain._community_summaries = {
+            "0": {
+                "summary": "Apple and Beats tech cluster",
+                "entities": ["apple", "beats"],
+                "size": 2,
+            }
+        }
+
+        class _Cfg:
+            graph_rag_community_top_k = 5
+
+        # Disable embedding path so token-overlap fallback is used
+        brain.embedding.embed_query.side_effect = Exception("no embed")
+        result = brain._global_search_context("Apple products", _Cfg())
+        assert "Apple" in result or "Beats" in result
+
+    # ── Phase 5: local search context ────────────────────────────────────
+
+    def test_local_search_context_includes_entity_description(self):
+        """_local_search_context includes entity descriptions in output."""
+        brain = self._make_brain()
+        brain._entity_graph = {"apple": {"description": "tech company", "chunk_ids": ["c1"]}}
+        brain._relation_graph = {}
+        brain._community_map = {}
+        brain._community_summaries = {}
+
+        class _Cfg:
+            pass
+
+        result = brain._local_search_context("query", ["apple"], _Cfg())
+        assert "tech company" in result
+
+    # ── AxonConfig new fields ─────────────────────────────────────────────
+
+    def test_axonconfig_new_fields_defaults(self):
+        """New AxonConfig community fields have correct default values."""
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig()
+        assert cfg.graph_rag_community is True
+        assert cfg.graph_rag_community_async is True
+        assert cfg.graph_rag_community_top_k == 5
+        assert cfg.graph_rag_mode == "local"

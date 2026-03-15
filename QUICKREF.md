@@ -214,13 +214,28 @@ rag:
   top_k: 10
   hybrid_search: true
 
-  # GraphRAG — entity-graph retrieval expansion (not full Microsoft GraphRAG).
-  # During ingest, named entities are extracted from each chunk and stored in an
-  # entity→doc_id map.  At query time, query entities are matched (Jaccard) and
-  # entity-linked documents are injected as extra context slots.
+  # Graph-augmented retrieval expansion — inspired by GraphRAG but NOT the full
+  # Microsoft GraphRAG method (no community detection, no community summaries,
+  # no global/local search modes).
+  #
+  # What it does:
+  #   - Ingest: LLM extracts named entities per chunk → entity→[chunk_ids] map.
+  #             Optionally extracts SUBJECT|RELATION|OBJECT triples → relation graph.
+  #   - Query:  Query entities matched via token-Jaccard (exact for single tokens).
+  #             Direct entity matches + 1-hop relation neighbours injected as extra
+  #             context slots (guaranteed by graph_rag_budget, separate from top_k).
+  #
+  # Known limits:
+  #   - Shallow graph: nodes are lowercased strings; no canonical entity resolution,
+  #     no relation normalisation, no confidence scores, no multi-hop reasoning.
+  #   - Heuristic scoring: expanded docs score 0.5–0.8 (direct) or 0.62 (1-hop);
+  #     not learned or calibrated against vector/lexical similarity.
+  #   - Extraction quality depends on the configured LLM's instruction-following.
+  #
+  # Requires an LLM at ingest time. Adds latency per chunk.
   graph_rag: false
-  graph_rag_budget: 3       # extra entity-linked docs added beyond top_k
-  graph_rag_relations: true # extract SUBJECT|RELATION|OBJECT triples for 1-hop traversal
+  graph_rag_budget: 3       # extra entity-linked slots beyond top_k (0 = no guarantee)
+  graph_rag_relations: true # extract relation triples for 1-hop traversal
 ```
 
 ### Offline / Air-gapped Mode

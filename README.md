@@ -127,7 +127,7 @@ Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (ha
 - **Rich document support** — PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, images (BMP/PNG/TIF/PGM with VLM auto-captioning)
 - **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
-- **Advanced indexing** — RAPTOR hierarchical summaries, GraphRAG entity graph
+- **Advanced indexing** — RAPTOR hierarchical summaries, graph-augmented retrieval expansion (entity graph + relation graph + 1-hop traversal; inspired by GraphRAG but not the full Microsoft GraphRAG method)
 - **Reranking** — cross-encoder (BGE) reranking
 - **Agent-ready** — FastAPI REST API + MCP server for Copilot agent mode
 

@@ -64,9 +64,13 @@ qdrant = [
 fastembed = [
     "fastembed>=0.1.0,<1.0.0",
 ]
+graphrag = [
+    "networkx>=3.0",
+]
 all = [
     "qdrant-client>=1.7.0,<2.0.0",
     "fastembed>=0.1.0,<1.0.0",
+    "networkx>=3.0",
 ]
 
 [project.scripts]

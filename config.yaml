@@ -133,6 +133,12 @@ rag:
   # and use 1-hop graph traversal at retrieval time for richer context expansion.
   graph_rag_relations: true
 
+  # Community detection — clusters entity graph after ingest (requires: pip install networkx)
+  # graph_rag_community: false
+  # graph_rag_community_async: true
+  # graph_rag_community_top_k: 5
+  # graph_rag_mode: local   # local | global | hybrid
+
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.
   # query_cache: false
