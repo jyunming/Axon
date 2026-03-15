@@ -1,14 +1,38 @@
 # Axon
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+<p align="center">
+  <img src="docs/assets/axon-mark.png" alt="Axon" width="300" />
+</p>
+
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black"></a>
+</p>
 
 **A local-first RAG platform for humans and AI agents.**
 
 Axon lets you ingest your documents and ask questions about them using a local LLM — no cloud, no API keys required for the default setup. It also exposes a REST API and MCP server so agents (GitHub Copilot, custom bots) can query your knowledge base as a tool.
 
+---
+
+## Interactive REPL
+
+![Axon REPL demo](docs/assets/repl-demo.gif)
+
+---
+
+## GitHub Copilot Integration
+
+Use Axon as a tool directly inside VS Code with GitHub Copilot:
+
 ![Axon Copilot demo](docs/assets/AxonCopilot.gif)
+
+---
+
+## Web UI
+
+![Axon Web UI](docs/assets/webapp-screenshot.png)
 
 ---
 
