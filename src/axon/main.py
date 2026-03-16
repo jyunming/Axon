@@ -374,7 +374,7 @@ class AxonConfig:
         200  # hard cap on LLM calls across all levels (0=unlimited)
     )
     # TASK 12: Lazy community generation — skip summarization at finalize; generate on first global query
-    graph_rag_community_lazy: bool = False
+    graph_rag_community_lazy: bool = True
     # TASK 12: Global search pre-filter — cap communities entering map-reduce (0=no cap)
     graph_rag_global_top_communities: int = 0
     # TASK 12: RAPTOR source-size guard — skip RAPTOR for sources larger than this MB (0=no limit)
