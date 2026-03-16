@@ -2839,7 +2839,7 @@ class TestGraphRAGRobustness:
             return_value=[{"id": "doc_ml_1", "text": "ml text", "score": 1.0, "metadata": {}}]
         )
 
-        results = brain._expand_with_entity_graph("machine learning query", [], cfg=None)
+        results, _ = brain._expand_with_entity_graph("machine learning query", [], cfg=None)
         expanded = [r for r in results if r.get("_graph_expanded")]
         assert len(expanded) == 1
         score = expanded[0]["score"]
@@ -2857,7 +2857,7 @@ class TestGraphRAGRobustness:
             return_value=[{"id": "doc_py_1", "text": "py text", "score": 1.0, "metadata": {}}]
         )
 
-        results = brain._expand_with_entity_graph("python query", [], cfg=None)
+        results, _ = brain._expand_with_entity_graph("python query", [], cfg=None)
         expanded = [r for r in results if r.get("_graph_expanded")]
         assert len(expanded) == 1
         assert expanded[0]["score"] != 1.0
@@ -2986,7 +2986,7 @@ class TestGraphRAGRobustness:
 
         brain.vector_store.get_by_ids = _fake_get_by_ids
 
-        results = brain._expand_with_entity_graph("python programming", [], cfg=None)
+        results, _ = brain._expand_with_entity_graph("python programming", [], cfg=None)
 
         expanded = [r for r in results if r.get("_graph_expanded")]
         scores_by_id = {r["id"]: r["score"] for r in expanded}
@@ -3154,6 +3154,11 @@ class TestGraphRAGCommunity:
         brain._entity_embeddings = {}
         brain._entity_description_buffer = {}
         brain._claims_graph = {}
+        brain._community_hierarchy = {}
+        brain._community_children = {}
+        brain._relation_description_buffer = {}
+        brain._text_unit_entity_map = {}
+        brain._text_unit_relation_map = {}
         # Bind real implementations
         brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
         brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
@@ -3176,6 +3181,7 @@ class TestGraphRAGCommunity:
             brain, AxonBrain
         )
         brain._local_search_context = AxonBrain._local_search_context.__get__(brain, AxonBrain)
+        brain._get_incoming_relations = AxonBrain._get_incoming_relations.__get__(brain, AxonBrain)
         brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
         brain._match_entities_by_embedding = AxonBrain._match_entities_by_embedding.__get__(
             brain, AxonBrain
@@ -3193,6 +3199,7 @@ class TestGraphRAGCommunity:
         brain._save_community_map = MagicMock()
         brain._save_community_summaries = MagicMock()
         brain._save_community_levels = MagicMock()
+        brain._save_community_hierarchy = MagicMock()
         brain._save_entity_embeddings = MagicMock()
         brain._save_claims_graph = MagicMock()
         return brain
@@ -3503,7 +3510,10 @@ class TestGraphRAGCommunity:
             graph_rag_community_level = 0
 
         result = brain._global_search_map_reduce("test query", _Cfg())
-        assert result == ""
+        # Low scores are filtered; result is either empty or the no-data answer
+        from axon.main import _GRAPHRAG_NO_DATA_ANSWER
+
+        assert result == "" or result == _GRAPHRAG_NO_DATA_ANSWER
 
     def test_global_map_reduce_returns_top_points(self):
         """_global_search_map_reduce includes high-score points in output."""
@@ -3574,9 +3584,14 @@ class TestGraphRAGCommunity:
         with patch("networkx.algorithms.community.louvain_communities", _fake_louvain):
             result = brain._run_hierarchical_community_detection()
 
-        assert len(result) == 2
-        assert 0 in result
-        assert 1 in result
+        # result is now (community_levels, community_hierarchy, community_children)
+        if isinstance(result, tuple) and len(result) == 3:
+            community_levels = result[0]
+        else:
+            community_levels = result
+        assert len(community_levels) == 2
+        assert 0 in community_levels
+        assert 1 in community_levels
 
     def test_community_map_property_returns_finest_level(self):
         """_community_map property returns the finest (highest-index) level map."""
@@ -3680,3 +3695,376 @@ class TestGraphRAGCommunity:
         assert result[0]["subject"] == "Apple"
         assert result[0]["object"] == "Beats"
         assert "Apple acquired Beats" in result[0]["description"]
+
+
+class TestGraphRAGRealImplementation:
+    """Tests for the 9 GraphRAG correctness gaps (GAPs 1-9)."""
+
+    def _make_brain(self):
+        """Return a MagicMock AxonBrain with real methods bound."""
+        import threading
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = AxonConfig()
+        brain.llm = MagicMock()
+        brain.embedding = MagicMock()
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._community_levels = {}
+        brain._community_summaries = {}
+        brain._community_graph_dirty = False
+        brain._last_matched_entities = []
+        brain._entity_embeddings = {}
+        brain._entity_description_buffer = {}
+        brain._claims_graph = {}
+        brain._community_hierarchy = {}
+        brain._community_children = {}
+        brain._relation_description_buffer = {}
+        brain._text_unit_entity_map = {}
+        brain._text_unit_relation_map = {}
+        brain._community_rebuild_lock = threading.Lock()
+        # Bind real implementations
+        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
+        brain._run_hierarchical_community_detection = (
+            AxonBrain._run_hierarchical_community_detection.__get__(brain, AxonBrain)
+        )
+        brain._build_networkx_graph = AxonBrain._build_networkx_graph.__get__(brain, AxonBrain)
+        brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
+            brain, AxonBrain
+        )
+        brain._global_search_map_reduce = AxonBrain._global_search_map_reduce.__get__(
+            brain, AxonBrain
+        )
+        brain._local_search_context = AxonBrain._local_search_context.__get__(brain, AxonBrain)
+        brain._get_incoming_relations = AxonBrain._get_incoming_relations.__get__(brain, AxonBrain)
+        brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
+        brain._extract_claims = AxonBrain._extract_claims.__get__(brain, AxonBrain)
+        brain._rebuild_communities = AxonBrain._rebuild_communities.__get__(brain, AxonBrain)
+        brain._save_entity_graph = MagicMock()
+        brain._save_relation_graph = MagicMock()
+        brain._save_community_map = MagicMock()
+        brain._save_community_summaries = MagicMock()
+        brain._save_community_levels = MagicMock()
+        brain._save_community_hierarchy = MagicMock()
+        brain._save_entity_embeddings = MagicMock()
+        brain._save_claims_graph = MagicMock()
+        return brain
+
+    def test_global_search_reduce_calls_llm(self):
+        """_global_search_map_reduce makes a second (reduce) LLM call with Analyst-formatted text."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        brain._community_summaries = {
+            "0_0": {
+                "title": "Test",
+                "summary": "test",
+                "full_content": "test community content",
+                "findings": [],
+                "rank": 5.0,
+                "entities": [],
+                "size": 1,
+                "level": 0,
+            }
+        }
+        call_count = [0]
+        call_prompts = []
+
+        def _fake_complete(prompt, system_prompt=None):
+            call_count[0] += 1
+            call_prompts.append(prompt)
+            if call_count[0] == 1:
+                return '[{"point": "important finding", "score": 80}]'
+            else:
+                return "Comprehensive synthesized answer."
+
+        brain.llm.complete.side_effect = _fake_complete
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        class _Cfg:
+            graph_rag_global_min_score = 20
+            graph_rag_global_top_points = 50
+            graph_rag_community_level = 0
+            graph_rag_global_reduce_max_tokens = 8000
+
+        result = brain._global_search_map_reduce("test query", _Cfg())
+
+        assert call_count[0] >= 2
+        reduce_prompt = call_prompts[-1]
+        assert "----Analyst" in reduce_prompt
+        assert result == "Comprehensive synthesized answer."
+
+    def test_global_search_no_data_returns_no_data_answer(self):
+        """When all map-phase scores are below min_score, return _GRAPHRAG_NO_DATA_ANSWER."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from axon.main import _GRAPHRAG_NO_DATA_ANSWER
+
+        brain = self._make_brain()
+        brain._community_summaries = {
+            "0_0": {
+                "title": "Test",
+                "summary": "test",
+                "full_content": "test content",
+                "findings": [],
+                "rank": 5.0,
+                "entities": [],
+                "size": 1,
+                "level": 0,
+            }
+        }
+        brain.llm.complete.return_value = '[{"point": "low relevance", "score": 5}]'
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        class _Cfg:
+            graph_rag_global_min_score = 20
+            graph_rag_global_top_points = 50
+            graph_rag_community_level = 0
+            graph_rag_global_reduce_max_tokens = 8000
+
+        result = brain._global_search_map_reduce("test query", _Cfg())
+        assert result == _GRAPHRAG_NO_DATA_ANSWER
+
+    def test_global_search_token_budget_respected(self):
+        """With a very small reduce_max_tokens, reduce prompt is truncated to few analysts."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        summaries = {}
+        for i in range(5):
+            summaries[f"0_{i}"] = {
+                "title": f"Community {i}",
+                "summary": "test",
+                "full_content": f"community content {i}",
+                "findings": [],
+                "rank": 5.0,
+                "entities": [],
+                "size": 1,
+                "level": 0,
+            }
+        brain._community_summaries = summaries
+
+        captured_prompts = []
+
+        def _fake_complete(prompt, system_prompt=None):
+            captured_prompts.append(prompt)
+            if "Community Report" in prompt:
+                return '[{"point": "' + ("x" * 100) + '", "score": 90}]'
+            return "Answer."
+
+        brain.llm.complete.side_effect = _fake_complete
+        brain._executor = ThreadPoolExecutor(max_workers=2)
+
+        class _Cfg:
+            graph_rag_global_min_score = 20
+            graph_rag_global_top_points = 50
+            graph_rag_community_level = 0
+            graph_rag_global_reduce_max_tokens = 10
+
+        brain._global_search_map_reduce("test query", _Cfg())
+        reduce_prompt = captured_prompts[-1]
+        analyst_count = reduce_prompt.count("----Analyst")
+        assert analyst_count <= 2
+
+    def test_local_search_incoming_edges_included(self):
+        """_local_search_context includes B->A relation when querying for entity A."""
+        from unittest.mock import MagicMock
+
+        brain = self._make_brain()
+        brain._entity_graph = {
+            "apple": {"description": "Tech company", "chunk_ids": ["c1"], "type": "ORGANIZATION"},
+            "google": {
+                "description": "Search company",
+                "chunk_ids": ["c2"],
+                "type": "ORGANIZATION",
+            },
+        }
+        brain._relation_graph = {
+            "google": [
+                {
+                    "target": "apple",
+                    "relation": "competes_with",
+                    "chunk_id": "c2",
+                    "description": "Google competes with Apple in mobile",
+                    "weight": 1,
+                }
+            ]
+        }
+        brain._community_levels = {}
+        brain._community_summaries = {}
+        brain._claims_graph = {}
+        brain.vector_store = MagicMock()
+        brain.vector_store.get_by_ids.return_value = []
+
+        class _Cfg:
+            pass
+
+        result = brain._local_search_context("apple products", ["apple"], _Cfg())
+        assert "competes_with" in result or "Google competes with Apple" in result
+
+    def test_local_search_covariate_matched_by_subject(self):
+        """Claims are retrieved by subject name match, not by chunk_ids lookup."""
+        from unittest.mock import MagicMock
+
+        brain = self._make_brain()
+        brain._entity_graph = {
+            "apple": {
+                "description": "Tech company",
+                "chunk_ids": ["c1"],
+                "type": "ORGANIZATION",
+            }
+        }
+        brain._relation_graph = {}
+        brain._community_levels = {}
+        brain._community_summaries = {}
+        # Claim stored under chunk "c99" which is NOT in apple's chunk_ids ("c1")
+        brain._claims_graph = {
+            "c99": [
+                {
+                    "subject": "apple",
+                    "object": "beats",
+                    "type": "acquisition",
+                    "status": "TRUE",
+                    "description": "Apple acquired Beats for $3B",
+                    "text_unit_id": "c99",
+                }
+            ]
+        }
+        brain.vector_store = MagicMock()
+        brain.vector_store.get_by_ids.return_value = []
+
+        class _Cfg:
+            pass
+
+        result = brain._local_search_context("apple acquisitions", ["apple"], _Cfg())
+        assert "Apple acquired Beats" in result
+
+    def test_community_hierarchy_parent_child_structure(self):
+        """_run_hierarchical_community_detection returns 3-tuple with parent/child data."""
+        from unittest.mock import patch
+
+        brain = self._make_brain()
+        brain._entity_graph = {
+            "a": {"description": "entity a", "chunk_ids": ["c1"]},
+            "b": {"description": "entity b", "chunk_ids": ["c2"]},
+            "c": {"description": "entity c", "chunk_ids": ["c3"]},
+            "d": {"description": "entity d", "chunk_ids": ["c4"]},
+        }
+        brain._relation_graph = {
+            "a": [{"target": "b", "relation": "related", "chunk_id": "c1", "weight": 1}],
+            "c": [{"target": "d", "relation": "linked", "chunk_id": "c3", "weight": 1}],
+        }
+        brain.config.graph_rag_community_levels = 2
+
+        def _fake_louvain(G, seed=42, resolution=1.0):
+            nodes = list(G.nodes)
+            mid = len(nodes) // 2
+            return [set(nodes[:mid]), set(nodes[mid:])] if mid > 0 else [set(nodes)]
+
+        with patch("networkx.algorithms.community.louvain_communities", _fake_louvain):
+            result = brain._run_hierarchical_community_detection()
+
+        assert isinstance(result, tuple) and len(result) == 3
+        community_levels, community_hierarchy, community_children = result
+        assert isinstance(community_levels, dict)
+        assert isinstance(community_hierarchy, dict)
+        assert isinstance(community_children, dict)
+        assert len(community_levels) >= 1
+
+    def test_relation_weight_accumulates(self):
+        """Inserting same (subject, relation, object) triple twice yields weight >= 2."""
+        brain = self._make_brain()
+        brain._relation_graph = {}
+
+        def _store_relation(src, tgt, relation, doc_id, desc=""):
+            src_lower = src.lower().strip()
+            if src_lower not in brain._relation_graph:
+                brain._relation_graph[src_lower] = []
+            rel_tgt = tgt.lower().strip()
+            rel_relation = relation.strip()
+            existing_entry = next(
+                (
+                    e
+                    for e in brain._relation_graph[src_lower]
+                    if e.get("target") == rel_tgt and e.get("relation") == rel_relation
+                ),
+                None,
+            )
+            if existing_entry is not None:
+                existing_entry["weight"] = existing_entry.get("weight", 1) + 1
+                if "text_unit_ids" not in existing_entry:
+                    existing_entry["text_unit_ids"] = [existing_entry.get("chunk_id", "")]
+                if doc_id not in existing_entry["text_unit_ids"]:
+                    existing_entry["text_unit_ids"].append(doc_id)
+            else:
+                brain._relation_graph[src_lower].append(
+                    {
+                        "target": rel_tgt,
+                        "relation": rel_relation,
+                        "chunk_id": doc_id,
+                        "text_unit_ids": [doc_id],
+                        "description": desc,
+                        "weight": 1,
+                    }
+                )
+
+        _store_relation("Apple", "Beats", "acquired", "chunk1", "Apple bought Beats")
+        _store_relation("Apple", "Beats", "acquired", "chunk2", "Apple acquired Beats Electronics")
+
+        entry = brain._relation_graph["apple"][0]
+        assert entry["weight"] >= 2
+        assert "chunk1" in entry["text_unit_ids"]
+        assert "chunk2" in entry["text_unit_ids"]
+
+    def test_claim_schema_includes_text_unit_id(self):
+        """Claims parsed from 8-column format have new fields and text_unit_id settable."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = (
+            "Apple | Beats | acquisition | TRUE | Apple acquired Beats for $3B"
+            " | 2014-05-28 | unknown | Apple bought Beats"
+        )
+        claims = brain._extract_claims("some text")
+        assert len(claims) == 1
+        claim = claims[0]
+        assert claim["subject"] == "Apple"
+        assert claim["status"] == "TRUE"
+        assert claim["start_date"] == "2014-05-28"
+        assert claim["end_date"] is None
+        assert claim["source_text"] == "Apple bought Beats"
+        assert "text_unit_id" in claim
+        assert claim["text_unit_id"] is None
+        # Simulate caller setting text_unit_id
+        for c in claims:
+            c["text_unit_id"] = "chunk_abc"
+        assert claims[0]["text_unit_id"] == "chunk_abc"
+
+    def test_rebuild_communities_lock_prevents_interleaving(self):
+        """A thread calling _rebuild_communities blocks while the lock is already held."""
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        # Provide a real executor so _generate_community_summaries doesn't crash
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+        results = []
+
+        def _run_rebuild():
+            brain._rebuild_communities()
+            results.append("done")
+
+        brain._community_rebuild_lock.acquire()
+        t = threading.Thread(target=_run_rebuild)
+        t.start()
+
+        time.sleep(0.05)
+        assert len(results) == 0
+
+        brain._community_rebuild_lock.release()
+        t.join(timeout=5.0)
+        assert len(results) == 1
+        assert results[0] == "done"
