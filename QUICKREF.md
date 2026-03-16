@@ -214,28 +214,39 @@ rag:
   top_k: 10
   hybrid_search: true
 
-  # Graph-augmented retrieval expansion — inspired by GraphRAG but NOT the full
-  # Microsoft GraphRAG method (no community detection, no community summaries,
-  # no global/local search modes).
+  # GraphRAG-inspired retrieval — entity graph + relation graph + community detection.
+  # NOT the full Microsoft GraphRAG method (no claim extraction, no DRIFT search,
+  # no hierarchical community hierarchy). A lightweight approximation.
   #
   # What it does:
-  #   - Ingest: LLM extracts named entities per chunk → entity→[chunk_ids] map.
-  #             Optionally extracts SUBJECT|RELATION|OBJECT triples → relation graph.
-  #   - Query:  Query entities matched via token-Jaccard (exact for single tokens).
-  #             Direct entity matches + 1-hop relation neighbours injected as extra
-  #             context slots (guaranteed by graph_rag_budget, separate from top_k).
+  #   - Ingest: LLM extracts named entities (with descriptions) and
+  #             SUBJECT|RELATION|OBJECT triples (with descriptions) per chunk.
+  #             After ingest, Louvain community detection clusters the entity graph
+  #             (requires: pip install networkx). LLM generates a summary paragraph
+  #             per community cluster.
+  #   - Query:  graph_rag_mode controls retrieval strategy:
+  #     local   — entity descriptions + relation descriptions + community snippet
+  #               prepended before document excerpts (default)
+  #     global  — top community summaries ranked by embedding similarity injected
+  #               as primary context (good for corpus-wide questions)
+  #     hybrid  — community reports + document excerpts combined
   #
   # Known limits:
-  #   - Shallow graph: nodes are lowercased strings; no canonical entity resolution,
-  #     no relation normalisation, no confidence scores, no multi-hop reasoning.
-  #   - Heuristic scoring: expanded docs score 0.5–0.8 (direct) or 0.62 (1-hop);
-  #     not learned or calibrated against vector/lexical similarity.
-  #   - Extraction quality depends on the configured LLM's instruction-following.
+  #   - Shallow graph: no canonical entity resolution, no alias handling,
+  #     no relation normalisation, no multi-hop reasoning beyond 1 hop.
+  #   - Heuristic scoring: not learned or calibrated.
+  #   - Extraction quality depends on the configured LLM.
+  #   - Community detection is async by default; first query after ingest may
+  #     run before communities are ready (graph_rag_community_async: false to block).
   #
-  # Requires an LLM at ingest time. Adds latency per chunk.
+  # Requires an LLM at ingest time. Adds per-chunk latency.
   graph_rag: false
-  graph_rag_budget: 3       # extra entity-linked slots beyond top_k (0 = no guarantee)
-  graph_rag_relations: true # extract relation triples for 1-hop traversal
+  graph_rag_budget: 3              # extra entity-linked slots beyond top_k (0 = no guarantee)
+  graph_rag_relations: true        # extract relation triples for 1-hop traversal
+  # graph_rag_community: false     # run Louvain community detection (needs networkx)
+  # graph_rag_community_async: true
+  # graph_rag_community_top_k: 5
+  # graph_rag_mode: local          # local | global | hybrid
 ```
 
 ### Offline / Air-gapped Mode

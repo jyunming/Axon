@@ -2152,6 +2152,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         path = pathlib.Path(self.config.bm25_path) / ".community_map.json"
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(self._community_map), encoding="utf-8")
         except Exception as e:
             logger.debug(f"Could not save community map: {e}")
@@ -2178,6 +2179,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         path = pathlib.Path(self.config.bm25_path) / ".community_summaries.json"
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(self._community_summaries), encoding="utf-8")
         except Exception as e:
             logger.debug(f"Could not save community summaries: {e}")
@@ -2209,6 +2211,7 @@ Your primary goal is to help the user by answering questions based on the provid
     def _run_community_detection(self) -> dict:
         """Run Louvain community detection. Returns {entity_lower: community_id}."""
         try:
+            import networkx as nx  # noqa: F401 — ensures ImportError fires when networkx is absent
             import networkx.algorithms.community as nx_comm
         except ImportError:
             logger.warning(
