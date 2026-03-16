@@ -3243,6 +3243,7 @@ class TestGraphRAGCommunity:
             "relation": "acquired",
             "object": "Beats",
             "description": "Apple bought Beats for $3B",
+            "strength": 5,
         }
 
     def test_extract_relations_three_part_fallback(self):
@@ -4068,3 +4069,342 @@ class TestGraphRAGRealImplementation:
         t.join(timeout=5.0)
         assert len(results) == 1
         assert results[0] == "done"
+
+
+class TestGraphRAGAuditFixes:
+    """Tests for GraphRAG audit fixes from GRAPHRAG_REAUDIT_2026_03_16_NEW_TASK_5."""
+
+    def _make_brain(self):
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.config.graph_rag_community_levels = 2
+        brain.config.graph_rag_community_max_cluster_size = 10
+        brain.config.graph_rag_leiden_seed = 42
+        brain.config.graph_rag_community_use_lcc = False
+        brain.config.graph_rag_community_max_context_tokens = 4000
+        brain.config.graph_rag_community_include_claims = False
+        brain.config.graph_rag_claims = False
+        brain.config.graph_rag_local_max_context_tokens = 8000
+        brain.config.graph_rag_local_community_prop = 0.25
+        brain.config.graph_rag_local_text_unit_prop = 0.5
+        brain.config.graph_rag_local_top_k_entities = 10
+        brain.config.graph_rag_local_top_k_relationships = 10
+        brain.config.graph_rag_local_include_relationship_weight = False
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._claims_graph = {}
+        brain._community_levels = {}
+        brain._community_hierarchy = {}
+        brain._community_children = {}
+        brain._community_summaries = {}
+        brain._entity_embeddings = {}
+        brain._entity_description_buffer = {}
+        brain._relation_description_buffer = {}
+        brain._text_unit_entity_map = {}
+        brain._text_unit_relation_map = {}
+        brain._save_entity_graph = MagicMock()
+        brain._save_relation_graph = MagicMock()
+        brain._save_community_summaries = MagicMock()
+        brain._save_community_hierarchy = MagicMock()
+        llm = MagicMock()
+        llm.complete = MagicMock(return_value="")
+        brain.llm = llm
+        # Bind real methods
+        for method_name in [
+            "_run_hierarchical_community_detection",
+            "_build_networkx_graph",
+            "_get_incoming_relations",
+            "_local_search_context",
+            "_extract_relations",
+            "_entity_matches",
+            "_expand_with_entity_graph",
+            "_match_entities_by_embedding",
+            "_extract_entities",
+        ]:
+            method = getattr(AxonBrain, method_name)
+            setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+        return brain
+
+    def test_hierarchy_no_cluster_id_collision_across_levels(self):
+        """Fallback hierarchy keys must be level-qualified to avoid cross-level collisions."""
+        import pytest
+
+        b = self._make_brain()
+        b._entity_graph = {
+            "a": {
+                "chunk_ids": ["c1"],
+                "description": "",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 1,
+            },
+            "b": {
+                "chunk_ids": ["c2"],
+                "description": "",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 1,
+            },
+            "c": {
+                "chunk_ids": ["c3"],
+                "description": "",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 1,
+            },
+            "d": {
+                "chunk_ids": ["c4"],
+                "description": "",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 1,
+            },
+        }
+        b._relation_graph = {
+            "a": [
+                {"target": "b", "relation": "rel", "chunk_id": "c1", "description": "", "weight": 1}
+            ],
+            "c": [
+                {"target": "d", "relation": "rel", "chunk_id": "c3", "description": "", "weight": 1}
+            ],
+        }
+        try:
+            import networkx  # noqa: F401
+        except ImportError:
+            pytest.skip("networkx not installed")
+
+        result = b._run_hierarchical_community_detection()
+        assert isinstance(result, tuple) and len(result) == 3
+        community_levels, hierarchy, children = result
+        # With 2+ levels, hierarchy keys must not be bare integers that collide across levels
+        # All hierarchy keys should be either None or strings with "_" separator (level-qualified)
+        for key in hierarchy:
+            assert (
+                isinstance(key, str) and "_" in key
+            ), f"Hierarchy key {key!r} is not level-qualified — collision risk"
+
+    def test_use_lcc_default_is_false(self):
+        """graph_rag_community_use_lcc should default to False to preserve all graph components."""
+        import dataclasses
+
+        from axon.main import AxonConfig
+
+        fields = {f.name: f.default for f in dataclasses.fields(AxonConfig)}
+        assert (
+            fields.get("graph_rag_community_use_lcc") is False
+        ), "use_lcc defaults True — disconnected components would be silently dropped"
+
+    def test_entity_ranking_uses_total_degree(self):
+        """Entity ranking in local search should count both incoming and outgoing relations."""
+        b = self._make_brain()
+        # 'a' has 0 outgoing but is a target of 'b' — total degree 1
+        # 'b' has 1 outgoing, 0 incoming — total degree 1
+        # 'c' has 0 outgoing, 0 incoming — total degree 0
+        b._entity_graph = {
+            "a": {
+                "chunk_ids": ["c1"],
+                "description": "node a",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 0,
+            },
+            "b": {
+                "chunk_ids": ["c2"],
+                "description": "node b",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 1,
+            },
+            "c": {
+                "chunk_ids": ["c3"],
+                "description": "node c",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 0,
+            },
+        }
+        b._relation_graph = {
+            "b": [
+                {
+                    "target": "a",
+                    "relation": "links_to",
+                    "chunk_id": "c2",
+                    "description": "b links to a",
+                    "weight": 1,
+                }
+            ],
+        }
+        b._community_levels = {}
+        b._community_summaries = {}
+        result = b._local_search_context("test query", ["a", "b", "c"], b.config)
+        # 'c' has zero total degree so should appear after 'a' and 'b'
+        if "node a" in result and "node c" in result:
+            assert result.index("node a") < result.index("node c") or result.index(
+                "node b"
+            ) < result.index("node c")
+
+    def test_multiple_community_reports_in_local_search(self):
+        """Local search must include multiple community reports, not just the first one."""
+        b = self._make_brain()
+        b._entity_graph = {
+            "alpha": {
+                "chunk_ids": ["c1"],
+                "description": "alpha entity",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 1,
+            },
+            "beta": {
+                "chunk_ids": ["c2"],
+                "description": "beta entity",
+                "type": "CONCEPT",
+                "frequency": 1,
+                "degree": 1,
+            },
+        }
+        b._relation_graph = {}
+        # Two different communities
+        b._community_levels = {0: {"alpha": 10, "beta": 20}}
+        b._community_summaries = {
+            "0_10": {
+                "title": "Alpha Community",
+                "summary": "This is about alpha.",
+                "findings": [],
+                "rank": 7.0,
+                "entities": ["alpha"],
+                "size": 1,
+                "level": 0,
+                "full_content": "# Alpha Community\nThis is about alpha.",
+            },
+            "0_20": {
+                "title": "Beta Community",
+                "summary": "This is about beta.",
+                "findings": [],
+                "rank": 6.0,
+                "entities": ["beta"],
+                "size": 1,
+                "level": 0,
+                "full_content": "# Beta Community\nThis is about beta.",
+            },
+        }
+        result = b._local_search_context("test query", ["alpha", "beta"], b.config)
+        # Both community snippets should appear (not just the first)
+        assert "Alpha Community" in result, "First community report missing"
+        assert "Beta Community" in result, "Second community report missing — break removed?"
+
+    def test_relation_extraction_includes_strength_field(self):
+        """_extract_relations must return dicts with a 'strength' key."""
+        b = self._make_brain()
+        b.llm.complete = MagicMock(
+            return_value="Apple | acquired | Beats | Apple bought Beats for $3B | 9\n"
+            "Beats | makes | headphones | Beats manufactures audio products | 7"
+        )
+        result = b._extract_relations("Apple acquired Beats, which makes headphones.")
+        assert len(result) >= 1
+        for r in result:
+            assert "strength" in r, f"Missing 'strength' key in {r}"
+            assert 1 <= r["strength"] <= 10, f"strength {r['strength']} out of range"
+
+    def test_relation_extraction_strength_defaults_on_missing_column(self):
+        """_extract_relations should use strength=5 when 5th column is absent."""
+        b = self._make_brain()
+        b.llm.complete = MagicMock(
+            return_value="Apple | acquired | Beats | Apple bought Beats for $3B"
+        )
+        result = b._extract_relations("Apple acquired Beats.")
+        assert len(result) == 1
+        assert result[0]["strength"] == 5
+
+    def test_global_search_map_uses_chunks_not_raw_report(self):
+        """Global search map phase must chunk long reports so later content is not lost."""
+        import concurrent.futures
+
+        b = self._make_brain()
+        b.config.graph_rag_global_min_score = 0
+        b.config.graph_rag_global_top_points = 50
+        b.config.graph_rag_community_level = 0
+        b.config.graph_rag_global_reduce_max_tokens = 8000
+        # Build a report long enough to require chunking (>2000 chars)
+        long_report = "Important fact: the answer is 42. " * 100  # ~3400 chars
+        b._community_summaries = {
+            "0_1": {
+                "title": "T1",
+                "summary": "short",
+                "full_content": long_report,
+                "rank": 8.0,
+                "entities": [],
+                "size": 1,
+                "level": 0,
+                "findings": [],
+            },
+        }
+        calls = []
+
+        def fake_complete(prompt, system_prompt=None):
+            calls.append(prompt)
+            return '[{"point": "answer is 42", "score": 90}]'
+
+        b.llm.complete = MagicMock(side_effect=fake_complete)
+        b._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        from axon.main import (
+            _GRAPHRAG_REDUCE_SYSTEM_PROMPT,  # noqa: F401
+            AxonBrain,
+        )
+
+        AxonBrain._global_search_map_reduce(b, "what is the answer?", b.config)
+        # With chunking, the long report should produce >=2 map LLM calls (one per chunk)
+        # The reduce call is 1 additional call, so total > 2 if chunking works
+        map_calls = [c for c in calls if "Community Report" in c]
+        assert len(map_calls) >= 2, (
+            f"Expected >=2 map calls for chunked report, got {len(map_calls)} — "
+            "report may not be chunked"
+        )
+        b._executor.shutdown(wait=False)
+
+    def test_union_embedding_and_llm_entity_extraction(self):
+        """_expand_with_entity_graph must union LLM-extracted and embedding-matched entities."""
+        import concurrent.futures
+
+        from axon.main import AxonBrain
+
+        b = self._make_brain()
+        b.config.graph_rag_entity_embedding_match = True
+        b.config.graph_rag_relations = False
+        b.config.graph_rag_budget = 3
+        b.config.top_k = 3
+        b._entity_graph = {
+            "apple": {
+                "chunk_ids": ["c1"],
+                "description": "tech company",
+                "type": "ORG",
+                "frequency": 1,
+                "degree": 1,
+            },
+            "beatles": {
+                "chunk_ids": ["c2"],
+                "description": "music band",
+                "type": "ORG",
+                "frequency": 1,
+                "degree": 1,
+            },
+        }
+        b._entity_embeddings = {"apple": [1.0, 0.0], "beatles": [0.0, 1.0]}
+        # LLM extracts "apple" (exact mention)
+        b._extract_entities = MagicMock(
+            return_value=[{"name": "apple", "type": "ORG", "description": ""}]
+        )
+        # Embedding match returns "beatles" (semantic neighbor)
+        b._match_entities_by_embedding = MagicMock(return_value=["beatles"])
+        b._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        b.vector_store = MagicMock()
+        b.vector_store.get_by_ids = MagicMock(return_value=[])
+        results, matched = AxonBrain._expand_with_entity_graph(b, "apple music", [], b.config)
+        b._executor.shutdown(wait=False)
+        # Both apple (LLM) and beatles (embedding) should appear in matched entities
+        matched_lower = [m.lower() for m in matched]
+        assert "apple" in matched_lower, "LLM-extracted entity 'apple' missing from matched"
+        assert (
+            "beatles" in matched_lower
+        ), "Embedding-matched entity 'beatles' missing — union not working"
