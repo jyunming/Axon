@@ -273,6 +273,14 @@ class AxonConfig:
     # questions that no single leaf chunk can answer.
     raptor: bool = True
     raptor_chunk_group_size: int = 5
+    raptor_max_levels: int = 2  # P3: recursive summarization depth
+    raptor_cache_summaries: bool = True  # P5: skip LLM when window content unchanged
+    raptor_drilldown: bool = True  # P1: replace summary hits with leaf chunks
+    raptor_drilldown_top_k: int = 5  # P1: max leaves substituted per summary hit
+    raptor_retrieval_mode: str = (
+        "tree_traversal"  # P4: tree_traversal|summary_first|corpus_overview
+    )
+    raptor_graphrag_leaf_skip_threshold: int = 20  # P2: skip GraphRAG on sources >= N leaf chunks
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
@@ -353,9 +361,36 @@ class AxonConfig:
     graph_rag_local_top_k_entities: int = 10
     graph_rag_local_top_k_relationships: int = 10
     graph_rag_local_include_relationship_weight: bool = False
+    # TASK 11: Unified candidate ranking weights
+    graph_rag_local_entity_weight: float = 3.0
+    graph_rag_local_relation_weight: float = 2.0
+    graph_rag_local_community_weight: float = 1.5
+    graph_rag_local_text_unit_weight: float = 1.0
+
+    # TASK 12: Runtime cost reduction — community triage
+    graph_rag_community_min_size: int = 3  # communities smaller than this → template only
+    graph_rag_community_llm_top_n_per_level: int = 50  # max LLM-summarized per level (0=unlimited)
+    graph_rag_community_llm_max_total: int = (
+        200  # hard cap on LLM calls across all levels (0=unlimited)
+    )
+    # TASK 12: Lazy community generation — skip summarization at finalize; generate on first global query
+    graph_rag_community_lazy: bool = False
+    # TASK 12: Global search pre-filter — cap communities entering map-reduce (0=no cap)
+    graph_rag_global_top_communities: int = 0
+    # TASK 12: RAPTOR source-size guard — skip RAPTOR for sources larger than this MB (0=no limit)
+    raptor_max_source_size_mb: float = 0.0
 
     # GAP 6: Async rebuild debounce
     graph_rag_community_rebuild_debounce_s: float = 2.0
+
+    # TASK 7: Exact-token entity boost in local search
+    graph_rag_exact_entity_boost: float = 3.0
+
+    # TASK 7: Deferred community rebuild (batch ingest mode)
+    graph_rag_community_defer: bool = True
+
+    # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction
+    graph_rag_include_raptor_summaries: bool = False
 
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
@@ -1375,7 +1410,16 @@ class OpenVectorStore:
         self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
     ) -> list[dict]:
         if self.provider == "chroma":
-            results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
+            where = None
+            if filter_dict:
+                if len(filter_dict) == 1:
+                    key, val = next(iter(filter_dict.items()))
+                    where = {key: {"$eq": val}}
+                else:
+                    where = {"$and": [{k: {"$eq": v}} for k, v in filter_dict.items()]}
+            results = self.collection.query(
+                query_embeddings=[query_embedding], n_results=top_k, where=where
+            )
             return [
                 {
                     "id": results["ids"][0][i],
@@ -1786,6 +1830,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self._community_levels: dict = self._load_community_levels()
         self._community_summaries: dict = self._load_community_summaries()
         self._community_graph_dirty: bool = False
+        self._community_build_in_progress: bool = False
         self._last_matched_entities: list = []
 
         # GraphRAG entity embeddings (for embedding-based entity matching at query time)
@@ -1793,6 +1838,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # GraphRAG entity description buffer (transient, not persisted)
         self._entity_description_buffer: dict = {}
+
+        # P5: In-memory RAPTOR summary cache {cache_key: summary_text}
+        self._raptor_summary_cache: dict[str, str] = {}
 
         # GraphRAG claims graph
         self._claims_graph: dict = self._load_claims_graph()
@@ -1983,6 +2031,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self._relation_description_buffer = {}
         self._text_unit_entity_map = {}
         self._text_unit_relation_map = {}
+        self._raptor_summary_cache = {}
 
         # Merge entity graphs and relation graphs from all descendant projects so
         # that GraphRAG expansion is coherent when querying from a parent project.
@@ -2036,7 +2085,7 @@ Your primary goal is to help the user by answering questions based on the provid
                                         if isinstance(d, str) and d not in existing_ids
                                     ]
                                     if new_ids:
-                                        existing["chunk_ids"].extend(new_ids)
+                                        existing.setdefault("chunk_ids", []).extend(new_ids)
                                         existing["frequency"] = len(existing["chunk_ids"])
                                 else:
                                     # existing is legacy list
@@ -2420,8 +2469,22 @@ Your primary goal is to help the user by answering questions based on the provid
             if path.exists():
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
-                    # JSON keys are strings; convert to int; None values stay None
-                    return {int(k): (None if v is None else int(v)) for k, v in raw.items()}
+                    # JSON keys are strings; support both legacy int keys and
+                    # level-qualified string keys like "1_3".
+                    result = {}
+                    for k, v in raw.items():
+                        key = k if ("_" in str(k)) else (int(k) if str(k).isdigit() else k)
+                        val = (
+                            None
+                            if v is None
+                            else (
+                                v
+                                if (isinstance(v, str) and "_" in v)
+                                else (int(str(v)) if str(v).isdigit() else v)
+                            )
+                        )
+                        result[key] = val
+                    return result
         except Exception:
             pass
         return {}
@@ -2665,7 +2728,32 @@ Your primary goal is to help the user by answering questions based on the provid
                     if cluster not in community_children[parent]:
                         community_children[parent].append(cluster)
 
-            return community_levels, community_hierarchy, community_children
+            # Normalize Leiden hierarchy to level-qualified string keys to match Louvain format
+            # and avoid cross-level integer collisions.
+            normalized_hierarchy: dict = {}
+            normalized_children: dict = {}
+            # Build a level-lookup for each (level, cluster) → level-qualified key
+            cluster_to_level: dict = {}
+            for lvl, cmap in community_levels.items():
+                for _ent, cid in cmap.items():
+                    if cid not in cluster_to_level:
+                        cluster_to_level[cid] = lvl
+            for raw_cid, raw_parent in community_hierarchy.items():
+                lvl = cluster_to_level.get(raw_cid, 0)
+                norm_key = f"{lvl}_{raw_cid}"
+                if raw_parent is None:
+                    norm_parent = None
+                else:
+                    parent_lvl = cluster_to_level.get(raw_parent, max(0, lvl - 1))
+                    norm_parent = f"{parent_lvl}_{raw_parent}"
+                normalized_hierarchy[norm_key] = norm_parent
+                if norm_parent is not None:
+                    if norm_parent not in normalized_children:
+                        normalized_children[norm_parent] = []
+                    if norm_key not in normalized_children[norm_parent]:
+                        normalized_children[norm_parent].append(norm_key)
+
+            return community_levels, normalized_hierarchy, normalized_children
 
         except ImportError:
             pass  # Fall through to synthetic mapping
@@ -2764,24 +2852,91 @@ Your primary goal is to help the user by answering questions based on the provid
                     f"{total} total communities detected."
                 )
                 if self.config.graph_rag_community:
-                    self._generate_community_summaries()
-                    if getattr(self.config, "graph_rag_index_community_reports", True):
-                        self._index_community_reports_in_vector_store()
+                    _lazy = getattr(self.config, "graph_rag_community_lazy", False)
+                    if _lazy:
+                        logger.info(
+                            "GraphRAG: community_lazy=True — skipping summarization; "
+                            "will generate on first global query."
+                        )
+                    else:
+                        self._generate_community_summaries()
+                        if getattr(self.config, "graph_rag_index_community_reports", True):
+                            self._index_community_reports_in_vector_store()
+
+    def finalize_graph(self) -> None:
+        """Explicitly trigger community rebuild.
+
+        Use after batch ingest with ``graph_rag_community_defer=True`` to run
+        community detection once when all documents have been ingested.
+        """
+        if self._community_graph_dirty:
+            self._community_graph_dirty = False
+            self._rebuild_communities()
 
     def _generate_community_summaries(self) -> None:
         """Generate LLM summaries for each detected community cluster across all levels."""
         if not self._community_levels:
             return
+        import hashlib as _hashlib
         import json as _json
         import re as _re
         from collections import defaultdict
+
+        def _member_hash(level_idx: int, members: list) -> str:
+            members_sorted = sorted(members)
+            raw = f"{level_idx}|{'|'.join(members_sorted)}"
+            return _hashlib.md5(raw.encode()).hexdigest()
 
         summaries = {}
         total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
         logger.info(f"GraphRAG: Generating summaries for {total_communities} communities...")
 
+        _min_size = getattr(self.config, "graph_rag_community_min_size", 3)
+        _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 50)
+        _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 200)
+        _llm_calls_issued = 0
+
+        def _community_score(members: list) -> float:
+            """Composite score = density × size. Used to rank which communities get LLM."""
+            member_set = set(members)
+            internal_edges = sum(
+                1
+                for src in members
+                for entry in self._relation_graph.get(src, [])
+                if entry.get("target", "") in member_set
+            )
+            return (internal_edges / max(len(members), 1)) * len(members)
+
+        def _template_summary(level_idx: int, cid, members: list, new_hash: str) -> tuple:
+            """Deterministic zero-LLM summary for small/capped communities."""
+            size = len(members)
+            sample = ", ".join(sorted(members)[:5])
+            suffix = f" (+{size - 5} more)" if size > 5 else ""
+            title = f"Community {cid}"
+            summary = f"A cluster of {size} entities: {sample}{suffix}."
+            return f"{level_idx}_{cid}", {
+                "title": title,
+                "summary": summary,
+                "findings": [],
+                "rank": float(size),
+                "full_content": f"# {title}\n\n{summary}",
+                "entities": members,
+                "size": size,
+                "level": level_idx,
+                "member_hash": new_hash,
+                "template": True,
+            }
+
         def _summarise(args):
             level_idx, cid, members = args
+            summary_key = f"{level_idx}_{cid}"
+            new_hash = _member_hash(level_idx, members)
+            existing = self._community_summaries.get(summary_key, {})
+            if existing.get("member_hash") == new_hash and existing.get("full_content"):
+                # Membership unchanged — reuse cached summary
+                cached = dict(existing)
+                cached["member_hash"] = new_hash
+                return summary_key, cached
             ent_parts = []
             for e in members[:30]:
                 node = self._entity_graph.get(e, {})
@@ -2813,14 +2968,16 @@ Your primary goal is to help the user by answering questions based on the provid
                     parent_key, self._community_children.get(cid, [])
                 )
                 sub_reports = []
-                for sub_key in sub_community_keys:
-                    if sub_key in self._community_summaries:
-                        sub_reports.append(
-                            self._community_summaries[sub_key].get("full_content", "")
-                        )
+                ranked_sub = sorted(
+                    [k for k in sub_community_keys if k in self._community_summaries],
+                    key=lambda k: self._community_summaries[k].get("rank", 0.0),
+                    reverse=True,
+                )
+                for sub_key in ranked_sub[:5]:
+                    sub_reports.append(self._community_summaries[sub_key].get("full_content", ""))
                 if sub_reports:
                     entity_rel_text = "\n\n".join(
-                        f"Sub-community Report:\n{r}" for r in sub_reports[:3]
+                        f"Sub-community Report:\n{r}" for r in sub_reports
                     )
             else:
                 entity_rel_text = "\n".join(ent_parts)
@@ -2844,11 +3001,10 @@ Your primary goal is to help the user by answering questions based on the provid
             context = entity_rel_text
             if claim_parts:
                 context += "\n\nClaims:\n" + "\n".join(claim_parts)
-            summary_key = f"{level_idx}_{cid}"
             prompt = (
                 "You are analyzing a knowledge graph community.\n\n"
                 "Community members and descriptions:\n"
-                f"{context[:3000]}\n\n"
+                f"{context}\n\n"
                 "Generate a community report as JSON with this exact structure:\n"
                 "{\n"
                 '  "title": "<2-5 word theme name>",\n'
@@ -2897,6 +3053,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     "entities": members,
                     "size": len(members),
                     "level": level_idx,
+                    "member_hash": new_hash,
                 }
             except Exception as e:
                 logger.debug(f"Community summary failed for community {summary_key}: {e}")
@@ -2909,6 +3066,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     "entities": members,
                     "size": len(members),
                     "level": level_idx,
+                    "member_hash": new_hash,
                 }
 
         # Process levels from finest (highest idx) to coarsest — SEQUENTIALLY so sub-community
@@ -2918,11 +3076,37 @@ Your primary goal is to help the user by answering questions based on the provid
             community_entities: dict = defaultdict(list)
             for entity, cid in level_map.items():
                 community_entities[cid].append(entity)
-            level_work_items = [
-                (level_idx, cid, members) for cid, members in community_entities.items()
-            ]
-            level_results = list(self._executor.map(_summarise, level_work_items))
-            for summary_key, summary_dict in level_results:
+
+            llm_items, template_items = [], []
+            ranked = sorted(
+                community_entities.items(), key=lambda kv: _community_score(kv[1]), reverse=True
+            )
+
+            for rank_pos, (cid, members) in enumerate(ranked):
+                summary_key = f"{level_idx}_{cid}"
+                new_hash = _member_hash(level_idx, members)
+                # Cache hit: always reuse regardless of triage
+                existing = self._community_summaries.get(summary_key, {})
+                if existing.get("member_hash") == new_hash and existing.get("full_content"):
+                    summaries[summary_key] = dict(existing)
+                    continue
+                # Triage gates (applied in order):
+                if _min_size > 0 and len(members) < _min_size:
+                    template_items.append((level_idx, cid, members, new_hash))
+                    continue
+                if _top_n_per_level > 0 and rank_pos >= _top_n_per_level:
+                    template_items.append((level_idx, cid, members, new_hash))
+                    continue
+                if _max_total > 0 and _llm_calls_issued >= _max_total:
+                    template_items.append((level_idx, cid, members, new_hash))
+                    continue
+                _llm_calls_issued += 1
+                llm_items.append((level_idx, cid, members))
+
+            for args in template_items:
+                key, val = _template_summary(*args)
+                summaries[key] = val
+            for summary_key, summary_dict in self._executor.map(_summarise, llm_items):
                 summaries[summary_key] = summary_dict
             # Make this level's summaries available before summarizing coarser levels
             self._community_summaries = dict(summaries)
@@ -2940,6 +3124,11 @@ Your primary goal is to help the user by answering questions based on the provid
             if not full_content:
                 continue
             doc_id = f"__community__{summary_key}"
+            content_hash = cs.get("member_hash", "")
+            # Skip re-indexing if content is unchanged since last index
+            if cs.get("indexed_hash") == content_hash and content_hash:
+                continue
+            cs["indexed_hash"] = content_hash
             docs_to_add.append(
                 {
                     "id": doc_id,
@@ -3022,8 +3211,24 @@ Your primary goal is to help the user by answering questions based on the provid
         if not level_summaries:
             level_summaries = self._community_summaries
 
+        # TASK 12: Dynamic community pre-filter — cheap token-overlap relevance score
+        _top_n_communities = getattr(cfg, "graph_rag_global_top_communities", 0)
+        if _top_n_communities > 0 and len(level_summaries) > _top_n_communities:
+            _query_words = set(query.lower().split())
+
+            def _community_relevance(cs_item: tuple) -> float:
+                _, cs = cs_item
+                text = ((cs.get("title") or "") + " " + (cs.get("summary") or "")).lower()
+                return len(_query_words & set(text.split())) / max(len(_query_words), 1)
+
+            sorted_summaries = sorted(
+                level_summaries.items(), key=_community_relevance, reverse=True
+            )
+            level_summaries = dict(sorted_summaries[:_top_n_communities])
+            logger.debug("GraphRAG global: pre-filtered to top %d communities.", _top_n_communities)
+
         # Chunk reports so large reports don't get hard-truncated and later sections aren't lost
-        _MAP_CHUNK_CHARS = 2000
+        _MAP_CHUNK_CHARS = int(getattr(cfg, "graph_rag_global_map_max_length", 500) or 500) * 4
 
         def _chunk_report(cid: str, cs: dict) -> list[tuple[str, str]]:
             """Split a community report into bounded chunks. Returns [(cid_chunk_id, text)]."""
@@ -3112,16 +3317,25 @@ Your primary goal is to help the user by answering questions based on the provid
             return _GRAPHRAG_NO_DATA_ANSWER
 
         reduce_context = "\n\n".join(analyst_lines)
+        reduce_max_length = getattr(cfg, "graph_rag_global_reduce_max_length", 500)
         reduce_prompt = (
             f"The following analytic reports have been generated for the query:\n\n"
             f"Query: {query}\n\n"
             f"Reports:\n\n{reduce_context}\n\n"
             f"Using the reports above, generate a comprehensive response to the query."
+            f"\nRespond in at most {reduce_max_length} tokens."
         )
+        reduce_system_prompt = _GRAPHRAG_REDUCE_SYSTEM_PROMPT
+        if getattr(cfg, "graph_rag_global_allow_general_knowledge", False):
+            reduce_system_prompt = (
+                reduce_system_prompt
+                + " You may supplement the provided reports with your own general knowledge"
+                " where relevant."
+            )
         try:
             response = self.llm.complete(
                 reduce_prompt,
-                system_prompt=_GRAPHRAG_REDUCE_SYSTEM_PROMPT,
+                system_prompt=reduce_system_prompt,
             )
             return response.strip() if response else _GRAPHRAG_NO_DATA_ANSWER
         except Exception as e:
@@ -3140,170 +3354,202 @@ Your primary goal is to help the user by answering questions based on the provid
         return results
 
     def _local_search_context(self, query: str, matched_entities: list, cfg) -> str:
-        """Build structured GraphRAG local context: entity descriptions + relations + community snippet."""
+        """Build structured GraphRAG local context using unified candidate ranking.
+
+        TASK 11: Replaces fixed 25/50/25 budget split with joint ranking across all
+        artifact types, then greedy-fill up to total_budget tokens.
+        """
         if not matched_entities:
             return ""
 
-        # GAP 4: Token budget per section
+        import re as _re
+
+        # --- Phase 1: Setup ---
         total_budget = getattr(cfg, "graph_rag_local_max_context_tokens", 8000)
-        community_budget = int(total_budget * getattr(cfg, "graph_rag_local_community_prop", 0.25))
-        text_unit_budget = int(total_budget * getattr(cfg, "graph_rag_local_text_unit_prop", 0.5))
-        entity_rel_budget = total_budget - community_budget - text_unit_budget
         top_k_entities = getattr(cfg, "graph_rag_local_top_k_entities", 10)
         top_k_relationships = getattr(cfg, "graph_rag_local_top_k_relationships", 10)
         include_weight = getattr(cfg, "graph_rag_local_include_relationship_weight", False)
 
-        # GAP 4: Rank entities by total degree (outgoing + incoming relations)
+        entity_weight = getattr(cfg, "graph_rag_local_entity_weight", 3.0)
+        relation_weight = getattr(cfg, "graph_rag_local_relation_weight", 2.0)
+        community_weight = getattr(cfg, "graph_rag_local_community_weight", 1.5)
+        text_unit_weight = getattr(cfg, "graph_rag_local_text_unit_weight", 1.0)
+
+        _query_tokens = set(query.lower().split()) | set(_re.split(r"[\s\W_]+", query.lower()))
+        _boost = getattr(self.config, "graph_rag_exact_entity_boost", 3.0)
+
         def _entity_degree(ent: str) -> int:
             outgoing = len(self._relation_graph.get(ent.lower(), []))
             incoming = len(self._get_incoming_relations(ent))
             return outgoing + incoming
 
-        ranked_entities = sorted(matched_entities, key=_entity_degree, reverse=True)
+        def _entity_raw(ent: str) -> float:
+            return _entity_degree(ent) * (_boost if ent.lower() in _query_tokens else 1.0)
+
+        ranked_entities = sorted(matched_entities, key=_entity_raw, reverse=True)
         ranked_entities = ranked_entities[:top_k_entities]
 
-        parts = []
-        used_entity_rel_tokens = 0
+        # --- Phase 2: Collect all candidates into a flat list ---
+        candidates: list[dict] = []
 
-        ent_parts = []
-        for ent in ranked_entities:
-            if used_entity_rel_tokens > entity_rel_budget:
-                break
+        # Entities
+        raw_scores = [_entity_raw(e) for e in ranked_entities]
+        max_raw = max(raw_scores, default=1.0) or 1.0
+        for ent, raw in zip(ranked_entities, raw_scores):
             node = self._entity_graph.get(ent.lower(), {})
             desc = node.get("description", "") if isinstance(node, dict) else ""
             ent_type = node.get("type", "") if isinstance(node, dict) else ""
-            if desc:
-                line = f"  - {ent} [{ent_type}]: {desc}" if ent_type else f"  - {ent}: {desc}"
-                ent_parts.append(line)
-                used_entity_rel_tokens += len(line) // 4
-        if ent_parts:
-            parts.append("**Matched Entities:**\n" + "\n".join(ent_parts))
+            if not desc:
+                continue
+            line = f"  - {ent} [{ent_type}]: {desc}" if ent_type else f"  - {ent}: {desc}"
+            candidates.append(
+                {
+                    "type": "entity",
+                    "score": entity_weight * (raw / max_raw),
+                    "text": line,
+                    "tokens": len(line) // 4 + 1,
+                    "key": ent.lower(),
+                }
+            )
 
-        rel_parts = []
-        rel_count = 0
+        # Relations — collect outgoing (top 3/entity) + incoming (top 2/entity)
+        def _mutual_count(e_entry, ranked):
+            tgt = e_entry.get("target", "")
+            return sum(
+                1
+                for ee in ranked
+                if tgt in {x.get("target", "") for x in self._relation_graph.get(ee.lower(), [])}
+            )
+
+        rel_candidates_raw: list[tuple[float, dict, str]] = []
+        seen_rel_keys: set = set()
         for ent in ranked_entities:
-            if rel_count >= top_k_relationships or used_entity_rel_tokens > entity_rel_budget:
-                break
             ent_lower = ent.lower()
-            # Outgoing relations
             outgoing = self._relation_graph.get(ent_lower, [])
-
-            # GAP 4: Out-of-network mutual-links prioritization (count shared targets)
-            def _mutual_count(e):
-                return sum(
-                    1
-                    for ee in ranked_entities
-                    if e.get("target", "")
-                    in {
-                        entry2.get("target", "")
-                        for entry2 in self._relation_graph.get(ee.lower(), [])
-                    }
-                )
-
-            sorted_outgoing = sorted(outgoing, key=_mutual_count, reverse=True)
+            sorted_outgoing = sorted(
+                outgoing, key=lambda e: _mutual_count(e, ranked_entities), reverse=True
+            )
             for entry in sorted_outgoing[:3]:
-                if rel_count >= top_k_relationships or used_entity_rel_tokens > entity_rel_budget:
-                    break
-                desc = entry.get("description") or (
-                    f"{ent} {entry.get('relation', '')} {entry.get('target', '')}"
-                )
-                weight_str = ""
-                if include_weight and entry.get("weight"):
-                    weight_str = f" (weight: {entry['weight']})"
-                line = f"  - {desc}{weight_str}"
-                rel_parts.append(line)
-                used_entity_rel_tokens += len(line) // 4
-                rel_count += 1
-            # GAP 4: Incoming edges
+                mc = _mutual_count(entry, ranked_entities)
+                rel_candidates_raw.append((mc, entry, ent))
             for entry in self._get_incoming_relations(ent)[:2]:
-                if rel_count >= top_k_relationships or used_entity_rel_tokens > entity_rel_budget:
-                    break
-                src = entry.get("source", "")
-                desc = entry.get("description") or (f"{src} {entry.get('relation', '')} {ent}")
-                weight_str = ""
-                if include_weight and entry.get("weight"):
-                    weight_str = f" (weight: {entry['weight']})"
-                line = f"  - {desc}{weight_str}"
-                rel_parts.append(line)
-                used_entity_rel_tokens += len(line) // 4
-                rel_count += 1
-        if rel_parts:
-            parts.append("**Relevant Relationships:**\n" + "\n".join(rel_parts))
+                mc = _mutual_count(entry, ranked_entities)
+                rel_candidates_raw.append((mc, entry, ent))
 
-        # Community section (budget-capped) — collect up to budget across all matched entities
+        # Sort by mutual count, cap at top_k_relationships, normalize
+        rel_candidates_raw.sort(key=lambda x: x[0], reverse=True)
+        rel_candidates_raw = rel_candidates_raw[:top_k_relationships]
+        max_mutual = max((x[0] for x in rel_candidates_raw), default=0)
+        for mc, entry, ent in rel_candidates_raw:
+            src = entry.get("source", ent)
+            desc = entry.get("description") or (
+                f"{src} {entry.get('relation', '')} {entry.get('target', '')}"
+            )
+            weight_str = ""
+            if include_weight and entry.get("weight"):
+                weight_str = f" (weight: {entry['weight']})"
+            line = f"  - {desc}{weight_str}"
+            rel_key = line[:80]
+            if rel_key in seen_rel_keys:
+                continue
+            seen_rel_keys.add(rel_key)
+            within = (mc + 1) / (max_mutual + 1)
+            candidates.append(
+                {
+                    "type": "relation",
+                    "score": relation_weight * within,
+                    "text": line,
+                    "tokens": len(line) // 4 + 1,
+                }
+            )
+
+        # Communities — finest level, deduplicated by summary_key
         if self._community_levels and self._community_summaries:
             finest = max(self._community_levels.keys()) if self._community_levels else None
-            used_community_tokens = 0
             seen_community_keys: set = set()
-            community_parts = []
-            for ent in ranked_entities[:top_k_entities]:
-                if used_community_tokens > community_budget:
-                    break
+            community_raws: list[tuple[float, str, str]] = []
+            for ent in ranked_entities:
                 cid = (
                     self._community_levels.get(finest, {}).get(ent.lower())
                     if finest is not None
                     else None
                 )
-                if cid is not None:
-                    summary_key = f"{finest}_{cid}"
-                    if summary_key in seen_community_keys:
-                        continue
-                    seen_community_keys.add(summary_key)
-                    cs = self._community_summaries.get(summary_key, {})
-                    # Also check old-format key for backward compat
-                    if not cs:
-                        cs = self._community_summaries.get(str(cid), {})
-                    summary = cs.get("summary", "")
-                    if summary:
-                        sentences = summary.split(". ")
-                        snippet = ". ".join(sentences[:3]).strip()
-                        if snippet and not snippet.endswith("."):
-                            snippet += "."
-                        title = cs.get("title", f"Community {cid}")
-                        community_text = f"**Community Context ({title}):**\n  {snippet}"
-                        used_community_tokens += len(community_text) // 4
-                        community_parts.append(community_text)
-            if community_parts:
-                parts.extend(community_parts)
+                if cid is None:
+                    continue
+                summary_key = f"{finest}_{cid}"
+                if summary_key in seen_community_keys:
+                    continue
+                seen_community_keys.add(summary_key)
+                cs = self._community_summaries.get(summary_key, {})
+                if not cs:
+                    cs = self._community_summaries.get(str(cid), {})
+                summary = cs.get("summary", "")
+                if not summary:
+                    continue
+                sentences = summary.split(". ")
+                snippet = ". ".join(sentences[:3]).strip()
+                if snippet and not snippet.endswith("."):
+                    snippet += "."
+                title = cs.get("title", f"Community {cid}")
+                community_text = f"**Community Context ({title}):**\n  {snippet}"
+                rank = cs.get("rank", 0.5)
+                community_raws.append((rank, community_text, summary_key))
+            max_rank = max((r[0] for r in community_raws), default=1.0) or 1.0
+            for rank, ctext, _ in community_raws:
+                within = rank / max_rank
+                candidates.append(
+                    {
+                        "type": "community",
+                        "score": community_weight * within,
+                        "text": ctext,
+                        "tokens": len(ctext) // 4 + 1,
+                    }
+                )
 
-        # Source text units (budget-capped, ranked by relationship count)
-        text_unit_parts = []
+        # Text units — from entity chunk_ids, cap at 20, rank by relation count
         seen_chunks: set = set()
-        used_text_unit_tokens = 0
-        text_unit_ids_all = []
-        for ent in ranked_entities[:3]:
+        text_unit_ids_all: list[str] = []
+        for ent in ranked_entities:
             node = self._entity_graph.get(ent.lower(), {})
             chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else []
-            for cid in chunk_ids[:2]:
+            for cid in chunk_ids:
                 if cid not in seen_chunks:
                     seen_chunks.add(cid)
                     text_unit_ids_all.append(cid)
-
-        # GAP 9: Sort by relationship count (descending)
-        def _text_unit_rel_count(chunk_id: str) -> int:
-            return len(self._text_unit_relation_map.get(chunk_id, []))
-
-        text_unit_ids_sorted = sorted(text_unit_ids_all, key=_text_unit_rel_count, reverse=True)
-
-        for cid in text_unit_ids_sorted:
-            if used_text_unit_tokens > text_unit_budget:
+                if len(text_unit_ids_all) >= 20:
+                    break
+            if len(text_unit_ids_all) >= 20:
                 break
+
+        def _tu_rel_count(cid: str) -> int:
+            return len(self._text_unit_relation_map.get(cid, []))
+
+        max_rel = max((_tu_rel_count(c) for c in text_unit_ids_all), default=0)
+        for cid in text_unit_ids_all:
             try:
                 docs = self.vector_store.get_by_ids([cid])
-                if docs:
-                    text_snippet = docs[0].get("text", "")[:200].strip()
-                    if text_snippet:
-                        line = f"  [{cid}] {text_snippet}..."
-                        text_unit_parts.append(line)
-                        used_text_unit_tokens += len(line) // 4
+                if not docs:
+                    continue
+                text_snippet = docs[0].get("text", "")[:200].strip()
+                if not text_snippet:
+                    continue
+                line = f"  [{cid}] {text_snippet}..."
+                rc = _tu_rel_count(cid)
+                within = (rc + 1) / (max_rel + 1)
+                candidates.append(
+                    {
+                        "type": "text_unit",
+                        "score": text_unit_weight * within,
+                        "text": line,
+                        "tokens": len(line) // 4 + 1,
+                    }
+                )
             except Exception:
                 pass
-        if text_unit_parts:
-            parts.append("**Source Text Units:**\n" + "\n".join(text_unit_parts))
 
-        # GAP 4 (covariate fix): Claims matched by subject name, not chunk_ids
+        # Claims — high-signal factual assertions, fixed score
         if self._claims_graph:
-            claim_parts = []
+            claim_lines: list[str] = []
             for ent in ranked_entities[:3]:
                 for chunk_claims in self._claims_graph.values():
                     for claim in chunk_claims:
@@ -3311,9 +3557,49 @@ Your primary goal is to help the user by answering questions based on the provid
                             status = claim.get("status", "SUSPECTED")
                             desc = claim.get("description", "")
                             if desc:
-                                claim_parts.append(f"  - [{status}] {desc}")
-            if claim_parts:
-                parts.append("**Claims / Facts:**\n" + "\n".join(claim_parts[:10]))
+                                claim_lines.append(f"  - [{status}] {desc}")
+            for line in claim_lines[:10]:
+                candidates.append(
+                    {
+                        "type": "claim",
+                        "score": entity_weight * 1.0,
+                        "text": line,
+                        "tokens": len(line) // 4 + 1,
+                    }
+                )
+
+        # --- Phase 3: Sort and greedy-fill ---
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        selected: list[dict] = []
+        used = 0
+        for c in candidates:
+            if used + c["tokens"] <= total_budget:
+                selected.append(c)
+                used += c["tokens"]
+            # continue (not break) — smaller items later may still fit
+
+        # --- Phase 4: Reassemble into section-formatted output ---
+        by_type: dict[str, list[str]] = {
+            "entity": [],
+            "relation": [],
+            "community": [],
+            "text_unit": [],
+            "claim": [],
+        }
+        for c in selected:
+            by_type[c["type"]].append(c["text"])
+
+        parts: list[str] = []
+        if by_type["entity"]:
+            parts.append("**Matched Entities:**\n" + "\n".join(by_type["entity"]))
+        if by_type["relation"]:
+            parts.append("**Relevant Relationships:**\n" + "\n".join(by_type["relation"]))
+        for ctext in by_type["community"]:
+            parts.append(ctext)
+        if by_type["text_unit"]:
+            parts.append("**Source Text Units:**\n" + "\n".join(by_type["text_unit"]))
+        if by_type["claim"]:
+            parts.append("**Claims / Facts:**\n" + "\n".join(by_type["claim"]))
 
         return "\n\n".join(parts)
 
@@ -3661,7 +3947,7 @@ Your primary goal is to help the user by answering questions based on the provid
         eg_changed = False
         for entity in list(self._entity_graph):
             node = self._entity_graph[entity]
-            chunk_ids = node["chunk_ids"] if isinstance(node, dict) else node
+            chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else node
             after = [d for d in chunk_ids if d not in deleted_ids]
             if len(after) != len(chunk_ids):
                 eg_changed = True
@@ -3700,6 +3986,51 @@ Your primary goal is to help the user by answering questions based on the provid
             if claims_changed:
                 self._save_claims_graph()
 
+    def _raptor_group_by_structure(self, chunks: list[dict], n: int) -> list[list[dict]]:
+        """Group chunks for RAPTOR summarization using section/heading boundaries.
+
+        Detection priority (any one match = new section starts):
+          1. metadata["heading"] or metadata["section"] is non-empty
+          2. text starts with a Markdown heading (#, ##, ###)
+          3. text starts with numbered/lettered heading pattern
+
+        Fallback: if no heading found across any chunk, pure fixed windows of size n.
+        Within detected sections: further split into sub-windows of size n if section > n.
+        """
+        import re as _re
+
+        _heading_re = _re.compile(
+            r"^(#{1,4}\s|chapter\s+\d|section\s+[\d.]+|\d+\.\s+[A-Z]|\b[IVX]+\.\s)",
+            _re.IGNORECASE,
+        )
+
+        def _is_section_start(doc: dict) -> bool:
+            meta = doc.get("metadata", {})
+            if meta.get("heading") or meta.get("section"):
+                return True
+            return bool(_heading_re.match(doc.get("text", "").lstrip()[:80]))
+
+        has_structure = any(_is_section_start(c) for c in chunks)
+        if not has_structure:
+            return [chunks[i : i + n] for i in range(0, len(chunks), n)]
+
+        sections: list[list[dict]] = []
+        current: list[dict] = []
+        for chunk in chunks:
+            if _is_section_start(chunk) and current:
+                sections.append(current)
+                current = [chunk]
+            else:
+                current.append(chunk)
+        if current:
+            sections.append(current)
+
+        windows: list[list[dict]] = []
+        for sec in sections:
+            for i in range(0, len(sec), n):
+                windows.append(sec[i : i + n])
+        return windows
+
     def _generate_raptor_summaries(self, documents: list[dict]) -> list[dict]:
         """Generate RAPTOR summary nodes for a list of already-split chunks."""
         from itertools import groupby
@@ -3716,56 +4047,296 @@ Your primary goal is to help the user by answering questions based on the provid
         windows = []
         for source, group in groupby(sorted_docs, key=_source):
             chunks = list(group)
-            for i in range(0, len(chunks), n):
-                windows.append((source, i, chunks[i : i + n]))
+            for idx, window in enumerate(self._raptor_group_by_structure(chunks, n)):
+                windows.append((source, idx, window))
 
         if not windows:
             return []
 
         logger.info(f"   RAPTOR: Generating summaries for {len(windows)} groups...")
 
-        def _proc_window(item):
-            source, i, window = item
+        import hashlib as _hl
+
+        def _summarise_window(source, i, window, level):
+            """Call LLM (or return from cache) for one window at a given RAPTOR level."""
             combined = "\n\n".join(c["text"] for c in window)
+            content_hash = _hl.md5(combined[:4000].encode("utf-8", errors="replace")).hexdigest()[
+                :12
+            ]
+            cache_key = f"{source}|L{level}|{i}|{content_hash}"
+
+            # P5: return cached summary when content is unchanged
+            if self.config.raptor_cache_summaries and cache_key in self._raptor_summary_cache:
+                logger.debug(f"RAPTOR cache hit for {source} L{level}[{i}]")
+                return self._raptor_summary_cache[cache_key]
+
             prompt = (
                 "Summarise the following passage into a concise but comprehensive paragraph "
                 "that captures all key facts and concepts. "
                 "Output only the summary paragraph.\n\n" + combined[:4000]
             )
             try:
-                summary_text = self.llm.complete(
+                text = self.llm.complete(
                     prompt,
                     system_prompt="You are an expert at summarising technical documents.",
                 )
-                if not summary_text or not summary_text.strip():
+                if not text or not text.strip():
                     return None
+                text = text.strip()
+                if self.config.raptor_cache_summaries:
+                    self._raptor_summary_cache[cache_key] = text
+                return text
+            except Exception as e:
+                logger.debug(f"RAPTOR L{level} summary failed for {source}[{i}]: {e}")
+                return None
 
-                import hashlib
-
-                content_sig = hashlib.md5(
-                    summary_text.strip().encode("utf-8", errors="replace")
-                ).hexdigest()[:8]
-                uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
+        def _proc_window(item):
+            source, i, window = item
+            summary_text = _summarise_window(source, i, window, level=1)
+            if not summary_text or not isinstance(summary_text, str):
+                return None
+            try:
+                content_sig = _hl.md5(summary_text.encode("utf-8", errors="replace")).hexdigest()[
+                    :8
+                ]
+                uid = _hl.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
                 return {
                     "id": f"raptor_{uid}",
-                    "text": summary_text.strip(),
+                    "text": summary_text,
                     "metadata": {
                         "source": source,
                         "raptor_level": 1,
                         "window_start": i,
                         "window_end": i + len(window) - 1,
+                        "children_ids": [doc["id"] for doc in window],
                     },
                 }
             except Exception as e:
-                logger.debug(f"RAPTOR summary failed for {source}[{i}]: {e}")
+                logger.debug(f"RAPTOR node build failed for {source}[{i}]: {e}")
                 return None
 
         results = list(self._executor.map(_proc_window, windows))
+        level_1_summaries = [r for r in results if r]
+        if level_1_summaries:
+            logger.info(f"   RAPTOR: generated {len(level_1_summaries)} level-1 summary node(s)")
 
-        summaries = [r for r in results if r]
-        if summaries:
-            logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
-        return summaries
+        # P3: Recursive summarization up to raptor_max_levels
+        max_levels = getattr(self.config, "raptor_max_levels", 2)
+        all_summaries = list(level_1_summaries)
+        prev_level_nodes = list(level_1_summaries)
+        current_level = 1
+
+        while current_level < max_levels and len(prev_level_nodes) > 1:
+            next_level = current_level + 1
+            logger.info(
+                f"   RAPTOR: Building level-{next_level} summaries from "
+                f"{len(prev_level_nodes)} level-{current_level} node(s)..."
+            )
+            sorted_prev = sorted(prev_level_nodes, key=_source)
+            next_windows = []
+            for source, group in groupby(sorted_prev, key=_source):
+                group_list = list(group)
+                for idx, window in enumerate(self._raptor_group_by_structure(group_list, n)):
+                    next_windows.append((source, idx, window, next_level))
+
+            if not next_windows:
+                break
+
+            def _proc_upper(item):
+                source, i, window, lvl = item
+                summary_text = _summarise_window(source, i, window, level=lvl)
+                if not summary_text or not isinstance(summary_text, str):
+                    return None
+                try:
+                    content_sig = _hl.md5(
+                        summary_text.encode("utf-8", errors="replace")
+                    ).hexdigest()[:8]
+                    uid = _hl.md5(f"{source}|raptor|L{lvl}|{i}|{content_sig}".encode()).hexdigest()[
+                        :12
+                    ]
+                    children_ids = [c["id"] for c in window]
+                    node = {
+                        "id": f"raptor_{uid}",
+                        "text": summary_text,
+                        "metadata": {
+                            "source": source,
+                            "raptor_level": lvl,
+                            "window_start": i,
+                            "window_end": i + len(window) - 1,
+                            "children_ids": children_ids,
+                        },
+                    }
+                    for child in window:
+                        child["metadata"]["parent_id"] = node["id"]
+                    return node
+                except Exception as e:
+                    logger.debug(f"RAPTOR L{lvl} node build failed for {source}[{i}]: {e}")
+                    return None
+
+            upper_results = list(self._executor.map(_proc_upper, next_windows))
+            next_level_nodes = [r for r in upper_results if r]
+            if next_level_nodes:
+                logger.info(
+                    f"   RAPTOR: generated {len(next_level_nodes)} level-{next_level} summary node(s)"
+                )
+            all_summaries.extend(next_level_nodes)
+            prev_level_nodes = next_level_nodes
+            current_level = next_level
+
+        return all_summaries
+
+    def _raptor_drilldown(self, query: str, results: list[dict], cfg=None) -> list[dict]:
+        """Replace RAPTOR summary hits with their underlying leaf chunks.
+
+        For each result whose metadata contains ``raptor_level >= 1``:
+
+        * If ``children_ids`` is stored in the node's metadata, fetch those exact
+          descendants via ``get_by_ids`` and recurse until leaf chunks are reached
+          (P2+P3 — true tree traversal, no spurious cross-source contamination).
+        * If ``children_ids`` is absent (level-1 nodes ingested before multi-level
+          RAPTOR was added), fall back to a filtered ``search`` using the now-fixed
+          Chroma ``where`` clause (P1).
+        * After all substitutions, deduplicate by ID keeping the highest-scored
+          occurrence (P4).
+
+        Non-RAPTOR results pass through unchanged.  Falls back to keeping the
+        summary when window metadata is missing or any fetch fails.
+        """
+        if cfg is None:
+            cfg = self.config
+        if not getattr(cfg, "raptor_drilldown", True):
+            return results
+
+        drilldown_top_k = getattr(cfg, "raptor_drilldown_top_k", 5)
+        final: list[dict] = []
+
+        def _collect_leaves(node_ids: list[str], depth: int = 0) -> list[dict]:
+            """Recursively fetch children via get_by_ids until leaf chunks are reached."""
+            if not node_ids or depth > 5:
+                return []
+            docs = self.vector_store.get_by_ids(node_ids)
+            leaves = []
+            to_recurse = []
+            for doc in docs:
+                if doc.get("metadata", {}).get("raptor_level"):
+                    grandchildren = doc.get("metadata", {}).get("children_ids", [])
+                    if grandchildren:
+                        to_recurse.extend(grandchildren)
+                    # RAPTOR node with no children_ids — treat as leaf to avoid data loss
+                else:
+                    leaves.append(doc)
+            if to_recurse:
+                leaves.extend(_collect_leaves(to_recurse, depth + 1))
+            return leaves
+
+        for r in results:
+            meta = r.get("metadata", {})
+            if not meta.get("raptor_level"):
+                final.append(r)
+                continue
+
+            source = meta.get("source")
+            window_start = meta.get("window_start")
+            window_end = meta.get("window_end")
+
+            if source is None or window_start is None or window_end is None:
+                final.append(r)
+                continue
+
+            try:
+                children_ids = meta.get("children_ids")
+                if children_ids:
+                    # P2+P3: walk the stored lineage tree
+                    leaves = _collect_leaves(children_ids)
+                    if not leaves:
+                        # children_ids present but store returned nothing — fall back
+                        query_vec = self.embedding.embed([query])[0]
+                        fetch_k = (window_end - window_start + 1) * 3
+                        raw = self.vector_store.search(
+                            query_vec,
+                            top_k=max(fetch_k, drilldown_top_k * 2),
+                            filter_dict={"source": source},
+                        )
+                        leaves = [d for d in raw if not d.get("metadata", {}).get("raptor_level")]
+                else:
+                    # Legacy level-1 node or pre-P3 node: use filtered search
+                    query_vec = self.embedding.embed([query])[0]
+                    fetch_k = (window_end - window_start + 1) * 3
+                    raw = self.vector_store.search(
+                        query_vec,
+                        top_k=max(fetch_k, drilldown_top_k * 2),
+                        filter_dict={"source": source},
+                    )
+                    leaves = [d for d in raw if not d.get("metadata", {}).get("raptor_level")]
+            except Exception as e:
+                logger.debug(f"RAPTOR drilldown fetch failed for {source}: {e}")
+                final.append(r)
+                continue
+
+            if not leaves:
+                final.append(r)
+                continue
+
+            if cfg.rerank and self.reranker:
+                leaves = self.reranker.rerank(query, leaves)
+            else:
+                leaves = sorted(leaves, key=lambda x: x.get("score", 0.0), reverse=True)
+
+            final.extend(leaves[:drilldown_top_k])
+
+        # P4: Deduplicate by ID, keeping highest-scored occurrence
+        seen: dict[str, dict] = {}
+        deduped: list[dict] = []
+        for res in final:
+            rid = res["id"]
+            if rid not in seen:
+                seen[rid] = res
+                deduped.append(res)
+            elif res.get("score", 0.0) > seen[rid].get("score", 0.0):
+                idx = next(i for i, x in enumerate(deduped) if x["id"] == rid)
+                deduped[idx] = res
+                seen[rid] = res
+        return deduped
+
+    def _apply_artifact_ranking(self, results: list[dict], cfg=None) -> list[dict]:
+        """Re-order results by artifact type according to ``raptor_retrieval_mode``.
+
+        Applies a score multiplier per artifact type, then re-sorts:
+
+        * ``tree_traversal`` (default): leaf ×1.5 > raptor ×1.0 > community ×0.7
+        * ``summary_first``:            raptor ×1.5 > leaf ×1.0 > community ×0.7
+        * ``corpus_overview``:          community ×1.5 > raptor ×1.0 > leaf ×0.7
+        """
+        if cfg is None:
+            cfg = self.config
+        mode = getattr(cfg, "raptor_retrieval_mode", "tree_traversal")
+        if mode not in ("tree_traversal", "summary_first", "corpus_overview"):
+            return results
+
+        WEIGHTS = {
+            "tree_traversal": {"leaf": 1.5, "raptor": 1.0, "community": 0.7},
+            "summary_first": {"leaf": 1.0, "raptor": 1.5, "community": 0.7},
+            "corpus_overview": {"leaf": 0.7, "raptor": 1.0, "community": 1.5},
+        }
+        w = WEIGHTS[mode]
+
+        def _artifact_type(r: dict) -> str:
+            meta = r.get("metadata", {})
+            if meta.get("raptor_level"):
+                return "raptor"
+            if meta.get("graph_rag_type") == "community_report" or r.get("id", "").startswith(
+                "__community__"
+            ):
+                return "community"
+            return "leaf"
+
+        for r in results:
+            r["_artifact_score"] = r.get("score", 0.5) * w[_artifact_type(r)]
+
+        ranked = sorted(results, key=lambda x: x["_artifact_score"], reverse=True)
+        for r in ranked:
+            r.pop("_artifact_score", None)
+        return ranked
 
     def _expand_with_entity_graph(
         self, query: str, results: list[dict], cfg=None
@@ -3815,7 +4386,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 # Scale matched score into [0.5, 0.8) range so it is clearly below
                 # a direct vector-match score but still meaningfully ranked.
                 doc_score = 0.5 + score * 0.3
-                doc_ids = node["chunk_ids"] if isinstance(node, dict) else node
+                doc_ids = node.get("chunk_ids", []) if isinstance(node, dict) else node
                 for did in doc_ids:
                     if did not in existing_ids:
                         if extra_id_scores.get(did, 0.0) < doc_score:
@@ -3831,7 +4402,9 @@ Your primary goal is to help the user by answering questions based on the provid
                         continue
                     target_node = self._entity_graph.get(target, {})
                     target_chunk_ids = (
-                        target_node["chunk_ids"] if isinstance(target_node, dict) else target_node
+                        target_node.get("chunk_ids", [])
+                        if isinstance(target_node, dict)
+                        else target_node
                     )
                     for did in target_chunk_ids:
                         if did not in existing_ids:
@@ -4155,16 +4728,69 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
         if self.config.raptor:
-            raptor_docs = self._generate_raptor_summaries(documents)
+            # TASK 12: Source-size guard — skip RAPTOR for sources whose estimated text size exceeds threshold
+            _raptor_max_mb = getattr(self.config, "raptor_max_source_size_mb", 0.0)
+            if _raptor_max_mb > 0.0:
+                from collections import defaultdict as _dfl
+
+                _size_by_source: dict = _dfl(int)
+                for _d in documents:
+                    _src = _d.get("metadata", {}).get("source", _d["id"])
+                    _size_by_source[_src] += len(_d.get("text", ""))
+                _max_bytes = int(_raptor_max_mb * 1024 * 1024)
+                _skipped_sources = {src for src, sz in _size_by_source.items() if sz > _max_bytes}
+                if _skipped_sources:
+                    logger.info(
+                        "   RAPTOR: skipping %d large source(s) > %.1f MB",
+                        len(_skipped_sources),
+                        _raptor_max_mb,
+                    )
+                _raptor_eligible = [
+                    _d
+                    for _d in documents
+                    if _d.get("metadata", {}).get("source", _d["id"]) not in _skipped_sources
+                ]
+            else:
+                _raptor_eligible = documents
+            raptor_docs = self._generate_raptor_summaries(_raptor_eligible)
             documents = documents + raptor_docs
 
         # GraphRAG: extract entities from new chunks and update entity graph
         if self.config.graph_rag:
             updated = False
-            # Only extract entities from actual document chunks
-            chunks_to_process = [
-                doc for doc in documents if not doc.get("metadata", {}).get("raptor_level")
-            ]
+            # Only extract entities from actual document chunks (optionally include RAPTOR level-1)
+            _include_raptor = getattr(self.config, "graph_rag_include_raptor_summaries", False)
+
+            # P2: Skip GraphRAG entity extraction for large sources when raptor=True.
+            # Sources with >= raptor_graphrag_leaf_skip_threshold leaf chunks bypass
+            # extraction; their RAPTOR summaries still enter GraphRAG if the include flag is set.
+            _skip_threshold = getattr(self.config, "raptor_graphrag_leaf_skip_threshold", 20)
+            _leaf_count_by_source: dict = {}
+            for _doc in documents:
+                if not _doc.get("metadata", {}).get("raptor_level"):
+                    _src = _doc.get("metadata", {}).get("source", _doc["id"])
+                    _leaf_count_by_source[_src] = _leaf_count_by_source.get(_src, 0) + 1
+
+            _large_sources: set = set()
+            if self.config.raptor and _skip_threshold > 0:
+                _large_sources = {
+                    src for src, cnt in _leaf_count_by_source.items() if cnt >= _skip_threshold
+                }
+                if _large_sources:
+                    logger.info(
+                        f"   GraphRAG: skipping leaf-chunk entity extraction for "
+                        f"{len(_large_sources)} large source(s) (>= {_skip_threshold} leaf chunks)"
+                    )
+
+            chunks_to_process = []
+            for _doc in documents:
+                _lvl = _doc.get("metadata", {}).get("raptor_level")
+                _src = _doc.get("metadata", {}).get("source", _doc["id"])
+                if not _lvl:
+                    if _src not in _large_sources:
+                        chunks_to_process.append(_doc)
+                elif _include_raptor and _lvl == 1:
+                    chunks_to_process.append(_doc)
 
             logger.info(f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks...")
 
@@ -4224,6 +4850,7 @@ Your primary goal is to help the user by answering questions based on the provid
                         ):
                             self._entity_graph[key]["description"] = ent["description"]
                     if isinstance(self._entity_graph[key], dict):
+                        self._entity_graph[key].setdefault("chunk_ids", [])
                         if doc_id not in self._entity_graph[key]["chunk_ids"]:
                             self._entity_graph[key]["chunk_ids"].append(doc_id)
                             updated = True
@@ -4292,6 +4919,10 @@ Your primary goal is to help the user by answering questions based on the provid
                             "relation": relation.strip(),
                             "chunk_id": doc_id,
                             "description": description,
+                            "strength": triple.get("strength", 5)
+                            if isinstance(triple, dict)
+                            else 5,
+                            "support_count": 1,
                         }
                         if src_lower not in self._relation_graph:
                             self._relation_graph[src_lower] = []
@@ -4310,6 +4941,9 @@ Your primary goal is to help the user by answering questions based on the provid
                             # Accumulate strength-based weight (sum of LM-derived strengths)
                             existing_entry["weight"] = existing_entry.get("weight", 1) + entry.get(
                                 "strength", 1
+                            )
+                            existing_entry["support_count"] = (
+                                existing_entry.get("support_count", 1) + 1
                             )
                             # GAP 7: accumulate text_unit_ids
                             if "text_unit_ids" not in existing_entry:
@@ -4332,6 +4966,36 @@ Your primary goal is to help the user by answering questions based on the provid
                             self._relation_description_buffer[pair].append(description)
                 if rg_updated:
                     self._save_relation_graph()
+
+                # TASK 11: Normalize relation targets into entity graph so traversal never KeyErrors
+                if rg_updated or updated:
+                    _stub_added = False
+                    for _src, _entries in self._relation_graph.items():
+                        for _entry in _entries:
+                            _tgt = _entry.get("target", "").lower().strip()
+                            if not _tgt:
+                                continue
+                            if _tgt not in self._entity_graph:
+                                self._entity_graph[_tgt] = {
+                                    "description": "",
+                                    "type": "UNKNOWN",
+                                    "chunk_ids": [],
+                                    "frequency": 0,
+                                    "degree": 0,
+                                }
+                                _stub_added = True
+                            # Ensure the relation's source chunk is in the target's chunk_ids
+                            _cid = _entry.get("chunk_id", "")
+                            if _cid:
+                                _tgt_node = self._entity_graph[_tgt]
+                                if isinstance(_tgt_node, dict):
+                                    _tgt_node.setdefault("chunk_ids", [])
+                                    if _cid not in _tgt_node["chunk_ids"]:
+                                        _tgt_node["chunk_ids"].append(_cid)
+                                        _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
+                                        _stub_added = True
+                    if _stub_added:
+                        self._save_entity_graph()
 
                 # GAP 9: Update text_unit_relation_map
                 for doc_id, triples in rel_results:
@@ -4359,6 +5023,10 @@ Your primary goal is to help the user by answering questions based on the provid
             # Item 10: Canonicalize entity descriptions
             if self.config.graph_rag and getattr(self.config, "graph_rag_canonicalize", False):
                 self._canonicalize_entity_descriptions()
+            if self.config.graph_rag and getattr(
+                self.config, "graph_rag_canonicalize_relations", False
+            ):
+                self._canonicalize_relation_descriptions()
 
             # Item 11: Extract claims
             claims_changed = False
@@ -4383,18 +5051,25 @@ Your primary goal is to help the user by answering questions based on the provid
                     self._save_claims_graph()
 
             if self.config.graph_rag_community and self._community_graph_dirty:
-                self._community_graph_dirty = False
-                if self.config.graph_rag_community_async:
-
-                    def _debounced_rebuild():
-                        import time as _time
-
-                        _time.sleep(self.config.graph_rag_community_rebuild_debounce_s)
-                        self._rebuild_communities()
-
-                    self._executor.submit(_debounced_rebuild)
+                if getattr(self.config, "graph_rag_community_defer", True):
+                    pass  # leave dirty; caller must invoke finalize_graph()
                 else:
-                    self._rebuild_communities()
+                    self._community_graph_dirty = False
+                    if self.config.graph_rag_community_async:
+
+                        def _debounced_rebuild():
+                            import time as _time
+
+                            self._community_build_in_progress = True
+                            try:
+                                _time.sleep(self.config.graph_rag_community_rebuild_debounce_s)
+                                self._rebuild_communities()
+                            finally:
+                                self._community_build_in_progress = False
+
+                        self._executor.submit(_debounced_rebuild)
+                    else:
+                        self._rebuild_communities()
 
         n_chunks = len(documents)
         if self._own_bm25:
@@ -4860,6 +5535,14 @@ Your primary goal is to help the user by answering questions based on the provid
         for r in results:
             r.pop("_graph_expanded", None)
 
+        # P1: RAPTOR drill-down — replace summary hits with grounded leaf chunks
+        if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
+            results = self._raptor_drilldown(query, results, cfg=cfg)
+
+        # P4: Artifact-type ranking pass
+        if self.config.raptor or self.config.graph_rag:
+            results = self._apply_artifact_ranking(results, cfg=cfg)
+
         graph_mode = getattr(cfg, "graph_rag_mode", "local")
         _matched_entities = retrieval.get("matched_entities", [])
 
@@ -4881,6 +5564,20 @@ Your primary goal is to help the user by answering questions based on the provid
         context, has_web = self._build_context(results)
 
         # GraphRAG global context injection
+        # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
+        if (
+            cfg.graph_rag
+            and graph_mode in ("global", "hybrid")
+            and not self._community_summaries
+            and self._community_levels
+            and getattr(self.config, "graph_rag_community_lazy", False)
+        ):
+            logger.info(
+                "GraphRAG: lazy mode — generating community summaries on first global query."
+            )
+            self._generate_community_summaries()
+            if getattr(self.config, "graph_rag_index_community_reports", True):
+                self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
             _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:
@@ -4969,6 +5666,14 @@ Your primary goal is to help the user by answering questions based on the provid
         for r in results:
             r.pop("_graph_expanded", None)
 
+        # P1: RAPTOR drill-down — replace summary hits with grounded leaf chunks
+        if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
+            results = self._raptor_drilldown(query, results, cfg=cfg)
+
+        # P4: Artifact-type ranking pass
+        if self.config.raptor or self.config.graph_rag:
+            results = self._apply_artifact_ranking(results, cfg=cfg)
+
         graph_mode = getattr(cfg, "graph_rag_mode", "local")
         _matched_entities = retrieval.get("matched_entities", [])
 
@@ -4988,6 +5693,20 @@ Your primary goal is to help the user by answering questions based on the provid
         context, has_web = self._build_context(results)
 
         # GraphRAG global context injection
+        # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
+        if (
+            cfg.graph_rag
+            and graph_mode in ("global", "hybrid")
+            and not self._community_summaries
+            and self._community_levels
+            and getattr(self.config, "graph_rag_community_lazy", False)
+        ):
+            logger.info(
+                "GraphRAG: lazy mode — generating community summaries on first global query."
+            )
+            self._generate_community_summaries()
+            if getattr(self.config, "graph_rag_index_community_reports", True):
+                self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
             _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:
