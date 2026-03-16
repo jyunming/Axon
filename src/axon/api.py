@@ -980,6 +980,8 @@ async def get_ingest_status(job_id: str):
     """Poll the status of an async ingest job started by POST /ingest.
 
     Returns 404 if the job_id is unknown or has been evicted (TTL: 60 min).
+    When the job is "completed" but community detection is still running in the
+    background, returns status "building_communities" instead.
     """
     job = _jobs.get(job_id)
     if job is None:
@@ -987,8 +989,45 @@ async def get_ingest_status(job_id: str):
             status_code=404,
             detail=f"Job '{job_id}' not found. It may have already been evicted (TTL: 60 min) or the job_id is invalid.",
         )
-    # Return a clean view without the internal timestamp field
-    return {k: v for k, v in job.items() if k != "started_at_ts"}
+    result = {k: v for k, v in job.items() if k != "started_at_ts"}
+    if (
+        result.get("status") == "completed"
+        and brain
+        and getattr(brain, "_community_build_in_progress", False)
+    ):
+        result = dict(result)
+        result["status"] = "building_communities"
+    return result
+
+
+@app.get("/graph/status")
+async def get_graph_status():
+    """Return current GraphRAG community build status."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    in_progress = getattr(brain, "_community_build_in_progress", False)
+    summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+    return {
+        "community_build_in_progress": in_progress,
+        "community_summary_count": summary_count,
+    }
+
+
+@app.post("/graph/finalize")
+async def finalize_graph():
+    """Trigger an explicit community rebuild.
+
+    Use this after batch ingest with ``graph_rag_community_defer=True`` to
+    run community detection once all documents have been ingested.
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        brain.finalize_graph()
+        return {"status": "ok", "community_summary_count": len(brain._community_summaries)}
+    except Exception as e:
+        logger.error(f"finalize_graph failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/add_text")

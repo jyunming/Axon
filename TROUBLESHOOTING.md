@@ -119,18 +119,24 @@ The `.env` file is optional — Docker Compose won't fail if it's missing.
 
 ## About the GraphRAG Feature
 
-Axon's `graph_rag` option is a **graph-augmented retrieval expansion** feature — it is **not** the full Microsoft GraphRAG method. It does not implement community detection, community summaries, global search, or local search over a community hierarchy.
+Axon's `graph_rag` option implements a **GraphRAG-style pipeline** with the following capabilities:
 
-What it does do:
-- Extracts named entities from each chunk at ingest time and stores an entity→chunk-id map.
-- Optionally extracts `SUBJECT | RELATION | OBJECT` triples and stores a relation graph.
-- At query time, matches query entities (token-Jaccard) and injects directly matched chunks plus 1-hop relation neighbours as guaranteed extra context slots (`graph_rag_budget`).
+- Hierarchical community detection: Leiden algorithm via `graspologic` when available, Louvain fallback otherwise.
+- LLM-generated community reports and summaries per community cluster.
+- Map-reduce global search: community reports are chunked, mapped in parallel by LLM, then reduced into a single ranked answer.
+- Token-budgeted local search over community hierarchy: entity descriptions, relation descriptions, community snippets, and raw text units assembled within a configurable token budget.
+- Entity and relation graphs with strength tracking and support-count accumulation.
+- Optional claim/covariate extraction (`graph_rag_claims: true`).
+- Optional entity and relation description canonicalization (`graph_rag_canonicalize`, `graph_rag_canonicalize_relations`).
 
-Known limits that will not be automatically resolved by enabling the feature:
-- The graph is shallow (lowercased strings, no entity canonicalisation or deduplication across chunks).
-- Scoring of expanded docs is heuristic (0.5–0.8 range), not calibrated against vector or lexical similarity.
-- Extraction quality depends entirely on the configured LLM's ability to follow extraction instructions. A weak or small model will produce a noisy or empty graph.
-- Entity matching uses exact match for single tokens and token-Jaccard for multi-token phrases. Aliases, acronyms, and spelling variants are not resolved.
+What remains approximate compared to the Microsoft GraphRAG reference implementation:
+- The Louvain fallback produces a synthetic hierarchy via multi-resolution clustering (not true Leiden).
+- Candidate ranking is unified (degree + embedding similarity) rather than full DRIFT search.
+- No query-time claim filtering.
+
+Known limits:
+- Extraction quality depends entirely on the configured LLM. A weak or small model will produce a noisy or empty graph.
+- Entity matching uses exact match for single tokens and token-Jaccard for multi-token phrases. Aliases, acronyms, and spelling variants are not resolved without canonicalization enabled.
 
 ---
 

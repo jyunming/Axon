@@ -1010,6 +1010,181 @@ class SQLLoader(BaseLoader):
         return documents
 
 
+class EMLLoader(BaseLoader):
+    """Loader for .eml email files using stdlib email module."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        import email as _email
+        import email.policy
+
+        with open(path, "rb") as f:
+            msg = _email.message_from_binary_file(f, policy=email.policy.default)
+
+        from_addr = str(msg.get("From", ""))
+        to_addr = str(msg.get("To", ""))
+        subject = str(msg.get("Subject", ""))
+        date = str(msg.get("Date", ""))
+
+        # Extract body: prefer text/plain, fallback to text/html
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                ct = part.get_content_type()
+                if ct == "text/plain" and not body:
+                    payload = part.get_payload(decode=True)
+                    if isinstance(payload, bytes):
+                        body = payload.decode(
+                            part.get_content_charset() or "utf-8", errors="ignore"
+                        )
+                elif ct == "text/html" and not body:
+                    payload = part.get_payload(decode=True)
+                    if isinstance(payload, bytes):
+                        html = payload.decode(
+                            part.get_content_charset() or "utf-8", errors="ignore"
+                        )
+                        body = _extract_html_text(html)
+        else:
+            payload = msg.get_payload(decode=True)
+            if isinstance(payload, bytes):
+                body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+            if msg.get_content_type() == "text/html":
+                body = _extract_html_text(body)
+
+        text = (
+            f"From: {from_addr}\nTo: {to_addr}\nSubject: {subject}\nDate: {date}\n\n{body}".strip()
+        )
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {
+                    "source": path,
+                    "type": "eml",
+                    "email_from": from_addr,
+                    "email_to": to_addr,
+                    "email_subject": subject,
+                    "email_date": date,
+                },
+            }
+        ]
+
+
+class MSGLoader(BaseLoader):
+    """Loader for Outlook .msg files using extract-msg."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            import extract_msg
+        except ImportError:
+            logger.error("extract-msg not installed. Install with: pip install extract-msg")
+            return []
+        try:
+            msg = extract_msg.Message(path)
+        except Exception as exc:
+            logger.warning(f"Could not open MSG file {path}: {exc}")
+            return []
+
+        from_addr = msg.sender or ""
+        to_addr = msg.to or ""
+        subject = msg.subject or ""
+        date = str(msg.date) if msg.date else ""
+        body = msg.body or ""
+        if not body and msg.htmlBody:
+            body = _extract_html_text(
+                msg.htmlBody.decode("utf-8", errors="ignore")
+                if isinstance(msg.htmlBody, bytes)
+                else msg.htmlBody
+            )
+
+        text = (
+            f"From: {from_addr}\nTo: {to_addr}\nSubject: {subject}\nDate: {date}\n\n{body}".strip()
+        )
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {
+                    "source": path,
+                    "type": "msg",
+                    "email_from": from_addr,
+                    "email_to": to_addr,
+                    "email_subject": subject,
+                    "email_date": date,
+                },
+            }
+        ]
+
+
+class LaTeXLoader(BaseLoader):
+    """Loader for LaTeX .tex files. Strips commands and extracts prose content.
+
+    Note: Mathematical equation content is intentionally discarded as it is
+    not natural-language searchable. Use this loader for prose-heavy papers.
+    """
+
+    # Environments whose entire content is discarded (math, floats, bibliographies)
+    _DISCARD_ENVS = re.compile(
+        r"\\begin\{(figure|table|equation|align|align\*|eqnarray|eqnarray\*"
+        r"|math|displaymath|tikzpicture|lstlisting|verbatim)\}.*?\\end\{\1\}",
+        re.DOTALL,
+    )
+    # Commands that wrap prose — replace with their argument
+    _WRAP_CMDS = re.compile(
+        r"\\(?:textbf|textit|emph|texttt|underline|textrm|textsc|textsl"
+        r"|section|subsection|subsubsection|paragraph|subparagraph"
+        r"|chapter|title|author|date|caption|footnote)\*?\{([^}]*)\}",
+        re.DOTALL,
+    )
+    # Non-prose commands to remove entirely (with optional bracket/brace args)
+    _REMOVE_CMDS = re.compile(
+        r"\\(?:label|ref|eqref|cite|citep|citet|citealt|nocite"
+        r"|includegraphics|bibliography|bibliographystyle"
+        r"|vspace|hspace|vskip|hskip|noindent|newpage|clearpage"
+        r"|tableofcontents|listoffigures|listtables)"
+        r"(?:\[[^\]]*\])?(?:\{[^}]*\})?",
+    )
+    # Remaining bare commands (e.g. \maketitle, \par, \LaTeX)
+    _BARE_CMDS = re.compile(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{[^}]*\})?")
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # Pass 1: strip comments (% to EOL, but not \%)
+        content = re.sub(r"(?<!\\)%[^\n]*", "", content)
+        # Pass 2: strip preamble (everything before \begin{document})
+        doc_start = content.find(r"\begin{document}")
+        if doc_start != -1:
+            content = content[doc_start + len(r"\begin{document}") :]
+        end_doc = content.find(r"\end{document}")
+        if end_doc != -1:
+            content = content[:end_doc]
+        # Pass 3: discard math/float environments
+        content = self._DISCARD_ENVS.sub(" ", content)
+        # Pass 4: remove non-prose commands
+        content = self._REMOVE_CMDS.sub(" ", content)
+        # Pass 5: unwrap text-formatting commands
+        content = self._WRAP_CMDS.sub(r"\1", content)
+        # Pass 6: strip remaining bare commands
+        content = self._BARE_CMDS.sub(" ", content)
+        # Clean up braces, multiple spaces
+        content = content.replace("{", " ").replace("}", " ")
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        content = re.sub(r"[ \t]+", " ", content)
+        text = content.strip()
+
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {"source": path, "type": "latex"},
+            }
+        ]
+
+
 class DirectoryLoader:
     """Loader that crawls a directory and uses appropriate loaders for each file."""
 
@@ -1030,6 +1205,9 @@ class DirectoryLoader:
             ".parquet": ParquetLoader(),
             ".epub": EPUBLoader(),
             ".rtf": RTFLoader(),
+            ".eml": EMLLoader(),
+            ".msg": MSGLoader(),
+            ".tex": LaTeXLoader(),
             ".html": HTMLLoader(),
             ".htm": HTMLLoader(),
             ".xml": XMLLoader(),

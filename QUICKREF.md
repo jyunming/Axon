@@ -214,9 +214,10 @@ rag:
   top_k: 10
   hybrid_search: true
 
-  # GraphRAG-inspired retrieval — entity graph + relation graph + community detection.
-  # NOT the full Microsoft GraphRAG method (no claim extraction, no DRIFT search,
-  # no hierarchical community hierarchy). A lightweight approximation.
+  # GraphRAG-style indexing and retrieval. Implements: hierarchical community detection
+  # (Leiden via graspologic, or Louvain fallback), LLM community reports, map-reduce global
+  # search, token-budgeted local search, entity/relation graphs, optional claim/covariate
+  # extraction. Approximate where noted (fallback hierarchy, unified candidate ranking).
   #
   # What it does:
   #   - Ingest: LLM extracts named entities (with descriptions) and

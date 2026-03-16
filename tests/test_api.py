@@ -33,6 +33,7 @@ def _make_brain(provider="chroma"):
     brain.config.compress_context = False
     # _apply_overrides returns a copy of config with overrides applied
     brain._apply_overrides.return_value = brain.config
+    brain._community_build_in_progress = False
     return brain
 
 

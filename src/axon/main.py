@@ -216,9 +216,15 @@ class AxonConfig:
     hybrid_mode: Literal["weighted", "rrf"] = "weighted"  # Hybrid fusion mode
 
     # Chunking
-    chunk_strategy: Literal["recursive", "semantic"] = "semantic"
+    chunk_strategy: Literal["recursive", "semantic", "markdown", "cosine_semantic"] = "semantic"
     chunk_size: int = 1000
     chunk_overlap: int = 200
+    # Cosine semantic chunking (only active when chunk_strategy="cosine_semantic")
+    cosine_semantic_threshold: float = 0.7
+    cosine_semantic_max_size: int = 500
+    # MMR deduplication — reorders and removes near-duplicate retrieved chunks
+    mmr: bool = False
+    mmr_lambda: float = 0.5  # 1.0 = pure relevance, 0.0 = pure diversity
 
     # Re-ranking
     rerank: bool = False
@@ -1794,6 +1800,20 @@ Your primary goal is to help the user by answering questions based on the provid
 
                 self.splitter = SemanticTextSplitter(
                     chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
+            elif self.config.chunk_strategy == "markdown":
+                from axon.splitters import MarkdownSplitter
+
+                self.splitter = MarkdownSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
+            elif self.config.chunk_strategy == "cosine_semantic":
+                from axon.splitters import CosineSemanticSplitter
+
+                self.splitter = CosineSemanticSplitter(
+                    embed_fn=self.embedding.embed,
+                    breakpoint_threshold=self.config.cosine_semantic_threshold,
+                    max_chunk_size=self.config.cosine_semantic_max_size,
                 )
             else:
                 from axon.splitters import RecursiveCharacterTextSplitter
@@ -4615,7 +4635,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return "doc", False
 
-    def _get_splitter_for_type(self, dataset_type: str, has_code: bool):
+    def _get_splitter_for_type(self, dataset_type: str, has_code: bool, source: str = ""):
         """Return a splitter configured for the detected document type."""
         from axon.splitters import RecursiveCharacterTextSplitter, SemanticTextSplitter
 
@@ -4629,7 +4649,19 @@ Your primary goal is to help the user by answering questions based on the provid
             return SemanticTextSplitter(chunk_size=400, chunk_overlap=50)
         elif dataset_type == "doc" and has_code:
             return SemanticTextSplitter(chunk_size=500, chunk_overlap=75)
-        else:  # doc default
+        elif dataset_type == "doc":
+            # Auto-select MarkdownSplitter for .md sources when strategy is "semantic" (default)
+            if (
+                os.path.splitext(source)[1].lower() == ".md"
+                and self.config.chunk_strategy == "semantic"
+            ):
+                from axon.splitters import MarkdownSplitter
+
+                return MarkdownSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
+            return self.splitter
+        else:
             return self.splitter  # Use default configured splitter
 
     def _split_with_parents(self, documents: list[dict]) -> list[dict]:
@@ -4699,7 +4731,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 doc.setdefault("metadata", {})["dataset_type"] = dataset_type
                 if has_code:
                     doc["metadata"]["has_code"] = True
-                splitter = self._get_splitter_for_type(dataset_type, has_code)
+                source = doc.get("metadata", {}).get("source", "")
+                splitter = self._get_splitter_for_type(dataset_type, has_code, source=source)
                 if splitter is not None:
                     chunked.extend(splitter.transform_documents([doc]))
                 else:
@@ -5196,6 +5229,55 @@ Your primary goal is to help the user by answering questions based on the provid
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
 
+    def _mmr_deduplicate(self, results: list[dict], cfg) -> list[dict]:
+        """Reorder and deduplicate results using Maximal Marginal Relevance (Jaccard similarity).
+
+        Iteratively selects the next document maximising:
+            lambda * relevance_score - (1-lambda) * max_jaccard_similarity_to_selected
+
+        Near-duplicates (Jaccard >= 0.85) are dropped entirely.
+        """
+        if len(results) <= 1:
+            return results
+
+        lambda_mult = getattr(cfg, "mmr_lambda", 0.5)
+        dup_threshold = 0.85
+
+        def _tok(text: str) -> frozenset:
+            return frozenset(re.sub(r"[^\w\s]", "", text.lower()).split())
+
+        def _jac(a: frozenset, b: frozenset) -> float:
+            union = a | b
+            return len(a & b) / len(union) if union else 0.0
+
+        token_sets = [_tok(r.get("text", "")) for r in results]
+        selected_idx: list[int] = []
+        remaining = list(range(len(results)))
+
+        while remaining:
+            if not selected_idx:
+                best = max(remaining, key=lambda i: results[i].get("score", 0.0))
+            else:
+                best = max(
+                    remaining,
+                    key=lambda i: (
+                        lambda_mult * results[i].get("score", 0.0)
+                        - (1 - lambda_mult)
+                        * max(_jac(token_sets[i], token_sets[j]) for j in selected_idx)
+                    ),
+                )
+            remaining.remove(best)
+            # Drop near-duplicates of already-selected docs
+            if (
+                selected_idx
+                and max(_jac(token_sets[best], token_sets[j]) for j in selected_idx)
+                >= dup_threshold
+            ):
+                continue
+            selected_idx.append(best)
+
+        return [results[i] for i in selected_idx]
+
     def _execute_web_search(self, query: str, count: int = 5) -> list[dict]:
         """Execute a web search using the Brave Search API and return results."""
         import httpx
@@ -5379,6 +5461,10 @@ Your primary goal is to help the user by answering questions based on the provid
             results = web_results
         else:
             results = filtered_results
+
+        # MMR deduplication — reorder and remove near-duplicate chunks
+        if getattr(cfg, "mmr", False) and results:
+            results = self._mmr_deduplicate(results, cfg)
 
         # Save base count before GraphRAG expansion for accurate metrics
         base_count = len(results)
@@ -7181,6 +7267,9 @@ _AT_LOADER_EXTS = {
     ".parquet",
     ".epub",
     ".rtf",
+    ".eml",
+    ".msg",
+    ".tex",
 }
 _AT_DIR_MAX_BYTES = 120_000  # ~120 KB total across all files in a folder
 _AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
@@ -7207,7 +7296,15 @@ def _expand_at_files(text: str) -> str:
             return ""
 
     def _read_via_loader(path: str) -> str:
-        from axon.loaders import EPUBLoader, ExcelLoader, ParquetLoader, RTFLoader
+        from axon.loaders import (
+            EMLLoader,
+            EPUBLoader,
+            ExcelLoader,
+            LaTeXLoader,
+            MSGLoader,
+            ParquetLoader,
+            RTFLoader,
+        )
 
         _loader_map = {
             ".docx": DOCXLoader,
@@ -7217,6 +7314,9 @@ def _expand_at_files(text: str) -> str:
             ".parquet": ParquetLoader,
             ".epub": EPUBLoader,
             ".rtf": RTFLoader,
+            ".eml": EMLLoader,
+            ".msg": MSGLoader,
+            ".tex": LaTeXLoader,
         }
         try:
             ext = os.path.splitext(path)[1].lower()

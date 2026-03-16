@@ -72,6 +72,7 @@ graphrag = [
 loaders = [
     "ebooklib>=0.18",
     "striprtf>=0.0.26",
+    "extract-msg>=0.28.0",
 ]
 all = [
     "qdrant-client>=1.7.0,<2.0.0",
@@ -79,6 +80,7 @@ all = [
     "networkx>=3.0",
     "ebooklib>=0.18",
     "striprtf>=0.0.26",
+    "extract-msg>=0.28.0",
 ]
 
 [project.scripts]
