@@ -138,6 +138,16 @@ rag:
   # graph_rag_community_async: true
   # graph_rag_community_top_k: 5
   # graph_rag_mode: local   # local | global | hybrid
+  # graph_rag_global_min_score: 20
+  # graph_rag_global_top_points: 50
+  # graph_rag_community_level: 0
+  # graph_rag_community_levels: 2
+  # graph_rag_entity_embedding_match: true
+  # graph_rag_entity_match_threshold: 0.5
+  # graph_rag_index_community_reports: true
+  # graph_rag_canonicalize: false
+  # graph_rag_canonicalize_min_occurrences: 3
+  # graph_rag_claims: false
 
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.

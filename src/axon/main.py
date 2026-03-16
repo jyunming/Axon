@@ -278,6 +278,28 @@ class AxonConfig:
     # or "hybrid" (both).
     graph_rag_mode: str = "local"  # "local" | "global" | "hybrid"
 
+    # Global search map-reduce parameters
+    graph_rag_global_min_score: int = 20  # minimum map-phase score to include
+    graph_rag_global_top_points: int = 50  # max points assembled in reduce phase
+    graph_rag_community_level: int = 0  # which hierarchy level for global search
+
+    # Hierarchical community detection
+    graph_rag_community_levels: int = 2  # number of hierarchy levels
+
+    # Entity embedding matching at query time
+    graph_rag_entity_embedding_match: bool = True
+    graph_rag_entity_match_threshold: float = 0.5
+
+    # Community report vector store indexing
+    graph_rag_index_community_reports: bool = True
+
+    # Entity description canonicalization
+    graph_rag_canonicalize: bool = False
+    graph_rag_canonicalize_min_occurrences: int = 3
+
+    # Claim / covariate extraction (off by default)
+    graph_rag_claims: bool = False
+
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
 
@@ -1704,10 +1726,19 @@ Your primary goal is to help the user by answering questions based on the provid
         self._relation_graph: dict = self._load_relation_graph()
 
         # GraphRAG community detection state
-        self._community_map: dict = self._load_community_map()
+        self._community_levels: dict = self._load_community_levels()
         self._community_summaries: dict = self._load_community_summaries()
         self._community_graph_dirty: bool = False
         self._last_matched_entities: list = []
+
+        # GraphRAG entity embeddings (for embedding-based entity matching at query time)
+        self._entity_embeddings: dict = self._load_entity_embeddings()
+
+        # GraphRAG entity description buffer (transient, not persisted)
+        self._entity_description_buffer: dict = {}
+
+        # GraphRAG claims graph
+        self._claims_graph: dict = self._load_claims_graph()
 
         # Shared executor for background/parallel tasks
         from concurrent.futures import ThreadPoolExecutor
@@ -1851,8 +1882,11 @@ Your primary goal is to help the user by answering questions based on the provid
         self._ingested_hashes = self._load_hash_store()
         self._entity_graph = self._load_entity_graph()
         self._relation_graph = self._load_relation_graph()
-        self._community_map = self._load_community_map()
+        self._community_levels = self._load_community_levels()
         self._community_summaries = self._load_community_summaries()
+        self._entity_embeddings = self._load_entity_embeddings()
+        self._entity_description_buffer = {}
+        self._claims_graph = self._load_claims_graph()
         self._community_graph_dirty = False
 
         # Merge entity graphs and relation graphs from all descendant projects so
@@ -2066,10 +2100,18 @@ Your primary goal is to help the user by answering questions based on the provid
                         # Legacy flat-list format — migrate
                         cleaned[key] = {
                             "description": "",
+                            "type": "UNKNOWN",
                             "chunk_ids": [v for v in value if isinstance(v, str)],
+                            "frequency": len([v for v in value if isinstance(v, str)]),
+                            "degree": 0,
                         }
                     elif isinstance(value, dict) and "chunk_ids" in value:
-                        cleaned[key] = value
+                        node = value
+                        # Migration: add missing fields with defaults
+                        node.setdefault("type", "UNKNOWN")
+                        node.setdefault("frequency", len(node.get("chunk_ids", [])))
+                        node.setdefault("degree", 0)
+                        cleaned[key] = node
                     # Otherwise skip malformed entries
                 return cleaned
             except Exception:
@@ -2126,36 +2168,75 @@ Your primary goal is to help the user by answering questions based on the provid
         path.write_text(json.dumps(self._relation_graph), encoding="utf-8")
 
     def _load_community_map(self) -> dict:
-        """Load persisted community membership map from disk.
+        """Backward-compat: returns finest community level map."""
+        return self._community_map  # uses the property
 
-        Shape: {entity_lower: community_id (int)}
+    def _save_community_map(self) -> None:
+        """Backward-compat: delegates to _save_community_levels."""
+        self._save_community_levels()
+
+    def _load_community_levels(self) -> dict:
+        """Load persisted hierarchical community levels from disk.
+
+        Shape: {level_int: {entity_lower: community_id}}
+        Falls back to old .community_map.json if levels file is missing.
         """
         import json
         import pathlib
 
-        path = pathlib.Path(self.config.bm25_path) / ".community_map.json"
+        path = pathlib.Path(self.config.bm25_path) / ".community_levels.json"
         try:
             if path.exists():
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
-                    return {
+                    return {int(k): v for k, v in raw.items() if isinstance(v, dict)}
+        except Exception:
+            pass
+        # Fall back to old .community_map.json if levels file missing
+        old_path = pathlib.Path(self.config.bm25_path) / ".community_map.json"
+        try:
+            if old_path.exists():
+                raw = json.loads(old_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    filtered = {
                         k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, int)
                     }
+                    if filtered:
+                        return {0: filtered}
         except Exception:
             pass
         return {}
 
-    def _save_community_map(self) -> None:
-        """Persist community membership map to disk."""
+    def _save_community_levels(self) -> None:
+        """Persist hierarchical community levels to disk."""
         import json
         import pathlib
 
-        path = pathlib.Path(self.config.bm25_path) / ".community_map.json"
+        path = pathlib.Path(self.config.bm25_path) / ".community_levels.json"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._community_map), encoding="utf-8")
+            path.write_text(
+                json.dumps({str(k): v for k, v in self._community_levels.items()}),
+                encoding="utf-8",
+            )
         except Exception as e:
-            logger.debug(f"Could not save community map: {e}")
+            logger.debug(f"Could not save community levels: {e}")
+
+    @property
+    def _community_map(self) -> dict:
+        """Alias for the finest-grained community level (backward compat)."""
+        if not self._community_levels:
+            return {}
+        finest = max(self._community_levels.keys())
+        return self._community_levels.get(finest, {})
+
+    @_community_map.setter
+    def _community_map(self, value: dict) -> None:
+        """For backward compat: setting _community_map sets level 0 in a single-level structure."""
+        if value:
+            self._community_levels = {0: value}
+        else:
+            self._community_levels = {}
 
     def _load_community_summaries(self) -> dict:
         """Load persisted community summaries from disk."""
@@ -2184,6 +2265,63 @@ Your primary goal is to help the user by answering questions based on the provid
         except Exception as e:
             logger.debug(f"Could not save community summaries: {e}")
 
+    def _load_entity_embeddings(self) -> dict:
+        """Load persisted entity embeddings from disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".entity_embeddings.json"
+        try:
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return raw
+        except Exception:
+            pass
+        return {}
+
+    def _save_entity_embeddings(self) -> None:
+        """Persist entity embeddings to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".entity_embeddings.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._entity_embeddings), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Could not save entity embeddings: {e}")
+
+    def _load_claims_graph(self) -> dict:
+        """Load persisted claims graph from disk.
+
+        Shape: {chunk_id: [claim_dict, ...]}
+        """
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".claims_graph.json"
+        try:
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return raw
+        except Exception:
+            pass
+        return {}
+
+    def _save_claims_graph(self) -> None:
+        """Persist claims graph to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".claims_graph.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._claims_graph), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Could not save claims graph: {e}")
+
     def _build_networkx_graph(self):
         """Build a NetworkX undirected graph from entity and relation data."""
         import networkx as nx
@@ -2196,13 +2334,14 @@ Your primary goal is to help the user by answering questions based on the provid
             for entry in entries:
                 tgt = entry.get("target", "")
                 if src and tgt:
+                    edge_weight = entry.get("weight", 1)
                     if G.has_edge(src, tgt):
-                        G[src][tgt]["weight"] = G[src][tgt].get("weight", 1) + 1
+                        G[src][tgt]["weight"] += edge_weight
                     else:
                         G.add_edge(
                             src,
                             tgt,
-                            weight=1,
+                            weight=edge_weight,
                             relation=entry.get("relation", ""),
                             description=entry.get("description", ""),
                         )
@@ -2233,37 +2372,97 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.warning(f"Community detection failed: {e}")
             return {}
 
+    def _run_hierarchical_community_detection(self) -> dict:
+        """Run Louvain at multiple resolutions to produce a level hierarchy.
+
+        Returns: {level_int: {entity_lower: community_id}}
+        Level 0 = coarsest (low resolution, few large communities).
+        Level n-1 = finest (high resolution, many small communities).
+        """
+        try:
+            import networkx as nx  # noqa: F401 — ensures ImportError fires when networkx is absent
+            import networkx.algorithms.community as nx_comm
+        except ImportError:
+            logger.warning(
+                "GraphRAG community detection requires networkx. "
+                "Install with: pip install networkx"
+            )
+            return {}
+
+        G = self._build_networkx_graph()
+        if len(G.nodes) < 2:
+            single = dict.fromkeys(G.nodes, 0)
+            return {0: single}
+
+        n_levels = max(1, getattr(self.config, "graph_rag_community_levels", 2))
+        # Resolution parameters: 0.5 (coarse) -> 1.5 (fine) linearly spaced
+        try:
+            import numpy as np
+
+            if n_levels == 1:
+                resolutions = [1.0]
+            else:
+                resolutions = list(np.linspace(0.5, 1.5, n_levels))
+        except ImportError:
+            step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
+            resolutions = [0.5 + i * step for i in range(n_levels)]
+
+        levels = {}
+        for level_idx, resolution in enumerate(resolutions):
+            try:
+                communities = nx_comm.louvain_communities(G, seed=42, resolution=resolution)
+                mapping = {}
+                for cid, members in enumerate(communities):
+                    for entity in members:
+                        mapping[entity] = cid
+                levels[level_idx] = mapping
+            except Exception as e:
+                logger.warning(f"Community detection failed at level {level_idx}: {e}")
+                levels[level_idx] = dict.fromkeys(G.nodes, 0)
+
+        return levels
+
     def _rebuild_communities(self) -> None:
         """Run community detection and generate summaries."""
         logger.info("GraphRAG: Running community detection...")
-        self._community_map = self._run_community_detection()
-        if self._community_map:
-            self._save_community_map()
-            n = len(set(self._community_map.values()))
-            logger.info(f"GraphRAG: {n} communities detected.")
+        self._community_levels = self._run_hierarchical_community_detection()
+        if self._community_levels:
+            self._save_community_levels()
+            total = sum(len(set(m.values())) for m in self._community_levels.values())
+            logger.info(
+                f"GraphRAG: {len(self._community_levels)} community levels, "
+                f"{total} total communities detected."
+            )
             if self.config.graph_rag_community:
                 self._generate_community_summaries()
+                if getattr(self.config, "graph_rag_index_community_reports", True):
+                    self._index_community_reports_in_vector_store()
 
     def _generate_community_summaries(self) -> None:
-        """Generate LLM summaries for each detected community cluster."""
-        if not self._community_map:
+        """Generate LLM summaries for each detected community cluster across all levels."""
+        if not self._community_levels:
             return
+        import json as _json
+        import re as _re
         from collections import defaultdict
 
-        community_entities: dict = defaultdict(list)
-        for entity, cid in self._community_map.items():
-            community_entities[cid].append(entity)
-
         summaries = {}
-        logger.info(f"GraphRAG: Generating summaries for {len(community_entities)} communities...")
+        total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
+        logger.info(f"GraphRAG: Generating summaries for {total_communities} communities...")
 
         def _summarise(args):
-            cid, members = args
+            level_idx, cid, members = args
             ent_parts = []
             for e in members[:30]:
                 node = self._entity_graph.get(e, {})
                 desc = node.get("description", "") if isinstance(node, dict) else ""
-                ent_parts.append(f"- {e}: {desc}" if desc else f"- {e}")
+                ent_type = node.get("type", "") if isinstance(node, dict) else ""
+                if desc:
+                    ent_parts.append(
+                        f"- {e} [{ent_type}]: {desc}" if ent_type else f"- {e}: {desc}"
+                    )
+                else:
+                    ent_parts.append(f"- {e}")
             member_set = set(members)
             rel_parts = []
             for src in members[:20]:
@@ -2277,42 +2476,135 @@ Your primary goal is to help the user by answering questions based on the provid
             context = "\n".join(ent_parts)
             if rel_parts:
                 context += "\n\nKey relationships:\n" + "\n".join(rel_parts[:20])
+            summary_key = f"{level_idx}_{cid}"
             prompt = (
-                "You are analyzing a knowledge graph community. "
-                "Write a comprehensive paragraph (3-5 sentences) summarising "
-                "the main themes, entities, and relationships in this cluster.\n\n"
-                f"Community members and descriptions:\n{context[:3000]}"
+                "You are analyzing a knowledge graph community.\n\n"
+                "Community members and descriptions:\n"
+                f"{context[:3000]}\n\n"
+                "Generate a community report as JSON with this exact structure:\n"
+                "{\n"
+                '  "title": "<2-5 word theme name>",\n'
+                '  "summary": "<2-3 sentence overview>",\n'
+                '  "findings": [\n'
+                '    {"summary": "<headline>", "explanation": "<1-2 sentence detail>"},\n'
+                "    ... up to 8 findings\n"
+                "  ],\n"
+                '  "rank": <float 0-10 importance>\n'
+                "}\n"
+                "Output only valid JSON. No markdown code blocks."
             )
             try:
-                summary = self.llm.complete(
+                raw_text = self.llm.complete(
                     prompt,
                     system_prompt="You are an expert knowledge graph analyst.",
                 )
-                return str(cid), {
-                    "summary": summary.strip() if summary else "",
+                try:
+                    raw_stripped = _re.sub(r"```(?:json)?\s*|\s*```", "", raw_text).strip()
+                    parsed = _json.loads(raw_stripped)
+                    title = str(parsed.get("title", f"Community {cid}"))
+                    summary = str(parsed.get("summary", ""))
+                    findings = parsed.get("findings", [])
+                    if not isinstance(findings, list):
+                        findings = []
+                    rank = float(parsed.get("rank", 5.0))
+                except Exception:
+                    title = f"Community {cid}"
+                    summary = raw_text.strip() if raw_text else ""
+                    findings = []
+                    rank = 5.0
+                findings_text = "\n".join(
+                    f"- {f.get('summary', '')}: {f.get('explanation', '')}"
+                    for f in findings
+                    if isinstance(f, dict)
+                )
+                full_content = f"# {title}\n\n{summary}"
+                if findings_text:
+                    full_content += f"\n\nFindings:\n{findings_text}"
+                return summary_key, {
+                    "title": title,
+                    "summary": summary,
+                    "findings": findings,
+                    "rank": rank,
+                    "full_content": full_content,
                     "entities": members,
                     "size": len(members),
+                    "level": level_idx,
                 }
             except Exception as e:
-                logger.debug(f"Community summary failed for community {cid}: {e}")
-                return str(cid), {"summary": "", "entities": members, "size": len(members)}
+                logger.debug(f"Community summary failed for community {summary_key}: {e}")
+                return summary_key, {
+                    "title": f"Community {cid}",
+                    "summary": "",
+                    "findings": [],
+                    "rank": 5.0,
+                    "full_content": "",
+                    "entities": members,
+                    "size": len(members),
+                    "level": level_idx,
+                }
 
-        results = list(self._executor.map(_summarise, community_entities.items()))
-        for cid_str, summary_dict in results:
-            summaries[cid_str] = summary_dict
+        # Build work items across all levels
+        work_items = []
+        for level_idx, level_map in self._community_levels.items():
+            community_entities: dict = defaultdict(list)
+            for entity, cid in level_map.items():
+                community_entities[cid].append(entity)
+            for cid, members in community_entities.items():
+                work_items.append((level_idx, cid, members))
+
+        results = list(self._executor.map(_summarise, work_items))
+        for summary_key, summary_dict in results:
+            summaries[summary_key] = summary_dict
         self._community_summaries = summaries
         self._save_community_summaries()
         logger.info(f"GraphRAG: Community summaries generated for {len(summaries)} communities.")
 
+    def _index_community_reports_in_vector_store(self) -> None:
+        """Index community reports as synthetic documents in the vector store."""
+        if not self._community_summaries:
+            return
+        docs_to_add = []
+        for summary_key, cs in self._community_summaries.items():
+            full_content = cs.get("full_content") or cs.get("summary", "")
+            if not full_content:
+                continue
+            doc_id = f"__community__{summary_key}"
+            docs_to_add.append(
+                {
+                    "id": doc_id,
+                    "text": full_content,
+                    "metadata": {
+                        "graph_rag_type": "community_report",
+                        "community_key": summary_key,
+                        "level": cs.get("level", 0),
+                        "rank": cs.get("rank", 5.0),
+                        "title": cs.get("title", ""),
+                        "source": "__community_report__",
+                    },
+                }
+            )
+        if docs_to_add:
+            try:
+                ids = [d["id"] for d in docs_to_add]
+                texts = [d["text"] for d in docs_to_add]
+                metadatas = [d["metadata"] for d in docs_to_add]
+                embeddings = self.embedding.embed(texts)
+                self._own_vector_store.add(ids, texts, embeddings, metadatas)
+                logger.info(
+                    f"GraphRAG: Indexed {len(docs_to_add)} community reports in vector store."
+                )
+            except Exception as e:
+                logger.warning(f"Could not index community reports: {e}")
+
     def _global_search_context(self, query: str, cfg) -> str:
-        """Score community summaries against the query; return top-K as context."""
+        """Score community summaries against the query; return top-K as context (legacy method)."""
         if not self._community_summaries:
             return ""
         top_k = getattr(cfg, "graph_rag_community_top_k", 5)
         query_tokens = set(query.lower().split())
         scored = []
         for cid, cs in self._community_summaries.items():
-            summary = cs.get("summary", "")
+            summary = cs.get("full_content") or cs.get("summary", "(no summary)")
             if not summary:
                 continue
             # Try embedding similarity first, fall back to token overlap
@@ -2334,9 +2626,88 @@ Your primary goal is to help the user by answering questions based on the provid
             entities_preview = ", ".join(cs.get("entities", [])[:10])
             parts.append(
                 f"[Community Report {rank + 1} — {cs.get('size', 0)} entities: "
-                f"{entities_preview}]\n{cs.get('summary', '(no summary)')}"
+                f"{entities_preview}]\n{cs.get('full_content') or cs.get('summary', '(no summary)')}"
             )
         return "\n\n".join(parts)
+
+    def _global_search_map_reduce(self, query: str, cfg) -> str:
+        """Map-reduce global search over community reports (Item 4)."""
+        import json as _json
+        import re as _re
+
+        if not self._community_summaries:
+            return ""
+
+        min_score = getattr(cfg, "graph_rag_global_min_score", 20)
+        top_points = getattr(cfg, "graph_rag_global_top_points", 50)
+
+        # Filter summaries to the target level
+        target_level = getattr(cfg, "graph_rag_community_level", 0)
+        target_level_prefix = f"{target_level}_"
+        level_summaries = {
+            k: v for k, v in self._community_summaries.items() if k.startswith(target_level_prefix)
+        }
+        # Fall back to all summaries if nothing matches the target level
+        if not level_summaries:
+            level_summaries = self._community_summaries
+
+        def _map_community(args):
+            cid, cs = args
+            report = cs.get("full_content") or cs.get("summary", "")
+            if not report:
+                return []
+            prompt = (
+                "---Role---\n"
+                "You are a helpful assistant responding to questions about the dataset.\n\n"
+                "---Goal---\n"
+                "Generate a list of key points relevant to answering the question, "
+                "based solely on the community report below.\n"
+                "If the report is not relevant, return an empty JSON array.\n\n"
+                f"---Question---\n{query}\n\n"
+                f"---Community Report---\n{report[:2000]}\n\n"
+                "---Response Format---\n"
+                'Return a JSON array: [{"point": "...", "score": 1-100}, ...]\n'
+                "Higher score = more relevant. Output only valid JSON."
+            )
+            try:
+                raw = self.llm.complete(
+                    prompt,
+                    system_prompt="You are a knowledge graph analysis assistant.",
+                )
+                raw_clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+                points = _json.loads(raw_clean)
+                if not isinstance(points, list):
+                    return []
+                return [
+                    (float(p.get("score", 0)), str(p.get("point", "")))
+                    for p in points
+                    if isinstance(p, dict) and p.get("point")
+                ]
+            except Exception:
+                return []
+
+        # Map phase — parallel
+        all_items = list(level_summaries.items())
+        all_points = []
+        try:
+            results = list(self._executor.map(_map_community, all_items))
+            for point_list in results:
+                all_points.extend(point_list)
+        except Exception:
+            return ""
+
+        # Filter and sort
+        filtered = [(score, point) for score, point in all_points if score >= min_score]
+        filtered.sort(reverse=True)
+        top = filtered[:top_points]
+
+        if not top:
+            return ""
+
+        lines = [
+            f"{i + 1}. {point} (relevance: {score:.0f}/100)" for i, (score, point) in enumerate(top)
+        ]
+        return "**Key Findings from Knowledge Graph:**\n" + "\n".join(lines)
 
     def _local_search_context(self, query: str, matched_entities: list, cfg) -> str:
         """Build structured GraphRAG local context: entity descriptions + relations + community snippet."""
@@ -2347,8 +2718,11 @@ Your primary goal is to help the user by answering questions based on the provid
         for ent in matched_entities[:5]:
             node = self._entity_graph.get(ent.lower(), {})
             desc = node.get("description", "") if isinstance(node, dict) else ""
+            ent_type = node.get("type", "") if isinstance(node, dict) else ""
             if desc:
-                ent_parts.append(f"  - {ent}: {desc}")
+                ent_parts.append(
+                    f"  - {ent} [{ent_type}]: {desc}" if ent_type else f"  - {ent}: {desc}"
+                )
         if ent_parts:
             parts.append("**Matched Entities:**\n" + "\n".join(ent_parts))
         rel_parts = []
@@ -2360,21 +2734,62 @@ Your primary goal is to help the user by answering questions based on the provid
                 rel_parts.append(f"  - {desc}")
         if rel_parts:
             parts.append("**Relevant Relationships:**\n" + "\n".join(rel_parts))
-        if self._community_map and self._community_summaries:
-            cids = set()
+        if self._community_levels and self._community_summaries:
+            finest = max(self._community_levels.keys()) if self._community_levels else None
             for ent in matched_entities[:3]:
-                cid = self._community_map.get(ent.lower())
+                cid = (
+                    self._community_levels.get(finest, {}).get(ent.lower())
+                    if finest is not None
+                    else None
+                )
                 if cid is not None:
-                    cids.add(str(cid))
-            for cid in list(cids)[:1]:
-                cs = self._community_summaries.get(cid, {})
-                summary = cs.get("summary", "")
-                if summary:
-                    sentences = summary.split(". ")
-                    snippet = ". ".join(sentences[:2]).strip()
-                    if snippet and not snippet.endswith("."):
-                        snippet += "."
-                    parts.append(f"**Community Context:**\n  {snippet}")
+                    summary_key = f"{finest}_{cid}"
+                    cs = self._community_summaries.get(summary_key, {})
+                    # Also check old-format key for backward compat
+                    if not cs:
+                        cs = self._community_summaries.get(str(cid), {})
+                    summary = cs.get("summary", "")
+                    if summary:
+                        sentences = summary.split(". ")
+                        snippet = ". ".join(sentences[:2]).strip()
+                        if snippet and not snippet.endswith("."):
+                            snippet += "."
+                        title = cs.get("title", f"Community {cid}")
+                        parts.append(f"**Community Context ({title}):**\n  {snippet}")
+                        break
+        # Source text units (Item 7): brief text snippets from entity-linked chunks
+        text_unit_parts = []
+        seen_chunks: set = set()
+        for ent in matched_entities[:3]:
+            node = self._entity_graph.get(ent.lower(), {})
+            chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else []
+            for cid in chunk_ids[:2]:
+                if cid not in seen_chunks:
+                    seen_chunks.add(cid)
+                    try:
+                        docs = self.vector_store.get_by_ids([cid])
+                        if docs:
+                            text_snippet = docs[0].get("text", "")[:200].strip()
+                            if text_snippet:
+                                text_unit_parts.append(f"  [{cid}] {text_snippet}...")
+                    except Exception:
+                        pass
+        if text_unit_parts:
+            parts.append("**Source Text Units:**\n" + "\n".join(text_unit_parts))
+        # Claims / facts (Item 11)
+        if self._claims_graph:
+            claim_parts = []
+            for ent in matched_entities[:3]:
+                node = self._entity_graph.get(ent.lower(), {})
+                chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else []
+                for cid in chunk_ids[:3]:
+                    for claim in self._claims_graph.get(cid, [])[:2]:
+                        status = claim.get("status", "SUSPECTED")
+                        desc = claim.get("description", "")
+                        if desc:
+                            claim_parts.append(f"  - [{status}] {desc}")
+            if claim_parts:
+                parts.append("**Claims / Facts:**\n" + "\n".join(claim_parts))
         return "\n\n".join(parts)
 
     def _entity_matches(self, q_entity: str, g_entity: str) -> float:
@@ -2392,19 +2807,22 @@ Your primary goal is to help the user by answering questions based on the provid
         jaccard = len(intersection) / len(union) if union else 0.0
         return jaccard if jaccard >= 0.4 else 0.0
 
+    _VALID_ENTITY_TYPES = {"PERSON", "ORGANIZATION", "GEO", "EVENT", "CONCEPT", "PRODUCT"}
+
     def _extract_entities(self, text: str) -> list[dict]:
         """Extract named entities from text using the LLM.
 
-        Returns a list of dicts with shape {"name": str, "description": str}.
+        Returns a list of dicts with shape:
+          {"name": str, "type": str, "description": str}
         Returns an empty list on failure or when the LLM produces no output.
         """
         prompt = (
-            "Extract the key named entities (people, organisations, places, products, technical concepts)\n"
-            "from the following text.\n"
-            "For each entity output one line in this exact format:\n"
-            "  ENTITY_NAME | one-sentence description\n"
-            "No bullets, numbering, or extra text.\n"
-            "If there are no entities, output nothing.\n\n" + text[:3000]
+            "Extract the key named entities from the following text.\n"
+            "For each entity output one line:\n"
+            "  ENTITY_NAME | ENTITY_TYPE | one-sentence description\n"
+            "ENTITY_TYPE must be one of: PERSON, ORGANIZATION, GEO, EVENT, CONCEPT, PRODUCT\n"
+            "No bullets, numbering, or extra text. If no entities, output nothing.\n\n"
+            + text[:3000]
         )
         try:
             raw = self.llm.complete(
@@ -2416,10 +2834,34 @@ Your primary goal is to help the user by answering questions based on the provid
                 if not line:
                     continue
                 parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 2:
-                    entities.append({"name": parts[0], "description": parts[1]})
+                if len(parts) >= 3:
+                    ent_type = parts[1].upper()
+                    if ent_type not in AxonBrain._VALID_ENTITY_TYPES:
+                        ent_type = "CONCEPT"
+                    entities.append(
+                        {
+                            "name": parts[0],
+                            "type": ent_type,
+                            "description": parts[2],
+                        }
+                    )
+                elif len(parts) == 2:
+                    # Old 2-column format — no type
+                    entities.append(
+                        {
+                            "name": parts[0],
+                            "type": "UNKNOWN",
+                            "description": parts[1],
+                        }
+                    )
                 else:
-                    entities.append({"name": parts[0], "description": ""})
+                    entities.append(
+                        {
+                            "name": parts[0],
+                            "type": "UNKNOWN",
+                            "description": "",
+                        }
+                    )
             return entities[:20]
         except Exception:
             return []
@@ -2469,6 +2911,137 @@ Your primary goal is to help the user by answering questions based on the provid
         except Exception:
             return []
 
+    def _embed_entities(self, entity_keys: list) -> None:
+        """Embed entity descriptions; store in _entity_embeddings (Item 5)."""
+        to_embed = []
+        for key in entity_keys:
+            node = self._entity_graph.get(key, {})
+            if isinstance(node, dict):
+                desc = node.get("description", "")
+                if desc and key not in self._entity_embeddings:
+                    to_embed.append((key, f"{key}: {desc}"))
+        if not to_embed:
+            return
+        keys, texts = zip(*to_embed)
+        try:
+            vectors = self.embedding.embed(list(texts))
+            for k, v in zip(keys, vectors):
+                self._entity_embeddings[k] = v if isinstance(v, list) else list(v)
+            self._save_entity_embeddings()
+            logger.info(f"GraphRAG: Embedded {len(to_embed)} entity descriptions.")
+        except Exception as e:
+            logger.debug(f"Entity embedding failed: {e}")
+
+    def _match_entities_by_embedding(self, query: str, top_k: int = 5) -> list:
+        """Return entity keys matching the query by embedding cosine similarity (Item 5)."""
+        if not self._entity_embeddings:
+            return []
+        try:
+            import numpy as np
+
+            q_vec = np.array(self.embedding.embed_query(query))
+            q_norm = np.linalg.norm(q_vec)
+            if q_norm == 0:
+                return []
+            scored = []
+            for entity_key, e_vec in self._entity_embeddings.items():
+                ev = np.array(e_vec)
+                ev_norm = np.linalg.norm(ev)
+                if ev_norm == 0:
+                    continue
+                sim = float(np.dot(q_vec, ev) / (q_norm * ev_norm))
+                scored.append((sim, entity_key))
+            threshold = getattr(self.config, "graph_rag_entity_match_threshold", 0.5)
+            scored = [(s, k) for s, k in scored if s >= threshold]
+            scored.sort(reverse=True)
+            return [k for _, k in scored[:top_k]]
+        except Exception as e:
+            logger.debug(f"Entity embedding match failed: {e}")
+            return []
+
+    def _extract_claims(self, text: str) -> list:
+        """Extract factual claims from text (Item 11). Returns list of claim dicts."""
+        prompt = (
+            "Extract factual claims from the following text.\n"
+            "For each claim output one line:\n"
+            "  SUBJECT | OBJECT | CLAIM_TYPE | TRUE or FALSE or SUSPECTED | description\n"
+            "CLAIM_TYPE examples: acquisition, partnership, product_launch, regulatory_action\n"
+            "No bullets or extra text. If no clear claims, output nothing.\n\n" + text[:3000]
+        )
+        try:
+            raw = self.llm.complete(
+                prompt,
+                system_prompt="You are a fact extraction specialist.",
+            )
+            claims = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 5:
+                    status = parts[3].upper()
+                    if status not in ("TRUE", "FALSE", "SUSPECTED"):
+                        status = "SUSPECTED"
+                    claims.append(
+                        {
+                            "subject": parts[0],
+                            "object": parts[1],
+                            "type": parts[2],
+                            "status": status,
+                            "description": parts[4],
+                        }
+                    )
+            return claims[:10]
+        except Exception:
+            return []
+
+    def _canonicalize_entity_descriptions(self) -> None:
+        """Synthesize canonical descriptions for entities with multiple descriptions (Item 10)."""
+        min_occ = getattr(self.config, "graph_rag_canonicalize_min_occurrences", 3)
+        to_canonicalize = {
+            k: descs
+            for k, descs in self._entity_description_buffer.items()
+            if len(set(descs)) > 1 and len(descs) >= min_occ
+        }
+        if not to_canonicalize:
+            return
+
+        logger.info(f"GraphRAG: Canonicalizing descriptions for {len(to_canonicalize)} entities...")
+
+        def _synthesize(args):
+            entity_key, descs = args
+            unique_descs = list(dict.fromkeys(descs))[:10]  # deduplicate, cap at 10
+            node = self._entity_graph.get(entity_key, {})
+            entity_type = node.get("type", "UNKNOWN") if isinstance(node, dict) else "UNKNOWN"
+            numbered = "\n".join(f"{i + 1}. {d}" for i, d in enumerate(unique_descs))
+            prompt = (
+                f"Entity: {entity_key}\nType: {entity_type}\n\n"
+                "The following descriptions were extracted from different documents:\n"
+                f"{numbered}\n\n"
+                "Write a single comprehensive description that synthesizes all of the above. "
+                "Output only the description, no preamble."
+            )
+            try:
+                result = self.llm.complete(
+                    prompt,
+                    system_prompt="You are a knowledge graph curation specialist.",
+                )
+                return entity_key, result.strip() if result else unique_descs[0]
+            except Exception:
+                return entity_key, unique_descs[0]
+
+        results = list(self._executor.map(_synthesize, to_canonicalize.items()))
+        changed = False
+        for entity_key, canonical_desc in results:
+            node = self._entity_graph.get(entity_key)
+            if isinstance(node, dict) and canonical_desc:
+                node["description"] = canonical_desc
+                changed = True
+        if changed:
+            self._save_entity_graph()
+        self._entity_description_buffer.clear()
+
     def _prune_entity_graph(self, deleted_ids: set) -> None:
         """Remove deleted chunk IDs from entity graph and relation graph.
 
@@ -2485,6 +3058,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 if after:
                     if isinstance(node, dict):
                         self._entity_graph[entity]["chunk_ids"] = after
+                        # Recompute frequency after pruning (Item 2)
+                        self._entity_graph[entity]["frequency"] = len(after)
                     else:
                         self._entity_graph[entity] = {"description": "", "chunk_ids": after}
                 else:
@@ -2504,6 +3079,16 @@ Your primary goal is to help the user by answering questions based on the provid
                     del self._relation_graph[src]
         if rg_changed:
             self._save_relation_graph()
+
+        # Prune claims graph (Item 11)
+        if hasattr(self, "_claims_graph"):
+            claims_changed = False
+            for chunk_id in list(self._claims_graph):
+                if chunk_id in deleted_ids:
+                    del self._claims_graph[chunk_id]
+                    claims_changed = True
+            if claims_changed:
+                self._save_claims_graph()
 
     def _generate_raptor_summaries(self, documents: list[dict]) -> list[dict]:
         """Generate RAPTOR summary nodes for a list of already-split chunks."""
@@ -2581,7 +3166,18 @@ Your primary goal is to help the user by answering questions based on the provid
         4. Fetch any chunks not already in results, tag with _graph_expanded.
         5. Return the expanded list (top_k slicing is deferred to the caller).
         """
-        query_entities = self._extract_entities(query)
+        # Item 5: Use embedding-based entity matching when available
+        if (
+            getattr(self.config, "graph_rag_entity_embedding_match", True)
+            and self._entity_embeddings
+        ):
+            matched_keys = self._match_entities_by_embedding(query)
+            # matched_keys are already entity graph keys; wrap as minimal dicts
+            query_entities = [
+                {"name": k, "type": "UNKNOWN", "description": ""} for k in matched_keys
+            ]
+        else:
+            query_entities = self._extract_entities(query)
         if not query_entities:
             return results
 
@@ -2967,17 +3563,50 @@ Your primary goal is to help the user by answering questions based on the provid
 
             results = list(self._executor.map(_proc, chunks_to_process))
 
+            # Track entity keys extracted this run for embedding (Item 5)
+            entities_extracted_this_run: list = []
+
             total_entities = 0
+            # Build a lookup from doc_id to doc for metadata writing (Item 7)
+            doc_by_id = {doc["id"]: doc for doc in chunks_to_process}
             for doc_id, entities in results:
                 total_entities += len(entities)
-                for ent in entities:  # ent is now {"name": ..., "description": ...}
+                # Track entity keys for embedding
+                for ent in entities:
+                    if isinstance(ent, dict) and ent.get("name"):
+                        entities_extracted_this_run.append(ent)
+
+                for ent in entities:  # ent is now {"name": ..., "type": ..., "description": ...}
                     key = ent["name"].lower().strip() if isinstance(ent, dict) else ent.lower()
                     if not key:
                         continue
                     if key not in self._entity_graph:
                         desc = ent.get("description", "") if isinstance(ent, dict) else ""
-                        self._entity_graph[key] = {"description": desc, "chunk_ids": []}
+                        ent_type = (
+                            ent.get("type", "UNKNOWN") if isinstance(ent, dict) else "UNKNOWN"
+                        )
+                        self._entity_graph[key] = {
+                            "description": desc,
+                            "type": ent_type,
+                            "chunk_ids": [],
+                            "frequency": 0,
+                            "degree": 0,
+                        }
                     elif isinstance(self._entity_graph[key], dict):
+                        # Update type if not yet set
+                        if (
+                            not self._entity_graph[key].get("type")
+                            or self._entity_graph[key].get("type") == "UNKNOWN"
+                        ):
+                            new_type = (
+                                ent.get("type", "UNKNOWN") if isinstance(ent, dict) else "UNKNOWN"
+                            )
+                            if new_type and new_type != "UNKNOWN":
+                                self._entity_graph[key]["type"] = new_type
+                        # Item 10: collect descriptions for canonicalization
+                        if isinstance(ent, dict) and ent.get("description"):
+                            desc_buf = self._entity_description_buffer.setdefault(key, [])
+                            desc_buf.append(ent["description"])
                         if (
                             not self._entity_graph[key].get("description")
                             and isinstance(ent, dict)
@@ -2995,6 +3624,20 @@ Your primary goal is to help the user by answering questions based on the provid
                             self._entity_graph[key].append(doc_id)
                             updated = True
                             self._community_graph_dirty = True
+
+                # Item 7: Write entity IDs back into chunk metadata for text-unit linkage
+                doc = doc_by_id.get(doc_id)
+                if doc is not None and entities and doc.get("metadata") is not None:
+                    doc["metadata"]["entity_ids"] = [
+                        e["name"].lower() for e in entities if isinstance(e, dict) and e.get("name")
+                    ]
+
+            # Item 2: Update frequency for all entities touched during this ingest
+            for entity_key in self._entity_graph:
+                node = self._entity_graph[entity_key]
+                if isinstance(node, dict):
+                    node["frequency"] = len(node.get("chunk_ids", []))
+
             if updated:
                 self._save_entity_graph()
             if total_entities == 0:
@@ -3038,17 +3681,61 @@ Your primary goal is to help the user by answering questions based on the provid
                         }
                         if src_lower not in self._relation_graph:
                             self._relation_graph[src_lower] = []
-                        # Avoid duplicate entries for the same chunk (check without description)
-                        dedup_key = (entry["target"], entry["relation"], entry["chunk_id"])
-                        existing_keys = {
-                            (e.get("target"), e.get("relation"), e.get("chunk_id"))
-                            for e in self._relation_graph[src_lower]
-                        }
-                        if dedup_key not in existing_keys:
+                        # Item 8: weight tracking — increment weight for same (target, relation) pair
+                        existing_entry = next(
+                            (
+                                e
+                                for e in self._relation_graph[src_lower]
+                                if e.get("target") == entry["target"]
+                                and e.get("relation") == entry["relation"]
+                            ),
+                            None,
+                        )
+                        if existing_entry:
+                            existing_entry["weight"] = existing_entry.get("weight", 1) + 1
+                            rg_updated = True
+                        else:
+                            entry["weight"] = 1
                             self._relation_graph[src_lower].append(entry)
                             rg_updated = True
                 if rg_updated:
                     self._save_relation_graph()
+
+            # Item 2: Recompute degree for all entities after relation-build
+            for entity_key in self._entity_graph:
+                if isinstance(self._entity_graph[entity_key], dict):
+                    self._entity_graph[entity_key]["degree"] = len(
+                        self._relation_graph.get(entity_key, [])
+                    )
+
+            # Item 5: Embed entity descriptions for query-time matching
+            if getattr(self.config, "graph_rag_entity_embedding_match", True):
+                entity_keys_this_batch = list(
+                    {ent["name"].lower() for ent in entities_extracted_this_run if ent.get("name")}
+                )
+                self._embed_entities(entity_keys_this_batch)
+
+            # Item 10: Canonicalize entity descriptions
+            if self.config.graph_rag and getattr(self.config, "graph_rag_canonicalize", False):
+                self._canonicalize_entity_descriptions()
+
+            # Item 11: Extract claims
+            claims_changed = False
+            if getattr(self.config, "graph_rag_claims", False):
+                logger.info(
+                    f"   GraphRAG: Extracting claims from {len(chunks_to_process)} chunks..."
+                )
+
+                def _proc_claims(doc):
+                    return doc["id"], self._extract_claims(doc["text"])
+
+                claim_results = list(self._executor.map(_proc_claims, chunks_to_process))
+                for doc_id, claims in claim_results:
+                    if claims:
+                        self._claims_graph[doc_id] = claims
+                        claims_changed = True
+                if claims_changed:
+                    self._save_claims_graph()
 
             if self.config.graph_rag_community and self._community_graph_dirty:
                 self._community_graph_dirty = False
@@ -3541,7 +4228,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # GraphRAG global context injection
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
-            _global_ctx = self._global_search_context(query, cfg)
+            _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:
                 if graph_mode == "global":
                     context = f"**Knowledge Graph Community Reports:**\n{_global_ctx}"
@@ -3648,7 +4335,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # GraphRAG global context injection
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
-            _global_ctx = self._global_search_context(query, cfg)
+            _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:
                 if graph_mode == "global":
                     context = f"**Knowledge Graph Community Reports:**\n{_global_ctx}"

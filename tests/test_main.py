@@ -2736,6 +2736,8 @@ class TestGraphRAGRobustness:
         brain.config = AxonConfig()
         brain._entity_graph = {}
         brain._relation_graph = {}
+        brain._entity_embeddings = {}
+        brain._claims_graph = {}
         # Bind real implementations so we test actual logic
         brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
         brain._prune_entity_graph = AxonBrain._prune_entity_graph.__get__(brain, AxonBrain)
@@ -2743,8 +2745,13 @@ class TestGraphRAGRobustness:
         brain._expand_with_entity_graph = AxonBrain._expand_with_entity_graph.__get__(
             brain, AxonBrain
         )
+        brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
+        brain._match_entities_by_embedding = AxonBrain._match_entities_by_embedding.__get__(
+            brain, AxonBrain
+        )
         brain._save_entity_graph = MagicMock()
         brain._save_relation_graph = MagicMock()
+        brain._save_claims_graph = MagicMock()
         return brain
 
     # ── Phase 1: _entity_matches ──────────────────────────────────────────
@@ -3140,10 +3147,13 @@ class TestGraphRAGCommunity:
         brain.embedding = MagicMock()
         brain._entity_graph = {}
         brain._relation_graph = {}
-        brain._community_map = {}
+        brain._community_levels = {}
         brain._community_summaries = {}
         brain._community_graph_dirty = False
         brain._last_matched_entities = []
+        brain._entity_embeddings = {}
+        brain._entity_description_buffer = {}
+        brain._claims_graph = {}
         # Bind real implementations
         brain._extract_entities = AxonBrain._extract_entities.__get__(brain, AxonBrain)
         brain._extract_relations = AxonBrain._extract_relations.__get__(brain, AxonBrain)
@@ -3154,39 +3164,64 @@ class TestGraphRAGCommunity:
         brain._run_community_detection = AxonBrain._run_community_detection.__get__(
             brain, AxonBrain
         )
+        brain._run_hierarchical_community_detection = (
+            AxonBrain._run_hierarchical_community_detection.__get__(brain, AxonBrain)
+        )
         brain._build_networkx_graph = AxonBrain._build_networkx_graph.__get__(brain, AxonBrain)
         brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
             brain, AxonBrain
         )
         brain._global_search_context = AxonBrain._global_search_context.__get__(brain, AxonBrain)
+        brain._global_search_map_reduce = AxonBrain._global_search_map_reduce.__get__(
+            brain, AxonBrain
+        )
         brain._local_search_context = AxonBrain._local_search_context.__get__(brain, AxonBrain)
         brain._entity_matches = AxonBrain._entity_matches.__get__(brain, AxonBrain)
+        brain._match_entities_by_embedding = AxonBrain._match_entities_by_embedding.__get__(
+            brain, AxonBrain
+        )
+        brain._embed_entities = AxonBrain._embed_entities.__get__(brain, AxonBrain)
+        brain._extract_claims = AxonBrain._extract_claims.__get__(brain, AxonBrain)
+        brain._canonicalize_entity_descriptions = (
+            AxonBrain._canonicalize_entity_descriptions.__get__(brain, AxonBrain)
+        )
+        brain._index_community_reports_in_vector_store = (
+            AxonBrain._index_community_reports_in_vector_store.__get__(brain, AxonBrain)
+        )
         brain._save_entity_graph = MagicMock()
         brain._save_relation_graph = MagicMock()
         brain._save_community_map = MagicMock()
         brain._save_community_summaries = MagicMock()
+        brain._save_community_levels = MagicMock()
+        brain._save_entity_embeddings = MagicMock()
+        brain._save_claims_graph = MagicMock()
         return brain
 
     # ── Phase 1.1: _extract_entities returns dicts ────────────────────────
 
     def test_extract_entities_returns_name_and_description(self):
-        """_extract_entities parses 'NAME | description' lines into dicts."""
+        """_extract_entities parses 'NAME | description' 2-col lines with UNKNOWN type."""
         brain = self._make_brain()
         brain.llm.complete.return_value = (
             "OpenAI | AI research company\nGPT-4 | Large language model"
         )
         result = brain._extract_entities("some text")
-        assert result == [
-            {"name": "OpenAI", "description": "AI research company"},
-            {"name": "GPT-4", "description": "Large language model"},
-        ]
+        assert len(result) == 2
+        assert result[0]["name"] == "OpenAI"
+        assert result[0]["description"] == "AI research company"
+        assert result[0]["type"] == "UNKNOWN"
+        assert result[1]["name"] == "GPT-4"
+        assert result[1]["type"] == "UNKNOWN"
 
     def test_extract_entities_handles_no_pipe_fallback(self):
         """_extract_entities handles lines without a pipe by returning empty description."""
         brain = self._make_brain()
         brain.llm.complete.return_value = "OpenAI"
         result = brain._extract_entities("some text")
-        assert result == [{"name": "OpenAI", "description": ""}]
+        assert len(result) == 1
+        assert result[0]["name"] == "OpenAI"
+        assert result[0]["description"] == ""
+        assert result[0]["type"] == "UNKNOWN"
 
     # ── Phase 1.2: _extract_relations returns dicts ───────────────────────
 
@@ -3232,7 +3267,11 @@ class TestGraphRAGCommunity:
         (tmp_path / ".entity_graph.json").write_text(json.dumps(legacy), encoding="utf-8")
 
         result = brain._load_entity_graph()
-        assert result == {"openai": {"description": "", "chunk_ids": ["chunk1", "chunk2"]}}
+        assert result["openai"]["description"] == ""
+        assert result["openai"]["chunk_ids"] == ["chunk1", "chunk2"]
+        assert result["openai"]["type"] == "UNKNOWN"
+        assert result["openai"]["frequency"] == 2
+        assert result["openai"]["degree"] == 0
 
     # ── Phase 2.5: community detection ───────────────────────────────────
 
@@ -3251,20 +3290,20 @@ class TestGraphRAGCommunity:
     # ── Phase 2.4: community map persist ─────────────────────────────────
 
     def test_community_map_persisted(self, tmp_path):
-        """_save_community_map / _load_community_map round-trips correctly."""
+        """_save_community_levels / _load_community_levels round-trips correctly."""
         from unittest.mock import MagicMock
 
         from axon.main import AxonBrain, AxonConfig
 
         brain = MagicMock(spec=AxonBrain)
         brain.config = AxonConfig(bm25_path=str(tmp_path))
-        brain._community_map = {"entityA": 0, "entityB": 1}
-        brain._save_community_map = AxonBrain._save_community_map.__get__(brain, AxonBrain)
-        brain._load_community_map = AxonBrain._load_community_map.__get__(brain, AxonBrain)
+        brain._community_levels = {0: {"entityA": 0, "entityB": 1}}
+        brain._save_community_levels = AxonBrain._save_community_levels.__get__(brain, AxonBrain)
+        brain._load_community_levels = AxonBrain._load_community_levels.__get__(brain, AxonBrain)
 
-        brain._save_community_map()
-        loaded = brain._load_community_map()
-        assert loaded == {"entityA": 0, "entityB": 1}
+        brain._save_community_levels()
+        loaded = brain._load_community_levels()
+        assert loaded == {0: {"entityA": 0, "entityB": 1}}
 
     # ── Phase 3: community summaries generation ───────────────────────────
 
@@ -3273,20 +3312,22 @@ class TestGraphRAGCommunity:
         from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
-        brain._community_map = {"apple": 0, "beats": 0}
+        brain._community_levels = {0: {"apple": 0, "beats": 0}}
         brain._entity_graph = {
             "apple": {"description": "tech company", "chunk_ids": ["c1"]},
             "beats": {"description": "audio brand", "chunk_ids": ["c2"]},
         }
         brain._relation_graph = {}
         brain._community_summaries = {}
-        brain.llm.complete.return_value = "Apple and Beats are related tech entities."
+        brain.llm.complete.return_value = (
+            '{"title": "Tech", "summary": "Apple and Beats.", "findings": [], "rank": 5.0}'
+        )
         brain._executor = ThreadPoolExecutor(max_workers=1)
 
         brain._generate_community_summaries()
 
-        assert "0" in brain._community_summaries
-        assert brain._community_summaries["0"]["summary"] != ""
+        assert "0_0" in brain._community_summaries
+        assert brain._community_summaries["0_0"]["summary"] != ""
         brain._save_community_summaries.assert_called_once()
 
     # ── Phase 4: global search context ───────────────────────────────────
@@ -3295,10 +3336,15 @@ class TestGraphRAGCommunity:
         """_global_search_context returns text containing community summary content."""
         brain = self._make_brain()
         brain._community_summaries = {
-            "0": {
+            "0_0": {
+                "title": "Tech cluster",
                 "summary": "Apple and Beats tech cluster",
+                "full_content": "# Tech cluster\n\nApple and Beats tech cluster",
+                "findings": [],
+                "rank": 5.0,
                 "entities": ["apple", "beats"],
                 "size": 2,
+                "level": 0,
             }
         }
 
@@ -3314,11 +3360,17 @@ class TestGraphRAGCommunity:
 
     def test_local_search_context_includes_entity_description(self):
         """_local_search_context includes entity descriptions in output."""
+        from unittest.mock import MagicMock
+
         brain = self._make_brain()
         brain._entity_graph = {"apple": {"description": "tech company", "chunk_ids": ["c1"]}}
         brain._relation_graph = {}
-        brain._community_map = {}
+        brain._community_levels = {}
         brain._community_summaries = {}
+        brain._claims_graph = {}
+        # Mock vector store to return empty for text units lookup
+        brain.vector_store = MagicMock()
+        brain.vector_store.get_by_ids.return_value = []
 
         class _Cfg:
             pass
@@ -3337,3 +3389,294 @@ class TestGraphRAGCommunity:
         assert cfg.graph_rag_community_async is True
         assert cfg.graph_rag_community_top_k == 5
         assert cfg.graph_rag_mode == "local"
+
+    # ── New tests for Items 1-11 ───────────────────────────────────────────
+
+    def test_extract_entities_returns_type(self):
+        """_extract_entities parses 3-column pipe format and returns type field."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = "Apple | ORGANIZATION | Tech company"
+        result = brain._extract_entities("some text")
+        assert len(result) == 1
+        assert result[0]["name"] == "Apple"
+        assert result[0]["type"] == "ORGANIZATION"
+        assert result[0]["description"] == "Tech company"
+
+    def test_extract_entities_two_column_fallback(self):
+        """_extract_entities falls back to UNKNOWN type for old 2-column format."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = "Apple | Tech company"
+        result = brain._extract_entities("some text")
+        assert len(result) == 1
+        assert result[0]["type"] == "UNKNOWN"
+        assert result[0]["description"] == "Tech company"
+
+    def test_entity_frequency_tracked(self):
+        """Entity frequency equals the number of chunk_ids after update."""
+        brain = self._make_brain()
+        brain._entity_graph = {
+            "apple": {
+                "description": "tech company",
+                "type": "ORGANIZATION",
+                "chunk_ids": ["c1", "c2"],
+                "frequency": 0,
+                "degree": 0,
+            }
+        }
+        # Simulate the frequency update logic from ingest
+        for entity_key in brain._entity_graph:
+            node = brain._entity_graph[entity_key]
+            if isinstance(node, dict):
+                node["frequency"] = len(node.get("chunk_ids", []))
+        assert brain._entity_graph["apple"]["frequency"] == 2
+
+    def test_community_report_has_title_and_findings(self):
+        """_generate_community_summaries stores title, findings, and rank from JSON."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        brain._community_levels = {0: {"apple": 0, "beats": 0}}
+        brain._entity_graph = {
+            "apple": {"description": "tech company", "type": "ORGANIZATION", "chunk_ids": ["c1"]},
+            "beats": {"description": "audio brand", "type": "PRODUCT", "chunk_ids": ["c2"]},
+        }
+        brain._relation_graph = {}
+        brain._community_summaries = {}
+        brain.llm.complete.return_value = (
+            '{"title": "Tech Products", "summary": "Apple and Beats.", '
+            '"findings": [{"summary": "Acquisition", "explanation": "Apple bought Beats."}], "rank": 7.0}'
+        )
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        brain._generate_community_summaries()
+
+        assert "0_0" in brain._community_summaries
+        cs = brain._community_summaries["0_0"]
+        assert cs["title"] == "Tech Products"
+        assert isinstance(cs["findings"], list)
+        assert cs["rank"] == 7.0
+
+    def test_community_report_json_fallback(self):
+        """_generate_community_summaries falls back gracefully when LLM returns plain text."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        brain._community_levels = {0: {"apple": 0}}
+        brain._entity_graph = {
+            "apple": {"description": "tech company", "type": "ORGANIZATION", "chunk_ids": ["c1"]}
+        }
+        brain._relation_graph = {}
+        brain._community_summaries = {}
+        brain.llm.complete.return_value = "This is a plain text summary, not JSON."
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        brain._generate_community_summaries()
+
+        assert "0_0" in brain._community_summaries
+        cs = brain._community_summaries["0_0"]
+        assert cs["title"] == "Community 0"
+        assert cs["findings"] == []
+
+    def test_global_map_reduce_filters_low_score(self):
+        """_global_search_map_reduce filters out points with score below min_score."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        brain._community_summaries = {
+            "0_0": {
+                "title": "Test",
+                "summary": "test",
+                "full_content": "test content",
+                "findings": [],
+                "rank": 5.0,
+                "entities": [],
+                "size": 1,
+                "level": 0,
+            }
+        }
+        brain.llm.complete.return_value = '[{"point": "low relevance", "score": 5}]'
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        class _Cfg:
+            graph_rag_global_min_score = 20
+            graph_rag_global_top_points = 50
+            graph_rag_community_level = 0
+
+        result = brain._global_search_map_reduce("test query", _Cfg())
+        assert result == ""
+
+    def test_global_map_reduce_returns_top_points(self):
+        """_global_search_map_reduce includes high-score points in output."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        brain._community_summaries = {
+            "0_0": {
+                "title": "AI",
+                "summary": "AI growth",
+                "full_content": "# AI\n\nAI growth",
+                "findings": [],
+                "rank": 8.0,
+                "entities": [],
+                "size": 1,
+                "level": 0,
+            }
+        }
+        brain.llm.complete.return_value = '[{"point": "AI growth", "score": 80}]'
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        class _Cfg:
+            graph_rag_global_min_score = 20
+            graph_rag_global_top_points = 50
+            graph_rag_community_level = 0
+
+        result = brain._global_search_map_reduce("AI trends", _Cfg())
+        assert "AI growth" in result
+
+    def test_entity_embedding_match_used_when_available(self):
+        """_match_entities_by_embedding returns matching entity keys above threshold."""
+        brain = self._make_brain()
+        brain._entity_embeddings = {"openai": [0.1, 0.2, 0.3]}
+        brain.embedding.embed_query.return_value = [0.1, 0.2, 0.3]
+        brain.config.graph_rag_entity_match_threshold = 0.5
+
+        result = brain._match_entities_by_embedding("openai query")
+        assert "openai" in result
+
+    def test_entity_embedding_match_falls_back_when_empty(self):
+        """_match_entities_by_embedding returns [] when no embeddings stored."""
+        brain = self._make_brain()
+        brain._entity_embeddings = {}
+
+        result = brain._match_entities_by_embedding("any query")
+        assert result == []
+
+    def test_hierarchical_detection_produces_multiple_levels(self):
+        """_run_hierarchical_community_detection returns dict with multiple level keys."""
+        from unittest.mock import patch
+
+        brain = self._make_brain()
+        brain._entity_graph = {
+            "a": {"description": "entity a", "chunk_ids": ["c1"]},
+            "b": {"description": "entity b", "chunk_ids": ["c2"]},
+            "c": {"description": "entity c", "chunk_ids": ["c3"]},
+        }
+        brain._relation_graph = {
+            "a": [{"target": "b", "relation": "related", "chunk_id": "c1", "weight": 1}]
+        }
+        brain.config.graph_rag_community_levels = 2
+
+        # Patch louvain to return a fixed result
+        def _fake_louvain(G, seed=42, resolution=1.0):
+            nodes = list(G.nodes)
+            return [set(nodes[:1]), set(nodes[1:])] if len(nodes) > 1 else [set(nodes)]
+
+        with patch("networkx.algorithms.community.louvain_communities", _fake_louvain):
+            result = brain._run_hierarchical_community_detection()
+
+        assert len(result) == 2
+        assert 0 in result
+        assert 1 in result
+
+    def test_community_map_property_returns_finest_level(self):
+        """_community_map property returns the finest (highest-index) level map."""
+        brain = self._make_brain()
+        brain._community_levels = {0: {"a": 0}, 1: {"a": 0, "b": 1}}
+        # Access through the property on the real class — but brain is a MagicMock,
+        # so we call the property getter directly
+        from axon.main import AxonBrain
+
+        result = AxonBrain._community_map.fget(brain)
+        assert result == {"a": 0, "b": 1}
+
+    def test_relationship_weight_incremented(self):
+        """Relation weight is incremented when same (target, relation) pair appears again."""
+        brain = self._make_brain()
+        brain._relation_graph = {
+            "apple": [
+                {
+                    "target": "beats",
+                    "relation": "acquired",
+                    "chunk_id": "c1",
+                    "weight": 1,
+                }
+            ]
+        }
+        # Simulate the weight-increment logic from ingest
+        entry = {"target": "beats", "relation": "acquired", "chunk_id": "c2"}
+        existing = next(
+            (
+                e
+                for e in brain._relation_graph["apple"]
+                if e.get("target") == entry["target"] and e.get("relation") == entry["relation"]
+            ),
+            None,
+        )
+        assert existing is not None
+        existing["weight"] = existing.get("weight", 1) + 1
+        assert brain._relation_graph["apple"][0]["weight"] == 2
+
+    def test_community_reports_indexed_in_vector_store(self):
+        """_index_community_reports_in_vector_store calls vector_store.add with community docs."""
+        from unittest.mock import MagicMock
+
+        brain = self._make_brain()
+        brain._community_summaries = {
+            "0_0": {
+                "title": "AI",
+                "summary": "AI research",
+                "full_content": "# AI\n\nAI research",
+                "findings": [],
+                "rank": 7.0,
+                "entities": ["openai"],
+                "size": 1,
+                "level": 0,
+            }
+        }
+        brain.embedding.embed.return_value = [[0.1, 0.2]]
+        mock_vs = MagicMock()
+        brain._own_vector_store = mock_vs
+
+        brain._index_community_reports_in_vector_store()
+
+        assert mock_vs.add.called
+        call_args = mock_vs.add.call_args
+        ids_passed = call_args[0][0]
+        assert any("__community__" in id_ for id_ in ids_passed)
+
+    def test_canonicalize_entity_descriptions(self):
+        """_canonicalize_entity_descriptions updates entity graph with synthesized description."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        brain = self._make_brain()
+        brain._entity_graph = {
+            "openai": {
+                "description": "AI company",
+                "type": "ORGANIZATION",
+                "chunk_ids": ["c1"],
+                "frequency": 1,
+                "degree": 0,
+            }
+        }
+        brain._entity_description_buffer = {"openai": ["AI company", "Research org", "GPT maker"]}
+        brain.config.graph_rag_canonicalize_min_occurrences = 3
+        brain.llm.complete.return_value = "Leading AI research organization"
+        brain._executor = ThreadPoolExecutor(max_workers=1)
+
+        brain._canonicalize_entity_descriptions()
+
+        assert brain._entity_graph["openai"]["description"] == "Leading AI research organization"
+        assert brain._entity_description_buffer == {}
+
+    def test_claims_extraction_parses_pipe_format(self):
+        """_extract_claims parses pipe-delimited claim lines correctly."""
+        brain = self._make_brain()
+        brain.llm.complete.return_value = (
+            "Apple | Beats | acquisition | TRUE | Apple acquired Beats for $3B"
+        )
+        result = brain._extract_claims("some text")
+        assert len(result) == 1
+        assert result[0]["status"] == "TRUE"
+        assert result[0]["subject"] == "Apple"
+        assert result[0]["object"] == "Beats"
+        assert "Apple acquired Beats" in result[0]["description"]
