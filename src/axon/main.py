@@ -7163,6 +7163,9 @@ _AT_TEXT_EXTS = {
     ".tf",
     ".proto",
     ".graphql",
+    ".jsonl",
+    ".ndjson",
+    ".ipynb",
 }
 # Extensions handled by dedicated loaders (extract clean text from binary formats)
 _AT_LOADER_EXTS = {
@@ -7173,6 +7176,11 @@ _AT_LOADER_EXTS = {
     ".png",
     ".jpg",
     ".jpeg",
+    ".xlsx",
+    ".xls",
+    ".parquet",
+    ".epub",
+    ".rtf",
 }
 _AT_DIR_MAX_BYTES = 120_000  # ~120 KB total across all files in a folder
 _AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
@@ -7186,7 +7194,7 @@ def _expand_at_files(text: str) -> str:
                    _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
     """
     # Imported at call time so tests can patch axon.loaders.DOCXLoader / PDFLoader.
-    from axon.loaders import DOCXLoader, PDFLoader
+    from axon.loaders import DOCXLoader, PDFLoader, PPTXLoader  # noqa: F401 (used in _loader_map)
 
     def _read_text_file(path: str, max_bytes: int = _AT_FILE_MAX_BYTES) -> str:
         try:
@@ -7199,9 +7207,21 @@ def _expand_at_files(text: str) -> str:
             return ""
 
     def _read_via_loader(path: str) -> str:
+        from axon.loaders import EPUBLoader, ExcelLoader, ParquetLoader, RTFLoader
+
+        _loader_map = {
+            ".docx": DOCXLoader,
+            ".pptx": PPTXLoader,
+            ".xlsx": ExcelLoader,
+            ".xls": ExcelLoader,
+            ".parquet": ParquetLoader,
+            ".epub": EPUBLoader,
+            ".rtf": RTFLoader,
+        }
         try:
             ext = os.path.splitext(path)[1].lower()
-            loader = DOCXLoader() if ext == ".docx" else PDFLoader()
+            loader_cls = _loader_map.get(ext)
+            loader = loader_cls() if loader_cls else PDFLoader()
             docs = loader.load(path)
             chunks = [d.get("text", "") for d in docs if d.get("text")]
             joined = "\n\n".join(chunks)
