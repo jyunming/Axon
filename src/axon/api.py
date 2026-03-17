@@ -990,13 +990,11 @@ async def get_ingest_status(job_id: str):
             detail=f"Job '{job_id}' not found. It may have already been evicted (TTL: 60 min) or the job_id is invalid.",
         )
     result = {k: v for k, v in job.items() if k != "started_at_ts"}
-    if (
-        result.get("status") == "completed"
-        and brain
-        and getattr(brain, "_community_build_in_progress", False)
-    ):
-        result = dict(result)
-        result["status"] = "building_communities"
+    # Report community build state as a separate boolean so that polling job A
+    # is not misreported when an unrelated job B triggered a community rebuild.
+    result["community_build_in_progress"] = bool(
+        brain and getattr(brain, "_community_build_in_progress", False)
+    )
     return result
 
 
@@ -1019,11 +1017,15 @@ async def finalize_graph():
 
     Use this after batch ingest with ``graph_rag_community_defer=True`` to
     run community detection once all documents have been ingested.
+    Community detection is CPU-heavy, so it is offloaded to a thread to
+    avoid blocking the event loop.
     """
+    import asyncio
+
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        brain.finalize_graph()
+        await asyncio.to_thread(brain.finalize_graph)
         return {"status": "ok", "community_summary_count": len(brain._community_summaries)}
     except Exception as e:
         logger.error(f"finalize_graph failed: {e}")

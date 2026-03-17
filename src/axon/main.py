@@ -1401,17 +1401,20 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             from qdrant_client.models import PointStruct
 
-            points = []
-            for i, (id, embedding, text) in enumerate(zip(ids, embeddings, texts)):
-                payload = {"text": text}
-                if metadatas:
-                    payload.update(metadatas[i])
-                points.append(PointStruct(id=id, vector=embedding, payload=payload))
-            # Qdrant has no strict per-call limit but large upserts consume excess memory;
-            # batch at the same ceiling for consistency.
+            # Build and upsert PointStructs incrementally per batch so peak
+            # memory stays bounded to _CHROMA_MAX_BATCH rows, not O(N).
             _bs = OpenVectorStore._CHROMA_MAX_BATCH
-            for _start in range(0, max(len(points), 1), _bs):
-                _batch = points[_start : _start + _bs]
+            _n = max(len(ids), 1)
+            for _start in range(0, _n, _bs):
+                _end = _start + _bs
+                _batch = [
+                    PointStruct(
+                        id=ids[i],
+                        vector=embeddings[i],
+                        payload={"text": texts[i], **(metadatas[i] if metadatas else {})},
+                    )
+                    for i in range(_start, min(_end, len(ids)))
+                ]
                 if not _batch:
                     break
                 self.client.upsert(collection_name="axon", points=_batch)
@@ -5339,9 +5342,13 @@ Your primary goal is to help the user by answering questions based on the provid
                     e["name"] for e in entities if isinstance(e, dict) and e.get("name")
                 ]
 
-            # Item 2: Update frequency for all entities touched during this ingest
-            for entity_key in self._entity_graph:
-                node = self._entity_graph[entity_key]
+            # Item 2: Update frequency only for entities touched in this ingest run
+            # (avoids O(|V|) scan of the full entity graph on every ingest batch)
+            _touched_entity_keys = {
+                ent["name"].lower() for ent in entities_extracted_this_run if ent.get("name")
+            }
+            for entity_key in _touched_entity_keys:
+                node = self._entity_graph.get(entity_key)
                 if isinstance(node, dict):
                     node["frequency"] = len(node.get("chunk_ids", []))
 
@@ -5472,9 +5479,10 @@ Your primary goal is to help the user by answering questions based on the provid
                         for t in triples
                     ]
 
-            # Item 2: Recompute degree for all entities after relation-build
-            for entity_key in self._entity_graph:
-                if isinstance(self._entity_graph[entity_key], dict):
+            # Item 2: Recompute degree for entities touched by this ingest's relations only
+            # (avoids O(|V|) scan of the full entity graph on every ingest batch)
+            for entity_key in _touched_entity_keys:
+                if isinstance(self._entity_graph.get(entity_key), dict):
                     self._entity_graph[entity_key]["degree"] = len(
                         self._relation_graph.get(entity_key, [])
                     )
