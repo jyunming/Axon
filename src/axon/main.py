@@ -433,6 +433,21 @@ class AxonConfig:
     # "off" (default): use graph_rag_mode as configured.
     graph_rag_auto_route: Literal["off", "heuristic", "llm"] = "off"
 
+    # P1: Semantic entity alias resolution — merge near-duplicate entity names (e.g.
+    # "Apple" / "Apple Inc." / "Apple Corporation") into a single canonical node before
+    # community detection.  Uses cosine similarity on entity-name embeddings.
+    # pip install axon[graphrag]  (no extra deps — uses the already-loaded embedding model)
+    graph_rag_entity_resolve: bool = False
+    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0–1)
+    graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
+
+    # P2: Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
+    # "rebel" skips the LLM for relation extraction; produces structured (subject, relation,
+    # object) triples directly from a fine-tuned seq2seq model.
+    # pip install axon[rebel]
+    graph_rag_relation_backend: Literal["llm", "rebel"] = "llm"
+    graph_rag_rebel_model: str = "Babelscape/rebel-large"
+
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
 
@@ -3003,6 +3018,9 @@ Your primary goal is to help the user by answering questions based on the provid
     def _rebuild_communities(self) -> None:
         """Run community detection and generate summaries."""
         with self._community_rebuild_lock:
+            # P1: Entity alias resolution — merge near-duplicates before community detection
+            if getattr(self.config, "graph_rag_entity_resolve", False):
+                self._resolve_entity_aliases()
             logger.info("GraphRAG: Running community detection...")
             result = self._run_hierarchical_community_detection()
             if isinstance(result, tuple) and len(result) == 3:
@@ -3924,6 +3942,92 @@ Your primary goal is to help the user by answering questions based on the provid
         "product": "PRODUCT",
     }
 
+    def _ensure_rebel(self):
+        """Lazy-initialise the REBEL relation extraction pipeline (P2)."""
+        if not hasattr(self, "_rebel_pipeline") or self._rebel_pipeline is None:
+            try:
+                from transformers import pipeline as _hf_pipeline
+            except ImportError:
+                raise ImportError("REBEL backend requires transformers. pip install axon[rebel]")
+            _model = getattr(self.config, "graph_rag_rebel_model", "Babelscape/rebel-large")
+            logger.info(
+                "GraphRAG REBEL: loading model '%s' (first-run download may take time)…", _model
+            )
+            self._rebel_pipeline = _hf_pipeline(
+                "text2text-generation",
+                model=_model,
+                tokenizer=_model,
+                device=-1,  # CPU — avoids CUDA dependency
+            )
+        return self._rebel_pipeline
+
+    @staticmethod
+    def _parse_rebel_output(text: str) -> list[dict]:
+        """Parse REBEL's ``<triplet> SUBJ <subj> OBJ <obj> REL`` output format.
+
+        REBEL encodes triplets as:
+            <triplet> head_entity <subj> tail_entity <obj> relation_type
+
+        Returns a list of relation dicts compatible with ``_extract_relations``.
+        """
+        triplets: list[dict] = []
+        subject = object_ = relation = ""
+        current = "x"
+        tokens = text.replace("<s>", "").replace("<pad>", "").replace("</s>", "").split()
+        for token in tokens:
+            if token == "<triplet>":
+                if subject and relation and object_:
+                    triplets.append(
+                        {
+                            "subject": subject.strip(),
+                            "relation": relation.strip(),
+                            "object": object_.strip(),
+                            "description": "",
+                            "strength": 5,
+                        }
+                    )
+                subject = object_ = relation = ""
+                current = "t"
+            elif token == "<subj>":
+                current = "s"
+            elif token == "<obj>":
+                current = "o"
+            elif current == "t":
+                subject += " " + token
+            elif current == "s":
+                object_ += " " + token
+            elif current == "o":
+                relation += " " + token
+        # Flush final triplet
+        if subject and relation and object_:
+            triplets.append(
+                {
+                    "subject": subject.strip(),
+                    "relation": relation.strip(),
+                    "object": object_.strip(),
+                    "description": "",
+                    "strength": 5,
+                }
+            )
+        return triplets
+
+    def _extract_relations_rebel(self, text: str) -> list[dict]:
+        """Extract relations using REBEL — no LLM call, structured triplet output (P2)."""
+        try:
+            pipe = self._ensure_rebel()
+            # REBEL's tokeniser caps at 512 tokens; truncate input to ~1 000 chars
+            outputs = pipe(text[:1000], max_length=512, return_tensors=False)
+            raw = outputs[0]["generated_text"] if outputs else ""
+            return AxonBrain._parse_rebel_output(raw)[:15]
+        except ImportError:
+            logger.warning(
+                "graph_rag_relation_backend='rebel' but transformers is not installed. "
+                "pip install axon[rebel]"
+            )
+            return []
+        except Exception:
+            return []
+
     def _extract_entities_gliner(self, text: str) -> list[dict]:
         """Extract entities using GLiNER (TASK 14 — NER-only; no LLM call)."""
         model = self._ensure_gliner()
@@ -4015,6 +4119,10 @@ Your primary goal is to help the user by answering questions based on the provid
         {"subject": str, "relation": str, "object": str, "description": str}.
         Returns an empty list on failure or when the LLM produces no output.
         """
+        # P2: REBEL fast-path — skip LLM when backend is "rebel"
+        if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
+            return self._extract_relations_rebel(text)
+
         prompt = (
             "Extract key relationships from the following text.\n"
             "For each relationship output one line:\n"
@@ -4178,6 +4286,131 @@ Your primary goal is to help the user by answering questions based on the provid
             return claims[:10]
         except Exception:
             return []
+
+    def _resolve_entity_aliases(self) -> int:
+        """Merge semantically equivalent entity nodes into a single canonical node (P1).
+
+        Uses cosine similarity on entity-name embeddings from the active embedding model.
+        Entities whose name-embeddings exceed ``graph_rag_entity_resolve_threshold`` are
+        grouped; within each group the node with the most chunk_ids becomes canonical and
+        all alias nodes are merged into it (chunk_ids, description, relations).
+
+        Returns the number of alias nodes merged (0 if nothing to merge).
+        """
+        import numpy as np
+
+        threshold = getattr(self.config, "graph_rag_entity_resolve_threshold", 0.92)
+        max_entities = getattr(self.config, "graph_rag_entity_resolve_max", 5000)
+
+        keys = [k for k, v in self._entity_graph.items() if isinstance(v, dict)]
+        n = len(keys)
+        if n < 2:
+            return 0
+        if n > max_entities:
+            logger.warning(
+                "GraphRAG entity resolution: entity graph has %d nodes (limit=%d). "
+                "Skipping alias resolution — increase graph_rag_entity_resolve_max to enable.",
+                n,
+                max_entities,
+            )
+            return 0
+
+        # Embed entity names (not descriptions) — aliases share similar surface forms
+        try:
+            raw_emb = self.embedding.embed(keys)
+        except Exception as exc:
+            logger.warning("GraphRAG entity resolution: embedding failed (%s). Skipping.", exc)
+            return 0
+
+        emb = np.array(raw_emb, dtype=np.float32)
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        emb = emb / norms  # unit-normalise for cosine via dot product
+
+        # Union-Find for grouping similar entities
+        parent = list(range(n))
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(a: int, b: int) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        # O(n²) pairwise similarity — acceptable for n ≤ max_entities (default 5 000)
+        sim = emb @ emb.T  # shape (n, n)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if sim[i, j] >= threshold:
+                    _union(i, j)
+
+        # Collect groups
+        groups: dict[int, list[int]] = {}
+        for i in range(n):
+            groups.setdefault(_find(i), []).append(i)
+
+        merged = 0
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            # Canonical = entity with most chunk_ids (highest coverage)
+            canon_idx = max(
+                members,
+                key=lambda i: len(self._entity_graph[keys[i]].get("chunk_ids", [])),
+            )
+            canon_key = keys[canon_idx]
+            canon_node = self._entity_graph[canon_key]
+
+            for idx in members:
+                if idx == canon_idx:
+                    continue
+                alias_key = keys[idx]
+                alias_node = self._entity_graph[alias_key]
+
+                # Merge chunk_ids
+                for cid in alias_node.get("chunk_ids", []):
+                    if cid not in canon_node["chunk_ids"]:
+                        canon_node["chunk_ids"].append(cid)
+
+                # Inherit description if canonical has none
+                if not canon_node.get("description") and alias_node.get("description"):
+                    canon_node["description"] = alias_node["description"]
+
+                # Migrate relation_graph entries keyed by the alias
+                if alias_key in self._relation_graph:
+                    canon_rels = self._relation_graph.setdefault(canon_key, [])
+                    canon_rels.extend(self._relation_graph.pop(alias_key))
+
+                # Rewrite subject/object references inside all relation lists
+                for rel_list in self._relation_graph.values():
+                    for rel in rel_list:
+                        if isinstance(rel, dict):
+                            if rel.get("subject", "").lower() == alias_key:
+                                rel["subject"] = canon_key
+                            if rel.get("object", "").lower() == alias_key:
+                                rel["object"] = canon_key
+
+                del self._entity_graph[alias_key]
+                merged += 1
+
+            # Refresh frequency for canonical
+            canon_node["frequency"] = len(canon_node["chunk_ids"])
+
+        if merged > 0:
+            logger.info(
+                "GraphRAG entity resolution: merged %d alias nodes into canonical entities "
+                "(threshold=%.2f, %d nodes remaining).",
+                merged,
+                threshold,
+                len(self._entity_graph),
+            )
+            self._community_graph_dirty = True
+
+        return merged
 
     def _canonicalize_entity_descriptions(self) -> None:
         """Synthesize canonical descriptions for entities with multiple descriptions (Item 10)."""

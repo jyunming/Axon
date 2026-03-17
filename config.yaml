@@ -154,6 +154,13 @@ rag:
   # graph_rag_report_compress: false # compress community reports with LLMLingua-2
   # graph_rag_report_compress_ratio: 0.5
   # graph_rag_auto_route: off        # "off" | "heuristic" | "llm"
+  # P1: Semantic entity alias resolution (merges "Apple" / "Apple Inc." before community detection)
+  # graph_rag_entity_resolve: false
+  # graph_rag_entity_resolve_threshold: 0.92   # cosine similarity threshold (0–1)
+  # graph_rag_entity_resolve_max: 5000          # skip if entity graph exceeds this size
+  # P2: REBEL relation extraction backend (replaces LLM for relation triples)
+  # graph_rag_relation_backend: llm  # "llm" | "rebel" (pip install axon[rebel])
+  # graph_rag_rebel_model: Babelscape/rebel-large
 
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.

@@ -7704,3 +7704,318 @@ class TestVectorStoreBatchWrite:
         store.collection.add.side_effect = ValueError("Invalid dimension mismatch")
         with pytest.raises(ValueError):
             store.add(["id0"], ["text"], [[0.0]])
+
+
+class TestREBELRelationExtraction:
+    """Tests for P2 — REBEL relation extraction backend."""
+
+    def _make_brain(self, tmp_path, **cfg_kwargs):
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain, AxonConfig
+
+        cfg = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+            **cfg_kwargs,
+        )
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = cfg
+        brain.llm = MagicMock()
+        brain.embedding = MagicMock()
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._rebel_pipeline = None
+        return brain
+
+    def test_rebel_backend_skips_llm(self, tmp_path):
+        """When graph_rag_relation_backend='rebel', LLM is not called."""
+        brain = self._make_brain(tmp_path, graph_rag_relation_backend="rebel")
+
+        fake_pipe = MagicMock(
+            return_value=[
+                {"generated_text": "<triplet> Apple <subj> Microsoft <obj> competes with"}
+            ]
+        )
+        brain._rebel_pipeline = fake_pipe
+
+        result = brain._extract_relations("Apple competes with Microsoft.")
+
+        brain.llm.complete.assert_not_called()
+        assert isinstance(result, list)
+
+    def test_llm_backend_still_works(self, tmp_path):
+        """When graph_rag_relation_backend='llm' (default), LLM is called as before."""
+        brain = self._make_brain(tmp_path, graph_rag_relation_backend="llm")
+        brain.llm.complete.return_value = ""  # no relations parsed — just checking the path
+
+        result = brain._extract_relations("Some text.")
+        brain.llm.complete.assert_called_once()
+        assert isinstance(result, list)
+
+    def test_parse_rebel_output_single_triplet(self):
+        """A single well-formed REBEL triplet is parsed correctly."""
+        from axon.main import AxonBrain
+
+        raw = "<triplet> Apple <subj> Steve Jobs <obj> founded"
+        triplets = AxonBrain._parse_rebel_output(raw)
+        assert len(triplets) == 1
+        assert triplets[0]["subject"] == "Apple"
+        assert triplets[0]["object"] == "Steve Jobs"
+        assert triplets[0]["relation"] == "founded"
+
+    def test_parse_rebel_output_multiple_triplets(self):
+        """Multiple consecutive REBEL triplets are all parsed."""
+        from axon.main import AxonBrain
+
+        raw = (
+            "<triplet> Apple <subj> Steve Jobs <obj> founded"
+            " <triplet> Microsoft <subj> Bill Gates <obj> co-founded"
+        )
+        triplets = AxonBrain._parse_rebel_output(raw)
+        assert len(triplets) == 2
+        assert triplets[0]["subject"] == "Apple"
+        assert triplets[1]["subject"] == "Microsoft"
+
+    def test_parse_rebel_output_empty_string(self):
+        """Empty or whitespace-only output returns an empty list."""
+        from axon.main import AxonBrain
+
+        assert AxonBrain._parse_rebel_output("") == []
+        assert AxonBrain._parse_rebel_output("   ") == []
+        assert AxonBrain._parse_rebel_output("<pad></s>") == []
+
+    def test_rebel_missing_import_returns_empty(self, tmp_path):
+        """ImportError inside _ensure_rebel logs a warning and returns []."""
+        brain = self._make_brain(tmp_path, graph_rag_relation_backend="rebel")
+
+        with patch("axon.main.AxonBrain._ensure_rebel", side_effect=ImportError("no transformers")):
+            result = brain._extract_relations_rebel("some text")
+
+        assert result == []
+
+    def test_config_defaults(self):
+        """Default config has relation_backend='llm' and rebel_model set."""
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig()
+        assert cfg.graph_rag_relation_backend == "llm"
+        assert cfg.graph_rag_rebel_model == "Babelscape/rebel-large"
+
+
+class TestEntityAliasResolution:
+    """Tests for P1 — semantic entity alias resolution."""
+
+    def _make_brain(self, tmp_path, **cfg_kwargs):
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain, AxonConfig
+
+        cfg = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+            **cfg_kwargs,
+        )
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = cfg
+        brain.llm = MagicMock()
+        brain.embedding = MagicMock()
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._community_graph_dirty = False
+        return brain
+
+    def test_aliases_merged_when_above_threshold(self, tmp_path):
+        """Two entities with near-identical embeddings are merged into the canonical node."""
+        import numpy as np
+
+        brain = self._make_brain(
+            tmp_path,
+            graph_rag_entity_resolve=True,
+            graph_rag_entity_resolve_threshold=0.90,
+        )
+        brain._entity_graph = {
+            "apple inc": {
+                "chunk_ids": ["c1", "c2"],
+                "description": "Tech company",
+                "type": "ORGANIZATION",
+            },
+            "apple": {"chunk_ids": ["c3"], "description": "", "type": "ORGANIZATION"},
+        }
+        brain._relation_graph = {}
+
+        # Return near-identical embeddings so cosine similarity ≈ 1.0
+        vec = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        brain.embedding.embed.return_value = [vec.tolist(), vec.tolist()]
+
+        merged = brain._resolve_entity_aliases()
+
+        assert merged == 1
+        # Canonical should be "apple inc" (more chunk_ids)
+        assert "apple inc" in brain._entity_graph
+        assert "apple" not in brain._entity_graph
+        # Chunk ids from alias are absorbed
+        assert "c3" in brain._entity_graph["apple inc"]["chunk_ids"]
+
+    def test_distinct_entities_not_merged(self, tmp_path):
+        """Two entities with orthogonal embeddings are not merged."""
+
+        brain = self._make_brain(
+            tmp_path,
+            graph_rag_entity_resolve=True,
+            graph_rag_entity_resolve_threshold=0.90,
+        )
+        brain._entity_graph = {
+            "apple": {"chunk_ids": ["c1"], "description": "Fruit", "type": "CONCEPT"},
+            "microsoft": {
+                "chunk_ids": ["c2"],
+                "description": "Tech company",
+                "type": "ORGANIZATION",
+            },
+        }
+        brain._relation_graph = {}
+
+        # Orthogonal embeddings → similarity = 0
+        brain.embedding.embed.return_value = [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+
+        merged = brain._resolve_entity_aliases()
+
+        assert merged == 0
+        assert "apple" in brain._entity_graph
+        assert "microsoft" in brain._entity_graph
+
+    def test_relations_remapped_to_canonical(self, tmp_path):
+        """Subject/object references pointing to an alias are rewritten to the canonical key."""
+        import numpy as np
+
+        brain = self._make_brain(
+            tmp_path,
+            graph_rag_entity_resolve=True,
+            graph_rag_entity_resolve_threshold=0.90,
+        )
+        brain._entity_graph = {
+            "apple inc": {"chunk_ids": ["c1", "c2"], "description": "Tech", "type": "ORGANIZATION"},
+            "apple": {"chunk_ids": ["c3"], "description": "", "type": "ORGANIZATION"},
+        }
+        # Relation where alias appears as subject
+        brain._relation_graph = {
+            "google": [
+                {
+                    "subject": "apple",
+                    "object": "google",
+                    "relation": "competes with",
+                    "strength": 5,
+                    "description": "",
+                }
+            ]
+        }
+
+        vec = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        brain.embedding.embed.return_value = [vec.tolist(), vec.tolist()]
+
+        brain._resolve_entity_aliases()
+
+        # The relation subject should be rewritten from "apple" to "apple inc"
+        for rel in brain._relation_graph.get("google", []):
+            assert rel["subject"] != "apple"
+            assert rel["subject"] == "apple inc"
+
+    def test_alias_relation_entries_moved_to_canonical(self, tmp_path):
+        """Relation-graph entries keyed under an alias are migrated to the canonical key."""
+        import numpy as np
+
+        brain = self._make_brain(
+            tmp_path,
+            graph_rag_entity_resolve=True,
+            graph_rag_entity_resolve_threshold=0.90,
+        )
+        brain._entity_graph = {
+            "apple inc": {"chunk_ids": ["c1", "c2"], "description": "Tech", "type": "ORGANIZATION"},
+            "apple": {"chunk_ids": ["c3"], "description": "", "type": "ORGANIZATION"},
+        }
+        brain._relation_graph = {
+            "apple": [
+                {
+                    "subject": "apple",
+                    "object": "iphone",
+                    "relation": "makes",
+                    "strength": 5,
+                    "description": "",
+                }
+            ]
+        }
+
+        vec = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        brain.embedding.embed.return_value = [vec.tolist(), vec.tolist()]
+
+        brain._resolve_entity_aliases()
+
+        # "apple" key should be gone; relations moved under "apple inc"
+        assert "apple" not in brain._relation_graph
+        assert "apple inc" in brain._relation_graph
+        assert len(brain._relation_graph["apple inc"]) == 1
+
+    def test_skips_when_entity_count_exceeds_max(self, tmp_path):
+        """Returns 0 and logs warning when entity count exceeds graph_rag_entity_resolve_max."""
+        brain = self._make_brain(
+            tmp_path,
+            graph_rag_entity_resolve=True,
+            graph_rag_entity_resolve_max=2,
+        )
+        # 3 entities > max of 2
+        brain._entity_graph = {
+            "a": {"chunk_ids": ["c1"], "description": "", "type": "CONCEPT"},
+            "b": {"chunk_ids": ["c2"], "description": "", "type": "CONCEPT"},
+            "c": {"chunk_ids": ["c3"], "description": "", "type": "CONCEPT"},
+        }
+        brain._relation_graph = {}
+
+        merged = brain._resolve_entity_aliases()
+
+        assert merged == 0
+        brain.embedding.embed.assert_not_called()
+
+    def test_single_entity_returns_zero(self, tmp_path):
+        """A graph with only one entity returns 0 immediately."""
+        brain = self._make_brain(tmp_path, graph_rag_entity_resolve=True)
+        brain._entity_graph = {
+            "apple": {"chunk_ids": ["c1"], "description": "Fruit", "type": "CONCEPT"}
+        }
+        brain._relation_graph = {}
+
+        merged = brain._resolve_entity_aliases()
+
+        assert merged == 0
+        brain.embedding.embed.assert_not_called()
+
+    def test_config_defaults(self):
+        """Default config has entity_resolve=False with sensible thresholds."""
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig()
+        assert cfg.graph_rag_entity_resolve is False
+        assert cfg.graph_rag_entity_resolve_threshold == 0.92
+        assert cfg.graph_rag_entity_resolve_max == 5000
+
+    def test_rebuild_communities_calls_resolve_when_enabled(self, tmp_path):
+        """_rebuild_communities() calls _resolve_entity_aliases() when entity_resolve=True."""
+        brain = self._make_brain(
+            tmp_path,
+            graph_rag_entity_resolve=True,
+            graph_rag_community=True,
+        )
+        brain._community_rebuild_lock = MagicMock()
+        brain._community_rebuild_lock.__enter__ = MagicMock(return_value=None)
+        brain._community_rebuild_lock.__exit__ = MagicMock(return_value=False)
+        brain._community_build_in_progress = False
+        brain._community_graph_dirty = False
+        brain._run_hierarchical_community_detection = MagicMock(return_value={})
+        brain._save_entity_graph = MagicMock()
+
+        with patch("axon.main.AxonBrain._resolve_entity_aliases", return_value=0) as mock_resolve:
+            brain._rebuild_communities()
+
+        mock_resolve.assert_called_once()
