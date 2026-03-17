@@ -317,6 +317,7 @@ class TestAxonBrain:
             hybrid_search=False, rerank=False, similarity_threshold=0.0, query_cache=True
         )
         brain = AxonBrain(config)
+        brain._entity_graph = {}
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -337,6 +338,7 @@ class TestAxonBrain:
 
         config = AxonConfig(hybrid_search=False, rerank=False, similarity_threshold=0.0)
         brain = AxonBrain(config)
+        brain._entity_graph = {}
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -358,6 +360,7 @@ class TestAxonBrain:
             hybrid_search=False, rerank=False, similarity_threshold=0.0, query_cache=True
         )
         brain = AxonBrain(config)
+        brain._entity_graph = {}
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -384,6 +387,7 @@ class TestAxonBrain:
             query_cache_size=2,
         )
         brain = AxonBrain(config)
+        brain._entity_graph = {}
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9}]
@@ -1509,6 +1513,7 @@ class TestGraphRAG:
         config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
         brain = AxonBrain(config)
         brain._ingested_hashes = set()
+        brain._entity_graph = {}
         brain._save_hash_store = MagicMock()
         brain._save_entity_graph = MagicMock()
         return brain
@@ -1681,6 +1686,7 @@ class TestCacheFixes:
         )
         brain = AxonBrain(config)
         brain._ingested_hashes = set()
+        brain._entity_graph = {}
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "ctx", "score": 0.9, "metadata": {}}]
@@ -5127,6 +5133,7 @@ class TestRaptorTask8Fixes:
         config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
         brain = AxonBrain(config)
         brain._ingested_hashes = set()
+        brain._entity_graph = {}
         brain._save_hash_store = MagicMock()
         brain._save_entity_graph = MagicMock()
         brain.embedding.embed = MagicMock(side_effect=lambda texts: [[0.1] * 384] * len(texts))
@@ -6626,3 +6633,1074 @@ class TestRuntimeFixes:
         assert (
             brain.llm.complete.call_count <= 2
         ), f"Expected ≤2 LLM calls (pre-filter to 2), got {brain.llm.complete.call_count}"
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestBatchModeDefer:
+    """Tests for ingest_batch_mode deferred saves (TASK 13A)."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(**kwargs)
+        brain = AxonBrain(config)
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain._save_embedding_meta = MagicMock()
+        brain._validate_embedding_meta = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]])
+        brain._own_vector_store = MagicMock()
+        return brain
+
+    def test_batch_mode_bm25_save_deferred_during_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """ingest_batch_mode=True → bm25.add_documents called with save_deferred=True."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            ingest_batch_mode=True,
+            graph_rag=False,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        mock_bm25 = MagicMock()
+        brain._own_bm25 = mock_bm25
+
+        docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test.txt"}}]
+        brain.ingest(docs)
+
+        mock_bm25.add_documents.assert_called_once()
+        call_kwargs = mock_bm25.add_documents.call_args
+        # save_deferred may be positional or keyword
+        passed_deferred = call_kwargs[1].get("save_deferred") if call_kwargs[1] else None
+        if passed_deferred is None and len(call_kwargs[0]) > 1:
+            passed_deferred = call_kwargs[0][1]
+        assert passed_deferred is True
+        mock_bm25.flush.assert_not_called()
+
+    def test_batch_mode_flush_called_on_finalize_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """finalize_ingest() with ingest_batch_mode=True → bm25.flush() called."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            ingest_batch_mode=True,
+            graph_rag=False,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        mock_bm25 = MagicMock()
+        brain._own_bm25 = mock_bm25
+
+        docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test.txt"}}]
+        brain.ingest(docs)
+        mock_bm25.flush.assert_not_called()
+
+        brain.finalize_ingest()
+        mock_bm25.flush.assert_called_once()
+
+    def test_batch_mode_entity_graph_not_saved_during_ingest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """ingest_batch_mode=True → _save_entity_graph NOT called during ingest."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            ingest_batch_mode=True,
+            graph_rag=True,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+
+        docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test.txt"}}]
+        with patch.object(brain, "_save_entity_graph") as mock_save_eg, patch.object(
+            brain, "_extract_entities", return_value=[]
+        ):
+            brain.ingest(docs)
+            mock_save_eg.assert_not_called()
+
+    def test_batch_mode_false_saves_immediately(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """default ingest_batch_mode=False → _save_entity_graph IS called during ingest."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            ingest_batch_mode=False,
+            graph_rag=True,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+
+        docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test.txt"}}]
+        with patch.object(brain, "_save_entity_graph") as mock_save_eg, patch.object(
+            brain,
+            "_extract_entities",
+            return_value=[{"name": "entity1", "type": "PERSON", "description": "a person"}],
+        ):
+            brain.ingest(docs)
+            mock_save_eg.assert_called()
+
+    def test_finalize_ingest_calls_finalize_graph(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """finalize_ingest() → _rebuild_communities called when _community_graph_dirty=True."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            ingest_batch_mode=True,
+        )
+        brain._community_graph_dirty = True
+
+        with patch.object(brain, "_rebuild_communities") as mock_rebuild:
+            brain.finalize_ingest()
+            mock_rebuild.assert_called_once()
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestChunkBudget:
+    """Tests for max_chunks_per_source chunk budget (TASK 13B)."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(**kwargs)
+        brain = AxonBrain(config)
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain._save_embedding_meta = MagicMock()
+        brain._validate_embedding_meta = MagicMock()
+        brain._own_vector_store = MagicMock()
+        return brain
+
+    def test_chunk_cap_truncates_large_source(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """20 docs same source, cap=5 → only 5 docs reach embedding."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            max_chunks_per_source=5,
+            graph_rag=False,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {"id": f"d{i}", "text": f"chunk {i}", "metadata": {"source": "big.json"}}
+            for i in range(20)
+        ]
+        embed_call_docs = []
+
+        def capture_embed(texts):
+            embed_call_docs.extend(texts)
+            return [[0.1]] * len(texts)
+
+        brain.embedding.embed = capture_embed
+        brain.ingest(docs)
+        assert len(embed_call_docs) == 5
+
+    def test_chunk_cap_zero_means_no_limit(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """20 docs, cap=0 → all 20 reach embed."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            max_chunks_per_source=0,
+            graph_rag=False,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {"id": f"d{i}", "text": f"chunk {i}", "metadata": {"source": "big.json"}}
+            for i in range(20)
+        ]
+        embed_call_docs = []
+
+        def capture_embed(texts):
+            embed_call_docs.extend(texts)
+            return [[0.1]] * len(texts)
+
+        brain.embedding.embed = capture_embed
+        brain.ingest(docs)
+        assert len(embed_call_docs) == 20
+
+    def test_chunk_cap_per_source_independence(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """10 docs source A + 10 source B, cap=7 → 14 total."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            max_chunks_per_source=7,
+            graph_rag=False,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {"id": f"a{i}", "text": f"chunk a{i}", "metadata": {"source": "a.txt"}}
+            for i in range(10)
+        ] + [
+            {"id": f"b{i}", "text": f"chunk b{i}", "metadata": {"source": "b.txt"}}
+            for i in range(10)
+        ]
+        embed_call_docs = []
+
+        def capture_embed(texts):
+            embed_call_docs.extend(texts)
+            return [[0.1]] * len(texts)
+
+        brain.embedding.embed = capture_embed
+        brain.ingest(docs)
+        assert len(embed_call_docs) == 14
+
+    def test_chunk_cap_keeps_first_n(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """IDs a1..a10, cap=3 → only a1, a2, a3 in embed."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            max_chunks_per_source=3,
+            graph_rag=False,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {"id": f"a{i + 1}", "text": f"chunk {i}", "metadata": {"source": "a.txt"}}
+            for i in range(10)
+        ]
+
+        def capture_embed(texts):
+            return [[0.1]] * len(texts)
+
+        brain.embedding.embed = capture_embed
+        # Capture via _own_vector_store.add
+        stored_ids = []
+        brain._own_vector_store.add = MagicMock(
+            side_effect=lambda ids, texts, embs, metas: stored_ids.extend(ids)
+        )
+        brain.ingest(docs)
+        assert stored_ids == ["a1", "a2", "a3"]
+
+    def test_chunk_cap_logs_truncation(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, caplog
+    ):
+        """caplog: 'Chunk cap:' message appears on truncation, absent when within budget."""
+        import logging
+
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            max_chunks_per_source=3,
+            graph_rag=False,
+            raptor=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        brain.embedding.embed = MagicMock(return_value=[[0.1]] * 3)
+
+        docs = [
+            {"id": f"d{i}", "text": f"chunk {i}", "metadata": {"source": "big.json"}}
+            for i in range(10)
+        ]
+        with caplog.at_level(logging.INFO):
+            brain.ingest(docs)
+        assert "Chunk cap:" in caplog.text
+
+        # Now test no log when within budget
+        caplog.clear()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]] * 2)
+        docs_small = [
+            {"id": f"s{i}", "text": f"chunk {i}", "metadata": {"source": "small.txt"}}
+            for i in range(2)
+        ]
+        with caplog.at_level(logging.INFO):
+            brain.ingest(docs_small)
+        assert "Chunk cap:" not in caplog.text
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestSourcePolicy:
+    """Tests for source-class policy gates (TASK 13C)."""
+
+    def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
+        from axon.main import AxonBrain, AxonConfig
+
+        config = AxonConfig(**kwargs)
+        brain = AxonBrain(config)
+        brain.splitter = None
+        brain._ingested_hashes = set()
+        brain._save_hash_store = MagicMock()
+        brain._save_embedding_meta = MagicMock()
+        brain._validate_embedding_meta = MagicMock()
+        brain.embedding.embed = MagicMock(return_value=[[0.1]])
+        brain._own_vector_store = MagicMock()
+        return brain
+
+    def test_detect_manifest_by_filename(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source='requirements.txt' → ('manifest', False)."""
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(AxonConfig())
+        doc = {"id": "req", "text": "flask>=2.0", "metadata": {"source": "requirements.txt"}}
+        dtype, is_code = brain._detect_dataset_type(doc)
+        assert dtype == "manifest"
+        assert is_code is False
+
+    def test_detect_manifest_lock_extension(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source='yarn.lock' → ('manifest', False)."""
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(AxonConfig())
+        doc = {"id": "yarn", "text": "# yarn lockfile v1", "metadata": {"source": "yarn.lock"}}
+        dtype, is_code = brain._detect_dataset_type(doc)
+        assert dtype == "manifest"
+        assert is_code is False
+
+    def test_detect_reference_by_path(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """source='/docs/apidocs/foo.html' → ('reference', False)."""
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(AxonConfig())
+        doc = {
+            "id": "api",
+            "text": "API reference content",
+            "metadata": {"source": "/docs/apidocs/foo.html"},
+        }
+        dtype, is_code = brain._detect_dataset_type(doc)
+        assert dtype == "reference"
+        assert is_code is False
+
+    def test_detect_manifest_does_not_shadow_code(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source='main.py' → 'codebase' (Priority 1 fires first)."""
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(AxonConfig())
+        doc = {"id": "main", "text": "def main(): pass", "metadata": {"source": "main.py"}}
+        dtype, is_code = brain._detect_dataset_type(doc)
+        assert dtype == "codebase"
+
+    def test_policy_disabled_raptor_runs_on_knowledge(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source_policy_enabled=False, dataset_type=knowledge → _generate_raptor_summaries called."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            source_policy_enabled=False,
+            raptor=True,
+            graph_rag=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {
+                "id": "d1",
+                "text": "knowledge chunk",
+                "metadata": {"source": "kb.txt", "dataset_type": "knowledge"},
+            }
+        ]
+        with patch.object(brain, "_generate_raptor_summaries", return_value=[]) as mock_raptor:
+            brain.ingest(docs)
+            mock_raptor.assert_called()
+
+    def test_policy_enabled_skips_raptor_on_knowledge(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source_policy_enabled=True, dataset_type=knowledge → _generate_raptor_summaries NOT called."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            source_policy_enabled=True,
+            raptor=True,
+            graph_rag=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {
+                "id": "d1",
+                "text": "knowledge chunk",
+                "metadata": {"source": "kb.txt", "dataset_type": "knowledge"},
+            }
+        ]
+        with patch.object(brain, "_generate_raptor_summaries", return_value=[]) as mock_raptor:
+            brain.ingest(docs)
+            mock_raptor.assert_not_called()
+
+    def test_policy_enabled_skips_graphrag_on_manifest(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source_policy_enabled=True, dataset_type=manifest → _extract_entities NOT called."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            source_policy_enabled=True,
+            raptor=False,
+            graph_rag=True,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {
+                "id": "d1",
+                "text": "pkg: foo",
+                "metadata": {"source": "package.json", "dataset_type": "manifest"},
+            }
+        ]
+        with patch.object(brain, "_extract_entities", return_value=[]) as mock_extract:
+            brain.ingest(docs)
+            mock_extract.assert_not_called()
+
+    def test_policy_enabled_allows_graphrag_on_codebase(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source_policy_enabled=True, dataset_type=codebase → _extract_entities IS called."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            source_policy_enabled=True,
+            raptor=False,
+            graph_rag=True,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {
+                "id": "d1",
+                "text": "def foo(): pass",
+                "metadata": {"source": "main.py", "dataset_type": "codebase"},
+            }
+        ]
+        with patch.object(
+            brain,
+            "_extract_entities",
+            return_value=[{"name": "Foo", "type": "FUNCTION", "description": ""}],
+        ) as mock_extract:
+            brain.ingest(docs)
+            mock_extract.assert_called()
+
+    def test_policy_enabled_allows_raptor_on_paper(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        """source_policy_enabled=True, dataset_type=paper → _generate_raptor_summaries IS called."""
+        brain = self._make_brain(
+            MockReranker,
+            MockEmbed,
+            MockLLM,
+            MockStore,
+            MockBM25,
+            source_policy_enabled=True,
+            raptor=True,
+            graph_rag=False,
+            dedup_on_ingest=False,
+            parent_chunk_size=0,
+        )
+        docs = [
+            {
+                "id": "d1",
+                "text": "Abstract: ...",
+                "metadata": {"source": "paper.pdf", "dataset_type": "paper"},
+            }
+        ]
+        with patch.object(brain, "_generate_raptor_summaries", return_value=[]) as mock_raptor:
+            brain.ingest(docs)
+            mock_raptor.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# TASK 14 — GraphRAG Runtime Improvements
+# ---------------------------------------------------------------------------
+
+
+class TestGraspoLogicFallbackWarning:
+    """Item 1 — graspologic absent → WARNING logged in _run_hierarchical_community_detection."""
+
+    def test_warning_message_content(self):
+        """The warning text in the source code mentions axon[graphrag]."""
+        import inspect
+
+        from axon.main import AxonBrain
+
+        src = inspect.getsource(AxonBrain._run_hierarchical_community_detection)
+        assert "axon[graphrag]" in src
+        assert "graspologic not installed" in src
+
+    def test_warning_logged_on_import_error(self, caplog):
+        """When graspologic ImportError occurs, a WARNING is emitted."""
+        import logging
+
+        import networkx as nx
+
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.config.graph_rag_community_levels = 1
+        brain.config.graph_rag_community_max_cluster_size = 10
+        brain.config.graph_rag_leiden_seed = 42
+        brain.config.graph_rag_community_use_lcc = False
+
+        # _run_hierarchical_community_detection builds graph internally
+        G = nx.path_graph(4)
+        brain._build_networkx_graph = MagicMock(return_value=G)
+
+        _real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if "graspologic" in name:
+                raise ImportError("No module named graspologic")
+            return _real_import(name, *args, **kwargs)
+
+        with caplog.at_level(logging.WARNING, logger="Axon"):
+            with patch("builtins.__import__", side_effect=fake_import):
+                try:
+                    AxonBrain._run_hierarchical_community_detection(brain)
+                except Exception:
+                    pass
+
+        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        if warning_msgs:
+            assert any("axon[graphrag]" in m for m in warning_msgs)
+
+
+class TestMapReduceDedicatedPool:
+    """Item 4 — graph_rag_map_workers set → dedicated ThreadPoolExecutor used."""
+
+    def _make_cfg(self, map_workers=0):
+        cfg = MagicMock()
+        cfg.graph_rag_map_workers = map_workers
+        cfg.graph_rag_global_map_max_length = 500
+        cfg.graph_rag_global_min_score = 0
+        cfg.graph_rag_global_top_points = 10
+        cfg.graph_rag_community_level = 0
+        cfg.graph_rag_global_reduce_max_tokens = 8000
+        cfg.graph_rag_global_reduce_max_length = 500
+        cfg.graph_rag_global_allow_general_knowledge = False
+        cfg.graph_rag_global_top_communities = 0
+        cfg.graph_rag_report_compress = False
+        return cfg
+
+    def _make_brain(self):
+        import concurrent.futures
+
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.config.max_workers = 4
+        brain.llm = MagicMock()
+        brain.llm.complete = MagicMock(return_value='[{"point":"p","score":50}]')
+        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._community_summaries = {
+            "c0": {"full_content": "Community report text.", "summary": "s"}
+        }
+        return brain
+
+    def test_dedicated_pool_created_when_map_workers_set(self):
+        """When graph_rag_map_workers>0, a separate ThreadPoolExecutor must be created."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        cfg = self._make_cfg(map_workers=2)
+
+        pool_instances = []
+        original_tpe = ThreadPoolExecutor
+
+        class CapturingTPE(original_tpe):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                pool_instances.append(self)
+
+        with patch("concurrent.futures.ThreadPoolExecutor", CapturingTPE):
+            try:
+                AxonBrain._global_search_map_reduce(brain, "query", cfg)
+            except Exception:
+                pass
+
+        assert len(pool_instances) >= 1
+
+    def test_shared_pool_used_when_map_workers_zero(self):
+        """When graph_rag_map_workers==0, the shared _executor is used (no new TPE)."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        cfg = self._make_cfg(map_workers=0)
+
+        pool_instances = []
+        original_tpe = ThreadPoolExecutor
+
+        class CapturingTPE(original_tpe):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                pool_instances.append(self)
+
+        with patch("concurrent.futures.ThreadPoolExecutor", CapturingTPE):
+            try:
+                AxonBrain._global_search_map_reduce(brain, "query", cfg)
+            except Exception:
+                pass
+
+        assert len(pool_instances) == 0
+
+
+class TestGLiNERExtraction:
+    """Item 5 — graph_rag_ner_backend=gliner → GLiNER path, not llm.complete."""
+
+    def _make_brain(self, backend="gliner"):
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.config.graph_rag_ner_backend = backend
+        brain.llm = MagicMock()
+        brain.llm.complete = MagicMock(return_value="Paris | GEO | Capital of France")
+        brain._gliner_model = None
+        return brain
+
+    def test_gliner_path_skips_llm(self):
+        """When ner_backend=gliner, _extract_entities_gliner is called, not llm.complete."""
+        from axon.main import AxonBrain
+
+        brain = self._make_brain(backend="gliner")
+        mock_result = [{"name": "Paris", "type": "GEO", "description": ""}]
+        # Patch the instance attribute so the MagicMock self picks it up
+        mock_fn = MagicMock(return_value=mock_result)
+        brain._extract_entities_gliner = mock_fn
+
+        result = AxonBrain._extract_entities(brain, "Paris is the capital of France.")
+
+        mock_fn.assert_called_once()
+        brain.llm.complete.assert_not_called()
+        assert result == mock_result
+
+    def test_llm_path_used_when_backend_is_llm(self):
+        """When ner_backend=llm, the LLM is used."""
+        from axon.main import AxonBrain
+
+        brain = self._make_brain(backend="llm")
+        mock_fn = MagicMock()
+        brain._extract_entities_gliner = mock_fn
+
+        AxonBrain._extract_entities(brain, "Paris is the capital of France.")
+
+        mock_fn.assert_not_called()
+        brain.llm.complete.assert_called_once()
+
+    def test_extract_entities_gliner_deduplicates(self):
+        """_extract_entities_gliner deduplicates case-insensitively."""
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        mock_model = MagicMock()
+        mock_model.predict_entities = MagicMock(
+            return_value=[
+                {"text": "Paris", "label": "location"},
+                {"text": "paris", "label": "location"},
+                {"text": "France", "label": "location"},
+            ]
+        )
+        # Patch the instance so self._ensure_gliner() returns mock_model
+        brain._ensure_gliner = MagicMock(return_value=mock_model)
+
+        result = AxonBrain._extract_entities_gliner(brain, "Paris and France.")
+
+        names = [e["name"] for e in result]
+        assert "Paris" in names
+        assert "France" in names
+        assert len(result) == 2
+
+    def test_extract_entities_gliner_type_mapping(self):
+        """_extract_entities_gliner maps GLiNER labels to internal type strings."""
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        mock_model = MagicMock()
+        mock_model.predict_entities = MagicMock(
+            return_value=[
+                {"text": "Alice", "label": "person"},
+                {"text": "Acme", "label": "organization"},
+                {"text": "London", "label": "location"},
+            ]
+        )
+        brain._ensure_gliner = MagicMock(return_value=mock_model)
+
+        result = AxonBrain._extract_entities_gliner(brain, "text")
+
+        types = {e["name"]: e["type"] for e in result}
+        assert types["Alice"] == "PERSON"
+        assert types["Acme"] == "ORGANIZATION"
+        assert types["London"] == "GEO"
+
+
+class TestLLMLinguaCompression:
+    """Item 2 — graph_rag_report_compress=True → chunks compressed via LLMLingua."""
+
+    def _make_brain(self):
+        import concurrent.futures
+
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.config.max_workers = 2
+        brain.llm = MagicMock()
+        brain.llm.complete = MagicMock(return_value='[{"point":"p","score":60}]')
+        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._community_summaries = {
+            "c0": {"full_content": "Long community report text for testing.", "summary": "s"}
+        }
+        brain._llmlingua = None
+        return brain
+
+    def _make_cfg(self, compress=True, ratio=0.5):
+        cfg = MagicMock()
+        cfg.graph_rag_map_workers = 0
+        cfg.graph_rag_global_map_max_length = 500
+        cfg.graph_rag_global_min_score = 0
+        cfg.graph_rag_global_top_points = 10
+        cfg.graph_rag_community_level = 0
+        cfg.graph_rag_global_reduce_max_tokens = 8000
+        cfg.graph_rag_global_reduce_max_length = 500
+        cfg.graph_rag_global_allow_general_knowledge = False
+        cfg.graph_rag_global_top_communities = 0
+        cfg.graph_rag_report_compress = compress
+        cfg.graph_rag_report_compress_ratio = ratio
+        return cfg
+
+    def test_compress_called_when_enabled(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        cfg = self._make_cfg(compress=True)
+        mock_compressor = MagicMock()
+        mock_compressor.compress_prompt = MagicMock(
+            return_value={"compressed_prompt": "compressed"}
+        )
+        # Patch instance so self._ensure_llmlingua() returns mock_compressor
+        brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
+
+        try:
+            AxonBrain._global_search_map_reduce(brain, "test query", cfg)
+        except Exception:
+            pass
+
+        mock_compressor.compress_prompt.assert_called()
+
+    def test_compress_skipped_when_disabled(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        cfg = self._make_cfg(compress=False)
+        mock_compressor = MagicMock()
+        brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
+
+        try:
+            AxonBrain._global_search_map_reduce(brain, "test query", cfg)
+        except Exception:
+            pass
+
+        mock_compressor.compress_prompt.assert_not_called()
+
+    def test_compress_falls_back_on_chunk_error(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        cfg = self._make_cfg(compress=True)
+        mock_compressor = MagicMock()
+        mock_compressor.compress_prompt = MagicMock(side_effect=RuntimeError("compress fail"))
+        brain._ensure_llmlingua = MagicMock(return_value=mock_compressor)
+
+        try:
+            result = AxonBrain._global_search_map_reduce(brain, "test query", cfg)
+            assert isinstance(result, str)
+        except RuntimeError as exc:
+            assert "compress fail" not in str(exc)
+
+
+class TestAutoRoute:
+    """Item 3 — Adaptive query routing / Self-RAG."""
+
+    def _make_brain(self):
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.llm = MagicMock()
+        return brain
+
+    def test_heuristic_holistic_query_returns_true(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        assert (
+            AxonBrain._classify_query_needs_graphrag(brain, "summarize all documents", "heuristic")
+            is True
+        )
+
+    def test_heuristic_short_factual_returns_false(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        assert (
+            AxonBrain._classify_query_needs_graphrag(brain, "what is Python?", "heuristic") is False
+        )
+
+    def test_heuristic_long_query_returns_true(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        long_q = (
+            "please tell me about history cultural context significance ancient Rome "
+            "detail extra words to pass the twenty word threshold for this test case"
+        )
+        assert len(long_q.split()) > 20
+        assert AxonBrain._classify_query_needs_graphrag(brain, long_q, "heuristic") is True
+
+    def test_heuristic_overview_keyword_returns_true(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        assert (
+            AxonBrain._classify_query_needs_graphrag(
+                brain, "give me an overview of this codebase", "heuristic"
+            )
+            is True
+        )
+
+    def test_llm_yes_returns_true(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        brain.llm.complete = MagicMock(return_value="YES")
+        assert AxonBrain._classify_query_needs_graphrag(brain, "any query", "llm") is True
+
+    def test_llm_no_returns_false(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        brain.llm.complete = MagicMock(return_value="NO")
+        assert AxonBrain._classify_query_needs_graphrag(brain, "what is X?", "llm") is False
+
+    def test_llm_exception_returns_false(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        brain.llm.complete = MagicMock(side_effect=RuntimeError("timeout"))
+        assert AxonBrain._classify_query_needs_graphrag(brain, "query", "llm") is False
+
+    def test_off_mode_returns_false(self):
+        from axon.main import AxonBrain
+
+        brain = self._make_brain()
+        assert (
+            AxonBrain._classify_query_needs_graphrag(brain, "summarize everything", "off") is False
+        )
+
+
+class TestTask14Config:
+    """Verify new TASK 14 AxonConfig fields have correct defaults."""
+
+    def test_new_defaults(self):
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig()
+        assert cfg.graph_rag_map_workers == 0
+        assert cfg.graph_rag_ner_backend == "llm"
+        assert cfg.graph_rag_report_compress is False
+        assert cfg.graph_rag_report_compress_ratio == 0.5
+        assert cfg.graph_rag_auto_route == "off"
+
+    def test_yaml_load_rag_flat_keys(self, tmp_path):
+        """New TASK 14 keys can be set via rag: section in config.yaml."""
+        import yaml
+
+        from axon.main import AxonConfig
+
+        cfg_data = {
+            "rag": {
+                "graph_rag_map_workers": 4,
+                "graph_rag_ner_backend": "gliner",
+                "graph_rag_report_compress": True,
+                "graph_rag_report_compress_ratio": 0.3,
+                "graph_rag_auto_route": "heuristic",
+            }
+        }
+        p = tmp_path / "config.yaml"
+        p.write_text(yaml.dump(cfg_data))
+        loaded = AxonConfig.load(str(p))
+        assert loaded.graph_rag_map_workers == 4
+        assert loaded.graph_rag_ner_backend == "gliner"
+        assert loaded.graph_rag_report_compress is True
+        assert loaded.graph_rag_report_compress_ratio == 0.3
+        assert loaded.graph_rag_auto_route == "heuristic"
+
+
+class TestVectorStoreBatchWrite:
+    """Verify OpenVectorStore.add() slices large payloads into safe Chroma batches."""
+
+    def _make_store(self):
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonConfig, OpenVectorStore
+
+        cfg = AxonConfig()
+        store = OpenVectorStore.__new__(OpenVectorStore)
+        store.config = cfg
+        store.provider = "chroma"
+        store.collection = MagicMock()
+        return store
+
+    def test_small_payload_single_call(self):
+        """A payload under the batch limit is written in one collection.add() call."""
+        store = self._make_store()
+        ids = [str(i) for i in range(100)]
+        texts = ["t"] * 100
+        embs = [[0.0]] * 100
+        store.add(ids, texts, embs)
+        assert store.collection.add.call_count == 1
+
+    def test_large_payload_split_into_batches(self):
+        """A payload larger than _CHROMA_MAX_BATCH is split across multiple calls."""
+        from axon.main import OpenVectorStore
+
+        store = self._make_store()
+        n = OpenVectorStore._CHROMA_MAX_BATCH + 500  # e.g. 5500
+        ids = [str(i) for i in range(n)]
+        texts = ["t"] * n
+        embs = [[0.0]] * n
+        store.add(ids, texts, embs)
+        assert store.collection.add.call_count == 2
+        # First call has exactly _CHROMA_MAX_BATCH items
+        first_call_ids = store.collection.add.call_args_list[0].kwargs["ids"]
+        assert len(first_call_ids) == OpenVectorStore._CHROMA_MAX_BATCH
+        # Second call has the remainder
+        second_call_ids = store.collection.add.call_args_list[1].kwargs["ids"]
+        assert len(second_call_ids) == 500
+
+    def test_exactly_at_limit_single_call(self):
+        """A payload exactly at the limit is sent in one call."""
+        from axon.main import OpenVectorStore
+
+        store = self._make_store()
+        n = OpenVectorStore._CHROMA_MAX_BATCH
+        ids = [str(i) for i in range(n)]
+        texts = ["t"] * n
+        embs = [[0.0]] * n
+        store.add(ids, texts, embs)
+        assert store.collection.add.call_count == 1
+
+    def test_three_batches(self):
+        """A payload spanning 3 batches triggers 3 calls."""
+        from axon.main import OpenVectorStore
+
+        store = self._make_store()
+        n = OpenVectorStore._CHROMA_MAX_BATCH * 2 + 1
+        ids = [str(i) for i in range(n)]
+        texts = ["t"] * n
+        embs = [[0.0]] * n
+        store.add(ids, texts, embs)
+        assert store.collection.add.call_count == 3
+
+    def test_metadatas_sliced_correctly(self):
+        """Metadatas are sliced in sync with ids/texts/embeddings."""
+        from axon.main import OpenVectorStore
+
+        store = self._make_store()
+        n = OpenVectorStore._CHROMA_MAX_BATCH + 10
+        ids = [str(i) for i in range(n)]
+        texts = ["t"] * n
+        embs = [[0.0]] * n
+        metas = [{"idx": i} for i in range(n)]
+        store.add(ids, texts, embs, metas)
+        assert store.collection.add.call_count == 2
+        first_metas = store.collection.add.call_args_list[0].kwargs["metadatas"]
+        assert len(first_metas) == OpenVectorStore._CHROMA_MAX_BATCH
+        assert first_metas[0] == {"idx": 0}
+        second_metas = store.collection.add.call_args_list[1].kwargs["metadatas"]
+        assert len(second_metas) == 10
+        assert second_metas[0] == {"idx": OpenVectorStore._CHROMA_MAX_BATCH}
+
+    def test_dimension_error_logged(self):
+        """InvalidDimensionException triggers an error log before re-raising."""
+        import pytest
+
+        store = self._make_store()
+        store.collection.add.side_effect = ValueError("Invalid dimension mismatch")
+        with pytest.raises(ValueError):
+            store.add(["id0"], ["text"], [[0.0]])

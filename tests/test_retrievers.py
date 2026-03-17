@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from unittest.mock import patch
 
 from axon.retrievers import BM25Retriever, weighted_score_fusion
 
@@ -407,3 +408,31 @@ class TestBM25SaveOsError:
                 r.save()
 
         assert len(copy2_called) == 1
+
+
+class TestBM25BatchAdd:
+    """Tests for BM25Retriever deferred-save batch mode (TASK 13A)."""
+
+    def test_add_documents_save_deferred_true(self, tmp_path):
+        """save_deferred=True → save() NOT called; corpus extended."""
+        retriever = BM25Retriever(str(tmp_path / "bm25"))
+        docs = [{"id": "d1", "text": "hello world", "metadata": {}}]
+        with patch.object(retriever, "save") as mock_save:
+            retriever.add_documents(docs, save_deferred=True)
+            mock_save.assert_not_called()
+        assert len(retriever.corpus) == 1
+
+    def test_add_documents_save_deferred_false(self, tmp_path):
+        """save_deferred=False (default) → save() IS called."""
+        retriever = BM25Retriever(str(tmp_path / "bm25"))
+        docs = [{"id": "d1", "text": "hello world", "metadata": {}}]
+        with patch.object(retriever, "save") as mock_save:
+            retriever.add_documents(docs, save_deferred=False)
+            mock_save.assert_called_once()
+
+    def test_flush_calls_save(self, tmp_path):
+        """flush() → save() called."""
+        retriever = BM25Retriever(str(tmp_path / "bm25"))
+        with patch.object(retriever, "save") as mock_save:
+            retriever.flush()
+            mock_save.assert_called_once()

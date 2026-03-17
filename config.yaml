@@ -148,6 +148,12 @@ rag:
   # graph_rag_canonicalize: false
   # graph_rag_canonicalize_min_occurrences: 3
   # graph_rag_claims: false
+  # TASK 14: GraphRAG runtime improvements
+  # graph_rag_map_workers: 0         # dedicated pool for map-reduce (0 = use max_workers)
+  # graph_rag_ner_backend: llm       # "llm" or "gliner" (pip install axon[gliner])
+  # graph_rag_report_compress: false # compress community reports with LLMLingua-2
+  # graph_rag_report_compress_ratio: 0.5
+  # graph_rag_auto_route: off        # "off" | "heuristic" | "llm"
 
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.

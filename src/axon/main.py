@@ -386,6 +386,22 @@ class AxonConfig:
     # TASK 12: RAPTOR source-size guard — skip RAPTOR for sources larger than this MB (0=no limit)
     raptor_max_source_size_mb: float = 0.0
 
+    # TASK 13A: Deferred batch saves — suppress per-call disk writes during batch ingest.
+    # When True: BM25, entity graph, and relation graph saves deferred to finalize_ingest().
+    # Reduces O(N²) disk writes to O(1) per session.
+    # Crash recovery: in-memory state only; re-ingest affected sources on restart.
+    ingest_batch_mode: bool = False
+
+    # TASK 13B: Per-source chunk count cap after splitting.
+    # Prevents chunk explosion from large structured files (JSON, TSV, CSV).
+    # Keeps first N chunks (document order). 0 = unlimited (current behavior).
+    max_chunks_per_source: int = 0
+
+    # TASK 13C: When True, detected dataset_type gates RAPTOR and GraphRAG.
+    # Tabular, manifest, and reference sources skip both enrichments.
+    # False (default) = current behavior.
+    source_policy_enabled: bool = False
+
     # GAP 6: Async rebuild debounce
     graph_rag_community_rebuild_debounce_s: float = 2.0
 
@@ -398,6 +414,25 @@ class AxonConfig:
     # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction
     graph_rag_include_raptor_summaries: bool = False
 
+    # TASK 14: Dedicated thread pool size for map-reduce phase (0 = use max_workers).
+    # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
+    # from starving the shared executor during concurrent ingest.
+    graph_rag_map_workers: int = 0
+
+    # TASK 14: Alternative NER backend. "gliner" skips LLM for entity extraction.
+    # Relations and claims still use LLM. pip install axon[gliner]
+    graph_rag_ner_backend: Literal["llm", "gliner"] = "llm"
+
+    # TASK 14: Token-level compression of community reports before map-reduce LLM calls.
+    # Uses LLMLingua-2. pip install axon[llmlingua]
+    graph_rag_report_compress: bool = False
+    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0–1.0)
+
+    # TASK 14: Auto-route queries based on complexity.
+    # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
+    # "off" (default): use graph_rag_mode as configured.
+    graph_rag_auto_route: Literal["off", "heuristic", "llm"] = "off"
+
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
 
@@ -405,7 +440,9 @@ class AxonConfig:
     max_workers: int = 8
 
     # Dataset type for type-specific chunking. "auto" uses content-based heuristics.
-    dataset_type: Literal["auto", "codebase", "paper", "doc", "discussion", "knowledge"] = "auto"
+    dataset_type: Literal[
+        "auto", "codebase", "paper", "doc", "discussion", "knowledge", "manifest", "reference"
+    ] = "auto"
 
     # Smart re-ingest: track doc versions and re-ingest only changed documents
     smart_ingest: bool = False
@@ -567,6 +604,15 @@ offline:
 
         if "max_workers" in data:
             config_dict["max_workers"] = data["max_workers"]
+
+        if "ingest_batch_mode" in data:
+            config_dict["ingest_batch_mode"] = data["ingest_batch_mode"]
+
+        if "max_chunks_per_source" in data:
+            config_dict["max_chunks_per_source"] = data["max_chunks_per_source"]
+
+        if "source_policy_enabled" in data:
+            config_dict["source_policy_enabled"] = data["source_policy_enabled"]
 
         if "projects_base" in data:
             config_dict["projects_root"] = data["projects_base"]
@@ -1316,6 +1362,9 @@ class OpenVectorStore:
         elif self.provider == "qdrant" and self.client:
             self.client = None
 
+    # Chroma hard limit per collection.add() call.
+    _CHROMA_MAX_BATCH = 5000
+
     def add(
         self,
         ids: list[str],
@@ -1324,17 +1373,31 @@ class OpenVectorStore:
         metadatas: list[dict] = None,
     ):
         if self.provider == "chroma":
-            try:
-                self.collection.add(
-                    ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas
-                )
-            except Exception as e:
-                if "dimension" in str(e).lower():
-                    logger.error(
-                        f"Embedding dimension mismatch in ChromaDB! Expected: {self.config.embedding_model}. "
-                        "Try clearing the project data or switch to a different project."
+            # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
+            # so that large post-split payloads (e.g. long-contract corpora) do not crash.
+            _bs = OpenVectorStore._CHROMA_MAX_BATCH
+            for _start in range(0, max(len(ids), 1), _bs):
+                _end = _start + _bs
+                _ids_b = ids[_start:_end]
+                _texts_b = texts[_start:_end]
+                _emb_b = embeddings[_start:_end]
+                _meta_b = metadatas[_start:_end] if metadatas is not None else None
+                if not _ids_b:
+                    break
+                try:
+                    self.collection.add(
+                        ids=_ids_b,
+                        documents=_texts_b,
+                        embeddings=_emb_b,
+                        metadatas=_meta_b,
                     )
-                raise
+                except Exception as e:
+                    if "dimension" in str(e).lower():
+                        logger.error(
+                            f"Embedding dimension mismatch in ChromaDB! Expected: {self.config.embedding_model}. "
+                            "Try clearing the project data or switch to a different project."
+                        )
+                    raise
         elif self.provider == "qdrant":
             from qdrant_client.models import PointStruct
 
@@ -1344,7 +1407,14 @@ class OpenVectorStore:
                 if metadatas:
                     payload.update(metadatas[i])
                 points.append(PointStruct(id=id, vector=embedding, payload=payload))
-            self.client.upsert(collection_name="axon", points=points)
+            # Qdrant has no strict per-call limit but large upserts consume excess memory;
+            # batch at the same ceiling for consistency.
+            _bs = OpenVectorStore._CHROMA_MAX_BATCH
+            for _start in range(0, max(len(points), 1), _bs):
+                _batch = points[_start : _start + _bs]
+                if not _batch:
+                    break
+                self.client.upsert(collection_name="axon", points=_batch)
         elif self.provider == "lancedb":
             import json
 
@@ -2776,7 +2846,86 @@ Your primary goal is to help the user by answering questions based on the provid
             return community_levels, normalized_hierarchy, normalized_children
 
         except ImportError:
-            pass  # Fall through to synthetic mapping
+            logger.warning(
+                "GraphRAG: graspologic not installed — falling back to leidenalg/Louvain. "
+                "pip install axon[graphrag]"
+            )
+
+        # Tier-2 fallback: multi-resolution Leiden via leidenalg (better than Louvain)
+        try:
+            import igraph as _ig
+            import leidenalg as _la
+
+            try:
+                import numpy as np
+
+                resolutions = list(np.linspace(0.5, 1.5, n_levels)) if n_levels > 1 else [1.0]
+            except ImportError:
+                step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
+                resolutions = [0.5 + i * step for i in range(n_levels)]
+
+            _G_ig = _ig.Graph.from_networkx(G)
+            community_levels: dict = {}
+            for level_idx, resolution in enumerate(resolutions):
+                try:
+                    partition = _la.find_partition(
+                        _G_ig,
+                        _la.ModularityVertexPartition,
+                        seed=seed,
+                    )
+                    node_names = (
+                        _G_ig.vs["_nx_name"]
+                        if "_nx_name" in _G_ig.vs.attributes()
+                        else list(G.nodes())
+                    )
+                    cmap = {}
+                    for cid, members in enumerate(partition):
+                        for idx in members:
+                            cmap[node_names[idx]] = cid
+                    community_levels[level_idx] = cmap
+                except Exception as _e:
+                    logger.debug("leidenalg at resolution %s failed: %s", resolution, _e)
+
+            if community_levels:
+                # Build synthetic hierarchy (same approach as Louvain fallback below)
+                community_hierarchy: dict = {}
+                community_children: dict = {}
+                if len(community_levels) > 1:
+                    _levels_sorted = sorted(community_levels.keys())
+                    for _i in range(1, len(_levels_sorted)):
+                        _fine = _levels_sorted[_i]
+                        _coarse = _levels_sorted[_i - 1]
+                        for _fine_cid in set(community_levels[_fine].values()):
+                            _fine_key = f"{_fine}_{_fine_cid}"
+                            _members = [
+                                n for n, c in community_levels[_fine].items() if c == _fine_cid
+                            ]
+                            _votes: dict = {}
+                            for _m in _members:
+                                _p = community_levels[_coarse].get(_m)
+                                if _p is not None:
+                                    _votes[_p] = _votes.get(_p, 0) + 1
+                            _parent_cid = max(_votes, key=_votes.get) if _votes else None
+                            _parent_key = (
+                                f"{_coarse}_{_parent_cid}" if _parent_cid is not None else None
+                            )
+                            community_hierarchy[_fine_key] = _parent_key
+                            if _parent_key:
+                                community_children.setdefault(_parent_key, [])
+                                if _fine_key not in community_children[_parent_key]:
+                                    community_children[_parent_key].append(_fine_key)
+                    for _cid in set(community_levels[_levels_sorted[0]].values()):
+                        _root_key = f"{_levels_sorted[0]}_{_cid}"
+                        community_hierarchy.setdefault(_root_key, None)
+                else:
+                    for _cid in set(community_levels[0].values()):
+                        community_hierarchy[f"0_{_cid}"] = None
+                logger.debug(
+                    "GraphRAG: leidenalg produced %d community levels.", len(community_levels)
+                )
+                return community_levels, community_hierarchy, community_children
+        except ImportError:
+            pass  # fall through to networkx Louvain
 
         # Synthetic parent-child mapping using multiple-resolution Louvain
         try:
@@ -2882,6 +3031,26 @@ Your primary goal is to help the user by answering questions based on the provid
                         self._generate_community_summaries()
                         if getattr(self.config, "graph_rag_index_community_reports", True):
                             self._index_community_reports_in_vector_store()
+
+    def finalize_ingest(self) -> None:
+        """Flush all deferred saves and trigger community rebuild.
+
+        Call once after the last ``ingest()`` when ``ingest_batch_mode=True``.
+        Flushes BM25, entity/relation/claims graphs, then delegates to
+        ``finalize_graph()`` for community rebuild.
+        Safe to call when ``ingest_batch_mode=False`` (flush is a no-op; community
+        rebuild still runs as normal).
+        """
+        if getattr(self.config, "ingest_batch_mode", False):
+            if self._own_bm25:
+                self._own_bm25.flush()
+                logger.info("finalize_ingest: BM25 corpus flushed.")
+            self._save_entity_graph()
+            self._save_relation_graph()
+            if getattr(self, "_claims_graph", None):
+                self._save_claims_graph()
+            logger.info("finalize_ingest: entity/relation/claims graphs saved.")
+        self.finalize_graph()
 
     def finalize_graph(self) -> None:
         """Explicitly trigger community rebuild.
@@ -3270,6 +3439,33 @@ Your primary goal is to help the user by answering questions based on the provid
         rng = _random.Random(42)
         rng.shuffle(all_chunks)
 
+        # TASK 14: Token-level compression of community report chunks before LLM map phase
+        if getattr(cfg, "graph_rag_report_compress", False) is True and all_chunks:
+            _ratio = getattr(cfg, "graph_rag_report_compress_ratio", 0.5)
+            try:
+                _lingua = self._ensure_llmlingua()
+                _compressed_chunks = []
+                for _cid, _text in all_chunks:
+                    if not _text:
+                        _compressed_chunks.append((_cid, _text))
+                        continue
+                    try:
+                        _out = _lingua.compress_prompt(_text, rate=_ratio, force_tokens=["\n"])
+                        _compressed_chunks.append((_cid, _out["compressed_prompt"]))
+                    except Exception:
+                        _compressed_chunks.append((_cid, _text))
+                all_chunks = _compressed_chunks
+                logger.info(
+                    "GraphRAG map-reduce: compressed %d report chunks (ratio=%.2f)",
+                    len(all_chunks),
+                    _ratio,
+                )
+            except ImportError:
+                logger.warning(
+                    "graph_rag_report_compress=True but llmlingua not installed. "
+                    "pip install axon[llmlingua]"
+                )
+
         def _map_community(args):
             chunk_id, report_chunk = args
             if not report_chunk:
@@ -3305,9 +3501,18 @@ Your primary goal is to help the user by answering questions based on the provid
                 return []
 
         # Map phase — parallel over shuffled chunks
+        # TASK 14: Use a dedicated pool when graph_rag_map_workers is set, so map-reduce
+        # does not starve the shared executor during concurrent ingest.
         all_points = []
+        _map_workers_cfg = getattr(cfg, "graph_rag_map_workers", 0)
         try:
-            results = list(self._executor.map(_map_community, all_chunks))
+            if isinstance(_map_workers_cfg, int) and _map_workers_cfg > 0:
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+
+                with _TPE(max_workers=_map_workers_cfg) as _map_pool:
+                    results = list(_map_pool.map(_map_community, all_chunks))
+            else:
+                results = list(self._executor.map(_map_community, all_chunks))
             for point_list in results:
                 all_points.extend(point_list)
         except Exception:
@@ -3640,6 +3845,105 @@ Your primary goal is to help the user by answering questions based on the provid
 
     _VALID_ENTITY_TYPES = {"PERSON", "ORGANIZATION", "GEO", "EVENT", "CONCEPT", "PRODUCT"}
 
+    _HOLISTIC_KEYWORDS = frozenset(
+        [
+            "summarize",
+            "summary",
+            "overview",
+            "all",
+            "every",
+            "compare",
+            "list all",
+            "across",
+            "throughout",
+            "entire",
+            "whole",
+            "global",
+            "what are all",
+            "how many",
+            "count",
+            "trend",
+            "pattern",
+            "themes",
+            "main topics",
+        ]
+    )
+
+    def _classify_query_needs_graphrag(self, query: str, mode: str) -> bool:
+        """Return True if GraphRAG global search is warranted for this query (TASK 14)."""
+        if mode == "heuristic":
+            q_lower = query.lower()
+            if any(kw in q_lower for kw in AxonBrain._HOLISTIC_KEYWORDS):
+                return True
+            if len(query.split()) > 20:
+                return True
+            return False
+        elif mode == "llm":
+            prompt = (
+                "Does the following question require a holistic, corpus-wide analysis "
+                "(e.g. summarization, comparison, listing all topics) rather than a "
+                "targeted factual lookup? Answer only YES or NO.\n\nQuestion: " + query
+            )
+            try:
+                ans = self.llm.complete(prompt, max_tokens=5).strip().upper()
+                return ans.startswith("Y")
+            except Exception:
+                return False
+        return False
+
+    def _ensure_llmlingua(self):
+        """Lazy-initialise the LLMLingua-2 prompt compressor (TASK 14)."""
+        if not hasattr(self, "_llmlingua") or self._llmlingua is None:
+            from llmlingua import PromptCompressor
+
+            self._llmlingua = PromptCompressor(
+                model_name="microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+                use_llmlingua2=True,
+                device_map="cpu",
+            )
+        return self._llmlingua
+
+    def _ensure_gliner(self):
+        """Lazy-initialise the GLiNER NER model (TASK 14)."""
+        if not hasattr(self, "_gliner_model") or self._gliner_model is None:
+            from gliner import GLiNER
+
+            self._gliner_model = GLiNER.from_pretrained("urchade/gliner_mediumv2.1")
+        return self._gliner_model
+
+    _GLINER_LABELS = ["person", "organization", "location", "event", "concept", "product"]
+    _GLINER_TYPE_MAP = {
+        "person": "PERSON",
+        "organization": "ORGANIZATION",
+        "location": "GEO",
+        "event": "EVENT",
+        "concept": "CONCEPT",
+        "product": "PRODUCT",
+    }
+
+    def _extract_entities_gliner(self, text: str) -> list[dict]:
+        """Extract entities using GLiNER (TASK 14 — NER-only; no LLM call)."""
+        model = self._ensure_gliner()
+        try:
+            preds = model.predict_entities(text[:3000], AxonBrain._GLINER_LABELS, threshold=0.5)
+            seen: set = set()
+            entities = []
+            for p in preds:
+                name = p["text"].strip()
+                if name.lower() in seen:
+                    continue
+                seen.add(name.lower())
+                entities.append(
+                    {
+                        "name": name,
+                        "type": AxonBrain._GLINER_TYPE_MAP.get(p["label"].lower(), "CONCEPT"),
+                        "description": "",
+                    }
+                )
+            return entities[:20]
+        except Exception:
+            return []
+
     def _extract_entities(self, text: str) -> list[dict]:
         """Extract named entities from text using the LLM.
 
@@ -3647,6 +3951,10 @@ Your primary goal is to help the user by answering questions based on the provid
           {"name": str, "type": str, "description": str}
         Returns an empty list on failure or when the LLM produces no output.
         """
+        # TASK 14: GLiNER fast-path — skip LLM for NER when backend is "gliner"
+        if getattr(self.config, "graph_rag_ner_backend", "llm") == "gliner":
+            return self._extract_entities_gliner(text)
+
         prompt = (
             "Extract the key named entities from the following text.\n"
             "For each entity output one line:\n"
@@ -4530,6 +4838,18 @@ Your primary goal is to help the user by answering questions based on the provid
         )
 
     # ── Dataset type detection ────────────────────────────────────────────────
+    _SOURCE_POLICY: dict = {
+        # (raptor_allowed, graph_rag_allowed)
+        "paper": (True, True),
+        "doc": (True, True),
+        "knowledge": (False, False),
+        "discussion": (False, True),
+        "codebase": (False, True),
+        "manifest": (False, False),
+        "reference": (False, False),
+    }
+    _SOURCE_POLICY_DEFAULT = (True, True)
+
     _CODE_EXTENSIONS = {
         ".py",
         ".ts",
@@ -4579,6 +4899,54 @@ Your primary goal is to help the user by answering questions based on the provid
             ext = os.path.splitext(source)[1].lower()
             if ext in self._CODE_EXTENSIONS:
                 return "codebase", False
+
+        # Priority 1.5: Manifest / lockfile / generated-reference detection
+        if source:
+            _base = os.path.basename(source).lower()
+            _manifest_names = {
+                "package.json",
+                "package-lock.json",
+                "yarn.lock",
+                "pnpm-lock.yaml",
+                "requirements.txt",
+                "requirements-dev.txt",
+                "pipfile",
+                "pipfile.lock",
+                "pyproject.toml",
+                "setup.cfg",
+                "setup.py",
+                "cargo.toml",
+                "cargo.lock",
+                "go.mod",
+                "go.sum",
+                "composer.json",
+                "composer.lock",
+                "gemfile",
+                "gemfile.lock",
+                "podfile",
+                "podfile.lock",
+                ".gitmodules",
+                "cmakelists.txt",
+                "makefile",
+                "dockerfile",
+            }
+            if _base in _manifest_names:
+                return "manifest", False
+            _ext = os.path.splitext(source)[1].lower()
+            if _ext in (".lock", ".sum"):
+                return "manifest", False
+            _ref_signals = (
+                "/api/",
+                "/apidocs/",
+                "/api-docs/",
+                "/swagger/",
+                "/openapi/",
+                "/reference/",
+                "/javadoc/",
+                "/doxygen/",
+            )
+            if any(sig in source.lower().replace("\\", "/") for sig in _ref_signals):
+                return "reference", False
 
         # Priority 2: JSON with discussion keys
         if text.strip().startswith("{") or text.strip().startswith("["):
@@ -4716,6 +5084,9 @@ Your primary goal is to help the user by answering questions based on the provid
         # collection was created — mixing models silently corrupts retrieval.
         self._validate_embedding_meta(on_mismatch="raise")
 
+        _defer_saves = getattr(self.config, "ingest_batch_mode", False)
+        _policy_on = getattr(self.config, "source_policy_enabled", False)
+
         t0 = time.time()
         from tqdm import tqdm
 
@@ -4738,6 +5109,30 @@ Your primary goal is to help the user by answering questions based on the provid
                 else:
                     chunked.append(doc)
             documents = chunked
+
+        # TASK 13B: Per-source chunk budget enforcement
+        _max_chunks = getattr(self.config, "max_chunks_per_source", 0)
+        if _max_chunks > 0:
+            from collections import defaultdict as _dfl_b
+
+            _chunks_by_source: dict = _dfl_b(list)
+            for _d in documents:
+                _src = _d.get("metadata", {}).get("source", _d["id"])
+                _chunks_by_source[_src].append(_d)
+            _capped: list = []
+            for _src, _src_chunks in _chunks_by_source.items():
+                if len(_src_chunks) > _max_chunks:
+                    logger.info(
+                        "   Chunk cap: '%s' truncated %d → %d chunks (max_chunks_per_source=%d)",
+                        _src,
+                        len(_src_chunks),
+                        _max_chunks,
+                        _max_chunks,
+                    )
+                    _capped.extend(_src_chunks[:_max_chunks])
+                else:
+                    _capped.extend(_src_chunks)
+            documents = _capped
 
         if self.config.dedup_on_ingest:
             before = len(documents)
@@ -4785,8 +5180,27 @@ Your primary goal is to help the user by answering questions based on the provid
                 ]
             else:
                 _raptor_eligible = documents
-            raptor_docs = self._generate_raptor_summaries(_raptor_eligible)
-            documents = documents + raptor_docs
+            if _policy_on:
+                _raptor_ok_list: list = []
+                _raptor_pol_skipped: set = set()
+                for _d in _raptor_eligible:
+                    _dtype = _d.get("metadata", {}).get("dataset_type", "doc")
+                    _r_ok, _ = AxonBrain._SOURCE_POLICY.get(
+                        _dtype, AxonBrain._SOURCE_POLICY_DEFAULT
+                    )
+                    if _r_ok:
+                        _raptor_ok_list.append(_d)
+                    else:
+                        _raptor_pol_skipped.add(_d.get("metadata", {}).get("source", _d["id"]))
+                if _raptor_pol_skipped:
+                    logger.info(
+                        "   RAPTOR: source_policy skipped %d source(s)",
+                        len(_raptor_pol_skipped),
+                    )
+                _raptor_eligible = _raptor_ok_list
+            if _raptor_eligible:
+                raptor_docs = self._generate_raptor_summaries(_raptor_eligible)
+                documents = documents + raptor_docs
 
         # GraphRAG: extract entities from new chunks and update entity graph
         if self.config.graph_rag:
@@ -4824,6 +5238,25 @@ Your primary goal is to help the user by answering questions based on the provid
                         chunks_to_process.append(_doc)
                 elif _include_raptor and _lvl == 1:
                     chunks_to_process.append(_doc)
+
+            if _policy_on:
+                _grag_ok_list: list = []
+                _grag_pol_skipped: set = set()
+                for _d in chunks_to_process:
+                    _dtype = _d.get("metadata", {}).get("dataset_type", "doc")
+                    _, _g_ok = AxonBrain._SOURCE_POLICY.get(
+                        _dtype, AxonBrain._SOURCE_POLICY_DEFAULT
+                    )
+                    if _g_ok:
+                        _grag_ok_list.append(_d)
+                    else:
+                        _grag_pol_skipped.add(_d.get("metadata", {}).get("source", _d["id"]))
+                if _grag_pol_skipped:
+                    logger.info(
+                        "   GraphRAG: source_policy skipped %d source(s)",
+                        len(_grag_pol_skipped),
+                    )
+                chunks_to_process = _grag_ok_list
 
             logger.info(f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks...")
 
@@ -4912,7 +5345,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 if isinstance(node, dict):
                     node["frequency"] = len(node.get("chunk_ids", []))
 
-            if updated:
+            if updated and not _defer_saves:
                 self._save_entity_graph()
             if total_entities == 0:
                 logger.warning(
@@ -4997,7 +5430,7 @@ Your primary goal is to help the user by answering questions based on the provid
                             if pair not in self._relation_description_buffer:
                                 self._relation_description_buffer[pair] = []
                             self._relation_description_buffer[pair].append(description)
-                if rg_updated:
+                if rg_updated and not _defer_saves:
                     self._save_relation_graph()
 
                 # TASK 11: Normalize relation targets into entity graph so traversal never KeyErrors
@@ -5027,7 +5460,7 @@ Your primary goal is to help the user by answering questions based on the provid
                                         _tgt_node["chunk_ids"].append(_cid)
                                         _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
                                         _stub_added = True
-                    if _stub_added:
+                    if _stub_added and not _defer_saves:
                         self._save_entity_graph()
 
                 # GAP 9: Update text_unit_relation_map
@@ -5080,7 +5513,7 @@ Your primary goal is to help the user by answering questions based on the provid
                                 claim["text_unit_id"] = doc_id
                         self._claims_graph[doc_id] = claims
                         claims_changed = True
-                if claims_changed:
+                if claims_changed and not _defer_saves:
                     self._save_claims_graph()
 
             if self.config.graph_rag_community and self._community_graph_dirty:
@@ -5106,7 +5539,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         n_chunks = len(documents)
         if self._own_bm25:
-            self._own_bm25.add_documents(documents)
+            self._own_bm25.add_documents(documents, save_deferred=_defer_saves)
 
         ids = [d["id"] for d in documents]
         texts = [d["text"] for d in documents]
@@ -5571,6 +6004,14 @@ Your primary goal is to help the user by answering questions based on the provid
 
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
+
+        # TASK 14: Adaptive query routing — bypass GraphRAG for non-holistic queries
+        _route = getattr(cfg, "graph_rag_auto_route", "off")
+        if _route != "off" and cfg.graph_rag:
+            _needs_grag = self._classify_query_needs_graphrag(query, _route)
+            if not _needs_grag:
+                cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
+                logger.debug("Auto-route: GraphRAG bypassed for query '%s...'", query[:60])
 
         # Cache lookup (only when chat_history is empty — cached responses don't track turns)
         cache_key = None

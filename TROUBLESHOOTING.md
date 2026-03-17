@@ -246,3 +246,38 @@ llm:
 **Cause:** When `hybrid_search` or `rerank` is enabled, Axon internally fetches `top_k × 3` candidates to allow for score merging and re-ranking. The final result passed to the LLM is capped at `top_k` after all processing. Internal retrieval methods (used in debugging or qualification scripts) may show the pre-cap candidate set.
 
 **Guidance:** `top_k` controls how many chunks the LLM receives as context. The pre-cap overfetch is intentional and improves hybrid/reranked result quality.
+
+---
+
+## `pip install axon[graphrag]` fails with `gensim` build error
+
+**Error:**
+```
+error: metadata-generation-failed
+...AttributeError: 'dict' object has no attribute '__NUMPY_SETUP__'
+gensim
+```
+
+**Cause:** `graspologic` 0.3.x on PyPI depends on `gensim` 3.8.x, which cannot build against NumPy 2.x or Python 3.13. This is a known upstream incompatibility.
+
+**Fix:** The `[graphrag]` extra no longer includes `graspologic`. It uses `leidenalg` + `igraph` instead, which ship pre-built wheels for all platforms and Python 3.13:
+
+```bash
+pip install -e ".[graphrag]"
+# installs: networkx, leidenalg, igraph
+```
+
+The Axon community-detection fallback chain is:
+1. **graspologic** hierarchical Leiden (if installed separately and compatible with your Python/NumPy)
+2. **leidenalg** multi-resolution Leiden ← installed by `axon[graphrag]`
+3. **networkx** Louvain ← always available (no extra install needed)
+
+> If you have `graspologic` installed from a compatible environment (Python ≤ 3.12, NumPy 1.x), Axon will prefer it for true hierarchical parent-child community structure.
+
+---
+
+## `pip install graspologic` fails on Python 3.13
+
+**Cause:** Same as above — `gensim` 3.8.x does not support Python 3.13 or NumPy 2.x.
+
+**Fix:** Skip `graspologic`. Install `leidenalg` instead via `pip install axon[graphrag]`. The Leiden algorithm quality is equivalent; only the parent-child hierarchy output differs slightly (synthetic instead of true hierarchical).
