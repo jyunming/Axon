@@ -234,7 +234,7 @@ class AxonConfig:
     similarity_threshold: float = 0.3
     hybrid_search: bool = True
     hybrid_weight: float = 0.7  # 1.0 = Pure Semantic, 0.0 = Pure Keyword
-    hybrid_mode: Literal["weighted", "rrf"] = "weighted"  # Hybrid fusion mode
+    hybrid_mode: Literal["weighted", "rrf"] = "rrf"  # Hybrid fusion mode (rrf is more robust)
 
     # Chunking
     chunk_strategy: Literal["recursive", "semantic", "markdown", "cosine_semantic"] = "semantic"
@@ -810,11 +810,12 @@ offline:
 
 
 class OpenReranker:
-    """Document reranker supporting cross-encoder and LLM (RankGPT) providers.
+    """Document reranker supporting cross-encoder and pointwise LLM providers.
 
     When ``reranker_provider="cross-encoder"`` a sentence-transformers CrossEncoder
     scores each (query, document) pair.  When ``reranker_provider="llm"`` the
-    active LLM rates each document on a 1–10 scale in parallel threads.
+    active LLM rates each document on a 1–10 scale in parallel threads
+    (pointwise LLM reranker, not listwise RankGPT).
     """
 
     def __init__(self, config: AxonConfig):
@@ -832,7 +833,7 @@ class OpenReranker:
                     logger.error("sentence-transformers not installed. Reranking disabled.")
                     self.config.rerank = False
             elif self.config.reranker_provider == "llm":
-                logger.info("Using LLM for Re-ranking (RankGPT)")
+                logger.info("Using LLM for Re-ranking (pointwise)")
                 self.llm = OpenLLM(self.config)
 
     def rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -864,7 +865,7 @@ class OpenReranker:
         return reranked_docs
 
     def _llm_rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """RankGPT pointwise scoring implementation."""
+        """Pointwise LLM scoring implementation (scores each document independently on 1–10 scale)."""
         system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
 
         from concurrent.futures import ThreadPoolExecutor
@@ -5504,7 +5505,11 @@ Your primary goal is to help the user by answering questions based on the provid
             "f": filters_key,
             "top_k": cfg.top_k,
             "hybrid": cfg.hybrid_search,
+            "hybrid_mode": cfg.hybrid_mode,
+            "hybrid_weight": cfg.hybrid_weight,
             "rerank": cfg.rerank,
+            "reranker_provider": cfg.reranker_provider,
+            "reranker_model": cfg.reranker_model,
             "hyde": cfg.hyde,
             "multi_query": cfg.multi_query,
             "step_back": cfg.step_back,
@@ -5512,13 +5517,16 @@ Your primary goal is to help the user by answering questions based on the provid
             "threshold": cfg.similarity_threshold,
             "discuss": cfg.discussion_fallback,
             "compress_context": cfg.compress_context,
+            "cite": cfg.cite,
             "truth_grounding": cfg.truth_grounding,
             "graph_rag": cfg.graph_rag,
+            "raptor": cfg.raptor,
+            "raptor_chunk_group_size": cfg.raptor_chunk_group_size,
+            "parent_chunk_size": cfg.parent_chunk_size,
             "llm_provider": cfg.llm_provider,
             "llm_model": cfg.llm_model,
             "embedding_provider": cfg.embedding_provider,
             "embedding_model": cfg.embedding_model,
-            "reranker_model": cfg.reranker_model,
         }
         return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
@@ -5547,7 +5555,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     "after_filter": filtered_count,
                     "final": final_count,
                 },
-                "top_score": round(top_score, 4) if top_score else None,
+                "top_score": round(top_score, 4) if top_score is not None else None,
                 "hybrid": active.hybrid_search,
                 "rerank": active.rerank,
                 "transformations": transformations or {},
@@ -5772,6 +5780,13 @@ Your primary goal is to help the user by answering questions based on the provid
             if has_code:
                 doc["metadata"]["has_code"] = True
 
+            # Use type-specific child splitter so parent mode honours the same
+            # chunking policy (e.g. code-aware splitting) as the normal ingest path.
+            source = doc.get("metadata", {}).get("source", "")
+            child_splitter = self._get_splitter_for_type(dataset_type, has_code, source=source)
+            if child_splitter is None:
+                child_splitter = self.splitter
+
             parent_texts = parent_splitter.split(doc["text"])
             for p_idx, parent_text in enumerate(parent_texts):
                 p_doc = {
@@ -5779,7 +5794,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     "text": parent_text,
                     "metadata": doc.get("metadata", {}).copy(),
                 }
-                child_chunks = self.splitter.transform_documents([p_doc])
+                child_chunks = child_splitter.transform_documents([p_doc])
                 for child in child_chunks:
                     child["metadata"]["parent_text"] = parent_text
                 all_chunks.extend(child_chunks)
@@ -6318,6 +6333,25 @@ Your primary goal is to help the user by answering questions based on the provid
         # Persist embedding meta after first successful ingest (idempotent on subsequent calls)
         self._save_embedding_meta()
 
+        # Update doc-version tracking: record content hash + chunk count per source path.
+        # This powers /tracked-docs and /ingest/refresh.
+        import hashlib as _hl
+        import time as _time_mod
+
+        _chunks_by_src: dict = {}
+        for _d in documents:
+            _src = _d.get("metadata", {}).get("source", _d["id"])
+            _chunks_by_src.setdefault(_src, []).append(_d)
+        for _src, _src_docs in _chunks_by_src.items():
+            _combined = "".join(d.get("text", "") for d in _src_docs)
+            _content_hash = _hl.md5(_combined.encode("utf-8", errors="replace")).hexdigest()
+            self._doc_versions[_src] = {
+                "content_hash": _content_hash,
+                "chunk_count": len(_src_docs),
+                "ingested_at": _time_mod.strftime("%Y-%m-%dT%H:%M:%SZ", _time_mod.gmtime()),
+            }
+        self._save_doc_versions()
+
         logger.info(
             {
                 "event": "ingest_complete",
@@ -6566,12 +6600,24 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # Vector Search
         if cfg.hyde:
-            # HyDE uses a single hypothetical document as the vector query
+            # HyDE: embed the hypothetical document and search with it.
+            # If multi-query/step-back/decompose also produced variants, search with
+            # those as well so transforms compose rather than HyDE replacing them.
             all_vector_results.extend(
                 self.vector_store.search(
                     self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters
                 )
             )
+            if len(search_queries) > 1:
+                # search_queries[0] is the original query; additional entries are transform variants
+                for variant in search_queries[1:]:
+                    all_vector_results.extend(
+                        self.vector_store.search(
+                            self.embedding.embed_query(variant),
+                            top_k=fetch_k,
+                            filter_dict=filters,
+                        )
+                    )
         else:
             # Batch embed all unique queries
             if len(search_queries) == 1:
@@ -6845,7 +6891,14 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.compress_context:
             results = self._compress_context(query, results)
         final_count = len(results)
-        top_score = results[0].get("score", 0) if results else 0
+        # Use rerank_score when reranking was active (reflects the actual ranking signal)
+        if results:
+            r0 = results[0]
+            top_score = (
+                r0.get("rerank_score", r0.get("score", 0)) if cfg.rerank else r0.get("score", 0)
+            )
+        else:
+            top_score = 0
 
         # A4: Exclude community report synthetic docs from citation candidates.
         # They are internal artifacts and confuse users when cited as source documents.

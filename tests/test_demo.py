@@ -60,7 +60,8 @@ class TestDemo_BasicIngestRetrieve:
 
     @pytest.fixture
     def brain(self, tmp_path):
-        return _make_brain(tmp_path)
+        # Use weighted fusion so vector similarity dominates for semantically clear queries
+        return _make_brain(tmp_path, hybrid_mode="weighted")
 
     def test_retrieves_correct_document(self, brain):
         docs = [

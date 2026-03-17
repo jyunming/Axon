@@ -764,26 +764,43 @@ async def list_tracked_docs():
 
 @app.post("/ingest/refresh")
 async def refresh_docs():
-    """Re-check all tracked files and re-ingest changed ones."""
+    """Re-ingest any tracked files whose content has changed since last ingest."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     import hashlib as _hashlib
 
+    from axon.loaders import DirectoryLoader
+
     versions = brain.get_doc_versions()
-    results: dict[str, list[str]] = {"skipped": [], "reingest_needed": [], "missing": []}
+    results: dict[str, list] = {"skipped": [], "reingested": [], "missing": [], "errors": []}
     for source_id, record in versions.items():
         if not os.path.exists(source_id):
             results["missing"].append(source_id)
             continue
         try:
             with open(source_id, "rb") as f:
-                content_hash = _hashlib.md5(f.read()).hexdigest()
-            if content_hash != record.get("content_hash"):
-                results["reingest_needed"].append(source_id)
-            else:
+                current_hash = _hashlib.md5(f.read()).hexdigest()
+            if current_hash == record.get("content_hash"):
                 results["skipped"].append(source_id)
-        except Exception:
-            results["missing"].append(source_id)
+                continue
+            # Content changed — re-ingest the file
+            loader = DirectoryLoader()
+            import functools
+
+            docs = await asyncio.get_event_loop().run_in_executor(
+                None, functools.partial(loader._load_file, source_id)
+            )
+            if docs:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, functools.partial(brain.ingest, docs)
+                )
+                results["reingested"].append(source_id)
+            else:
+                results["errors"].append(
+                    {"source": source_id, "error": "loader returned no documents"}
+                )
+        except Exception as exc:
+            results["errors"].append({"source": source_id, "error": str(exc)})
     return results
 
 
@@ -1299,7 +1316,7 @@ async def delete_documents(request: DeleteRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}(?:/[A-Za-z0-9_\-]{1,64}){0,4}$")
+_VALID_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}(?:/[a-z0-9][a-z0-9_-]{0,49}){0,4}$")
 
 
 @app.post("/project/new")

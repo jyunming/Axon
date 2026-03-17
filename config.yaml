@@ -122,8 +122,8 @@ rag:
   # Enable hybrid search (vector + keyword)
   hybrid_search: true
 
-  # Hybrid fusion mode: "weighted" (default) or "rrf" (Reciprocal Rank Fusion)
-  hybrid_mode: weighted
+  # Hybrid fusion mode: "rrf" (Reciprocal Rank Fusion, default) or "weighted" (min-max heuristic)
+  hybrid_mode: rrf
 
   # Parent-document / small-to-big retrieval.
   # Set to a value larger than chunk.size (e.g. 3000) to index small child chunks

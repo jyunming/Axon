@@ -91,7 +91,7 @@ class TestAxonConfigNewDefaults:
         from axon.main import AxonConfig
 
         cfg = AxonConfig()
-        assert cfg.hybrid_mode == "weighted"
+        assert cfg.hybrid_mode == "rrf"
 
     def test_dataset_type_default(self):
         from axon.main import AxonConfig
@@ -384,5 +384,5 @@ def test_ingest_refresh_returns_results_when_brain_set(tmp_path):
     assert resp.status_code == 200
     data = resp.json()
     assert "skipped" in data
-    assert "reingest_needed" in data
+    assert "reingested" in data
     assert "missing" in data

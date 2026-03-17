@@ -16,7 +16,7 @@ class TestAxonConfig:
         assert config.top_k == 10
         assert config.discussion_fallback is True
         assert config.max_workers == 8
-        assert config.hybrid_mode == "weighted"
+        assert config.hybrid_mode == "rrf"
         assert config.dataset_type == "auto"
 
     def test_load_from_yaml(self, tmp_path):
@@ -1282,8 +1282,8 @@ class TestLogQueryMetrics:
                 latency_ms=10.0,
             )
             logged_data = mock_logger.info.call_args[0][0]
-            # top_score=0 treated as falsy → logged as None
-            assert logged_data["top_score"] is None
+            # top_score=0.0 is a real zero confidence score, logged as 0.0 (not None)
+            assert logged_data["top_score"] == 0.0
 
 
 # ---------------------------------------------------------------------------

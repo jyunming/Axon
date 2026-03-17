@@ -341,13 +341,14 @@ curl http://localhost:8000/ingest/status/abc123
 ### List Tracked Documents
 ```bash
 curl http://localhost:8000/tracked-docs
-# Response: {"sources": [{"source_id": "/path/file.txt", "chunks": 5, "ingested_at": "..."}]}
+# Response: {"docs": {"/path/file.txt": {"content_hash": "...", "chunk_count": 5, "ingested_at": "..."}}}
 ```
 
-### Refresh (Re-check Changed Files)
+### Refresh (Re-ingest Changed Files)
 ```bash
 curl -X POST http://localhost:8000/ingest/refresh
-# Re-ingests any files whose content has changed since last ingest
+# Re-ingests files whose content has changed since last ingest
+# Response: {"skipped": [...], "reingested": [...], "missing": [...], "errors": [...]}
 ```
 
 ### Projects

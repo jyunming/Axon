@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # ─────────────────────────────────────────────────────────────────────────────
 # A1: RAPTOR→GraphRAG Auto-Composition
 # ─────────────────────────────────────────────────────────────────────────────
@@ -418,30 +416,27 @@ class TestGraphVisualization:
     def test_export_missing_pyvis_raises(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """pyvis not installed -> ImportError raised with install hint."""
+        """export_graph_html no longer requires pyvis — it uses a built-in 3D renderer."""
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        with patch.dict("sys.modules", {"pyvis": None, "pyvis.network": None}):
-            with pytest.raises(ImportError, match="pyvis"):
-                brain.export_graph_html()
+        # Should not raise even with pyvis absent
+        with patch("webbrowser.open"):
+            html = brain.export_graph_html()
+        assert "<html" in html
 
     def test_export_returns_html_string(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """With mock pyvis, export_graph_html returns an HTML string."""
+        """export_graph_html returns a self-contained HTML string."""
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
-        mock_net = MagicMock()
-        mock_net.generate_html.return_value = "<html><body>graph</body></html>"
-        mock_network_cls = MagicMock(return_value=mock_net)
-        mock_pyvis = MagicMock()
-        mock_pyvis.network.Network = mock_network_cls
-        with patch.dict("sys.modules", {"pyvis": mock_pyvis, "pyvis.network": mock_pyvis.network}):
+        with patch("webbrowser.open"):
             html = brain.export_graph_html()
         assert "<html" in html
+        assert "3d-force-graph" in html or "force" in html.lower()
 
     def test_export_includes_entity_nodes(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """Graph with 2 entities -> add_node called twice."""
+        """Graph with 2 entities -> payload contains 2 nodes."""
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         brain._entity_graph = {
             "apple inc": {
@@ -451,27 +446,16 @@ class TestGraphVisualization:
             },
             "tim cook": {"type": "PERSON", "chunk_ids": ["c1", "c2"], "description": "CEO"},
         }
-        mock_net = MagicMock()
-        mock_net.generate_html.return_value = "<html><body>nodes</body></html>"
-        mock_network_cls = MagicMock(return_value=mock_net)
-        mock_pyvis_net = MagicMock()
-        mock_pyvis_net.Network = mock_network_cls
-        with patch.dict("sys.modules", {"pyvis": MagicMock(), "pyvis.network": mock_pyvis_net}):
-            brain.export_graph_html()
-        assert mock_net.add_node.call_count == 2
+        payload = brain.build_graph_payload()
+        assert len(payload["nodes"]) == 2
 
     def test_export_saves_to_file(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
-        """path argument -> file is written."""
+        """path argument -> file is written with valid HTML."""
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         out_file = tmp_path / "graph.html"
-        mock_net = MagicMock()
-        mock_net.generate_html.return_value = "<html><body>saved</body></html>"
-        mock_network_cls = MagicMock(return_value=mock_net)
-        mock_pyvis_net = MagicMock()
-        mock_pyvis_net.Network = mock_network_cls
-        with patch.dict("sys.modules", {"pyvis": MagicMock(), "pyvis.network": mock_pyvis_net}):
+        with patch("webbrowser.open"):
             brain.export_graph_html(str(out_file))
         assert out_file.exists()
         assert "<html" in out_file.read_text(encoding="utf-8")
@@ -479,7 +463,7 @@ class TestGraphVisualization:
     def test_export_includes_relation_edges(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """Graph with a relation -> add_edge called."""
+        """Graph with a relation -> payload links list is non-empty."""
         brain = self._make_brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
         brain._entity_graph = {
             "apple inc": {"type": "ORGANIZATION", "chunk_ids": ["c1"], "description": ""},
@@ -488,18 +472,12 @@ class TestGraphVisualization:
         brain._relation_graph = {
             "apple inc": [
                 {
-                    "object": "tim cook",
+                    "target": "tim cook",
                     "relation": "led by",
                     "description": "CEO relationship",
                     "strength": 8,
                 }
             ]
         }
-        mock_net = MagicMock()
-        mock_net.generate_html.return_value = "<html><body>edges</body></html>"
-        mock_network_cls = MagicMock(return_value=mock_net)
-        mock_pyvis_net = MagicMock()
-        mock_pyvis_net.Network = mock_network_cls
-        with patch.dict("sys.modules", {"pyvis": MagicMock(), "pyvis.network": mock_pyvis_net}):
-            brain.export_graph_html()
-        assert mock_net.add_edge.call_count >= 1
+        payload = brain.build_graph_payload()
+        assert len(payload["links"]) >= 1

@@ -442,8 +442,6 @@ class URLLoader(BaseLoader):
         GitHub Gist URLs are rewritten to their raw form.
         GitHub tree (directory) URLs raise ``ValueError`` immediately.
         """
-        import uuid
-
         import httpx
 
         url = _rewrite_github_url(url)  # Gap-5: rewrite before SSRF check
@@ -474,9 +472,12 @@ class URLLoader(BaseLoader):
             )
 
         text = _extract_html_text(raw) if "html" in content_type else raw
+        import hashlib as _hl
+
+        stable_id = "url_" + _hl.md5(url.encode("utf-8")).hexdigest()
         return [
             {
-                "id": uuid.uuid4().hex,
+                "id": stable_id,
                 "text": text,
                 "metadata": {"source": url, "type": "url"},
             }
