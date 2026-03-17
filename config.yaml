@@ -21,6 +21,15 @@ embedding:
   # openai: text-embedding-3-small, etc.
   model: all-MiniLM-L6-v2
 
+  # Local path to a pre-downloaded embedding model directory.
+  # Overrides 'model' for sentence_transformers (passed as the model path).
+  # For fastembed, used as cache_dir so no network download is needed.
+  # Leave empty to download from HuggingFace Hub as usual.
+  # Examples:
+  #   Windows: C:/models/all-MiniLM-L6-v2
+  #   Linux:   /srv/models/all-MiniLM-L6-v2
+  # model_path: ""
+
   # For Ollama provider:
   # base_url: http://localhost:11434
 
@@ -36,6 +45,15 @@ llm:
 
   # Base URL for API connections. Useful to point the 'openai' client to an Open Source Docker Engine like vLLM.
   base_url: http://localhost:11434
+
+  # Directory where Ollama stores its model blobs.
+  # Equivalent to the OLLAMA_MODELS environment variable.
+  # Use this to redirect Ollama to a secondary disk, NAS, or shared network volume.
+  # The OLLAMA_MODELS env var takes priority if both are set.
+  # Examples:
+  #   Windows: D:/ollama-models
+  #   Linux:   /mnt/nas/ollama-models
+  # models_dir: ""
 
   # API Key for cloud providers (or fake string for local open-source API engines)
   api_key: ""

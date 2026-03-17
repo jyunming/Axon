@@ -80,7 +80,18 @@ class AxonConfig:
         "sentence_transformers", "ollama", "fastembed", "openai"
     ] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
+    # Local path override for the embedding model (sentence_transformers / fastembed).
+    # When set, this path is passed directly to the model loader instead of downloading.
+    # sentence_transformers: absolute path to a local model folder.
+    # fastembed: treated as cache_dir so the model is loaded from there.
+    # Takes precedence over embedding_model when non-empty.
+    embedding_model_path: str = ""
     ollama_base_url: str = "http://localhost:11434"
+    # Local directory where Ollama stores its model blobs.
+    # Equivalent to setting the OLLAMA_MODELS environment variable.
+    # Useful when models live on a secondary disk or network share.
+    # Can also be set via the OLLAMA_MODELS env var (env var takes priority).
+    ollama_models_dir: str = ""
 
     # LLM
     llm_provider: Literal[
@@ -608,6 +619,10 @@ offline:
         if "ollama_base_url" not in config_dict and "llm_base_url" in config_dict:
             config_dict["ollama_base_url"] = config_dict["llm_base_url"]
 
+        # llm.models_dir → ollama_models_dir
+        if "llm_models_dir" in config_dict and "ollama_models_dir" not in config_dict:
+            config_dict["ollama_models_dir"] = config_dict.pop("llm_models_dir")
+
         if "api_key" not in config_dict and "llm_api_key" in config_dict:
             config_dict["api_key"] = config_dict["llm_api_key"]
 
@@ -652,6 +667,9 @@ offline:
         env_projects_root = os.getenv("AXON_PROJECTS_ROOT")
         if env_projects_root:
             config_dict["projects_root"] = env_projects_root
+        env_ollama_models = os.getenv("OLLAMA_MODELS")
+        if env_ollama_models:
+            config_dict["ollama_models_dir"] = env_ollama_models
 
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
@@ -862,11 +880,13 @@ class OpenEmbedding:
 
     def _load_model(self):
         """Load the embedding model."""
+        _model_path = getattr(self.config, "embedding_model_path", "")
         if self.provider == "sentence_transformers":
             from sentence_transformers import SentenceTransformer
 
-            logger.info(f"Loading Sentence Transformers: {self.config.embedding_model}")
-            self.model = SentenceTransformer(self.config.embedding_model)
+            _src = _model_path or self.config.embedding_model
+            logger.info(f"Loading Sentence Transformers: {_src}")
+            self.model = SentenceTransformer(_src)
             self.dimension = self.model.get_sentence_embedding_dimension()
 
         elif self.provider == "ollama":
@@ -876,8 +896,14 @@ class OpenEmbedding:
         elif self.provider == "fastembed":
             from fastembed import TextEmbedding
 
-            logger.info(f"Loading FastEmbed: {self.config.embedding_model}")
-            self.model = TextEmbedding(model_name=self.config.embedding_model)
+            _kwargs: dict = {"model_name": self.config.embedding_model}
+            if _model_path:
+                _kwargs["cache_dir"] = _model_path
+            logger.info(
+                f"Loading FastEmbed: {self.config.embedding_model}"
+                + (f" (cache_dir={_model_path})" if _model_path else "")
+            )
+            self.model = TextEmbedding(**_kwargs)
             self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 384)
 
         elif self.provider == "openai":
@@ -1837,6 +1863,12 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.info(
                 f"Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
             )
+
+        # Apply Ollama model directory override before any Ollama client is constructed.
+        # Sets OLLAMA_MODELS so the Ollama daemon resolves blobs from the given path.
+        if self.config.ollama_models_dir and not os.getenv("OLLAMA_MODELS"):
+            os.environ["OLLAMA_MODELS"] = self.config.ollama_models_dir
+            logger.info("Ollama models dir: %s", self.config.ollama_models_dir)
 
         # Apply custom projects root from config before any project operations
         if self.config.projects_root:

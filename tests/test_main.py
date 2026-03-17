@@ -7706,6 +7706,144 @@ class TestVectorStoreBatchWrite:
             store.add(["id0"], ["text"], [[0.0]])
 
 
+class TestLocalModelPaths:
+    """Tests for embedding_model_path and ollama_models_dir config options."""
+
+    def test_embedding_model_path_config_default(self):
+        """embedding_model_path defaults to empty string."""
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig()
+        assert cfg.embedding_model_path == ""
+
+    def test_ollama_models_dir_config_default(self):
+        """ollama_models_dir defaults to empty string."""
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig()
+        assert cfg.ollama_models_dir == ""
+
+    def test_embedding_model_path_loaded_from_yaml(self, tmp_path):
+        """embedding.model_path in YAML is mapped to embedding_model_path."""
+        import yaml
+
+        from axon.main import AxonConfig
+
+        cfg_data = {
+            "embedding": {"provider": "sentence_transformers", "model_path": "/srv/models/minilm"},
+            "llm": {"provider": "ollama", "model": "gemma"},
+            "vector_store": {"provider": "chroma", "path": str(tmp_path / "chroma")},
+            "bm25": {"path": str(tmp_path / "bm25")},
+        }
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump(cfg_data))
+        loaded = AxonConfig.load(str(cfg_file))
+        assert loaded.embedding_model_path == "/srv/models/minilm"
+
+    def test_ollama_models_dir_loaded_from_yaml(self, tmp_path):
+        """llm.models_dir in YAML is mapped to ollama_models_dir."""
+        import yaml
+
+        from axon.main import AxonConfig
+
+        cfg_data = {
+            "embedding": {"provider": "sentence_transformers", "model": "all-MiniLM-L6-v2"},
+            "llm": {"provider": "ollama", "model": "gemma", "models_dir": "D:/ollama-models"},
+            "vector_store": {"provider": "chroma", "path": str(tmp_path / "chroma")},
+            "bm25": {"path": str(tmp_path / "bm25")},
+        }
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump(cfg_data))
+        loaded = AxonConfig.load(str(cfg_file))
+        assert loaded.ollama_models_dir == "D:/ollama-models"
+
+    def test_ollama_models_env_var_wins_over_yaml(self, tmp_path, monkeypatch):
+        """OLLAMA_MODELS env var takes priority over llm.models_dir in YAML."""
+        import yaml
+
+        from axon.main import AxonConfig
+
+        monkeypatch.setenv("OLLAMA_MODELS", "/env/override/models")
+        cfg_data = {
+            "embedding": {"provider": "sentence_transformers", "model": "all-MiniLM-L6-v2"},
+            "llm": {"provider": "ollama", "model": "gemma", "models_dir": "D:/yaml-models"},
+            "vector_store": {"provider": "chroma", "path": str(tmp_path / "chroma")},
+            "bm25": {"path": str(tmp_path / "bm25")},
+        }
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump(cfg_data))
+        loaded = AxonConfig.load(str(cfg_file))
+        assert loaded.ollama_models_dir == "/env/override/models"
+
+    def test_sentence_transformers_uses_model_path(self, tmp_path):
+        """OpenEmbedding uses embedding_model_path as the model source for sentence_transformers."""
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        from axon.main import AxonConfig, OpenEmbedding
+
+        cfg = AxonConfig(
+            embedding_provider="sentence_transformers",
+            embedding_model="all-MiniLM-L6-v2",
+            embedding_model_path="/local/models/minilm",
+        )
+        mock_st = MagicMock()
+        mock_st.get_sentence_embedding_dimension.return_value = 384
+        mock_module = MagicMock()
+        mock_module.SentenceTransformer = MagicMock(return_value=mock_st)
+        with patch.dict(sys.modules, {"sentence_transformers": mock_module}):
+            emb = OpenEmbedding(cfg)
+            mock_module.SentenceTransformer.assert_called_once_with("/local/models/minilm")
+        assert emb.dimension == 384
+
+    def test_sentence_transformers_falls_back_to_model_name(self, tmp_path):
+        """OpenEmbedding falls back to embedding_model when embedding_model_path is empty."""
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        from axon.main import AxonConfig, OpenEmbedding
+
+        cfg = AxonConfig(
+            embedding_provider="sentence_transformers",
+            embedding_model="all-MiniLM-L6-v2",
+            embedding_model_path="",
+        )
+        mock_st = MagicMock()
+        mock_st.get_sentence_embedding_dimension.return_value = 384
+        mock_module = MagicMock()
+        mock_module.SentenceTransformer = MagicMock(return_value=mock_st)
+        with patch.dict(sys.modules, {"sentence_transformers": mock_module}):
+            OpenEmbedding(cfg)
+            mock_module.SentenceTransformer.assert_called_once_with("all-MiniLM-L6-v2")
+
+    def test_ollama_models_dir_sets_env_var(self, tmp_path, monkeypatch):
+        """AxonBrain sets OLLAMA_MODELS env var when ollama_models_dir is configured."""
+        import os
+        from unittest.mock import MagicMock, patch
+
+        from axon.main import AxonBrain, AxonConfig
+
+        monkeypatch.delenv("OLLAMA_MODELS", raising=False)
+        cfg = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+            ollama_models_dir="D:/my-ollama-models",
+        )
+        with (
+            patch("axon.main.OpenEmbedding") as mock_emb,
+            patch("axon.main.OpenLLM") as mock_llm,
+            patch("axon.main.OpenVectorStore") as mock_vs,
+            patch("axon.main.OpenReranker") as mock_rr,
+        ):
+            mock_emb.return_value = MagicMock(dimension=384)
+            mock_llm.return_value = MagicMock()
+            mock_vs.return_value = MagicMock()
+            mock_rr.return_value = MagicMock()
+            AxonBrain(config=cfg)
+
+        assert os.environ.get("OLLAMA_MODELS") == "D:/my-ollama-models"
+
+
 class TestREBELRelationExtraction:
     """Tests for P2 — REBEL relation extraction backend."""
 
