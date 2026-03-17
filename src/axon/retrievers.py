@@ -39,17 +39,28 @@ class BM25Retriever:
         """Simple tokenizer."""
         return text.lower().split()
 
-    def add_documents(self, documents: list[dict[str, Any]]) -> None:
-        """Add documents to the BM25 index. No-op if documents is empty."""
+    def add_documents(self, documents: list[dict[str, Any]], save_deferred: bool = False) -> None:
+        """Add documents to the BM25 index. No-op if documents is empty.
+
+        Args:
+            documents: List of document dicts with keys ``id``, ``text``, ``metadata``.
+            save_deferred: When ``True``, skip the disk write — corpus is updated in memory
+                only.  Call :meth:`flush` (or :meth:`save`) when the batch is complete.
+        """
         if not documents:
             return
         self.corpus.extend(documents)
         tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
         self.bm25 = BM25Okapi(tokenized_corpus)
-        self.save()
+        if not save_deferred:
+            self.save()
 
     # Explicit alias for callers that batch their writes; semantics are identical.
     batch_add_documents = add_documents
+
+    def flush(self) -> None:
+        """Explicitly save corpus — call after deferred batch ingest session."""
+        self.save()
 
     def search(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
         """Search the BM25 index."""

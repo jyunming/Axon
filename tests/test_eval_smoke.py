@@ -302,6 +302,10 @@ class TestPipelineIntegrationSmoke:
             brain._query_cache = {}
             brain._ingested_hashes = set()
             brain._entity_graph = {}
+            brain._relation_graph = {}
+            brain._community_map = {}
+            brain._community_summaries = {}
+            brain._last_matched_entities = []
             brain._apply_overrides = m.AxonBrain._apply_overrides.__get__(brain)
             brain._execute_retrieval = m.AxonBrain._execute_retrieval.__get__(brain)
             brain._build_context = m.AxonBrain._build_context.__get__(brain)

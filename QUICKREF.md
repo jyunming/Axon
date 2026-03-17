@@ -97,7 +97,7 @@ axon --cite "Summarise my documents"        # inline source citations
 axon --decompose "Complex multi-part query" # split into sub-questions
 axon --compress "Your question"             # compress retrieved context
 axon --raptor --ingest ./docs/              # hierarchical indexing on ingest
-axon --graph-rag "Your question"            # entity-graph retrieval
+axon --graph-rag "Your question"            # entity-graph retrieval expansion
 
 # CLI — project management
 axon --project myproject "Your question"    # use a named project
@@ -213,6 +213,41 @@ llm:
 rag:
   top_k: 10
   hybrid_search: true
+
+  # GraphRAG-style indexing and retrieval. Implements: hierarchical community detection
+  # (Leiden via graspologic, or Louvain fallback), LLM community reports, map-reduce global
+  # search, token-budgeted local search, entity/relation graphs, optional claim/covariate
+  # extraction. Approximate where noted (fallback hierarchy, unified candidate ranking).
+  #
+  # What it does:
+  #   - Ingest: LLM extracts named entities (with descriptions) and
+  #             SUBJECT|RELATION|OBJECT triples (with descriptions) per chunk.
+  #             After ingest, Louvain community detection clusters the entity graph
+  #             (requires: pip install networkx). LLM generates a summary paragraph
+  #             per community cluster.
+  #   - Query:  graph_rag_mode controls retrieval strategy:
+  #     local   — entity descriptions + relation descriptions + community snippet
+  #               prepended before document excerpts (default)
+  #     global  — top community summaries ranked by embedding similarity injected
+  #               as primary context (good for corpus-wide questions)
+  #     hybrid  — community reports + document excerpts combined
+  #
+  # Known limits:
+  #   - Shallow graph: no canonical entity resolution, no alias handling,
+  #     no relation normalisation, no multi-hop reasoning beyond 1 hop.
+  #   - Heuristic scoring: not learned or calibrated.
+  #   - Extraction quality depends on the configured LLM.
+  #   - Community detection is async by default; first query after ingest may
+  #     run before communities are ready (graph_rag_community_async: false to block).
+  #
+  # Requires an LLM at ingest time. Adds per-chunk latency.
+  graph_rag: false
+  graph_rag_budget: 3              # extra entity-linked slots beyond top_k (0 = no guarantee)
+  graph_rag_relations: true        # extract relation triples for 1-hop traversal
+  # graph_rag_community: false     # run Louvain community detection (needs networkx)
+  # graph_rag_community_async: true
+  # graph_rag_community_top_k: 5
+  # graph_rag_mode: local          # local | global | hybrid
 ```
 
 ### Offline / Air-gapped Mode

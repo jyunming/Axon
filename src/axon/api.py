@@ -980,6 +980,8 @@ async def get_ingest_status(job_id: str):
     """Poll the status of an async ingest job started by POST /ingest.
 
     Returns 404 if the job_id is unknown or has been evicted (TTL: 60 min).
+    When the job is "completed" but community detection is still running in the
+    background, returns status "building_communities" instead.
     """
     job = _jobs.get(job_id)
     if job is None:
@@ -987,8 +989,47 @@ async def get_ingest_status(job_id: str):
             status_code=404,
             detail=f"Job '{job_id}' not found. It may have already been evicted (TTL: 60 min) or the job_id is invalid.",
         )
-    # Return a clean view without the internal timestamp field
-    return {k: v for k, v in job.items() if k != "started_at_ts"}
+    result = {k: v for k, v in job.items() if k != "started_at_ts"}
+    # Report community build state as a separate boolean so that polling job A
+    # is not misreported when an unrelated job B triggered a community rebuild.
+    result["community_build_in_progress"] = bool(
+        brain and getattr(brain, "_community_build_in_progress", False)
+    )
+    return result
+
+
+@app.get("/graph/status")
+async def get_graph_status():
+    """Return current GraphRAG community build status."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    in_progress = getattr(brain, "_community_build_in_progress", False)
+    summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+    return {
+        "community_build_in_progress": in_progress,
+        "community_summary_count": summary_count,
+    }
+
+
+@app.post("/graph/finalize")
+async def finalize_graph():
+    """Trigger an explicit community rebuild.
+
+    Use this after batch ingest with ``graph_rag_community_defer=True`` to
+    run community detection once all documents have been ingested.
+    Community detection is CPU-heavy, so it is offloaded to a thread to
+    avoid blocking the event loop.
+    """
+    import asyncio
+
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        await asyncio.to_thread(brain.finalize_graph)
+        return {"status": "ok", "community_summary_count": len(brain._community_summaries)}
+    except Exception as e:
+        logger.error(f"finalize_graph failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/add_text")
@@ -1231,6 +1272,8 @@ async def delete_documents(request: DeleteRequest):
             brain.vector_store.delete_by_ids(existing_ids)
             if brain.bm25 is not None:
                 brain.bm25.delete_documents(existing_ids)
+            if brain._entity_graph:
+                brain._prune_entity_graph(set(existing_ids))
         return {
             "status": "success",
             "deleted": len(existing_ids),

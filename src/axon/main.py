@@ -42,6 +42,31 @@ logger = logging.getLogger("Axon")
 # XDG-style user config dir — consistent across Linux / macOS / Windows
 _USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "config.yaml")
 
+# GraphRAG reduce-phase system prompt (GAP 1)
+_GRAPHRAG_REDUCE_SYSTEM_PROMPT = (
+    "You are a helpful assistant responding to questions about a dataset by synthesizing the "
+    "perspectives from multiple data analysts.\n\n"
+    "Generate a response of the target length and format that responds to the user's question, "
+    "summarize all the reports from multiple analysts who focused on different parts of the "
+    "dataset.\n\n"
+    "Note that the analysts' reports provided below are ranked in the importance of addressing "
+    "the user's question.\n\n"
+    "If you don't know the answer or if the input reports do not contain sufficient information "
+    "to provide an answer, just say so. Do not make anything up.\n\n"
+    "The response should preserve the original meaning and use of modal verbs such as 'shall', "
+    "'may' or 'will'.\n\n"
+    "Points supported by data should list their data references as follows:\n"
+    '"This is an example sentence supported by multiple data references [Data: Reports (report1), (report2)]."\n\n'
+    "**Do not list more than 5 data references in a single reference**. Instead, list the top 5 "
+    'most relevant references and add "+more" to indicate that there are more.\n\n'
+    "Everything needs to be explained at length and in detail, with specific quotes and passages "
+    "from the data providing evidence to back up each and every claim."
+)
+
+_GRAPHRAG_NO_DATA_ANSWER = (
+    "I am sorry but I am unable to answer this question given the provided data."
+)
+
 
 @dataclass
 class AxonConfig:
@@ -191,9 +216,15 @@ class AxonConfig:
     hybrid_mode: Literal["weighted", "rrf"] = "weighted"  # Hybrid fusion mode
 
     # Chunking
-    chunk_strategy: Literal["recursive", "semantic"] = "semantic"
+    chunk_strategy: Literal["recursive", "semantic", "markdown", "cosine_semantic"] = "semantic"
     chunk_size: int = 1000
     chunk_overlap: int = 200
+    # Cosine semantic chunking (only active when chunk_strategy="cosine_semantic")
+    cosine_semantic_threshold: float = 0.7
+    cosine_semantic_max_size: int = 500
+    # MMR deduplication — reorders and removes near-duplicate retrieved chunks
+    mmr: bool = False
+    mmr_lambda: float = 0.5  # 1.0 = pure relevance, 0.0 = pure diversity
 
     # Re-ranking
     rerank: bool = False
@@ -248,12 +279,159 @@ class AxonConfig:
     # questions that no single leaf chunk can answer.
     raptor: bool = True
     raptor_chunk_group_size: int = 5
+    raptor_max_levels: int = 2  # P3: recursive summarization depth
+    raptor_cache_summaries: bool = True  # P5: skip LLM when window content unchanged
+    raptor_drilldown: bool = True  # P1: replace summary hits with leaf chunks
+    raptor_drilldown_top_k: int = 5  # P1: max leaves substituted per summary hit
+    raptor_retrieval_mode: str = (
+        "tree_traversal"  # P4: tree_traversal|summary_first|corpus_overview
+    )
+    raptor_graphrag_leaf_skip_threshold: int = 20  # P2: skip GraphRAG on sources >= N leaf chunks
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
     # stored in an entity→doc_id map.  At retrieval time, entities found in the
     # query are used to expand the result set with graph-connected documents.
     graph_rag: bool = True
+
+    # Maximum number of graph-expanded (entity-linked) documents to inject beyond
+    # the normal top_k slice.  Set to 0 to disable the guarantee and fall back to
+    # the old behaviour of truncating the combined list to top_k.
+    graph_rag_budget: int = 3
+
+    # Relation extraction: extract SUBJECT | RELATION | OBJECT triples during ingest
+    # and use 1-hop graph traversal at retrieval time for richer context expansion.
+    graph_rag_relations: bool = True
+
+    # Community detection: cluster the entity graph into thematic communities after ingest.
+    # Requires: pip install networkx
+    graph_rag_community: bool = True
+
+    # Run community detection in the background (non-blocking) after ingest.
+    graph_rag_community_async: bool = True
+
+    # Number of top community summaries to inject into the prompt during global search.
+    graph_rag_community_top_k: int = 5
+
+    # GraphRAG query mode: "local" (entity/relation context), "global" (community summaries),
+    # or "hybrid" (both).
+    graph_rag_mode: str = "local"  # "local" | "global" | "hybrid"
+
+    # Global search map-reduce parameters
+    graph_rag_global_min_score: int = 20  # minimum map-phase score to include
+    graph_rag_global_top_points: int = 50  # max points assembled in reduce phase
+    graph_rag_community_level: int = 0  # which hierarchy level for global search
+
+    # Hierarchical community detection
+    graph_rag_community_levels: int = 2  # number of hierarchy levels
+
+    # Entity embedding matching at query time
+    graph_rag_entity_embedding_match: bool = True
+    graph_rag_entity_match_threshold: float = 0.5
+
+    # Community report vector store indexing
+    graph_rag_index_community_reports: bool = True
+
+    # Entity description canonicalization
+    graph_rag_canonicalize: bool = False
+    graph_rag_canonicalize_min_occurrences: int = 2  # GAP 8: was 3
+
+    # Claim / covariate extraction (off by default)
+    graph_rag_claims: bool = False
+
+    # GAP 1: Global search reduce phase
+    graph_rag_global_reduce_max_tokens: int = 8000
+    graph_rag_global_map_max_length: int = 1000
+    graph_rag_global_reduce_max_length: int = 2000
+    graph_rag_global_allow_general_knowledge: bool = False
+
+    # GAP 2: Hierarchical community detection parameters
+    graph_rag_community_max_cluster_size: int = 10
+    graph_rag_community_use_lcc: bool = False
+    graph_rag_leiden_seed: int = 42
+
+    # GAP 3a: Community summarization context budget
+    graph_rag_community_max_context_tokens: int = 4000
+
+    # GAP 3b: Relation description canonicalization
+    graph_rag_canonicalize_relations: bool = False
+    graph_rag_canonicalize_relations_min_occurrences: int = 2
+
+    # GAP 3c: Include claims in community reports
+    graph_rag_community_include_claims: bool = False
+
+    # GAP 4: Local search token budget and ranking controls
+    graph_rag_local_max_context_tokens: int = 8000
+    graph_rag_local_community_prop: float = 0.25
+    graph_rag_local_text_unit_prop: float = 0.5
+    graph_rag_local_top_k_entities: int = 10
+    graph_rag_local_top_k_relationships: int = 10
+    graph_rag_local_include_relationship_weight: bool = False
+    # TASK 11: Unified candidate ranking weights
+    graph_rag_local_entity_weight: float = 3.0
+    graph_rag_local_relation_weight: float = 2.0
+    graph_rag_local_community_weight: float = 1.5
+    graph_rag_local_text_unit_weight: float = 1.0
+
+    # TASK 12: Runtime cost reduction — community triage
+    graph_rag_community_min_size: int = 3  # communities smaller than this → template only
+    graph_rag_community_llm_top_n_per_level: int = 50  # max LLM-summarized per level (0=unlimited)
+    graph_rag_community_llm_max_total: int = (
+        200  # hard cap on LLM calls across all levels (0=unlimited)
+    )
+    # TASK 12: Lazy community generation — skip summarization at finalize; generate on first global query
+    graph_rag_community_lazy: bool = True
+    # TASK 12: Global search pre-filter — cap communities entering map-reduce (0=no cap)
+    graph_rag_global_top_communities: int = 0
+    # TASK 12: RAPTOR source-size guard — skip RAPTOR for sources larger than this MB (0=no limit)
+    raptor_max_source_size_mb: float = 0.0
+
+    # TASK 13A: Deferred batch saves — suppress per-call disk writes during batch ingest.
+    # When True: BM25, entity graph, and relation graph saves deferred to finalize_ingest().
+    # Reduces O(N²) disk writes to O(1) per session.
+    # Crash recovery: in-memory state only; re-ingest affected sources on restart.
+    ingest_batch_mode: bool = False
+
+    # TASK 13B: Per-source chunk count cap after splitting.
+    # Prevents chunk explosion from large structured files (JSON, TSV, CSV).
+    # Keeps first N chunks (document order). 0 = unlimited (current behavior).
+    max_chunks_per_source: int = 0
+
+    # TASK 13C: When True, detected dataset_type gates RAPTOR and GraphRAG.
+    # Tabular, manifest, and reference sources skip both enrichments.
+    # False (default) = current behavior.
+    source_policy_enabled: bool = False
+
+    # GAP 6: Async rebuild debounce
+    graph_rag_community_rebuild_debounce_s: float = 2.0
+
+    # TASK 7: Exact-token entity boost in local search
+    graph_rag_exact_entity_boost: float = 3.0
+
+    # TASK 7: Deferred community rebuild (batch ingest mode)
+    graph_rag_community_defer: bool = True
+
+    # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction
+    graph_rag_include_raptor_summaries: bool = False
+
+    # TASK 14: Dedicated thread pool size for map-reduce phase (0 = use max_workers).
+    # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
+    # from starving the shared executor during concurrent ingest.
+    graph_rag_map_workers: int = 0
+
+    # TASK 14: Alternative NER backend. "gliner" skips LLM for entity extraction.
+    # Relations and claims still use LLM. pip install axon[gliner]
+    graph_rag_ner_backend: Literal["llm", "gliner"] = "llm"
+
+    # TASK 14: Token-level compression of community reports before map-reduce LLM calls.
+    # Uses LLMLingua-2. pip install axon[llmlingua]
+    graph_rag_report_compress: bool = False
+    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0–1.0)
+
+    # TASK 14: Auto-route queries based on complexity.
+    # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
+    # "off" (default): use graph_rag_mode as configured.
+    graph_rag_auto_route: Literal["off", "heuristic", "llm"] = "off"
 
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
@@ -262,7 +440,9 @@ class AxonConfig:
     max_workers: int = 8
 
     # Dataset type for type-specific chunking. "auto" uses content-based heuristics.
-    dataset_type: Literal["auto", "codebase", "paper", "doc", "discussion", "knowledge"] = "auto"
+    dataset_type: Literal[
+        "auto", "codebase", "paper", "doc", "discussion", "knowledge", "manifest", "reference"
+    ] = "auto"
 
     # Smart re-ingest: track doc versions and re-ingest only changed documents
     smart_ingest: bool = False
@@ -424,6 +604,15 @@ offline:
 
         if "max_workers" in data:
             config_dict["max_workers"] = data["max_workers"]
+
+        if "ingest_batch_mode" in data:
+            config_dict["ingest_batch_mode"] = data["ingest_batch_mode"]
+
+        if "max_chunks_per_source" in data:
+            config_dict["max_chunks_per_source"] = data["max_chunks_per_source"]
+
+        if "source_policy_enabled" in data:
+            config_dict["source_policy_enabled"] = data["source_policy_enabled"]
 
         if "projects_base" in data:
             config_dict["projects_root"] = data["projects_base"]
@@ -1173,6 +1362,9 @@ class OpenVectorStore:
         elif self.provider == "qdrant" and self.client:
             self.client = None
 
+    # Chroma hard limit per collection.add() call.
+    _CHROMA_MAX_BATCH = 5000
+
     def add(
         self,
         ids: list[str],
@@ -1181,27 +1373,51 @@ class OpenVectorStore:
         metadatas: list[dict] = None,
     ):
         if self.provider == "chroma":
-            try:
-                self.collection.add(
-                    ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas
-                )
-            except Exception as e:
-                if "dimension" in str(e).lower():
-                    logger.error(
-                        f"Embedding dimension mismatch in ChromaDB! Expected: {self.config.embedding_model}. "
-                        "Try clearing the project data or switch to a different project."
+            # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
+            # so that large post-split payloads (e.g. long-contract corpora) do not crash.
+            _bs = OpenVectorStore._CHROMA_MAX_BATCH
+            for _start in range(0, max(len(ids), 1), _bs):
+                _end = _start + _bs
+                _ids_b = ids[_start:_end]
+                _texts_b = texts[_start:_end]
+                _emb_b = embeddings[_start:_end]
+                _meta_b = metadatas[_start:_end] if metadatas is not None else None
+                if not _ids_b:
+                    break
+                try:
+                    self.collection.add(
+                        ids=_ids_b,
+                        documents=_texts_b,
+                        embeddings=_emb_b,
+                        metadatas=_meta_b,
                     )
-                raise
+                except Exception as e:
+                    if "dimension" in str(e).lower():
+                        logger.error(
+                            f"Embedding dimension mismatch in ChromaDB! Expected: {self.config.embedding_model}. "
+                            "Try clearing the project data or switch to a different project."
+                        )
+                    raise
         elif self.provider == "qdrant":
             from qdrant_client.models import PointStruct
 
-            points = []
-            for i, (id, embedding, text) in enumerate(zip(ids, embeddings, texts)):
-                payload = {"text": text}
-                if metadatas:
-                    payload.update(metadatas[i])
-                points.append(PointStruct(id=id, vector=embedding, payload=payload))
-            self.client.upsert(collection_name="axon", points=points)
+            # Build and upsert PointStructs incrementally per batch so peak
+            # memory stays bounded to _CHROMA_MAX_BATCH rows, not O(N).
+            _bs = OpenVectorStore._CHROMA_MAX_BATCH
+            _n = max(len(ids), 1)
+            for _start in range(0, _n, _bs):
+                _end = _start + _bs
+                _batch = [
+                    PointStruct(
+                        id=ids[i],
+                        vector=embeddings[i],
+                        payload={"text": texts[i], **(metadatas[i] if metadatas else {})},
+                    )
+                    for i in range(_start, min(_end, len(ids)))
+                ]
+                if not _batch:
+                    break
+                self.client.upsert(collection_name="axon", points=_batch)
         elif self.provider == "lancedb":
             import json
 
@@ -1273,7 +1489,16 @@ class OpenVectorStore:
         self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
     ) -> list[dict]:
         if self.provider == "chroma":
-            results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
+            where = None
+            if filter_dict:
+                if len(filter_dict) == 1:
+                    key, val = next(iter(filter_dict.items()))
+                    where = {key: {"$eq": val}}
+                else:
+                    where = {"$and": [{k: {"$eq": v}} for k, v in filter_dict.items()]}
+            results = self.collection.query(
+                query_embeddings=[query_embedding], n_results=top_k, where=where
+            )
             return [
                 {
                     "id": results["ids"][0][i],
@@ -1649,6 +1874,20 @@ Your primary goal is to help the user by answering questions based on the provid
                 self.splitter = SemanticTextSplitter(
                     chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
                 )
+            elif self.config.chunk_strategy == "markdown":
+                from axon.splitters import MarkdownSplitter
+
+                self.splitter = MarkdownSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
+            elif self.config.chunk_strategy == "cosine_semantic":
+                from axon.splitters import CosineSemanticSplitter
+
+                self.splitter = CosineSemanticSplitter(
+                    embed_fn=self.embedding.embed,
+                    breakpoint_threshold=self.config.cosine_semantic_threshold,
+                    max_chunk_size=self.config.cosine_semantic_max_size,
+                )
             else:
                 from axon.splitters import RecursiveCharacterTextSplitter
 
@@ -1676,6 +1915,53 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
+
+        # GraphRAG relation graph: {source_entity_lower: [{target, relation, chunk_id, description}]}
+        self._relation_graph: dict = self._load_relation_graph()
+
+        # GraphRAG community detection state
+        self._community_levels: dict = self._load_community_levels()
+        self._community_summaries: dict = self._load_community_summaries()
+        self._community_graph_dirty: bool = False
+        self._community_build_in_progress: bool = False
+        self._last_matched_entities: list = []
+
+        # GraphRAG entity embeddings (for embedding-based entity matching at query time)
+        self._entity_embeddings: dict = self._load_entity_embeddings()
+
+        # GraphRAG entity description buffer (transient, not persisted)
+        self._entity_description_buffer: dict = {}
+
+        # P5: In-memory RAPTOR summary cache {cache_key: summary_text}
+        self._raptor_summary_cache: dict[str, str] = {}
+
+        # GraphRAG claims graph
+        self._claims_graph: dict = self._load_claims_graph()
+
+        # GAP 2: Hierarchical community parent/child structure
+        self._community_hierarchy: dict[int, int] = self._load_community_hierarchy()
+        self._community_children: dict[int, list[int]] = {}
+        # Rebuild children from hierarchy on load
+        for child_cid, parent_cid in self._community_hierarchy.items():
+            if parent_cid is not None:
+                if parent_cid not in self._community_children:
+                    self._community_children[parent_cid] = []
+                if child_cid not in self._community_children[parent_cid]:
+                    self._community_children[parent_cid].append(child_cid)
+
+        # GAP 3b: Relation description buffer (transient, not persisted)
+        self._relation_description_buffer: dict = (
+            {}
+        )  # (subject_lower, object_lower) -> [descriptions]
+
+        # GAP 6: Rebuild lock to prevent concurrent community rebuilds
+        self._community_rebuild_lock: threading.Lock = threading.Lock()
+
+        # GAP 9: TextUnit reverse maps (in-memory only, rebuilt during ingest)
+        self._text_unit_entity_map: dict[str, list[str]] = {}  # chunk_id -> [entity_names]
+        self._text_unit_relation_map: dict[
+            str, list[tuple[str, str]]
+        ] = {}  # chunk_id -> [(src, tgt)]
 
         # Shared executor for background/parallel tasks
         from concurrent.futures import ThreadPoolExecutor
@@ -1818,33 +2104,176 @@ Your primary goal is to help the user by answering questions based on the provid
             self._query_cache = OrderedDict()
         self._ingested_hashes = self._load_hash_store()
         self._entity_graph = self._load_entity_graph()
+        self._relation_graph = self._load_relation_graph()
+        self._community_levels = self._load_community_levels()
+        self._community_summaries = self._load_community_summaries()
+        self._entity_embeddings = self._load_entity_embeddings()
+        self._entity_description_buffer = {}
+        self._claims_graph = self._load_claims_graph()
+        self._community_graph_dirty = False
+        # GAP 2: reload hierarchy
+        self._community_hierarchy = self._load_community_hierarchy()
+        self._community_children = {}
+        for child_cid, parent_cid in self._community_hierarchy.items():
+            if parent_cid is not None:
+                if parent_cid not in self._community_children:
+                    self._community_children[parent_cid] = []
+                if child_cid not in self._community_children[parent_cid]:
+                    self._community_children[parent_cid].append(child_cid)
+        # GAP 3b, 9: reset transient maps
+        self._relation_description_buffer = {}
+        self._text_unit_entity_map = {}
+        self._text_unit_relation_map = {}
+        self._raptor_summary_cache = {}
 
-        # Merge entity graphs from all descendant projects so that GraphRAG
-        # relationship expansion works when querying from a parent project.
+        # Merge entity graphs and relation graphs from all descendant projects so
+        # that GraphRAG expansion is coherent when querying from a parent project.
         if descendants:
             import pathlib
 
             for desc in descendants:
                 desc_bm25_path = project_bm25_path(desc)
-                desc_graph_path = pathlib.Path(desc_bm25_path) / ".entity_graph.json"
+                desc_base = pathlib.Path(desc_bm25_path)
+
+                # --- entity graph ---
+                desc_graph_path = desc_base / ".entity_graph.json"
                 if desc_graph_path.exists():
                     try:
                         import json as _json
 
                         raw = _json.loads(desc_graph_path.read_text(encoding="utf-8"))
                         if isinstance(raw, dict):
-                            for entity, doc_ids in raw.items():
-                                if isinstance(entity, str) and isinstance(doc_ids, list):
-                                    if entity not in self._entity_graph:
-                                        self._entity_graph[entity] = []
+                            for entity, node in raw.items():
+                                if not isinstance(entity, str):
+                                    continue
+                                if isinstance(node, dict):
+                                    doc_ids = node.get("chunk_ids", [])
+                                elif isinstance(node, list):
+                                    doc_ids = node
+                                else:
+                                    continue
+                                if not doc_ids:
+                                    continue
+                                existing = self._entity_graph.get(entity)
+                                if existing is None:
+                                    if isinstance(node, dict):
+                                        self._entity_graph[entity] = {
+                                            "description": node.get("description", ""),
+                                            "type": node.get("type", "UNKNOWN"),
+                                            "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
+                                            "frequency": len(
+                                                [d for d in doc_ids if isinstance(d, str)]
+                                            ),
+                                            "degree": node.get("degree", 0),
+                                        }
+                                    else:
+                                        self._entity_graph[entity] = [
+                                            d for d in doc_ids if isinstance(d, str)
+                                        ]
+                                elif isinstance(existing, dict):
+                                    existing_ids = set(existing.get("chunk_ids", []))
+                                    new_ids = [
+                                        d
+                                        for d in doc_ids
+                                        if isinstance(d, str) and d not in existing_ids
+                                    ]
+                                    if new_ids:
+                                        existing.setdefault("chunk_ids", []).extend(new_ids)
+                                        existing["frequency"] = len(existing["chunk_ids"])
+                                else:
+                                    # existing is legacy list
+                                    existing_ids = set(existing)
                                     for doc_id in doc_ids:
-                                        if (
-                                            isinstance(doc_id, str)
-                                            and doc_id not in self._entity_graph[entity]
-                                        ):
-                                            self._entity_graph[entity].append(doc_id)
+                                        if isinstance(doc_id, str) and doc_id not in existing_ids:
+                                            existing.append(doc_id)
+                                            existing_ids.add(doc_id)
                     except Exception as e:
                         logger.warning(f"Could not merge entity graph for '{desc}': {e}")
+
+                # --- relation graph ---
+                desc_rel_path = desc_base / ".relation_graph.json"
+                if desc_rel_path.exists():
+                    try:
+                        import json as _json
+
+                        raw = _json.loads(desc_rel_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            for src, entries in raw.items():
+                                if isinstance(src, str) and isinstance(entries, list):
+                                    if src not in self._relation_graph:
+                                        self._relation_graph[src] = []
+                                    existing = {
+                                        (e.get("target"), e.get("relation"), e.get("chunk_id"))
+                                        for e in self._relation_graph[src]
+                                    }
+                                    for entry in entries:
+                                        if isinstance(entry, dict):
+                                            key = (
+                                                entry.get("target"),
+                                                entry.get("relation"),
+                                                entry.get("chunk_id"),
+                                            )
+                                            if key not in existing:
+                                                self._relation_graph[src].append(entry)
+                                                existing.add(key)
+                    except Exception as e:
+                        logger.warning(f"Could not merge relation graph for '{desc}': {e}")
+
+                # --- entity embeddings ---
+                desc_emb_path = desc_base / ".entity_embeddings.json"
+                if desc_emb_path.exists():
+                    try:
+                        raw = _json.loads(desc_emb_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            for entity_key, embedding in raw.items():
+                                if (
+                                    isinstance(entity_key, str)
+                                    and entity_key not in self._entity_embeddings
+                                ):
+                                    self._entity_embeddings[entity_key] = embedding
+                    except Exception as e:
+                        logger.warning(f"Could not merge entity embeddings for '{desc}': {e}")
+
+                # --- claims ---
+                desc_claims_path = desc_base / ".claims_graph.json"
+                if desc_claims_path.exists():
+                    try:
+                        raw = _json.loads(desc_claims_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            for chunk_id, claims in raw.items():
+                                if isinstance(chunk_id, str) and isinstance(claims, list):
+                                    if chunk_id not in self._claims_graph:
+                                        self._claims_graph[chunk_id] = []
+                                    existing_claim_keys = {
+                                        (c.get("subject"), c.get("object"), c.get("type"))
+                                        for c in self._claims_graph[chunk_id]
+                                    }
+                                    for claim in claims:
+                                        if isinstance(claim, dict):
+                                            key = (
+                                                claim.get("subject"),
+                                                claim.get("object"),
+                                                claim.get("type"),
+                                            )
+                                            if key not in existing_claim_keys:
+                                                self._claims_graph[chunk_id].append(claim)
+                                                existing_claim_keys.add(key)
+                    except Exception as e:
+                        logger.warning(f"Could not merge claims for '{desc}': {e}")
+
+                # --- community summaries (namespaced to avoid community-ID collision) ---
+                desc_summ_path = desc_base / ".community_summaries.json"
+                if desc_summ_path.exists():
+                    try:
+                        raw = _json.loads(desc_summ_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            for summ_key, summary in raw.items():
+                                if isinstance(summ_key, str) and isinstance(summary, dict):
+                                    namespaced_key = f"desc_{desc}_{summ_key}"
+                                    if namespaced_key not in self._community_summaries:
+                                        self._community_summaries[namespaced_key] = dict(summary)
+                    except Exception as e:
+                        logger.warning(f"Could not merge community summaries for '{desc}': {e}")
 
         self._active_project = name
         set_active_project(name)
@@ -1975,8 +2404,12 @@ Your primary goal is to help the user by answering questions based on the provid
         else:
             logger.warning(msg)
 
-    def _load_entity_graph(self) -> dict[str, list[str]]:
-        """Load persisted entity→doc_id graph from disk."""
+    def _load_entity_graph(self) -> dict:
+        """Load persisted entity→doc_id graph from disk.
+
+        Shape (new): {entity_lower: {"description": str, "chunk_ids": list[str]}}
+        Migrates legacy flat-list format: {entity_lower: [chunk_id, ...]}
+        """
         import json
         import pathlib
 
@@ -1986,11 +2419,27 @@ Your primary goal is to help the user by answering questions based on the provid
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(raw, dict):
                     return {}
-                cleaned: dict[str, list[str]] = {}
+                cleaned: dict = {}
                 for key, value in raw.items():
-                    if not isinstance(key, str) or not isinstance(value, list):
+                    if not isinstance(key, str):
                         continue
-                    cleaned[key] = [v for v in value if isinstance(v, str)]
+                    if isinstance(value, list):
+                        # Legacy flat-list format — migrate
+                        cleaned[key] = {
+                            "description": "",
+                            "type": "UNKNOWN",
+                            "chunk_ids": [v for v in value if isinstance(v, str)],
+                            "frequency": len([v for v in value if isinstance(v, str)]),
+                            "degree": 0,
+                        }
+                    elif isinstance(value, dict) and "chunk_ids" in value:
+                        node = value
+                        # Migration: add missing fields with defaults
+                        node.setdefault("type", "UNKNOWN")
+                        node.setdefault("frequency", len(node.get("chunk_ids", [])))
+                        node.setdefault("degree", 0)
+                        cleaned[key] = node
+                    # Otherwise skip malformed entries
                 return cleaned
             except Exception:
                 pass
@@ -2005,34 +2454,1913 @@ Your primary goal is to help the user by answering questions based on the provid
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
 
-    def _extract_entities(self, text: str) -> list[str]:
+    def _load_relation_graph(self) -> dict:
+        """Load persisted relation graph from disk.
+
+        Shape: {source_entity_lower: [{target: str, relation: str, chunk_id: str}]}
+        """
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict):
+                    return {}
+                cleaned: dict = {}
+                for key, value in raw.items():
+                    if not isinstance(key, str) or not isinstance(value, list):
+                        continue
+                    cleaned[key] = [
+                        entry
+                        for entry in value
+                        if isinstance(entry, dict)
+                        and "target" in entry
+                        and "relation" in entry
+                        and "chunk_id" in entry
+                    ]
+                return cleaned
+            except Exception:
+                pass
+        return {}
+
+    def _save_relation_graph(self) -> None:
+        """Persist relation graph to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._relation_graph), encoding="utf-8")
+
+    def _load_community_map(self) -> dict:
+        """Backward-compat: returns finest community level map."""
+        return self._community_map  # uses the property
+
+    def _save_community_map(self) -> None:
+        """Backward-compat: delegates to _save_community_levels."""
+        self._save_community_levels()
+
+    def _load_community_levels(self) -> dict:
+        """Load persisted hierarchical community levels from disk.
+
+        Shape: {level_int: {entity_lower: community_id}}
+        Falls back to old .community_map.json if levels file is missing.
+        """
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".community_levels.json"
+        try:
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return {int(k): v for k, v in raw.items() if isinstance(v, dict)}
+        except Exception:
+            pass
+        # Fall back to old .community_map.json if levels file missing
+        old_path = pathlib.Path(self.config.bm25_path) / ".community_map.json"
+        try:
+            if old_path.exists():
+                raw = json.loads(old_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    filtered = {
+                        k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, int)
+                    }
+                    if filtered:
+                        return {0: filtered}
+        except Exception:
+            pass
+        return {}
+
+    def _save_community_levels(self) -> None:
+        """Persist hierarchical community levels to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".community_levels.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({str(k): v for k, v in self._community_levels.items()}),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.debug(f"Could not save community levels: {e}")
+
+    def _load_community_hierarchy(self) -> dict:
+        """Load persisted community hierarchy from disk.
+
+        Shape: {cluster_id_int: parent_cluster_id_int_or_None}
+        """
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".community_hierarchy.json"
+        try:
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    # JSON keys are strings; support both legacy int keys and
+                    # level-qualified string keys like "1_3".
+                    result = {}
+                    for k, v in raw.items():
+                        key = k if ("_" in str(k)) else (int(k) if str(k).isdigit() else k)
+                        val = (
+                            None
+                            if v is None
+                            else (
+                                v
+                                if (isinstance(v, str) and "_" in v)
+                                else (int(str(v)) if str(v).isdigit() else v)
+                            )
+                        )
+                        result[key] = val
+                    return result
+        except Exception:
+            pass
+        return {}
+
+    def _save_community_hierarchy(self) -> None:
+        """Persist community hierarchy to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".community_hierarchy.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({str(k): v for k, v in self._community_hierarchy.items()}),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.debug(f"Could not save community hierarchy: {e}")
+
+    @property
+    def _community_map(self) -> dict:
+        """Alias for the finest-grained community level (backward compat)."""
+        if not self._community_levels:
+            return {}
+        finest = max(self._community_levels.keys())
+        return self._community_levels.get(finest, {})
+
+    @_community_map.setter
+    def _community_map(self, value: dict) -> None:
+        """For backward compat: setting _community_map sets level 0 in a single-level structure."""
+        if value:
+            self._community_levels = {0: value}
+        else:
+            self._community_levels = {}
+
+    def _load_community_summaries(self) -> dict:
+        """Load persisted community summaries from disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".community_summaries.json"
+        try:
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return raw
+        except Exception:
+            pass
+        return {}
+
+    def _save_community_summaries(self) -> None:
+        """Persist community summaries to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".community_summaries.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._community_summaries), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Could not save community summaries: {e}")
+
+    def _load_entity_embeddings(self) -> dict:
+        """Load persisted entity embeddings from disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".entity_embeddings.json"
+        try:
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return raw
+        except Exception:
+            pass
+        return {}
+
+    def _save_entity_embeddings(self) -> None:
+        """Persist entity embeddings to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".entity_embeddings.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._entity_embeddings), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Could not save entity embeddings: {e}")
+
+    def _load_claims_graph(self) -> dict:
+        """Load persisted claims graph from disk.
+
+        Shape: {chunk_id: [claim_dict, ...]}
+        """
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".claims_graph.json"
+        try:
+            if path.exists():
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return raw
+        except Exception:
+            pass
+        return {}
+
+    def _save_claims_graph(self) -> None:
+        """Persist claims graph to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".claims_graph.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._claims_graph), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Could not save claims graph: {e}")
+
+    def _build_networkx_graph(self):
+        """Build a NetworkX undirected graph from entity and relation data."""
+        import networkx as nx
+
+        G = nx.Graph()
+        for entity, node in self._entity_graph.items():
+            desc = node.get("description", "") if isinstance(node, dict) else ""
+            G.add_node(entity, description=desc)
+        for src, entries in self._relation_graph.items():
+            for entry in entries:
+                tgt = entry.get("target", "")
+                if src and tgt:
+                    edge_weight = entry.get("weight", 1)
+                    if G.has_edge(src, tgt):
+                        G[src][tgt]["weight"] += edge_weight
+                    else:
+                        G.add_edge(
+                            src,
+                            tgt,
+                            weight=edge_weight,
+                            relation=entry.get("relation", ""),
+                            description=entry.get("description", ""),
+                        )
+        return G
+
+    def _run_community_detection(self) -> dict:
+        """Run Louvain community detection. Returns {entity_lower: community_id}."""
+        try:
+            import networkx as nx  # noqa: F401 — ensures ImportError fires when networkx is absent
+            import networkx.algorithms.community as nx_comm
+        except ImportError:
+            logger.warning(
+                "GraphRAG community detection requires networkx. "
+                "Install with: pip install networkx"
+            )
+            return {}
+        G = self._build_networkx_graph()
+        if len(G.nodes) < 2:
+            return dict.fromkeys(G.nodes, 0)
+        try:
+            communities = nx_comm.louvain_communities(G, seed=42)
+            mapping = {}
+            for cid, members in enumerate(communities):
+                for entity in members:
+                    mapping[entity] = cid
+            return mapping
+        except Exception as e:
+            logger.warning(f"Community detection failed: {e}")
+            return {}
+
+    def _run_hierarchical_community_detection(self) -> tuple:
+        """Run hierarchical community detection.
+
+        Returns:
+            (community_levels, community_hierarchy, community_children)
+            - community_levels: {level_int: {entity_lower: cluster_id}}
+            - community_hierarchy: {cluster_id: parent_cluster_id}  (None for root)
+            - community_children: {cluster_id: [child_cluster_ids]}
+        """
+        try:
+            import networkx as nx
+        except ImportError:
+            logger.warning(
+                "GraphRAG community detection requires networkx. "
+                "Install with: pip install networkx"
+            )
+            return {}, {}, {}
+
+        G = self._build_networkx_graph()
+        if G.number_of_nodes() < 2:
+            nodes = list(G.nodes())
+            return {0: dict.fromkeys(nodes, 0)}, {0: None}, {0: []}
+
+        n_levels = max(1, getattr(self.config, "graph_rag_community_levels", 2))
+        max_cluster_size = getattr(self.config, "graph_rag_community_max_cluster_size", 10)
+        seed = getattr(self.config, "graph_rag_leiden_seed", 42)
+        use_lcc = getattr(self.config, "graph_rag_community_use_lcc", True)
+
+        components = list(nx.connected_components(G))
+        if use_lcc and components:
+            try:
+                lcc_nodes = max(components, key=len)
+                dropped = G.number_of_nodes() - len(lcc_nodes)
+                if dropped > 0:
+                    logger.info(
+                        f"GraphRAG: use_lcc=True — clustering {len(lcc_nodes)} nodes, "
+                        f"dropping {dropped} nodes in {len(components) - 1} smaller components"
+                    )
+                G = G.subgraph(lcc_nodes).copy()
+            except Exception:
+                pass
+        elif not use_lcc and len(components) > 1:
+            logger.debug(
+                f"GraphRAG: clustering all {len(components)} connected components "
+                f"({G.number_of_nodes()} total nodes)"
+            )
+
+        try:
+            # Try graspologic hierarchical Leiden
+            from graspologic.partition import hierarchical_leiden
+
+            partitions = hierarchical_leiden(G, max_cluster_size=max_cluster_size, random_seed=seed)
+            community_levels: dict = {}
+            community_hierarchy: dict = {}
+            community_children: dict = {}
+
+            for triple in partitions:
+                level = triple.level
+                entity = triple.node
+                cluster = triple.cluster
+                parent = getattr(triple, "parent_cluster", None)
+
+                if level not in community_levels:
+                    community_levels[level] = {}
+                community_levels[level][entity] = cluster
+
+                if cluster not in community_hierarchy:
+                    community_hierarchy[cluster] = parent
+                if parent is not None:
+                    if parent not in community_children:
+                        community_children[parent] = []
+                    if cluster not in community_children[parent]:
+                        community_children[parent].append(cluster)
+
+            # Normalize Leiden hierarchy to level-qualified string keys to match Louvain format
+            # and avoid cross-level integer collisions.
+            normalized_hierarchy: dict = {}
+            normalized_children: dict = {}
+            # Build a level-lookup for each (level, cluster) → level-qualified key
+            cluster_to_level: dict = {}
+            for lvl, cmap in community_levels.items():
+                for _ent, cid in cmap.items():
+                    if cid not in cluster_to_level:
+                        cluster_to_level[cid] = lvl
+            for raw_cid, raw_parent in community_hierarchy.items():
+                lvl = cluster_to_level.get(raw_cid, 0)
+                norm_key = f"{lvl}_{raw_cid}"
+                if raw_parent is None:
+                    norm_parent = None
+                else:
+                    parent_lvl = cluster_to_level.get(raw_parent, max(0, lvl - 1))
+                    norm_parent = f"{parent_lvl}_{raw_parent}"
+                normalized_hierarchy[norm_key] = norm_parent
+                if norm_parent is not None:
+                    if norm_parent not in normalized_children:
+                        normalized_children[norm_parent] = []
+                    if norm_key not in normalized_children[norm_parent]:
+                        normalized_children[norm_parent].append(norm_key)
+
+            return community_levels, normalized_hierarchy, normalized_children
+
+        except ImportError:
+            logger.warning(
+                "GraphRAG: graspologic not installed — falling back to leidenalg/Louvain. "
+                "pip install axon[graphrag]"
+            )
+
+        # Tier-2 fallback: multi-resolution Leiden via leidenalg (better than Louvain)
+        try:
+            import igraph as _ig
+            import leidenalg as _la
+
+            try:
+                import numpy as np
+
+                resolutions = list(np.linspace(0.5, 1.5, n_levels)) if n_levels > 1 else [1.0]
+            except ImportError:
+                step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
+                resolutions = [0.5 + i * step for i in range(n_levels)]
+
+            _G_ig = _ig.Graph.from_networkx(G)
+            community_levels: dict = {}
+            for level_idx, resolution in enumerate(resolutions):
+                try:
+                    partition = _la.find_partition(
+                        _G_ig,
+                        _la.ModularityVertexPartition,
+                        seed=seed,
+                    )
+                    node_names = (
+                        _G_ig.vs["_nx_name"]
+                        if "_nx_name" in _G_ig.vs.attributes()
+                        else list(G.nodes())
+                    )
+                    cmap = {}
+                    for cid, members in enumerate(partition):
+                        for idx in members:
+                            cmap[node_names[idx]] = cid
+                    community_levels[level_idx] = cmap
+                except Exception as _e:
+                    logger.debug("leidenalg at resolution %s failed: %s", resolution, _e)
+
+            if community_levels:
+                # Build synthetic hierarchy (same approach as Louvain fallback below)
+                community_hierarchy: dict = {}
+                community_children: dict = {}
+                if len(community_levels) > 1:
+                    _levels_sorted = sorted(community_levels.keys())
+                    for _i in range(1, len(_levels_sorted)):
+                        _fine = _levels_sorted[_i]
+                        _coarse = _levels_sorted[_i - 1]
+                        for _fine_cid in set(community_levels[_fine].values()):
+                            _fine_key = f"{_fine}_{_fine_cid}"
+                            _members = [
+                                n for n, c in community_levels[_fine].items() if c == _fine_cid
+                            ]
+                            _votes: dict = {}
+                            for _m in _members:
+                                _p = community_levels[_coarse].get(_m)
+                                if _p is not None:
+                                    _votes[_p] = _votes.get(_p, 0) + 1
+                            _parent_cid = max(_votes, key=_votes.get) if _votes else None
+                            _parent_key = (
+                                f"{_coarse}_{_parent_cid}" if _parent_cid is not None else None
+                            )
+                            community_hierarchy[_fine_key] = _parent_key
+                            if _parent_key:
+                                community_children.setdefault(_parent_key, [])
+                                if _fine_key not in community_children[_parent_key]:
+                                    community_children[_parent_key].append(_fine_key)
+                    for _cid in set(community_levels[_levels_sorted[0]].values()):
+                        _root_key = f"{_levels_sorted[0]}_{_cid}"
+                        community_hierarchy.setdefault(_root_key, None)
+                else:
+                    for _cid in set(community_levels[0].values()):
+                        community_hierarchy[f"0_{_cid}"] = None
+                logger.debug(
+                    "GraphRAG: leidenalg produced %d community levels.", len(community_levels)
+                )
+                return community_levels, community_hierarchy, community_children
+        except ImportError:
+            pass  # fall through to networkx Louvain
+
+        # Synthetic parent-child mapping using multiple-resolution Louvain
+        try:
+            import networkx.algorithms.community as nx_comm
+        except ImportError:
+            return {0: dict.fromkeys(G.nodes(), 0)}, {0: None}, {0: []}
+
+        try:
+            import numpy as np
+
+            resolutions = list(np.linspace(0.5, 1.5, n_levels)) if n_levels > 1 else [1.0]
+        except ImportError:
+            step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
+            resolutions = [0.5 + i * step for i in range(n_levels)]
+
+        community_levels = {}
+
+        for level_idx, resolution in enumerate(resolutions):
+            try:
+                partition = nx_comm.louvain_communities(G, seed=seed, resolution=resolution)
+                cmap = {}
+                for cid, nodes in enumerate(partition):
+                    for node in nodes:
+                        cmap[node] = cid
+                community_levels[level_idx] = cmap
+            except Exception as e:
+                logger.debug(f"Louvain at resolution {resolution} failed: {e}")
+
+        if not community_levels:
+            return {0: dict.fromkeys(G.nodes(), 0)}, {0: None}, {0: []}
+
+        # Synthetic parent mapping — use level-qualified keys to avoid cross-level collisions
+        community_hierarchy = {}
+        community_children = {}
+
+        if len(community_levels) > 1:
+            levels_sorted = sorted(community_levels.keys())
+            for i in range(1, len(levels_sorted)):
+                fine_level = levels_sorted[i]
+                coarse_level = levels_sorted[i - 1]
+                fine_map = community_levels[fine_level]
+                coarse_map = community_levels[coarse_level]
+
+                fine_clusters = set(fine_map.values())
+                for fine_cid in fine_clusters:
+                    fine_key = f"{fine_level}_{fine_cid}"
+                    fine_members = [n for n, c in fine_map.items() if c == fine_cid]
+                    coarse_votes: dict = {}
+                    for m in fine_members:
+                        parent_cid = coarse_map.get(m)
+                        if parent_cid is not None:
+                            coarse_votes[parent_cid] = coarse_votes.get(parent_cid, 0) + 1
+                    parent_cid = max(coarse_votes, key=coarse_votes.get) if coarse_votes else None
+                    parent_key = f"{coarse_level}_{parent_cid}" if parent_cid is not None else None
+                    community_hierarchy[fine_key] = parent_key
+                    if parent_key is not None:
+                        if parent_key not in community_children:
+                            community_children[parent_key] = []
+                        if fine_key not in community_children[parent_key]:
+                            community_children[parent_key].append(fine_key)
+
+            for cid in set(community_levels[levels_sorted[0]].values()):
+                root_key = f"{levels_sorted[0]}_{cid}"
+                if root_key not in community_hierarchy:
+                    community_hierarchy[root_key] = None
+        else:
+            for cid in set(community_levels[0].values()):
+                community_hierarchy[f"0_{cid}"] = None
+
+        return community_levels, community_hierarchy, community_children
+
+    def _rebuild_communities(self) -> None:
+        """Run community detection and generate summaries."""
+        with self._community_rebuild_lock:
+            logger.info("GraphRAG: Running community detection...")
+            result = self._run_hierarchical_community_detection()
+            if isinstance(result, tuple) and len(result) == 3:
+                community_levels, hierarchy, children = result
+            else:
+                # Legacy: _run_hierarchical_community_detection returned a plain dict
+                community_levels = result if isinstance(result, dict) else {}
+                hierarchy = {}
+                children = {}
+            self._community_levels = community_levels
+            self._community_hierarchy = hierarchy
+            self._community_children = children
+            self._save_community_hierarchy()
+            if self._community_levels:
+                self._save_community_levels()
+                total = sum(len(set(m.values())) for m in self._community_levels.values())
+                logger.info(
+                    f"GraphRAG: {len(self._community_levels)} community levels, "
+                    f"{total} total communities detected."
+                )
+                if self.config.graph_rag_community:
+                    _lazy = getattr(self.config, "graph_rag_community_lazy", False)
+                    if _lazy:
+                        logger.info(
+                            "GraphRAG: community_lazy=True — skipping summarization; "
+                            "will generate on first global query."
+                        )
+                    else:
+                        self._generate_community_summaries()
+                        if getattr(self.config, "graph_rag_index_community_reports", True):
+                            self._index_community_reports_in_vector_store()
+
+    def finalize_ingest(self) -> None:
+        """Flush all deferred saves and trigger community rebuild.
+
+        Call once after the last ``ingest()`` when ``ingest_batch_mode=True``.
+        Flushes BM25, entity/relation/claims graphs, then delegates to
+        ``finalize_graph()`` for community rebuild.
+        Safe to call when ``ingest_batch_mode=False`` (flush is a no-op; community
+        rebuild still runs as normal).
+        """
+        if getattr(self.config, "ingest_batch_mode", False):
+            if self._own_bm25:
+                self._own_bm25.flush()
+                logger.info("finalize_ingest: BM25 corpus flushed.")
+            self._save_entity_graph()
+            self._save_relation_graph()
+            if getattr(self, "_claims_graph", None):
+                self._save_claims_graph()
+            logger.info("finalize_ingest: entity/relation/claims graphs saved.")
+        self.finalize_graph()
+
+    def finalize_graph(self) -> None:
+        """Explicitly trigger community rebuild.
+
+        Use after batch ingest with ``graph_rag_community_defer=True`` to run
+        community detection once when all documents have been ingested.
+        """
+        if self._community_graph_dirty:
+            self._community_graph_dirty = False
+            self._rebuild_communities()
+
+    def _generate_community_summaries(self) -> None:
+        """Generate LLM summaries for each detected community cluster across all levels."""
+        if not self._community_levels:
+            return
+        import hashlib as _hashlib
+        import json as _json
+        import re as _re
+        from collections import defaultdict
+
+        def _member_hash(level_idx: int, members: list) -> str:
+            members_sorted = sorted(members)
+            raw = f"{level_idx}|{'|'.join(members_sorted)}"
+            return _hashlib.md5(raw.encode()).hexdigest()
+
+        summaries = {}
+        total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
+        logger.info(f"GraphRAG: Generating summaries for {total_communities} communities...")
+
+        _min_size = getattr(self.config, "graph_rag_community_min_size", 3)
+        _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 50)
+        _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 200)
+        _llm_calls_issued = 0
+
+        def _community_score(members: list) -> float:
+            """Composite score = density × size. Used to rank which communities get LLM."""
+            member_set = set(members)
+            internal_edges = sum(
+                1
+                for src in members
+                for entry in self._relation_graph.get(src, [])
+                if entry.get("target", "") in member_set
+            )
+            return (internal_edges / max(len(members), 1)) * len(members)
+
+        def _template_summary(level_idx: int, cid, members: list, new_hash: str) -> tuple:
+            """Deterministic zero-LLM summary for small/capped communities."""
+            size = len(members)
+            sample = ", ".join(sorted(members)[:5])
+            suffix = f" (+{size - 5} more)" if size > 5 else ""
+            title = f"Community {cid}"
+            summary = f"A cluster of {size} entities: {sample}{suffix}."
+            return f"{level_idx}_{cid}", {
+                "title": title,
+                "summary": summary,
+                "findings": [],
+                "rank": float(size),
+                "full_content": f"# {title}\n\n{summary}",
+                "entities": members,
+                "size": size,
+                "level": level_idx,
+                "member_hash": new_hash,
+                "template": True,
+            }
+
+        def _summarise(args):
+            level_idx, cid, members = args
+            summary_key = f"{level_idx}_{cid}"
+            new_hash = _member_hash(level_idx, members)
+            existing = self._community_summaries.get(summary_key, {})
+            if existing.get("member_hash") == new_hash and existing.get("full_content"):
+                # Membership unchanged — reuse cached summary
+                cached = dict(existing)
+                cached["member_hash"] = new_hash
+                return summary_key, cached
+            ent_parts = []
+            for e in members[:30]:
+                node = self._entity_graph.get(e, {})
+                desc = node.get("description", "") if isinstance(node, dict) else ""
+                ent_type = node.get("type", "") if isinstance(node, dict) else ""
+                if desc:
+                    ent_parts.append(
+                        f"- {e} [{ent_type}]: {desc}" if ent_type else f"- {e}: {desc}"
+                    )
+                else:
+                    ent_parts.append(f"- {e}")
+            member_set = set(members)
+            rel_parts = []
+            for src in members[:20]:
+                for entry in self._relation_graph.get(src, [])[:5]:
+                    tgt = entry.get("target", "")
+                    if tgt in member_set:
+                        rel_desc = entry.get("description") or (
+                            f"{src} {entry.get('relation', '')} {tgt}"
+                        )
+                        rel_parts.append(f"- {rel_desc}")
+            # GAP 3a: token-budget check — substitute sub-community reports when too large
+            max_ctx_tokens = getattr(self.config, "graph_rag_community_max_context_tokens", 4000)
+            entity_rel_text = "\n".join(ent_parts + rel_parts)
+            if len(entity_rel_text) // 4 > max_ctx_tokens:
+                # Children keys are level-qualified strings (e.g. "1_3") — look up directly
+                parent_key = f"{level_idx}_{cid}"
+                sub_community_keys = self._community_children.get(
+                    parent_key, self._community_children.get(cid, [])
+                )
+                sub_reports = []
+                ranked_sub = sorted(
+                    [k for k in sub_community_keys if k in self._community_summaries],
+                    key=lambda k: self._community_summaries[k].get("rank", 0.0),
+                    reverse=True,
+                )
+                for sub_key in ranked_sub[:5]:
+                    sub_reports.append(self._community_summaries[sub_key].get("full_content", ""))
+                if sub_reports:
+                    entity_rel_text = "\n\n".join(
+                        f"Sub-community Report:\n{r}" for r in sub_reports
+                    )
+            else:
+                entity_rel_text = "\n".join(ent_parts)
+                if rel_parts:
+                    entity_rel_text += "\n\nKey relationships:\n" + "\n".join(rel_parts[:20])
+            # GAP 3c: Include claims in community context — auto-enabled if claims extraction is on
+            include_claims = getattr(self.config, "graph_rag_community_include_claims", False)
+            if not include_claims and getattr(self.config, "graph_rag_claims", False):
+                include_claims = True
+            claim_parts = []
+            if include_claims and self._claims_graph:
+                for entity in members[:10]:
+                    for chunk_claims in self._claims_graph.values():
+                        for claim in chunk_claims:
+                            if claim.get("subject", "").lower() == entity.lower():
+                                status = claim.get("status", "")
+                                desc = claim.get("description", "")
+                                claim_parts.append(f"  [{status}] {entity}: {desc}")
+                if claim_parts:
+                    claim_parts = claim_parts[:10]
+            context = entity_rel_text
+            if claim_parts:
+                context += "\n\nClaims:\n" + "\n".join(claim_parts)
+            prompt = (
+                "You are analyzing a knowledge graph community.\n\n"
+                "Community members and descriptions:\n"
+                f"{context}\n\n"
+                "Generate a community report as JSON with this exact structure:\n"
+                "{\n"
+                '  "title": "<2-5 word theme name>",\n'
+                '  "summary": "<2-3 sentence overview>",\n'
+                '  "findings": [\n'
+                '    {"summary": "<headline>", "explanation": "<1-2 sentence detail>"},\n'
+                "    ... up to 8 findings\n"
+                "  ],\n"
+                '  "rank": <float 0-10 importance>\n'
+                "}\n"
+                "Output only valid JSON. No markdown code blocks."
+            )
+            try:
+                raw_text = self.llm.complete(
+                    prompt,
+                    system_prompt="You are an expert knowledge graph analyst.",
+                )
+                try:
+                    raw_stripped = _re.sub(r"```(?:json)?\s*|\s*```", "", raw_text).strip()
+                    parsed = _json.loads(raw_stripped)
+                    title = str(parsed.get("title", f"Community {cid}"))
+                    summary = str(parsed.get("summary", ""))
+                    findings = parsed.get("findings", [])
+                    if not isinstance(findings, list):
+                        findings = []
+                    rank = float(parsed.get("rank", 5.0))
+                except Exception:
+                    title = f"Community {cid}"
+                    summary = raw_text.strip() if raw_text else ""
+                    findings = []
+                    rank = 5.0
+                findings_text = "\n".join(
+                    f"- {f.get('summary', '')}: {f.get('explanation', '')}"
+                    for f in findings
+                    if isinstance(f, dict)
+                )
+                full_content = f"# {title}\n\n{summary}"
+                if findings_text:
+                    full_content += f"\n\nFindings:\n{findings_text}"
+                return summary_key, {
+                    "title": title,
+                    "summary": summary,
+                    "findings": findings,
+                    "rank": rank,
+                    "full_content": full_content,
+                    "entities": members,
+                    "size": len(members),
+                    "level": level_idx,
+                    "member_hash": new_hash,
+                }
+            except Exception as e:
+                logger.debug(f"Community summary failed for community {summary_key}: {e}")
+                return summary_key, {
+                    "title": f"Community {cid}",
+                    "summary": "",
+                    "findings": [],
+                    "rank": 5.0,
+                    "full_content": "",
+                    "entities": members,
+                    "size": len(members),
+                    "level": level_idx,
+                    "member_hash": new_hash,
+                }
+
+        # Process levels from finest (highest idx) to coarsest — SEQUENTIALLY so sub-community
+        # reports are available when summarizing parent communities (true bottom-up composition).
+        for level_idx in sorted(self._community_levels.keys(), reverse=True):
+            level_map = self._community_levels[level_idx]
+            community_entities: dict = defaultdict(list)
+            for entity, cid in level_map.items():
+                community_entities[cid].append(entity)
+
+            llm_items, template_items = [], []
+            ranked = sorted(
+                community_entities.items(), key=lambda kv: _community_score(kv[1]), reverse=True
+            )
+
+            for rank_pos, (cid, members) in enumerate(ranked):
+                summary_key = f"{level_idx}_{cid}"
+                new_hash = _member_hash(level_idx, members)
+                # Cache hit: always reuse regardless of triage
+                existing = self._community_summaries.get(summary_key, {})
+                if existing.get("member_hash") == new_hash and existing.get("full_content"):
+                    summaries[summary_key] = dict(existing)
+                    continue
+                # Triage gates (applied in order):
+                if _min_size > 0 and len(members) < _min_size:
+                    template_items.append((level_idx, cid, members, new_hash))
+                    continue
+                if _top_n_per_level > 0 and rank_pos >= _top_n_per_level:
+                    template_items.append((level_idx, cid, members, new_hash))
+                    continue
+                if _max_total > 0 and _llm_calls_issued >= _max_total:
+                    template_items.append((level_idx, cid, members, new_hash))
+                    continue
+                _llm_calls_issued += 1
+                llm_items.append((level_idx, cid, members))
+
+            for args in template_items:
+                key, val = _template_summary(*args)
+                summaries[key] = val
+            for summary_key, summary_dict in self._executor.map(_summarise, llm_items):
+                summaries[summary_key] = summary_dict
+            # Make this level's summaries available before summarizing coarser levels
+            self._community_summaries = dict(summaries)
+
+        self._save_community_summaries()
+        logger.info(f"GraphRAG: Community summaries generated for {len(summaries)} communities.")
+
+    def _index_community_reports_in_vector_store(self) -> None:
+        """Index community reports as synthetic documents in the vector store."""
+        if not self._community_summaries:
+            return
+        docs_to_add = []
+        for summary_key, cs in self._community_summaries.items():
+            full_content = cs.get("full_content") or cs.get("summary", "")
+            if not full_content:
+                continue
+            doc_id = f"__community__{summary_key}"
+            content_hash = cs.get("member_hash", "")
+            # Skip re-indexing if content is unchanged since last index
+            if cs.get("indexed_hash") == content_hash and content_hash:
+                continue
+            cs["indexed_hash"] = content_hash
+            docs_to_add.append(
+                {
+                    "id": doc_id,
+                    "text": full_content,
+                    "metadata": {
+                        "graph_rag_type": "community_report",
+                        "community_key": summary_key,
+                        "level": cs.get("level", 0),
+                        "rank": cs.get("rank", 5.0),
+                        "title": cs.get("title", ""),
+                        "source": "__community_report__",
+                    },
+                }
+            )
+        if docs_to_add:
+            try:
+                ids = [d["id"] for d in docs_to_add]
+                texts = [d["text"] for d in docs_to_add]
+                metadatas = [d["metadata"] for d in docs_to_add]
+                embeddings = self.embedding.embed(texts)
+                self._own_vector_store.add(ids, texts, embeddings, metadatas)
+                logger.info(
+                    f"GraphRAG: Indexed {len(docs_to_add)} community reports in vector store."
+                )
+            except Exception as e:
+                logger.warning(f"Could not index community reports: {e}")
+
+    def _global_search_context(self, query: str, cfg) -> str:
+        """Score community summaries against the query; return top-K as context (legacy method)."""
+        if not self._community_summaries:
+            return ""
+        top_k = getattr(cfg, "graph_rag_community_top_k", 5)
+        query_tokens = set(query.lower().split())
+        scored = []
+        for cid, cs in self._community_summaries.items():
+            summary = cs.get("full_content") or cs.get("summary", "(no summary)")
+            if not summary:
+                continue
+            # Try embedding similarity first, fall back to token overlap
+            try:
+                import numpy as np
+
+                q_vec = self.embedding.embed_query(query)
+                s_vec = self.embedding.embed([summary])[0]
+                sim = float(
+                    np.dot(q_vec, s_vec) / (np.linalg.norm(q_vec) * np.linalg.norm(s_vec) + 1e-9)
+                )
+            except Exception:
+                summary_tokens = set(summary.lower().split())
+                sim = len(query_tokens & summary_tokens) / max(len(query_tokens), 1)
+            scored.append((sim, cid, cs))
+        scored.sort(reverse=True)
+        parts = []
+        for rank, (_, _cid, cs) in enumerate(scored[:top_k]):
+            entities_preview = ", ".join(cs.get("entities", [])[:10])
+            parts.append(
+                f"[Community Report {rank + 1} — {cs.get('size', 0)} entities: "
+                f"{entities_preview}]\n{cs.get('full_content') or cs.get('summary', '(no summary)')}"
+            )
+        return "\n\n".join(parts)
+
+    def _global_search_map_reduce(self, query: str, cfg) -> str:
+        """Map-reduce global search over community reports (Item 4)."""
+        import json as _json
+        import re as _re
+
+        if not self._community_summaries:
+            return ""
+
+        min_score = getattr(cfg, "graph_rag_global_min_score", 20)
+        top_points = getattr(cfg, "graph_rag_global_top_points", 50)
+
+        # Filter summaries to the target level
+        target_level = getattr(cfg, "graph_rag_community_level", 0)
+        target_level_prefix = f"{target_level}_"
+        level_summaries = {
+            k: v for k, v in self._community_summaries.items() if k.startswith(target_level_prefix)
+        }
+        # Fall back to all summaries if nothing matches the target level
+        if not level_summaries:
+            level_summaries = self._community_summaries
+
+        # TASK 12: Dynamic community pre-filter — cheap token-overlap relevance score
+        _top_n_communities = getattr(cfg, "graph_rag_global_top_communities", 0)
+        if _top_n_communities > 0 and len(level_summaries) > _top_n_communities:
+            _query_words = set(query.lower().split())
+
+            def _community_relevance(cs_item: tuple) -> float:
+                _, cs = cs_item
+                text = ((cs.get("title") or "") + " " + (cs.get("summary") or "")).lower()
+                return len(_query_words & set(text.split())) / max(len(_query_words), 1)
+
+            sorted_summaries = sorted(
+                level_summaries.items(), key=_community_relevance, reverse=True
+            )
+            level_summaries = dict(sorted_summaries[:_top_n_communities])
+            logger.debug("GraphRAG global: pre-filtered to top %d communities.", _top_n_communities)
+
+        # Chunk reports so large reports don't get hard-truncated and later sections aren't lost
+        _MAP_CHUNK_CHARS = int(getattr(cfg, "graph_rag_global_map_max_length", 500) or 500) * 4
+
+        def _chunk_report(cid: str, cs: dict) -> list[tuple[str, str]]:
+            """Split a community report into bounded chunks. Returns [(cid_chunk_id, text)]."""
+            report = cs.get("full_content") or cs.get("summary", "")
+            if not report:
+                return []
+            chunks = []
+            for i in range(0, len(report), _MAP_CHUNK_CHARS):
+                chunk_text = report[i : i + _MAP_CHUNK_CHARS]
+                chunks.append((f"{cid}#{i}", chunk_text))
+            return chunks
+
+        # Build shuffled chunk list for unbiased map phase
+        import random as _random
+
+        all_chunks: list[tuple[str, str]] = []
+        for cid, cs in level_summaries.items():
+            all_chunks.extend(_chunk_report(cid, cs))
+        rng = _random.Random(42)
+        rng.shuffle(all_chunks)
+
+        # TASK 14: Token-level compression of community report chunks before LLM map phase
+        if getattr(cfg, "graph_rag_report_compress", False) is True and all_chunks:
+            _ratio = getattr(cfg, "graph_rag_report_compress_ratio", 0.5)
+            try:
+                _lingua = self._ensure_llmlingua()
+                _compressed_chunks = []
+                for _cid, _text in all_chunks:
+                    if not _text:
+                        _compressed_chunks.append((_cid, _text))
+                        continue
+                    try:
+                        _out = _lingua.compress_prompt(_text, rate=_ratio, force_tokens=["\n"])
+                        _compressed_chunks.append((_cid, _out["compressed_prompt"]))
+                    except Exception:
+                        _compressed_chunks.append((_cid, _text))
+                all_chunks = _compressed_chunks
+                logger.info(
+                    "GraphRAG map-reduce: compressed %d report chunks (ratio=%.2f)",
+                    len(all_chunks),
+                    _ratio,
+                )
+            except ImportError:
+                logger.warning(
+                    "graph_rag_report_compress=True but llmlingua not installed. "
+                    "pip install axon[llmlingua]"
+                )
+
+        def _map_community(args):
+            chunk_id, report_chunk = args
+            if not report_chunk:
+                return []
+            prompt = (
+                "---Role---\n"
+                "You are a helpful assistant responding to questions about the dataset.\n\n"
+                "---Goal---\n"
+                "Generate a list of key points relevant to answering the question, "
+                "based solely on the community report below.\n"
+                "If the report is not relevant, return an empty JSON array.\n\n"
+                f"---Question---\n{query}\n\n"
+                f"---Community Report---\n{report_chunk}\n\n"
+                "---Response Format---\n"
+                'Return a JSON array: [{"point": "...", "score": 1-100}, ...]\n'
+                "Higher score = more relevant. Output only valid JSON."
+            )
+            try:
+                raw = self.llm.complete(
+                    prompt,
+                    system_prompt="You are a knowledge graph analysis assistant.",
+                )
+                raw_clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+                points = _json.loads(raw_clean)
+                if not isinstance(points, list):
+                    return []
+                return [
+                    (float(p.get("score", 0)), str(p.get("point", "")))
+                    for p in points
+                    if isinstance(p, dict) and p.get("point")
+                ]
+            except Exception:
+                return []
+
+        # Map phase — parallel over shuffled chunks
+        # TASK 14: Use a dedicated pool when graph_rag_map_workers is set, so map-reduce
+        # does not starve the shared executor during concurrent ingest.
+        all_points = []
+        _map_workers_cfg = getattr(cfg, "graph_rag_map_workers", 0)
+        try:
+            if isinstance(_map_workers_cfg, int) and _map_workers_cfg > 0:
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+
+                with _TPE(max_workers=_map_workers_cfg) as _map_pool:
+                    results = list(_map_pool.map(_map_community, all_chunks))
+            else:
+                results = list(self._executor.map(_map_community, all_chunks))
+            for point_list in results:
+                all_points.extend(point_list)
+        except Exception:
+            return ""
+
+        # Filter and sort
+        filtered = [(score, point) for score, point in all_points if score >= min_score]
+        filtered.sort(reverse=True)
+        top = filtered[:top_points]
+
+        if not top:
+            return _GRAPHRAG_NO_DATA_ANSWER
+
+        # --- REDUCE PHASE: token-budget assembly ---
+        reduce_max_tokens = getattr(cfg, "graph_rag_global_reduce_max_tokens", 8000)
+        analyst_lines = []
+        token_estimate = 0
+        for idx, (score, point) in enumerate(top):
+            line = f"----Analyst {idx + 1}----\nImportance Score: {score:.0f}\n{point}"
+            # Rough token estimate: 1 token ≈ 4 characters
+            token_estimate += len(line) // 4
+            if token_estimate > reduce_max_tokens:
+                break
+            analyst_lines.append(line)
+
+        if not analyst_lines:
+            return _GRAPHRAG_NO_DATA_ANSWER
+
+        reduce_context = "\n\n".join(analyst_lines)
+        reduce_max_length = getattr(cfg, "graph_rag_global_reduce_max_length", 500)
+        reduce_prompt = (
+            f"The following analytic reports have been generated for the query:\n\n"
+            f"Query: {query}\n\n"
+            f"Reports:\n\n{reduce_context}\n\n"
+            f"Using the reports above, generate a comprehensive response to the query."
+            f"\nRespond in at most {reduce_max_length} tokens."
+        )
+        reduce_system_prompt = _GRAPHRAG_REDUCE_SYSTEM_PROMPT
+        if getattr(cfg, "graph_rag_global_allow_general_knowledge", False):
+            reduce_system_prompt = (
+                reduce_system_prompt
+                + " You may supplement the provided reports with your own general knowledge"
+                " where relevant."
+            )
+        try:
+            response = self.llm.complete(
+                reduce_prompt,
+                system_prompt=reduce_system_prompt,
+            )
+            return response.strip() if response else _GRAPHRAG_NO_DATA_ANSWER
+        except Exception as e:
+            logger.debug(f"GraphRAG global reduce failed: {e}")
+            # Fallback: return raw analyst summaries
+            return "**Knowledge Graph Findings:**\n\n" + reduce_context
+
+    def _get_incoming_relations(self, entity: str) -> list[dict]:
+        """Return all relation entries where entity is the target (GAP 4: incoming edges)."""
+        results = []
+        ent_lower = entity.lower()
+        for src, entries in self._relation_graph.items():
+            for entry in entries:
+                if entry.get("target", "").lower() == ent_lower:
+                    results.append({**entry, "source": src, "direction": "incoming"})
+        return results
+
+    def _local_search_context(self, query: str, matched_entities: list, cfg) -> str:
+        """Build structured GraphRAG local context using unified candidate ranking.
+
+        TASK 11: Replaces fixed 25/50/25 budget split with joint ranking across all
+        artifact types, then greedy-fill up to total_budget tokens.
+        """
+        if not matched_entities:
+            return ""
+
+        import re as _re
+
+        # --- Phase 1: Setup ---
+        total_budget = getattr(cfg, "graph_rag_local_max_context_tokens", 8000)
+        top_k_entities = getattr(cfg, "graph_rag_local_top_k_entities", 10)
+        top_k_relationships = getattr(cfg, "graph_rag_local_top_k_relationships", 10)
+        include_weight = getattr(cfg, "graph_rag_local_include_relationship_weight", False)
+
+        entity_weight = getattr(cfg, "graph_rag_local_entity_weight", 3.0)
+        relation_weight = getattr(cfg, "graph_rag_local_relation_weight", 2.0)
+        community_weight = getattr(cfg, "graph_rag_local_community_weight", 1.5)
+        text_unit_weight = getattr(cfg, "graph_rag_local_text_unit_weight", 1.0)
+
+        _query_tokens = set(query.lower().split()) | set(_re.split(r"[\s\W_]+", query.lower()))
+        _boost = getattr(self.config, "graph_rag_exact_entity_boost", 3.0)
+
+        def _entity_degree(ent: str) -> int:
+            outgoing = len(self._relation_graph.get(ent.lower(), []))
+            incoming = len(self._get_incoming_relations(ent))
+            return outgoing + incoming
+
+        def _entity_raw(ent: str) -> float:
+            return _entity_degree(ent) * (_boost if ent.lower() in _query_tokens else 1.0)
+
+        ranked_entities = sorted(matched_entities, key=_entity_raw, reverse=True)
+        ranked_entities = ranked_entities[:top_k_entities]
+
+        # --- Phase 2: Collect all candidates into a flat list ---
+        candidates: list[dict] = []
+
+        # Entities
+        raw_scores = [_entity_raw(e) for e in ranked_entities]
+        max_raw = max(raw_scores, default=1.0) or 1.0
+        for ent, raw in zip(ranked_entities, raw_scores):
+            node = self._entity_graph.get(ent.lower(), {})
+            desc = node.get("description", "") if isinstance(node, dict) else ""
+            ent_type = node.get("type", "") if isinstance(node, dict) else ""
+            if not desc:
+                continue
+            line = f"  - {ent} [{ent_type}]: {desc}" if ent_type else f"  - {ent}: {desc}"
+            candidates.append(
+                {
+                    "type": "entity",
+                    "score": entity_weight * (raw / max_raw),
+                    "text": line,
+                    "tokens": len(line) // 4 + 1,
+                    "key": ent.lower(),
+                }
+            )
+
+        # Relations — collect outgoing (top 3/entity) + incoming (top 2/entity)
+        def _mutual_count(e_entry, ranked):
+            tgt = e_entry.get("target", "")
+            return sum(
+                1
+                for ee in ranked
+                if tgt in {x.get("target", "") for x in self._relation_graph.get(ee.lower(), [])}
+            )
+
+        rel_candidates_raw: list[tuple[float, dict, str]] = []
+        seen_rel_keys: set = set()
+        for ent in ranked_entities:
+            ent_lower = ent.lower()
+            outgoing = self._relation_graph.get(ent_lower, [])
+            sorted_outgoing = sorted(
+                outgoing, key=lambda e: _mutual_count(e, ranked_entities), reverse=True
+            )
+            for entry in sorted_outgoing[:3]:
+                mc = _mutual_count(entry, ranked_entities)
+                rel_candidates_raw.append((mc, entry, ent))
+            for entry in self._get_incoming_relations(ent)[:2]:
+                mc = _mutual_count(entry, ranked_entities)
+                rel_candidates_raw.append((mc, entry, ent))
+
+        # Sort by mutual count, cap at top_k_relationships, normalize
+        rel_candidates_raw.sort(key=lambda x: x[0], reverse=True)
+        rel_candidates_raw = rel_candidates_raw[:top_k_relationships]
+        max_mutual = max((x[0] for x in rel_candidates_raw), default=0)
+        for mc, entry, ent in rel_candidates_raw:
+            src = entry.get("source", ent)
+            desc = entry.get("description") or (
+                f"{src} {entry.get('relation', '')} {entry.get('target', '')}"
+            )
+            weight_str = ""
+            if include_weight and entry.get("weight"):
+                weight_str = f" (weight: {entry['weight']})"
+            line = f"  - {desc}{weight_str}"
+            rel_key = line[:80]
+            if rel_key in seen_rel_keys:
+                continue
+            seen_rel_keys.add(rel_key)
+            within = (mc + 1) / (max_mutual + 1)
+            candidates.append(
+                {
+                    "type": "relation",
+                    "score": relation_weight * within,
+                    "text": line,
+                    "tokens": len(line) // 4 + 1,
+                }
+            )
+
+        # Communities — finest level, deduplicated by summary_key
+        if self._community_levels and self._community_summaries:
+            finest = max(self._community_levels.keys()) if self._community_levels else None
+            seen_community_keys: set = set()
+            community_raws: list[tuple[float, str, str]] = []
+            for ent in ranked_entities:
+                cid = (
+                    self._community_levels.get(finest, {}).get(ent.lower())
+                    if finest is not None
+                    else None
+                )
+                if cid is None:
+                    continue
+                summary_key = f"{finest}_{cid}"
+                if summary_key in seen_community_keys:
+                    continue
+                seen_community_keys.add(summary_key)
+                cs = self._community_summaries.get(summary_key, {})
+                if not cs:
+                    cs = self._community_summaries.get(str(cid), {})
+                summary = cs.get("summary", "")
+                if not summary:
+                    continue
+                sentences = summary.split(". ")
+                snippet = ". ".join(sentences[:3]).strip()
+                if snippet and not snippet.endswith("."):
+                    snippet += "."
+                title = cs.get("title", f"Community {cid}")
+                community_text = f"**Community Context ({title}):**\n  {snippet}"
+                rank = cs.get("rank", 0.5)
+                community_raws.append((rank, community_text, summary_key))
+            max_rank = max((r[0] for r in community_raws), default=1.0) or 1.0
+            for rank, ctext, _ in community_raws:
+                within = rank / max_rank
+                candidates.append(
+                    {
+                        "type": "community",
+                        "score": community_weight * within,
+                        "text": ctext,
+                        "tokens": len(ctext) // 4 + 1,
+                    }
+                )
+
+        # Text units — from entity chunk_ids, cap at 20, rank by relation count
+        seen_chunks: set = set()
+        text_unit_ids_all: list[str] = []
+        for ent in ranked_entities:
+            node = self._entity_graph.get(ent.lower(), {})
+            chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else []
+            for cid in chunk_ids:
+                if cid not in seen_chunks:
+                    seen_chunks.add(cid)
+                    text_unit_ids_all.append(cid)
+                if len(text_unit_ids_all) >= 20:
+                    break
+            if len(text_unit_ids_all) >= 20:
+                break
+
+        def _tu_rel_count(cid: str) -> int:
+            return len(self._text_unit_relation_map.get(cid, []))
+
+        max_rel = max((_tu_rel_count(c) for c in text_unit_ids_all), default=0)
+        for cid in text_unit_ids_all:
+            try:
+                docs = self.vector_store.get_by_ids([cid])
+                if not docs:
+                    continue
+                text_snippet = docs[0].get("text", "")[:200].strip()
+                if not text_snippet:
+                    continue
+                line = f"  [{cid}] {text_snippet}..."
+                rc = _tu_rel_count(cid)
+                within = (rc + 1) / (max_rel + 1)
+                candidates.append(
+                    {
+                        "type": "text_unit",
+                        "score": text_unit_weight * within,
+                        "text": line,
+                        "tokens": len(line) // 4 + 1,
+                    }
+                )
+            except Exception:
+                pass
+
+        # Claims — high-signal factual assertions, fixed score
+        if self._claims_graph:
+            claim_lines: list[str] = []
+            for ent in ranked_entities[:3]:
+                for chunk_claims in self._claims_graph.values():
+                    for claim in chunk_claims:
+                        if claim.get("subject", "").lower() == ent.lower():
+                            status = claim.get("status", "SUSPECTED")
+                            desc = claim.get("description", "")
+                            if desc:
+                                claim_lines.append(f"  - [{status}] {desc}")
+            for line in claim_lines[:10]:
+                candidates.append(
+                    {
+                        "type": "claim",
+                        "score": entity_weight * 1.0,
+                        "text": line,
+                        "tokens": len(line) // 4 + 1,
+                    }
+                )
+
+        # --- Phase 3: Sort and greedy-fill ---
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        selected: list[dict] = []
+        used = 0
+        for c in candidates:
+            if used + c["tokens"] <= total_budget:
+                selected.append(c)
+                used += c["tokens"]
+            # continue (not break) — smaller items later may still fit
+
+        # --- Phase 4: Reassemble into section-formatted output ---
+        by_type: dict[str, list[str]] = {
+            "entity": [],
+            "relation": [],
+            "community": [],
+            "text_unit": [],
+            "claim": [],
+        }
+        for c in selected:
+            by_type[c["type"]].append(c["text"])
+
+        parts: list[str] = []
+        if by_type["entity"]:
+            parts.append("**Matched Entities:**\n" + "\n".join(by_type["entity"]))
+        if by_type["relation"]:
+            parts.append("**Relevant Relationships:**\n" + "\n".join(by_type["relation"]))
+        for ctext in by_type["community"]:
+            parts.append(ctext)
+        if by_type["text_unit"]:
+            parts.append("**Source Text Units:**\n" + "\n".join(by_type["text_unit"]))
+        if by_type["claim"]:
+            parts.append("**Claims / Facts:**\n" + "\n".join(by_type["claim"]))
+
+        return "\n\n".join(parts)
+
+    def _entity_matches(self, q_entity: str, g_entity: str) -> float:
+        """Return Jaccard-based match score between 0.0 and 1.0."""
+        q = q_entity.lower().strip()
+        g = g_entity.lower().strip()
+        if q == g:
+            return 1.0
+        q_tokens = set(q.split())
+        g_tokens = set(g.split())
+        if len(q_tokens) == 1 and len(g_tokens) == 1:
+            return 0.0  # single tokens must match exactly
+        intersection = q_tokens & g_tokens
+        union = q_tokens | g_tokens
+        jaccard = len(intersection) / len(union) if union else 0.0
+        return jaccard if jaccard >= 0.4 else 0.0
+
+    _VALID_ENTITY_TYPES = {"PERSON", "ORGANIZATION", "GEO", "EVENT", "CONCEPT", "PRODUCT"}
+
+    _HOLISTIC_KEYWORDS = frozenset(
+        [
+            "summarize",
+            "summary",
+            "overview",
+            "all",
+            "every",
+            "compare",
+            "list all",
+            "across",
+            "throughout",
+            "entire",
+            "whole",
+            "global",
+            "what are all",
+            "how many",
+            "count",
+            "trend",
+            "pattern",
+            "themes",
+            "main topics",
+        ]
+    )
+
+    def _classify_query_needs_graphrag(self, query: str, mode: str) -> bool:
+        """Return True if GraphRAG global search is warranted for this query (TASK 14)."""
+        if mode == "heuristic":
+            q_lower = query.lower()
+            if any(kw in q_lower for kw in AxonBrain._HOLISTIC_KEYWORDS):
+                return True
+            if len(query.split()) > 20:
+                return True
+            return False
+        elif mode == "llm":
+            prompt = (
+                "Does the following question require a holistic, corpus-wide analysis "
+                "(e.g. summarization, comparison, listing all topics) rather than a "
+                "targeted factual lookup? Answer only YES or NO.\n\nQuestion: " + query
+            )
+            try:
+                ans = self.llm.complete(prompt, max_tokens=5).strip().upper()
+                return ans.startswith("Y")
+            except Exception:
+                return False
+        return False
+
+    def _ensure_llmlingua(self):
+        """Lazy-initialise the LLMLingua-2 prompt compressor (TASK 14)."""
+        if not hasattr(self, "_llmlingua") or self._llmlingua is None:
+            from llmlingua import PromptCompressor
+
+            self._llmlingua = PromptCompressor(
+                model_name="microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+                use_llmlingua2=True,
+                device_map="cpu",
+            )
+        return self._llmlingua
+
+    def _ensure_gliner(self):
+        """Lazy-initialise the GLiNER NER model (TASK 14)."""
+        if not hasattr(self, "_gliner_model") or self._gliner_model is None:
+            from gliner import GLiNER
+
+            self._gliner_model = GLiNER.from_pretrained("urchade/gliner_mediumv2.1")
+        return self._gliner_model
+
+    _GLINER_LABELS = ["person", "organization", "location", "event", "concept", "product"]
+    _GLINER_TYPE_MAP = {
+        "person": "PERSON",
+        "organization": "ORGANIZATION",
+        "location": "GEO",
+        "event": "EVENT",
+        "concept": "CONCEPT",
+        "product": "PRODUCT",
+    }
+
+    def _extract_entities_gliner(self, text: str) -> list[dict]:
+        """Extract entities using GLiNER (TASK 14 — NER-only; no LLM call)."""
+        model = self._ensure_gliner()
+        try:
+            preds = model.predict_entities(text[:3000], AxonBrain._GLINER_LABELS, threshold=0.5)
+            seen: set = set()
+            entities = []
+            for p in preds:
+                name = p["text"].strip()
+                if name.lower() in seen:
+                    continue
+                seen.add(name.lower())
+                entities.append(
+                    {
+                        "name": name,
+                        "type": AxonBrain._GLINER_TYPE_MAP.get(p["label"].lower(), "CONCEPT"),
+                        "description": "",
+                    }
+                )
+            return entities[:20]
+        except Exception:
+            return []
+
+    def _extract_entities(self, text: str) -> list[dict]:
         """Extract named entities from text using the LLM.
 
-        Returns a list of entity strings (people, organisations, places, products, technical concepts).
+        Returns a list of dicts with shape:
+          {"name": str, "type": str, "description": str}
         Returns an empty list on failure or when the LLM produces no output.
         """
+        # TASK 14: GLiNER fast-path — skip LLM for NER when backend is "gliner"
+        if getattr(self.config, "graph_rag_ner_backend", "llm") == "gliner":
+            return self._extract_entities_gliner(text)
+
         prompt = (
-            "Extract the key named entities (people, organisations, places, products, "
-            "technical concepts) from the following text. "
-            "Output one entity per line, no bullets or numbering. "
-            "If there are no entities, output nothing.\n\n"
-            + text[:1500]  # cap to avoid huge prompts
+            "Extract the key named entities from the following text.\n"
+            "For each entity output one line:\n"
+            "  ENTITY_NAME | ENTITY_TYPE | one-sentence description\n"
+            "ENTITY_TYPE must be one of: PERSON, ORGANIZATION, GEO, EVENT, CONCEPT, PRODUCT\n"
+            "No bullets, numbering, or extra text. If no entities, output nothing.\n\n"
+            + text[:3000]
         )
         try:
             raw = self.llm.complete(
                 prompt, system_prompt="You are a named entity extraction specialist."
             )
-            import re as _re
-
             entities = []
             for line in raw.splitlines():
-                # Strip leading markdown bullets/numbering the LLM may add despite the prompt
-                cleaned = _re.sub(r"^(?:[-*•]\s+|\d+[.)]\s*)", "", line).strip()
-                if cleaned:
-                    entities.append(cleaned)
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 3:
+                    ent_type = parts[1].upper()
+                    if ent_type not in AxonBrain._VALID_ENTITY_TYPES:
+                        ent_type = "CONCEPT"
+                    entities.append(
+                        {
+                            "name": parts[0],
+                            "type": ent_type,
+                            "description": parts[2],
+                        }
+                    )
+                elif len(parts) == 2:
+                    # Old 2-column format — no type
+                    entities.append(
+                        {
+                            "name": parts[0],
+                            "type": "UNKNOWN",
+                            "description": parts[1],
+                        }
+                    )
+                else:
+                    entities.append(
+                        {
+                            "name": parts[0],
+                            "type": "UNKNOWN",
+                            "description": "",
+                        }
+                    )
             return entities[:20]
         except Exception:
             return []
+
+    def _extract_relations(self, text: str) -> list[dict]:
+        """Extract SUBJECT | RELATION | OBJECT | description quads from text via the LLM.
+
+        Returns up to 15 relation dicts with shape
+        {"subject": str, "relation": str, "object": str, "description": str}.
+        Returns an empty list on failure or when the LLM produces no output.
+        """
+        prompt = (
+            "Extract key relationships from the following text.\n"
+            "For each relationship output one line:\n"
+            "  SUBJECT | RELATION | OBJECT | one-sentence description | strength (1-10)\n"
+            "Strength: 1=weak/incidental, 10=core/defining. "
+            "No bullets or extra text. If no clear relationships, output nothing.\n\n" + text[:3000]
+        )
+        try:
+            raw = self.llm.complete(
+                prompt, system_prompt="You are a knowledge graph extraction specialist."
+            )
+            triples = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 5:
+                    try:
+                        strength = max(1, min(10, int(parts[4])))
+                    except (ValueError, IndexError):
+                        strength = 5
+                    triples.append(
+                        {
+                            "subject": parts[0],
+                            "relation": parts[1],
+                            "object": parts[2],
+                            "description": parts[3],
+                            "strength": strength,
+                        }
+                    )
+                elif len(parts) >= 4:
+                    triples.append(
+                        {
+                            "subject": parts[0],
+                            "relation": parts[1],
+                            "object": parts[2],
+                            "description": parts[3],
+                            "strength": 5,
+                        }
+                    )
+                elif len(parts) == 3 and all(parts):
+                    triples.append(
+                        {
+                            "subject": parts[0],
+                            "relation": parts[1],
+                            "object": parts[2],
+                            "description": "",
+                            "strength": 5,
+                        }
+                    )
+            return triples[:15]
+        except Exception:
+            return []
+
+    def _embed_entities(self, entity_keys: list) -> None:
+        """Embed entity descriptions; store in _entity_embeddings (Item 5)."""
+        to_embed = []
+        for key in entity_keys:
+            node = self._entity_graph.get(key, {})
+            if isinstance(node, dict):
+                desc = node.get("description", "")
+                if desc and key not in self._entity_embeddings:
+                    to_embed.append((key, f"{key}: {desc}"))
+        if not to_embed:
+            return
+        keys, texts = zip(*to_embed)
+        try:
+            vectors = self.embedding.embed(list(texts))
+            for k, v in zip(keys, vectors):
+                self._entity_embeddings[k] = v if isinstance(v, list) else list(v)
+            self._save_entity_embeddings()
+            logger.info(f"GraphRAG: Embedded {len(to_embed)} entity descriptions.")
+        except Exception as e:
+            logger.debug(f"Entity embedding failed: {e}")
+
+    def _match_entities_by_embedding(self, query: str, top_k: int = 5) -> list:
+        """Return entity keys matching the query by embedding cosine similarity (Item 5)."""
+        if not self._entity_embeddings:
+            return []
+        try:
+            import numpy as np
+
+            q_vec = np.array(self.embedding.embed_query(query))
+            q_norm = np.linalg.norm(q_vec)
+            if q_norm == 0:
+                return []
+            scored = []
+            for entity_key, e_vec in self._entity_embeddings.items():
+                ev = np.array(e_vec)
+                ev_norm = np.linalg.norm(ev)
+                if ev_norm == 0:
+                    continue
+                sim = float(np.dot(q_vec, ev) / (q_norm * ev_norm))
+                scored.append((sim, entity_key))
+            threshold = getattr(self.config, "graph_rag_entity_match_threshold", 0.5)
+            scored = [(s, k) for s, k in scored if s >= threshold]
+            scored.sort(reverse=True)
+            return [k for _, k in scored[:top_k]]
+        except Exception as e:
+            logger.debug(f"Entity embedding match failed: {e}")
+            return []
+
+    def _extract_claims(self, text: str) -> list:
+        """Extract factual claims from text (Item 11). Returns list of claim dicts."""
+        prompt = (
+            "Extract factual claims from the following text.\n"
+            "For each claim output one line:\n"
+            "  SUBJECT | OBJECT | CLAIM_TYPE | STATUS | DESCRIPTION | START_DATE | END_DATE | SOURCE_QUOTE\n"
+            "  STATUS must be: TRUE, FALSE, or SUSPECTED\n"
+            "  CLAIM_TYPE examples: acquisition, partnership, product_launch, regulatory_action, financial\n"
+            "  START_DATE and END_DATE: ISO8601 date (YYYY-MM-DD) or 'unknown' if not mentioned\n"
+            "  SOURCE_QUOTE: verbatim short quote from the text (max 100 chars) or 'none'\n"
+            "No bullets or extra text. If no clear claims, output nothing.\n\n" + text[:3000]
+        )
+        try:
+            raw = self.llm.complete(
+                prompt,
+                system_prompt="You are a fact extraction specialist.",
+            )
+            claims = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 8:
+                    status = parts[3].upper()
+                    if status not in ("TRUE", "FALSE", "SUSPECTED"):
+                        status = "SUSPECTED"
+                    claims.append(
+                        {
+                            "subject": parts[0],
+                            "object": parts[1],
+                            "type": parts[2],
+                            "status": status,
+                            "description": parts[4],
+                            "start_date": parts[5] if parts[5] != "unknown" else None,
+                            "end_date": parts[6] if parts[6] != "unknown" else None,
+                            "source_text": parts[7] if parts[7] != "none" else None,
+                            "text_unit_id": None,  # filled in by caller
+                        }
+                    )
+                elif len(parts) >= 5:
+                    status = parts[3].upper()
+                    if status not in ("TRUE", "FALSE", "SUSPECTED"):
+                        status = "SUSPECTED"
+                    claims.append(
+                        {
+                            "subject": parts[0],
+                            "object": parts[1],
+                            "type": parts[2],
+                            "status": status,
+                            "description": parts[4],
+                            "start_date": None,
+                            "end_date": None,
+                            "source_text": None,
+                            "text_unit_id": None,
+                        }
+                    )
+            return claims[:10]
+        except Exception:
+            return []
+
+    def _canonicalize_entity_descriptions(self) -> None:
+        """Synthesize canonical descriptions for entities with multiple descriptions (Item 10)."""
+        min_occ = getattr(self.config, "graph_rag_canonicalize_min_occurrences", 3)
+        to_canonicalize = {
+            k: descs
+            for k, descs in self._entity_description_buffer.items()
+            if len(set(descs)) > 1 and len(descs) >= min_occ
+        }
+        if not to_canonicalize:
+            return
+
+        logger.info(f"GraphRAG: Canonicalizing descriptions for {len(to_canonicalize)} entities...")
+
+        def _synthesize(args):
+            entity_key, descs = args
+            unique_descs = list(dict.fromkeys(descs))[:10]  # deduplicate, cap at 10
+            node = self._entity_graph.get(entity_key, {})
+            entity_type = node.get("type", "UNKNOWN") if isinstance(node, dict) else "UNKNOWN"
+            numbered = "\n".join(f"{i + 1}. {d}" for i, d in enumerate(unique_descs))
+            prompt = (
+                f"Entity: {entity_key}\nType: {entity_type}\n\n"
+                "The following descriptions were extracted from different documents:\n"
+                f"{numbered}\n\n"
+                "Write a single comprehensive description that synthesizes all of the above. "
+                "Output only the description, no preamble."
+            )
+            try:
+                result = self.llm.complete(
+                    prompt,
+                    system_prompt="You are a knowledge graph curation specialist.",
+                )
+                return entity_key, result.strip() if result else unique_descs[0]
+            except Exception:
+                return entity_key, unique_descs[0]
+
+        results = list(self._executor.map(_synthesize, to_canonicalize.items()))
+        changed = False
+        for entity_key, canonical_desc in results:
+            node = self._entity_graph.get(entity_key)
+            if isinstance(node, dict) and canonical_desc:
+                node["description"] = canonical_desc
+                changed = True
+        if changed:
+            self._save_entity_graph()
+        self._entity_description_buffer.clear()
+
+    def _canonicalize_relation_descriptions(self) -> None:
+        """Synthesize canonical descriptions for repeated (subject, object) pairs (GAP 3b)."""
+        if not getattr(self.config, "graph_rag_canonicalize_relations", False):
+            return
+        min_occ = getattr(self.config, "graph_rag_canonicalize_relations_min_occurrences", 2)
+        to_canonicalize = {
+            pair: descs
+            for pair, descs in self._relation_description_buffer.items()
+            if len(descs) >= min_occ
+        }
+        if not to_canonicalize:
+            return
+
+        def _synthesize(args):
+            (src, tgt), descs = args
+            unique_descs = list(dict.fromkeys(descs))[:10]
+            numbered = "\n".join(f"{i+1}. {d}" for i, d in enumerate(unique_descs))
+            prompt = (
+                f"Relationship: {src} → {tgt}\n\n"
+                f"The following descriptions were extracted from different documents:\n{numbered}\n\n"
+                "Write a single comprehensive description that synthesizes all of the above. "
+                "Output only the description, no preamble."
+            )
+            try:
+                result = self.llm.complete(
+                    prompt,
+                    system_prompt="You are a knowledge graph curation specialist.",
+                )
+                return (src, tgt), result.strip() if result else unique_descs[0]
+            except Exception:
+                return (src, tgt), unique_descs[0]
+
+        results = list(self._executor.map(_synthesize, to_canonicalize.items()))
+        changed = False
+        for (src, tgt), canonical_desc in results:
+            if src in self._relation_graph:
+                for entry in self._relation_graph[src]:
+                    if entry.get("target", "").lower() == tgt and canonical_desc:
+                        entry["description"] = canonical_desc
+                        changed = True
+        if changed:
+            self._save_relation_graph()
+        self._relation_description_buffer.clear()
+
+    def _prune_entity_graph(self, deleted_ids: set) -> None:
+        """Remove deleted chunk IDs from entity graph and relation graph.
+
+        Entries that become empty are deleted entirely.  Persists changes to disk.
+        Handles both new dict-node format and legacy list format.
+        """
+        eg_changed = False
+        for entity in list(self._entity_graph):
+            node = self._entity_graph[entity]
+            chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else node
+            after = [d for d in chunk_ids if d not in deleted_ids]
+            if len(after) != len(chunk_ids):
+                eg_changed = True
+                if after:
+                    if isinstance(node, dict):
+                        self._entity_graph[entity]["chunk_ids"] = after
+                        # Recompute frequency after pruning (Item 2)
+                        self._entity_graph[entity]["frequency"] = len(after)
+                    else:
+                        self._entity_graph[entity] = {"description": "", "chunk_ids": after}
+                else:
+                    del self._entity_graph[entity]
+        if eg_changed:
+            self._save_entity_graph()
+
+        rg_changed = False
+        for src in list(self._relation_graph):
+            before = self._relation_graph[src]
+            after = [entry for entry in before if entry.get("chunk_id") not in deleted_ids]
+            if len(after) != len(before):
+                rg_changed = True
+                if after:
+                    self._relation_graph[src] = after
+                else:
+                    del self._relation_graph[src]
+        if rg_changed:
+            self._save_relation_graph()
+
+        # Prune claims graph (Item 11)
+        if hasattr(self, "_claims_graph"):
+            claims_changed = False
+            for chunk_id in list(self._claims_graph):
+                if chunk_id in deleted_ids:
+                    del self._claims_graph[chunk_id]
+                    claims_changed = True
+            if claims_changed:
+                self._save_claims_graph()
+
+    def _raptor_group_by_structure(self, chunks: list[dict], n: int) -> list[list[dict]]:
+        """Group chunks for RAPTOR summarization using section/heading boundaries.
+
+        Detection priority (any one match = new section starts):
+          1. metadata["heading"] or metadata["section"] is non-empty
+          2. text starts with a Markdown heading (#, ##, ###)
+          3. text starts with numbered/lettered heading pattern
+
+        Fallback: if no heading found across any chunk, pure fixed windows of size n.
+        Within detected sections: further split into sub-windows of size n if section > n.
+        """
+        import re as _re
+
+        _heading_re = _re.compile(
+            r"^(#{1,4}\s|chapter\s+\d|section\s+[\d.]+|\d+\.\s+[A-Z]|\b[IVX]+\.\s)",
+            _re.IGNORECASE,
+        )
+
+        def _is_section_start(doc: dict) -> bool:
+            meta = doc.get("metadata", {})
+            if meta.get("heading") or meta.get("section"):
+                return True
+            return bool(_heading_re.match(doc.get("text", "").lstrip()[:80]))
+
+        has_structure = any(_is_section_start(c) for c in chunks)
+        if not has_structure:
+            return [chunks[i : i + n] for i in range(0, len(chunks), n)]
+
+        sections: list[list[dict]] = []
+        current: list[dict] = []
+        for chunk in chunks:
+            if _is_section_start(chunk) and current:
+                sections.append(current)
+                current = [chunk]
+            else:
+                current.append(chunk)
+        if current:
+            sections.append(current)
+
+        windows: list[list[dict]] = []
+        for sec in sections:
+            for i in range(0, len(sec), n):
+                windows.append(sec[i : i + n])
+        return windows
 
     def _generate_raptor_summaries(self, documents: list[dict]) -> list[dict]:
         """Generate RAPTOR summary nodes for a list of already-split chunks."""
@@ -2050,95 +4378,391 @@ Your primary goal is to help the user by answering questions based on the provid
         windows = []
         for source, group in groupby(sorted_docs, key=_source):
             chunks = list(group)
-            for i in range(0, len(chunks), n):
-                windows.append((source, i, chunks[i : i + n]))
+            for idx, window in enumerate(self._raptor_group_by_structure(chunks, n)):
+                windows.append((source, idx, window))
 
         if not windows:
             return []
 
         logger.info(f"   RAPTOR: Generating summaries for {len(windows)} groups...")
 
-        def _proc_window(item):
-            source, i, window = item
+        import hashlib as _hl
+
+        def _summarise_window(source, i, window, level):
+            """Call LLM (or return from cache) for one window at a given RAPTOR level."""
             combined = "\n\n".join(c["text"] for c in window)
+            content_hash = _hl.md5(combined[:4000].encode("utf-8", errors="replace")).hexdigest()[
+                :12
+            ]
+            cache_key = f"{source}|L{level}|{i}|{content_hash}"
+
+            # P5: return cached summary when content is unchanged
+            if self.config.raptor_cache_summaries and cache_key in self._raptor_summary_cache:
+                logger.debug(f"RAPTOR cache hit for {source} L{level}[{i}]")
+                return self._raptor_summary_cache[cache_key]
+
             prompt = (
                 "Summarise the following passage into a concise but comprehensive paragraph "
                 "that captures all key facts and concepts. "
                 "Output only the summary paragraph.\n\n" + combined[:4000]
             )
             try:
-                summary_text = self.llm.complete(
+                text = self.llm.complete(
                     prompt,
                     system_prompt="You are an expert at summarising technical documents.",
                 )
-                if not summary_text or not summary_text.strip():
+                if not text or not text.strip():
                     return None
+                text = text.strip()
+                if self.config.raptor_cache_summaries:
+                    self._raptor_summary_cache[cache_key] = text
+                return text
+            except Exception as e:
+                logger.debug(f"RAPTOR L{level} summary failed for {source}[{i}]: {e}")
+                return None
 
-                import hashlib
-
-                content_sig = hashlib.md5(
-                    summary_text.strip().encode("utf-8", errors="replace")
-                ).hexdigest()[:8]
-                uid = hashlib.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
+        def _proc_window(item):
+            source, i, window = item
+            summary_text = _summarise_window(source, i, window, level=1)
+            if not summary_text or not isinstance(summary_text, str):
+                return None
+            try:
+                content_sig = _hl.md5(summary_text.encode("utf-8", errors="replace")).hexdigest()[
+                    :8
+                ]
+                uid = _hl.md5(f"{source}|raptor|{i}|{content_sig}".encode()).hexdigest()[:12]
                 return {
                     "id": f"raptor_{uid}",
-                    "text": summary_text.strip(),
+                    "text": summary_text,
                     "metadata": {
                         "source": source,
                         "raptor_level": 1,
                         "window_start": i,
                         "window_end": i + len(window) - 1,
+                        "children_ids": [doc["id"] for doc in window],
                     },
                 }
             except Exception as e:
-                logger.debug(f"RAPTOR summary failed for {source}[{i}]: {e}")
+                logger.debug(f"RAPTOR node build failed for {source}[{i}]: {e}")
                 return None
 
         results = list(self._executor.map(_proc_window, windows))
+        level_1_summaries = [r for r in results if r]
+        if level_1_summaries:
+            logger.info(f"   RAPTOR: generated {len(level_1_summaries)} level-1 summary node(s)")
 
-        summaries = [r for r in results if r]
-        if summaries:
-            logger.info(f"   RAPTOR: generated {len(summaries)} summary node(s)")
-        return summaries
+        # P3: Recursive summarization up to raptor_max_levels
+        max_levels = getattr(self.config, "raptor_max_levels", 2)
+        all_summaries = list(level_1_summaries)
+        prev_level_nodes = list(level_1_summaries)
+        current_level = 1
 
-    def _expand_with_entity_graph(self, query: str, results: list[dict], cfg=None) -> list[dict]:
+        while current_level < max_levels and len(prev_level_nodes) > 1:
+            next_level = current_level + 1
+            logger.info(
+                f"   RAPTOR: Building level-{next_level} summaries from "
+                f"{len(prev_level_nodes)} level-{current_level} node(s)..."
+            )
+            sorted_prev = sorted(prev_level_nodes, key=_source)
+            next_windows = []
+            for source, group in groupby(sorted_prev, key=_source):
+                group_list = list(group)
+                for idx, window in enumerate(self._raptor_group_by_structure(group_list, n)):
+                    next_windows.append((source, idx, window, next_level))
+
+            if not next_windows:
+                break
+
+            def _proc_upper(item):
+                source, i, window, lvl = item
+                summary_text = _summarise_window(source, i, window, level=lvl)
+                if not summary_text or not isinstance(summary_text, str):
+                    return None
+                try:
+                    content_sig = _hl.md5(
+                        summary_text.encode("utf-8", errors="replace")
+                    ).hexdigest()[:8]
+                    uid = _hl.md5(f"{source}|raptor|L{lvl}|{i}|{content_sig}".encode()).hexdigest()[
+                        :12
+                    ]
+                    children_ids = [c["id"] for c in window]
+                    node = {
+                        "id": f"raptor_{uid}",
+                        "text": summary_text,
+                        "metadata": {
+                            "source": source,
+                            "raptor_level": lvl,
+                            "window_start": i,
+                            "window_end": i + len(window) - 1,
+                            "children_ids": children_ids,
+                        },
+                    }
+                    for child in window:
+                        child["metadata"]["parent_id"] = node["id"]
+                    return node
+                except Exception as e:
+                    logger.debug(f"RAPTOR L{lvl} node build failed for {source}[{i}]: {e}")
+                    return None
+
+            upper_results = list(self._executor.map(_proc_upper, next_windows))
+            next_level_nodes = [r for r in upper_results if r]
+            if next_level_nodes:
+                logger.info(
+                    f"   RAPTOR: generated {len(next_level_nodes)} level-{next_level} summary node(s)"
+                )
+            all_summaries.extend(next_level_nodes)
+            prev_level_nodes = next_level_nodes
+            current_level = next_level
+
+        return all_summaries
+
+    def _raptor_drilldown(self, query: str, results: list[dict], cfg=None) -> list[dict]:
+        """Replace RAPTOR summary hits with their underlying leaf chunks.
+
+        For each result whose metadata contains ``raptor_level >= 1``:
+
+        * If ``children_ids`` is stored in the node's metadata, fetch those exact
+          descendants via ``get_by_ids`` and recurse until leaf chunks are reached
+          (P2+P3 — true tree traversal, no spurious cross-source contamination).
+        * If ``children_ids`` is absent (level-1 nodes ingested before multi-level
+          RAPTOR was added), fall back to a filtered ``search`` using the now-fixed
+          Chroma ``where`` clause (P1).
+        * After all substitutions, deduplicate by ID keeping the highest-scored
+          occurrence (P4).
+
+        Non-RAPTOR results pass through unchanged.  Falls back to keeping the
+        summary when window metadata is missing or any fetch fails.
+        """
+        if cfg is None:
+            cfg = self.config
+        if not getattr(cfg, "raptor_drilldown", True):
+            return results
+
+        drilldown_top_k = getattr(cfg, "raptor_drilldown_top_k", 5)
+        final: list[dict] = []
+
+        def _collect_leaves(node_ids: list[str], depth: int = 0) -> list[dict]:
+            """Recursively fetch children via get_by_ids until leaf chunks are reached."""
+            if not node_ids or depth > 5:
+                return []
+            docs = self.vector_store.get_by_ids(node_ids)
+            leaves = []
+            to_recurse = []
+            for doc in docs:
+                if doc.get("metadata", {}).get("raptor_level"):
+                    grandchildren = doc.get("metadata", {}).get("children_ids", [])
+                    if grandchildren:
+                        to_recurse.extend(grandchildren)
+                    # RAPTOR node with no children_ids — treat as leaf to avoid data loss
+                else:
+                    leaves.append(doc)
+            if to_recurse:
+                leaves.extend(_collect_leaves(to_recurse, depth + 1))
+            return leaves
+
+        for r in results:
+            meta = r.get("metadata", {})
+            if not meta.get("raptor_level"):
+                final.append(r)
+                continue
+
+            source = meta.get("source")
+            window_start = meta.get("window_start")
+            window_end = meta.get("window_end")
+
+            if source is None or window_start is None or window_end is None:
+                final.append(r)
+                continue
+
+            try:
+                children_ids = meta.get("children_ids")
+                if children_ids:
+                    # P2+P3: walk the stored lineage tree
+                    leaves = _collect_leaves(children_ids)
+                    if not leaves:
+                        # children_ids present but store returned nothing — fall back
+                        query_vec = self.embedding.embed([query])[0]
+                        fetch_k = (window_end - window_start + 1) * 3
+                        raw = self.vector_store.search(
+                            query_vec,
+                            top_k=max(fetch_k, drilldown_top_k * 2),
+                            filter_dict={"source": source},
+                        )
+                        leaves = [d for d in raw if not d.get("metadata", {}).get("raptor_level")]
+                else:
+                    # Legacy level-1 node or pre-P3 node: use filtered search
+                    query_vec = self.embedding.embed([query])[0]
+                    fetch_k = (window_end - window_start + 1) * 3
+                    raw = self.vector_store.search(
+                        query_vec,
+                        top_k=max(fetch_k, drilldown_top_k * 2),
+                        filter_dict={"source": source},
+                    )
+                    leaves = [d for d in raw if not d.get("metadata", {}).get("raptor_level")]
+            except Exception as e:
+                logger.debug(f"RAPTOR drilldown fetch failed for {source}: {e}")
+                final.append(r)
+                continue
+
+            if not leaves:
+                final.append(r)
+                continue
+
+            if cfg.rerank and self.reranker:
+                leaves = self.reranker.rerank(query, leaves)
+            else:
+                leaves = sorted(leaves, key=lambda x: x.get("score", 0.0), reverse=True)
+
+            final.extend(leaves[:drilldown_top_k])
+
+        # P4: Deduplicate by ID, keeping highest-scored occurrence
+        seen: dict[str, dict] = {}
+        deduped: list[dict] = []
+        for res in final:
+            rid = res["id"]
+            if rid not in seen:
+                seen[rid] = res
+                deduped.append(res)
+            elif res.get("score", 0.0) > seen[rid].get("score", 0.0):
+                idx = next(i for i, x in enumerate(deduped) if x["id"] == rid)
+                deduped[idx] = res
+                seen[rid] = res
+        return deduped
+
+    def _apply_artifact_ranking(self, results: list[dict], cfg=None) -> list[dict]:
+        """Re-order results by artifact type according to ``raptor_retrieval_mode``.
+
+        Applies a score multiplier per artifact type, then re-sorts:
+
+        * ``tree_traversal`` (default): leaf ×1.5 > raptor ×1.0 > community ×0.7
+        * ``summary_first``:            raptor ×1.5 > leaf ×1.0 > community ×0.7
+        * ``corpus_overview``:          community ×1.5 > raptor ×1.0 > leaf ×0.7
+        """
+        if cfg is None:
+            cfg = self.config
+        mode = getattr(cfg, "raptor_retrieval_mode", "tree_traversal")
+        if mode not in ("tree_traversal", "summary_first", "corpus_overview"):
+            return results
+
+        WEIGHTS = {
+            "tree_traversal": {"leaf": 1.5, "raptor": 1.0, "community": 0.7},
+            "summary_first": {"leaf": 1.0, "raptor": 1.5, "community": 0.7},
+            "corpus_overview": {"leaf": 0.7, "raptor": 1.0, "community": 1.5},
+        }
+        w = WEIGHTS[mode]
+
+        def _artifact_type(r: dict) -> str:
+            meta = r.get("metadata", {})
+            if meta.get("raptor_level"):
+                return "raptor"
+            if meta.get("graph_rag_type") == "community_report" or r.get("id", "").startswith(
+                "__community__"
+            ):
+                return "community"
+            return "leaf"
+
+        for r in results:
+            r["_artifact_score"] = r.get("score", 0.5) * w[_artifact_type(r)]
+
+        ranked = sorted(results, key=lambda x: x["_artifact_score"], reverse=True)
+        for r in ranked:
+            r.pop("_artifact_score", None)
+        return ranked
+
+    def _expand_with_entity_graph(
+        self, query: str, results: list[dict], cfg=None
+    ) -> tuple[list[dict], list[str]]:
         """Expand retrieval results using GraphRAG entity linkage.
 
         1. Extract entities from the query.
-        2. Look up all chunk IDs linked to those entities in the entity graph.
-        3. Fetch any chunks not already in results from the vector store.
-        4. Append them (capped to avoid bloat), returning the expanded list.
+        2. Match query entities against the entity graph using Jaccard similarity.
+        3. Perform 1-hop traversal via the relation graph (when enabled).
+        4. Fetch any chunks not already in results, tag with _graph_expanded.
+        5. Return the expanded list (top_k slicing is deferred to the caller).
         """
+        # Item 5: Union LLM-extracted entities with embedding-based matches.
+        # LLM extraction captures exact textual mentions; embedding matching adds semantic neighbors.
         query_entities = self._extract_entities(query)
+        if (
+            getattr(self.config, "graph_rag_entity_embedding_match", True)
+            and self._entity_embeddings
+        ):
+            matched_keys = self._match_entities_by_embedding(query)
+            seen_names = {e.get("name", "").lower() for e in query_entities}
+            for k in matched_keys:
+                if k.lower() not in seen_names:
+                    query_entities.append({"name": k, "type": "UNKNOWN", "description": ""})
         if not query_entities:
-            return results
+            return results, []
 
         active_top_k = (cfg.top_k if cfg is not None else None) or self.config.top_k
+        active_cfg = cfg if cfg is not None else self.config
 
         existing_ids = {r["id"] for r in results}
-        extra_ids: list[str] = []
-        for entity in query_entities:
-            for eid, doc_ids in self._entity_graph.items():
-                if entity.lower() in eid.lower() or eid.lower() in entity.lower():
-                    for did in doc_ids:
-                        if did not in existing_ids and did not in extra_ids:
-                            extra_ids.append(did)
+        # {doc_id: best_score} so we don't lower a score if the same ID matches again
+        extra_id_scores: dict[str, float] = {}
 
-        if not extra_ids:
-            return results
+        matched_entities: set[str] = set()
 
-        # Fetch the extra chunks from the vector store (capped to the active top_k)
+        for query_entity in query_entities:
+            # Support both new dict-node format and legacy list format
+            q_name = query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
+            if not q_name:
+                continue
+            for eid, node in self._entity_graph.items():
+                score = self._entity_matches(q_name, eid)
+                if score <= 0.0:
+                    continue
+                matched_entities.add(eid)
+                # Scale matched score into [0.5, 0.8) range so it is clearly below
+                # a direct vector-match score but still meaningfully ranked.
+                doc_score = 0.5 + score * 0.3
+                doc_ids = node.get("chunk_ids", []) if isinstance(node, dict) else node
+                for did in doc_ids:
+                    if did not in existing_ids:
+                        if extra_id_scores.get(did, 0.0) < doc_score:
+                            extra_id_scores[did] = doc_score
+
+        # 1-hop traversal via relation graph
+        use_relations = getattr(active_cfg, "graph_rag_relations", True) and self._relation_graph
+        if use_relations and matched_entities:
+            for src_entity in matched_entities:
+                for entry in self._relation_graph.get(src_entity, []):
+                    target = entry.get("target", "").lower()
+                    if not target:
+                        continue
+                    target_node = self._entity_graph.get(target, {})
+                    target_chunk_ids = (
+                        target_node.get("chunk_ids", [])
+                        if isinstance(target_node, dict)
+                        else target_node
+                    )
+                    for did in target_chunk_ids:
+                        if did not in existing_ids:
+                            # 1-hop score: lower than direct match
+                            hop_score = 0.62
+                            if extra_id_scores.get(did, 0.0) < hop_score:
+                                extra_id_scores[did] = hop_score
+
+        if not extra_id_scores:
+            return results, list(matched_entities)
+
+        # Fetch the extra chunks from the vector store (capped to avoid huge fetches)
+        extra_ids = list(extra_id_scores.keys())[:active_top_k]
         try:
-            extra_results = self.vector_store.get_by_ids(extra_ids[:active_top_k])
+            extra_results = self.vector_store.get_by_ids(extra_ids)
             if extra_results:
                 logger.info(
                     f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)"
                 )
+                for r in extra_results:
+                    r["score"] = extra_id_scores.get(r["id"], 0.65)
+                    r["_graph_expanded"] = True
                 results = list(results) + extra_results
         except Exception as e:
             logger.debug(f"GraphRAG expansion failed: {e}")
 
-        return results
+        return results, list(matched_entities)
 
     def _doc_hash(self, doc: dict) -> str:
         """Return an MD5 hex digest of the document's text content."""
@@ -2217,6 +4841,18 @@ Your primary goal is to help the user by answering questions based on the provid
         )
 
     # ── Dataset type detection ────────────────────────────────────────────────
+    _SOURCE_POLICY: dict = {
+        # (raptor_allowed, graph_rag_allowed)
+        "paper": (True, True),
+        "doc": (True, True),
+        "knowledge": (False, False),
+        "discussion": (False, True),
+        "codebase": (False, True),
+        "manifest": (False, False),
+        "reference": (False, False),
+    }
+    _SOURCE_POLICY_DEFAULT = (True, True)
+
     _CODE_EXTENSIONS = {
         ".py",
         ".ts",
@@ -2266,6 +4902,54 @@ Your primary goal is to help the user by answering questions based on the provid
             ext = os.path.splitext(source)[1].lower()
             if ext in self._CODE_EXTENSIONS:
                 return "codebase", False
+
+        # Priority 1.5: Manifest / lockfile / generated-reference detection
+        if source:
+            _base = os.path.basename(source).lower()
+            _manifest_names = {
+                "package.json",
+                "package-lock.json",
+                "yarn.lock",
+                "pnpm-lock.yaml",
+                "requirements.txt",
+                "requirements-dev.txt",
+                "pipfile",
+                "pipfile.lock",
+                "pyproject.toml",
+                "setup.cfg",
+                "setup.py",
+                "cargo.toml",
+                "cargo.lock",
+                "go.mod",
+                "go.sum",
+                "composer.json",
+                "composer.lock",
+                "gemfile",
+                "gemfile.lock",
+                "podfile",
+                "podfile.lock",
+                ".gitmodules",
+                "cmakelists.txt",
+                "makefile",
+                "dockerfile",
+            }
+            if _base in _manifest_names:
+                return "manifest", False
+            _ext = os.path.splitext(source)[1].lower()
+            if _ext in (".lock", ".sum"):
+                return "manifest", False
+            _ref_signals = (
+                "/api/",
+                "/apidocs/",
+                "/api-docs/",
+                "/swagger/",
+                "/openapi/",
+                "/reference/",
+                "/javadoc/",
+                "/doxygen/",
+            )
+            if any(sig in source.lower().replace("\\", "/") for sig in _ref_signals):
+                return "reference", False
 
         # Priority 2: JSON with discussion keys
         if text.strip().startswith("{") or text.strip().startswith("["):
@@ -2322,7 +5006,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return "doc", False
 
-    def _get_splitter_for_type(self, dataset_type: str, has_code: bool):
+    def _get_splitter_for_type(self, dataset_type: str, has_code: bool, source: str = ""):
         """Return a splitter configured for the detected document type."""
         from axon.splitters import RecursiveCharacterTextSplitter, SemanticTextSplitter
 
@@ -2336,7 +5020,19 @@ Your primary goal is to help the user by answering questions based on the provid
             return SemanticTextSplitter(chunk_size=400, chunk_overlap=50)
         elif dataset_type == "doc" and has_code:
             return SemanticTextSplitter(chunk_size=500, chunk_overlap=75)
-        else:  # doc default
+        elif dataset_type == "doc":
+            # Auto-select MarkdownSplitter for .md sources when strategy is "semantic" (default)
+            if (
+                os.path.splitext(source)[1].lower() == ".md"
+                and self.config.chunk_strategy == "semantic"
+            ):
+                from axon.splitters import MarkdownSplitter
+
+                return MarkdownSplitter(
+                    chunk_size=self.config.chunk_size, chunk_overlap=self.config.chunk_overlap
+                )
+            return self.splitter
+        else:
             return self.splitter  # Use default configured splitter
 
     def _split_with_parents(self, documents: list[dict]) -> list[dict]:
@@ -2391,6 +5087,9 @@ Your primary goal is to help the user by answering questions based on the provid
         # collection was created — mixing models silently corrupts retrieval.
         self._validate_embedding_meta(on_mismatch="raise")
 
+        _defer_saves = getattr(self.config, "ingest_batch_mode", False)
+        _policy_on = getattr(self.config, "source_policy_enabled", False)
+
         t0 = time.time()
         from tqdm import tqdm
 
@@ -2406,12 +5105,37 @@ Your primary goal is to help the user by answering questions based on the provid
                 doc.setdefault("metadata", {})["dataset_type"] = dataset_type
                 if has_code:
                     doc["metadata"]["has_code"] = True
-                splitter = self._get_splitter_for_type(dataset_type, has_code)
+                source = doc.get("metadata", {}).get("source", "")
+                splitter = self._get_splitter_for_type(dataset_type, has_code, source=source)
                 if splitter is not None:
                     chunked.extend(splitter.transform_documents([doc]))
                 else:
                     chunked.append(doc)
             documents = chunked
+
+        # TASK 13B: Per-source chunk budget enforcement
+        _max_chunks = getattr(self.config, "max_chunks_per_source", 0)
+        if _max_chunks > 0:
+            from collections import defaultdict as _dfl_b
+
+            _chunks_by_source: dict = _dfl_b(list)
+            for _d in documents:
+                _src = _d.get("metadata", {}).get("source", _d["id"])
+                _chunks_by_source[_src].append(_d)
+            _capped: list = []
+            for _src, _src_chunks in _chunks_by_source.items():
+                if len(_src_chunks) > _max_chunks:
+                    logger.info(
+                        "   Chunk cap: '%s' truncated %d → %d chunks (max_chunks_per_source=%d)",
+                        _src,
+                        len(_src_chunks),
+                        _max_chunks,
+                        _max_chunks,
+                    )
+                    _capped.extend(_src_chunks[:_max_chunks])
+                else:
+                    _capped.extend(_src_chunks)
+            documents = _capped
 
         if self.config.dedup_on_ingest:
             before = len(documents)
@@ -2435,16 +5159,107 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
         if self.config.raptor:
-            raptor_docs = self._generate_raptor_summaries(documents)
-            documents = documents + raptor_docs
+            # TASK 12: Source-size guard — skip RAPTOR for sources whose estimated text size exceeds threshold
+            _raptor_max_mb = getattr(self.config, "raptor_max_source_size_mb", 0.0)
+            if _raptor_max_mb > 0.0:
+                from collections import defaultdict as _dfl
+
+                _size_by_source: dict = _dfl(int)
+                for _d in documents:
+                    _src = _d.get("metadata", {}).get("source", _d["id"])
+                    _size_by_source[_src] += len(_d.get("text", ""))
+                _max_bytes = int(_raptor_max_mb * 1024 * 1024)
+                _skipped_sources = {src for src, sz in _size_by_source.items() if sz > _max_bytes}
+                if _skipped_sources:
+                    logger.info(
+                        "   RAPTOR: skipping %d large source(s) > %.1f MB",
+                        len(_skipped_sources),
+                        _raptor_max_mb,
+                    )
+                _raptor_eligible = [
+                    _d
+                    for _d in documents
+                    if _d.get("metadata", {}).get("source", _d["id"]) not in _skipped_sources
+                ]
+            else:
+                _raptor_eligible = documents
+            if _policy_on:
+                _raptor_ok_list: list = []
+                _raptor_pol_skipped: set = set()
+                for _d in _raptor_eligible:
+                    _dtype = _d.get("metadata", {}).get("dataset_type", "doc")
+                    _r_ok, _ = AxonBrain._SOURCE_POLICY.get(
+                        _dtype, AxonBrain._SOURCE_POLICY_DEFAULT
+                    )
+                    if _r_ok:
+                        _raptor_ok_list.append(_d)
+                    else:
+                        _raptor_pol_skipped.add(_d.get("metadata", {}).get("source", _d["id"]))
+                if _raptor_pol_skipped:
+                    logger.info(
+                        "   RAPTOR: source_policy skipped %d source(s)",
+                        len(_raptor_pol_skipped),
+                    )
+                _raptor_eligible = _raptor_ok_list
+            if _raptor_eligible:
+                raptor_docs = self._generate_raptor_summaries(_raptor_eligible)
+                documents = documents + raptor_docs
 
         # GraphRAG: extract entities from new chunks and update entity graph
         if self.config.graph_rag:
             updated = False
-            # Only extract entities from actual document chunks
-            chunks_to_process = [
-                doc for doc in documents if not doc.get("metadata", {}).get("raptor_level")
-            ]
+            # Only extract entities from actual document chunks (optionally include RAPTOR level-1)
+            _include_raptor = getattr(self.config, "graph_rag_include_raptor_summaries", False)
+
+            # P2: Skip GraphRAG entity extraction for large sources when raptor=True.
+            # Sources with >= raptor_graphrag_leaf_skip_threshold leaf chunks bypass
+            # extraction; their RAPTOR summaries still enter GraphRAG if the include flag is set.
+            _skip_threshold = getattr(self.config, "raptor_graphrag_leaf_skip_threshold", 20)
+            _leaf_count_by_source: dict = {}
+            for _doc in documents:
+                if not _doc.get("metadata", {}).get("raptor_level"):
+                    _src = _doc.get("metadata", {}).get("source", _doc["id"])
+                    _leaf_count_by_source[_src] = _leaf_count_by_source.get(_src, 0) + 1
+
+            _large_sources: set = set()
+            if self.config.raptor and _skip_threshold > 0:
+                _large_sources = {
+                    src for src, cnt in _leaf_count_by_source.items() if cnt >= _skip_threshold
+                }
+                if _large_sources:
+                    logger.info(
+                        f"   GraphRAG: skipping leaf-chunk entity extraction for "
+                        f"{len(_large_sources)} large source(s) (>= {_skip_threshold} leaf chunks)"
+                    )
+
+            chunks_to_process = []
+            for _doc in documents:
+                _lvl = _doc.get("metadata", {}).get("raptor_level")
+                _src = _doc.get("metadata", {}).get("source", _doc["id"])
+                if not _lvl:
+                    if _src not in _large_sources:
+                        chunks_to_process.append(_doc)
+                elif _include_raptor and _lvl == 1:
+                    chunks_to_process.append(_doc)
+
+            if _policy_on:
+                _grag_ok_list: list = []
+                _grag_pol_skipped: set = set()
+                for _d in chunks_to_process:
+                    _dtype = _d.get("metadata", {}).get("dataset_type", "doc")
+                    _, _g_ok = AxonBrain._SOURCE_POLICY.get(
+                        _dtype, AxonBrain._SOURCE_POLICY_DEFAULT
+                    )
+                    if _g_ok:
+                        _grag_ok_list.append(_d)
+                    else:
+                        _grag_pol_skipped.add(_d.get("metadata", {}).get("source", _d["id"]))
+                if _grag_pol_skipped:
+                    logger.info(
+                        "   GraphRAG: source_policy skipped %d source(s)",
+                        len(_grag_pol_skipped),
+                    )
+                chunks_to_process = _grag_ok_list
 
             logger.info(f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks...")
 
@@ -2453,17 +5268,91 @@ Your primary goal is to help the user by answering questions based on the provid
 
             results = list(self._executor.map(_proc, chunks_to_process))
 
+            # Track entity keys extracted this run for embedding (Item 5)
+            entities_extracted_this_run: list = []
+
             total_entities = 0
+            # Build a lookup from doc_id to doc for metadata writing (Item 7)
+            doc_by_id = {doc["id"]: doc for doc in chunks_to_process}
             for doc_id, entities in results:
                 total_entities += len(entities)
-                for entity in entities:
-                    key = entity.lower()
+                # Track entity keys for embedding
+                for ent in entities:
+                    if isinstance(ent, dict) and ent.get("name"):
+                        entities_extracted_this_run.append(ent)
+
+                for ent in entities:  # ent is now {"name": ..., "type": ..., "description": ...}
+                    key = ent["name"].lower().strip() if isinstance(ent, dict) else ent.lower()
+                    if not key:
+                        continue
                     if key not in self._entity_graph:
-                        self._entity_graph[key] = []
-                    if doc_id not in self._entity_graph[key]:
-                        self._entity_graph[key].append(doc_id)
-                        updated = True
-            if updated:
+                        desc = ent.get("description", "") if isinstance(ent, dict) else ""
+                        ent_type = (
+                            ent.get("type", "UNKNOWN") if isinstance(ent, dict) else "UNKNOWN"
+                        )
+                        self._entity_graph[key] = {
+                            "description": desc,
+                            "type": ent_type,
+                            "chunk_ids": [],
+                            "frequency": 0,
+                            "degree": 0,
+                        }
+                    elif isinstance(self._entity_graph[key], dict):
+                        # Update type if not yet set
+                        if (
+                            not self._entity_graph[key].get("type")
+                            or self._entity_graph[key].get("type") == "UNKNOWN"
+                        ):
+                            new_type = (
+                                ent.get("type", "UNKNOWN") if isinstance(ent, dict) else "UNKNOWN"
+                            )
+                            if new_type and new_type != "UNKNOWN":
+                                self._entity_graph[key]["type"] = new_type
+                        # Item 10: collect descriptions for canonicalization
+                        if isinstance(ent, dict) and ent.get("description"):
+                            desc_buf = self._entity_description_buffer.setdefault(key, [])
+                            desc_buf.append(ent["description"])
+                        if (
+                            not self._entity_graph[key].get("description")
+                            and isinstance(ent, dict)
+                            and ent.get("description")
+                        ):
+                            self._entity_graph[key]["description"] = ent["description"]
+                    if isinstance(self._entity_graph[key], dict):
+                        self._entity_graph[key].setdefault("chunk_ids", [])
+                        if doc_id not in self._entity_graph[key]["chunk_ids"]:
+                            self._entity_graph[key]["chunk_ids"].append(doc_id)
+                            updated = True
+                            self._community_graph_dirty = True
+                    else:
+                        # Legacy list format — migrate on the fly
+                        if doc_id not in self._entity_graph[key]:
+                            self._entity_graph[key].append(doc_id)
+                            updated = True
+                            self._community_graph_dirty = True
+
+                # Item 7: Write entity IDs back into chunk metadata for text-unit linkage
+                doc = doc_by_id.get(doc_id)
+                if doc is not None and entities and doc.get("metadata") is not None:
+                    doc["metadata"]["entity_ids"] = [
+                        e["name"].lower() for e in entities if isinstance(e, dict) and e.get("name")
+                    ]
+                # GAP 9: Update text_unit_entity_map
+                self._text_unit_entity_map[doc_id] = [
+                    e["name"] for e in entities if isinstance(e, dict) and e.get("name")
+                ]
+
+            # Item 2: Update frequency only for entities touched in this ingest run
+            # (avoids O(|V|) scan of the full entity graph on every ingest batch)
+            _touched_entity_keys = {
+                ent["name"].lower() for ent in entities_extracted_this_run if ent.get("name")
+            }
+            for entity_key in _touched_entity_keys:
+                node = self._entity_graph.get(entity_key)
+                if isinstance(node, dict):
+                    node["frequency"] = len(node.get("chunk_ids", []))
+
+            if updated and not _defer_saves:
                 self._save_entity_graph()
             if total_entities == 0:
                 logger.warning(
@@ -2472,9 +5361,193 @@ Your primary goal is to help the user by answering questions based on the provid
                     "GraphRAG relationship expansion will have no effect for this ingestion."
                 )
 
+            # Relation extraction: build SUBJECT | RELATION | OBJECT triples
+            if self.config.graph_rag_relations:
+                logger.info(
+                    f"   GraphRAG: Extracting relations from {len(chunks_to_process)} chunks..."
+                )
+
+                def _proc_rel(doc):
+                    return doc["id"], self._extract_relations(doc["text"])
+
+                rel_results = list(self._executor.map(_proc_rel, chunks_to_process))
+                rg_updated = False
+                for doc_id, triples in rel_results:
+                    for triple in triples:
+                        # triple is now a dict: {subject, relation, object, description}
+                        if isinstance(triple, dict):
+                            subject = triple.get("subject", "")
+                            relation = triple.get("relation", "")
+                            obj = triple.get("object", "")
+                            description = triple.get("description", "")
+                        else:
+                            # Legacy tuple format fallback
+                            subject, relation, obj = triple
+                            description = ""
+                        src_lower = subject.lower().strip()
+                        if not src_lower:
+                            continue
+                        entry = {
+                            "target": obj.lower().strip(),
+                            "relation": relation.strip(),
+                            "chunk_id": doc_id,
+                            "description": description,
+                            "strength": triple.get("strength", 5)
+                            if isinstance(triple, dict)
+                            else 5,
+                            "support_count": 1,
+                        }
+                        if src_lower not in self._relation_graph:
+                            self._relation_graph[src_lower] = []
+                        # Item 8: weight tracking — increment weight for same (target, relation) pair
+                        rel_tgt = entry["target"]
+                        rel_relation = entry["relation"]
+                        existing_entry = next(
+                            (
+                                e
+                                for e in self._relation_graph[src_lower]
+                                if e.get("target") == rel_tgt and e.get("relation") == rel_relation
+                            ),
+                            None,
+                        )
+                        if existing_entry:
+                            # Accumulate strength-based weight (sum of LM-derived strengths)
+                            existing_entry["weight"] = existing_entry.get("weight", 1) + entry.get(
+                                "strength", 1
+                            )
+                            existing_entry["support_count"] = (
+                                existing_entry.get("support_count", 1) + 1
+                            )
+                            # GAP 7: accumulate text_unit_ids
+                            if "text_unit_ids" not in existing_entry:
+                                existing_entry["text_unit_ids"] = [
+                                    existing_entry.get("chunk_id", "")
+                                ]
+                            if doc_id not in existing_entry["text_unit_ids"]:
+                                existing_entry["text_unit_ids"].append(doc_id)
+                            rg_updated = True
+                        else:
+                            entry["weight"] = entry.get("strength", 1)
+                            entry["text_unit_ids"] = [doc_id]
+                            self._relation_graph[src_lower].append(entry)
+                            rg_updated = True
+                        # GAP 3b: update relation description buffer
+                        if description:
+                            pair = (src_lower, rel_tgt)
+                            if pair not in self._relation_description_buffer:
+                                self._relation_description_buffer[pair] = []
+                            self._relation_description_buffer[pair].append(description)
+                if rg_updated and not _defer_saves:
+                    self._save_relation_graph()
+
+                # TASK 11: Normalize relation targets into entity graph so traversal never KeyErrors
+                if rg_updated or updated:
+                    _stub_added = False
+                    for _src, _entries in self._relation_graph.items():
+                        for _entry in _entries:
+                            _tgt = _entry.get("target", "").lower().strip()
+                            if not _tgt:
+                                continue
+                            if _tgt not in self._entity_graph:
+                                self._entity_graph[_tgt] = {
+                                    "description": "",
+                                    "type": "UNKNOWN",
+                                    "chunk_ids": [],
+                                    "frequency": 0,
+                                    "degree": 0,
+                                }
+                                _stub_added = True
+                            # Ensure the relation's source chunk is in the target's chunk_ids
+                            _cid = _entry.get("chunk_id", "")
+                            if _cid:
+                                _tgt_node = self._entity_graph[_tgt]
+                                if isinstance(_tgt_node, dict):
+                                    _tgt_node.setdefault("chunk_ids", [])
+                                    if _cid not in _tgt_node["chunk_ids"]:
+                                        _tgt_node["chunk_ids"].append(_cid)
+                                        _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
+                                        _stub_added = True
+                    if _stub_added and not _defer_saves:
+                        self._save_entity_graph()
+
+                # GAP 9: Update text_unit_relation_map
+                for doc_id, triples in rel_results:
+                    self._text_unit_relation_map[doc_id] = [
+                        (t.get("subject", ""), t.get("object", ""))
+                        if isinstance(t, dict)
+                        else (t[0], t[2])
+                        for t in triples
+                    ]
+
+            # Item 2: Recompute degree for entities touched by this ingest's relations only
+            # (avoids O(|V|) scan of the full entity graph on every ingest batch)
+            for entity_key in _touched_entity_keys:
+                if isinstance(self._entity_graph.get(entity_key), dict):
+                    self._entity_graph[entity_key]["degree"] = len(
+                        self._relation_graph.get(entity_key, [])
+                    )
+
+            # Item 5: Embed entity descriptions for query-time matching
+            if getattr(self.config, "graph_rag_entity_embedding_match", True):
+                entity_keys_this_batch = list(
+                    {ent["name"].lower() for ent in entities_extracted_this_run if ent.get("name")}
+                )
+                self._embed_entities(entity_keys_this_batch)
+
+            # Item 10: Canonicalize entity descriptions
+            if self.config.graph_rag and getattr(self.config, "graph_rag_canonicalize", False):
+                self._canonicalize_entity_descriptions()
+            if self.config.graph_rag and getattr(
+                self.config, "graph_rag_canonicalize_relations", False
+            ):
+                self._canonicalize_relation_descriptions()
+
+            # Item 11: Extract claims
+            claims_changed = False
+            if getattr(self.config, "graph_rag_claims", False):
+                logger.info(
+                    f"   GraphRAG: Extracting claims from {len(chunks_to_process)} chunks..."
+                )
+
+                def _proc_claims(doc):
+                    return doc["id"], self._extract_claims(doc["text"])
+
+                claim_results = list(self._executor.map(_proc_claims, chunks_to_process))
+                for doc_id, claims in claim_results:
+                    if claims:
+                        # GAP 5: set text_unit_id on each claim
+                        for claim in claims:
+                            if isinstance(claim, dict):
+                                claim["text_unit_id"] = doc_id
+                        self._claims_graph[doc_id] = claims
+                        claims_changed = True
+                if claims_changed and not _defer_saves:
+                    self._save_claims_graph()
+
+            if self.config.graph_rag_community and self._community_graph_dirty:
+                if getattr(self.config, "graph_rag_community_defer", True):
+                    pass  # leave dirty; caller must invoke finalize_graph()
+                else:
+                    self._community_graph_dirty = False
+                    if self.config.graph_rag_community_async:
+
+                        def _debounced_rebuild():
+                            import time as _time
+
+                            self._community_build_in_progress = True
+                            try:
+                                _time.sleep(self.config.graph_rag_community_rebuild_debounce_s)
+                                self._rebuild_communities()
+                            finally:
+                                self._community_build_in_progress = False
+
+                        self._executor.submit(_debounced_rebuild)
+                    else:
+                        self._rebuild_communities()
+
         n_chunks = len(documents)
         if self._own_bm25:
-            self._own_bm25.add_documents(documents)
+            self._own_bm25.add_documents(documents, save_deferred=_defer_saves)
 
         ids = [d["id"] for d in documents]
         texts = [d["text"] for d in documents]
@@ -2596,6 +5669,55 @@ Your primary goal is to help the user by answering questions based on the provid
         response = self.llm.complete(prompt, system_prompt="You are an expert search engineer.")
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
+
+    def _mmr_deduplicate(self, results: list[dict], cfg) -> list[dict]:
+        """Reorder and deduplicate results using Maximal Marginal Relevance (Jaccard similarity).
+
+        Iteratively selects the next document maximising:
+            lambda * relevance_score - (1-lambda) * max_jaccard_similarity_to_selected
+
+        Near-duplicates (Jaccard >= 0.85) are dropped entirely.
+        """
+        if len(results) <= 1:
+            return results
+
+        lambda_mult = getattr(cfg, "mmr_lambda", 0.5)
+        dup_threshold = 0.85
+
+        def _tok(text: str) -> frozenset:
+            return frozenset(re.sub(r"[^\w\s]", "", text.lower()).split())
+
+        def _jac(a: frozenset, b: frozenset) -> float:
+            union = a | b
+            return len(a & b) / len(union) if union else 0.0
+
+        token_sets = [_tok(r.get("text", "")) for r in results]
+        selected_idx: list[int] = []
+        remaining = list(range(len(results)))
+
+        while remaining:
+            if not selected_idx:
+                best = max(remaining, key=lambda i: results[i].get("score", 0.0))
+            else:
+                best = max(
+                    remaining,
+                    key=lambda i: (
+                        lambda_mult * results[i].get("score", 0.0)
+                        - (1 - lambda_mult)
+                        * max(_jac(token_sets[i], token_sets[j]) for j in selected_idx)
+                    ),
+                )
+            remaining.remove(best)
+            # Drop near-duplicates of already-selected docs
+            if (
+                selected_idx
+                and max(_jac(token_sets[best], token_sets[j]) for j in selected_idx)
+                >= dup_threshold
+            ):
+                continue
+            selected_idx.append(best)
+
+        return [results[i] for i in selected_idx]
 
     def _execute_web_search(self, query: str, count: int = 5) -> list[dict]:
         """Execute a web search using the Brave Search API and return results."""
@@ -2781,15 +5903,25 @@ Your primary goal is to help the user by answering questions based on the provid
         else:
             results = filtered_results
 
+        # MMR deduplication — reorder and remove near-duplicate chunks
+        if getattr(cfg, "mmr", False) and results:
+            results = self._mmr_deduplicate(results, cfg)
+
+        # Save base count before GraphRAG expansion for accurate metrics
+        base_count = len(results)
+
         # GraphRAG: expand results with entity-linked documents
+        _matched_entities: list = []
         if cfg.graph_rag and self._entity_graph:
-            results = self._expand_with_entity_graph(query, results, cfg=cfg)
+            results, _matched_entities = self._expand_with_entity_graph(query, results, cfg=cfg)
 
         return {
             "results": results,
             "vector_count": vector_count,
             "bm25_count": bm25_count,
-            "filtered_count": len(results),
+            "filtered_count": base_count,
+            "graph_expanded_count": len(results) - base_count,
+            "matched_entities": _matched_entities,
             "transforms": transforms,
         }
 
@@ -2881,6 +6013,14 @@ Your primary goal is to help the user by answering questions based on the provid
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
+        # TASK 14: Adaptive query routing — bypass GraphRAG for non-holistic queries
+        _route = getattr(cfg, "graph_rag_auto_route", "off")
+        if _route != "off" and cfg.graph_rag:
+            _needs_grag = self._classify_query_needs_graphrag(query, _route)
+            if not _needs_grag:
+                cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
+                logger.debug("Auto-route: GraphRAG bypassed for query '%s...'", query[:60])
+
         # Cache lookup (only when chat_history is empty — cached responses don't track turns)
         cache_key = None
         if cfg.query_cache and not chat_history and cfg.query_cache_size >= 1:
@@ -2919,12 +6059,77 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
-        results = results[: cfg.top_k]
+        if cfg.graph_rag and cfg.graph_rag_budget > 0:
+            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            expanded = [r for r in results if r.get("_graph_expanded")]
+            base_ids = {r["id"] for r in base}
+            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
+            results = base + graph_slots
+        else:
+            results = results[: cfg.top_k]
+        for r in results:
+            r.pop("_graph_expanded", None)
+
+        # P1: RAPTOR drill-down — replace summary hits with grounded leaf chunks
+        if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
+            results = self._raptor_drilldown(query, results, cfg=cfg)
+
+        # P4: Artifact-type ranking pass
+        if self.config.raptor or self.config.graph_rag:
+            results = self._apply_artifact_ranking(results, cfg=cfg)
+
+        graph_mode = getattr(cfg, "graph_rag_mode", "local")
+        _matched_entities = retrieval.get("matched_entities", [])
+
+        # GraphRAG local context header
+        if (
+            cfg.graph_rag
+            and graph_mode in ("local", "hybrid")
+            and _matched_entities
+            and (self._entity_graph or self._community_summaries)
+        ):
+            _local_ctx = self._local_search_context(query, _matched_entities, cfg)
+        else:
+            _local_ctx = ""
+
         if cfg.compress_context:
             results = self._compress_context(query, results)
         final_count = len(results)
         top_score = results[0].get("score", 0) if results else 0
         context, has_web = self._build_context(results)
+
+        # GraphRAG global context injection
+        # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
+        if (
+            cfg.graph_rag
+            and graph_mode in ("global", "hybrid")
+            and not self._community_summaries
+            and self._community_levels
+            and getattr(self.config, "graph_rag_community_lazy", False)
+        ):
+            logger.info(
+                "GraphRAG: lazy mode — generating community summaries on first global query."
+            )
+            self._generate_community_summaries()
+            if getattr(self.config, "graph_rag_index_community_reports", True):
+                self._index_community_reports_in_vector_store()
+        if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
+            _global_ctx = self._global_search_map_reduce(query, cfg)
+            if _global_ctx:
+                if graph_mode == "global":
+                    context = f"**Knowledge Graph Community Reports:**\n{_global_ctx}"
+                else:  # hybrid
+                    context = (
+                        f"**Knowledge Graph Community Reports:**\n{_global_ctx}\n\n"
+                        f"**Document Excerpts:**\n{context}"
+                    )
+
+        # Prepend local GraphRAG header
+        if _local_ctx:
+            context = (
+                f"**GraphRAG Local Context:**\n{_local_ctx}\n\n**Document Excerpts:**\n{context}"
+            )
+
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
         system_prompt = (
@@ -2985,10 +6190,75 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
-        results = results[: cfg.top_k]
+        if cfg.graph_rag and cfg.graph_rag_budget > 0:
+            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            expanded = [r for r in results if r.get("_graph_expanded")]
+            base_ids = {r["id"] for r in base}
+            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
+            results = base + graph_slots
+        else:
+            results = results[: cfg.top_k]
+        for r in results:
+            r.pop("_graph_expanded", None)
+
+        # P1: RAPTOR drill-down — replace summary hits with grounded leaf chunks
+        if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
+            results = self._raptor_drilldown(query, results, cfg=cfg)
+
+        # P4: Artifact-type ranking pass
+        if self.config.raptor or self.config.graph_rag:
+            results = self._apply_artifact_ranking(results, cfg=cfg)
+
+        graph_mode = getattr(cfg, "graph_rag_mode", "local")
+        _matched_entities = retrieval.get("matched_entities", [])
+
+        # GraphRAG local context header
+        if (
+            cfg.graph_rag
+            and graph_mode in ("local", "hybrid")
+            and _matched_entities
+            and (self._entity_graph or self._community_summaries)
+        ):
+            _local_ctx = self._local_search_context(query, _matched_entities, cfg)
+        else:
+            _local_ctx = ""
+
         if cfg.compress_context:
             results = self._compress_context(query, results)
         context, has_web = self._build_context(results)
+
+        # GraphRAG global context injection
+        # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
+        if (
+            cfg.graph_rag
+            and graph_mode in ("global", "hybrid")
+            and not self._community_summaries
+            and self._community_levels
+            and getattr(self.config, "graph_rag_community_lazy", False)
+        ):
+            logger.info(
+                "GraphRAG: lazy mode — generating community summaries on first global query."
+            )
+            self._generate_community_summaries()
+            if getattr(self.config, "graph_rag_index_community_reports", True):
+                self._index_community_reports_in_vector_store()
+        if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
+            _global_ctx = self._global_search_map_reduce(query, cfg)
+            if _global_ctx:
+                if graph_mode == "global":
+                    context = f"**Knowledge Graph Community Reports:**\n{_global_ctx}"
+                else:  # hybrid
+                    context = (
+                        f"**Knowledge Graph Community Reports:**\n{_global_ctx}\n\n"
+                        f"**Document Excerpts:**\n{context}"
+                    )
+
+        # Prepend local GraphRAG header
+        if _local_ctx:
+            context = (
+                f"**GraphRAG Local Context:**\n{_local_ctx}\n\n**Document Excerpts:**\n{context}"
+            )
+
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
         system_prompt = (
@@ -4428,6 +7698,9 @@ _AT_TEXT_EXTS = {
     ".tf",
     ".proto",
     ".graphql",
+    ".jsonl",
+    ".ndjson",
+    ".ipynb",
 }
 # Extensions handled by dedicated loaders (extract clean text from binary formats)
 _AT_LOADER_EXTS = {
@@ -4438,6 +7711,14 @@ _AT_LOADER_EXTS = {
     ".png",
     ".jpg",
     ".jpeg",
+    ".xlsx",
+    ".xls",
+    ".parquet",
+    ".epub",
+    ".rtf",
+    ".eml",
+    ".msg",
+    ".tex",
 }
 _AT_DIR_MAX_BYTES = 120_000  # ~120 KB total across all files in a folder
 _AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
@@ -4451,7 +7732,7 @@ def _expand_at_files(text: str) -> str:
                    _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
     """
     # Imported at call time so tests can patch axon.loaders.DOCXLoader / PDFLoader.
-    from axon.loaders import DOCXLoader, PDFLoader
+    from axon.loaders import DOCXLoader, PDFLoader, PPTXLoader  # noqa: F401 (used in _loader_map)
 
     def _read_text_file(path: str, max_bytes: int = _AT_FILE_MAX_BYTES) -> str:
         try:
@@ -4464,9 +7745,32 @@ def _expand_at_files(text: str) -> str:
             return ""
 
     def _read_via_loader(path: str) -> str:
+        from axon.loaders import (
+            EMLLoader,
+            EPUBLoader,
+            ExcelLoader,
+            LaTeXLoader,
+            MSGLoader,
+            ParquetLoader,
+            RTFLoader,
+        )
+
+        _loader_map = {
+            ".docx": DOCXLoader,
+            ".pptx": PPTXLoader,
+            ".xlsx": ExcelLoader,
+            ".xls": ExcelLoader,
+            ".parquet": ParquetLoader,
+            ".epub": EPUBLoader,
+            ".rtf": RTFLoader,
+            ".eml": EMLLoader,
+            ".msg": MSGLoader,
+            ".tex": LaTeXLoader,
+        }
         try:
             ext = os.path.splitext(path)[1].lower()
-            loader = DOCXLoader() if ext == ".docx" else PDFLoader()
+            loader_cls = _loader_map.get(ext)
+            loader = loader_cls() if loader_cls else PDFLoader()
             docs = loader.load(path)
             chunks = [d.get("text", "") for d in docs if d.get("text")]
             joined = "\n\n".join(chunks)

@@ -117,6 +117,50 @@ The `.env` file is optional — Docker Compose won't fail if it's missing.
 
 ---
 
+## About the GraphRAG Feature
+
+Axon's `graph_rag` option implements a **GraphRAG-style pipeline** with the following capabilities:
+
+- Hierarchical community detection: Leiden algorithm via `graspologic` when available, Louvain fallback otherwise.
+- LLM-generated community reports and summaries per community cluster.
+- Map-reduce global search: community reports are chunked, mapped in parallel by LLM, then reduced into a single ranked answer.
+- Token-budgeted local search over community hierarchy: entity descriptions, relation descriptions, community snippets, and raw text units assembled within a configurable token budget.
+- Entity and relation graphs with strength tracking and support-count accumulation.
+- Optional claim/covariate extraction (`graph_rag_claims: true`).
+- Optional entity and relation description canonicalization (`graph_rag_canonicalize`, `graph_rag_canonicalize_relations`).
+
+What remains approximate compared to the Microsoft GraphRAG reference implementation:
+- The Louvain fallback produces a synthetic hierarchy via multi-resolution clustering (not true Leiden).
+- Candidate ranking is unified (degree + embedding similarity) rather than full DRIFT search.
+- No query-time claim filtering.
+
+Known limits:
+- Extraction quality depends entirely on the configured LLM. A weak or small model will produce a noisy or empty graph.
+- Entity matching uses exact match for single tokens and token-Jaccard for multi-token phrases. Aliases, acronyms, and spelling variants are not resolved without canonicalization enabled.
+
+---
+
+## GraphRAG Adds No Extra Results
+
+**Symptom:** GraphRAG is enabled and ingestion succeeded (entities were extracted), but query results never include any entity-linked documents beyond the normal top_k.
+
+**Cause:** One of the following:
+- `graph_rag_budget` is set to `0`, which disables the guaranteed expansion slots.
+- Entity extraction worked but entity matching at query time finds no overlap (e.g. the query uses different terminology than the indexed entities).
+- The entity graph is empty — see the section below.
+
+**Fix:**
+- Confirm `graph_rag_budget > 0` in `config.yaml` (default is `3`):
+  ```yaml
+  rag:
+    graph_rag: true
+    graph_rag_budget: 3
+  ```
+- Check server logs for `GraphRAG: entity extraction returned 0 entities` — if present, see the section below.
+- Try the REPL: `/rag graph-rag` to verify the flag is on at runtime.
+
+---
+
 ## GraphRAG: Entity Graph Empty After Ingestion
 
 **Symptom:** GraphRAG is enabled but retrieval does not expand with entity-connected documents. Logs show: `GraphRAG: entity extraction returned 0 entities across all chunks.`
@@ -202,3 +246,38 @@ llm:
 **Cause:** When `hybrid_search` or `rerank` is enabled, Axon internally fetches `top_k × 3` candidates to allow for score merging and re-ranking. The final result passed to the LLM is capped at `top_k` after all processing. Internal retrieval methods (used in debugging or qualification scripts) may show the pre-cap candidate set.
 
 **Guidance:** `top_k` controls how many chunks the LLM receives as context. The pre-cap overfetch is intentional and improves hybrid/reranked result quality.
+
+---
+
+## `pip install axon[graphrag]` fails with `gensim` build error
+
+**Error:**
+```
+error: metadata-generation-failed
+...AttributeError: 'dict' object has no attribute '__NUMPY_SETUP__'
+gensim
+```
+
+**Cause:** `graspologic` 0.3.x on PyPI depends on `gensim` 3.8.x, which cannot build against NumPy 2.x or Python 3.13. This is a known upstream incompatibility.
+
+**Fix:** The `[graphrag]` extra no longer includes `graspologic`. It uses `leidenalg` + `igraph` instead, which ship pre-built wheels for all platforms and Python 3.13:
+
+```bash
+pip install -e ".[graphrag]"
+# installs: networkx, leidenalg, igraph
+```
+
+The Axon community-detection fallback chain is:
+1. **graspologic** hierarchical Leiden (if installed separately and compatible with your Python/NumPy)
+2. **leidenalg** multi-resolution Leiden ← installed by `axon[graphrag]`
+3. **networkx** Louvain ← always available (no extra install needed)
+
+> If you have `graspologic` installed from a compatible environment (Python ≤ 3.12, NumPy 1.x), Axon will prefer it for true hierarchical parent-child community structure.
+
+---
+
+## `pip install graspologic` fails on Python 3.13
+
+**Cause:** Same as above — `gensim` 3.8.x does not support Python 3.13 or NumPy 2.x.
+
+**Fix:** Skip `graspologic`. Install `leidenalg` instead via `pip install axon[graphrag]`. The Leiden algorithm quality is equivalent; only the parent-child hierarchy output differs slightly (synthetic instead of true hierarchical).

@@ -77,6 +77,19 @@ pip install -e ".[qdrant]"
 pip install -e ".[all]"
 ```
 
+### Optional Feature Extras
+
+| Extra | What it enables | Install |
+|---|---|---|
+| `graphrag` | GraphRAG community detection using the Leiden algorithm (better than the default networkx Louvain fallback) | `pip install -e ".[graphrag]"` |
+| `gliner` | GLiNER fast NER backend for entity extraction — skips the LLM call during ingest (`graph_rag_ner_backend: gliner` in config) | `pip install -e ".[gliner]"` |
+| `llmlingua` | LLMLingua-2 token compression for GraphRAG community reports before map-reduce (`graph_rag_report_compress: true` in config) | `pip install -e ".[llmlingua]"` |
+| `loaders` | EPUB, RTF, and `.msg` (Outlook) file loaders | `pip install -e ".[loaders]"` |
+
+> **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
+> The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x due to its `gensim` build dependency — do not use it on Python 3.13.
+> The fallback chain is: graspologic hierarchical Leiden → leidenalg multi-resolution Leiden → networkx Louvain.
+
 Verify the install:
 
 ```bash
@@ -456,6 +469,17 @@ rag:
   top_k: 10
   similarity_threshold: 0.3
   hybrid_search: true
+
+  # Graph-augmented retrieval expansion (inspired by GraphRAG; not the full
+  # Microsoft GraphRAG method — no community detection or global search).
+  # Extracts entities and optionally relation triples from each chunk at ingest
+  # time; at query time, entity-matched and 1-hop-related chunks are injected as
+  # extra context slots beyond the normal top_k.
+  # Requires a capable LLM at ingest; adds per-chunk latency.
+  # Limits: shallow graph, heuristic scoring, no entity canonicalisation.
+  # graph_rag: false
+  # graph_rag_budget: 3       # extra slots beyond top_k (0 = no guarantee)
+  # graph_rag_relations: true # enable 1-hop relation traversal
 
 chunk:
   size: 1000

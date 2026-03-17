@@ -667,19 +667,551 @@ class PDFLoader(BaseLoader):
         return []
 
 
+class JSONLLoader(BaseLoader):
+    """Loader for newline-delimited JSON files (.jsonl, .ndjson). Each line becomes a document."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        fname = os.path.basename(path)
+        documents = []
+        with open(path, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(f"Skipping malformed JSON at line {i + 1} in {path}")
+                    continue
+                if isinstance(item, dict):
+                    text = item.get("text", item.get("content", json.dumps(item)))
+                else:
+                    text = json.dumps(item)
+                documents.append(
+                    {
+                        "id": f"{fname}_{i}",
+                        "text": text,
+                        "metadata": {"source": path, "type": "jsonl", "line": i},
+                    }
+                )
+        return documents
+
+
+class NotebookLoader(BaseLoader):
+    """Loader for Jupyter notebooks (.ipynb). Extracts markdown and code cells as documents."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        with open(path, encoding="utf-8") as f:
+            try:
+                nb = json.load(f)
+            except json.JSONDecodeError as exc:
+                logger.warning(f"Skipping malformed notebook {path}: {exc}")
+                return []
+
+        fname = os.path.basename(path)
+        documents = []
+        for i, cell in enumerate(nb.get("cells", [])):
+            cell_type = cell.get("cell_type", "")
+            source = cell.get("source", [])
+            text = "".join(source) if isinstance(source, list) else source
+            text = text.strip()
+            if not text:
+                continue
+            if cell_type == "code":
+                text = f"```python\n{text}\n```"
+            documents.append(
+                {
+                    "id": f"{fname}_cell_{i}",
+                    "text": text,
+                    "metadata": {
+                        "source": path,
+                        "type": "notebook",
+                        "cell_type": cell_type,
+                        "cell_index": i,
+                    },
+                }
+            )
+        return documents
+
+
+class ExcelLoader(BaseLoader):
+    """Loader for Excel files (.xlsx, .xls) using pandas. Each sheet is loaded as a table."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            import pandas as pd
+        except ImportError:
+            logger.error("pandas not installed.")
+            return []
+        try:
+            xl = pd.ExcelFile(path)
+        except ImportError:
+            logger.error("openpyxl not installed. Install with: pip install openpyxl")
+            return []
+        except Exception as exc:
+            logger.warning(f"Could not open Excel file {path}: {exc}")
+            return []
+
+        from axon.splitters import TableSplitter
+
+        fname = os.path.basename(path)
+        documents = []
+        doc_idx = 0
+        for sheet_name in xl.sheet_names:
+            try:
+                df = xl.parse(sheet_name).fillna("").astype(str)
+            except Exception as exc:
+                logger.warning(f"Skipping sheet '{sheet_name}' in {path}: {exc}")
+                continue
+            if df.empty:
+                continue
+            headers = list(df.columns)
+            rows = df.to_dict(orient="records")
+            splitter = TableSplitter(table_name=f"{fname}[{sheet_name}]")
+            for text in splitter.transform_rows(rows, headers):
+                documents.append(
+                    {
+                        "id": f"{fname}_{sheet_name}_{doc_idx}",
+                        "text": text,
+                        "metadata": {
+                            "source": path,
+                            "type": "excel",
+                            "sheet": sheet_name,
+                            "row": doc_idx,
+                        },
+                    }
+                )
+                doc_idx += 1
+        return documents
+
+
+class ParquetLoader(BaseLoader):
+    """Loader for Parquet files using pandas + pyarrow."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            import pandas as pd
+        except ImportError:
+            logger.error("pandas not installed.")
+            return []
+        try:
+            df = pd.read_parquet(path).fillna("").astype(str)
+        except ImportError:
+            logger.error("pyarrow not installed. Install with: pip install pyarrow")
+            return []
+        except Exception as exc:
+            logger.warning(f"Could not read Parquet file {path}: {exc}")
+            return []
+
+        from axon.splitters import TableSplitter
+
+        fname = os.path.basename(path)
+        splitter = TableSplitter(table_name=fname)
+        chunks = splitter.transform_rows(df.to_dict(orient="records"), list(df.columns))
+        return [
+            {
+                "id": f"{fname}_{i}",
+                "text": text,
+                "metadata": {"source": path, "type": "parquet", "row": i},
+            }
+            for i, text in enumerate(chunks)
+        ]
+
+
+class EPUBLoader(BaseLoader):
+    """Loader for EPUB ebooks using ebooklib. Each document item becomes a chunk."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            import ebooklib
+            from ebooklib import epub
+        except ImportError:
+            logger.error("ebooklib not installed. Install with: pip install ebooklib")
+            return []
+        try:
+            book = epub.read_epub(path, options={"ignore_ncx": True})
+        except Exception as exc:
+            logger.warning(f"Could not read EPUB {path}: {exc}")
+            return []
+
+        fname = os.path.basename(path)
+        documents = []
+        for i, item in enumerate(book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
+            html = item.get_content().decode("utf-8", errors="ignore")
+            text = _extract_html_text(html).strip()
+            if not text:
+                continue
+            documents.append(
+                {
+                    "id": f"{fname}_chapter_{i}",
+                    "text": text,
+                    "metadata": {
+                        "source": path,
+                        "type": "epub",
+                        "chapter": i,
+                        "item_name": item.get_name(),
+                    },
+                }
+            )
+        return documents
+
+
+class RTFLoader(BaseLoader):
+    """Loader for RTF files using striprtf."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            from striprtf.striprtf import rtf_to_text
+        except ImportError:
+            logger.error("striprtf not installed. Install with: pip install striprtf")
+            return []
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            text = rtf_to_text(content).strip()
+        except Exception as exc:
+            logger.warning(f"Could not parse RTF file {path}: {exc}")
+            return []
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {"source": path, "type": "rtf"},
+            }
+        ]
+
+
+class XMLLoader(BaseLoader):
+    """Loader for XML files. Strips tags and extracts clean text content."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        import xml.etree.ElementTree as ET
+
+        try:
+            tree = ET.parse(path)
+        except ET.ParseError as exc:
+            logger.warning(f"Could not parse XML {path}: {exc}")
+            # Fall back to stripping tags with regex
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                raw = f.read()
+            text = re.sub(r"<[^>]+>", " ", raw)
+            text = re.sub(r"\s+", " ", text).strip()
+            return [
+                {
+                    "id": os.path.basename(path),
+                    "text": text,
+                    "metadata": {"source": path, "type": "xml"},
+                }
+            ]
+
+        root = tree.getroot()
+        parts: list[str] = []
+
+        def _walk(node: ET.Element, depth: int = 0) -> None:
+            tag = node.tag.split("}")[-1] if "}" in node.tag else node.tag
+            attrs = " ".join(f'{k.split("}")[-1]}="{v}"' for k, v in node.attrib.items())
+            header = f"<{tag}{' ' + attrs if attrs else ''}>"
+            text = (node.text or "").strip()
+            if text:
+                parts.append(f"{header} {text}")
+            elif node.attrib:
+                parts.append(header)
+            for child in node:
+                _walk(child, depth + 1)
+            tail = (node.tail or "").strip()
+            if tail:
+                parts.append(tail)
+
+        _walk(root)
+        full_text = "\n".join(parts)
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": full_text,
+                "metadata": {"source": path, "type": "xml"},
+            }
+        ]
+
+
+class SQLLoader(BaseLoader):
+    """Loader for SQL files. Extracts statements with natural-language descriptions."""
+
+    # Patterns that identify DDL/DML statement types
+    _STMT_RE = re.compile(
+        r"^\s*(CREATE\s+(?:TABLE|VIEW|INDEX|PROCEDURE|FUNCTION|TRIGGER)|"
+        r"INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|ALTER\s+TABLE|"
+        r"DROP\s+(?:TABLE|VIEW)|SELECT\b)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # Split on statement boundaries (semicolons followed by whitespace/newline)
+        raw_stmts = re.split(r";\s*\n", content)
+        fname = os.path.basename(path)
+        documents = []
+
+        for i, stmt in enumerate(raw_stmts):
+            stmt = stmt.strip()
+            if not stmt or stmt.startswith("--"):
+                continue
+
+            # Extract comments preceding the statement as context
+            comment_lines = [
+                line.lstrip("- ").strip()
+                for line in stmt.splitlines()
+                if line.strip().startswith("--")
+            ]
+            code = "\n".join(
+                line for line in stmt.splitlines() if not line.strip().startswith("--")
+            ).strip()
+            if not code:
+                continue
+
+            # Build a natural-language header from the first keyword + object name
+            m = self._STMT_RE.match(code)
+            if m:
+                first_line = code.splitlines()[0]
+                header = f"SQL statement: {first_line.strip()}"
+            else:
+                header = "SQL statement"
+
+            comment_text = " ".join(comment_lines)
+            text = f"{header}\n{comment_text}\n\n{code}".strip()
+
+            documents.append(
+                {
+                    "id": f"{fname}_stmt_{i}",
+                    "text": text,
+                    "metadata": {"source": path, "type": "sql", "statement_index": i},
+                }
+            )
+
+        # If no semicolon-delimited statements found, return the whole file
+        if not documents:
+            return [
+                {
+                    "id": fname,
+                    "text": content.strip(),
+                    "metadata": {"source": path, "type": "sql"},
+                }
+            ]
+
+        return documents
+
+
+class EMLLoader(BaseLoader):
+    """Loader for .eml email files using stdlib email module."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        import email as _email
+        import email.policy
+
+        with open(path, "rb") as f:
+            msg = _email.message_from_binary_file(f, policy=email.policy.default)
+
+        from_addr = str(msg.get("From", ""))
+        to_addr = str(msg.get("To", ""))
+        subject = str(msg.get("Subject", ""))
+        date = str(msg.get("Date", ""))
+
+        # Extract body: prefer text/plain, fallback to text/html
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                ct = part.get_content_type()
+                if ct == "text/plain" and not body:
+                    payload = part.get_payload(decode=True)
+                    if isinstance(payload, bytes):
+                        body = payload.decode(
+                            part.get_content_charset() or "utf-8", errors="ignore"
+                        )
+                elif ct == "text/html" and not body:
+                    payload = part.get_payload(decode=True)
+                    if isinstance(payload, bytes):
+                        html = payload.decode(
+                            part.get_content_charset() or "utf-8", errors="ignore"
+                        )
+                        body = _extract_html_text(html)
+        else:
+            payload = msg.get_payload(decode=True)
+            if isinstance(payload, bytes):
+                body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+            if msg.get_content_type() == "text/html":
+                body = _extract_html_text(body)
+
+        text = (
+            f"From: {from_addr}\nTo: {to_addr}\nSubject: {subject}\nDate: {date}\n\n{body}".strip()
+        )
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {
+                    "source": path,
+                    "type": "eml",
+                    "email_from": from_addr,
+                    "email_to": to_addr,
+                    "email_subject": subject,
+                    "email_date": date,
+                },
+            }
+        ]
+
+
+class MSGLoader(BaseLoader):
+    """Loader for Outlook .msg files using extract-msg."""
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        try:
+            import extract_msg
+        except ImportError:
+            logger.error("extract-msg not installed. Install with: pip install extract-msg")
+            return []
+        try:
+            msg = extract_msg.Message(path)
+        except Exception as exc:
+            logger.warning(f"Could not open MSG file {path}: {exc}")
+            return []
+
+        from_addr = msg.sender or ""
+        to_addr = msg.to or ""
+        subject = msg.subject or ""
+        date = str(msg.date) if msg.date else ""
+        body = msg.body or ""
+        if not body and msg.htmlBody:
+            body = _extract_html_text(
+                msg.htmlBody.decode("utf-8", errors="ignore")
+                if isinstance(msg.htmlBody, bytes)
+                else msg.htmlBody
+            )
+
+        text = (
+            f"From: {from_addr}\nTo: {to_addr}\nSubject: {subject}\nDate: {date}\n\n{body}".strip()
+        )
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {
+                    "source": path,
+                    "type": "msg",
+                    "email_from": from_addr,
+                    "email_to": to_addr,
+                    "email_subject": subject,
+                    "email_date": date,
+                },
+            }
+        ]
+
+
+class LaTeXLoader(BaseLoader):
+    """Loader for LaTeX .tex files. Strips commands and extracts prose content.
+
+    Note: Mathematical equation content is intentionally discarded as it is
+    not natural-language searchable. Use this loader for prose-heavy papers.
+    """
+
+    # Environments whose entire content is discarded (math, floats, bibliographies)
+    _DISCARD_ENVS = re.compile(
+        r"\\begin\{(figure|table|equation|align|align\*|eqnarray|eqnarray\*"
+        r"|math|displaymath|tikzpicture|lstlisting|verbatim)\}.*?\\end\{\1\}",
+        re.DOTALL,
+    )
+    # Commands that wrap prose — replace with their argument
+    _WRAP_CMDS = re.compile(
+        r"\\(?:textbf|textit|emph|texttt|underline|textrm|textsc|textsl"
+        r"|section|subsection|subsubsection|paragraph|subparagraph"
+        r"|chapter|title|author|date|caption|footnote)\*?\{([^}]*)\}",
+        re.DOTALL,
+    )
+    # Non-prose commands to remove entirely (with optional bracket/brace args)
+    _REMOVE_CMDS = re.compile(
+        r"\\(?:label|ref|eqref|cite|citep|citet|citealt|nocite"
+        r"|includegraphics|bibliography|bibliographystyle"
+        r"|vspace|hspace|vskip|hskip|noindent|newpage|clearpage"
+        r"|tableofcontents|listoffigures|listtables)"
+        r"(?:\[[^\]]*\])?(?:\{[^}]*\})?",
+    )
+    # Remaining bare commands (e.g. \maketitle, \par, \LaTeX)
+    _BARE_CMDS = re.compile(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{[^}]*\})?")
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # Pass 1: strip comments (% to EOL, but not \%)
+        content = re.sub(r"(?<!\\)%[^\n]*", "", content)
+        # Pass 2: strip preamble (everything before \begin{document})
+        doc_start = content.find(r"\begin{document}")
+        if doc_start != -1:
+            content = content[doc_start + len(r"\begin{document}") :]
+        end_doc = content.find(r"\end{document}")
+        if end_doc != -1:
+            content = content[:end_doc]
+        # Pass 3: discard math/float environments
+        content = self._DISCARD_ENVS.sub(" ", content)
+        # Pass 4: remove non-prose commands
+        content = self._REMOVE_CMDS.sub(" ", content)
+        # Pass 5: unwrap text-formatting commands
+        content = self._WRAP_CMDS.sub(r"\1", content)
+        # Pass 6: strip remaining bare commands
+        content = self._BARE_CMDS.sub(" ", content)
+        # Clean up braces, multiple spaces
+        content = content.replace("{", " ").replace("}", " ")
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        content = re.sub(r"[ \t]+", " ", content)
+        text = content.strip()
+
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": text,
+                "metadata": {"source": path, "type": "latex"},
+            }
+        ]
+
+
 class DirectoryLoader:
     """Loader that crawls a directory and uses appropriate loaders for each file."""
 
     def __init__(self, vlm_model: str = "llava"):
         _image_loader = ImageLoader(ollama_model=vlm_model)
+        _excel_loader = ExcelLoader()
         self.loaders = {
             ".txt": SmartTextLoader(),
             ".md": TextLoader(),
             ".tsv": FlexibleTableLoader(),
             ".json": JSONLoader(),
+            ".jsonl": JSONLLoader(),
+            ".ndjson": JSONLLoader(),
+            ".ipynb": NotebookLoader(),
             ".csv": FlexibleTableLoader(),
+            ".xlsx": _excel_loader,
+            ".xls": _excel_loader,
+            ".parquet": ParquetLoader(),
+            ".epub": EPUBLoader(),
+            ".rtf": RTFLoader(),
+            ".eml": EMLLoader(),
+            ".msg": MSGLoader(),
+            ".tex": LaTeXLoader(),
             ".html": HTMLLoader(),
             ".htm": HTMLLoader(),
+            ".xml": XMLLoader(),
+            ".sql": SQLLoader(),
             ".docx": DOCXLoader(),
             ".pptx": PPTXLoader(),
             ".bmp": _image_loader,
@@ -703,7 +1235,13 @@ class DirectoryLoader:
                     docs = loader.load(str(file_path))
                     # Native Path Enrichment (Breadcrumbs) for textual docs
                     for doc in docs:
-                        if doc["metadata"].get("type") not in ("csv", "tsv", "image"):
+                        if doc["metadata"].get("type") not in (
+                            "csv",
+                            "tsv",
+                            "excel",
+                            "parquet",
+                            "image",
+                        ):
                             rel_path = os.path.relpath(str(file_path), directory)
                             doc["text"] = f"[File Path: {rel_path}]\n{doc['text']}"
                     all_documents.extend(docs)

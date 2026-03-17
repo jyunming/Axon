@@ -125,6 +125,36 @@ rag:
   # time using an entity→doc_id graph persisted to {bm25_path}/.entity_graph.json.
   graph_rag: false
 
+  # Maximum number of graph-expanded documents added beyond the normal top_k slice.
+  # Set to 0 to disable the guarantee and fall back to simple top_k truncation.
+  graph_rag_budget: 3
+
+  # Relation extraction: extract SUBJECT | RELATION | OBJECT triples during ingest
+  # and use 1-hop graph traversal at retrieval time for richer context expansion.
+  graph_rag_relations: true
+
+  # Community detection — clusters entity graph after ingest (requires: pip install networkx)
+  # graph_rag_community: false
+  # graph_rag_community_async: true
+  # graph_rag_community_top_k: 5
+  # graph_rag_mode: local   # local | global | hybrid
+  # graph_rag_global_min_score: 20
+  # graph_rag_global_top_points: 50
+  # graph_rag_community_level: 0
+  # graph_rag_community_levels: 2
+  # graph_rag_entity_embedding_match: true
+  # graph_rag_entity_match_threshold: 0.5
+  # graph_rag_index_community_reports: true
+  # graph_rag_canonicalize: false
+  # graph_rag_canonicalize_min_occurrences: 3
+  # graph_rag_claims: false
+  # TASK 14: GraphRAG runtime improvements
+  # graph_rag_map_workers: 0         # dedicated pool for map-reduce (0 = use max_workers)
+  # graph_rag_ner_backend: llm       # "llm" or "gliner" (pip install axon[gliner])
+  # graph_rag_report_compress: false # compress community reports with LLMLingua-2
+  # graph_rag_report_compress_ratio: 0.5
+  # graph_rag_auto_route: off        # "off" | "heuristic" | "llm"
+
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.
   # query_cache: false
