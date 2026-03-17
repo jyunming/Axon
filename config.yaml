@@ -114,53 +114,56 @@ rag:
   # Also: --compress CLI flag, "compress": true API override.
   # compress_context: false
 
-  # RAPTOR hierarchical indexing (requires LLM during ingest — adds latency).
-  # Groups consecutive chunks per source and generates LLM summary nodes
-  # that are indexed alongside leaf chunks for multi-hop questions.
-  raptor: false
-  raptor_chunk_group_size: 5
+  # ── RAPTOR hierarchical indexing ─────────────────────────────────────────────
+  # Requires LLM during ingest. Groups consecutive chunks per source and generates
+  # summary nodes indexed alongside leaf chunks for multi-hop questions.
+  raptor: true
+  raptor_chunk_group_size: 5      # chunks per summary node (5 ≈ ~5 000 chars)
+  raptor_max_levels: 1            # 1 level of summaries (2 doubles LLM calls, diminishing return)
+  raptor_max_source_size_mb: 5.0  # skip RAPTOR for sources > 5 MB (prevents runaway costs)
 
-  # GraphRAG entity-centric retrieval (requires LLM during ingest — adds latency).
-  # Extracts named entities from each chunk; expands query results at retrieval
-  # time using an entity→doc_id graph persisted to {bm25_path}/.entity_graph.json.
-  graph_rag: false
+  # ── GraphRAG entity-centric retrieval ────────────────────────────────────────
+  # Requires LLM during ingest. Extracts entities + relations; expands query
+  # results at retrieval time via an entity graph.
+  graph_rag: true
+  graph_rag_budget: 3             # extra graph-expanded docs added beyond top_k
+  graph_rag_relations: true       # extract SUBJECT | RELATION | OBJECT triples
 
-  # Maximum number of graph-expanded documents added beyond the normal top_k slice.
-  # Set to 0 to disable the guarantee and fall back to simple top_k truncation.
-  graph_rag_budget: 3
+  # Community detection — clusters entity graph after ingest.
+  # Runs async in the background; summaries generated lazily on first global query.
+  # Requires: pip install axon[graphrag]  (networkx, igraph, leidenalg)
+  graph_rag_community: true
+  graph_rag_community_async: true     # non-blocking: community detection runs after ingest
+  graph_rag_community_lazy: true      # defer LLM summarisation to first global query
 
-  # Relation extraction: extract SUBJECT | RELATION | OBJECT triples during ingest
-  # and use 1-hop graph traversal at retrieval time for richer context expansion.
-  graph_rag_relations: true
+  # Query routing — "heuristic" detects holistic queries (summarize/compare/list all)
+  # at zero cost and upgrades them to global search; factual queries use local mode.
+  graph_rag_auto_route: heuristic
+  graph_rag_mode: hybrid              # local for factual | global when routed
 
-  # Community detection — clusters entity graph after ingest (requires: pip install networkx)
-  # graph_rag_community: false
-  # graph_rag_community_async: true
-  # graph_rag_community_top_k: 5
-  # graph_rag_mode: local   # local | global | hybrid
-  # graph_rag_global_min_score: 20
-  # graph_rag_global_top_points: 50
-  # graph_rag_community_level: 0
-  # graph_rag_community_levels: 2
-  # graph_rag_entity_embedding_match: true
-  # graph_rag_entity_match_threshold: 0.5
-  # graph_rag_index_community_reports: true
-  # graph_rag_canonicalize: false
-  # graph_rag_canonicalize_min_occurrences: 3
-  # graph_rag_claims: false
-  # TASK 14: GraphRAG runtime improvements
-  # graph_rag_map_workers: 0         # dedicated pool for map-reduce (0 = use max_workers)
-  # graph_rag_ner_backend: llm       # "llm" or "gliner" (pip install axon[gliner])
-  # graph_rag_report_compress: false # compress community reports with LLMLingua-2
-  # graph_rag_report_compress_ratio: 0.5
-  # graph_rag_auto_route: off        # "off" | "heuristic" | "llm"
+  # Map-reduce tuning for global search
+  graph_rag_global_top_communities: 20  # pre-filter: only top-20 relevant communities enter map-reduce
+  graph_rag_map_workers: 2             # dedicated thread pool; avoids starving ingest workers
+  graph_rag_community_top_k: 5         # top community summaries injected into prompt
+
+  # Entity matching at query time (uses cached embeddings — fast)
+  graph_rag_entity_embedding_match: true
+  graph_rag_entity_match_threshold: 0.5
+
+  # Community report vector-store index (speeds up report retrieval at query time)
+  graph_rag_index_community_reports: true
+
+  # ── Expensive optional passes (off by default) ────────────────────────────────
+  # graph_rag_canonicalize: false        # LLM description synthesis — enable for quality
+  # graph_rag_claims: false              # claim/covariate extraction — enable for fact-checking
+  # graph_rag_ner_backend: llm           # "gliner" skips LLM for NER (pip install axon[gliner])
+  # graph_rag_report_compress: false     # LLMLingua-2 token compression (pip install axon[llmlingua])
   # P1: Semantic entity alias resolution (merges "Apple" / "Apple Inc." before community detection)
   # graph_rag_entity_resolve: false
-  # graph_rag_entity_resolve_threshold: 0.92   # cosine similarity threshold (0–1)
-  # graph_rag_entity_resolve_max: 5000          # skip if entity graph exceeds this size
+  # graph_rag_entity_resolve_threshold: 0.92
+  # graph_rag_entity_resolve_max: 5000
   # P2: REBEL relation extraction backend (replaces LLM for relation triples)
-  # graph_rag_relation_backend: llm  # "llm" | "rebel" (pip install axon[rebel])
-  # graph_rag_rebel_model: Babelscape/rebel-large
+  # graph_rag_relation_backend: llm  # "rebel" = pip install axon[rebel]
 
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.
