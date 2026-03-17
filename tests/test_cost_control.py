@@ -285,3 +285,160 @@ class TestP4QueryGuidedLazySummarization:
             brain._generate_community_summaries()
             calls = [str(c) for c in mock_log.info.call_args_list]
             assert not any("lazy mode" in c for c in calls)
+
+
+class TestGraphVisualization:
+    """Tests for the normalized 3D graph visualization (build_graph_payload + export_graph_html)."""
+
+    def _make_brain(self, tmp_path, **kwargs):
+        from axon.main import AxonBrain, AxonConfig
+
+        cfg = AxonConfig(
+            vector_store_path=str(tmp_path / "chroma"),
+            bm25_path=str(tmp_path / "bm25"),
+            **kwargs,
+        )
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = cfg
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._community_levels = {}
+        return brain
+
+    def test_build_graph_payload_returns_nodes_and_links(self, tmp_path):
+        """build_graph_payload returns dict with 'nodes' and 'links' keys."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "kafka": {
+                "type": "PRODUCT",
+                "description": "messaging",
+                "chunk_ids": ["c1"],
+                "degree": 2,
+            },
+        }
+        brain._relation_graph = {}
+        payload = brain.build_graph_payload()
+        assert "nodes" in payload
+        assert "links" in payload
+
+    def test_build_graph_payload_node_fields(self, tmp_path):
+        """Each node contains required renderer fields."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "payment-service": {
+                "type": "ORGANIZATION",
+                "description": "handles payments",
+                "chunk_ids": ["c1", "c2"],
+                "degree": 3,
+            }
+        }
+        brain._relation_graph = {}
+        payload = brain.build_graph_payload()
+        node = payload["nodes"][0]
+        for field in ("id", "name", "label", "type", "color", "val", "tooltip"):
+            assert field in node, f"missing field: {field}"
+        assert node["id"] == "payment-service"
+        assert node["chunk_count"] == 2
+
+    def test_build_graph_payload_community_assignment(self, tmp_path):
+        """Community ID is read from level-0 community_levels {entity: community_id}."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "kafka": {"type": "PRODUCT", "description": "", "chunk_ids": [], "degree": 0}
+        }
+        brain._relation_graph = {}
+        brain._community_levels = {0: {"kafka": 7}}  # entity -> community_id
+        payload = brain.build_graph_payload()
+        assert payload["nodes"][0]["community"] == 7
+
+    def test_build_graph_payload_edge_uses_target_field(self, tmp_path):
+        """Links are built from relation_graph using the 'target' field (not 'object')."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "kafka": {"type": "PRODUCT", "description": "", "chunk_ids": [], "degree": 1},
+            "inventory": {"type": "CONCEPT", "description": "", "chunk_ids": [], "degree": 1},
+        }
+        brain._relation_graph = {
+            "kafka": [{"target": "inventory", "relation": "delays", "description": "", "weight": 5}]
+        }
+        payload = brain.build_graph_payload()
+        assert len(payload["links"]) == 1
+        link = payload["links"][0]
+        assert link["source"] == "kafka"
+        assert link["target"] == "inventory"
+
+    def test_build_graph_payload_deduplicates_edges(self, tmp_path):
+        """Duplicate (src, tgt, relation) triples produce only one link."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "a": {"type": "CONCEPT", "description": "", "chunk_ids": [], "degree": 1},
+            "b": {"type": "CONCEPT", "description": "", "chunk_ids": [], "degree": 1},
+        }
+        brain._relation_graph = {
+            "a": [
+                {"target": "b", "relation": "links", "description": "", "weight": 3},
+                {"target": "b", "relation": "links", "description": "", "weight": 3},  # duplicate
+            ]
+        }
+        payload = brain.build_graph_payload()
+        assert len(payload["links"]) == 1
+
+    def test_build_graph_payload_skips_unknown_targets(self, tmp_path):
+        """Relations pointing to entities not in the entity_graph are excluded."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "a": {"type": "CONCEPT", "description": "", "chunk_ids": [], "degree": 0}
+        }
+        brain._relation_graph = {
+            "a": [
+                {"target": "ghost-entity", "relation": "points-to", "description": "", "weight": 1}
+            ]
+        }
+        payload = brain.build_graph_payload()
+        assert len(payload["links"]) == 0
+
+    def test_export_graph_html_writes_file(self, tmp_path):
+        """export_graph_html writes a valid HTML file when path is provided."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "kafka": {"type": "PRODUCT", "description": "msg bus", "chunk_ids": ["c1"], "degree": 1}
+        }
+        brain._relation_graph = {}
+        html_path = str(tmp_path / "graph.html")
+        html = brain.export_graph_html(path=html_path, open_browser=False)
+        assert "ForceGraph3D" in html
+        assert "kafka" in html
+        import os
+
+        assert os.path.exists(html_path)
+
+    def test_export_graph_html_no_pyvis_required(self, tmp_path):
+        """The new export does not import or require pyvis."""
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        # Should not raise ImportError about pyvis
+        html = brain.export_graph_html(open_browser=False)
+        assert isinstance(html, str)
+
+    def test_export_graph_html_writes_json_payload(self, tmp_path):
+        """When json_path is provided, a valid JSON payload is written separately."""
+        import json
+
+        brain = self._make_brain(tmp_path)
+        brain._entity_graph = {
+            "auth-service": {
+                "type": "ORGANIZATION",
+                "description": "",
+                "chunk_ids": [],
+                "degree": 0,
+            }
+        }
+        brain._relation_graph = {}
+        html_path = str(tmp_path / "graph.html")
+        json_path = str(tmp_path / "graph.json")
+        brain.export_graph_html(path=html_path, json_path=json_path, open_browser=False)
+        data = json.loads(open(json_path).read())
+        assert "nodes" in data
+        assert "links" in data
+        assert any(n["id"] == "auth-service" for n in data["nodes"])

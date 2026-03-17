@@ -3223,92 +3223,276 @@ Your primary goal is to help the user by answering questions based on the provid
             self._community_graph_dirty = False
             self._rebuild_communities()
 
-    def export_graph_html(self, path: str | None = None) -> str:
-        """Export the entity–relation graph as a self-contained interactive HTML file.
+    # ── Graph visualization ──────────────────────────────────────────────────
 
-        Nodes = entities (colored by type), edges = relation triples.
-        Community membership shown by node color grouping when communities exist.
-        Returns the HTML string; also saves to *path* if provided.
-        Requires: pip install axon[graphrag]
+    _VIZ_TYPE_COLORS: dict[str, str] = {
+        "PERSON": "#4e79a7",
+        "ORGANIZATION": "#f28e2b",
+        "GEO": "#59a14f",
+        "EVENT": "#e15759",
+        "CONCEPT": "#76b7b2",
+        "PRODUCT": "#edc948",
+        "UNKNOWN": "#bab0ab",
+    }
+
+    def build_graph_payload(self) -> dict:
+        """Return a renderer-neutral graph payload normalised from internal graph state.
+
+        The payload shape is::
+
+            {
+                "nodes": [{"id", "name", "label", "type", "color", "val",
+                           "chunk_count", "degree", "community", "description",
+                           "tooltip"}, ...],
+                "links": [{"source", "target", "label", "relation",
+                           "description", "value", "width"}, ...]
+            }
+
+        This method separates graph extraction from rendering.  Feed the result
+        to :meth:`export_graph_html` or any other renderer.
         """
-        try:
-            from pyvis.network import Network
-        except ImportError:
-            raise ImportError("Graph visualization requires pyvis: pip install axon[graphrag]")
+        from html import escape
 
-        _TYPE_COLORS = {
-            "PERSON": "#4e79a7",
-            "ORGANIZATION": "#f28e2b",
-            "GEO": "#59a14f",
-            "EVENT": "#e15759",
-            "CONCEPT": "#76b7b2",
-            "PRODUCT": "#edc948",
-        }
-        _entity_to_community: dict[str, int] = {}
+        # community_levels level-0 schema: {entity -> community_id (int)}
+        entity_to_community: dict[str, int] = {}
         if self._community_levels:
-            # Persisted schema: {entity -> community_id (int)}.  Build a colour
-            # bucket per community so each cluster gets a distinct hue.
-            level0 = self._community_levels.get(0, {})
-            for entity, community_id in level0.items():
-                _entity_to_community[entity] = int(community_id) % 20
+            for entity, cid in self._community_levels.get(0, {}).items():
+                try:
+                    entity_to_community[entity] = int(cid)
+                except (TypeError, ValueError):
+                    pass
 
-        net = Network(
-            height="750px",
-            width="100%",
-            directed=True,
-            notebook=False,
-            bgcolor="#1a1a2e",
-            font_color="white",
-        )
-        net.set_options('{"physics": {"stabilization": {"iterations": 200}}}')
+        def _tooltip(name: str, node: dict, community: int | None) -> str:
+            desc = (node.get("description") or "").strip()
+            desc = escape(desc[:220]) if desc else "No description"
+            ntype = escape(node.get("type") or "UNKNOWN")
+            chunk_count = len(node.get("chunk_ids", []))
+            degree = node.get("degree", 0)
+            comm = "None" if community is None else str(community)
+            return (
+                f"<div style='max-width:320px'>"
+                f"<div><b>{escape(name)}</b></div>"
+                f"<div><b>Type:</b> {ntype}</div>"
+                f"<div><b>Chunks:</b> {chunk_count}</div>"
+                f"<div><b>Degree:</b> {degree}</div>"
+                f"<div><b>Community:</b> {comm}</div>"
+                f"<div style='margin-top:6px'>{desc}</div>"
+                f"</div>"
+            )
 
-        added_nodes: set[str] = set()
-        for key, node in self._entity_graph.items():
+        nodes: list[dict] = []
+        node_ids: set[str] = set()
+        for name, node in self._entity_graph.items():
             if not isinstance(node, dict):
                 continue
-            color = _TYPE_COLORS.get(node.get("type", ""), "#aec7e8")
-            label = key[:30]
-            title = (
-                f"<b>{key}</b><br>Type: {node.get('type', '?')}<br>"
-                f"Chunks: {len(node.get('chunk_ids', []))}<br>"
-                f"{node.get('description', '')[:120]}"
+            community = entity_to_community.get(name)
+            chunk_count = len(node.get("chunk_ids", []))
+            nodes.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "label": name[:24],
+                    "type": node.get("type") or "UNKNOWN",
+                    "color": self._VIZ_TYPE_COLORS.get(node.get("type") or "UNKNOWN", "#aec7e8"),
+                    "val": 4 + min(chunk_count, 18),
+                    "chunk_count": chunk_count,
+                    "degree": node.get("degree", 0),
+                    "community": community,
+                    "description": (node.get("description") or "")[:220],
+                    "tooltip": _tooltip(name, node, community),
+                }
             )
-            net.add_node(
-                key,
-                label=label,
-                title=title,
-                color=color,
-                size=8 + min(len(node.get("chunk_ids", [])) * 2, 20),
-            )
-            added_nodes.add(key)
+            node_ids.add(name)
 
-        for src_key, rels in self._relation_graph.items():
-            if src_key not in added_nodes:
+        links: list[dict] = []
+        seen_edges: set[tuple] = set()
+        for src, rels in self._relation_graph.items():
+            if src not in node_ids:
                 continue
             for rel in rels:
                 if not isinstance(rel, dict):
                     continue
-                tgt = rel.get("target", rel.get("object", ""))
-                if tgt not in added_nodes:
+                tgt = rel.get("target") or rel.get("object", "")
+                if not tgt or tgt not in node_ids:
                     continue
-                net.add_edge(
-                    src_key,
-                    tgt,
-                    label=rel.get("relation", "")[:25],
-                    title=rel.get("description", ""),
-                    width=1 + rel.get("strength", 5) / 5,
+                relation = rel.get("relation", "")
+                key = (src, tgt, relation)
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                strength = float(rel.get("weight") or rel.get("strength") or 5)
+                links.append(
+                    {
+                        "source": src,
+                        "target": tgt,
+                        "label": relation[:32],
+                        "relation": relation,
+                        "description": rel.get("description", ""),
+                        "value": strength,
+                        "width": 1 + strength / 8,
+                    }
                 )
 
-        html = net.generate_html()
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(html)
-            logger.info(
-                "Graph visualization saved to %s (%d nodes, %d edge groups)",
-                path,
-                len(added_nodes),
-                len(self._relation_graph),
+        return {"nodes": nodes, "links": links}
+
+    @staticmethod
+    def _render_graph_html(graph: dict) -> str:
+        """Render a graph payload (from :meth:`build_graph_payload`) as a 3D HTML viewer.
+
+        The viewer uses three.js + 3d-force-graph (CDN) and is fully self-contained
+        apart from those two JS libraries.  No server required.
+        """
+        import json as _json
+
+        data_json = _json.dumps(graph, ensure_ascii=False)
+        n_nodes = len(graph["nodes"])
+        n_links = len(graph["links"])
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GraphRAG 3D Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body, #graph {{
+      margin: 0; width: 100%; height: 100%;
+      overflow: hidden;
+      background: #0b1020; color: #e8edf7;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+    }}
+    .hud {{
+      position: fixed; top: 14px; left: 14px; z-index: 20;
+      max-width: 360px; padding: 12px 14px;
+      border: 1px solid rgba(255,255,255,0.14); border-radius: 12px;
+      background: rgba(8,12,20,0.84); backdrop-filter: blur(10px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.28);
+    }}
+    .hud h1 {{ margin: 0 0 8px; font-size: 14px; }}
+    .hud p  {{ margin: 4px 0; font-size: 12px; line-height: 1.45; opacity: 0.9; }}
+    .legend {{ display: grid; grid-template-columns: auto 1fr;
+               gap: 6px 10px; margin-top: 10px; font-size: 11px; }}
+    .swatch {{ width: 10px; height: 10px; border-radius: 999px; margin-top: 3px; }}
+  </style>
+  <script src="https://unpkg.com/three"></script>
+  <script src="https://unpkg.com/3d-force-graph"></script>
+</head>
+<body>
+  <div class="hud">
+    <h1>GraphRAG 3D Viewer</h1>
+    <p>Left drag rotates &nbsp;·&nbsp; Right drag pans &nbsp;·&nbsp; Scroll zooms.</p>
+    <p>Hover a node for details &nbsp;·&nbsp; Click to focus camera.</p>
+    <p>Nodes: {n_nodes} &nbsp;|&nbsp; Edges: {n_links}</p>
+    <div class="legend">
+      <div class="swatch" style="background:#4e79a7"></div><div>PERSON</div>
+      <div class="swatch" style="background:#f28e2b"></div><div>ORGANIZATION</div>
+      <div class="swatch" style="background:#59a14f"></div><div>GEO</div>
+      <div class="swatch" style="background:#e15759"></div><div>EVENT</div>
+      <div class="swatch" style="background:#76b7b2"></div><div>CONCEPT</div>
+      <div class="swatch" style="background:#edc948"></div><div>PRODUCT</div>
+      <div class="swatch" style="background:#bab0ab"></div><div>UNKNOWN</div>
+    </div>
+  </div>
+  <div id="graph"></div>
+  <script>
+    const graphData = {data_json};
+    const elem = document.getElementById('graph');
+    const Graph = ForceGraph3D()(elem)
+      .graphData(graphData)
+      .backgroundColor('#0b1020')
+      .nodeLabel(node => node.tooltip)
+      .nodeColor(node => node.color)
+      .nodeVal(node => node.val)
+      .nodeOpacity(0.95)
+      .linkLabel(link => `<div><b>${{link.relation || 'relation'}}</b><br>${{link.description || ''}}</div>`)
+      .linkWidth(link => link.width || 1)
+      .linkOpacity(0.45)
+      .linkDirectionalParticles(link => Math.min(4, Math.max(1, Math.round((link.value || 1) / 10))))
+      .linkDirectionalParticleSpeed(0.004)
+      .linkDirectionalParticleWidth(2)
+      .d3Force('charge').strength(-140);
+    Graph.d3Force('link').distance(90);
+    Graph.onNodeClick(node => {{
+      const distance = 120;
+      const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+      Graph.cameraPosition(
+        {{ x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }},
+        node, 1400
+      );
+    }});
+    Graph.controls().autoRotate = false;
+    Graph.controls().enableDamping = true;
+    Graph.controls().dampingFactor = 0.12;
+  </script>
+</body>
+</html>
+"""
+
+    def export_graph_html(
+        self,
+        path: str | None = None,
+        json_path: str | None = None,
+        open_browser: bool = True,
+    ) -> str:
+        """Export the entity–relation graph as a self-contained 3D interactive HTML viewer.
+
+        Normalises internal graph state into a renderer-neutral payload via
+        :meth:`build_graph_payload`, then renders it with three.js + 3d-force-graph.
+
+        Args:
+            path: File path to write the HTML to.  Defaults to a temp file when
+                  *open_browser* is True and no path is provided.
+            json_path: Optional path to also write the normalised graph JSON payload.
+            open_browser: If True (default), open the generated HTML in the default
+                          web browser immediately after writing.
+
+        Returns:
+            The rendered HTML string.
+        """
+        import json as _json
+        import pathlib
+        import tempfile
+
+        graph = self.build_graph_payload()
+        html = self._render_graph_html(graph)
+
+        if json_path:
+            pathlib.Path(json_path).write_text(
+                _json.dumps(graph, indent=2, ensure_ascii=False), encoding="utf-8"
             )
+            logger.info(
+                "Graph JSON payload saved to %s (%d nodes, %d edges)",
+                json_path,
+                len(graph["nodes"]),
+                len(graph["links"]),
+            )
+
+        if path:
+            pathlib.Path(path).write_text(html, encoding="utf-8")
+            logger.info(
+                "Graph visualization saved to %s (%d nodes, %d edges)",
+                path,
+                len(graph["nodes"]),
+                len(graph["links"]),
+            )
+            out_path = path
+        elif open_browser:
+            # Write to a temp file so the browser can load it
+            tmp = tempfile.NamedTemporaryFile(
+                suffix=".html", prefix="axon_graph_", delete=False, mode="w", encoding="utf-8"
+            )
+            tmp.write(html)
+            tmp.close()
+            out_path = tmp.name
+            logger.info("Graph visualization written to temp file %s", out_path)
+        else:
+            out_path = None
+
+        if open_browser and out_path:
+            import webbrowser
+
+            webbrowser.open(f"file://{pathlib.Path(out_path).resolve()}")
+            logger.info("Opened graph visualization in default browser.")
+
         return html
 
     def _generate_community_summaries(self, query_hint: str = "") -> None:
