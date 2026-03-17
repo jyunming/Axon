@@ -588,6 +588,7 @@ with st.sidebar:
         "ollama_cloud": "☁️ Ollama Cloud",
         "openai": "🔑 OpenAI",
         "vllm": "⚡ vLLM",
+        "github_copilot": "🐙 GitHub Copilot",
     }
     _model_short = config.llm_model[:22] + "…" if len(config.llm_model) > 22 else config.llm_model
     st.caption(f"{provider_labels.get(config.llm_provider, config.llm_provider)} · {_model_short}")
@@ -761,6 +762,58 @@ with st.sidebar:
                 label_visibility="collapsed",
                 placeholder="e.g. mistralai/Mistral-7B-Instruct-v0.2",
             )
+
+        elif config.llm_provider == "github_copilot":
+            _pat = st.text_input(
+                "GitHub OAuth Token",
+                value=config.copilot_pat,
+                type="password",
+                help="GitHub OAuth token (not a PAT). "
+                "Obtain it by running '/keys set github_copilot' in the REPL "
+                "or set GITHUB_COPILOT_PAT env var.",
+            )
+            if _pat != config.copilot_pat:
+                config.copilot_pat = _pat
+                _brain = st.session_state.brain
+                if hasattr(_brain.llm, "_openai_clients"):
+                    _brain.llm._openai_clients.pop("_copilot", None)
+                # Invalidate cached model list so we re-fetch with the new token
+                st.session_state.pop("_copilot_model_list", None)
+
+            # Fetch the live model list once per session (or after PAT change).
+            if "_copilot_model_list" not in st.session_state:
+                if config.copilot_pat:
+                    with st.spinner("Fetching Copilot model list…"):
+                        try:
+                            from axon.main import _fetch_copilot_models
+
+                            st.session_state["_copilot_model_list"] = _fetch_copilot_models(
+                                st.session_state.brain.llm
+                            )
+                        except Exception:
+                            st.session_state["_copilot_model_list"] = None
+
+            from axon.main import _COPILOT_MODELS_FALLBACK
+
+            _copilot_models = st.session_state.get("_copilot_model_list") or list(
+                _COPILOT_MODELS_FALLBACK
+            )
+            _copilot_model = st.selectbox(
+                "Model",
+                options=_copilot_models
+                + ([config.llm_model] if config.llm_model not in _copilot_models else []),
+                index=(
+                    _copilot_models.index(config.llm_model)
+                    if config.llm_model in _copilot_models
+                    else 0
+                ),
+                label_visibility="collapsed",
+            )
+            if _copilot_model != config.llm_model:
+                config.llm_model = _copilot_model
+                from axon.main import OpenLLM
+
+                st.session_state.brain.llm = OpenLLM(config)
 
         # ── Embedding ──
         st.caption("Embedding")

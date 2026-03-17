@@ -253,13 +253,17 @@ rag:
   graph_rag_budget: 3
   graph_rag_relations: true
   graph_rag_include_raptor_summaries: true   # use RAPTOR summaries for large sources (auto-composition)
+  raptor_graphrag_leaf_skip_threshold: 3     # skip leaf extraction when source has >= N leaves (use RAPTOR summaries instead)
   graph_rag_min_entities_for_relations: 3    # skip relation extraction for sparse chunks
+  graph_rag_relation_budget: 30              # cap relation extraction to top-30 chunks by entity density (0 = unlimited)
+  graph_rag_entity_min_frequency: 2          # prune entities seen in < 2 chunks before community detection
   graph_rag_community: true
+  graph_rag_community_backend: leidenalg    # leidenalg = documented Python 3.13 path; "auto" tries graspologic first
   graph_rag_auto_route: heuristic
   graph_rag_mode: hybrid
-  graph_rag_global_top_communities: 20
+  graph_rag_global_top_communities: 20       # lazy mode: generate LLM summaries for top-20 query-relevant communities only
 
-  # Extraction depth — new in this release:
+  # Extraction depth — light/standard/deep:
   # graph_rag_depth: standard   # light (no LLM, fast) | standard (default) | deep (+ claims)
 ```
 

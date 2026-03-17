@@ -772,6 +772,152 @@ class TestOpenLLM:
         assert config.vllm_base_url == "http://192.168.1.10:8000/v1"
 
 
+_FAKE_COPILOT_SESSION = {"token": "fake_session_token_abc", "expires_at": 9_999_999_999.0}
+
+
+class TestGitHubCopilotProvider:
+    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("openai.OpenAI")
+    def test_complete_calls_copilot_endpoint(self, MockOpenAI, _mock_refresh):
+        from axon.main import AxonConfig, OpenLLM
+
+        config = AxonConfig(
+            llm_provider="github_copilot", llm_model="gpt-4o", copilot_pat="gho_test"
+        )
+        llm = OpenLLM(config)
+
+        mock_client = MockOpenAI.return_value
+        mock_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="hello"))]
+        )
+
+        result = llm.complete("hi")
+        assert result == "hello"
+        assert MockOpenAI.call_args[1]["base_url"] == "https://api.githubcopilot.com"
+
+    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("openai.OpenAI")
+    def test_complete_passes_required_headers(self, MockOpenAI, _mock_refresh):
+        from axon.main import AxonConfig, OpenLLM
+
+        config = AxonConfig(
+            llm_provider="github_copilot", llm_model="gpt-4o", copilot_pat="gho_test"
+        )
+        llm = OpenLLM(config)
+
+        mock_client = MockOpenAI.return_value
+        mock_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="hi"))]
+        )
+        llm.complete("hi")
+
+        headers = MockOpenAI.call_args[1]["default_headers"]
+        assert "Editor-Version" in headers
+        assert "Copilot-Integration-Id" in headers
+
+    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("openai.OpenAI")
+    def test_complete_returns_response(self, MockOpenAI, _mock_refresh):
+        from axon.main import AxonConfig, OpenLLM
+
+        config = AxonConfig(
+            llm_provider="github_copilot", llm_model="gpt-4o", copilot_pat="gho_test"
+        )
+        llm = OpenLLM(config)
+
+        mock_client = MockOpenAI.return_value
+        mock_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="copilot answer"))]
+        )
+
+        result = llm.complete("What is 2+2?")
+        assert result == "copilot answer"
+
+    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("openai.OpenAI")
+    def test_stream_yields_tokens(self, MockOpenAI, _mock_refresh):
+        from axon.main import AxonConfig, OpenLLM
+
+        config = AxonConfig(
+            llm_provider="github_copilot", llm_model="gpt-4o", copilot_pat="gho_test"
+        )
+        llm = OpenLLM(config)
+
+        mock_client = MockOpenAI.return_value
+        chunks = [
+            MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+            MagicMock(choices=[MagicMock(delta=MagicMock(content=" world"))]),
+            MagicMock(choices=[MagicMock(delta=MagicMock(content=None))]),
+        ]
+        mock_client.chat.completions.create.return_value = iter(chunks)
+
+        tokens = list(llm.stream("hi"))
+        assert tokens == ["Hello", " world"]
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["stream"] is True
+
+    def test_missing_pat_raises_valueerror(self, monkeypatch):
+        import pytest
+
+        from axon.main import AxonConfig, OpenLLM
+
+        monkeypatch.delenv("GITHUB_COPILOT_PAT", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+        config = AxonConfig(llm_provider="github_copilot", llm_model="gpt-4o", copilot_pat="")
+        llm = OpenLLM(config)
+
+        with pytest.raises(ValueError, match="GITHUB_COPILOT_PAT"):
+            llm._get_copilot_client()
+
+    @patch("axon.main._refresh_copilot_session")
+    @patch("openai.OpenAI")
+    def test_client_cache_invalidated_on_pat_change(self, MockOpenAI, mock_refresh):
+        from axon.main import AxonConfig, OpenLLM
+
+        # Two successive OAuth tokens produce two different session tokens
+        mock_refresh.side_effect = [
+            {"token": "session_token_1", "expires_at": 9_999_999_999.0},
+            {"token": "session_token_2", "expires_at": 9_999_999_999.0},
+        ]
+        client_a = MagicMock()
+        client_b = MagicMock()
+        MockOpenAI.side_effect = [client_a, client_b]
+
+        for mock_client in (client_a, client_b):
+            mock_client.chat.completions.create.return_value = MagicMock(
+                choices=[MagicMock(message=MagicMock(content="resp"))]
+            )
+
+        config = AxonConfig(
+            llm_provider="github_copilot", llm_model="gpt-4o", copilot_pat="gho_first"
+        )
+        llm = OpenLLM(config)
+
+        llm.complete("hi")
+        first_client = llm._openai_clients.get("_copilot")
+
+        # Simulate OAuth token change: clear session cache so a new session is fetched
+        config.copilot_pat = "gho_second"
+        for k in ("_copilot", "_copilot_session", "_copilot_token"):
+            llm._openai_clients.pop(k, None)
+
+        llm.complete("hi")
+        second_client = llm._openai_clients.get("_copilot")
+
+        assert first_client is not second_client
+        assert MockOpenAI.call_count == 2
+
+    def test_pat_loaded_from_env(self, monkeypatch):
+        from axon.main import AxonConfig
+
+        monkeypatch.setenv("GITHUB_COPILOT_PAT", "gho_from_env")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+        config = AxonConfig(llm_provider="github_copilot", llm_model="gpt-4o")
+        assert config.copilot_pat == "gho_from_env"
+
+
 # ---------------------------------------------------------------------------
 # New tests: HyDE, multi-query, load_directory, metrics
 # ---------------------------------------------------------------------------

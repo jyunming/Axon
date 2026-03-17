@@ -95,7 +95,7 @@ class AxonConfig:
 
     # LLM
     llm_provider: Literal[
-        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot"
+        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot", "github_copilot"
     ] = "ollama"
     llm_model: str = "gemma"
     llm_temperature: float = 0.7
@@ -105,6 +105,12 @@ class AxonConfig:
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
     vllm_base_url: str = "http://localhost:8000/v1"
+
+    # GitHub OAuth token for the "github_copilot" provider.
+    # Obtained via the OAuth device flow (/keys set github_copilot).
+    # Classic PATs are NOT accepted by the Copilot API.
+    # Can also be set via GITHUB_COPILOT_PAT env var.
+    copilot_pat: str = ""
 
     # Projects
     # Root directory for all named projects. Defaults to ~/.axon/projects.
@@ -140,6 +146,10 @@ class AxonConfig:
                 self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
+        if not self.copilot_pat:
+            self.copilot_pat = os.environ.get("GITHUB_COPILOT_PAT") or os.environ.get(
+                "GITHUB_TOKEN", ""
+            )
 
         # 2. Environment variable overrides for paths
         env_root = os.getenv("AXON_PROJECTS_ROOT")
@@ -297,7 +307,7 @@ class AxonConfig:
     raptor_retrieval_mode: str = (
         "tree_traversal"  # P4: tree_traversal|summary_first|corpus_overview
     )
-    raptor_graphrag_leaf_skip_threshold: int = 20  # P2: skip GraphRAG on sources >= N leaf chunks
+    raptor_graphrag_leaf_skip_threshold: int = 3  # P2: skip GraphRAG on sources >= N leaf chunks
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
@@ -429,6 +439,22 @@ class AxonConfig:
     # A2: Skip relation extraction for chunks with fewer than this many entities.
     # 0 = always extract. Saves ~30-50% of relation LLM calls on typical corpora.
     graph_rag_min_entities_for_relations: int = 3
+
+    # Budget-based relation gating: max chunks to run relation extraction on per ingest batch.
+    # Chunks are ranked by entity density (entities/text-length) and only the top-N are processed.
+    # 0 = unlimited (fall back to entity-count threshold gate only).
+    graph_rag_relation_budget: int = 0
+
+    # Community detection backend preference.
+    # "auto"      = graspologic → leidenalg → louvain (legacy order)
+    # "leidenalg" = skip graspologic; use leidenalg/igraph directly (recommended for Python 3.13)
+    # "louvain"   = skip both; use networkx Louvain only
+    graph_rag_community_backend: str = "auto"
+
+    # Minimum entity appearance frequency to include in community detection graph.
+    # Entities appearing in fewer than this many chunks are pruned before building the graph.
+    # 1 = no pruning (include all entities). 2 = prune singletons (recommended).
+    graph_rag_entity_min_frequency: int = 1
 
     # TASK 14: Dedicated thread pool size for map-reduce phase (0 = use max_workers).
     # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
@@ -996,6 +1022,30 @@ class OpenLLM:
             self._openai_clients[cache_key] = OpenAI(**kwargs)
         return self._openai_clients[cache_key]
 
+    def _get_copilot_client(self):
+        """Return an OpenAI client authenticated with the current Copilot session token.
+
+        The session token is obtained by exchanging the stored GitHub OAuth token
+        (copilot_pat field) via the copilot_internal/v2/token endpoint.  It expires
+        every ~30 minutes; this method refreshes it transparently and rebuilds the
+        client only when the token changes.
+        """
+        from openai import OpenAI
+
+        session_token = _get_copilot_session_token(self)
+        if self._openai_clients.get("_copilot_token") != session_token:
+            self._openai_clients["_copilot"] = OpenAI(
+                base_url="https://api.githubcopilot.com",
+                api_key=session_token,
+                default_headers={
+                    "Editor-Version": "axon/1.0.0",
+                    "Editor-Plugin-Version": "axon/1.0.0",
+                    "Copilot-Integration-Id": "axon",
+                },
+            )
+            self._openai_clients["_copilot_token"] = session_token
+        return self._openai_clients["_copilot"]
+
     def complete(
         self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None
     ) -> str:
@@ -1125,6 +1175,23 @@ class OpenLLM:
             response = self._get_openai_client(
                 base_url=self.config.vllm_base_url
             ).chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                timeout=self.config.llm_timeout,
+            )
+            return response.choices[0].message.content
+
+        elif provider == "github_copilot":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+            response = self._get_copilot_client().chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -1314,6 +1381,26 @@ class OpenLLM:
             stream = self._get_openai_client(
                 base_url=self.config.vllm_base_url
             ).chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                stream=True,
+                timeout=self.config.llm_timeout,
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+
+        elif provider == "github_copilot":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+            stream = self._get_copilot_client().chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -2759,8 +2846,12 @@ Your primary goal is to help the user by answering questions based on the provid
         """Build a NetworkX undirected graph from entity and relation data."""
         import networkx as nx
 
+        _min_freq_raw = getattr(self.config, "graph_rag_entity_min_frequency", 1)
+        _min_freq = int(_min_freq_raw) if isinstance(_min_freq_raw, int | float) else 1
         G = nx.Graph()
         for entity, node in self._entity_graph.items():
+            if isinstance(node, dict) and node.get("frequency", 1) < _min_freq:
+                continue
             desc = node.get("description", "") if isinstance(node, dict) else ""
             G.add_node(entity, description=desc)
         for src, entries in self._relation_graph.items():
@@ -2852,8 +2943,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 f"({G.number_of_nodes()} total nodes)"
             )
 
+        _backend = getattr(self.config, "graph_rag_community_backend", "auto")
+
         try:
-            # Try graspologic hierarchical Leiden
+            # Try graspologic hierarchical Leiden — skipped when backend != "auto"
+            if _backend != "auto":
+                raise ImportError("backend override — skipping graspologic")
             from graspologic.partition import hierarchical_leiden
 
             partitions = hierarchical_leiden(G, max_cluster_size=max_cluster_size, random_seed=seed)
@@ -2912,8 +3007,10 @@ Your primary goal is to help the user by answering questions based on the provid
                 "pip install axon[graphrag]"
             )
 
-        # Tier-2 fallback: multi-resolution Leiden via leidenalg (better than Louvain)
+        # Tier-2: multi-resolution Leiden via leidenalg — skipped when backend="louvain"
         try:
+            if _backend == "louvain":
+                raise ImportError("backend override — skipping leidenalg")
             import igraph as _ig
             import leidenalg as _la
 
@@ -3149,9 +3246,11 @@ Your primary goal is to help the user by answering questions based on the provid
         }
         _entity_to_community: dict[str, int] = {}
         if self._community_levels:
-            for cid, members in self._community_levels.get(0, {}).items():
-                for m in members:
-                    _entity_to_community[m] = hash(cid) % 20
+            # Persisted schema: {entity -> community_id (int)}.  Build a colour
+            # bucket per community so each cluster gets a distinct hue.
+            level0 = self._community_levels.get(0, {})
+            for entity, community_id in level0.items():
+                _entity_to_community[entity] = int(community_id) % 20
 
         net = Network(
             height="750px",
@@ -3189,7 +3288,7 @@ Your primary goal is to help the user by answering questions based on the provid
             for rel in rels:
                 if not isinstance(rel, dict):
                     continue
-                tgt = rel.get("object", "")
+                tgt = rel.get("target", rel.get("object", ""))
                 if tgt not in added_nodes:
                     continue
                 net.add_edge(
@@ -3212,8 +3311,14 @@ Your primary goal is to help the user by answering questions based on the provid
             )
         return html
 
-    def _generate_community_summaries(self) -> None:
-        """Generate LLM summaries for each detected community cluster across all levels."""
+    def _generate_community_summaries(self, query_hint: str = "") -> None:
+        """Generate LLM summaries for each detected community cluster across all levels.
+
+        When *query_hint* is provided (lazy mode), communities are ranked by relevance to
+        the query first so the most useful ones get LLM treatment before the budget cap.
+        The LLM cap is tightened to ``graph_rag_global_top_communities`` in lazy mode,
+        replacing the full ``graph_rag_community_llm_max_total`` limit.
+        """
         if not self._community_levels:
             return
         import hashlib as _hashlib
@@ -3228,11 +3333,35 @@ Your primary goal is to help the user by answering questions based on the provid
 
         summaries = {}
         total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
-        logger.info(f"GraphRAG: Generating summaries for {total_communities} communities...")
 
         _min_size = getattr(self.config, "graph_rag_community_min_size", 3)
         _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 50)
         _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 200)
+
+        # Lazy mode: tighten cap to graph_rag_global_top_communities so only the most
+        # query-relevant communities receive LLM treatment on the first global query.
+        _lazy_cap = getattr(self.config, "graph_rag_global_top_communities", 0)
+        if query_hint and _lazy_cap > 0:
+            _max_total = min(_max_total, _lazy_cap)
+            logger.info(
+                "GraphRAG: lazy mode — generating community summaries for query "
+                "(LLM cap: %d of %d communities).",
+                _max_total,
+                total_communities,
+            )
+        else:
+            logger.info("GraphRAG: Generating summaries for %d communities...", total_communities)
+
+        # Pre-compute query relevance scores when a hint is provided.
+        _query_words: set = set(query_hint.lower().split()) if query_hint else set()
+
+        def _query_relevance(members: list) -> float:
+            """Fraction of query words present in community entity names."""
+            if not _query_words:
+                return 0.0
+            member_words = {w for m in members for w in m.lower().split()}
+            return len(_query_words & member_words) / len(_query_words)
+
         _llm_calls_issued = 0
 
         def _community_score(members: list) -> float:
@@ -3417,9 +3546,19 @@ Your primary goal is to help the user by answering questions based on the provid
                 community_entities[cid].append(entity)
 
             llm_items, template_items = [], []
-            ranked = sorted(
-                community_entities.items(), key=lambda kv: _community_score(kv[1]), reverse=True
-            )
+            if query_hint:
+                # Prioritise query-relevant communities so they consume LLM budget first.
+                ranked = sorted(
+                    community_entities.items(),
+                    key=lambda kv: (_query_relevance(kv[1]), _community_score(kv[1])),
+                    reverse=True,
+                )
+            else:
+                ranked = sorted(
+                    community_entities.items(),
+                    key=lambda kv: _community_score(kv[1]),
+                    reverse=True,
+                )
 
             for rank_pos, (cid, members) in enumerate(ranked):
                 summary_key = f"{level_idx}_{cid}"
@@ -5760,8 +5899,8 @@ Your primary goal is to help the user by answering questions based on the provid
             if self.config.graph_rag_relations:
                 # A2: skip relation extraction for chunks below the entity count threshold
                 _min_ent = getattr(self.config, "graph_rag_min_entities_for_relations", 3)
+                _entity_count_by_doc = {doc_id: len(ents) for doc_id, ents in results}
                 if _min_ent > 0:
-                    _entity_count_by_doc = {doc_id: len(ents) for doc_id, ents in results}
                     _rel_chunks = [
                         doc
                         for doc in chunks_to_process
@@ -5769,11 +5908,25 @@ Your primary goal is to help the user by answering questions based on the provid
                     ]
                 else:
                     _rel_chunks = chunks_to_process
-                logger.info(
-                    f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
-                    f"(skipped {len(chunks_to_process) - len(_rel_chunks)} below "
-                    f"{_min_ent}-entity threshold)..."
-                )
+                # Budget-based relation gating: rank by entity density, cap at budget
+                _rel_budget = getattr(self.config, "graph_rag_relation_budget", 0)
+                if _rel_budget > 0 and len(_rel_chunks) > _rel_budget:
+                    _rel_chunks = sorted(
+                        _rel_chunks,
+                        key=lambda d: _entity_count_by_doc.get(d["id"], 0)
+                        / max(len(d.get("text", "")), 1),
+                        reverse=True,
+                    )[:_rel_budget]
+                    logger.info(
+                        f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
+                        f"(budget cap; {len(chunks_to_process) - len(_rel_chunks)} skipped)..."
+                    )
+                else:
+                    logger.info(
+                        f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
+                        f"(skipped {len(chunks_to_process) - len(_rel_chunks)} below "
+                        f"{_min_ent}-entity threshold)..."
+                    )
 
                 def _proc_rel(doc):
                     return doc["id"], self._extract_relations(doc["text"])
@@ -6530,10 +6683,7 @@ Your primary goal is to help the user by answering questions based on the provid
             and self._community_levels
             and getattr(self.config, "graph_rag_community_lazy", False)
         ):
-            logger.info(
-                "GraphRAG: lazy mode — generating community summaries on first global query."
-            )
-            self._generate_community_summaries()
+            self._generate_community_summaries(query_hint=query)
             if getattr(self.config, "graph_rag_index_community_reports", True):
                 self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
@@ -6667,10 +6817,7 @@ Your primary goal is to help the user by answering questions based on the provid
             and self._community_levels
             and getattr(self.config, "graph_rag_community_lazy", False)
         ):
-            logger.info(
-                "GraphRAG: lazy mode — generating community summaries on first global query."
-            )
-            self._generate_community_summaries()
+            self._generate_community_summaries(query_hint=query)
             if getattr(self.config, "graph_rag_index_community_reports", True):
                 self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
@@ -6806,7 +6953,7 @@ def main():
     parser.add_argument("--stream", action="store_true", help="Stream the response")
     parser.add_argument(
         "--provider",
-        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm"],
+        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm", "github_copilot"],
         help="LLM provider to use (overrides config)",
     )
     parser.add_argument(
@@ -6965,7 +7112,7 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm")
+        _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm", "github_copilot")
         if "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
             if _prov in _PROVIDERS:
@@ -7309,6 +7456,222 @@ _SLASH_COMMANDS = [
 ]
 
 
+def _save_env_key(env_name: str, key: str) -> None:
+    """Persist *key* to ~/.axon/.env and os.environ."""
+    _env_file = Path.home() / ".axon" / ".env"
+    _env_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = _env_file.read_text(encoding="utf-8") if _env_file.exists() else ""
+    lines = [ln for ln in existing.splitlines() if not ln.startswith(f"{env_name}=")]
+    lines.append(f"{env_name}={key}")
+    _env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[env_name] = key
+
+
+def _prompt_key_if_missing(provider: str, brain) -> bool:
+    """If *provider* needs an API key/token and none is set, prompt the user.
+
+    For github_copilot: runs the OAuth device flow (browser-based).
+    For other providers: prompts for the API key via getpass.
+    Saves to ~/.axon/.env and patches brain.config in-place.
+    Returns True when a key is available (already set or just obtained).
+    """
+    _key_map = {
+        "gemini": ("gemini_api_key", "GEMINI_API_KEY"),
+        "ollama_cloud": ("ollama_cloud_key", "OLLAMA_CLOUD_KEY"),
+        "openai": ("api_key", "OPENAI_API_KEY"),
+        "github_copilot": ("copilot_pat", "GITHUB_COPILOT_PAT"),
+    }
+    if provider not in _key_map:
+        return True
+    attr, env_name = _key_map[provider]
+    if getattr(brain.config, attr, ""):
+        return True  # already configured
+
+    if provider == "github_copilot":
+        print("  ⚠️  No GitHub OAuth token set for the 'github_copilot' provider.")
+        print("  Starting GitHub OAuth device flow…")
+        try:
+            key = _copilot_device_flow()
+        except (EOFError, KeyboardInterrupt, RuntimeError) as e:
+            print(f"\n  Cancelled: {e}")
+            return False
+        _save_env_key(env_name, key)
+        brain.config.copilot_pat = key
+        # Clear cached session so the new OAuth token is exchanged on next use
+        brain.llm._openai_clients.pop("_copilot", None)
+        brain.llm._openai_clients.pop("_copilot_session", None)
+        brain.llm._openai_clients.pop("_copilot_token", None)
+        print(f"  {env_name} saved and applied.")
+        return True
+
+    print(f"  ⚠️  No {env_name} set for the '{provider}' provider.")
+    try:
+        import getpass
+
+        key = getpass.getpass(f"  Enter {env_name} (hidden, Enter to skip): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Skipped.")
+        return False
+    if not key:
+        print("  Skipped — you can set it later with /keys set " + provider)
+        return False
+    _save_env_key(env_name, key)
+    setattr(brain.config, attr, key)
+    print(f"  {env_name} saved and applied.")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# GitHub Copilot OAuth helpers
+# ---------------------------------------------------------------------------
+# GitHub Copilot does NOT accept Personal Access Tokens.  The required flow is:
+#   1. OAuth device flow  →  GitHub OAuth token  (stored in ~/.axon/.env)
+#   2. OAuth token        →  Copilot session token  (in-memory, ~30 min TTL)
+#   3. Session token used as Bearer on every API call.
+# ---------------------------------------------------------------------------
+
+_COPILOT_OAUTH_CLIENT_ID = "Iv1.b507a08c87ecfe98"  # GitHub Copilot Vim plugin client ID
+_COPILOT_SESSION_REFRESH_BUFFER = 60  # seconds before expiry to pre-refresh
+
+
+def _copilot_device_flow() -> str:
+    """Run GitHub OAuth device flow and return the resulting GitHub OAuth token.
+
+    Prints the user code and verification URL, then polls until the user
+    completes authorisation in the browser.
+    """
+    import time
+
+    import httpx
+
+    resp = httpx.post(
+        "https://github.com/login/device/code",
+        json={"client_id": _COPILOT_OAUTH_CLIENT_ID, "scope": "read:user"},
+        headers={"Accept": "application/json"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    print(f"  Open in your browser: {data['verification_uri']}")
+    print(f"  Enter this code:      {data['user_code']}")
+    print("  Waiting for authorisation", end="", flush=True)
+
+    interval = data.get("interval", 5)
+    deadline = time.time() + data.get("expires_in", 900)
+
+    while time.time() < deadline:
+        time.sleep(interval)
+        print(".", end="", flush=True)
+        token_resp = httpx.post(
+            "https://github.com/login/oauth/access_token",
+            json={
+                "client_id": _COPILOT_OAUTH_CLIENT_ID,
+                "device_code": data["device_code"],
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        token_data = token_resp.json()
+        if "access_token" in token_data:
+            print()
+            return token_data["access_token"]
+        err = token_data.get("error", "")
+        if err == "slow_down":
+            interval += 5
+        elif err != "authorization_pending":
+            print()
+            raise RuntimeError(f"GitHub OAuth error: {err}")
+    print()
+    raise RuntimeError("GitHub OAuth device flow timed out.")
+
+
+def _refresh_copilot_session(oauth_token: str) -> dict:
+    """Exchange a GitHub OAuth token for a short-lived Copilot session token.
+
+    Returns {"token": str, "expires_at": float} where expires_at is a Unix
+    timestamp.  The session token is valid for ~30 minutes.
+    """
+    import httpx
+
+    resp = httpx.get(
+        "https://api.github.com/copilot_internal/v2/token",
+        headers={
+            "Authorization": f"token {oauth_token}",
+            "Editor-Version": "axon/1.0.0",
+            "Editor-Plugin-Version": "axon/1.0.0",
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return {"token": data["token"], "expires_at": float(data["expires_at"])}
+
+
+def _get_copilot_session_token(llm) -> str:
+    """Return a valid Copilot session token, refreshing if needed."""
+    import time
+
+    oauth_token = llm.config.copilot_pat
+    if not oauth_token:
+        raise ValueError(
+            "GitHub Copilot token not set. "
+            "Run /keys set github_copilot or export GITHUB_COPILOT_PAT=<oauth_token>."
+        )
+    session = llm._openai_clients.get("_copilot_session")
+    if not session or time.time() >= session["expires_at"] - _COPILOT_SESSION_REFRESH_BUFFER:
+        session = _refresh_copilot_session(oauth_token)
+        llm._openai_clients["_copilot_session"] = session
+    return session["token"]
+
+
+# Static fallback used when the Copilot token isn't set or the network call fails.
+# The live list is fetched from https://api.githubcopilot.com/models at completion time.
+_COPILOT_MODELS_FALLBACK: list[str] = [
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "claude-3.5-sonnet",
+    "claude-3.7-sonnet",
+    "o1",
+    "o3-mini",
+]
+
+
+def _fetch_copilot_models(llm) -> list[str]:
+    """Return chat model IDs from https://api.githubcopilot.com/models.
+
+    Uses the Copilot session token (not the raw OAuth token / PAT) because the
+    /models endpoint requires a session token.  Falls back to
+    _COPILOT_MODELS_FALLBACK on any error.
+    """
+    try:
+        if not llm.config.copilot_pat:
+            return list(_COPILOT_MODELS_FALLBACK)
+        session_token = _get_copilot_session_token(llm)
+        import httpx
+
+        resp = httpx.get(
+            "https://api.githubcopilot.com/models",
+            headers={
+                "Authorization": f"Bearer {session_token}",
+                "Editor-Version": "axon/1.0.0",
+                "Copilot-Integration-Id": "axon",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        ids = [
+            m["id"]
+            for m in resp.json().get("data", [])
+            if m.get("capabilities", {}).get("type") == "chat"
+        ]
+        return ids if ids else list(_COPILOT_MODELS_FALLBACK)
+    except Exception:
+        return list(_COPILOT_MODELS_FALLBACK)
+
+
 def _make_completer(brain: "AxonBrain"):
     """Return a readline completer for slash commands, paths, and model names."""
 
@@ -7333,9 +7696,23 @@ def _make_completer(brain: "AxonBrain"):
                 matches = [m + "/" if os.path.isdir(m) else m for m in matches]
                 return matches[state] if state < len(matches) else None
 
-            # /model or /pull — complete Ollama model names
+            # /model or /pull — complete model names
             if full_line.startswith("/model ") or full_line.startswith("/pull "):
                 model_prefix = full_line.split(" ", 1)[1]
+                # Explicit github_copilot/ prefix typed
+                if model_prefix.startswith("github_copilot/") or model_prefix in (
+                    "github_copilot",
+                    "github_copilot/",
+                ):
+                    cp_prefix = model_prefix[len("github_copilot/") :]
+                    cp_models = _fetch_copilot_models(brain.llm)
+                    matches = [f"github_copilot/{m}" for m in cp_models if m.startswith(cp_prefix)]
+                    return matches[state] if state < len(matches) else None
+                # Active provider is github_copilot — complete bare model names
+                if brain.config.llm_provider == "github_copilot" and "/" not in model_prefix:
+                    cp_models = _fetch_copilot_models(brain.llm)
+                    matches = [m for m in cp_models if m.startswith(model_prefix)]
+                    return matches[state] if state < len(matches) else None
                 try:
                     import ollama as _ollama
 
@@ -8353,17 +8730,38 @@ def _interactive_repl(
                 elif text.startswith("/model ") or text.startswith("/embed "):
                     cmd_len = len("/model ") if text.startswith("/model ") else len("/embed ")
                     prefix = text[cmd_len:]
-                    try:
-                        import ollama as _ol
+                    if prefix.startswith("github_copilot/") or prefix in (
+                        "github_copilot",
+                        "github_copilot/",
+                    ):
+                        cp_prefix = prefix[len("github_copilot/") :]
+                        for mid in _fetch_copilot_models(self._brain.llm):
+                            if mid.startswith(cp_prefix):
+                                full = f"github_copilot/{mid}"
+                                yield Completion(
+                                    full[len(prefix) :], display=full, display_meta="copilot"
+                                )
+                    elif self._brain.config.llm_provider == "github_copilot" and "/" not in prefix:
+                        # Active provider is github_copilot — complete bare model names
+                        for mid in _fetch_copilot_models(self._brain.llm):
+                            if mid.startswith(prefix):
+                                yield Completion(
+                                    mid[len(prefix) :], display=mid, display_meta="copilot"
+                                )
+                    else:
+                        try:
+                            import ollama as _ol
 
-                        resp = _ol.list()
-                        mods = resp.models if hasattr(resp, "models") else resp.get("models", [])
-                        for m in mods:
-                            name = m.model if hasattr(m, "model") else m.get("name", "")
-                            if name.startswith(prefix):
-                                yield Completion(name[len(prefix) :], display=name)
-                    except Exception:
-                        pass
+                            resp = _ol.list()
+                            mods = (
+                                resp.models if hasattr(resp, "models") else resp.get("models", [])
+                            )
+                            for m in mods:
+                                name = m.model if hasattr(m, "model") else m.get("name", "")
+                                if name.startswith(prefix):
+                                    yield Completion(name[len(prefix) :], display=name)
+                        except Exception:
+                            pass
                 # ── /resume <session-id> ──────────────────────────────────
                 elif text.startswith("/resume "):
                     prefix = text[len("/resume ") :]
@@ -8617,7 +9015,7 @@ def _interactive_repl(
                     _detail = {
                         "model": "  /model <model>              keep current provider\n"
                         "  /model <provider>/<model>   switch provider + model\n"
-                        "  providers: ollama, gemini, openai, ollama_cloud, vllm\n"
+                        "  providers: ollama, gemini, openai, ollama_cloud, vllm, github_copilot\n"
                         "  e.g.  /model gemini/gemini-2.0-flash\n"
                         "        /model ollama/gemma:2b\n"
                         "        /model openai/gpt-4o\n"
@@ -8779,7 +9177,14 @@ def _interactive_repl(
                         print(f"  Done — {ingested} ingested, {skipped} skipped.")
 
             elif cmd == "/model":
-                _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm")
+                _PROVIDERS = (
+                    "ollama",
+                    "gemini",
+                    "openai",
+                    "ollama_cloud",
+                    "vllm",
+                    "github_copilot",
+                )
                 if not arg:
                     print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
                     print(
@@ -8807,15 +9212,14 @@ def _interactive_repl(
                                 f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
                             )
                         elif provider != "ollama":
-                            print("  ℹ️  Make sure the required API key env var is set.")
+                            _prompt_key_if_missing(provider, brain)
                 else:
                     inferred = _infer_provider(arg)
                     brain.config.llm_provider = inferred
                     brain.config.llm_model = arg
                     brain.llm = OpenLLM(brain.config)
                     print(f"  Switched LLM to {inferred}/{arg}")
-                    if inferred != "ollama":
-                        print("  ℹ️  Make sure the required API key env var is set.")
+                    _prompt_key_if_missing(inferred, brain)
 
             elif cmd == "/vllm-url":
                 if not arg:
@@ -9226,10 +9630,11 @@ def _interactive_repl(
             elif cmd == "/keys":
                 _env_file = Path.home() / ".axon" / ".env"
                 _provider_keys = {
-                    "gemini": ("GEMINI_API_KEY", "https://aistudio.google.com/app/apikey"),
-                    "openai": ("OPENAI_API_KEY", "https://platform.openai.com/api-keys"),
-                    "brave": ("BRAVE_API_KEY", "https://api.search.brave.com/app/keys"),
-                    "ollama_cloud": ("OLLAMA_CLOUD_KEY", "https://ollama.com/settings"),
+                    "gemini": "GEMINI_API_KEY",
+                    "openai": "OPENAI_API_KEY",
+                    "brave": "BRAVE_API_KEY",
+                    "ollama_cloud": "OLLAMA_CLOUD_KEY",
+                    "github_copilot": "GITHUB_COPILOT_PAT",
                 }
                 if arg.lower().startswith("set"):
                     set_parts = arg.split(maxsplit=1)
@@ -9237,9 +9642,22 @@ def _interactive_repl(
                     if not prov or prov not in _provider_keys:
                         print("  Usage: /keys set <provider>")
                         print(f"  Providers: {', '.join(_provider_keys)}")
+                    elif prov == "github_copilot":
+                        print("  Starting GitHub OAuth device flow…")
+                        try:
+                            new_key = _copilot_device_flow()
+                        except (EOFError, KeyboardInterrupt, RuntimeError) as e:
+                            print(f"\n  Cancelled: {e}")
+                        else:
+                            env_name = _provider_keys[prov]
+                            _save_env_key(env_name, new_key)
+                            brain.config.copilot_pat = new_key
+                            for k in ("_copilot", "_copilot_session", "_copilot_token"):
+                                brain.llm._openai_clients.pop(k, None)
+                            print(f"  {env_name} saved to {_env_file} and applied.")
+                            print("  Switch provider: /model github_copilot/<model>")
                     else:
-                        env_name, url = _provider_keys[prov]
-                        print(f"  Get your key at: {url}")
+                        env_name = _provider_keys[prov]
                         try:
                             import getpass
 
@@ -9248,20 +9666,7 @@ def _interactive_repl(
                             print("\n  Cancelled.")
                         else:
                             if new_key:
-                                _env_file.parent.mkdir(parents=True, exist_ok=True)
-                                existing = (
-                                    _env_file.read_text(encoding="utf-8")
-                                    if _env_file.exists()
-                                    else ""
-                                )
-                                lines = [
-                                    ln
-                                    for ln in existing.splitlines()
-                                    if not ln.startswith(f"{env_name}=")
-                                ]
-                                lines.append(f"{env_name}={new_key}")
-                                _env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                                os.environ[env_name] = new_key
+                                _save_env_key(env_name, new_key)
                                 if prov == "brave":
                                     brain.config.brave_api_key = new_key
                                 elif prov == "gemini":
@@ -9276,7 +9681,7 @@ def _interactive_repl(
                                 print("  No key entered — nothing saved.")
                 else:
                     print("\n  API Key Status\n  " + "─" * 50)
-                    for prov, (env_name, _url) in _provider_keys.items():
+                    for prov, env_name in _provider_keys.items():
                         val = os.environ.get(env_name, "")
                         if val:
                             masked = val[:4] + "****" + val[-2:] if len(val) > 6 else "****"

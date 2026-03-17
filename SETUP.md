@@ -87,8 +87,9 @@ pip install -e ".[all]"
 | `loaders` | EPUB, RTF, and `.msg` (Outlook) file loaders | `pip install -e ".[loaders]"` |
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
-> The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x due to its `gensim` build dependency — do not use it on Python 3.13.
-> The fallback chain is: graspologic hierarchical Leiden → leidenalg multi-resolution Leiden → networkx Louvain.
+> The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x — do not install it on Python 3.13.
+> The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which skips `graspologic` entirely and uses the documented Python 3.13 path directly.
+> To restore the legacy preference order (graspologic → leidenalg → networkx Louvain) set `graph_rag_community_backend: auto`.
 
 Verify the install:
 

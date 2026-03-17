@@ -70,6 +70,16 @@ llm:
   # Or set env var: VLLM_BASE_URL=http://host:port/v1
   vllm_base_url: "http://localhost:8000/v1"
 
+  # GitHub Copilot API (OAuth-based, no VS Code extension required)
+  # Provider: github_copilot
+  # Requires a GitHub OAuth token (NOT a PAT) and an active Copilot subscription.
+  # Get the token by running: /keys set github_copilot  (OAuth device flow)
+  # Or set env var: GITHUB_COPILOT_PAT=<github_oauth_token>
+  # copilot_pat: ""
+  # Run the REPL command '/model github_copilot/<Tab>' for a live model list.
+  # Known models (varies by subscription): gpt-4o, gpt-4.1, gpt-4o-mini,
+  #   claude-3.5-sonnet, claude-3.7-sonnet, o1, o3-mini
+
   # Generation parameters
   temperature: 0.7
   max_tokens: 2048
@@ -147,7 +157,10 @@ rag:
   graph_rag_budget: 3             # extra graph-expanded docs added beyond top_k
   graph_rag_relations: true       # extract SUBJECT | RELATION | OBJECT triples
   graph_rag_include_raptor_summaries: true  # use RAPTOR summaries as GraphRAG units for large sources
+  raptor_graphrag_leaf_skip_threshold: 3    # skip leaf extraction for sources with >= N leaf chunks (use RAPTOR summaries instead)
   graph_rag_min_entities_for_relations: 3   # skip relation extraction for chunks with fewer entities
+  graph_rag_relation_budget: 30             # max chunks for relation extraction; ranked by entity density (0 = unlimited)
+  graph_rag_entity_min_frequency: 2         # prune entities seen in fewer than N chunks before community detection
 
   # Community detection — clusters entity graph after ingest.
   # Runs async in the background; summaries generated lazily on first global query.
@@ -155,6 +168,9 @@ rag:
   graph_rag_community: true
   graph_rag_community_async: true     # non-blocking: community detection runs after ingest
   graph_rag_community_lazy: true      # defer LLM summarisation to first global query
+  # Community detection backend: "auto" (graspologic→leidenalg→louvain) | "leidenalg" | "louvain"
+  # "leidenalg" is the documented supported path for Python 3.13 — avoids graspologic instability.
+  graph_rag_community_backend: leidenalg
 
   # Query routing — "heuristic" detects holistic queries (summarize/compare/list all)
   # at zero cost and upgrades them to global search; factual queries use local mode.

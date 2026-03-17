@@ -267,12 +267,17 @@ pip install -e ".[graphrag]"
 # installs: networkx, leidenalg, igraph
 ```
 
-The Axon community-detection fallback chain is:
-1. **graspologic** hierarchical Leiden (if installed separately and compatible with your Python/NumPy)
-2. **leidenalg** multi-resolution Leiden ← installed by `axon[graphrag]`
-3. **networkx** Louvain ← always available (no extra install needed)
+The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which uses the documented Python 3.13 path directly and bypasses `graspologic`.
 
-> If you have `graspologic` installed from a compatible environment (Python ≤ 3.12, NumPy 1.x), Axon will prefer it for true hierarchical parent-child community structure.
+The community-detection backend can be configured explicitly:
+```yaml
+rag:
+  graph_rag_community_backend: leidenalg  # recommended for Python 3.13 (default)
+  # graph_rag_community_backend: auto     # graspologic → leidenalg → networkx Louvain
+  # graph_rag_community_backend: louvain  # networkx only, no extra deps required
+```
+
+If you have `graspologic` installed from a Python ≤ 3.12 / NumPy 1.x environment and want Axon to use it, set `graph_rag_community_backend: auto`.
 
 ---
 
@@ -300,25 +305,34 @@ relation extraction). For 100 chunks that is 100–300 LLM calls before any quer
      graph_rag_depth: light
    ```
 
-2. **Raise the relation threshold** — skip relation extraction on sparse chunks (~30–50% reduction):
+2. **Budget relation extraction** — the default ships with `graph_rag_relation_budget: 30`, which caps
+   relation extraction to the 30 most entity-dense chunks per batch. Reduce further if needed:
    ```yaml
    rag:
-     graph_rag_min_entities_for_relations: 5
+     graph_rag_relation_budget: 15      # strict budget (0 = unlimited)
+     graph_rag_min_entities_for_relations: 5  # also skip sparse chunks
    ```
 
-3. **Limit RAPTOR to small sources** — skip RAPTOR for files larger than N MB:
+3. **Prune singleton entities** — `graph_rag_entity_min_frequency: 2` (default) excludes entities that
+   appear in only one chunk before community detection, reducing graph size and community count:
+   ```yaml
+   rag:
+     graph_rag_entity_min_frequency: 3  # stricter: entities must appear in >= 3 chunks
+   ```
+
+4. **Limit RAPTOR to small sources** — skip RAPTOR for files larger than N MB:
    ```yaml
    rag:
      raptor_max_source_size_mb: 2.0
    ```
 
-4. **Reduce RAPTOR group size** — fewer chunks per summary = fewer LLM calls:
+5. **Reduce RAPTOR group size** — fewer chunks per summary = fewer LLM calls:
    ```yaml
    rag:
      raptor_chunk_group_size: 10   # default is 5
    ```
 
-5. **Disable both for bulk ingest**, then re-enable for daily use (dedup skips unchanged chunks):
+6. **Disable both for bulk ingest**, then re-enable for daily use (dedup skips unchanged chunks):
    ```yaml
    rag:
      raptor: false
