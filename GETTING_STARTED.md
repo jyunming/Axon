@@ -245,6 +245,81 @@ curl -X POST http://localhost:8000/query \
 
 ---
 
+---
+
+## RAPTOR + GraphRAG — Best-Known Method
+
+RAPTOR and GraphRAG are **on by default** as of v1.0.0. They make Axon much better at multi-hop
+and corpus-wide questions, but they add LLM calls during ingest. Here is how to get the most out
+of them without paying unnecessary cost.
+
+### What each feature does
+
+| Feature | What it adds | Ingest cost |
+|---|---|---|
+| **RAPTOR** | Hierarchical summaries — groups ~5 leaf chunks per source into a summary node; summary nodes are retrieved alongside leaf chunks for multi-hop questions | ~1 LLM call per 5 chunks |
+| **GraphRAG** | Entity–relation graph — extracts entities and relations from each chunk; expands retrieval via the graph; detects communities for corpus-wide global search | ~1–3 LLM calls per chunk |
+| **RAPTOR + GraphRAG** | Auto-composition — large sources (≥20 leaf chunks) have their RAPTOR summaries used as GraphRAG extraction units instead of leaf chunks, cutting GraphRAG LLM calls by ~50–80% for large files | Shared cost — not additive |
+
+### Reducing ingest time
+
+**Option 1 — Use the light extraction tier (fastest, no LLM for entities):**
+```yaml
+# config.yaml
+rag:
+  graph_rag_depth: light   # regex noun-phrase extraction, zero LLM calls
+```
+Use this for a first ingest or when you just want entity graph structure without deep descriptions.
+
+**Option 2 — Raise the entity threshold for relations (skip ~40% of LLM calls):**
+```yaml
+rag:
+  graph_rag_min_entities_for_relations: 5   # skip relation extraction on sparse chunks
+```
+
+**Option 3 — Disable GraphRAG for the initial ingest, then enable and re-ingest:**
+```yaml
+rag:
+  raptor: true
+  graph_rag: false   # first pass: RAPTOR only (fast)
+```
+After ingest completes, set `graph_rag: true` and re-ingest (dedup skips unchanged chunks).
+
+**Option 4 — Disable both for bulk ingest, enable for daily use:**
+```yaml
+rag:
+  raptor: false
+  graph_rag: false
+```
+
+**Option 5 — Limit RAPTOR to small sources (skip large files):**
+```yaml
+rag:
+  raptor_max_source_size_mb: 2.0   # skip RAPTOR for sources > 2 MB
+```
+
+### Visualize the entity–relation graph
+
+After ingest, you can explore the extracted entity graph as an interactive HTML visualization:
+
+**REPL:**
+```
+/graph-viz                        # saves to temp dir and prints the path
+/graph-viz /path/to/output.html   # saves to a specific file
+```
+
+**API:**
+```bash
+curl http://localhost:8000/graph/visualize -o graph.html
+# Open graph.html in any browser — no server required
+```
+
+Requires `pyvis`: `pip install axon[graphrag]`
+
+The visualization shows entities as colored nodes (by type), relation triples as labeled edges, and community membership via node color grouping.
+
+---
+
 ## Where to go next
 
 | Guide | What it covers |

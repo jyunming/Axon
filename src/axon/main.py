@@ -422,8 +422,13 @@ class AxonConfig:
     # TASK 7: Deferred community rebuild (batch ingest mode)
     graph_rag_community_defer: bool = True
 
-    # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction
-    graph_rag_include_raptor_summaries: bool = False
+    # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction.
+    # Defaults to True so large-source RAPTOR summaries are used as GraphRAG units.
+    graph_rag_include_raptor_summaries: bool = True
+
+    # A2: Skip relation extraction for chunks with fewer than this many entities.
+    # 0 = always extract. Saves ~30-50% of relation LLM calls on typical corpora.
+    graph_rag_min_entities_for_relations: int = 3
 
     # TASK 14: Dedicated thread pool size for map-reduce phase (0 = use max_workers).
     # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
@@ -433,6 +438,12 @@ class AxonConfig:
     # TASK 14: Alternative NER backend. "gliner" skips LLM for entity extraction.
     # Relations and claims still use LLM. pip install axon[gliner]
     graph_rag_ner_backend: Literal["llm", "gliner"] = "llm"
+
+    # A3: Extraction depth tier.
+    # "light" = regex noun-phrase extractor, no LLM, no relations (fastest)
+    # "standard" = current LLM-based NER (default)
+    # "deep" = standard + claims + canonicalize
+    graph_rag_depth: Literal["light", "standard", "deep"] = "standard"
 
     # TASK 14: Token-level compression of community reports before map-reduce LLM calls.
     # Uses LLMLingua-2. pip install axon[llmlingua]
@@ -3115,6 +3126,92 @@ Your primary goal is to help the user by answering questions based on the provid
             self._community_graph_dirty = False
             self._rebuild_communities()
 
+    def export_graph_html(self, path: str | None = None) -> str:
+        """Export the entity–relation graph as a self-contained interactive HTML file.
+
+        Nodes = entities (colored by type), edges = relation triples.
+        Community membership shown by node color grouping when communities exist.
+        Returns the HTML string; also saves to *path* if provided.
+        Requires: pip install axon[graphrag]
+        """
+        try:
+            from pyvis.network import Network
+        except ImportError:
+            raise ImportError("Graph visualization requires pyvis: pip install axon[graphrag]")
+
+        _TYPE_COLORS = {
+            "PERSON": "#4e79a7",
+            "ORGANIZATION": "#f28e2b",
+            "GEO": "#59a14f",
+            "EVENT": "#e15759",
+            "CONCEPT": "#76b7b2",
+            "PRODUCT": "#edc948",
+        }
+        _entity_to_community: dict[str, int] = {}
+        if self._community_levels:
+            for cid, members in self._community_levels.get(0, {}).items():
+                for m in members:
+                    _entity_to_community[m] = hash(cid) % 20
+
+        net = Network(
+            height="750px",
+            width="100%",
+            directed=True,
+            notebook=False,
+            bgcolor="#1a1a2e",
+            font_color="white",
+        )
+        net.set_options('{"physics": {"stabilization": {"iterations": 200}}}')
+
+        added_nodes: set[str] = set()
+        for key, node in self._entity_graph.items():
+            if not isinstance(node, dict):
+                continue
+            color = _TYPE_COLORS.get(node.get("type", ""), "#aec7e8")
+            label = key[:30]
+            title = (
+                f"<b>{key}</b><br>Type: {node.get('type', '?')}<br>"
+                f"Chunks: {len(node.get('chunk_ids', []))}<br>"
+                f"{node.get('description', '')[:120]}"
+            )
+            net.add_node(
+                key,
+                label=label,
+                title=title,
+                color=color,
+                size=8 + min(len(node.get("chunk_ids", [])) * 2, 20),
+            )
+            added_nodes.add(key)
+
+        for src_key, rels in self._relation_graph.items():
+            if src_key not in added_nodes:
+                continue
+            for rel in rels:
+                if not isinstance(rel, dict):
+                    continue
+                tgt = rel.get("object", "")
+                if tgt not in added_nodes:
+                    continue
+                net.add_edge(
+                    src_key,
+                    tgt,
+                    label=rel.get("relation", "")[:25],
+                    title=rel.get("description", ""),
+                    width=1 + rel.get("strength", 5) / 5,
+                )
+
+        html = net.generate_html()
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+            logger.info(
+                "Graph visualization saved to %s (%d nodes, %d edge groups)",
+                path,
+                len(added_nodes),
+                len(self._relation_graph),
+            )
+        return html
+
     def _generate_community_summaries(self) -> None:
         """Generate LLM summaries for each detected community cluster across all levels."""
         if not self._community_levels:
@@ -4083,6 +4180,27 @@ Your primary goal is to help the user by answering questions based on the provid
         except Exception:
             return []
 
+    def _extract_entities_light(self, text: str) -> list[dict]:
+        """Lightweight entity extraction using regex noun-phrase heuristics (no LLM).
+
+        Picks capitalized multi-word phrases (2–4 tokens) from the text.
+        Returns up to 20 entities with type=CONCEPT and empty description.
+        """
+        import re as _re
+
+        pattern = _re.compile(r"\b([A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3})\b")
+        seen: set = set()
+        entities: list[dict] = []
+        for match in pattern.finditer(text):
+            phrase = match.group(1)
+            key = phrase.lower()
+            if key not in seen:
+                seen.add(key)
+                entities.append({"name": phrase, "type": "CONCEPT", "description": ""})
+            if len(entities) >= 20:
+                break
+        return entities
+
     def _extract_entities(self, text: str) -> list[dict]:
         """Extract named entities from text using the LLM.
 
@@ -4090,6 +4208,10 @@ Your primary goal is to help the user by answering questions based on the provid
           {"name": str, "type": str, "description": str}
         Returns an empty list on failure or when the LLM produces no output.
         """
+        # A3: light tier — skip LLM entirely
+        if getattr(self.config, "graph_rag_depth", "standard") == "light":
+            return self._extract_entities_light(text)
+
         # TASK 14: GLiNER fast-path — skip LLM for NER when backend is "gliner"
         if getattr(self.config, "graph_rag_ner_backend", "llm") == "gliner":
             return self._extract_entities_gliner(text)
@@ -4151,6 +4273,10 @@ Your primary goal is to help the user by answering questions based on the provid
         {"subject": str, "relation": str, "object": str, "description": str}.
         Returns an empty list on failure or when the LLM produces no output.
         """
+        # A3: light tier skips all relation extraction
+        if getattr(self.config, "graph_rag_depth", "standard") == "light":
+            return []
+
         # P2: REBEL fast-path — skip LLM when backend is "rebel"
         if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
             return self._extract_relations_rebel(text)
@@ -5501,11 +5627,15 @@ Your primary goal is to help the user by answering questions based on the provid
             for _doc in documents:
                 _lvl = _doc.get("metadata", {}).get("raptor_level")
                 _src = _doc.get("metadata", {}).get("source", _doc["id"])
-                if not _lvl:
+                if not _lvl:  # leaf chunk
                     if _src not in _large_sources:
                         chunks_to_process.append(_doc)
-                elif _include_raptor and _lvl == 1:
-                    chunks_to_process.append(_doc)
+                    # else: leaf from large source → skip; RAPTOR summary will cover it
+                elif _lvl == 1:  # RAPTOR level-1 summary
+                    # Auto-include for large sources when RAPTOR is on (regardless of include flag)
+                    _auto_raptor = self.config.raptor and _src in _large_sources
+                    if _include_raptor or _auto_raptor:
+                        chunks_to_process.append(_doc)
 
             if _policy_on:
                 _grag_ok_list: list = []
@@ -5628,14 +5758,27 @@ Your primary goal is to help the user by answering questions based on the provid
 
             # Relation extraction: build SUBJECT | RELATION | OBJECT triples
             if self.config.graph_rag_relations:
+                # A2: skip relation extraction for chunks below the entity count threshold
+                _min_ent = getattr(self.config, "graph_rag_min_entities_for_relations", 3)
+                if _min_ent > 0:
+                    _entity_count_by_doc = {doc_id: len(ents) for doc_id, ents in results}
+                    _rel_chunks = [
+                        doc
+                        for doc in chunks_to_process
+                        if _entity_count_by_doc.get(doc["id"], 0) >= _min_ent
+                    ]
+                else:
+                    _rel_chunks = chunks_to_process
                 logger.info(
-                    f"   GraphRAG: Extracting relations from {len(chunks_to_process)} chunks..."
+                    f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
+                    f"(skipped {len(chunks_to_process) - len(_rel_chunks)} below "
+                    f"{_min_ent}-entity threshold)..."
                 )
 
                 def _proc_rel(doc):
                     return doc["id"], self._extract_relations(doc["text"])
 
-                rel_results = list(self._executor.map(_proc_rel, chunks_to_process))
+                rel_results = list(self._executor.map(_proc_rel, _rel_chunks))
                 rg_updated = False
                 for doc_id, triples in rel_results:
                     for triple in triples:
@@ -5760,7 +5903,11 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._embed_entities(entity_keys_this_batch)
 
             # Item 10: Canonicalize entity descriptions
-            if self.config.graph_rag and getattr(self.config, "graph_rag_canonicalize", False):
+            # A3: also run for "deep" tier
+            _depth = getattr(self.config, "graph_rag_depth", "standard")
+            if self.config.graph_rag and (
+                getattr(self.config, "graph_rag_canonicalize", False) or _depth == "deep"
+            ):
                 self._canonicalize_entity_descriptions()
             if self.config.graph_rag and getattr(
                 self.config, "graph_rag_canonicalize_relations", False
@@ -5768,8 +5915,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._canonicalize_relation_descriptions()
 
             # Item 11: Extract claims
+            # A3: also run for "deep" tier
             claims_changed = False
-            if getattr(self.config, "graph_rag_claims", False):
+            if getattr(self.config, "graph_rag_claims", False) or _depth == "deep":
                 logger.info(
                     f"   GraphRAG: Extracting claims from {len(chunks_to_process)} chunks..."
                 )
@@ -6361,7 +6509,17 @@ Your primary goal is to help the user by answering questions based on the provid
             results = self._compress_context(query, results)
         final_count = len(results)
         top_score = results[0].get("score", 0) if results else 0
-        context, has_web = self._build_context(results)
+
+        # A4: Exclude community report synthetic docs from citation candidates.
+        # They are internal artifacts and confuse users when cited as source documents.
+        # Global community context is injected separately via _global_search_map_reduce.
+        citation_results = [
+            r
+            for r in results
+            if r.get("metadata", {}).get("graph_rag_type") != "community_report"
+            and not r.get("id", "").startswith("__community__")
+        ]
+        context, has_web = self._build_context(citation_results)
 
         # GraphRAG global context injection
         # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
@@ -6490,7 +6648,15 @@ Your primary goal is to help the user by answering questions based on the provid
 
         if cfg.compress_context:
             results = self._compress_context(query, results)
-        context, has_web = self._build_context(results)
+
+        # A4: Exclude community report synthetic docs from citation candidates.
+        citation_results = [
+            r
+            for r in results
+            if r.get("metadata", {}).get("graph_rag_type") != "community_report"
+            and not r.get("id", "").startswith("__community__")
+        ]
+        context, has_web = self._build_context(citation_results)
 
         # GraphRAG global context injection
         # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
@@ -7124,6 +7290,7 @@ _SLASH_COMMANDS = [
     "/discuss",
     "/embed ",
     "/exit",
+    "/graph-viz",
     "/help",
     "/ingest ",
     "/keys",
@@ -8735,6 +8902,24 @@ def _interactive_repl(
                         print(f"\r  '{arg}' ready.{' ' * 50}")
                     except Exception as e:
                         print(f"  Pull failed: {e}")
+
+            elif cmd == "/graph-viz":
+                import os as _os
+                import tempfile
+
+                _out_path = (
+                    arg.strip()
+                    if arg.strip()
+                    else _os.path.join(tempfile.gettempdir(), "axon_graph.html")
+                )
+                try:
+                    brain.export_graph_html(_out_path)
+                    print(f"  Graph visualization saved → {_out_path}")
+                    print("  Open in your browser to explore the entity–relation graph.")
+                except ImportError as _e:
+                    print(f"  {_e}")
+                except Exception as _e:
+                    print(f"  Failed to export graph: {_e}")
 
             elif cmd == "/clear":
                 chat_history.clear()

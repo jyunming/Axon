@@ -124,10 +124,11 @@ Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (ha
 - **Multi-LLM** — Ollama (local), Gemini, OpenAI, vLLM; switch live from the REPL
 - **Multi-embedding** — sentence-transformers, Ollama, FastEmbed
 - **Vector stores** — ChromaDB (default), Qdrant, LanceDB
-- **Rich document support** — PDF, DOCX, HTML, CSV/TSV, Markdown, JSON, plain text, images (BMP/PNG/TIF/PGM with VLM auto-captioning)
+- **14+ file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM with VLM auto-captioning)
+- **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
 - **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
-- **Advanced indexing** — RAPTOR hierarchical summaries, GraphRAG-style pipeline (hierarchical community detection, LLM community reports, map-reduce global search, token-budgeted local search, optional claim extraction; faithful approximation — full parity requires graspologic for Leiden hierarchy)
+- **RAPTOR + GraphRAG enabled by default** — hierarchical summaries + entity–relation graph; auto-composition cuts ingest cost for large sources; interactive graph visualization via `/graph-viz`
 - **Reranking** — cross-encoder (BGE) reranking
 - **Agent-ready** — FastAPI REST API + MCP server for Copilot agent mode
 

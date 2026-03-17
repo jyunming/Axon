@@ -5200,7 +5200,12 @@ class TestRaptorTask8Fixes:
     def test_graphrag_skips_large_source_leaves(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """25-chunk source with threshold=10 must leave entity graph empty."""
+        """25-chunk source with raptor=True: leaf chunks skipped, RAPTOR summaries auto-included.
+
+        A1 change: large sources with raptor=True now auto-include their RAPTOR level-1
+        summaries in GraphRAG entity extraction, even when graph_rag_include_raptor_summaries
+        is False. The entity graph may be populated from RAPTOR summaries (not leaf chunks).
+        """
         brain = self._make_brain(
             MockReranker,
             MockEmbed,
@@ -5217,11 +5222,18 @@ class TestRaptorTask8Fixes:
             {"id": f"d{i}", "text": f"text {i}", "metadata": {"source": "big.txt"}}
             for i in range(25)
         ]
-        # LLM returns RAPTOR summaries for the raptor pass, empty entity JSON for any
-        # extraction that sneaks through.
+        # LLM returns RAPTOR summaries for the raptor pass; entity extraction also uses LLM.
         brain.llm.complete = MagicMock(return_value="Summary paragraph.")
         brain.ingest(docs)
-        assert brain._entity_graph == {}, "Entity graph must stay empty for large source"
+        # With A1 auto-composition, RAPTOR summaries for large sources are extracted.
+        # Leaf chunks from big.txt must NOT appear in entity chunk_ids.
+        leaf_ids = {f"d{i}" for i in range(25)}
+        for node in brain._entity_graph.values():
+            if isinstance(node, dict):
+                for cid in node.get("chunk_ids", []):
+                    assert (
+                        cid not in leaf_ids
+                    ), f"Leaf chunk {cid} from large source must not be in entity graph"
 
     def test_graphrag_allows_small_source_leaves(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25

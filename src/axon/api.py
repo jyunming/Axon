@@ -14,7 +14,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from axon import shares as _shares
@@ -1029,6 +1029,20 @@ async def finalize_graph():
         return {"status": "ok", "community_summary_count": len(brain._community_summaries)}
     except Exception as e:
         logger.error(f"finalize_graph failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/graph/visualize", tags=["graph"])
+async def get_graph_visualization():
+    """Return the entity–relation graph as a self-contained interactive HTML page."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        html = brain.export_graph_html()
+        return HTMLResponse(content=html)
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -70,6 +70,7 @@ graphrag = [
     "networkx>=3.0",
     "leidenalg>=0.11.0",
     "igraph>=1.0.0",
+    "pyvis>=0.3.2",
 ]
 gliner = [
     "gliner>=0.2.0",
@@ -91,6 +92,7 @@ all = [
     "networkx>=3.0",
     "leidenalg>=0.11.0",
     "igraph>=1.0.0",
+    "pyvis>=0.3.2",
     "gliner>=0.2.0",
     "llmlingua>=0.2.0",
     "transformers>=4.20.0",

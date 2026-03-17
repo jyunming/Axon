@@ -136,6 +136,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
+| `/graph-viz [path]` | Export entity–relation graph as interactive HTML (requires `pip install axon[graphrag]`); omit path to save to temp dir |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
 | `/quit`, `/exit` | Exit the REPL |
@@ -241,13 +242,25 @@ rag:
   #     run before communities are ready (graph_rag_community_async: false to block).
   #
   # Requires an LLM at ingest time. Adds per-chunk latency.
-  graph_rag: false
-  graph_rag_budget: 3              # extra entity-linked slots beyond top_k (0 = no guarantee)
-  graph_rag_relations: true        # extract relation triples for 1-hop traversal
-  # graph_rag_community: false     # run Louvain community detection (needs networkx)
-  # graph_rag_community_async: true
-  # graph_rag_community_top_k: 5
-  # graph_rag_mode: local          # local | global | hybrid
+  # ── RAPTOR + GraphRAG (both ON by default) ───────────────────────────────────
+  # > ⚠ First ingest will be significantly slower (LLM calls per chunk).
+  # > To disable: set raptor: false and graph_rag: false
+  raptor: true
+  raptor_max_levels: 1
+  raptor_max_source_size_mb: 5.0
+
+  graph_rag: true
+  graph_rag_budget: 3
+  graph_rag_relations: true
+  graph_rag_include_raptor_summaries: true   # use RAPTOR summaries for large sources (auto-composition)
+  graph_rag_min_entities_for_relations: 3    # skip relation extraction for sparse chunks
+  graph_rag_community: true
+  graph_rag_auto_route: heuristic
+  graph_rag_mode: hybrid
+  graph_rag_global_top_communities: 20
+
+  # Extraction depth — new in this release:
+  # graph_rag_depth: standard   # light (no LLM, fast) | standard (default) | deep (+ claims)
 ```
 
 ### Offline / Air-gapped Mode
@@ -550,5 +563,5 @@ MIT License - See [LICENSE](LICENSE) file.
 
 ---
 
-**Last Updated:** 2026-03-13
+**Last Updated:** 2026-03-17
 **Version:** 1.0.0
