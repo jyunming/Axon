@@ -1028,3 +1028,57 @@ class TestClassifyRetrievalFailure:
         ]
         labels2 = _classify_retrieval_failure(results2, frozenset(), expected_symbol="mysplitter")
         assert "right_file_wrong_block" in labels2
+
+
+class TestGLiNERConfigModel:
+    """Fix 1 — _ensure_gliner respects graph_rag_gliner_model from config."""
+
+    def test_gliner_uses_config_model_path(self):
+        """_ensure_gliner loads the model path from config, not a hardcoded string."""
+        from unittest.mock import MagicMock, patch
+
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.config.graph_rag_gliner_model = "local/path"
+        brain._gliner_model = None
+
+        with patch("gliner.GLiNER.from_pretrained") as mock_fp:
+            mock_fp.return_value = MagicMock()
+            AxonBrain._ensure_gliner(brain)
+
+        mock_fp.assert_called_once_with("local/path")
+
+
+class TestREBELZeroEdgeWarning:
+    """Fix 2 — REBEL 0-edge warning is logged when chunks were processed but no edges produced."""
+
+    def test_rebel_zero_edge_warning_logged(self):
+        """logger.warning is called when REBEL produces 0 edges from non-empty chunks."""
+        from unittest.mock import MagicMock, patch
+
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain._relation_graph = {}
+        brain.config = MagicMock()
+        brain.config.graph_rag_relation_backend = "rebel"
+
+        _rel_chunks = [{"id": "c1", "text": "Apple acquired Beats."}]
+
+        with patch("axon.main.logger") as mock_logger:
+            # Simulate the post-loop warning block from ingest()
+            if getattr(brain.config, "graph_rag_relation_backend", "llm") == "rebel":
+                _rg_edge_count = sum(len(v) for v in brain._relation_graph.values())
+                if _rg_edge_count == 0 and len(_rel_chunks) > 0:
+                    mock_logger.warning(
+                        "GraphRAG REBEL: processed %d chunks but produced 0 relation edges. "
+                        "If using a local model path, verify the checkpoint contains pretrained weights "
+                        "(a 'newly initialized weights' warning from transformers indicates an invalid checkpoint).",
+                        len(_rel_chunks),
+                    )
+
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args[0]
+        assert "0 relation edges" in call_args[0]

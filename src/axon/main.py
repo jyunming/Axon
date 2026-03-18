@@ -434,9 +434,9 @@ class AxonConfig:
 
     # TASK 12: Runtime cost reduction — community triage
     graph_rag_community_min_size: int = 3  # communities smaller than this → template only
-    graph_rag_community_llm_top_n_per_level: int = 50  # max LLM-summarized per level (0=unlimited)
+    graph_rag_community_llm_top_n_per_level: int = 15  # max LLM-summarized per level (0=unlimited)
     graph_rag_community_llm_max_total: int = (
-        200  # hard cap on LLM calls across all levels (0=unlimited)
+        30  # hard cap on LLM calls across all levels (0=unlimited)
     )
     # TASK 12: Lazy community generation — skip summarization at finalize; generate on first global query
     graph_rag_community_lazy: bool = True
@@ -561,6 +561,7 @@ class AxonConfig:
     # pip install axon[rebel]
     graph_rag_relation_backend: Literal["llm", "rebel"] = "llm"
     graph_rag_rebel_model: str = "Babelscape/rebel-large"
+    graph_rag_gliner_model: str = "urchade/gliner_mediumv2.1"
 
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
@@ -3997,8 +3998,8 @@ Your primary goal is to help the user by answering questions based on the provid
         total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
 
         _min_size = getattr(self.config, "graph_rag_community_min_size", 3)
-        _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 50)
-        _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 200)
+        _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 15)
+        _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 30)
 
         # Lazy mode: tighten cap to graph_rag_global_top_communities so only the most
         # query-relevant communities receive LLM treatment on the first global query.
@@ -4956,7 +4957,9 @@ Your primary goal is to help the user by answering questions based on the provid
         if not hasattr(self, "_gliner_model") or self._gliner_model is None:
             from gliner import GLiNER
 
-            self._gliner_model = GLiNER.from_pretrained("urchade/gliner_mediumv2.1")
+            _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_mediumv2.1")
+            logger.info("GraphRAG GLiNER: loading model '%s'…", _model)
+            self._gliner_model = GLiNER.from_pretrained(_model)
         return self._gliner_model
 
     _GLINER_LABELS = ["person", "organization", "location", "event", "concept", "product"]
@@ -6895,6 +6898,7 @@ Your primary goal is to help the user by answering questions based on the provid
         _policy_on = getattr(self.config, "source_policy_enabled", False)
 
         t0 = time.time()
+        _ingest_fallback_count = 0
         from tqdm import tqdm
 
         logger.info(f"Ingesting {len(documents)} documents...")
@@ -6913,6 +6917,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 splitter = self._get_splitter_for_type(dataset_type, has_code, source=source)
                 if splitter is not None:
                     chunked.extend(splitter.transform_documents([doc]))
+                    if hasattr(splitter, "fallback_chunks_produced"):
+                        _ingest_fallback_count += splitter.fallback_chunks_produced
                 else:
                     chunked.append(doc)
             documents = chunked
@@ -7287,6 +7293,22 @@ Your primary goal is to help the user by answering questions based on the provid
                 if rg_updated and not _defer_saves:
                     self._save_relation_graph()
 
+                if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
+                    _rg_edge_count = sum(len(v) for v in self._relation_graph.values())
+                    if _rg_edge_count == 0 and len(_rel_chunks) > 0:
+                        logger.warning(
+                            "GraphRAG REBEL: processed %d chunks but produced 0 relation edges. "
+                            "If using a local model path, verify the checkpoint contains pretrained weights "
+                            "(a 'newly initialized weights' warning from transformers indicates an invalid checkpoint).",
+                            len(_rel_chunks),
+                        )
+                    else:
+                        logger.info(
+                            "GraphRAG REBEL: %d relation edges from %d chunks.",
+                            _rg_edge_count,
+                            len(_rel_chunks),
+                        )
+
                 # TASK 11: Normalize relation targets into entity graph so traversal never KeyErrors
                 if rg_updated or updated:
                     _stub_added = False
@@ -7466,6 +7488,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 "embed_ms": round(embed_ms, 1),
                 "store_ms": round(store_ms, 1),
                 "total_ms": round((time.time() - t0) * 1000, 1),
+                "entity_count": len(self._entity_graph),
+                "relation_edge_count": sum(len(v) for v in self._relation_graph.values()),
+                "fallback_chunks": _ingest_fallback_count,
             }
         )
 

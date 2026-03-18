@@ -77,6 +77,21 @@ class TestAxonConfig:
         config = AxonConfig()
         assert config.contextual_retrieval is False
 
+    def test_gliner_model_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_mediumv2.1"
+
+    def test_community_top_n_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().graph_rag_community_llm_top_n_per_level == 15
+
+    def test_community_max_total_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().graph_rag_community_llm_max_total == 30
+
     def test_load_from_yaml(self, tmp_path):
         from axon.main import AxonConfig
 

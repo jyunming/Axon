@@ -195,6 +195,8 @@ rag:
 
   # Map-reduce tuning for global search
   graph_rag_global_top_communities: 20  # pre-filter: only top-20 relevant communities enter map-reduce
+  # graph_rag_community_llm_top_n_per_level: 15  # max communities summarised per level (default: 15)
+  # graph_rag_community_llm_max_total: 30         # hard cap on total LLM summarisation calls (default: 30)
   graph_rag_map_workers: 2             # dedicated thread pool; avoids starving ingest workers
   graph_rag_community_top_k: 5         # top community summaries injected into prompt
 
@@ -216,6 +218,8 @@ rag:
   # graph_rag_entity_resolve_max: 5000
   # P2: REBEL relation extraction backend (replaces LLM for relation triples)
   # graph_rag_relation_backend: llm  # "rebel" = pip install axon[rebel]
+  # graph_rag_gliner_model: "urchade/gliner_mediumv2.1"
+  # Set to a local path for fully offline operation: "C:/dev/HF_models/gliner_medium_v21"
   # A3: Extraction depth tier: light (no LLM, noun-phrases only) | standard (default) | deep (+ claims + canonicalize)
   # graph_rag_depth: standard
 
