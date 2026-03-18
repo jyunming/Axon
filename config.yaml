@@ -173,6 +173,9 @@ rag:
   # code_lexical_boost: true    # identifier-aware re-scoring for code result sets (default: true)
   # code_top_k_multiplier: 2    # fetch_k multiplier when a code query is detected (default: 2)
   # code_max_chunks_per_file: 3 # per-file cap in final top_k for diversity (default: 3)
+  # code_bm25_weight: 0.7       # BM25 weight when code mode active (weighted mode only; ignored in rrf)
+  # code_top_k: 6               # top-K override for code queries (0 = use top_k)
+  # retrieval_dry_run: false    # skip LLM; return ranked candidates + diagnostics only
   graph_rag_community_lazy: true      # defer LLM summarisation to first global query
   # Community detection backend: "auto" (graspologic→leidenalg→louvain) | "leidenalg" | "louvain"
   # "leidenalg" is the documented supported path for Python 3.13 — avoids graspologic instability.

@@ -849,3 +849,182 @@ class TestCodeLexicalBoost:
 
         cfg = AxonConfig(code_lexical_boost=False)
         assert cfg.code_lexical_boost is False
+
+
+# ---------------------------------------------------------------------------
+# Retrieval Diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestCodeRetrievalDiagnostics:
+    def test_default_values(self):
+        from axon.main import CodeRetrievalDiagnostics
+
+        d = CodeRetrievalDiagnostics()
+        assert d.diagnostics_version == "1.0"
+        assert d.code_mode_triggered is False
+        assert d.tokens_extracted == []
+        assert d.channels_activated == []
+        assert d.result_count == 0
+        assert d.boost_applied is False
+        assert d.fallback_chunks_in_results == 0
+
+    def test_to_dict_keys(self):
+        from axon.main import CodeRetrievalDiagnostics
+
+        d = CodeRetrievalDiagnostics(code_mode_triggered=True, result_count=5)
+        out = d.to_dict()
+        assert out["diagnostics_version"] == "1.0"
+        assert out["code_mode_triggered"] is True
+        assert out["result_count"] == 5
+        assert "channels_activated" in out
+
+    def test_to_json_is_valid(self):
+        import json
+
+        from axon.main import CodeRetrievalDiagnostics
+
+        d = CodeRetrievalDiagnostics()
+        parsed = json.loads(d.to_json())
+        assert parsed["diagnostics_version"] == "1.0"
+
+    def test_independent_mutable_defaults(self):
+        from axon.main import CodeRetrievalDiagnostics
+
+        d1 = CodeRetrievalDiagnostics()
+        d2 = CodeRetrievalDiagnostics()
+        d1.tokens_extracted.append("foo")
+        assert d2.tokens_extracted == []
+
+
+class TestCodeRetrievalTrace:
+    def test_default_values(self):
+        from axon.main import CodeRetrievalTrace
+
+        t = CodeRetrievalTrace()
+        assert t.per_result_score_breakdown == []
+        assert t.channel_raw_counts == {}
+        assert t.diversity_cap_deferrals == 0
+        assert t.deferred_chunk_ids == []
+
+    def test_to_dict_keys(self):
+        from axon.main import CodeRetrievalTrace
+
+        t = CodeRetrievalTrace(diversity_cap_deferrals=2)
+        out = t.to_dict()
+        assert out["diversity_cap_deferrals"] == 2
+        assert "per_result_score_breakdown" in out
+
+    def test_independent_mutable_defaults(self):
+        from axon.main import CodeRetrievalTrace
+
+        t1 = CodeRetrievalTrace()
+        t2 = CodeRetrievalTrace()
+        t1.deferred_chunk_ids.append("x")
+        assert t2.deferred_chunk_ids == []
+
+
+class TestClassifyRetrievalFailure:
+    def test_exact_symbol_missed(self):
+        from axon.main import _classify_retrieval_failure, _extract_code_query_tokens
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.9,
+                "text": "some code",
+                "metadata": {"source_class": "code", "symbol_name": "unrelated_function"},
+            }
+        ]
+        tokens = _extract_code_query_tokens("CodeAwareSplitter")
+        labels = _classify_retrieval_failure(results, tokens)
+        assert "exact_symbol_missed" in labels
+
+    def test_fallback_chunk_involved(self):
+        from axon.main import _classify_retrieval_failure
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.8,
+                "text": "x",
+                "metadata": {
+                    "is_fallback": True,
+                    "source_class": "code",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        labels = _classify_retrieval_failure(results, frozenset())
+        assert "fallback_chunk_involved" in labels
+
+    def test_too_many_broad_chunks(self):
+        from axon.main import _classify_retrieval_failure
+
+        results = [
+            {"id": str(i), "score": 0.5, "text": "prose", "metadata": {}} for i in range(4)
+        ] + [
+            {
+                "id": "c",
+                "score": 0.8,
+                "text": "code",
+                "metadata": {"source_class": "code", "symbol_type": "function"},
+            }
+        ]
+        labels = _classify_retrieval_failure(results, frozenset())
+        assert "too_many_broad_chunks" in labels
+
+    def test_no_failures_clean_result(self):
+        from axon.main import _classify_retrieval_failure, _extract_code_query_tokens
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.9,
+                "text": "def mysplitter(): pass",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "mysplitter",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        tokens = _extract_code_query_tokens("mysplitter")
+        labels = _classify_retrieval_failure(results, tokens)
+        assert "exact_symbol_missed" not in labels
+        assert "fallback_chunk_involved" not in labels
+
+    def test_right_file_wrong_block(self):
+        from axon.main import _classify_retrieval_failure
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.7,
+                "text": "other stuff in splitters",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "other_fn",
+                    "source": "splitters.py",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        labels = _classify_retrieval_failure(results, frozenset(), expected_symbol="mysplitter")
+        assert "right_file_wrong_block" not in labels  # source doesn't contain "mysplitter"
+
+        results2 = [
+            {
+                "id": "b",
+                "score": 0.7,
+                "text": "code in mysplitter file",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "other_fn",
+                    "source": "mysplitter_utils.py",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        labels2 = _classify_retrieval_failure(results2, frozenset(), expected_symbol="mysplitter")
+        assert "right_file_wrong_block" in labels2

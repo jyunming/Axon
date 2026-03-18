@@ -20,7 +20,7 @@ import sys  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 import uuid  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, Literal  # noqa: E402
 
@@ -500,6 +500,12 @@ class AxonConfig:
     code_lexical_boost: bool = True  # apply identifier-aware re-scoring to code result sets
     code_top_k_multiplier: int = 2  # extra fetch_k factor when code query detected
     code_max_chunks_per_file: int = 3  # per-file cap in final top_k (diversity)
+    # Code query mode tuning (active when code_lexical_boost=True and code query detected).
+    # code_bm25_weight only affects weighted fusion mode — silently ignored in RRF (default).
+    code_bm25_weight: float = 0.7  # BM25 weight override for code queries (weighted mode only)
+    code_top_k: int = 6  # top-K override when code mode active (0 = use top_k)
+    # Retrieval dry-run: skip LLM, return ranked candidates + diagnostics only.
+    retrieval_dry_run: bool = False
 
     # Minimum entity appearance frequency to include in community detection graph.
     # Entities appearing in fewer than this many chunks are pruned before building the graph.
@@ -2050,6 +2056,131 @@ def _looks_like_code_query(query: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Retrieval accountability types (Layer 1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CodeRetrievalDiagnostics:
+    """Stable external contract for code retrieval observability.
+
+    Versioned and serializable. Returned in API responses (include_diagnostics=True)
+    and benchmark output. Schema version bumps when field semantics change.
+    """
+
+    diagnostics_version: str = "1.0"
+    code_mode_triggered: bool = False
+    tokens_extracted: list = field(default_factory=list)
+    channels_activated: list = field(default_factory=list)
+    result_count: int = 0
+    boost_applied: bool = False
+    fallback_chunks_in_results: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "diagnostics_version": self.diagnostics_version,
+            "code_mode_triggered": self.code_mode_triggered,
+            "tokens_extracted": list(self.tokens_extracted),
+            "channels_activated": list(self.channels_activated),
+            "result_count": self.result_count,
+            "boost_applied": self.boost_applied,
+            "fallback_chunks_in_results": self.fallback_chunks_in_results,
+        }
+
+    def to_json(self) -> str:
+        import json as _j
+
+        return _j.dumps(self.to_dict())
+
+
+@dataclass
+class CodeRetrievalTrace:
+    """Internal debug trace — volatile, not returned in API by default.
+
+    Contains per-result score breakdowns, channel raw counts, query variants,
+    and diversity-cap deferral details. Use for offline tuning only.
+    """
+
+    per_result_score_breakdown: list = field(default_factory=list)
+    channel_raw_counts: dict = field(default_factory=dict)
+    query_rewrite_variants: list = field(default_factory=list)
+    diversity_cap_deferrals: int = 0
+    deferred_chunk_ids: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "per_result_score_breakdown": list(self.per_result_score_breakdown),
+            "channel_raw_counts": dict(self.channel_raw_counts),
+            "query_rewrite_variants": list(self.query_rewrite_variants),
+            "diversity_cap_deferrals": self.diversity_cap_deferrals,
+            "deferred_chunk_ids": list(self.deferred_chunk_ids),
+        }
+
+
+def _classify_retrieval_failure(
+    results: list[dict],
+    query_tokens: frozenset,
+    expected_symbol: str | None = None,
+) -> list[str]:
+    """Classify automatable retrieval failure modes for CI benchmarking.
+
+    Returns a list of applicable labels. Labels that require ground truth
+    (e.g. synthesis failures) are NOT included — those are benchmark-only.
+
+    Labels:
+    - ``exact_symbol_missed``: query had symbol tokens but none matched result symbol_names
+    - ``right_file_wrong_block``: expected_symbol's file appeared but not the exact symbol chunk
+    - ``too_many_broad_chunks``: >50% results lack code source_class or symbol_type
+    - ``fallback_chunk_involved``: any result has is_fallback=True in metadata
+    """
+    if not results:
+        return []
+
+    labels: list[str] = []
+
+    result_symbols = [(r.get("metadata", {}).get("symbol_name") or "").lower() for r in results]
+    result_sources = [
+        (
+            r.get("metadata", {}).get("source") or r.get("metadata", {}).get("file_path") or ""
+        ).lower()
+        for r in results
+    ]
+
+    # exact_symbol_missed
+    code_tokens = frozenset(t for t in query_tokens if len(t) >= 3)
+    if code_tokens:
+        any_symbol_hit = any(
+            sym and any(tok in sym or sym in tok for tok in code_tokens) for sym in result_symbols
+        )
+        if not any_symbol_hit:
+            labels.append("exact_symbol_missed")
+
+    # right_file_wrong_block
+    if expected_symbol:
+        exp_lower = expected_symbol.lower()
+        file_hit = any(exp_lower in src for src in result_sources)
+        sym_hit = any(exp_lower in sym for sym in result_symbols if sym)
+        if file_hit and not sym_hit:
+            labels.append("right_file_wrong_block")
+
+    # too_many_broad_chunks
+    broad = sum(
+        1
+        for r in results
+        if r.get("metadata", {}).get("source_class") != "code"
+        or r.get("metadata", {}).get("symbol_type") is None
+    )
+    if broad / len(results) > 0.5:
+        labels.append("too_many_broad_chunks")
+
+    # fallback_chunk_involved
+    if any(r.get("metadata", {}).get("is_fallback") for r in results):
+        labels.append("fallback_chunk_involved")
+
+    return labels
+
+
+# ---------------------------------------------------------------------------
 
 
 class AxonBrain:
@@ -2229,6 +2360,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._query_cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
+        self._last_diagnostics: CodeRetrievalDiagnostics = CodeRetrievalDiagnostics()
 
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
@@ -5861,13 +5993,19 @@ Your primary goal is to help the user by answering questions based on the provid
                         existing_edges.add(ek)
 
     def _apply_code_lexical_boost(
-        self, results: list[dict], query_tokens: frozenset[str], cfg=None
+        self,
+        results: list[dict],
+        query_tokens: frozenset,
+        cfg=None,
+        diagnostics: "CodeRetrievalDiagnostics | None" = None,
+        trace: "CodeRetrievalTrace | None" = None,
     ) -> list[dict]:
         """Re-score code results by lexical identifier match, then enforce per-file diversity.
 
         Only results with ``metadata.source_class == "code"`` are re-scored; all
         others pass through unchanged.  If no query tokens match any result, the
         original scores are preserved (no degradation on non-identifier queries).
+        Fills ``diagnostics`` and ``trace`` in-place when provided.
         """
         if cfg is None:
             cfg = self.config
@@ -5878,13 +6016,16 @@ Your primary goal is to help the user by answering questions based on the provid
         long_tokens = frozenset(t for t in query_tokens if len(t) >= 4)
 
         lex_scores: list[float] = []
+        score_signals: list[dict] = []  # per-result signal breakdown for trace
         for r in results:
             meta = r.get("metadata", {})
             if meta.get("source_class") != "code":
                 lex_scores.append(0.0)
+                score_signals.append({})
                 continue
 
             score = 0.0
+            signals: dict = {}
             sym_name = (meta.get("symbol_name") or "").lower()
             sym_type = (meta.get("symbol_type") or "").lower()
             file_path = meta.get("file_path") or meta.get("source") or ""
@@ -5895,43 +6036,65 @@ Your primary goal is to help the user by answering questions based on the provid
             # Exact symbol name match
             if sym_name and sym_name in query_tokens:
                 score += 1.0
+                signals["symbol_hit"] = "exact"
             # Partial symbol name match
             elif sym_name:
                 for tok in long_tokens:
                     if tok in sym_name:
                         score += 0.5
+                        signals["symbol_hit"] = "partial"
                         break
 
             # Basename match
             if basename and basename in query_tokens:
                 score += 0.4
+                signals["file_hit"] = True
 
             # Qualified name match
             if qualified and qualified in query_tokens:
                 score += 1.0
+                signals["qualified_hit"] = True
 
             # Token-in-text hits (capped)
             text_hits = sum(1 for tok in long_tokens if tok in text_lower)
             score += min(text_hits * 0.08, 0.32)
+            if text_hits:
+                signals["text_hits"] = text_hits
 
             # Multiplier for function/method results that matched anything
             if score > 0.0 and sym_type in {"function", "method"}:
                 score *= 1.1
+                signals["sym_type_boost"] = True
 
             lex_scores.append(score)
+            score_signals.append(signals)
 
         max_lex = max(lex_scores) if lex_scores else 0.0
         if max_lex == 0.0:
             # No matches — skip re-scoring entirely
             return results
 
+        if diagnostics is not None:
+            diagnostics.boost_applied = True
+
         # Blend: normalize lex scores then mix with original score
         boosted: list[dict] = []
-        for r, lex in zip(results, lex_scores):
+        for r, lex, signals in zip(results, lex_scores, score_signals):
             norm_lex = lex / max_lex
             orig = r.get("score", 0.0)
             r = dict(r)
-            r["score"] = orig * 0.45 + norm_lex * 0.55
+            final = orig * 0.45 + norm_lex * 0.55
+            r["score"] = final
+            if trace is not None and signals:
+                trace.per_result_score_breakdown.append(
+                    {
+                        "id": r.get("id", ""),
+                        "orig_score": orig,
+                        "final_score": final,
+                        "lex_score": lex,
+                        **signals,
+                    }
+                )
             boosted.append(r)
 
         # Per-file diversity cap
@@ -5948,7 +6111,91 @@ Your primary goal is to help the user by answering questions based on the provid
             else:
                 deferred.append(r)
 
+        if trace is not None:
+            trace.diversity_cap_deferrals = len(deferred)
+            trace.deferred_chunk_ids = [r.get("id", "") for r in deferred]
+
         return diverse + deferred
+
+    def _symbol_channel_search(
+        self,
+        query_tokens: frozenset,
+        top_k: int,
+        filters: dict = None,
+    ) -> list[dict]:
+        """Dedicated symbol_name + qualified_name retrieval channel.
+
+        Scans the in-memory BM25 corpus for chunks whose ``symbol_name`` or
+        ``qualified_name`` metadata field exactly (or partially) matches any
+        query token.  Returns scored result dicts with ``metadata.channel``
+        set to ``"symbol_name"`` or ``"qualified_name"``.
+
+        Handles both ``BM25Retriever`` (single corpus) and
+        ``MultiBM25Retriever`` (fan-out across projects).
+        """
+        if not self.bm25 or not query_tokens:
+            return []
+
+        long_tokens = frozenset(t for t in query_tokens if len(t) >= 3)
+        if not long_tokens:
+            return []
+
+        # Collect all corpora (handles single and multi-project fan-out)
+        if hasattr(self.bm25, "_retrievers"):
+            corpora = [r.corpus for r in self.bm25._retrievers if hasattr(r, "corpus")]
+        elif hasattr(self.bm25, "corpus"):
+            corpora = [self.bm25.corpus]
+        else:
+            return []
+
+        hits: dict[str, dict] = {}  # id → best result
+        for corpus in corpora:
+            for doc in corpus:
+                meta = doc.get("metadata", {})
+                sym = (meta.get("symbol_name") or "").lower()
+                qname = (meta.get("qualified_name") or "").lower()
+                if not sym and not qname:
+                    continue
+
+                # Apply metadata filters if provided
+                if filters:
+                    match = all(meta.get(k) == v for k, v in filters.items())
+                    if not match:
+                        continue
+
+                # Score: exact match = 1.0, partial = 0.6
+                best_score = 0.0
+                best_channel = "symbol_name"
+                if sym:
+                    if sym in long_tokens:
+                        best_score = 1.0
+                        best_channel = "symbol_name"
+                    elif any(tok in sym for tok in long_tokens):
+                        best_score = max(best_score, 0.6)
+                        best_channel = "symbol_name"
+                if qname:
+                    if qname in long_tokens:
+                        if 1.0 >= best_score:
+                            best_score = 1.0
+                            best_channel = "qualified_name"
+                    elif any(tok in qname for tok in long_tokens):
+                        if 0.6 > best_score:
+                            best_score = 0.6
+                            best_channel = "qualified_name"
+
+                if best_score == 0.0:
+                    continue
+
+                doc_id = doc.get("id", "")
+                if doc_id not in hits or best_score > hits[doc_id]["score"]:
+                    result = dict(doc)
+                    result["score"] = best_score
+                    result["metadata"] = dict(meta)
+                    result["metadata"]["channel"] = best_channel
+                    hits[doc_id] = result
+
+        ranked = sorted(hits.values(), key=lambda x: x["score"], reverse=True)
+        return ranked[:top_k]
 
     def _expand_with_code_graph(
         self, query: str, results: list[dict], cfg=None
@@ -7304,9 +7551,25 @@ Your primary goal is to help the user by answering questions based on the provid
 
         transforms["queries"] = search_queries
 
+        # --- Retrieval accountability objects ---
+        diagnostics = CodeRetrievalDiagnostics()
+        trace = CodeRetrievalTrace()
+        trace.query_rewrite_variants = list(search_queries[1:])
+
+        # --- Code mode detection ---
+        _code_mode = cfg.code_lexical_boost and _looks_like_code_query(query)
+        _code_query_tokens: frozenset = frozenset()
+        _effective_top_k = cfg.top_k
+        if _code_mode:
+            _code_query_tokens = _extract_code_query_tokens(query)
+            diagnostics.code_mode_triggered = True
+            diagnostics.tokens_extracted = sorted(_code_query_tokens)
+            if getattr(cfg, "code_top_k", 0) > 0:
+                _effective_top_k = cfg.code_top_k
+
         # --- Phase 2: Retrieval ---
         fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
-        if cfg.code_lexical_boost and _looks_like_code_query(query):
+        if _code_mode:
             fetch_k = int(fetch_k * cfg.code_top_k_multiplier)
 
         all_vector_results = []
@@ -7356,6 +7619,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 dedup_vector[r["id"]] = r
         vector_results = list(dedup_vector.values())
         vector_count = len(vector_results)
+        diagnostics.channels_activated.append("dense")
+        trace.channel_raw_counts["dense"] = vector_count
 
         # Hybrid Search (Keyword component)
         bm25_count = 0
@@ -7372,8 +7637,39 @@ Your primary goal is to help the user by answering questions based on the provid
             for r in all_bm25_results:
                 if r["id"] not in dedup_bm25 or r["score"] > dedup_bm25[r["id"]]["score"]:
                     dedup_bm25[r["id"]] = r
+
+            # --- Symbol channel injection (code mode only) ---
+            if _code_mode and _code_query_tokens:
+                sym_hits = self._symbol_channel_search(
+                    _code_query_tokens, top_k=fetch_k, filters=filters
+                )
+                if sym_hits:
+                    sym_channels = {
+                        r.get("metadata", {}).get("channel", "symbol_name") for r in sym_hits
+                    }
+                    for ch in sym_channels:
+                        if ch not in diagnostics.channels_activated:
+                            diagnostics.channels_activated.append(ch)
+                        trace.channel_raw_counts[ch] = sum(
+                            1 for r in sym_hits if r.get("metadata", {}).get("channel") == ch
+                        )
+                    # Merge into BM25 dedup (best score wins)
+                    for sr in sym_hits:
+                        sid = sr["id"]
+                        if sid not in dedup_bm25 or sr["score"] > dedup_bm25[sid]["score"]:
+                            dedup_bm25[sid] = sr
+
             bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
+            diagnostics.channels_activated.append("bm25")
+            trace.channel_raw_counts["bm25"] = bm25_count
+
+            # Code mode: override BM25 weight (effective only in weighted mode)
+            _fusion_weight = (
+                getattr(cfg, "code_bm25_weight", cfg.hybrid_weight)
+                if _code_mode
+                else cfg.hybrid_weight
+            )
 
             if cfg.hybrid_mode == "rrf":
                 from axon.retrievers import reciprocal_rank_fusion
@@ -7382,9 +7678,7 @@ Your primary goal is to help the user by answering questions based on the provid
             else:
                 from axon.retrievers import weighted_score_fusion
 
-                results = weighted_score_fusion(
-                    vector_results, bm25_results, weight=cfg.hybrid_weight
-                )
+                results = weighted_score_fusion(vector_results, bm25_results, weight=_fusion_weight)
         else:
             results = vector_results
 
@@ -7423,8 +7717,10 @@ Your primary goal is to help the user by answering questions based on the provid
                 1 for r in results if r.get("metadata", {}).get("source_class") == "code"
             ) / max(len(results), 1)
             if code_fraction >= 0.3:
-                query_tokens = _extract_code_query_tokens(query)
-                results = self._apply_code_lexical_boost(results, query_tokens, cfg=cfg)
+                boost_tokens = _code_query_tokens or _extract_code_query_tokens(query)
+                results = self._apply_code_lexical_boost(
+                    results, boost_tokens, cfg=cfg, diagnostics=diagnostics, trace=trace
+                )
 
         # Save base count before GraphRAG expansion for accurate metrics
         base_count = len(results)
@@ -7440,6 +7736,12 @@ Your primary goal is to help the user by answering questions based on the provid
             if _matched_code_syms:
                 logger.debug("code_graph: matched symbols=%s", _matched_code_syms)
 
+        # Finalize diagnostics
+        diagnostics.result_count = len(results)
+        diagnostics.fallback_chunks_in_results = sum(
+            1 for r in results if r.get("metadata", {}).get("is_fallback")
+        )
+
         return {
             "results": results,
             "vector_count": vector_count,
@@ -7448,7 +7750,47 @@ Your primary goal is to help the user by answering questions based on the provid
             "graph_expanded_count": len(results) - base_count,
             "matched_entities": _matched_entities,
             "transforms": transforms,
+            "diagnostics": diagnostics,
+            "trace": trace,
+            "_effective_top_k": _effective_top_k,
         }
+
+    def search_raw(
+        self,
+        query: str,
+        filters: dict = None,
+        overrides: dict = None,
+    ) -> tuple:
+        """Run retrieval without calling the LLM.
+
+        Returns ``(results, diagnostics, trace)`` — useful for benchmark harnesses,
+        the ``/search/raw`` API endpoint, and the ``--dry-run`` CLI flag.
+        The result list is already sliced to the effective top-k.
+        """
+        cfg = self._apply_overrides(overrides)
+        retrieval = self._execute_retrieval(query, filters=filters, cfg=cfg)
+        results = retrieval["results"]
+        diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
+        trace = retrieval.get("trace", CodeRetrievalTrace())
+
+        if cfg.rerank:
+            results = self.reranker.rerank(query, results)
+
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
+        if cfg.graph_rag and cfg.graph_rag_budget > 0:
+            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
+            expanded = [r for r in results if r.get("_graph_expanded")]
+            base_ids = {r["id"] for r in base}
+            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
+            results = base + graph_slots
+        else:
+            results = results[:_top_k]
+        for r in results:
+            r.pop("_graph_expanded", None)
+
+        diagnostics.result_count = len(results)
+        self._last_diagnostics = diagnostics
+        return results, diagnostics, trace
 
     def _build_context(self, results: list[dict]) -> tuple:
         """Build context string from results, labelling web vs local sources distinctly.
@@ -7583,6 +7925,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
+        self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
 
         if not results:
             self._log_query_metrics(
@@ -7608,14 +7951,15 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
-            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
             expanded = [r for r in results if r.get("_graph_expanded")]
             base_ids = {r["id"] for r in base}
             graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
             results = base + graph_slots
         else:
-            results = results[: cfg.top_k]
+            results = results[:_top_k]
         for r in results:
             r.pop("_graph_expanded", None)
 
@@ -7739,6 +8083,7 @@ Your primary goal is to help the user by answering questions based on the provid
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
+        self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
 
         if not results:
             if cfg.discussion_fallback:
@@ -7753,14 +8098,15 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
-            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
             expanded = [r for r in results if r.get("_graph_expanded")]
             base_ids = {r["id"] for r in base}
             graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
             results = base + graph_slots
         else:
-            results = results[: cfg.top_k]
+            results = results[:_top_k]
         for r in results:
             r.pop("_graph_expanded", None)
 

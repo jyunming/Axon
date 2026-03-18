@@ -46,6 +46,21 @@ class TestAxonConfig:
 
         assert AxonConfig().code_lexical_boost is True
 
+    def test_code_bm25_weight_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_bm25_weight == 0.7
+
+    def test_code_top_k_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_top_k == 6
+
+    def test_retrieval_dry_run_default_false(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().retrieval_dry_run is False
+
     def test_code_top_k_multiplier_default(self):
         from axon.main import AxonConfig
 

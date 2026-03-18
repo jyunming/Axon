@@ -212,6 +212,14 @@ class QueryRequest(BaseModel):
         None, ge=0.0, le=2.0, description="Override LLM temperature for this request (0.0–2.0)"
     )
     timeout: float | None = Field(None, gt=0, description="Query timeout in seconds (default 120)")
+    include_diagnostics: bool = Field(
+        False,
+        description="When True, include retrieval diagnostics in response (code_mode, channels, etc.)",
+    )
+    dry_run: bool = Field(
+        False,
+        description="Skip LLM; return ranked chunks + diagnostics without calling generation model",
+    )
 
 
 class SearchRequest(BaseModel):
@@ -830,6 +838,28 @@ async def query_brain(request: QueryRequest):
             loop = asyncio.get_event_loop()
 
         timeout = request.timeout or float(os.getenv("AXON_QUERY_TIMEOUT", "120"))
+
+        # Dry-run: skip LLM, return ranked candidates + diagnostics
+        if request.dry_run:
+            try:
+                results, diag, _trace = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: brain.search_raw(
+                            request.query, filters=request.filters, overrides=overrides
+                        ),
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=504, detail="Dry-run retrieval timed out")
+            return {
+                "query": request.query,
+                "dry_run": True,
+                "results": results,
+                "diagnostics": diag.to_dict(),
+            }
+
         try:
             response = await asyncio.wait_for(
                 loop.run_in_executor(
@@ -858,7 +888,10 @@ async def query_brain(request: QueryRequest):
             "compress": cfg.compress_context,
             "discuss": cfg.discussion_fallback,
         }
-        return {"query": request.query, "response": response, "settings": settings}
+        out: dict = {"query": request.query, "response": response, "settings": settings}
+        if request.include_diagnostics:
+            out["diagnostics"] = brain._last_diagnostics.to_dict()
+        return out
     except HTTPException:
         raise
     except Exception as e:
@@ -924,6 +957,44 @@ async def search_brain(request: SearchRequest):
         return results[:top_k]
     except Exception as e:
         logger.error(f"Error during search: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/search/raw")
+async def search_raw_endpoint(request: SearchRequest, include_trace: bool = False):
+    """Run retrieval without calling the LLM.
+
+    Returns ranked results plus typed diagnostics (and optionally the internal
+    debug trace when ``include_trace=true``).  Useful for benchmark harnesses,
+    CI failure classification, and manual retrieval tuning.
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        loop = asyncio.get_running_loop()
+        overrides: dict = {}
+        if request.top_k is not None:
+            overrides["top_k"] = int(request.top_k)
+        if request.threshold is not None:
+            overrides["similarity_threshold"] = float(request.threshold)
+        results, diag, trace = await loop.run_in_executor(
+            None,
+            lambda: brain.search_raw(
+                request.query,
+                filters=request.filters,
+                overrides=overrides or None,
+            ),
+        )
+        out: dict = {
+            "query": request.query,
+            "results": results,
+            "diagnostics": diag.to_dict(),
+        }
+        if include_trace:
+            out["trace"] = trace.to_dict()
+        return out
+    except Exception as e:
+        logger.error(f"Error during /search/raw: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
