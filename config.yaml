@@ -165,8 +165,14 @@ rag:
   # Community detection — clusters entity graph after ingest.
   # Runs async in the background; summaries generated lazily on first global query.
   # Requires: pip install axon[graphrag]  (networkx, igraph, leidenalg)
-  graph_rag_community: true
+  # Default: false (cost-control). Enable explicitly for global/community-based queries.
+  graph_rag_community: false
   graph_rag_community_async: true     # non-blocking: community detection runs after ingest
+  code_graph: false          # Phase 2: build structural code graph (File/Symbol nodes, CONTAINS/IMPORTS edges)
+  code_graph_bridge: false   # Phase 3: link code symbols to prose chunks via MENTIONED_IN edges
+  # code_lexical_boost: true    # identifier-aware re-scoring for code result sets (default: true)
+  # code_top_k_multiplier: 2    # fetch_k multiplier when a code query is detected (default: 2)
+  # code_max_chunks_per_file: 3 # per-file cap in final top_k for diversity (default: 3)
   graph_rag_community_lazy: true      # defer LLM summarisation to first global query
   # Community detection backend: "auto" (graspologic→leidenalg→louvain) | "leidenalg" | "louvain"
   # "leidenalg" is the documented supported path for Python 3.13 — avoids graspologic instability.
@@ -176,6 +182,13 @@ rag:
   # at zero cost and upgrades them to global search; factual queries use local mode.
   graph_rag_auto_route: heuristic
   graph_rag_mode: hybrid              # local for factual | global when routed
+
+  # Multi-class query router (Option B).
+  # "heuristic": keyword-based, zero latency (default)
+  # "llm": one classifier LLM call per query
+  # "off": skip router entirely (falls back to graph_rag_auto_route)
+  query_router: heuristic
+  contextual_retrieval: false
 
   # Map-reduce tuning for global search
   graph_rag_global_top_communities: 20  # pre-filter: only top-20 relevant communities enter map-reduce

@@ -258,6 +258,29 @@ class TextLoader(BaseLoader):
         ]
 
 
+class CodeFileLoader(BaseLoader):
+    """Loader for source code files.
+
+    Sets ``type="code"`` in metadata so the ``DirectoryLoader`` path-enrichment
+    step skips prepending a ``[File Path: ...]`` prefix into the raw text.
+    Keeping the prefix out of code text is required so that AST-based chunkers
+    (e.g. ``CodeAwareSplitter._split_python_ast``) receive valid syntax.
+    The file path is preserved in ``metadata["source"]``.
+    """
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        _check_file_size(path)
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        return [
+            {
+                "id": os.path.basename(path),
+                "text": content,
+                "metadata": {"source": path, "type": "code"},
+            }
+        ]
+
+
 class TSVLoader(BaseLoader):
     """Loader for tab-delimited files. Each row becomes an enriched document chunk."""
 
@@ -1192,7 +1215,9 @@ class DirectoryLoader:
     def __init__(self, vlm_model: str = "llava"):
         _image_loader = ImageLoader(ollama_model=vlm_model)
         _excel_loader = ExcelLoader()
+        _code_loader = CodeFileLoader()
         self.loaders = {
+            # ── document / data formats ───────────────────────────────────
             ".txt": SmartTextLoader(),
             ".md": TextLoader(),
             ".tsv": FlexibleTableLoader(),
@@ -1223,6 +1248,33 @@ class DirectoryLoader:
             ".tiff": _image_loader,
             ".pgm": _image_loader,
             ".pdf": PDFLoader(),
+            # ── source code formats ───────────────────────────────────────
+            # CodeFileLoader sets type="code" so path-prefix enrichment is
+            # skipped, keeping raw text valid for AST-based chunking.
+            ".py": _code_loader,
+            ".go": _code_loader,
+            ".rs": _code_loader,
+            ".cpp": _code_loader,
+            ".c": _code_loader,
+            ".h": _code_loader,
+            ".hpp": _code_loader,
+            ".sh": _code_loader,
+            ".bash": _code_loader,
+            ".zsh": _code_loader,
+            ".rb": _code_loader,
+            ".pl": _code_loader,
+            ".pm": _code_loader,
+            ".jl": _code_loader,
+            ".js": _code_loader,
+            ".jsx": _code_loader,
+            ".ts": _code_loader,
+            ".tsx": _code_loader,
+            ".java": _code_loader,
+            ".kt": _code_loader,
+            ".cs": _code_loader,
+            ".php": _code_loader,
+            ".scala": _code_loader,
+            ".swift": _code_loader,
         }
 
     def load(self, directory: str) -> list[dict[str, Any]]:
@@ -1234,7 +1286,10 @@ class DirectoryLoader:
                 loader = self.loaders[file_path.suffix.lower()]
                 try:
                     docs = loader.load(str(file_path))
-                    # Native Path Enrichment (Breadcrumbs) for textual docs
+                    # Native Path Enrichment (Breadcrumbs) for textual docs.
+                    # Excluded: tabular/image types (structured data) and code
+                    # files (type="code") — prepending into code text breaks
+                    # AST-based chunkers like CodeAwareSplitter._split_python_ast.
                     for doc in docs:
                         if doc["metadata"].get("type") not in (
                             "csv",
@@ -1242,6 +1297,7 @@ class DirectoryLoader:
                             "excel",
                             "parquet",
                             "image",
+                            "code",
                         ):
                             rel_path = os.path.relpath(str(file_path), directory)
                             doc["text"] = f"[File Path: {rel_path}]\n{doc['text']}"
@@ -1281,7 +1337,7 @@ class DirectoryLoader:
                 logger.warning("async file load failed: %s", res)
                 continue
             for doc in res:
-                if doc["metadata"].get("type") not in ("csv", "tsv", "image"):
+                if doc["metadata"].get("type") not in ("csv", "tsv", "image", "code"):
                     rel_path = os.path.relpath(str(file_path), directory)
                     doc["text"] = f"[File Path: {rel_path}]\n{doc['text']}"
             all_documents.extend(res)

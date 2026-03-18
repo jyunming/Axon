@@ -67,6 +67,43 @@ _GRAPHRAG_NO_DATA_ANSWER = (
     "I am sorry but I am unable to answer this question given the provided data."
 )
 
+# Route profiles for the multi-class query router (Option B).
+# Each key maps to a set of AxonConfig field overrides applied to the per-request config copy.
+_ROUTE_PROFILES: dict = {
+    "factual": {
+        "raptor": False,
+        "graph_rag": False,
+        "parent_doc": False,
+        "hyde": False,
+        "multi_query": False,
+        "step_back": False,
+        "query_decompose": False,
+    },
+    "synthesis": {
+        "parent_doc": True,
+        "raptor": True,
+        "graph_rag": False,
+    },
+    "table_lookup": {
+        "graph_rag": False,
+        "raptor": False,
+        "parent_doc": False,
+        "dataset_type": "knowledge",
+    },
+    "entity_relation": {
+        "graph_rag": True,
+        "graph_rag_community": False,
+        "parent_doc": False,
+        "raptor": False,
+    },
+    "corpus_exploration": {
+        "raptor": True,
+        "graph_rag": False,
+        "parent_doc": True,
+        "multi_query": True,
+    },
+}
+
 
 @dataclass
 class AxonConfig:
@@ -326,7 +363,8 @@ class AxonConfig:
 
     # Community detection: cluster the entity graph into thematic communities after ingest.
     # Requires: pip install networkx
-    graph_rag_community: bool = True
+    # Default is False (off by default) for cost control; enable explicitly when needed.
+    graph_rag_community: bool = False
 
     # Run community detection in the background (non-blocking) after ingest.
     graph_rag_community_async: bool = True
@@ -451,6 +489,18 @@ class AxonConfig:
     # "louvain"   = skip both; use networkx Louvain only
     graph_rag_community_backend: str = "auto"
 
+    # Structural code graph (Phase 2 + Phase 3).
+    # Phase 2: builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.
+    # Phase 3 (code_graph_bridge): scans prose chunks for code symbol mentions → MENTIONED_IN edges.
+    # Query time: traverses the code graph to expand retrieval results.
+    code_graph: bool = False  # build + query structural code graph
+    code_graph_bridge: bool = False  # Phase 3: link code symbols to prose chunks
+
+    # Query-time lexical boost for code corpora.
+    code_lexical_boost: bool = True  # apply identifier-aware re-scoring to code result sets
+    code_top_k_multiplier: int = 2  # extra fetch_k factor when code query detected
+    code_max_chunks_per_file: int = 3  # per-file cap in final top_k (diversity)
+
     # Minimum entity appearance frequency to include in community detection graph.
     # Entities appearing in fewer than this many chunks are pruned before building the graph.
     # 1 = no pruning (include all entities). 2 = prune singletons (recommended).
@@ -480,6 +530,16 @@ class AxonConfig:
     # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
     # "off" (default): use graph_rag_mode as configured.
     graph_rag_auto_route: Literal["off", "heuristic", "llm"] = "off"
+
+    # Option B: Multi-class query router
+    # "heuristic": keyword-based classifier (zero latency, default)
+    # "llm": one LLM call per query to classify route
+    # "off": skip router, use graph_rag_auto_route legacy behaviour
+    query_router: str = "heuristic"
+
+    # Contextual retrieval — prepend LLM-generated situating context to each chunk at ingest time.
+    # Based on Anthropic's contextual retrieval technique.
+    contextual_retrieval: bool = False
 
     # P1: Semantic entity alias resolution — merge near-duplicate entity names (e.g.
     # "Apple" / "Apple Inc." / "Apple Corporation") into a single canonical node before
@@ -1505,6 +1565,33 @@ class OpenVectorStore:
     # Chroma hard limit per collection.add() call.
     _CHROMA_MAX_BATCH = 5000
 
+    @staticmethod
+    def _sanitize_chroma_meta(metadatas: list[dict] | None) -> list[dict] | None:
+        """Coerce metadata dicts to Chroma-safe scalar types.
+
+        Chroma only accepts ``str | int | float | bool`` per field.
+        - list  → pipe-joined string (e.g. imports, calls, env_vars)
+        - None  → omitted
+        - other → str(v)
+        """
+        if metadatas is None:
+            return None
+        result: list[dict] = []
+        for meta in metadatas:
+            sanitized: dict = {}
+            for k, v in meta.items():
+                if isinstance(v, str | int | float | bool):
+                    sanitized[k] = v
+                elif isinstance(v, list):
+                    if v:
+                        sanitized[k] = "|".join(str(x) for x in v)
+                    # empty list → omit
+                elif v is not None:
+                    sanitized[k] = str(v)
+                # None → omit
+            result.append(sanitized)
+        return result
+
     def add(
         self,
         ids: list[str],
@@ -1516,12 +1603,13 @@ class OpenVectorStore:
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
             # so that large post-split payloads (e.g. long-contract corpora) do not crash.
             _bs = OpenVectorStore._CHROMA_MAX_BATCH
+            _safe_meta = OpenVectorStore._sanitize_chroma_meta(metadatas)
             for _start in range(0, max(len(ids), 1), _bs):
                 _end = _start + _bs
                 _ids_b = ids[_start:_end]
                 _texts_b = texts[_start:_end]
                 _emb_b = embeddings[_start:_end]
-                _meta_b = metadatas[_start:_end] if metadatas is not None else None
+                _meta_b = _safe_meta[_start:_end] if _safe_meta is not None else None
                 if not _ids_b:
                     break
                 try:
@@ -1873,6 +1961,97 @@ class MultiBM25Retriever:
     batch_add_documents = add_documents
 
 
+# ---------------------------------------------------------------------------
+# Code-query lexical boost — module-level utilities
+# ---------------------------------------------------------------------------
+
+_SYMBOL_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "class",
+        "method",
+        "function",
+        "def",
+        "func",
+        "import",
+        "module",
+        "package",
+        "splitter",
+        "loader",
+        "retriever",
+    }
+)
+
+_CODE_EXTENSIONS: frozenset[str] = frozenset(
+    {".py", ".go", ".rs", ".ts", ".js", ".sh", ".rb", ".jl", ".cpp", ".c", ".java", ".kt"}
+)
+
+
+def _extract_code_query_tokens(query: str) -> frozenset[str]:
+    """Extract identifier-like tokens from a query for lexical code matching.
+
+    Returns a frozenset of lowercase token strings covering:
+    - CamelCase identifiers and their split parts
+    - snake_case parts
+    - Basename references (loaders.py → "loaders")
+    - Qualified names (foo.bar → "foo", "bar", "foo.bar")
+    - All identifiers of length >= 4
+    """
+    tokens: set[str] = set()
+
+    # Basename references: strip known code extensions
+    for ext in _CODE_EXTENSIONS:
+        for m in re.finditer(r"\b(\w+)" + re.escape(ext) + r"\b", query):
+            tokens.add(m.group(1).lower())
+
+    # Qualified names: foo.bar → {"foo", "bar", "foo.bar"}
+    for m in re.finditer(r"\b([A-Za-z_]\w+)\.([A-Za-z_]\w+)\b", query):
+        tokens.add(m.group(1).lower())
+        tokens.add(m.group(2).lower())
+        tokens.add((m.group(1) + "." + m.group(2)).lower())
+
+    # All identifier-like tokens (length >= 4)
+    for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b", query):
+        word = m.group(0)
+        tokens.add(word.lower())
+
+        # CamelCase split: CodeAwareSplitter → ["Code", "Aware", "Splitter"]
+        camel_parts = re.findall(r"[A-Z][a-z0-9]*|[a-z][a-z0-9]*", word)
+        for part in camel_parts:
+            if len(part) >= 3:
+                tokens.add(part.lower())
+
+        # snake_case split: _split_python_ast → ["split", "python", "ast"]
+        if "_" in word:
+            for part in word.split("_"):
+                if len(part) >= 3:
+                    tokens.add(part.lower())
+
+    return frozenset(tokens)
+
+
+def _looks_like_code_query(query: str) -> bool:
+    """Return True if the query is likely asking about code identifiers or files."""
+    # CamelCase identifier
+    if re.search(r"[a-z][A-Z]", query):
+        return True
+    # snake_case identifier
+    if re.search(r"[a-z]_[a-z]", query):
+        return True
+    # Filename with a known code extension
+    for ext in _CODE_EXTENSIONS:
+        if ext in query:
+            return True
+    # Symbol keyword
+    query_lower = query.lower()
+    for kw in _SYMBOL_KEYWORDS:
+        if kw in query_lower.split():
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+
+
 class AxonBrain:
     """Core RAG engine that wires together embedding, vector store, BM25, reranker, and LLM.
 
@@ -2061,6 +2240,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
+
+        # Structural code graph: {nodes: {node_id: {...}}, edges: [{source, target, edge_type, chunk_id}]}
+        self._code_graph: dict = self._load_code_graph()
 
         # GraphRAG relation graph: {source_entity_lower: [{target, relation, chunk_id, description}]}
         self._relation_graph: dict = self._load_relation_graph()
@@ -2599,6 +2781,30 @@ Your primary goal is to help the user by answering questions based on the provid
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
+
+    def _load_code_graph(self) -> dict:
+        """Load code graph from disk. Returns empty graph if not found."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and "nodes" in data and "edges" in data:
+                    return data
+            except Exception:
+                pass
+        return {"nodes": {}, "edges": []}
+
+    def _save_code_graph(self) -> None:
+        """Persist code graph to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._code_graph), encoding="utf-8")
 
     def _load_relation_graph(self) -> dict:
         """Load persisted relation graph from disk.
@@ -3212,6 +3418,9 @@ Your primary goal is to help the user by answering questions based on the provid
             if getattr(self, "_claims_graph", None):
                 self._save_claims_graph()
             logger.info("finalize_ingest: entity/relation/claims graphs saved.")
+            if self._code_graph.get("nodes"):
+                self._save_code_graph()
+                logger.info("finalize_ingest: code graph saved.")
         self.finalize_graph()
 
     def finalize_graph(self) -> None:
@@ -4365,6 +4574,103 @@ Your primary goal is to help the user by answering questions based on the provid
                 return False
         return False
 
+    # ── keyword sets for multi-class router ───────────────────────────────────
+    _SYNTHESIS_KEYWORDS: frozenset = frozenset(
+        {
+            "summarize",
+            "overview",
+            "compare",
+            "contrast",
+            "explain",
+            "discuss",
+            "survey",
+            "themes",
+            "analysis",
+        }
+    )
+    _TABLE_KEYWORDS: frozenset = frozenset(
+        {
+            "table",
+            "row",
+            "column",
+            "value",
+            "count",
+            "average",
+            "maximum",
+            "minimum",
+            "statistic",
+            "how many",
+            "list all",
+        }
+    )
+    _ENTITY_KEYWORDS: frozenset = frozenset(
+        {
+            "relationship",
+            "related to",
+            "who",
+            "works with",
+            "connected",
+            "linked",
+            "colleague",
+            "dependency",
+        }
+    )
+    _CORPUS_KEYWORDS: frozenset = frozenset(
+        {
+            "all documents",
+            "entire corpus",
+            "everything",
+            "main topics",
+            "key themes",
+            "across all",
+        }
+    )
+
+    def _classify_query_route(self, query: str, cfg: "AxonConfig") -> str:
+        """Return one of: factual | synthesis | table_lookup | entity_relation | corpus_exploration."""
+        if cfg.query_router == "llm":
+            return self._classify_query_route_llm(query)
+        return self._classify_query_route_heuristic(query)
+
+    def _classify_query_route_heuristic(self, query: str) -> str:
+        q = query.lower()
+        words = set(q.split())
+        # corpus_exploration
+        if any(kw in q for kw in self._CORPUS_KEYWORDS) or (
+            len(query) > 120 and any(kw in words for kw in self._SYNTHESIS_KEYWORDS)
+        ):
+            return "corpus_exploration"
+        # entity_relation
+        if any(kw in q for kw in self._ENTITY_KEYWORDS):
+            return "entity_relation"
+        # table_lookup
+        if any(kw in q for kw in self._TABLE_KEYWORDS):
+            return "table_lookup"
+        # synthesis
+        if any(kw in words for kw in self._SYNTHESIS_KEYWORDS) or len(query) > 80:
+            return "synthesis"
+        return "factual"
+
+    def _classify_query_route_llm(self, query: str) -> str:
+        prompt = (
+            "Classify this query into exactly one category. Respond with only the category name.\n\n"
+            "Categories:\n"
+            "- factual: short lookup, specific named fact or definition\n"
+            "- synthesis: broad question needing information from multiple sections or documents\n"
+            "- table_lookup: asks for numerical data, statistics, or structured rows/columns\n"
+            "- entity_relation: asks about relationships, connections, or dependencies between entities\n"
+            "- corpus_exploration: asks about themes, topics, or a high-level summary of the entire corpus\n\n"
+            f"Query: {query}\n\nCategory:"
+        )
+        valid = {"factual", "synthesis", "table_lookup", "entity_relation", "corpus_exploration"}
+        try:
+            response = self.llm.generate(prompt, max_tokens=20).strip().lower()
+            if response in valid:
+                return response
+        except Exception:
+            pass
+        return "factual"
+
     def _ensure_llmlingua(self):
         """Lazy-initialise the LLMLingua-2 prompt compressor (TASK 14)."""
         if not hasattr(self, "_llmlingua") or self._llmlingua is None:
@@ -5384,6 +5690,354 @@ Your primary goal is to help the user by answering questions based on the provid
             r.pop("_artifact_score", None)
         return ranked
 
+    # ------------------------------------------------------------------
+    # Structural Code Graph (Phase 2 + Phase 3)
+    # ------------------------------------------------------------------
+
+    def _build_code_graph_from_chunks(self, chunks: list[dict]) -> None:
+        """Build/update code graph nodes and CONTAINS/IMPORTS edges from codebase chunks.
+
+        Nodes:
+        - File node  — one per unique file_path
+        - Symbol node — one per (file_path, symbol_name) with a real symbol_type
+
+        Edges:
+        - CONTAINS : File → Symbol
+        - IMPORTS  : File → File  (resolved from imports metadata)
+        """
+        nodes: dict = self._code_graph.setdefault("nodes", {})
+        edges_list: list = self._code_graph.setdefault("edges", [])
+        existing_edges: set = {(e["source"], e["target"], e["edge_type"]) for e in edges_list}
+
+        file_nodes_seen: set = set()
+
+        for chunk in chunks:
+            meta = chunk.get("metadata", {})
+            if meta.get("source_class") != "code":
+                continue
+
+            file_path = meta.get("file_path") or meta.get("source", "")
+            language = meta.get("language", "unknown")
+            symbol_type = meta.get("symbol_type", "block")
+            symbol_name = meta.get("symbol_name", "")
+            chunk_id = chunk.get("id", "")
+            file_node_id = file_path
+
+            # ── File node ───────────────────────────────────────────────────
+            if file_path and file_path not in file_nodes_seen:
+                file_nodes_seen.add(file_path)
+                if file_node_id not in nodes:
+                    nodes[file_node_id] = {
+                        "node_id": file_node_id,
+                        "node_type": "file",
+                        "name": os.path.basename(file_path),
+                        "file_path": file_path,
+                        "language": language,
+                        "chunk_ids": [],
+                        "signature": "",
+                        "start_line": None,
+                        "end_line": None,
+                    }
+
+            if file_path and chunk_id:
+                cids = nodes[file_node_id]["chunk_ids"]
+                if chunk_id not in cids:
+                    cids.append(chunk_id)
+
+            # ── Symbol node ──────────────────────────────────────────────────
+            if symbol_type not in ("block", "") and symbol_name and file_path:
+                sym_node_id = f"{file_path}::{symbol_name}"
+                if sym_node_id not in nodes:
+                    nodes[sym_node_id] = {
+                        "node_id": sym_node_id,
+                        "node_type": symbol_type,
+                        "name": symbol_name,
+                        "file_path": file_path,
+                        "language": language,
+                        "chunk_ids": [chunk_id] if chunk_id else [],
+                        "signature": meta.get("signature", ""),
+                        "start_line": meta.get("start_line"),
+                        "end_line": meta.get("end_line"),
+                    }
+                else:
+                    if chunk_id and chunk_id not in nodes[sym_node_id]["chunk_ids"]:
+                        nodes[sym_node_id]["chunk_ids"].append(chunk_id)
+
+                # CONTAINS edge: File → Symbol
+                ek = (file_node_id, sym_node_id, "CONTAINS")
+                if ek not in existing_edges and file_path:
+                    edges_list.append(
+                        {
+                            "source": file_node_id,
+                            "target": sym_node_id,
+                            "edge_type": "CONTAINS",
+                            "chunk_id": chunk_id,
+                        }
+                    )
+                    existing_edges.add(ek)
+
+            # ── IMPORTS edges ────────────────────────────────────────────────
+            imports_raw = meta.get("imports", "")
+            if isinstance(imports_raw, str):
+                import_stmts = [s for s in imports_raw.split("|") if s.strip()]
+            elif isinstance(imports_raw, list):
+                import_stmts = imports_raw
+            else:
+                import_stmts = []
+
+            for stmt in import_stmts:
+                target_file_id = self._resolve_import_to_file(stmt.strip())
+                if target_file_id and target_file_id != file_node_id:
+                    ek = (file_node_id, target_file_id, "IMPORTS")
+                    if ek not in existing_edges:
+                        edges_list.append(
+                            {
+                                "source": file_node_id,
+                                "target": target_file_id,
+                                "edge_type": "IMPORTS",
+                                "chunk_id": chunk_id,
+                            }
+                        )
+                        existing_edges.add(ek)
+
+    def _resolve_import_to_file(self, stmt: str) -> str | None:
+        """Resolve an import statement to a file node_id in the code graph, or None."""
+        m = re.match(r"^from\s+([\w.]+)\s+import", stmt)
+        if not m:
+            m = re.match(r"^import\s+([\w.]+)", stmt)
+        if not m:
+            return None
+        module = m.group(1)
+        # e.g. "axon.splitters" → look for file_path ending in axon/splitters.py
+        module_rel = module.replace(".", "/") + ".py"
+        for node_id, node in self._code_graph.get("nodes", {}).items():
+            if node.get("node_type") == "file":
+                fp = node.get("file_path", "").replace("\\", "/")
+                if fp.endswith(module_rel):
+                    return node_id
+        return None
+
+    def _build_code_doc_bridge(self, prose_chunks: list[dict]) -> None:
+        """Phase 3: add MENTIONED_IN edges from code symbol nodes to prose chunks.
+
+        Scans prose chunk text for occurrences of known code symbol/file names.
+        Only matches names >= 4 chars to avoid false positives on short tokens.
+        """
+        nodes: dict = self._code_graph.get("nodes", {})
+        if not nodes:
+            return
+
+        edges_list: list = self._code_graph.setdefault("edges", [])
+        existing_edges: set = {(e["source"], e["target"], e["edge_type"]) for e in edges_list}
+
+        # Build lookup: name → node_id  (symbols + file basenames/stems)
+        sym_lookup: dict[str, str] = {}
+        for node_id, node in nodes.items():
+            name = node.get("name", "")
+            if len(name) >= 4:
+                sym_lookup[name] = node_id
+            if node.get("node_type") == "file":
+                stem = os.path.splitext(name)[0]
+                if len(stem) >= 4:
+                    sym_lookup[stem] = node_id
+
+        for chunk in prose_chunks:
+            text = chunk.get("text", "")
+            chunk_id = chunk.get("id", "")
+            if not text or not chunk_id:
+                continue
+            for sym_name, node_id in sym_lookup.items():
+                if re.search(r"\b" + re.escape(sym_name) + r"\b", text):
+                    ek = (node_id, chunk_id, "MENTIONED_IN")
+                    if ek not in existing_edges:
+                        edges_list.append(
+                            {
+                                "source": node_id,
+                                "target": chunk_id,
+                                "edge_type": "MENTIONED_IN",
+                                "chunk_id": chunk_id,
+                            }
+                        )
+                        existing_edges.add(ek)
+
+    def _apply_code_lexical_boost(
+        self, results: list[dict], query_tokens: frozenset[str], cfg=None
+    ) -> list[dict]:
+        """Re-score code results by lexical identifier match, then enforce per-file diversity.
+
+        Only results with ``metadata.source_class == "code"`` are re-scored; all
+        others pass through unchanged.  If no query tokens match any result, the
+        original scores are preserved (no degradation on non-identifier queries).
+        """
+        if cfg is None:
+            cfg = self.config
+
+        if not query_tokens:
+            return results
+
+        long_tokens = frozenset(t for t in query_tokens if len(t) >= 4)
+
+        lex_scores: list[float] = []
+        for r in results:
+            meta = r.get("metadata", {})
+            if meta.get("source_class") != "code":
+                lex_scores.append(0.0)
+                continue
+
+            score = 0.0
+            sym_name = (meta.get("symbol_name") or "").lower()
+            sym_type = (meta.get("symbol_type") or "").lower()
+            file_path = meta.get("file_path") or meta.get("source") or ""
+            basename = os.path.splitext(os.path.basename(file_path))[0].lower()
+            qualified = f"{basename}.{sym_name}" if sym_name and basename else ""
+            text_lower = r.get("text", "").lower()
+
+            # Exact symbol name match
+            if sym_name and sym_name in query_tokens:
+                score += 1.0
+            # Partial symbol name match
+            elif sym_name:
+                for tok in long_tokens:
+                    if tok in sym_name:
+                        score += 0.5
+                        break
+
+            # Basename match
+            if basename and basename in query_tokens:
+                score += 0.4
+
+            # Qualified name match
+            if qualified and qualified in query_tokens:
+                score += 1.0
+
+            # Token-in-text hits (capped)
+            text_hits = sum(1 for tok in long_tokens if tok in text_lower)
+            score += min(text_hits * 0.08, 0.32)
+
+            # Multiplier for function/method results that matched anything
+            if score > 0.0 and sym_type in {"function", "method"}:
+                score *= 1.1
+
+            lex_scores.append(score)
+
+        max_lex = max(lex_scores) if lex_scores else 0.0
+        if max_lex == 0.0:
+            # No matches — skip re-scoring entirely
+            return results
+
+        # Blend: normalize lex scores then mix with original score
+        boosted: list[dict] = []
+        for r, lex in zip(results, lex_scores):
+            norm_lex = lex / max_lex
+            orig = r.get("score", 0.0)
+            r = dict(r)
+            r["score"] = orig * 0.45 + norm_lex * 0.55
+            boosted.append(r)
+
+        # Per-file diversity cap
+        cap = cfg.code_max_chunks_per_file
+        seen_files: dict[str, int] = {}
+        diverse: list[dict] = []
+        deferred: list[dict] = []
+        for r in sorted(boosted, key=lambda x: x["score"], reverse=True):
+            fp = r.get("metadata", {}).get("file_path") or r.get("metadata", {}).get("source", "")
+            count = seen_files.get(fp, 0)
+            if count < cap:
+                diverse.append(r)
+                seen_files[fp] = count + 1
+            else:
+                deferred.append(r)
+
+        return diverse + deferred
+
+    def _expand_with_code_graph(
+        self, query: str, results: list[dict], cfg=None
+    ) -> tuple[list[dict], list[str]]:
+        """Expand retrieval results using structural code graph traversal.
+
+        Matches query tokens against code node names, then follows CONTAINS,
+        IMPORTS, and MENTIONED_IN edges to fetch related chunks.
+        """
+        nodes: dict = self._code_graph.get("nodes", {})
+        edges_list: list = self._code_graph.get("edges", [])
+        if not nodes:
+            return results, []
+
+        # Build edge index
+        outgoing: dict[str, list[tuple[str, str]]] = {}
+        incoming: dict[str, list[tuple[str, str]]] = {}
+        for edge in edges_list:
+            src, tgt, et = edge["source"], edge["target"], edge["edge_type"]
+            outgoing.setdefault(src, []).append((tgt, et))
+            incoming.setdefault(tgt, []).append((src, et))
+
+        # Extract tokens from query (identifier-like words, >= 3 chars)
+        query_tokens: set[str] = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_.]{2,}\b", query))
+
+        # Match against node names
+        matched_node_ids: set[str] = set()
+        matched_names: list[str] = []
+        for node_id, node in nodes.items():
+            name = node.get("name", "")
+            if name in query_tokens or any(t in name for t in query_tokens if len(t) >= 4):
+                matched_node_ids.add(node_id)
+                if name not in matched_names:
+                    matched_names.append(name)
+
+        # Also match file_path from already-retrieved results
+        for r in results:
+            fp = r.get("metadata", {}).get("file_path", "")
+            if fp and fp in nodes:
+                matched_node_ids.add(fp)
+
+        if not matched_node_ids:
+            return results, []
+
+        # Collect extra chunk_ids via 1-hop traversal
+        already_ids: set[str] = {r["id"] for r in results}
+        extra_chunk_ids: set[str] = set()
+
+        for node_id in list(matched_node_ids):
+            # Own chunk_ids
+            for cid in nodes[node_id].get("chunk_ids", []):
+                extra_chunk_ids.add(cid)
+            # Outgoing: IMPORTS → target file chunks; CONTAINS → symbol chunks; MENTIONED_IN → prose chunks
+            for tgt_id, et in outgoing.get(node_id, []):
+                if et in ("IMPORTS", "CONTAINS", "MENTIONED_IN"):
+                    tgt_node = nodes.get(tgt_id)
+                    if tgt_node:
+                        for cid in tgt_node.get("chunk_ids", []):
+                            extra_chunk_ids.add(cid)
+            # Incoming CONTAINS: if we matched a symbol, also get 2 chunks from its parent file
+            for src_id, et in incoming.get(node_id, []):
+                if et == "CONTAINS":
+                    src_node = nodes.get(src_id)
+                    if src_node:
+                        for cid in src_node.get("chunk_ids", [])[:2]:
+                            extra_chunk_ids.add(cid)
+
+        extra_chunk_ids -= already_ids
+        if not extra_chunk_ids:
+            return results, matched_names
+
+        budget = getattr(cfg, "graph_rag_budget", 3)
+        fetch_ids = list(extra_chunk_ids)[: budget * 2]
+
+        try:
+            extra_docs = self.vector_store.get_by_ids(fetch_ids)
+            for doc in extra_docs:
+                if doc["id"] not in already_ids:
+                    doc.setdefault("score", 0.5)
+                    doc["_code_graph_expanded"] = True
+                    results.append(doc)
+                    already_ids.add(doc["id"])
+                    if len(results) > getattr(cfg, "top_k", 10) + budget:
+                        break
+        except Exception:
+            pass
+
+        return results, matched_names
+
     def _expand_with_entity_graph(
         self, query: str, results: list[dict], cfg=None
     ) -> tuple[list[dict], list[str]]:
@@ -5485,6 +6139,23 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
 
+    def _prepend_contextual_context(self, chunk: dict, whole_doc_text: str) -> dict:
+        """Prepend LLM-generated situating context to chunk text (Anthropic method)."""
+        prompt = (
+            "<document>\n{doc}\n</document>\n\n"
+            "Here is the chunk we want to situate within the whole document:\n"
+            "<chunk>\n{chunk}\n</chunk>\n\n"
+            "Provide a concise sentence (≤30 words) that situates this chunk "
+            "within the document. Output ONLY that sentence, no preamble."
+        ).format(doc=whole_doc_text[:3000], chunk=chunk["text"][:800])
+        try:
+            ctx_sentence = self.llm.generate(prompt, max_tokens=60).strip()
+            chunk = dict(chunk)
+            chunk["text"] = ctx_sentence + "\n" + chunk["text"]
+        except Exception:
+            pass  # graceful degradation
+        return chunk
+
     def _make_cache_key(self, query: str, filters, cfg) -> str:
         """Return a stable cache key for the given query + active config.
 
@@ -5569,7 +6240,7 @@ Your primary goal is to help the user by answering questions based on the provid
         "doc": (True, True),
         "knowledge": (False, False),
         "discussion": (False, True),
-        "codebase": (False, True),
+        "codebase": (False, False),  # prose GraphRAG off; code graph is separate
         "manifest": (False, False),
         "reference": (False, False),
     }
@@ -5584,8 +6255,15 @@ Your primary goal is to help the user by answering questions based on the provid
         ".java",
         ".cpp",
         ".c",
+        ".h",
+        ".hpp",
         ".sh",
+        ".bash",
+        ".zsh",
         ".rb",
+        ".pl",
+        ".pm",
+        ".jl",
         ".kt",
         ".swift",
         ".jsx",
@@ -5733,7 +6411,9 @@ Your primary goal is to help the user by answering questions based on the provid
         from axon.splitters import RecursiveCharacterTextSplitter, SemanticTextSplitter
 
         if dataset_type == "codebase":
-            return RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+            from axon.splitters import CodeAwareSplitter
+
+            return CodeAwareSplitter()
         elif dataset_type == "paper":
             return SemanticTextSplitter(chunk_size=600, chunk_overlap=100)
         elif dataset_type == "discussion":
@@ -5885,6 +6565,18 @@ Your primary goal is to help the user by answering questions based on the provid
                 return
             self._ingested_hashes.update(new_hashes)
             self._save_hash_store()
+
+        # Contextual retrieval: prepend LLM context to each chunk
+        if self.config.contextual_retrieval and self.config.dataset_type in {
+            "doc",
+            "paper",
+            "discussion",
+        }:
+            raw_docs = documents
+            whole_doc_text = " ".join(d.get("text", "") for d in raw_docs)
+            documents = [
+                self._prepend_contextual_context(chunk, whole_doc_text) for chunk in raw_docs
+            ]
 
         # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
         if self.config.raptor:
@@ -6352,6 +7044,26 @@ Your primary goal is to help the user by answering questions based on the provid
             }
         self._save_doc_versions()
 
+        # ── Code graph (Phase 2 + Phase 3) ──────────────────────────────
+        if getattr(self.config, "code_graph", False):
+            _code_chunks = [
+                d for d in documents if d.get("metadata", {}).get("source_class") == "code"
+            ]
+            if _code_chunks:
+                self._build_code_graph_from_chunks(_code_chunks)
+                logger.info("   Code graph: %d code chunks indexed.", len(_code_chunks))
+            if getattr(self.config, "code_graph_bridge", False):
+                _prose_chunks = [
+                    d for d in documents if d.get("metadata", {}).get("source_class") != "code"
+                ]
+                if _prose_chunks:
+                    self._build_code_doc_bridge(_prose_chunks)
+                    logger.info(
+                        "   Code graph bridge: scanned %d prose chunks.", len(_prose_chunks)
+                    )
+            if not _defer_saves:
+                self._save_code_graph()
+
         logger.info(
             {
                 "event": "ingest_complete",
@@ -6594,6 +7306,8 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # --- Phase 2: Retrieval ---
         fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
+        if cfg.code_lexical_boost and _looks_like_code_query(query):
+            fetch_k = int(fetch_k * cfg.code_top_k_multiplier)
 
         all_vector_results = []
         all_bm25_results = []
@@ -6703,6 +7417,15 @@ Your primary goal is to help the user by answering questions based on the provid
         if getattr(cfg, "mmr", False) and results:
             results = self._mmr_deduplicate(results, cfg)
 
+        # Code lexical boost pass (before graph expansion, after threshold filtering)
+        if cfg.code_lexical_boost and results:
+            code_fraction = sum(
+                1 for r in results if r.get("metadata", {}).get("source_class") == "code"
+            ) / max(len(results), 1)
+            if code_fraction >= 0.3:
+                query_tokens = _extract_code_query_tokens(query)
+                results = self._apply_code_lexical_boost(results, query_tokens, cfg=cfg)
+
         # Save base count before GraphRAG expansion for accurate metrics
         base_count = len(results)
 
@@ -6710,6 +7433,12 @@ Your primary goal is to help the user by answering questions based on the provid
         _matched_entities: list = []
         if cfg.graph_rag and self._entity_graph:
             results, _matched_entities = self._expand_with_entity_graph(query, results, cfg=cfg)
+
+        # Code graph expansion (structural, independent of prose GraphRAG)
+        if getattr(cfg, "code_graph", False) and self._code_graph.get("nodes"):
+            results, _matched_code_syms = self._expand_with_code_graph(query, results, cfg=cfg)
+            if _matched_code_syms:
+                logger.debug("code_graph: matched symbols=%s", _matched_code_syms)
 
         return {
             "results": results,
@@ -6737,7 +7466,24 @@ Your primary goal is to help the user by answering questions based on the provid
             else:
                 # Small-to-big: prefer parent passage for richer LLM context
                 context_text = r.get("metadata", {}).get("parent_text") or r["text"]
-                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{context_text}")
+                meta = r.get("metadata", {})
+                if meta.get("source_class") == "code":
+                    basename = os.path.basename(
+                        meta.get("file_path") or meta.get("source") or "unknown"
+                    )
+                    sym = meta.get("symbol_name", "")
+                    sym_type = meta.get("symbol_type", "")
+                    if sym:
+                        label = (
+                            f"{basename} :: {sym} ({sym_type})"
+                            if sym_type
+                            else f"{basename} :: {sym}"
+                        )
+                    else:
+                        label = basename
+                else:
+                    label = meta.get("source", r["id"])
+                parts.append(f"[Document {i+1} — {label}]\n{context_text}")
         return "\n\n".join(parts), has_web
 
     def _build_system_prompt(self, has_web: bool, cfg=None) -> str:
@@ -6809,10 +7555,17 @@ Your primary goal is to help the user by answering questions based on the provid
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
-        # TASK 14: Adaptive query routing — bypass GraphRAG for non-holistic queries
-        _route = getattr(cfg, "graph_rag_auto_route", "off")
-        if _route != "off" and cfg.graph_rag:
-            _needs_grag = self._classify_query_needs_graphrag(query, _route)
+        # --- System-level query router ---
+        if cfg.query_router != "off":
+            route = self._classify_query_route(query, cfg)
+            profile_overrides = _ROUTE_PROFILES.get(route, {})
+            for k, v in profile_overrides.items():
+                if hasattr(cfg, k):
+                    object.__setattr__(cfg, k, v)
+            logger.debug("query_router: route=%s overrides=%s", route, profile_overrides)
+        elif cfg.graph_rag_auto_route != "off" and cfg.graph_rag:
+            # legacy binary classifier fallback
+            _needs_grag = self._classify_query_needs_graphrag(query, cfg.graph_rag_auto_route)
             if not _needs_grag:
                 cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
                 logger.debug("Auto-route: GraphRAG bypassed for query '%s...'", query[:60])

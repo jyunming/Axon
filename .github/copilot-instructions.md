@@ -107,6 +107,57 @@ without re-embedding.
 `POST /ingest` (directory ingestion) is asynchronous. After posting, poll
 `GET /ingest/status/{job_id}` until `status` is `completed` or `failed`.
 
+### Ingesting code repositories
+
+Use `ingest_path` on any local source directory — Axon automatically detects
+code files (`.py`, `.go`, `.rs`, `.ts`, `.js`, `.java`, `.cpp`, `.rb`, `.sh`,
+`.pl`, `.jl`, and more) and routes them through the syntax-aware
+`CodeAwareSplitter`. No path prefix is injected into code content.
+
+```
+POST /ingest
+{"path": "/path/to/repo/src", "metadata": {"project": "my-service"}}
+```
+
+**For cross-file link awareness** (recommended for large repos), set in
+`config.yaml`:
+
+```yaml
+rag:
+  code_graph: true        # File + Symbol nodes with CONTAINS/IMPORTS edges
+  code_graph_bridge: true # MENTIONED_IN edges linking prose docs to symbols
+```
+
+With `code_graph: true`, a query that retrieves a function will automatically
+expand to include the file it belongs to, files it imports, and any callers
+in the index — at zero extra LLM cost.
+
+---
+
+## Query Router
+
+Axon automatically selects the cheapest retrieval strategy per query. The
+default mode is `heuristic` (zero LLM calls — keyword + query-length signals):
+
+| Route | When activated | Retrieval strategy |
+|---|---|---|
+| `factual` | Short lookup, specific fact (default fallback) | Hybrid BM25+dense only |
+| `synthesis` | Summarise / compare / explain | + RAPTOR + parent-doc |
+| `table_lookup` | Numbers, statistics, rows/columns | Dense only, tabular path |
+| `entity_relation` | Relationship between X and Y | + GraphRAG (graph-light) |
+| `corpus_exploration` | Main themes, key topics across all docs | + RAPTOR + multi-query |
+
+Change the mode in `config.yaml`:
+
+```yaml
+rag:
+  query_router: heuristic   # heuristic | llm | off
+```
+
+`llm` mode uses a single tight classification prompt — more accurate but adds
+one LLM call per query. `off` falls back to the legacy `graph_rag_auto_route`
+binary flag.
+
 ---
 
 ## Query Workflow
@@ -168,3 +219,11 @@ tool names (they differ deliberately from the OpenAI-format `tools.py` names):
 - **Don't** ingest private network URLs — they are blocked server-side.
 - **Don't** call `POST /project/switch` from concurrent request handlers —
   use the `project` parameter on ingest endpoints instead.
+- **Don't** set `graph_rag: true` for code corpora — code-to-code links use
+  the code graph (`code_graph: true`); prose GraphRAG is disabled for code
+  datasets by design.
+- **Do** set `code_graph: true` when ingesting a source code repository if
+  you want cross-file link traversal at query time.
+- **Do** use `query_router: heuristic` (the default) for most deployments —
+  it requires no LLM calls and selects the right retrieval strategy
+  automatically.

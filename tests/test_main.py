@@ -19,6 +19,49 @@ class TestAxonConfig:
         assert config.hybrid_mode == "rrf"
         assert config.dataset_type == "auto"
 
+    def test_query_router_default(self):
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        assert config.query_router == "heuristic"
+
+    def test_graph_rag_community_default_false(self):
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        assert config.graph_rag_community is False
+
+    def test_code_graph_default_false(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_graph is False
+
+    def test_code_graph_bridge_default_false(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_graph_bridge is False
+
+    def test_code_lexical_boost_default_true(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_lexical_boost is True
+
+    def test_code_top_k_multiplier_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_top_k_multiplier == 2
+
+    def test_code_max_chunks_per_file_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_max_chunks_per_file == 3
+
+    def test_contextual_retrieval_default(self):
+        from axon.main import AxonConfig
+
+        config = AxonConfig()
+        assert config.contextual_retrieval is False
+
     def test_load_from_yaml(self, tmp_path):
         from axon.main import AxonConfig
 
@@ -1712,6 +1755,7 @@ class TestGraphRAG:
             MockBM25,
             graph_rag=True,
             similarity_threshold=0.0,
+            query_router="off",  # disable router so graph_rag=True is preserved
         )
         # Pre-populate entity graph
         brain._entity_graph = {"transformer": ["d2"]}
@@ -3545,7 +3589,8 @@ class TestGraphRAGCommunity:
         from axon.main import AxonConfig
 
         cfg = AxonConfig()
-        assert cfg.graph_rag_community is True
+        # graph_rag_community defaults to False (cost-control; enable explicitly)
+        assert cfg.graph_rag_community is False
         assert cfg.graph_rag_community_async is True
         assert cfg.graph_rag_community_top_k == 5
         assert cfg.graph_rag_mode == "local"
@@ -7278,10 +7323,14 @@ class TestSourcePolicy:
             brain.ingest(docs)
             mock_extract.assert_not_called()
 
-    def test_policy_enabled_allows_graphrag_on_codebase(
+    def test_policy_enabled_blocks_graphrag_on_codebase(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """source_policy_enabled=True, dataset_type=codebase → _extract_entities IS called."""
+        """source_policy_enabled=True, dataset_type=codebase → _extract_entities NOT called.
+
+        Per the code graph report, prose GraphRAG is disabled for codebase by default.
+        Code uses a separate structural graph, not the entity/community pipeline.
+        """
         brain = self._make_brain(
             MockReranker,
             MockEmbed,
@@ -7307,7 +7356,7 @@ class TestSourcePolicy:
             return_value=[{"name": "Foo", "type": "FUNCTION", "description": ""}],
         ) as mock_extract:
             brain.ingest(docs)
-            mock_extract.assert_called()
+            mock_extract.assert_not_called()
 
     def test_policy_enabled_allows_raptor_on_paper(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25

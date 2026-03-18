@@ -382,9 +382,44 @@ print(f"Embedding dimension: {len(embeddings[0])}")  # Should print 384
 
 ---
 
-## 6. Vision / Multimodal Setup (Optional)
+## 6. Code Corpus Setup (Optional)
 
-Only needed if you want to ingest image files. The system uses a Vision-Language Model (VLM) to auto-caption images before indexing.
+Only needed if you want to ingest source code repositories and enable
+syntax-aware chunking and code graph traversal.
+
+**Supported code extensions:** `.py`, `.go`, `.rs`, `.ts`, `.js`, `.tsx`,
+`.jsx`, `.java`, `.cpp`, `.c`, `.cs`, `.rb`, `.sh`, `.bash`, `.zsh`, `.pl`,
+`.pm`, `.jl`, `.h`, `.hpp`, `.swift`, `.kt`, `.php`
+
+The `ingest_path` tool (or `POST /ingest`) handles code directories the same
+way it handles document directories — no extra setup needed. The system
+auto-detects code files and routes them through `CodeAwareSplitter`, which
+uses Python AST for `.py` files and regex boundary detection for all other
+languages. No path prefix is injected into code file content (it lives in
+metadata only), so Python AST parsing is not disrupted.
+
+**Enable structural code graph for cross-file awareness:**
+
+```yaml
+# config.yaml
+rag:
+  code_graph: true        # build File + Symbol nodes with CONTAINS/IMPORTS edges
+  code_graph_bridge: true # also link prose chunks that mention code symbols
+```
+
+With `code_graph: true`, a query that retrieves a function chunk will
+automatically expand to include its containing file, its callers/callees, and
+files it imports — at zero extra LLM cost.
+
+> **Note:** The `graph_rag` flag is intentionally disabled for code corpora
+> (`_SOURCE_POLICY["codebase"] = (False, False)`). Code-to-code links come
+> from the code graph; `graph_rag` is reserved for prose document corpora.
+
+---
+
+## 6b. Vision / Multimodal Setup (Optional)
+
+Only needed if you want to ingest image files. The system uses a Vision-Language Model (VLM) to auto-caption images before indexing. See §6 for code corpus setup.
 
 **Supported image formats:** `.bmp`, `.png`, `.tif`, `.tiff`, `.pgm`
 
@@ -481,6 +516,26 @@ rag:
   # graph_rag: false
   # graph_rag_budget: 3       # extra slots beyond top_k (0 = no guarantee)
   # graph_rag_relations: true # enable 1-hop relation traversal
+  # graph_rag_community: false  # community detection (expensive; off by default)
+
+  # Query router — selects the cheapest retrieval strategy per query automatically.
+  # "heuristic": keyword + length signals, zero LLM calls (default)
+  # "llm":       single LLM classification call per query, more accurate
+  # "off":       legacy behaviour; falls back to graph_rag_auto_route flag
+  # query_router: heuristic
+
+  # Contextual retrieval — prepend a 1-sentence LLM-generated situating context
+  # to each prose chunk before embedding (Anthropic method).
+  # Only applies to dataset_type: doc / paper / discussion. Adds N LLM calls
+  # per ingest (one per chunk). Use with a fast local model.
+  # contextual_retrieval: false
+
+  # Code graph — build a structural symbol graph from code corpora at ingest time.
+  # CONTAINS edges link File nodes to their functions/classes; IMPORTS edges link
+  # files by import statement. At query time, 1-hop neighbours of matched code
+  # chunks are retrieved for free (independent of graph_rag flag).
+  # code_graph: false
+  # code_graph_bridge: false  # also build MENTIONED_IN edges from prose chunks
 
 chunk:
   size: 1000
