@@ -2055,6 +2055,142 @@ def _looks_like_code_query(query: str) -> bool:
     return False
 
 
+def _build_code_bm25_queries(query: str, query_tokens: frozenset) -> list[str]:
+    """Build deterministic BM25-only sub-queries from code identifier tokens.
+
+    Expands CamelCase, snake_case, dotted module paths, and filename stems
+    into short search strings that target BM25's lexical index.  These are
+    *not* fed to vector search — they are added to the BM25 pool only.
+
+    Returns a list of query strings (may be empty if no useful variants found).
+    """
+    variants: list[str] = []
+    seen: set[str] = {query.lower()}
+
+    for tok in sorted(query_tokens):  # deterministic order
+        if len(tok) < 4:
+            continue
+        if tok in seen:
+            continue
+
+        # CamelCase → spaced words (e.g. "CodeAwareSplitter" → "Code Aware Splitter")
+        camel_parts = re.findall(r"[A-Z][a-z0-9]*|[a-z][a-z0-9]*", tok)
+        if len(camel_parts) > 1:
+            spaced = " ".join(p for p in camel_parts if len(p) >= 2)
+            if spaced.lower() not in seen:
+                variants.append(spaced)
+                seen.add(spaced.lower())
+
+        # snake_case → spaced words (e.g. "split_python_ast" → "split python ast")
+        if "_" in tok:
+            parts = [p for p in tok.split("_") if len(p) >= 2]
+            if len(parts) > 1:
+                spaced = " ".join(parts)
+                if spaced not in seen:
+                    variants.append(spaced)
+                    seen.add(spaced)
+
+        # Dotted module path → base name (e.g. "axon.loaders" → "loaders")
+        if "." in tok:
+            base = tok.rsplit(".", 1)[-1]
+            if len(base) >= 4 and base not in seen:
+                variants.append(base)
+                seen.add(base)
+
+        # Raw token itself as a BM25 exact-ish search
+        if tok not in seen:
+            variants.append(tok)
+            seen.add(tok)
+
+    return variants
+
+
+# ---------------------------------------------------------------------------
+# Feature evidence surface registry
+# ---------------------------------------------------------------------------
+# Every retrieval feature must declare its evidence surface here so that:
+#   1. Diagnostics remain coherent as the feature set grows.
+#   2. Benchmark authors know which query slice exercises each feature.
+#   3. Silent complexity growth is prevented — if a feature has no measurable
+#      counter and no benchmark slice it should not exist.
+#
+# Schema per entry:
+#   diagnostic_field   — field name on CodeRetrievalDiagnostics (str, or None for trace-only)
+#   activation_counter — attribute on CodeRetrievalDiagnostics that counts activations
+#                        (int field, or None if boolean flag suffices)
+#   benchmark_slice    — human-readable description of the query type / corpus slice
+#                        where this feature is expected to improve results
+# ---------------------------------------------------------------------------
+
+_RETRIEVAL_FEATURES: dict[str, dict] = {
+    "code_mode_detection": {
+        "diagnostic_field": "code_mode_triggered",
+        "activation_counter": None,  # boolean: True/False per query
+        "benchmark_slice": (
+            "Queries containing CamelCase identifiers, snake_case names, "
+            "file extensions (.py/.go/etc.), or symbol keywords (class/function/def)"
+        ),
+    },
+    "lexical_boost": {
+        "diagnostic_field": "boost_applied",
+        "activation_counter": None,  # boolean: True when lex scores are non-zero
+        "benchmark_slice": (
+            "Code queries where exact symbol_name or qualified_name appears in the query; "
+            "expected to rank exact-match chunks above broad module-level chunks"
+        ),
+    },
+    "symbol_channel": {
+        "diagnostic_field": "channels_activated",  # entry 'symbol' in list
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Queries with a known function/class/method name that exists verbatim in "
+            "BM25 corpus metadata (symbol_name or qualified_name field)"
+        ),
+    },
+    "code_bm25_rewrite": {
+        "diagnostic_field": "channels_activated",  # entry 'bm25_variants' in list
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Code queries with multi-part identifiers (CamelCase, snake_case, dotted paths); "
+            "rewrite expands to spaced tokens for improved BM25 recall"
+        ),
+    },
+    "per_file_diversity": {
+        "diagnostic_field": None,  # trace-only: diversity_cap_deferrals / deferred_chunk_ids
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Queries over a corpus with many chunks per file (e.g. large main.py); "
+            "diversity cap prevents top-k from being monopolised by a single file"
+        ),
+    },
+    "line_range_tightness": {
+        "diagnostic_field": None,  # trace-only: per_result_score_breakdown 'tightness' key
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Deep implementation-location queries (e.g. 'how does X work') where the correct "
+            "answer is a ≤30-line function chunk rather than a broad 80-line module chunk"
+        ),
+    },
+    "fallback_chunk_telemetry": {
+        "diagnostic_field": "fallback_chunks_in_results",
+        "activation_counter": "fallback_chunks_in_results",
+        "benchmark_slice": (
+            "Queries where the correct chunk was produced by the splitter's fallback path "
+            "(e.g. non-Python/non-supported language files); "
+            "high fallback count indicates the code corpus needs better loader coverage"
+        ),
+    },
+    "dry_run_mode": {
+        "diagnostic_field": None,  # mode flag, not a per-query metric
+        "activation_counter": None,
+        "benchmark_slice": (
+            "All queries in benchmark harness; dry-run surfaces diagnostics+trace without "
+            "an LLM call, enabling fast iterative ranking evaluation"
+        ),
+    },
+}
+
+
 # ---------------------------------------------------------------------------
 # Retrieval accountability types (Layer 1)
 # ---------------------------------------------------------------------------
@@ -6066,6 +6202,18 @@ Your primary goal is to help the user by answering questions based on the provid
                 score *= 1.1
                 signals["sym_type_boost"] = True
 
+            # Line-range tightness tie-breaker: reward narrowly scoped chunks.
+            # +0.05 for ≤30 lines, +0.02 for ≤80 lines (secondary signal only).
+            start_line = meta.get("start_line")
+            end_line = meta.get("end_line")
+            if start_line is not None and end_line is not None:
+                span = max(int(end_line) - int(start_line), 1)
+                if span <= 30:
+                    score += 0.05
+                    signals["line_range_tight"] = span
+                elif span <= 80:
+                    score += 0.02
+
             lex_scores.append(score)
             score_signals.append(signals)
 
@@ -7625,11 +7773,23 @@ Your primary goal is to help the user by answering questions based on the provid
         # Hybrid Search (Keyword component)
         bm25_count = 0
         if cfg.hybrid_search and self.bm25:
-            # Parallelize BM25 searches across multiple queries
+            # Deterministic code query rewriting — extra BM25-only sub-queries
+            bm25_queries = list(search_queries)
+            if _code_mode and _code_query_tokens:
+                code_variants = _build_code_bm25_queries(query, _code_query_tokens)
+                for v in code_variants:
+                    if v not in bm25_queries:
+                        bm25_queries.append(v)
+                if code_variants:
+                    trace.query_rewrite_variants = [
+                        v for v in code_variants if v not in search_queries
+                    ]
+
+            # Parallelize BM25 searches across all queries (original + code variants)
             def _bm25_search(q):
                 return self.bm25.search(q, top_k=fetch_k)
 
-            all_bm25_lists = list(self._executor.map(_bm25_search, search_queries))
+            all_bm25_lists = list(self._executor.map(_bm25_search, bm25_queries))
             for b_list in all_bm25_lists:
                 all_bm25_results.extend(b_list)
 
@@ -8397,6 +8557,12 @@ def main():
         help="Enable/disable in-memory query result caching",
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Skip LLM; run retrieval only and print diagnostics + ranked chunks (requires --query)",
+    )
+    parser.add_argument(
         "--raptor",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -8737,7 +8903,21 @@ def main():
         return
 
     if args.query:
-        if args.stream:
+        if getattr(args, "dry_run", False):
+            results, diag, trace = brain.search_raw(args.query)
+            import json as _json_cli
+
+            print(f"\n  [DRY RUN] {diag.result_count} chunk(s) retrieved")
+            print(f"  Diagnostics:\n{_json_cli.dumps(diag.to_dict(), indent=4)}")
+            print("\n  Ranked chunks:")
+            for i, r in enumerate(results, 1):
+                meta = r.get("metadata", {})
+                src = meta.get("source") or meta.get("file_path") or r["id"]
+                sym = meta.get("symbol_name", "")
+                label = f"{src} :: {sym}" if sym else src
+                print(f"  {i:>2}. [{r['score']:.3f}]  {label}")
+                print(f"      {r['text'][:100]!r}")
+        elif args.stream:
             for chunk in brain.query_stream(args.query):
                 if isinstance(chunk, dict):
                     continue

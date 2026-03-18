@@ -515,6 +515,9 @@ class CodeAwareSplitter:
         self.max_symbol_size = max_symbol_size
         self.fallback_chunk_size = fallback_chunk_size
         self.fallback_overlap = fallback_overlap
+        # Telemetry: counts blocks produced via character fallback (not AST).
+        # Reset to 0 before each ingest run if you want per-file stats.
+        self.fallback_chunks_produced: int = 0
 
     # ── language detection ────────────────────────────────────────────────
 
@@ -857,9 +860,11 @@ class CodeAwareSplitter:
                     "has_docstring": False,
                     "is_entrypoint": False,
                     "is_test": False,
+                    "is_fallback": True,
                 }
                 for i, part in enumerate(raw)
             ]
+            self.fallback_chunks_produced += len(chunks)
 
         module_path = source.replace("\\", "/") if source else ""
         for chunk in chunks:
