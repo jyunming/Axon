@@ -50,7 +50,6 @@ ollama pull phi3:mini     # minimal — 2.3 GB, ~4 GB RAM
 | Command | Entry Point | Best For |
 |---|---|---|
 | `axon` | Interactive REPL | Day-to-day exploration |
-| `axon-ui` | Streamlit Web UI | Visual interface at [localhost:8501](http://localhost:8501) |
 | `axon-api` | FastAPI REST API | Agents, scripts, Copilot |
 | `axon-mcp` | MCP Server | GitHub Copilot agent mode |
 
@@ -102,19 +101,52 @@ Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (ha
 
 > See **[Getting Started](GETTING_STARTED.md)** for full setup details, workflow diagrams, and per-entry-point examples.
 
-![Axon Copilot demo](docs/assets/AxonCopilot.gif)
-
 ---
 
 ## Interactive REPL
+
+![Axon REPL](docs/assets/repl-demo.png)
 
 ![Axon REPL demo](docs/assets/repl-demo.gif)
 
 ---
 
-## Web UI
+## Graph Panel — Investigate Your Knowledge Base Visually
 
-![Axon Web UI](docs/assets/webapp-screenshot.png)
+After asking a question, the **Axon Graph Panel** opens a split view directly inside VS Code — no browser, no extra tools:
+
+```
+┌──────────────────────┬──────────────────────────────────────────┐
+│  Question            │  [ Knowledge Graph ]  [ Code Graph ]     │
+│  ────────────────    │  ────────────────────────────────────── │
+│  LLM-synthesised     │                                          │
+│  answer with         │   ●─────────────◆                       │
+│  inline citations    │   │   3D force-   │                      │
+│  ────────────────    │   ▼   graph      ▼                       │
+│  [1] main.py:142 ▸   │   ●              ●                       │
+│  [2] api.py:55   ▸   │                                          │
+│  [3] config.py   ▸   │  ← click any node or citation           │
+│                      │     to jump to the source file           │
+└──────────────────────┴──────────────────────────────────────────┘
+```
+
+**Two graph views — same panel:**
+- **Knowledge Graph** — entity–relation graph built from **any document** (PDF, DOCX, Markdown…) during ingest. Requires `graph_rag: true` — **on by default**. Nodes are named entities (people, concepts, components); edges are extracted relations. Just ingest your documents and the graph is ready.
+- **Code Graph** — structural file/class/function graph for source code (requires `code_graph: true` in `config.yaml`). Nodes are files, classes, and functions; edges are `IMPORTS` / `CONTAINS` / `CALLS` relationships. Click a node to jump to that definition.
+
+**How to open it:**
+
+```
+Command Palette (Ctrl+Shift+P)
+  → Axon: Show Graph for Query…   ← type a question
+  → Axon: Show Graph for Selection ← select code, then run
+
+Copilot Chat:
+  @workspace show me the graph for how authentication works
+  @workspace visualise the retrieval pipeline
+```
+
+![Axon Copilot demo](docs/assets/AxonCopilot.gif)
 
 ---
 
@@ -128,7 +160,8 @@ Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (ha
 - **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
 - **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
-- **RAPTOR + GraphRAG enabled by default** — hierarchical summaries + entity–relation graph; auto-composition cuts ingest cost for large sources; interactive graph visualization via `/graph-viz`
+- **RAPTOR + GraphRAG (fast mode by default)** — RAPTOR hierarchical summaries + entity graph via zero-LLM regex extraction; both on by default with no ingest slowdown; interactive 3D graph panel in VS Code, or `/graph-viz` HTML export
+- **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS` edges for code corpora; visualise alongside the knowledge graph in the VS Code panel
 - **Reranking** — cross-encoder (BGE) reranking
 - **Agent-ready** — FastAPI REST API + MCP server for Copilot agent mode
 

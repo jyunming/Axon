@@ -167,6 +167,7 @@ binary flag.
 | **Copilot synthesises** (recommended) | `search_knowledge` / `POST /search` |
 | Axon's local LLM synthesises | `query_knowledge` / `POST /query` |
 | Real-time / streaming output | `POST /query/stream` |
+| **Visualise + answer in VS Code panel** | `axon_showGraph` (VS Code extension LM tool) |
 
 **Prefer `search_knowledge` in agent mode.** This returns raw ranked chunks
 to Copilot, which then synthesises the answer using its own LLM. Axon handles
@@ -180,6 +181,25 @@ self-contained with its local Ollama model (e.g. offline, air-gapped).
 **Context window tip:** `search_knowledge` returns `top_k` chunks. Keep
 `top_k` between 5–8 for focused queries, 10–15 for broad/exploratory ones
 to avoid burning the context window.
+
+---
+
+## VS Code Extension LM Tool Names
+
+When using the Axon VS Code extension in Copilot Chat (`@workspace` or inline), these LM tools are available:
+
+| Tool | Does |
+|---|---|
+| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, Copilot synthesises the answer |
+| `axon_queryKnowledge` | Retrieval + answer via local LLM (requires Ollama) |
+| `axon_showGraph` | Open Graph Panel — shows answer, citations, and 3D entity/code graph in VS Code |
+| `axon_ingestPath` | Ingest a local file or directory (async, returns `job_id`) |
+| `axon_getIngestStatus` | Poll ingest job status |
+| `axon_listProjects` | List project namespaces |
+| `axon_switchProject` | Switch active project |
+| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+
+Use `axon_showGraph` when the user asks to "show the graph", "visualise", or "see connections" for a topic. The tool opens the split panel inside VS Code — **no browser is opened**.
 
 ---
 

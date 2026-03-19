@@ -151,11 +151,20 @@ rag:
   raptor_max_source_size_mb: 5.0  # skip RAPTOR for sources > 5 MB (prevents runaway costs)
 
   # ── GraphRAG entity-centric retrieval ────────────────────────────────────────
-  # Requires LLM during ingest. Extracts entities + relations; expands query
-  # results at retrieval time via an entity graph.
+  # Fast-graph mode (default): entity graph built with zero LLM calls.
+  #   - Entities extracted by regex noun-phrase heuristics (no LLM, no GLiNER)
+  #   - Relations disabled (the expensive LLM pass)
+  #   - Community detection off
+  #   → Ingest speed identical to having graph_rag: false
+  #   → VS Code Graph Panel KG tab populated; entity-based retrieval expansion active
+  #
+  # To enable richer graph (LLM entity descriptions + relations), set:
+  #   graph_rag_depth: standard
+  #   graph_rag_relations: true
   graph_rag: true
+  graph_rag_depth: light          # light = regex only, zero LLM calls; standard = LLM entity descriptions
   graph_rag_budget: 3             # extra graph-expanded docs added beyond top_k
-  graph_rag_relations: true       # extract SUBJECT | RELATION | OBJECT triples
+  graph_rag_relations: false      # set true to extract SUBJECT | RELATION | OBJECT triples (LLM-heavy)
   graph_rag_include_raptor_summaries: true  # use RAPTOR summaries as GraphRAG units for large sources
   raptor_graphrag_leaf_skip_threshold: 3    # skip leaf extraction for sources with >= N leaf chunks (use RAPTOR summaries instead)
   graph_rag_min_entities_for_relations: 3   # skip relation extraction for chunks with fewer entities
@@ -220,8 +229,8 @@ rag:
   # graph_rag_relation_backend: llm  # "rebel" = pip install axon[rebel]
   # graph_rag_gliner_model: "urchade/gliner_mediumv2.1"
   # Set to a local path for fully offline operation: "C:/dev/HF_models/gliner_medium_v21"
-  # A3: Extraction depth tier: light (no LLM, noun-phrases only) | standard (default) | deep (+ claims + canonicalize)
-  # graph_rag_depth: standard
+  # A3: Extraction depth tier: light (no LLM, noun-phrases only) | standard (LLM entity descriptions) | deep (+ claims + canonicalize)
+  # graph_rag_depth: light  ← already set above; override here only if you need per-run variation
 
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.

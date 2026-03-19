@@ -136,7 +136,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
-| `/graph-viz [path]` | Export entity–relation graph as interactive HTML (requires `pip install axon[graphrag]`); omit path to save to temp dir |
+| `/graph-viz [path]` | Export entity–relation graph as interactive HTML (requires `pip install axon[graphrag]`); omit path to save to temp dir. For a live VS Code panel use `Axon: Show Graph for Query…` instead. |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
 | `/quit`, `/exit` | Exit the REPL |
@@ -215,6 +215,12 @@ rag:
   top_k: 10
   hybrid_search: true
 
+  # Fast-graph mode (default): entity graph with zero LLM calls at ingest time.
+  # graph_rag_depth: light        → regex noun-phrase extraction, no LLM
+  # graph_rag_relations: false    → skip relation extraction (LLM-heavy)
+  # → VS Code Graph Panel KG tab populated; ingest speed unchanged vs graph_rag: false
+  # To upgrade: set graph_rag_depth: standard + graph_rag_relations: true
+  #
   # GraphRAG-style indexing and retrieval. Implements: hierarchical community detection
   # (Leiden via graspologic, or Louvain fallback), LLM community reports, map-reduce global
   # search, token-budgeted local search, entity/relation graphs, optional claim/covariate

@@ -1134,6 +1134,22 @@ async def get_graph_visualization():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/graph/data", tags=["graph"])
+async def graph_data():
+    """Return the entity/relation graph as JSON for VS Code webview consumption."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    return brain.build_graph_payload()
+
+
+@app.get("/code-graph/data", tags=["graph"])
+async def code_graph_data():
+    """Return the code structure graph (files, classes, functions) as JSON for VS Code webview."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    return brain.build_code_graph_payload()
+
+
 @app.post("/add_text")
 async def add_text(request: TextIngestRequest):
     if not brain:

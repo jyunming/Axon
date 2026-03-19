@@ -11,6 +11,222 @@ let externalServerPid: number | undefined; // PID of a server we didn't spawn bu
 let outputChannel: vscode.OutputChannel;
 
 // ---------------------------------------------------------------------------
+// Graph Panel
+// ---------------------------------------------------------------------------
+
+class AxonGraphPanel {
+  static currentPanel: AxonGraphPanel | undefined;
+  private readonly _panel: vscode.WebviewPanel;
+  private readonly _extensionUri: vscode.Uri;
+  private _disposables: vscode.Disposable[] = [];
+
+  static createOrReveal(context: vscode.ExtensionContext): AxonGraphPanel {
+    if (AxonGraphPanel.currentPanel) {
+      AxonGraphPanel.currentPanel._panel.reveal(vscode.ViewColumn.Beside);
+      return AxonGraphPanel.currentPanel;
+    }
+    const mediaUri = vscode.Uri.joinPath(context.extensionUri, 'media');
+    const panel = vscode.window.createWebviewPanel(
+      'axonGraph', 'Axon Graph', vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [mediaUri],
+      }
+    );
+    AxonGraphPanel.currentPanel = new AxonGraphPanel(panel, context.extensionUri);
+    return AxonGraphPanel.currentPanel;
+  }
+
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+    this._panel = panel;
+    this._extensionUri = extensionUri;
+    this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+    this._panel.webview.onDidReceiveMessage(
+      (msg: any) => this._handleMessage(msg),
+      null, this._disposables
+    );
+    this._panel.webview.html = this._loadingHtml('Axon Graph');
+  }
+
+  update(data: { query: string; answer: string; sources: any[]; knowledgeGraph: any; codeGraph: any }) {
+    this._panel.title = `Axon: ${data.query.slice(0, 40)}`;
+    this._panel.webview.html = this._buildHtml(data);
+  }
+
+  showLoading(query: string) {
+    this._panel.title = `Axon: ${query.slice(0, 40)}…`;
+    this._panel.webview.html = this._loadingHtml(query);
+  }
+
+  private _handleMessage(msg: any) {
+    if (msg.command === 'openFile') {
+      const uri = vscode.Uri.file(msg.path);
+      vscode.window.showTextDocument(uri, {
+        selection: new vscode.Range(
+          Math.max(0, (msg.line || 1) - 1), 0,
+          Math.max(0, (msg.line || 1) - 1), 0
+        )
+      });
+    }
+  }
+
+  private _loadingHtml(query: string): string {
+    const csp = `default-src 'none'; style-src 'unsafe-inline';`;
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body style="background:#1e1e1e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+      <div style="text-align:center">
+        <div style="font-size:2em;margin-bottom:1em">⟳</div>
+        <div>Loading graph for: <em>${escapeHtml(query)}</em></div>
+      </div>
+    </body></html>`;
+  }
+
+  private _buildHtml(data: { query: string; answer: string; sources: any[]; knowledgeGraph: any; codeGraph: any }): string {
+    // Serialize data for the webview — injected via <script type="application/json">,
+    // which the browser treats as opaque data (never executed), so it is NOT subject
+    // to script-src CSP. This eliminates the need for 'unsafe-inline'.
+    const dataJson = JSON.stringify(data).replace(/<\/script>/gi, '<\\/script>');
+
+    const forceGraphUri = this._panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'media', '3d-force-graph.min.js')
+    );
+    const panelJsUri = this._panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'media', 'graph-panel.js')
+    );
+
+    // No inline scripts → no 'unsafe-inline' needed.  Just cspSource covers both external files.
+    const cspSrc = this._panel.webview.cspSource;
+    const csp = `default-src 'none'; script-src ${cspSrc}; style-src 'unsafe-inline';`;
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1e1e1e; color: #d4d4d4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100vh; display: flex; overflow: hidden; }
+  #left { width: 35%; min-width: 260px; display: flex; flex-direction: column; border-right: 1px solid #333; overflow: hidden; }
+  #right { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  #tab-bar { display: flex; border-bottom: 1px solid #333; background: #252526; flex-shrink: 0; }
+  .tab { padding: 6px 16px; font-size: 0.78em; cursor: pointer; border-bottom: 2px solid transparent; color: #888; user-select: none; }
+  .tab:hover { color: #d4d4d4; }
+  .tab-active { color: #d4d4d4; border-bottom-color: #569cd6; }
+  .tab-disabled { opacity: 0.38; cursor: not-allowed; }
+  #graph-area { flex: 1; position: relative; overflow: hidden; }
+  #graph-kg, #graph-cg { position: absolute; inset: 0; display: none; }
+  #graph-placeholder { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: #888; font-style: italic; padding: 24px; text-align: center; }
+  .graph-tooltip { position: absolute; display: none; background: #252526; color: #d4d4d4; padding: 6px 10px; border-radius: 4px; font-size: 0.78em; max-width: 260px; pointer-events: none; border: 1px solid #444; z-index: 10; word-break: break-word; }
+  #query-text { padding: 12px 16px; font-size: 0.85em; color: #9cdcfe; border-bottom: 1px solid #333; font-weight: 600; word-break: break-word; }
+  #answer-text { padding: 12px 16px; font-size: 0.82em; line-height: 1.5; overflow-y: auto; flex: 1; border-bottom: 1px solid #333; }
+  #citations { overflow-y: auto; max-height: 200px; padding: 8px; }
+  #citations-heading { padding: 6px 16px; font-size: 0.75em; color: #888; text-transform: uppercase; letter-spacing: 0.05em; background: #252526; border-bottom: 1px solid #333; }
+  .citation { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #2a2a2a; font-size: 0.78em; }
+  .citation:hover { background: #2a2d2e; }
+  .cite-num { color: #569cd6; margin-right: 4px; }
+  .cite-src { color: #4ec9b0; font-weight: 500; }
+  .cite-text { color: #888; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<div id="left">
+  <div id="query-text"></div>
+  <div id="answer-text"></div>
+  <div id="citations-heading">Sources</div>
+  <div id="citations"></div>
+</div>
+<div id="right">
+  <div id="tab-bar">
+    <div id="tab-kg" class="tab">Knowledge Graph</div>
+    <div id="tab-cg" class="tab">Code Graph</div>
+  </div>
+  <div id="graph-area">
+    <div id="graph-kg"></div>
+    <div id="graph-cg"></div>
+    <div id="graph-placeholder">No graph data available.<br>Ingest with <code>graph_rag: true</code> or <code>code_graph: true</code>.</div>
+  </div>
+</div>
+<!-- Data passed as non-executable JSON — exempt from script-src CSP -->
+<script type="application/json" id="app-data">${dataJson}</script>
+<!-- Two external scripts only — no inline JS, satisfies strict script-src CSP -->
+<script src="${forceGraphUri}"></script>
+<script src="${panelJsUri}"></script>
+</body>
+</html>`;
+  }
+
+  dispose() {
+    AxonGraphPanel.currentPanel = undefined;
+    this._panel.dispose();
+    this._disposables.forEach(d => d.dispose());
+    this._disposables = [];
+  }
+}
+
+function escapeHtml(str: string): string {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function showGraphForQuery(
+  context: vscode.ExtensionContext,
+  query: string
+): Promise<'opened' | 'updated' | 'no_graph_available' | 'query_failed'> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+  const apiKey = config.get<string>('apiKey', '');
+
+  const panel = AxonGraphPanel.createOrReveal(context);
+  panel.showLoading(query);
+
+  try {
+    const [queryRes, searchRes, kgRes, cgRes] = await Promise.all([
+      httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey),
+      httpPost(`${apiBase}/search/raw`, { query }, apiKey),
+      httpGet(`${apiBase}/graph/data`, apiKey),
+      httpGet(`${apiBase}/code-graph/data`, apiKey),
+    ]);
+
+    const answer = JSON.parse(queryRes.body);
+    const search = JSON.parse(searchRes.body);
+    const knowledgeGraph = JSON.parse(kgRes.body);
+    const codeGraph      = JSON.parse(cgRes.body);
+
+    if (queryRes.status !== 200) {
+      vscode.window.showErrorMessage(`Axon query failed: ${formatDetail(answer, queryRes.body)}`);
+      panel.dispose();
+      return 'query_failed';
+    }
+
+    panel.update({
+      query,
+      answer: answer.response || '',
+      sources: search.results ?? [],
+      knowledgeGraph,
+      codeGraph,
+    });
+
+    const hasAny = (knowledgeGraph.nodes?.length ?? 0) > 0 || (codeGraph.nodes?.length ?? 0) > 0;
+    return hasAny ? 'opened' : 'no_graph_available';
+  } catch (err) {
+    vscode.window.showErrorMessage(`Axon graph panel error: ${err}`);
+    panel.dispose();
+    return 'query_failed';
+  }
+}
+
+async function showGraphForSelection(context: vscode.ExtensionContext) {
+  const editor = vscode.window.activeTextEditor;
+  const query = editor?.document.getText(editor.selection).trim()
+             || await vscode.window.showInputBox({ prompt: 'Enter query for Axon graph' });
+  if (!query) { return; }
+  await showGraphForQuery(context, query);
+}
+
+// ---------------------------------------------------------------------------
 // Activation
 // ---------------------------------------------------------------------------
 
@@ -35,7 +251,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Start the worker loop
     startCopilotLlmWorker(apiBase, apiKey);
     // Tell the backend to use the 'copilot' provider and PERSIST it
-    waitForHealth(apiBase, 15000).then((running) => {
+    waitForHealth(apiBase, 120_000).then((running) => {
       if (running) {
         httpPost(`${apiBase}/config/update`, { llm_provider: 'copilot', persist: true }, apiKey)
           .then(() => outputChannel.appendLine('Axon backend configured to use Copilot provider (persistent).'))
@@ -63,6 +279,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('axon.redeemShare', () => redeemShare(apiBase)),
     vscode.commands.registerCommand('axon.revokeShare', () => revokeShare(apiBase)),
     vscode.commands.registerCommand('axon.listShares', () => listShares(apiBase)),
+    vscode.commands.registerCommand('axon.showGraphForQuery', async () => {
+      const query = await vscode.window.showInputBox({ prompt: 'Axon: Enter query to visualise' });
+      if (query) { await showGraphForQuery(context, query); }
+    }),
+    vscode.commands.registerCommand('axon.showGraphForSelection', () => showGraphForSelection(context)),
   );
 
   // Register Language Model Tools (for Copilot Agent toolset)
@@ -86,7 +307,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_updateSettings', new AxonUpdateSettingsTool()),
         (vscode as any).lm.registerTool('axon_listShares', new AxonListSharesTool()),
         (vscode as any).lm.registerTool('axon_initStore', new AxonInitStoreTool()),
-        (vscode as any).lm.registerTool('axon_ingestImage', new AxonIngestImageTool())
+        (vscode as any).lm.registerTool('axon_ingestImage', new AxonIngestImageTool()),
+        (vscode as any).lm.registerTool('axon_showGraph', new AxonShowGraphTool(context))
       );
       outputChannel.appendLine('Successfully registered all Axon tools.');
     } else {
@@ -619,7 +841,7 @@ async function ensureServerRunning(apiBase: string, context: vscode.ExtensionCon
     serverProcess = undefined;
   });
 
-  const started = await waitForHealth(apiBase, 30_000); // Increased to 30s
+  const started = await waitForHealth(apiBase, 120_000); // 2 min — model loading takes time
 
   if (started) {
     outputChannel.appendLine('Axon API server is ready.');
@@ -1305,6 +1527,32 @@ class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(`Error during image ingest: ${err}`)
+      ]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Graph panel LM Tool
+// ---------------------------------------------------------------------------
+
+class AxonShowGraphTool implements vscode.LanguageModelTool<any> {
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Opening Axon graph for: "${options.input.query}"…` };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const { query } = options.input;
+    try {
+      const status = await showGraphForQuery(this.context, query);
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart(`Graph panel status: ${status}`)
+      ]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([
+        new (vscode as any).LanguageModelTextPart(`Error opening graph panel: ${err}`)
       ]);
     }
   }

@@ -20,7 +20,8 @@
     "onLanguageModelTool:axon_listProjects",
     "onLanguageModelTool:axon_createProject",
     "onLanguageModelTool:axon_listShares",
-    "onLanguageModelTool:axon_ingestImage"
+    "onLanguageModelTool:axon_ingestImage",
+    "onLanguageModelTool:axon_showGraph"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -189,7 +190,9 @@
               "description": "The project name to switch to (e.g. 'engineering', 'research', 'default')"
             }
           },
-          "required": ["name"]
+          "required": [
+            "name"
+          ]
         }
       },
       {
@@ -340,7 +343,10 @@
         "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects. Requires AxonStore mode — call axon_initStore first if not yet initialised.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonListShares",
-        "inputSchema": {"type": "object", "properties": {}}
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
       },
       {
         "name": "axon_initStore",
@@ -356,7 +362,28 @@
               "description": "Absolute path to the directory where AxonStore/ will be created (e.g. '/data' creates '/data/AxonStore/<username>/')"
             }
           },
-          "required": ["base_path"]
+          "required": [
+            "base_path"
+          ]
+        }
+      },
+      {
+        "name": "axon_showGraph",
+        "displayName": "Axon: Show Graph Panel",
+        "modelDescription": "Open the Axon graph panel for a query. Shows the answer, source citations, and the entity/relationship graph. Use when the user asks to 'show the graph', 'visualise', or 'see connections' for a topic.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonGraph",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The question or topic to visualise"
+            }
+          },
+          "required": [
+            "query"
+          ]
         }
       },
       {
@@ -377,7 +404,9 @@
               "description": "Target project namespace. Omit to use the active project."
             }
           },
-          "required": ["imagePath"]
+          "required": [
+            "imagePath"
+          ]
         }
       }
     ],
@@ -429,6 +458,14 @@
       {
         "command": "axon.listShares",
         "title": "Axon: List Active Shares"
+      },
+      {
+        "command": "axon.showGraphForQuery",
+        "title": "Axon: Show Graph for Query…"
+      },
+      {
+        "command": "axon.showGraphForSelection",
+        "title": "Axon: Show Graph for Selection"
       }
     ],
     "configuration": {
@@ -489,5 +526,8 @@
     "@types/vscode": "^1.93.0",
     "@vscode/vsce": "^2.24.0",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "3d-force-graph": "^1.79.1"
   }
 }

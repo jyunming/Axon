@@ -3814,6 +3814,53 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return {"nodes": nodes, "links": links}
 
+    def build_code_graph_payload(self) -> dict:
+        """Return the code structure graph as {nodes, links} for VS Code webview.
+
+        Node types: ``file``, ``class``, ``function``, ``method``, ``module``.
+        Edge types: ``CONTAINS`` (file→symbol), ``IMPORTS`` (file→file).
+        Returns ``{"nodes": [], "links": []}`` when no code graph has been built.
+        """
+        _COLORS = {
+            "file": "#4ec9b0",
+            "module": "#569cd6",
+            "class": "#c586c0",
+            "function": "#dcdcaa",
+            "method": "#dcdcaa",
+        }
+        nodes: list[dict] = []
+        for node_id, node in self._code_graph.get("nodes", {}).items():
+            ntype = node.get("node_type", "unknown")
+            sig = node.get("signature", "")
+            label = node.get("name", node_id)
+            nodes.append(
+                {
+                    "id": node_id,
+                    "name": label,
+                    "label": label[:28],
+                    "type": ntype,
+                    "color": _COLORS.get(ntype, "#888888"),
+                    "val": 5 if ntype == "file" else 3,
+                    "file_path": node.get("file_path", ""),
+                    "start_line": node.get("start_line") or 1,
+                    "chunk_ids": node.get("chunk_ids", []),
+                    "tooltip": f"[{ntype}] {label}" + (f"\n{sig}" if sig else ""),
+                }
+            )
+        links: list[dict] = []
+        for edge in self._code_graph.get("edges", []):
+            links.append(
+                {
+                    "source": edge.get("source", ""),
+                    "target": edge.get("target", ""),
+                    "label": edge.get("edge_type", ""),
+                    "edge_type": edge.get("edge_type", ""),
+                    "value": 1,
+                    "width": 1,
+                }
+            )
+        return {"nodes": nodes, "links": links}
+
     @staticmethod
     def _render_graph_html(graph: dict) -> str:
         """Render a graph payload (from :meth:`build_graph_payload`) as a 3D HTML viewer.
