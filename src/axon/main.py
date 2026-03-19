@@ -262,8 +262,8 @@ class AxonConfig:
             store_root = Path(self.axon_store_base).expanduser().resolve() / "AxonStore"
             user_dir = store_root / username
             self.projects_root = str(user_dir)
-            self.vector_store_path = str(user_dir / "_default" / "chroma_data")
-            self.bm25_path = str(user_dir / "_default" / "bm25_index")
+            self.vector_store_path = str(user_dir / "default" / "chroma_data")
+            self.bm25_path = str(user_dir / "default" / "bm25_index")
             self.axon_store_mode = True
 
     # RAG Settings
@@ -2426,6 +2426,82 @@ Your primary goal is to help the user by answering questions based on the provid
         )
         return model_name
 
+    def _preflight_model_audit(self) -> None:
+        """Log the source classification for every model asset and fail fast when
+        ``local_assets_only`` is enabled but a model still resolves to a remote ID.
+
+        Source kinds:
+          local_path         — absolute path that exists on disk
+          local_path_missing — absolute path that does NOT exist (misconfigured)
+          hf_cache           — bare HF model ID present in the local HF hub cache
+          remote_id          — bare HF model ID with no local copy found
+          n/a                — feature disabled, model will never be loaded
+        """
+        cfg = self.config
+
+        def _hf_cache_dir() -> str:
+            return os.path.join(
+                os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")),
+                "hub",
+            )
+
+        def _classify(path: str) -> str:
+            if not path:
+                return "n/a"
+            if os.path.isabs(path) or path.startswith("."):
+                return "local_path" if os.path.isdir(path) else "local_path_missing"
+            # Check HF disk cache: models--org--name directory
+            hf_slug = "models--" + path.replace("/", "--")
+            if os.path.isdir(os.path.join(_hf_cache_dir(), hf_slug)):
+                return "hf_cache"
+            return "remote_id"
+
+        # Build the audit table — only include helper models when their feature is active
+        _gliner_active = cfg.graph_rag and cfg.graph_rag_ner_backend == "gliner"
+        _rebel_active = cfg.graph_rag and cfg.graph_rag_relation_backend == "rebel"
+        _llmlingua_active = cfg.compress_context
+
+        rows: list[tuple[str, str]] = [
+            ("embedding", cfg.embedding_model),
+            ("reranker", cfg.reranker_model if cfg.rerank else ""),
+            ("gliner", cfg.graph_rag_gliner_model if _gliner_active else ""),
+            ("rebel", cfg.graph_rag_rebel_model if _rebel_active else ""),
+            ("llmlingua", cfg.graph_rag_llmlingua_model if _llmlingua_active else ""),
+            (
+                "tokenizer",
+                cfg.tokenizer_cache_dir or os.getenv("TIKTOKEN_CACHE_DIR", ""),
+            ),
+        ]
+
+        _KIND_LABEL = {
+            "local_path": "[local]        ",
+            "local_path_missing": "[MISSING]      ",
+            "hf_cache": "[hf_cache]     ",
+            "remote_id": "[remote]       ",
+            "n/a": "[n/a]          ",
+        }
+
+        lines: list[str] = []
+        problems: list[str] = []
+        for name, path in rows:
+            kind = _classify(path)
+            label = _KIND_LABEL[kind]
+            display = path if path else "(disabled)"
+            lines.append(f"  {label} {name:<12} {display}")
+            # Fail-fast candidates: active models that are not on local disk
+            if cfg.local_assets_only and path and kind in ("remote_id", "local_path_missing"):
+                problems.append(f"{name}: {display!r} ({kind})")
+
+        logger.info("Model asset audit:\n%s", "\n".join(lines))
+
+        if problems:
+            raise RuntimeError(
+                "local_assets_only is ON but the following model assets are not available locally:\n"
+                + "".join(f"  - {p}\n" for p in problems)
+                + "Set embedding_models_dir / hf_models_dir in config.yaml, "
+                "or provide absolute paths to pre-downloaded checkpoints."
+            )
+
     def __init__(self, config: AxonConfig | None = None):
         self.config = config or AxonConfig.load()
 
@@ -2491,6 +2567,11 @@ Your primary goal is to help the user by answering questions based on the provid
         if self.config.tokenizer_cache_dir and not os.getenv("TIKTOKEN_CACHE_DIR"):
             os.environ["TIKTOKEN_CACHE_DIR"] = self.config.tokenizer_cache_dir
             logger.info("Tiktoken cache dir: %s", self.config.tokenizer_cache_dir)
+
+        # ── Phase 5: startup preflight audit ──
+        # Logs the source classification for every model asset (local / hf_cache / remote).
+        # Raises RuntimeError early when local_assets_only is ON but assets are missing.
+        self._preflight_model_audit()
 
         # Apply Ollama model directory override before any Ollama client is constructed.
         # Sets OLLAMA_MODELS so the Ollama daemon resolves blobs from the given path.

@@ -22,15 +22,20 @@ AxonStore multi-user shared storage
 ------------------------------------
 When AxonStore mode is active (axon_store_base is set), each OS user gets a
 namespace under {axon_store_base}/AxonStore/{username}/ containing:
-    ShareMount/  — symlinks to other users' shared projects
-    .shares/     — share key manifests
-    _default/    — the user's default project
+    store_meta.json  — store-level identity and version metadata
+    default/         — the user's default project
+    projects/        — authoritative local projects
+    mounts/          — read-only mount descriptors
+    ShareMount/      — symlinks to shared projects (legacy compat)
+    .shares/         — share key manifests
 """
 
 import json
 import os
 import re
 import shutil
+import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,7 +64,28 @@ def set_projects_root(path: str | Path) -> None:
 
 _SEGMENT_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 _MAX_DEPTH: int = 5
+# _default is kept reserved so no one accidentally creates a project with that name.
+# The canonical default project is "default" (no underscore).
 _RESERVED_NAMES: set = {"sharemount", "_default", ".shares"}
+
+
+# ---------------------------------------------------------------------------
+# Namespace ID helpers  (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def build_namespace_id(prefix: str = "ns") -> str:
+    """Generate a new random namespace ID.
+
+    Format: ``{prefix}_{uuid4_hex}``  — e.g. ``proj_3f2a...``
+
+    Args:
+        prefix: Short label for the kind of namespace (``"proj"``, ``"store"``).
+
+    Returns:
+        A 40-character string that is unique with overwhelming probability.
+    """
+    return f"{prefix}_{uuid.uuid4().hex}"
 
 
 class ProjectHasChildrenError(ValueError):
@@ -159,7 +185,11 @@ def ensure_project(name: str, description: str = "") -> Path:
 
 
 def _ensure_single_project(name: str, description: str) -> Path:
-    """Create directories and meta.json for exactly one project node."""
+    """Create directories and meta.json for exactly one project node.
+
+    If ``meta.json`` already exists but is missing ``project_namespace_id``,
+    a new one is assigned and the file is updated in-place (migration path).
+    """
     root = project_dir(name)
     (root / "chroma_data").mkdir(parents=True, exist_ok=True)
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
@@ -172,11 +202,51 @@ def _ensure_single_project(name: str, description: str) -> Path:
                     "name": name,
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                    "project_namespace_id": build_namespace_id("proj"),
                 },
                 indent=2,
             )
         )
+    else:
+        # Backfill missing project_namespace_id for existing projects (Phase 1 migration)
+        meta = json.loads(meta_file.read_text())
+        if "project_namespace_id" not in meta:
+            meta["project_namespace_id"] = build_namespace_id("proj")
+            meta_file.write_text(json.dumps(meta, indent=2))
     return root
+
+
+def get_project_namespace_id(name: str) -> str | None:
+    """Return the ``project_namespace_id`` from a project's ``meta.json``.
+
+    Returns ``None`` if the project does not exist or has no namespace ID yet.
+    Call :func:`ensure_project` first to guarantee the field is present.
+    """
+    meta_file = project_dir(name) / "meta.json"
+    if not meta_file.exists():
+        return None
+    try:
+        meta = json.loads(meta_file.read_text())
+        val = meta.get("project_namespace_id")
+        return str(val) if val is not None else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def get_store_namespace_id(user_dir: Path) -> str | None:
+    """Return the ``store_namespace_id`` from ``store_meta.json``.
+
+    Returns ``None`` if the file does not exist or is unreadable.
+    """
+    store_meta = user_dir / "store_meta.json"
+    if not store_meta.exists():
+        return None
+    try:
+        meta = json.loads(store_meta.read_text())
+        val = meta.get("store_namespace_id")
+        return str(val) if val is not None else None
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def list_descendants(name: str, visited: set[str] | None = None) -> list[str]:
@@ -356,17 +426,63 @@ def delete_project(name: str) -> None:
 def ensure_user_namespace(user_dir: Path) -> None:
     """Create the standard subdirectories under a user's AxonStore namespace.
 
-    Creates: ShareMount/, .shares/, and _default project.
+    Creates: default/, projects/, mounts/, .shares/, and store_meta.json.
     Safe to call multiple times (idempotent).
+
+    Phase 0 migration: if ``_default`` exists and ``default`` does not,
+    renames ``_default`` → ``default`` automatically.  If both exist, raises
+    ``RuntimeError`` to prevent silent data loss.
     """
-    (user_dir / "ShareMount").mkdir(parents=True, exist_ok=True)
-    (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
-    # _default project
-    _ensure_single_project_at(user_dir / "_default", "_default", "Default project")
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Phase 0: migrate _default → default ──────────────────────────────────
+    old_default = user_dir / "_default"
+    new_default = user_dir / "default"
+    if old_default.exists() and not new_default.exists():
+        warnings.warn(
+            f"Migrating '{old_default}' → '{new_default}'. "
+            "The '_default' project name is no longer supported.",
+            stacklevel=2,
+        )
+        old_default.rename(new_default)
+    elif old_default.exists() and new_default.exists():
+        raise RuntimeError(
+            f"Both '_default' and 'default' exist under {user_dir}. "
+            "Remove or merge '_default' manually before starting Axon."
+        )
+
+    # ── Standard structure ────────────────────────────────────────────────────
+    (user_dir / "projects").mkdir(exist_ok=True)
+    (user_dir / "mounts").mkdir(exist_ok=True)
+    (user_dir / ".shares").mkdir(exist_ok=True)
+    # ShareMount kept for backwards compatibility with share-link helpers
+    (user_dir / "ShareMount").mkdir(exist_ok=True)
+
+    # Default project (canonical — no underscore)
+    _ensure_single_project_at(new_default, "default", "Default project")
+
+    # ── Phase 1: store_meta.json ─────────────────────────────────────────────
+    store_meta = user_dir / "store_meta.json"
+    if not store_meta.exists():
+        store_meta.write_text(
+            json.dumps(
+                {
+                    "store_version": 2,
+                    "store_scope": "user_scoped",
+                    "store_namespace_id": build_namespace_id("store"),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            )
+        )
 
 
 def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
-    """Create directories and meta.json for a project at an explicit path."""
+    """Create directories and meta.json for a project at an explicit path.
+
+    If ``meta.json`` already exists but is missing ``project_namespace_id``,
+    a new one is assigned in-place (migration path).
+    """
     (root / "chroma_data").mkdir(parents=True, exist_ok=True)
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
     (root / "sessions").mkdir(parents=True, exist_ok=True)
@@ -378,10 +494,16 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
                     "name": name,
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                    "project_namespace_id": build_namespace_id("proj"),
                 },
                 indent=2,
             )
         )
+    else:
+        meta = json.loads(meta_file.read_text())
+        if "project_namespace_id" not in meta:
+            meta["project_namespace_id"] = build_namespace_id("proj")
+            meta_file.write_text(json.dumps(meta, indent=2))
     return root
 
 

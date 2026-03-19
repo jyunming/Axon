@@ -8493,6 +8493,10 @@ def test_local_assets_only_sets_env_and_resolves_models(tmp_path, monkeypatch):
     hf_dir.mkdir()
     (hf_dir / "gliner_medium-v2.1").mkdir()
 
+    emb_dir = tmp_path / "emb"
+    emb_dir.mkdir()
+    (emb_dir / "all-MiniLM-L6-v2").mkdir()
+
     monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
 
@@ -8502,10 +8506,164 @@ def test_local_assets_only_sets_env_and_resolves_models(tmp_path, monkeypatch):
         cfg = AxonConfig(
             local_assets_only=True,
             hf_models_dir=str(hf_dir),
+            embedding_models_dir=str(emb_dir),
             graph_rag_gliner_model="urchade/gliner_medium-v2.1",
+            rerank=False,
         )
         brain = AxonBrain(cfg)
 
     assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
     assert os.environ.get("HF_HUB_OFFLINE") == "1"
     assert brain.config.graph_rag_gliner_model == str(hf_dir / "gliner_medium-v2.1")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Preflight model audit
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_audit_logs_all_rows(tmp_path, caplog):
+    """_preflight_model_audit logs one row per model asset."""
+    import logging
+
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "emb" / "all-MiniLM-L6-v2"
+    emb_dir.mkdir(parents=True)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            embedding_model_path=str(emb_dir),
+            rerank=False,
+            graph_rag=False,
+            compress_context=False,
+        )
+        with caplog.at_level(logging.INFO, logger="Axon"):
+            AxonBrain(cfg)
+
+    audit_msgs = [r.message for r in caplog.records if "Model asset audit" in r.message]
+    assert audit_msgs, "Expected 'Model asset audit' log entry"
+    audit_text = audit_msgs[0]
+    # All six row labels must appear
+    for label in ("embedding", "reranker", "gliner", "rebel", "llmlingua", "tokenizer"):
+        assert label in audit_text, f"Missing row '{label}' in audit log"
+
+
+def test_preflight_audit_classifies_local_path(tmp_path, caplog):
+    """A resolved absolute path is classified as [local]."""
+    import logging
+
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "models" / "all-MiniLM-L6-v2"
+    emb_dir.mkdir(parents=True)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(embedding_model=str(emb_dir), rerank=False, graph_rag=False)
+        with caplog.at_level(logging.INFO, logger="Axon"):
+            AxonBrain(cfg)
+
+    audit = next(r.message for r in caplog.records if "Model asset audit" in r.message)
+    assert "[local]" in audit
+
+
+def test_preflight_audit_classifies_remote_id(caplog):
+    """A bare HuggingFace model ID is classified as [remote] when not in local cache."""
+    import logging
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        # Use a model ID that definitely won't be in a tmp HF cache
+        cfg = AxonConfig(
+            embedding_model="definitely-nonexistent-model-xyz/v1",
+            rerank=False,
+            graph_rag=False,
+            local_assets_only=False,  # don't fail fast, just audit
+        )
+        # Patch HF cache dir to a non-existent path so hf_cache check always misses
+        with patch.dict(os.environ, {"HF_HOME": "/nonexistent/hf_home"}):
+            with caplog.at_level(logging.INFO, logger="Axon"):
+                AxonBrain(cfg)
+
+    audit = next(r.message for r in caplog.records if "Model asset audit" in r.message)
+    assert "[remote]" in audit
+
+
+def test_preflight_fails_fast_when_local_assets_only_and_remote(tmp_path, monkeypatch):
+    """RuntimeError raised at init when local_assets_only=True and embedding is a remote ID."""
+    import pytest
+
+    from axon.main import AxonBrain, AxonConfig
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            embedding_model="all-MiniLM-L6-v2",  # bare ID, no local dir configured
+            rerank=False,
+            graph_rag=False,
+        )
+        # Force HF cache miss so the bare ID cannot be resolved to hf_cache either
+        with patch.dict(os.environ, {"HF_HOME": str(tmp_path / "empty_hf")}):
+            with pytest.raises(RuntimeError, match="local_assets_only is ON"):
+                AxonBrain(cfg)
+
+
+def test_preflight_fails_fast_missing_path(tmp_path, monkeypatch):
+    """RuntimeError raised when local_assets_only=True and an absolute path does not exist."""
+    import pytest
+
+    from axon.main import AxonBrain, AxonConfig
+
+    missing = str(tmp_path / "nonexistent_model_dir")
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            embedding_model=missing,  # absolute but doesn't exist
+            rerank=False,
+            graph_rag=False,
+        )
+        with pytest.raises(RuntimeError, match="local_assets_only is ON"):
+            AxonBrain(cfg)
+
+
+def test_preflight_no_error_when_local_assets_only_all_local(tmp_path, monkeypatch):
+    """No error when local_assets_only=True and all active model paths exist on disk."""
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "emb" / "my-embed-model"
+    emb_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            embedding_model=str(emb_dir),
+            rerank=False,
+            graph_rag=False,
+        )
+        # Should not raise
+        brain = AxonBrain(cfg)
+
+    assert brain.config.local_assets_only is True
