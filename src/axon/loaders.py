@@ -269,12 +269,15 @@ class CodeFileLoader(BaseLoader):
     """
 
     def load(self, path: str) -> list[dict[str, Any]]:
+        import hashlib as _hl
+
         _check_file_size(path)
         with open(path, encoding="utf-8", errors="ignore") as f:
             content = f.read()
+        stable_id = "code_" + _hl.sha256(os.path.abspath(path).encode("utf-8")).hexdigest()[:24]
         return [
             {
-                "id": os.path.basename(path),
+                "id": stable_id,
                 "text": content,
                 "metadata": {"source": path, "type": "code"},
             }
@@ -497,7 +500,7 @@ class URLLoader(BaseLoader):
         text = _extract_html_text(raw) if "html" in content_type else raw
         import hashlib as _hl
 
-        stable_id = "url_" + _hl.md5(url.encode("utf-8")).hexdigest()
+        stable_id = "url_" + _hl.sha256(url.encode("utf-8")).hexdigest()[:32]
         return [
             {
                 "id": stable_id,

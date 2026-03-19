@@ -3865,8 +3865,8 @@ Your primary goal is to help the user by answering questions based on the provid
     def _render_graph_html(graph: dict) -> str:
         """Render a graph payload (from :meth:`build_graph_payload`) as a 3D HTML viewer.
 
-        The viewer uses three.js + 3d-force-graph (CDN) and is fully self-contained
-        apart from those two JS libraries.  No server required.
+        The viewer loads three.js and 3d-force-graph from unpkg.com CDN — requires
+        internet access to render.  The HTML file itself needs no server.
         """
         import json as _json
 

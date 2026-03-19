@@ -791,12 +791,19 @@ async def refresh_docs():
             if current_hash == record.get("content_hash"):
                 results["skipped"].append(source_id)
                 continue
-            # Content changed — re-ingest the file
-            loader = DirectoryLoader()
+            # Content changed — re-ingest the file using the same loader dispatch as DirectoryLoader
             import functools
 
+            loader = DirectoryLoader()
+            suffix = os.path.splitext(source_id)[1].lower()
+            loader_instance = loader.loaders.get(suffix)
+            if loader_instance is None:
+                results["errors"].append(
+                    {"source": source_id, "error": f"no loader for extension '{suffix}'"}
+                )
+                continue
             docs = await asyncio.get_event_loop().run_in_executor(
-                None, functools.partial(loader._load_file, source_id)
+                None, functools.partial(loader_instance.load, source_id)
             )
             if docs:
                 await asyncio.get_event_loop().run_in_executor(
@@ -1122,7 +1129,7 @@ async def finalize_graph():
 
 @app.get("/graph/visualize", tags=["graph"])
 async def get_graph_visualization():
-    """Return the entity–relation graph as a self-contained interactive HTML page."""
+    """Return the entity–relation graph as an interactive HTML page (requires internet for CDN JS)."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
