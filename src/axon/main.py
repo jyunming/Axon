@@ -3870,7 +3870,8 @@ Your primary goal is to help the user by answering questions based on the provid
         """
         import json as _json
 
-        data_json = _json.dumps(graph, ensure_ascii=False)
+        # Escape </script> so a crafted entity string cannot break out of the script context.
+        data_json = _json.dumps(graph, ensure_ascii=False).replace("</script>", "<\\/script>")
         n_nodes = len(graph["nodes"])
         n_links = len(graph["links"])
         return f"""<!doctype html>

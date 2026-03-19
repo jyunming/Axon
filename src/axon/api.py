@@ -786,14 +786,9 @@ async def refresh_docs():
             results["missing"].append(source_id)
             continue
         try:
-            with open(source_id, "rb") as f:
-                current_hash = _hashlib.md5(f.read()).hexdigest()
-            if current_hash == record.get("content_hash"):
-                results["skipped"].append(source_id)
-                continue
-            # Content changed — re-ingest the file using the same loader dispatch as DirectoryLoader
             import functools
 
+            loop = asyncio.get_running_loop()
             loader = DirectoryLoader()
             suffix = os.path.splitext(source_id)[1].lower()
             loader_instance = loader.loaders.get(suffix)
@@ -802,18 +797,24 @@ async def refresh_docs():
                     {"source": source_id, "error": f"no loader for extension '{suffix}'"}
                 )
                 continue
-            docs = await asyncio.get_event_loop().run_in_executor(
+            # Load first so we can compute the hash the same way ingest does:
+            # MD5 of concatenated chunk texts (not raw file bytes).
+            docs = await loop.run_in_executor(
                 None, functools.partial(loader_instance.load, source_id)
             )
-            if docs:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, functools.partial(brain.ingest, docs)
-                )
-                results["reingested"].append(source_id)
-            else:
+            if not docs:
                 results["errors"].append(
                     {"source": source_id, "error": "loader returned no documents"}
                 )
+                continue
+            combined = "".join(d.get("text", "") for d in docs)
+            current_hash = _hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
+            if current_hash == record.get("content_hash"):
+                results["skipped"].append(source_id)
+                continue
+            # Content changed — re-ingest
+            await loop.run_in_executor(None, functools.partial(brain.ingest, docs))
+            results["reingested"].append(source_id)
         except Exception as exc:
             results["errors"].append({"source": source_id, "error": str(exc)})
     return results
