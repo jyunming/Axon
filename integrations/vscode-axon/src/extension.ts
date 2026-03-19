@@ -356,9 +356,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_getCollection', new AxonGetCollectionTool()),
         (vscode as any).lm.registerTool('axon_clearCollection', new AxonClearCollectionTool()),
         (vscode as any).lm.registerTool('axon_updateSettings', new AxonUpdateSettingsTool()),
+        (vscode as any).lm.registerTool('axon_shareProject', new AxonShareProjectTool()),
+        (vscode as any).lm.registerTool('axon_redeemShare', new AxonRedeemShareTool()),
+        (vscode as any).lm.registerTool('axon_revokeShare', new AxonRevokeShareTool()),
         (vscode as any).lm.registerTool('axon_listShares', new AxonListSharesTool()),
         (vscode as any).lm.registerTool('axon_initStore', new AxonInitStoreTool()),
         (vscode as any).lm.registerTool('axon_ingestImage', new AxonIngestImageTool()),
+        (vscode as any).lm.registerTool('axon_refreshIngest', new AxonRefreshIngestTool()),
+        (vscode as any).lm.registerTool('axon_listStaleDocs', new AxonListStaleDocsTool()),
+        (vscode as any).lm.registerTool('axon_clearKnowledgeBase', new AxonClearKnowledgeBaseTool()),
+        (vscode as any).lm.registerTool('axon_showGraphStatus', new AxonShowGraphStatusTool()),
         (vscode as any).lm.registerTool('axon_showGraph', new AxonShowGraphTool(context))
       );
       outputChannel.appendLine('Successfully registered all Axon tools.');
@@ -1547,6 +1554,86 @@ async function showGraphStatus(apiBase: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Share LM Tools — generate, redeem, revoke, list
+// ---------------------------------------------------------------------------
+
+class AxonShareProjectTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    const { project, grantee } = options.input ?? {};
+    return { invocationMessage: `Generating share key for project "${project}" → ${grantee}…` };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { project, grantee, write_access = false } = options.input ?? {};
+    try {
+      const result = await httpPost(`${apiBase}/share/generate`, { project, grantee, write_access }, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Share generation failed: ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Share key generated.\nProject: ${data.project}\nGrantee: ${data.grantee}\nAccess: ${data.write_access ? 'read+write' : 'read-only'}\nKey ID: ${data.key_id}\n\nShare string (send to ${data.grantee}):\n${data.share_string}`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Share generation error: ${err}`)]);
+    }
+  }
+}
+
+class AxonRedeemShareTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: 'Redeeming share key and mounting shared project…' };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { share_string } = options.input ?? {};
+    try {
+      const result = await httpPost(`${apiBase}/share/redeem`, { share_string }, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Redeem failed: ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Share redeemed. Project "${data.owner}/${data.project}" mounted as "${data.mount_name}" (${data.write_access ? 'read+write' : 'read-only'}).`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Redeem error: ${err}`)]);
+    }
+  }
+}
+
+class AxonRevokeShareTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Revoking share key ${options.input?.key_id}…` };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { key_id } = options.input ?? {};
+    try {
+      const result = await httpPost(`${apiBase}/share/revoke`, { key_id }, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Revoke failed: ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Share ${data.key_id} revoked. Grantee "${data.grantee}" no longer has access to "${data.project}".`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Revoke error: ${err}`)]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // AxonStore LM Tools
 // ---------------------------------------------------------------------------
 
@@ -1708,6 +1795,107 @@ class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(`Error during image ingest: ${err}`)
       ]);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Refresh / stale / clear / graph-status LM Tools
+// ---------------------------------------------------------------------------
+
+class AxonRefreshIngestTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: 'Re-ingesting changed files…' };
+  }
+
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    try {
+      const result = await httpPost(`${apiBase}/ingest/refresh`, {}, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Refresh error: ${formatDetail(data, result.body)}`)]);
+      }
+      const r = (data.reingested || []).length;
+      const s = (data.skipped || []).length;
+      const m = (data.missing || []).length;
+      const e = (data.errors || []).length;
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Refresh complete: ${r} re-ingested, ${s} unchanged, ${m} missing, ${e} errors.\n` +
+        (data.reingested?.length ? `Updated: ${data.reingested.join(', ')}` : '')
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Refresh error: ${err}`)]);
+    }
+  }
+}
+
+class AxonListStaleDocsTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    const days = options.input?.days ?? 7;
+    return { invocationMessage: `Listing documents not refreshed in ${days} days…` };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const days = options.input?.days ?? 7;
+    try {
+      const result = await httpGet(`${apiBase}/collection/stale?days=${days}`, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Stale list error: ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Stale list error: ${err}`)]);
+    }
+  }
+}
+
+class AxonClearKnowledgeBaseTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: 'Clearing Axon knowledge base for current project…' };
+  }
+
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    try {
+      const result = await httpPost(`${apiBase}/clear`, {}, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Clear error: ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart('Knowledge base cleared for current project.')]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Clear error: ${err}`)]);
+    }
+  }
+}
+
+class AxonShowGraphStatusTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: 'Fetching GraphRAG status…' };
+  }
+
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    try {
+      const result = await httpGet(`${apiBase}/graph/status`, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph status error: ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph status error: ${err}`)]);
     }
   }
 }

@@ -17,10 +17,26 @@
     "onLanguageModelTool:axon_queryKnowledge",
     "onLanguageModelTool:axon_ingestText",
     "onLanguageModelTool:axon_ingestUrl",
+    "onLanguageModelTool:axon_ingestPath",
+    "onLanguageModelTool:axon_getIngestStatus",
     "onLanguageModelTool:axon_listProjects",
+    "onLanguageModelTool:axon_switchProject",
     "onLanguageModelTool:axon_createProject",
+    "onLanguageModelTool:axon_deleteProject",
+    "onLanguageModelTool:axon_deleteDocuments",
+    "onLanguageModelTool:axon_getCollection",
+    "onLanguageModelTool:axon_clearCollection",
+    "onLanguageModelTool:axon_updateSettings",
+    "onLanguageModelTool:axon_shareProject",
+    "onLanguageModelTool:axon_redeemShare",
+    "onLanguageModelTool:axon_revokeShare",
     "onLanguageModelTool:axon_listShares",
+    "onLanguageModelTool:axon_initStore",
     "onLanguageModelTool:axon_ingestImage",
+    "onLanguageModelTool:axon_refreshIngest",
+    "onLanguageModelTool:axon_listStaleDocs",
+    "onLanguageModelTool:axon_clearKnowledgeBase",
+    "onLanguageModelTool:axon_showGraphStatus",
     "onLanguageModelTool:axon_showGraph"
   ],
   "main": "./out/extension.js",
@@ -338,6 +354,50 @@
         }
       },
       {
+        "name": "axon_shareProject",
+        "displayName": "Axon: Share Project",
+        "modelDescription": "Generate an HMAC share key that lets another user access one of your projects. Returns a share_string to send to the grantee out-of-band (email, Slack, etc.) and a key_id for future revocation. Requires AxonStore mode — call axon_initStore first.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonShareProject",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": { "type": "string", "description": "Name of the project to share (must exist in your AxonStore)" },
+            "grantee": { "type": "string", "description": "OS username of the recipient on the shared filesystem" },
+            "write_access": { "type": "boolean", "description": "If true, grantee can ingest into the shared project. Default: false (read-only).", "default": false }
+          },
+          "required": ["project", "grantee"]
+        }
+      },
+      {
+        "name": "axon_redeemShare",
+        "displayName": "Axon: Redeem Share",
+        "modelDescription": "Redeem a share string received from another user to mount their project in your ShareMount/ directory. After redemption the shared project appears in your project list and can be queried. Mounting uses symlinks — currently only supported on Linux.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonRedeemShare",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "share_string": { "type": "string", "description": "The base64-encoded share string received from the project owner" }
+          },
+          "required": ["share_string"]
+        }
+      },
+      {
+        "name": "axon_revokeShare",
+        "displayName": "Axon: Revoke Share",
+        "modelDescription": "Revoke a previously issued share key by key_id. The grantee's mount will be removed on their next access. Use axon_listShares to find the key_id to revoke.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonRevokeShare",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "key_id": { "type": "string", "description": "The key_id of the share to revoke (e.g. sk_a1b2c3d4). Get it from axon_listShares." }
+          },
+          "required": ["key_id"]
+        }
+      },
+      {
         "name": "axon_listShares",
         "displayName": "Axon: List Active Shares",
         "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects. Requires AxonStore mode — call axon_initStore first if not yet initialised.",
@@ -407,6 +467,55 @@
           "required": [
             "imagePath"
           ]
+        }
+      },
+      {
+        "name": "axon_refreshIngest",
+        "displayName": "Axon: Refresh Ingest",
+        "modelDescription": "Re-ingest tracked files whose content has changed since the last ingest. Returns counts of re-ingested, unchanged, missing, and errored files. Use after editing source files to keep the knowledge base current without re-ingesting everything.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonRefreshIngest",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "axon_listStaleDocs",
+        "displayName": "Axon: List Stale Documents",
+        "modelDescription": "Return documents that have not been re-ingested within N calendar days. Use to identify which parts of the knowledge base are outdated and may need refreshing. Pair with axon_refreshIngest to update stale sources.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonListStaleDocs",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "days": {
+              "type": "integer",
+              "description": "Age threshold in days. Documents older than this are returned. Default: 7.",
+              "default": 7
+            }
+          }
+        }
+      },
+      {
+        "name": "axon_clearKnowledgeBase",
+        "displayName": "Axon: Clear Knowledge Base",
+        "modelDescription": "Clear the entire vector store and BM25 index for the current project. This is destructive and cannot be undone — all ingested documents for the active project are removed. Use only when a full re-ingest is intended.",
+        "canBeReferencedInPrompt": false,
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "axon_showGraphStatus",
+        "displayName": "Axon: Show GraphRAG Status",
+        "modelDescription": "Return the current state of the GraphRAG entity-relationship graph: entity count, relation edge count, community summary count, and whether a community build is in progress. Use to check whether GraphRAG data is available before querying.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonShowGraphStatus",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
         }
       }
     ],
