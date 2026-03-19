@@ -540,6 +540,62 @@ class TestNamespaceIds:
 
 
 # ---------------------------------------------------------------------------
+# Phase 2: canonical ID builders
+# ---------------------------------------------------------------------------
+
+
+class TestIdBuilder:
+    def test_build_source_id_format(self):
+        from axon.projects import build_source_id
+
+        sid = build_source_id("proj_abc", "file", "/docs/overview.md")
+        assert sid.startswith("src_")
+        assert len(sid) == 28  # "src_" + 24 hex chars
+
+    def test_build_source_id_deterministic(self):
+        from axon.projects import build_source_id
+
+        sid1 = build_source_id("proj_abc", "file", "/docs/overview.md")
+        sid2 = build_source_id("proj_abc", "file", "/docs/overview.md")
+        assert sid1 == sid2
+
+    def test_build_source_id_different_namespaces(self):
+        from axon.projects import build_source_id
+
+        sid1 = build_source_id("proj_aaa", "file", "/docs/overview.md")
+        sid2 = build_source_id("proj_bbb", "file", "/docs/overview.md")
+        assert sid1 != sid2
+
+    def test_build_chunk_id_format(self):
+        from axon.projects import build_chunk_id
+
+        cid = build_chunk_id("proj_abc", "src_xyz", "root", 0)
+        assert cid.startswith("chk_")
+        assert len(cid) == 28
+
+    def test_build_chunk_id_deterministic(self):
+        from axon.projects import build_chunk_id
+
+        cid1 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "leaf")
+        cid2 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "leaf")
+        assert cid1 == cid2
+
+    def test_build_chunk_id_unique_per_index(self):
+        from axon.projects import build_chunk_id
+
+        cid1 = build_chunk_id("proj_abc", "src_xyz", "root", 0)
+        cid2 = build_chunk_id("proj_abc", "src_xyz", "root", 1)
+        assert cid1 != cid2
+
+    def test_build_chunk_id_unique_per_kind(self):
+        from axon.projects import build_chunk_id
+
+        cid1 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "leaf")
+        cid2 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "raptor_l1")
+        assert cid1 != cid2
+
+
+# ---------------------------------------------------------------------------
 # AxonStore: reserved names
 # ---------------------------------------------------------------------------
 

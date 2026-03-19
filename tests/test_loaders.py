@@ -50,7 +50,9 @@ def test_text_loader_basic(tmp_path):
     assert len(docs) == 1
     _assert_doc(docs[0])
     assert docs[0]["text"] == "Hello world"
-    assert docs[0]["id"] == "hello.txt"
+    # ID is now a stable hash (not basename) — just verify it's non-empty
+    assert docs[0]["id"]
+    assert docs[0]["id"] != "hello.txt"
 
 
 def test_text_loader_empty(tmp_path):
@@ -784,3 +786,35 @@ class TestSmartTextLoaderIdFix:
         source = r"C:\data/project\notes.txt"
         docs = loader.load_text("Some content.", source=source)
         assert docs[0]["id"] == source
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: stable file IDs
+# ---------------------------------------------------------------------------
+
+
+def test_text_loader_id_is_not_basename(tmp_path):
+    """TextLoader id should not be just the filename."""
+    from axon.loaders import TextLoader
+
+    f = tmp_path / "overview.txt"
+    f.write_text("hello world")
+    docs = TextLoader().load(str(f))
+    assert docs
+    assert docs[0]["id"] != "overview.txt"
+    assert len(docs[0]["id"]) > 10  # stable hash
+
+
+def test_two_files_same_name_different_dirs_get_different_ids(tmp_path):
+    """Two files with same basename in different dirs get distinct IDs."""
+    from axon.loaders import TextLoader
+
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    (dir_a / "doc.txt").write_text("content a")
+    (dir_b / "doc.txt").write_text("content b")
+    docs_a = TextLoader().load(str(dir_a / "doc.txt"))
+    docs_b = TextLoader().load(str(dir_b / "doc.txt"))
+    assert docs_a[0]["id"] != docs_b[0]["id"]

@@ -156,12 +156,18 @@ class SemanticTextSplitter:
         """Split a list of documents into semantic chunks."""
         all_chunks = []
         for doc in documents:
+            doc_id = doc["id"]
             text_chunks = self.split(doc["text"])
             for i, chunk in enumerate(text_chunks):
                 metadata = doc.get("metadata", {}).copy()
                 metadata.update({"chunk": i, "total_chunks": len(text_chunks)})
+                chunk_meta = {**metadata}
+                chunk_meta.setdefault("source_id", doc.get("id", doc_id))
+                chunk_meta.setdefault("subdoc_locator", "root")
+                chunk_meta["chunk_index"] = i
+                chunk_meta.setdefault("chunk_kind", "leaf")
                 all_chunks.append(
-                    {"id": f"{doc['id']}_chunk_{i}", "text": chunk, "metadata": metadata}
+                    {"id": f"{doc_id}_chunk_{i}", "text": chunk, "metadata": chunk_meta}
                 )
         return all_chunks
 
@@ -264,12 +270,18 @@ class RecursiveCharacterTextSplitter:
         """Split a list of documents into chunks."""
         all_chunks = []
         for doc in documents:
+            doc_id = doc["id"]
             text_chunks = self.split(doc["text"])
             for i, chunk in enumerate(text_chunks):
                 metadata = doc.get("metadata", {}).copy()
                 metadata.update({"chunk": i, "total_chunks": len(text_chunks)})
+                chunk_meta = {**metadata}
+                chunk_meta.setdefault("source_id", doc.get("id", doc_id))
+                chunk_meta.setdefault("subdoc_locator", "root")
+                chunk_meta["chunk_index"] = i
+                chunk_meta.setdefault("chunk_kind", "leaf")
                 all_chunks.append(
-                    {"id": f"{doc['id']}_chunk_{i}", "text": chunk, "metadata": metadata}
+                    {"id": f"{doc_id}_chunk_{i}", "text": chunk, "metadata": chunk_meta}
                 )
         return all_chunks
 
@@ -316,12 +328,18 @@ class MarkdownSplitter:
     def transform_documents(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         all_chunks = []
         for doc in documents:
+            doc_id = doc["id"]
             text_chunks = self.split(doc["text"])
             for i, chunk in enumerate(text_chunks):
                 metadata = doc.get("metadata", {}).copy()
                 metadata.update({"chunk": i, "total_chunks": len(text_chunks)})
+                chunk_meta = {**metadata}
+                chunk_meta.setdefault("source_id", doc.get("id", doc_id))
+                chunk_meta.setdefault("subdoc_locator", "root")
+                chunk_meta["chunk_index"] = i
+                chunk_meta.setdefault("chunk_kind", "leaf")
                 all_chunks.append(
-                    {"id": f"{doc['id']}_chunk_{i}", "text": chunk, "metadata": metadata}
+                    {"id": f"{doc_id}_chunk_{i}", "text": chunk, "metadata": chunk_meta}
                 )
         return all_chunks
 
@@ -412,12 +430,18 @@ class CosineSemanticSplitter:
     def transform_documents(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         all_chunks = []
         for doc in documents:
+            doc_id = doc["id"]
             text_chunks = self.split(doc["text"])
             for i, chunk in enumerate(text_chunks):
                 metadata = doc.get("metadata", {}).copy()
                 metadata.update({"chunk": i, "total_chunks": len(text_chunks)})
+                chunk_meta = {**metadata}
+                chunk_meta.setdefault("source_id", doc.get("id", doc_id))
+                chunk_meta.setdefault("subdoc_locator", "root")
+                chunk_meta["chunk_index"] = i
+                chunk_meta.setdefault("chunk_kind", "leaf")
                 all_chunks.append(
-                    {"id": f"{doc['id']}_chunk_{i}", "text": chunk, "metadata": metadata}
+                    {"id": f"{doc_id}_chunk_{i}", "text": chunk, "metadata": chunk_meta}
                 )
         return all_chunks
 
@@ -882,6 +906,7 @@ class CodeAwareSplitter:
         """Split a list of code documents into symbol-aware chunks."""
         all_chunks: list[dict[str, Any]] = []
         for doc in documents:
+            doc_id = doc["id"]
             source = doc.get("metadata", {}).get("source", "") or doc.get("id", "")
             code_chunks = self.split_code(doc["text"], source=source)
             for i, chunk_data in enumerate(code_chunks):
@@ -894,11 +919,16 @@ class CodeAwareSplitter:
                         continue
                     metadata[k] = v
                 metadata.update({"chunk": i, "total_chunks": len(code_chunks)})
+                chunk_meta = {**metadata}
+                chunk_meta.setdefault("source_id", doc.get("id", doc_id))
+                chunk_meta.setdefault("subdoc_locator", "root")
+                chunk_meta["chunk_index"] = i
+                chunk_meta.setdefault("chunk_kind", "leaf")
                 all_chunks.append(
                     {
-                        "id": f"{doc['id']}_chunk_{i}",
+                        "id": f"{doc_id}_chunk_{i}",
                         "text": chunk_data["text"],
-                        "metadata": metadata,
+                        "metadata": chunk_meta,
                     }
                 )
         return all_chunks

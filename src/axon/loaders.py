@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import io
 import ipaddress
 import json
@@ -13,6 +14,12 @@ from typing import Any
 logger = logging.getLogger("Axon.Loaders")
 
 _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+def _stable_file_id(path: str, kind: str = "file") -> str:
+    """SHA-256 based stable ID from absolute path. Prevents basename collisions."""
+    abspath = os.path.normpath(os.path.abspath(path))
+    return kind + "_" + hashlib.sha256(abspath.encode()).hexdigest()[:24]
 
 
 def _check_file_size(path: str) -> None:
@@ -251,7 +258,7 @@ class TextLoader(BaseLoader):
             content = f.read()
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path),
                 "text": content,
                 "metadata": {"source": path, "type": "text"},
             }
@@ -355,7 +362,7 @@ class JSONLoader(BaseLoader):
             metadata = {k: v for k, v in data.items() if k not in ["text", "content"]}
             metadata = self._sanitize_metadata(metadata)
             metadata.update({"source": path, "type": "json"})
-            return [{"id": os.path.basename(path), "text": text, "metadata": metadata}]
+            return [{"id": _stable_file_id(path, "json"), "text": text, "metadata": metadata}]
 
 
 class CSVLoader(BaseLoader):
@@ -401,7 +408,7 @@ class HTMLLoader(BaseLoader):
         text = _extract_html_text(content)
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "html"),
                 "text": text,
                 "metadata": {"source": path, "type": "html"},
             }
@@ -527,7 +534,7 @@ class DOCXLoader(BaseLoader):
 
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "docx"),
                 "text": text,
                 "metadata": {"source": path, "type": "docx"},
             }
@@ -648,7 +655,7 @@ class PDFLoader(BaseLoader):
                 text = page.get_text()
                 documents.append(
                     {
-                        "id": f"{os.path.basename(path)}_page_{page_num}",
+                        "id": f"{_stable_file_id(path, 'pdf')}_page_{page_num}",
                         "text": text,
                         "metadata": {
                             "source": path,
@@ -673,7 +680,7 @@ class PDFLoader(BaseLoader):
                 text = reader.pages[page_num].extract_text() or ""
                 documents.append(
                     {
-                        "id": f"{os.path.basename(path)}_page_{page_num}",
+                        "id": f"{_stable_file_id(path, 'pdf')}_page_{page_num}",
                         "text": text,
                         "metadata": {
                             "source": path,
@@ -866,7 +873,7 @@ class EPUBLoader(BaseLoader):
             logger.warning(f"Could not read EPUB {path}: {exc}")
             return []
 
-        fname = os.path.basename(path)
+        stable_base = _stable_file_id(path, "epub")
         documents = []
         for i, item in enumerate(book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
             html = item.get_content().decode("utf-8", errors="ignore")
@@ -875,7 +882,7 @@ class EPUBLoader(BaseLoader):
                 continue
             documents.append(
                 {
-                    "id": f"{fname}_chapter_{i}",
+                    "id": f"{stable_base}_chapter_{i}",
                     "text": text,
                     "metadata": {
                         "source": path,

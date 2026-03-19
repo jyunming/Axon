@@ -30,6 +30,7 @@ namespace under {axon_store_base}/AxonStore/{username}/ containing:
     .shares/         — share key manifests
 """
 
+import hashlib
 import json
 import os
 import re
@@ -86,6 +87,55 @@ def build_namespace_id(prefix: str = "ns") -> str:
         A 40-character string that is unique with overwhelming probability.
     """
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def build_source_id(
+    project_namespace_id: str, source_kind: str, canonical_source_locator: str
+) -> str:
+    """Derive a stable source ID from the project namespace + source kind + canonical locator.
+
+    Formula: sha256(project_namespace_id | source_kind | canonical_source_locator)[:24]
+    prefixed with "src_".
+
+    Args:
+        project_namespace_id: From meta.json, e.g. "proj_3f2a..."
+        source_kind: "file", "url", "code", "text", etc.
+        canonical_source_locator: Normalized relative path, canonical URL, or logical key.
+            - For files: use the absolute path (normalized with os.path.normpath)
+            - For URLs: use the URL as-is
+            - For text snippets: use a stable logical key (e.g. content hash)
+
+    Returns:
+        A 28-character string: "src_" + first 24 hex chars of sha256.
+    """
+    raw = f"{project_namespace_id}|{source_kind}|{canonical_source_locator}"
+    return "src_" + hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+def build_chunk_id(
+    project_namespace_id: str,
+    source_id: str,
+    subdoc_locator: str,
+    chunk_index: int,
+    chunk_kind: str = "leaf",
+) -> str:
+    """Derive a stable globally-unique chunk ID.
+
+    Formula: sha256(project_namespace_id | source_id | subdoc_locator | chunk_index | chunk_kind)[:24]
+    prefixed with "chk_".
+
+    Args:
+        project_namespace_id: Project namespace ID from meta.json.
+        source_id: Source ID from build_source_id().
+        subdoc_locator: Sub-document position, e.g. "page:3", "sheet:Orders", "root", "row:44".
+        chunk_index: Zero-based index of this chunk within the subdoc.
+        chunk_kind: "leaf", "parent", "raptor_l1", "raptor_l2", "code".
+
+    Returns:
+        A 28-character string: "chk_" + first 24 hex chars of sha256.
+    """
+    raw = f"{project_namespace_id}|{source_id}|{subdoc_locator}|{chunk_index}|{chunk_kind}"
+    return "chk_" + hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
 class ProjectHasChildrenError(ValueError):
