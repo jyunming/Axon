@@ -1,3 +1,4 @@
+import os
 from unittest.mock import MagicMock, patch
 
 import yaml
@@ -80,7 +81,7 @@ class TestAxonConfig:
     def test_gliner_model_default(self):
         from axon.main import AxonConfig
 
-        assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_mediumv2.1"
+        assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_medium-v2.1"
 
     def test_community_top_n_default(self):
         from axon.main import AxonConfig
@@ -91,6 +92,40 @@ class TestAxonConfig:
         from axon.main import AxonConfig
 
         assert AxonConfig().graph_rag_community_llm_max_total == 30
+
+    def test_local_assets_only_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().local_assets_only is False
+
+    def test_embedding_models_dir_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().embedding_models_dir == ""
+
+    def test_hf_models_dir_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().hf_models_dir == ""
+
+    def test_tokenizer_cache_dir_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().tokenizer_cache_dir == ""
+
+    def test_llmlingua_model_default(self):
+        from axon.main import AxonConfig
+
+        assert (
+            AxonConfig().graph_rag_llmlingua_model
+            == "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank"
+        )
+
+    def test_gliner_model_default_corrected(self):
+        """GLiNER default ID must use the correct HF repo name (with hyphen, not dot)."""
+        from axon.main import AxonConfig
+
+        assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_medium-v2.1"
 
     def test_load_from_yaml(self, tmp_path):
         from axon.main import AxonConfig
@@ -8394,3 +8429,83 @@ class TestEntityAliasResolution:
             brain._rebuild_communities()
 
         mock_resolve.assert_called_once()
+
+
+def test_resolve_model_path_uses_hf_models_dir(tmp_path):
+    """_resolve_model_path prefers hf_models_dir over local_models_dir for kind='hf'."""
+    from axon.main import AxonBrain, AxonConfig
+
+    hf_dir = tmp_path / "hf"
+    hf_dir.mkdir()
+    (hf_dir / "my-model").mkdir()
+    cfg = AxonConfig(
+        hf_models_dir=str(hf_dir),
+        local_models_dir=str(tmp_path),
+        local_assets_only=True,
+    )
+    brain = MagicMock()
+    brain.config = cfg
+    result = AxonBrain._resolve_model_path(brain, "org/my-model", "hf")
+    assert result == str(hf_dir / "my-model")
+
+
+def test_resolve_model_path_uses_embedding_models_dir(tmp_path):
+    """_resolve_model_path prefers embedding_models_dir for kind='embedding'."""
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "embeddings"
+    emb_dir.mkdir()
+    (emb_dir / "all-MiniLM-L6-v2").mkdir()
+    cfg = AxonConfig(
+        embedding_models_dir=str(emb_dir),
+        local_models_dir=str(tmp_path),
+    )
+    brain = MagicMock()
+    brain.config = cfg
+    result = AxonBrain._resolve_model_path(
+        brain, "sentence-transformers/all-MiniLM-L6-v2", "embedding"
+    )
+    assert result == str(emb_dir / "all-MiniLM-L6-v2")
+
+
+def test_resolve_model_path_falls_back_to_local_models_dir(tmp_path):
+    """Falls back to local_models_dir when the per-type dir doesn't have the model."""
+    from axon.main import AxonBrain, AxonConfig
+
+    local_dir = tmp_path / "local"
+    local_dir.mkdir()
+    (local_dir / "rebel-large").mkdir()
+    cfg = AxonConfig(
+        hf_models_dir=str(tmp_path / "hf_empty"),  # doesn't exist
+        local_models_dir=str(local_dir),
+    )
+    brain = MagicMock()
+    brain.config = cfg
+    result = AxonBrain._resolve_model_path(brain, "Babelscape/rebel-large", "hf")
+    assert result == str(local_dir / "rebel-large")
+
+
+def test_local_assets_only_sets_env_and_resolves_models(tmp_path, monkeypatch):
+    """local_assets_only sets HF offline env vars and resolves model paths."""
+    from axon.main import AxonBrain, AxonConfig
+
+    hf_dir = tmp_path / "hf"
+    hf_dir.mkdir()
+    (hf_dir / "gliner_medium-v2.1").mkdir()
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            hf_models_dir=str(hf_dir),
+            graph_rag_gliner_model="urchade/gliner_medium-v2.1",
+        )
+        brain = AxonBrain(cfg)
+
+    assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+    assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    assert brain.config.graph_rag_gliner_model == str(hf_dir / "gliner_medium-v2.1")

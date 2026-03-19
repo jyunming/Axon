@@ -227,8 +227,12 @@ rag:
   # graph_rag_entity_resolve_max: 5000
   # P2: REBEL relation extraction backend (replaces LLM for relation triples)
   # graph_rag_relation_backend: llm  # "rebel" = pip install axon[rebel]
-  # graph_rag_gliner_model: "urchade/gliner_mediumv2.1"
+  # graph_rag_gliner_model: "urchade/gliner_medium-v2.1"
   # Set to a local path for fully offline operation: "C:/dev/HF_models/gliner_medium_v21"
+  # graph_rag_rebel_model: "Babelscape/rebel-large"
+  # Set to a local path: "C:/dev/HF_models/rebel_large"
+  # graph_rag_llmlingua_model: "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank"
+  # Set to a local path: "C:/dev/HF_models/llmlingua2_meetingbank"
   # A3: Extraction depth tier: light (no LLM, noun-phrases only) | standard (LLM entity descriptions) | deep (+ claims + canonicalize)
   # graph_rag_depth: light  ← already set above; override here only if you need per-run variation
 
@@ -280,7 +284,14 @@ web_search:
 # under local_models_dir. Web search is automatically disabled.
 # Use scripts/prefetch_models.py on an internet machine first to download models.
 offline:
-  enabled: false
-  # Absolute path to the directory containing pre-fetched model folders.
-  # e.g. Windows: C:/models   Linux: /srv/models
+  enabled: false          # strict no-egress: also disables RAPTOR + GraphRAG (LLM calls need network)
+  local_assets_only: false  # enforce local model files only; RAPTOR + GraphRAG stay enabled
+
+  # Multi-root model directories — set the paths that match your local layout.
+  # Each directory is checked before local_models_dir when resolving a bare model ID.
+  # embedding_models_dir: C:/dev/embedding_models   # sentence-transformers / fastembed
+  # hf_models_dir: C:/dev/HF_models                 # GLiNER, REBEL, LLMLingua, reranker
+  # tokenizer_cache_dir: C:/dev/HF_models/tokenizers  # tiktoken BPE cache → TIKTOKEN_CACHE_DIR
+
+  # Legacy single-root (still supported; checked after the per-type dirs above)
   local_models_dir: ""

@@ -1048,7 +1048,7 @@ class TestGLiNERConfigModel:
             mock_fp.return_value = MagicMock()
             AxonBrain._ensure_gliner(brain)
 
-        mock_fp.assert_called_once_with("local/path")
+        mock_fp.assert_called_once_with("local/path", local_files_only=False)
 
 
 class TestREBELZeroEdgeWarning:
@@ -1082,3 +1082,49 @@ class TestREBELZeroEdgeWarning:
         mock_logger.warning.assert_called_once()
         call_args = mock_logger.warning.call_args[0]
         assert "0 relation edges" in call_args[0]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2-4: local model routing — _ensure_gliner / _ensure_llmlingua
+# ---------------------------------------------------------------------------
+
+
+def test_gliner_local_files_only_when_local_path(tmp_path):
+    """_ensure_gliner passes local_files_only=True when model path is absolute."""
+    from axon.main import AxonBrain
+
+    model_dir = tmp_path / "gliner_model"
+    model_dir.mkdir()
+    cfg = MagicMock()
+    cfg.graph_rag_gliner_model = str(model_dir)
+    brain = MagicMock()
+    brain.config = cfg
+    brain._gliner_model = None
+
+    with patch("gliner.GLiNER.from_pretrained") as mock_gliner:
+        mock_gliner.return_value = MagicMock()
+        AxonBrain._ensure_gliner(brain)
+        mock_gliner.assert_called_once_with(str(model_dir), local_files_only=True)
+
+
+def test_llmlingua_uses_config_model(tmp_path):
+    """_ensure_llmlingua reads graph_rag_llmlingua_model from config."""
+    from axon.main import AxonBrain
+
+    model_dir = tmp_path / "llmlingua"
+    model_dir.mkdir()
+    cfg = MagicMock()
+    cfg.graph_rag_llmlingua_model = str(model_dir)
+    brain = MagicMock()
+    brain.config = cfg
+    brain._llmlingua = None
+
+    with patch("llmlingua.PromptCompressor") as mock_compressor:
+        mock_compressor.return_value = MagicMock()
+        AxonBrain._ensure_llmlingua(brain)
+        mock_compressor.assert_called_once()
+        call_kwargs = mock_compressor.call_args
+        assert call_kwargs.kwargs.get("model_name") == str(model_dir) or call_kwargs.args[0] == str(
+            model_dir
+        )
+        assert call_kwargs.kwargs.get("local_files_only") is True

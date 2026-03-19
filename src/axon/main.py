@@ -328,7 +328,22 @@ class AxonConfig:
 
     # Offline Mode
     offline_mode: bool = False
-    local_models_dir: str = ""
+    local_models_dir: str = ""  # legacy single-root, kept for backwards compat
+
+    # Local-assets-only mode: enforce local model loading without disabling RAPTOR/GraphRAG.
+    # Sets TRANSFORMERS_OFFLINE + HF_HUB_OFFLINE, resolves all model IDs to local paths,
+    # but keeps GraphRAG and RAPTOR enabled (they use the LLM, not downloaded assets).
+    # Use offline_mode for strict no-egress (also disables GraphRAG/RAPTOR LLM calls).
+    local_assets_only: bool = False
+
+    # Per-type model root directories (multi-root Phase 4).
+    # Each takes precedence over local_models_dir when set.
+    # embedding_models_dir: sentence-transformers / fastembed model root
+    # hf_models_dir:        GLiNER, REBEL, LLMLingua, and cross-encoder reranker
+    # tokenizer_cache_dir:  tiktoken BPE encoding cache (maps to TIKTOKEN_CACHE_DIR)
+    embedding_models_dir: str = ""
+    hf_models_dir: str = ""
+    tokenizer_cache_dir: str = ""
 
     # RAPTOR Hierarchical Indexing
     # During ingest, groups every raptor_chunk_group_size consecutive chunks per source
@@ -561,7 +576,10 @@ class AxonConfig:
     # pip install axon[rebel]
     graph_rag_relation_backend: Literal["llm", "rebel"] = "llm"
     graph_rag_rebel_model: str = "Babelscape/rebel-large"
-    graph_rag_gliner_model: str = "urchade/gliner_mediumv2.1"
+    graph_rag_gliner_model: str = "urchade/gliner_medium-v2.1"
+    graph_rag_llmlingua_model: str = (
+        "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank"
+    )
 
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
@@ -643,6 +661,7 @@ web_search:
 
 offline:
   enabled: false
+  local_assets_only: false
   local_models_dir: ""
 """
         using_default = path is None
@@ -718,6 +737,14 @@ offline:
             config_dict["offline_mode"] = ol.get("enabled", False)
             if ol.get("local_models_dir"):
                 config_dict["local_models_dir"] = ol["local_models_dir"]
+            if ol.get("local_assets_only") is not None:
+                config_dict["local_assets_only"] = ol["local_assets_only"]
+            if ol.get("embedding_models_dir"):
+                config_dict["embedding_models_dir"] = ol["embedding_models_dir"]
+            if ol.get("hf_models_dir"):
+                config_dict["hf_models_dir"] = ol["hf_models_dir"]
+            if ol.get("tokenizer_cache_dir"):
+                config_dict["tokenizer_cache_dir"] = ol["tokenizer_cache_dir"]
 
         # Map some specific names if they don't match exactly
         if "ollama_base_url" not in config_dict and "llm_base_url" in config_dict:
@@ -848,6 +875,10 @@ offline:
             "offline": {
                 "enabled": flat["offline_mode"],
                 "local_models_dir": flat["local_models_dir"],
+                "local_assets_only": flat["local_assets_only"],
+                "embedding_models_dir": flat["embedding_models_dir"],
+                "hf_models_dir": flat["hf_models_dir"],
+                "tokenizer_cache_dir": flat["tokenizer_cache_dir"],
             },
             "projects_root": flat["projects_root"],
         }
@@ -2351,37 +2382,80 @@ Your primary goal is to help the user by answering questions based on the provid
 5. **No emoji**: Do not use emoji in your responses. Plain text only.
 """
 
-    def _resolve_model_path(self, model_name: str) -> str:
-        """Resolve a HuggingFace model ID to a local path when offline_mode is on.
+    def _resolve_model_path(self, model_name: str, kind: str = "hf") -> str:
+        """Resolve a HuggingFace model ID to a local path when offline_mode or local_assets_only is on.
 
         If the name is already an absolute path or starts with '.' it is returned
-        unchanged.  Otherwise the last path component (after the optional org/)
-        is looked up under local_models_dir, then the full name with '/' → '--'.
-        A warning is logged when the directory cannot be found.
+        unchanged.  Otherwise the short name and org--name variants are looked up
+        across the configured model roots in priority order.
+
+        kind:
+            "embedding"  — checks embedding_models_dir before local_models_dir
+            "hf"         — checks hf_models_dir before local_models_dir
         """
-        if not self.config.offline_mode or not self.config.local_models_dir:
-            return model_name
         if os.path.isabs(model_name) or model_name.startswith("."):
             return model_name
-        base = self.config.local_models_dir
-        # Try bare name: "BAAI/bge-reranker-base" → "<dir>/bge-reranker-base"
+
+        # Build root list in priority order for this kind
+        roots: list[str] = []
+        if kind == "embedding" and self.config.embedding_models_dir:
+            roots.append(self.config.embedding_models_dir)
+        elif kind == "hf" and self.config.hf_models_dir:
+            roots.append(self.config.hf_models_dir)
+        if self.config.local_models_dir:
+            roots.append(self.config.local_models_dir)
+
+        if not roots:
+            return model_name
+
         short_name = model_name.split("/")[-1]
-        candidate = os.path.join(base, short_name)
-        if os.path.isdir(candidate):
-            return candidate
-        # Try HF cache style: "BAAI/bge-reranker-base" → "<dir>/BAAI--bge-reranker-base"
         hf_name = model_name.replace("/", "--")
-        candidate2 = os.path.join(base, hf_name)
-        if os.path.isdir(candidate2):
-            return candidate2
+
+        for base in roots:
+            for candidate_name in (short_name, hf_name):
+                candidate = os.path.join(base, candidate_name)
+                if os.path.isdir(candidate):
+                    return candidate
+
         logger.warning(
-            f"Offline mode: '{model_name}' not found in {base} "
-            f"(tried '{short_name}' and '{hf_name}')"
+            "Local model resolution: '%s' not found in %s (tried '%s' and '%s')",
+            model_name,
+            roots,
+            short_name,
+            hf_name,
         )
         return model_name
 
     def __init__(self, config: AxonConfig | None = None):
         self.config = config or AxonConfig.load()
+
+        # ── Local-assets-only: enforce local model files without disabling RAPTOR/GraphRAG ──
+        if self.config.local_assets_only:
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            if self.config.truth_grounding:
+                logger.info("Local-assets-only: disabling web search (truth_grounding → OFF)")
+                self.config.truth_grounding = False
+            # Resolve all model IDs to local paths — RAPTOR + GraphRAG remain enabled
+            self.config.embedding_model = self._resolve_model_path(
+                self.config.embedding_model, "embedding"
+            )
+            self.config.reranker_model = self._resolve_model_path(self.config.reranker_model, "hf")
+            self.config.graph_rag_gliner_model = self._resolve_model_path(
+                self.config.graph_rag_gliner_model, "hf"
+            )
+            self.config.graph_rag_rebel_model = self._resolve_model_path(
+                self.config.graph_rag_rebel_model, "hf"
+            )
+            self.config.graph_rag_llmlingua_model = self._resolve_model_path(
+                self.config.graph_rag_llmlingua_model, "hf"
+            )
+            logger.info(
+                "Local-assets-only ON  |  hf_models_dir: %s  |  embedding_models_dir: %s",
+                self.config.hf_models_dir or "(not set)",
+                self.config.embedding_models_dir or "(not set)",
+            )
 
         # ── Offline mode: lock down all network access before any model loads ──
         if self.config.offline_mode:
@@ -2404,11 +2478,19 @@ Your primary goal is to help the user by answering questions based on the provid
                 )
                 self.config.graph_rag = False
             # Resolve bare HF model IDs to local paths
-            self.config.embedding_model = self._resolve_model_path(self.config.embedding_model)
-            self.config.reranker_model = self._resolve_model_path(self.config.reranker_model)
-            logger.info(
-                f"Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
+            self.config.embedding_model = self._resolve_model_path(
+                self.config.embedding_model, "embedding"
             )
+            self.config.reranker_model = self._resolve_model_path(self.config.reranker_model, "hf")
+            logger.info(
+                "Offline mode ON  |  models dir: %s",
+                self.config.local_models_dir or "(not set)",
+            )
+
+        # Apply tiktoken cache directory if configured (Phase 4 tokenizer locality)
+        if self.config.tokenizer_cache_dir and not os.getenv("TIKTOKEN_CACHE_DIR"):
+            os.environ["TIKTOKEN_CACHE_DIR"] = self.config.tokenizer_cache_dir
+            logger.info("Tiktoken cache dir: %s", self.config.tokenizer_cache_dir)
 
         # Apply Ollama model directory override before any Ollama client is constructed.
         # Sets OLLAMA_MODELS so the Ollama daemon resolves blobs from the given path.
@@ -4993,10 +5075,20 @@ Your primary goal is to help the user by answering questions based on the provid
         if not hasattr(self, "_llmlingua") or self._llmlingua is None:
             from llmlingua import PromptCompressor
 
+            _model = getattr(
+                self.config,
+                "graph_rag_llmlingua_model",
+                "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+            )
+            _local = os.path.isabs(_model) or os.path.isdir(_model)
+            logger.info(
+                "GraphRAG LLMLingua: loading model '%s'%s…", _model, " (local)" if _local else ""
+            )
             self._llmlingua = PromptCompressor(
-                model_name="microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+                model_name=_model,
                 use_llmlingua2=True,
                 device_map="cpu",
+                **({"local_files_only": True} if _local else {}),
             )
         return self._llmlingua
 
@@ -5005,9 +5097,12 @@ Your primary goal is to help the user by answering questions based on the provid
         if not hasattr(self, "_gliner_model") or self._gliner_model is None:
             from gliner import GLiNER
 
-            _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_mediumv2.1")
-            logger.info("GraphRAG GLiNER: loading model '%s'…", _model)
-            self._gliner_model = GLiNER.from_pretrained(_model)
+            _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_medium-v2.1")
+            _local = os.path.isabs(_model) or os.path.isdir(_model)
+            logger.info(
+                "GraphRAG GLiNER: loading model '%s'%s…", _model, " (local)" if _local else ""
+            )
+            self._gliner_model = GLiNER.from_pretrained(_model, local_files_only=_local)
         return self._gliner_model
 
     _GLINER_LABELS = ["person", "organization", "location", "event", "concept", "product"]
@@ -5028,14 +5123,18 @@ Your primary goal is to help the user by answering questions based on the provid
             except ImportError:
                 raise ImportError("REBEL backend requires transformers. pip install axon[rebel]")
             _model = getattr(self.config, "graph_rag_rebel_model", "Babelscape/rebel-large")
+            _local = os.path.isabs(_model) or os.path.isdir(_model)
             logger.info(
-                "GraphRAG REBEL: loading model '%s' (first-run download may take time)…", _model
+                "GraphRAG REBEL: loading model '%s'%s…",
+                _model,
+                " (local)" if _local else " (first-run download may take time)",
             )
             self._rebel_pipeline = _hf_pipeline(
                 "text2text-generation",
                 model=_model,
                 tokenizer=_model,
                 device=-1,  # CPU — avoids CUDA dependency
+                **({"local_files_only": True} if _local else {}),
             )
         return self._rebel_pipeline
 
