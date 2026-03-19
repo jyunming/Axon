@@ -21,6 +21,15 @@ embedding:
   # openai: text-embedding-3-small, etc.
   model: all-MiniLM-L6-v2
 
+  # Local path to a pre-downloaded embedding model directory.
+  # Overrides 'model' for sentence_transformers (passed as the model path).
+  # For fastembed, used as cache_dir so no network download is needed.
+  # Leave empty to download from HuggingFace Hub as usual.
+  # Examples:
+  #   Windows: C:/models/all-MiniLM-L6-v2
+  #   Linux:   /srv/models/all-MiniLM-L6-v2
+  # model_path: ""
+
   # For Ollama provider:
   # base_url: http://localhost:11434
 
@@ -37,6 +46,15 @@ llm:
   # Base URL for API connections. Useful to point the 'openai' client to an Open Source Docker Engine like vLLM.
   base_url: http://localhost:11434
 
+  # Directory where Ollama stores its model blobs.
+  # Equivalent to the OLLAMA_MODELS environment variable.
+  # Use this to redirect Ollama to a secondary disk, NAS, or shared network volume.
+  # The OLLAMA_MODELS env var takes priority if both are set.
+  # Examples:
+  #   Windows: D:/ollama-models
+  #   Linux:   /mnt/nas/ollama-models
+  # models_dir: ""
+
   # API Key for cloud providers (or fake string for local open-source API engines)
   api_key: ""
 
@@ -51,6 +69,16 @@ llm:
   # Override at runtime with: /vllm-url http://host:port/v1
   # Or set env var: VLLM_BASE_URL=http://host:port/v1
   vllm_base_url: "http://localhost:8000/v1"
+
+  # GitHub Copilot API (OAuth-based, no VS Code extension required)
+  # Provider: github_copilot
+  # Requires a GitHub OAuth token (NOT a PAT) and an active Copilot subscription.
+  # Get the token by running: /keys set github_copilot  (OAuth device flow)
+  # Or set env var: GITHUB_COPILOT_PAT=<github_oauth_token>
+  # copilot_pat: ""
+  # Run the REPL command '/model github_copilot/<Tab>' for a live model list.
+  # Known models (varies by subscription): gpt-4o, gpt-4.1, gpt-4o-mini,
+  #   claude-3.5-sonnet, claude-3.7-sonnet, o1, o3-mini
 
   # Generation parameters
   temperature: 0.7
@@ -94,8 +122,8 @@ rag:
   # Enable hybrid search (vector + keyword)
   hybrid_search: true
 
-  # Hybrid fusion mode: "weighted" (default) or "rrf" (Reciprocal Rank Fusion)
-  hybrid_mode: weighted
+  # Hybrid fusion mode: "rrf" (Reciprocal Rank Fusion, default) or "weighted" (min-max heuristic)
+  hybrid_mode: rrf
 
   # Parent-document / small-to-big retrieval.
   # Set to a value larger than chunk.size (e.g. 3000) to index small child chunks
@@ -114,46 +142,95 @@ rag:
   # Also: --compress CLI flag, "compress": true API override.
   # compress_context: false
 
-  # RAPTOR hierarchical indexing (requires LLM during ingest — adds latency).
-  # Groups consecutive chunks per source and generates LLM summary nodes
-  # that are indexed alongside leaf chunks for multi-hop questions.
-  raptor: false
-  raptor_chunk_group_size: 5
+  # ── RAPTOR hierarchical indexing ─────────────────────────────────────────────
+  # Requires LLM during ingest. Groups consecutive chunks per source and generates
+  # summary nodes indexed alongside leaf chunks for multi-hop questions.
+  raptor: true
+  raptor_chunk_group_size: 5      # chunks per summary node (5 ≈ ~5 000 chars)
+  raptor_max_levels: 1            # 1 level of summaries (2 doubles LLM calls, diminishing return)
+  raptor_max_source_size_mb: 5.0  # skip RAPTOR for sources > 5 MB (prevents runaway costs)
 
-  # GraphRAG entity-centric retrieval (requires LLM during ingest — adds latency).
-  # Extracts named entities from each chunk; expands query results at retrieval
-  # time using an entity→doc_id graph persisted to {bm25_path}/.entity_graph.json.
-  graph_rag: false
+  # ── GraphRAG entity-centric retrieval ────────────────────────────────────────
+  # Fast-graph mode (default): entity graph built with zero LLM calls.
+  #   - Entities extracted by regex noun-phrase heuristics (no LLM, no GLiNER)
+  #   - Relations disabled (the expensive LLM pass)
+  #   - Community detection off
+  #   → Ingest speed identical to having graph_rag: false
+  #   → VS Code Graph Panel KG tab populated; entity-based retrieval expansion active
+  #
+  # To enable richer graph (LLM entity descriptions + relations), set:
+  #   graph_rag_depth: standard
+  #   graph_rag_relations: true
+  graph_rag: true
+  graph_rag_depth: light          # light = regex only, zero LLM calls; standard = LLM entity descriptions
+  graph_rag_budget: 3             # extra graph-expanded docs added beyond top_k
+  graph_rag_relations: false      # set true to extract SUBJECT | RELATION | OBJECT triples (LLM-heavy)
+  graph_rag_include_raptor_summaries: true  # use RAPTOR summaries as GraphRAG units for large sources
+  raptor_graphrag_leaf_skip_threshold: 3    # skip leaf extraction for sources with >= N leaf chunks (use RAPTOR summaries instead)
+  graph_rag_min_entities_for_relations: 3   # skip relation extraction for chunks with fewer entities
+  graph_rag_relation_budget: 30             # max chunks for relation extraction; ranked by entity density (0 = unlimited)
+  graph_rag_entity_min_frequency: 2         # prune entities seen in fewer than N chunks before community detection
 
-  # Maximum number of graph-expanded documents added beyond the normal top_k slice.
-  # Set to 0 to disable the guarantee and fall back to simple top_k truncation.
-  graph_rag_budget: 3
+  # Community detection — clusters entity graph after ingest.
+  # Runs async in the background; summaries generated lazily on first global query.
+  # Requires: pip install axon[graphrag]  (networkx, igraph, leidenalg)
+  # Default: false (cost-control). Enable explicitly for global/community-based queries.
+  graph_rag_community: false
+  graph_rag_community_async: true     # non-blocking: community detection runs after ingest
+  code_graph: false          # Phase 2: build structural code graph (File/Symbol nodes, CONTAINS/IMPORTS edges)
+  code_graph_bridge: false   # Phase 3: link code symbols to prose chunks via MENTIONED_IN edges
+  # code_lexical_boost: true    # identifier-aware re-scoring for code result sets (default: true)
+  # code_top_k_multiplier: 2    # fetch_k multiplier when a code query is detected (default: 2)
+  # code_max_chunks_per_file: 3 # per-file cap in final top_k for diversity (default: 3)
+  # code_bm25_weight: 0.7       # BM25 weight when code mode active (weighted mode only; ignored in rrf)
+  # code_top_k: 6               # top-K override for code queries (0 = use top_k)
+  # retrieval_dry_run: false    # skip LLM; return ranked candidates + diagnostics only
+  graph_rag_community_lazy: true      # defer LLM summarisation to first global query
+  # Community detection backend: "auto" (graspologic→leidenalg→louvain) | "leidenalg" | "louvain"
+  # "leidenalg" is the documented supported path for Python 3.13 — avoids graspologic instability.
+  graph_rag_community_backend: leidenalg
 
-  # Relation extraction: extract SUBJECT | RELATION | OBJECT triples during ingest
-  # and use 1-hop graph traversal at retrieval time for richer context expansion.
-  graph_rag_relations: true
+  # Query routing — "heuristic" detects holistic queries (summarize/compare/list all)
+  # at zero cost and upgrades them to global search; factual queries use local mode.
+  graph_rag_auto_route: heuristic
+  graph_rag_mode: hybrid              # local for factual | global when routed
 
-  # Community detection — clusters entity graph after ingest (requires: pip install networkx)
-  # graph_rag_community: false
-  # graph_rag_community_async: true
-  # graph_rag_community_top_k: 5
-  # graph_rag_mode: local   # local | global | hybrid
-  # graph_rag_global_min_score: 20
-  # graph_rag_global_top_points: 50
-  # graph_rag_community_level: 0
-  # graph_rag_community_levels: 2
-  # graph_rag_entity_embedding_match: true
-  # graph_rag_entity_match_threshold: 0.5
-  # graph_rag_index_community_reports: true
-  # graph_rag_canonicalize: false
-  # graph_rag_canonicalize_min_occurrences: 3
-  # graph_rag_claims: false
-  # TASK 14: GraphRAG runtime improvements
-  # graph_rag_map_workers: 0         # dedicated pool for map-reduce (0 = use max_workers)
-  # graph_rag_ner_backend: llm       # "llm" or "gliner" (pip install axon[gliner])
-  # graph_rag_report_compress: false # compress community reports with LLMLingua-2
-  # graph_rag_report_compress_ratio: 0.5
-  # graph_rag_auto_route: off        # "off" | "heuristic" | "llm"
+  # Multi-class query router (Option B).
+  # "heuristic": keyword-based, zero latency (default)
+  # "llm": one classifier LLM call per query
+  # "off": skip router entirely (falls back to graph_rag_auto_route)
+  query_router: heuristic
+  contextual_retrieval: false
+
+  # Map-reduce tuning for global search
+  graph_rag_global_top_communities: 20  # pre-filter: only top-20 relevant communities enter map-reduce
+  # graph_rag_community_llm_top_n_per_level: 15  # max communities summarised per level (default: 15)
+  # graph_rag_community_llm_max_total: 30         # hard cap on total LLM summarisation calls (default: 30)
+  graph_rag_map_workers: 2             # dedicated thread pool; avoids starving ingest workers
+  graph_rag_community_top_k: 5         # top community summaries injected into prompt
+
+  # Entity matching at query time (uses cached embeddings — fast)
+  graph_rag_entity_embedding_match: true
+  graph_rag_entity_match_threshold: 0.5
+
+  # Community report vector-store index (speeds up report retrieval at query time)
+  graph_rag_index_community_reports: true
+
+  # ── Expensive optional passes (off by default) ────────────────────────────────
+  # graph_rag_canonicalize: false        # LLM description synthesis — enable for quality
+  # graph_rag_claims: false              # claim/covariate extraction — enable for fact-checking
+  # graph_rag_ner_backend: llm           # "gliner" skips LLM for NER (pip install axon[gliner])
+  # graph_rag_report_compress: false     # LLMLingua-2 token compression (pip install axon[llmlingua])
+  # P1: Semantic entity alias resolution (merges "Apple" / "Apple Inc." before community detection)
+  # graph_rag_entity_resolve: false
+  # graph_rag_entity_resolve_threshold: 0.92
+  # graph_rag_entity_resolve_max: 5000
+  # P2: REBEL relation extraction backend (replaces LLM for relation triples)
+  # graph_rag_relation_backend: llm  # "rebel" = pip install axon[rebel]
+  # graph_rag_gliner_model: "urchade/gliner_mediumv2.1"
+  # Set to a local path for fully offline operation: "C:/dev/HF_models/gliner_medium_v21"
+  # A3: Extraction depth tier: light (no LLM, noun-phrases only) | standard (LLM entity descriptions) | deep (+ claims + canonicalize)
+  # graph_rag_depth: light  ← already set above; override here only if you need per-run variation
 
   # In-memory query result cache (LRU eviction, keyed on query + active flags).
   # Speeds up repeated identical queries. Bypassed when chat history is non-empty.

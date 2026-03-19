@@ -60,6 +60,7 @@ setup(
         ],
         "gliner": ["gliner>=0.2.0"],
         "llmlingua": ["llmlingua>=0.2.0"],
+        "rebel": ["transformers>=4.20.0"],
         "loaders": [
             "ebooklib>=0.18",
             "striprtf>=0.0.26",
@@ -73,6 +74,7 @@ setup(
             "igraph>=1.0.0",
             "gliner>=0.2.0",
             "llmlingua>=0.2.0",
+            "transformers>=4.20.0",
             "ebooklib>=0.18",
             "striprtf>=0.0.26",
             "extract-msg>=0.28.0",

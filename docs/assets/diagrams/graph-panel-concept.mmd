@@ -1,0 +1,28 @@
+graph LR
+    subgraph vscode["VS Code"]
+        subgraph panel["Axon Graph Panel"]
+            subgraph left["◀ Left (35%)"]
+                Q["🔍 Query\n─────────────\n'How does retrieval work?'"]
+                A["💬 Answer\n─────────────\nLLM-synthesised response\nwith inline citations"]
+                C["📎 Citations\n─────────────\n[1] main.py:142 ▸\n[2] retrievers.py:88 ▸\n[3] api.py:55 ▸"]
+            end
+            subgraph right["Right (65%) ▶"]
+                T["[ KG ] [ CG ]\n──── tabs ────"]
+                KG["Knowledge Graph\n────────────────\n3D entity–relation\ngraph  ●──◆──●\nnodes = entities\nedges = relations"]
+                CG["Code Graph\n────────────────\n3D file structure\ngraph  ■──▶──■\nnodes = files/classes\nedges = imports/calls"]
+            end
+        end
+    end
+
+    Q --> A --> C
+    T --> KG
+    T --> CG
+    C -- "click → open file" --> editor["Editor\nfile.py:88"]
+    KG -- "click → open file" --> editor
+    CG -- "click → open file" --> editor
+
+    style vscode fill:#1e1e1e,stroke:#555,color:#ccc
+    style panel fill:#252526,stroke:#444,color:#ccc
+    style left fill:#2d2d30,stroke:#333,color:#ccc
+    style right fill:#2d2d30,stroke:#333,color:#ccc
+    style editor fill:#1e1e1e,stroke:#569cd6,color:#9cdcfe

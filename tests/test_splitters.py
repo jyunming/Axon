@@ -2,7 +2,12 @@
 
 import pytest
 
-from axon.splitters import RecursiveCharacterTextSplitter, SemanticTextSplitter, TableSplitter
+from axon.splitters import (
+    CodeAwareSplitter,
+    RecursiveCharacterTextSplitter,
+    SemanticTextSplitter,
+    TableSplitter,
+)
 
 
 class TestSemanticTextSplitter:
@@ -206,3 +211,143 @@ class TestTableSplitter:
         headers = ["x"]
         result = splitter.transform_rows(rows, headers)
         assert len(result) == 1
+
+
+class TestCodeAwareSplitter:
+    """Tests for the syntax-aware code splitter."""
+
+    def test_python_two_functions_split(self):
+        splitter = CodeAwareSplitter()
+        code = "def hello():\n    print('hello')\n\ndef world():\n    print('world')\n"
+        chunks = splitter.split_code(code, source="foo.py")
+        names = [c["symbol_name"] for c in chunks]
+        assert "hello" in names
+        assert "world" in names
+
+    def test_python_class_chunked(self):
+        splitter = CodeAwareSplitter()
+        code = "class Foo:\n    def bar(self):\n        pass\n"
+        chunks = splitter.split_code(code, source="foo.py")
+        assert any(c["symbol_type"] == "class" and c["symbol_name"] == "Foo" for c in chunks)
+
+    def test_python_main_entrypoint(self):
+        splitter = CodeAwareSplitter()
+        code = 'def run():\n    pass\n\nif __name__ == "__main__":\n    run()\n'
+        chunks = splitter.split_code(code, source="script.py")
+        assert any(c["is_entrypoint"] for c in chunks)
+
+    def test_python_has_docstring_flag(self):
+        splitter = CodeAwareSplitter()
+        code = (
+            'def documented():\n    """This has a docstring."""\n    pass\n\n'
+            "def undocumented():\n    pass\n"
+        )
+        chunks = splitter.split_code(code, source="x.py")
+        by_name = {c["symbol_name"]: c for c in chunks}
+        assert by_name["documented"]["has_docstring"] is True
+        assert by_name["undocumented"]["has_docstring"] is False
+
+    def test_python_is_test_flag(self):
+        splitter = CodeAwareSplitter()
+        code = "def test_something():\n    assert 1 == 1\n"
+        chunks = splitter.split_code(code, source="test_foo.py")
+        assert chunks[0]["is_test"] is True
+
+    def test_go_function_boundary(self):
+        splitter = CodeAwareSplitter()
+        code = (
+            'func Hello() string {\n    return "hello"\n}\n\n'
+            'func World() string {\n    return "world"\n}\n'
+        )
+        chunks = splitter.split_code(code, source="main.go")
+        names = [c["symbol_name"] for c in chunks]
+        assert "Hello" in names
+        assert "World" in names
+
+    def test_go_main_entrypoint(self):
+        splitter = CodeAwareSplitter()
+        code = 'func main() {\n    fmt.Println("hi")\n}\n'
+        chunks = splitter.split_code(code, source="main.go")
+        assert chunks[0]["is_entrypoint"] is True
+
+    def test_bash_function_boundary(self):
+        splitter = CodeAwareSplitter()
+        code = (
+            'function setup() {\n    echo "setup"\n}\n\nfunction teardown() {\n    echo "done"\n}\n'
+        )
+        chunks = splitter.split_code(code, source="deploy.sh")
+        names = [c["symbol_name"] for c in chunks]
+        assert "setup" in names
+        assert "teardown" in names
+
+    def test_rust_fn_boundary(self):
+        splitter = CodeAwareSplitter()
+        code = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn sub(a: i32, b: i32) -> i32 {\n    a - b\n}\n"
+        chunks = splitter.split_code(code, source="math.rs")
+        names = [c["symbol_name"] for c in chunks]
+        assert "add" in names
+        assert "sub" in names
+
+    def test_fallback_for_unknown_language(self):
+        splitter = CodeAwareSplitter(fallback_chunk_size=50, fallback_overlap=5)
+        code = "x" * 200
+        chunks = splitter.split_code(code, source="data.unknown")
+        assert len(chunks) > 1
+        assert all(c["symbol_type"] == "block" for c in chunks)
+
+    def test_metadata_fields_present(self):
+        splitter = CodeAwareSplitter()
+        chunks = splitter.split_code("def foo():\n    pass\n", source="foo.py")
+        assert chunks
+        c = chunks[0]
+        for field in (
+            "source_class",
+            "language",
+            "file_path",
+            "imports",
+            "symbol_type",
+            "symbol_name",
+        ):
+            assert field in c, f"missing field: {field}"
+        assert c["source_class"] == "code"
+        assert c["language"] == "python"
+
+    def test_transform_documents(self):
+        splitter = CodeAwareSplitter()
+        docs = [{"id": "d1", "text": "def foo():\n    pass\n", "metadata": {"source": "foo.py"}}]
+        result = splitter.transform_documents(docs)
+        assert result
+        assert all("_chunk_" in r["id"] for r in result)
+        assert all(r["metadata"]["source_class"] == "code" for r in result)
+
+    def test_imports_extracted_python(self):
+        splitter = CodeAwareSplitter()
+        code = "import os\nfrom pathlib import Path\n\ndef foo():\n    pass\n"
+        chunks = splitter.split_code(code, source="foo.py")
+        all_imports = [imp for c in chunks for imp in c.get("imports", [])]
+        assert any("import os" in imp for imp in all_imports)
+
+    def test_syntax_error_falls_back(self):
+        splitter = CodeAwareSplitter(fallback_chunk_size=50, fallback_overlap=5)
+        # Invalid Python syntax — should not crash
+        code = "def broken(\n    pass\nclass Foo:\n    x = 1\n"
+        chunks = splitter.split_code(code, source="broken.py")
+        assert len(chunks) >= 1
+
+    def test_perl_sub_boundary(self):
+        splitter = CodeAwareSplitter()
+        code = "sub greet {\n    print 'hi';\n}\nsub farewell {\n    print 'bye';\n}\n"
+        chunks = splitter.split_code(code, source="script.pl")
+        names = [c["symbol_name"] for c in chunks]
+        assert "greet" in names
+        assert "farewell" in names
+
+    def test_julia_function_boundary(self):
+        splitter = CodeAwareSplitter()
+        code = (
+            "function add(a, b)\n    return a + b\nend\nfunction sub(a, b)\n    return a - b\nend\n"
+        )
+        chunks = splitter.split_code(code, source="math.jl")
+        names = [c["symbol_name"] for c in chunks]
+        assert "add" in names
+        assert "sub" in names

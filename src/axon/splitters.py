@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from typing import Any
 
@@ -417,5 +418,487 @@ class CosineSemanticSplitter:
                 metadata.update({"chunk": i, "total_chunks": len(text_chunks)})
                 all_chunks.append(
                     {"id": f"{doc['id']}_chunk_{i}", "text": chunk, "metadata": metadata}
+                )
+        return all_chunks
+
+
+class CodeAwareSplitter:
+    """Syntax-aware code splitter that chunks by symbol/block boundaries.
+
+    Language support:
+    - Python: stdlib ``ast`` (full symbol extraction + rich metadata)
+    - Go, Rust, C++, Bash, Ruby, Perl, Julia, JS/TS: regex boundary detection
+    - All others: ``RecursiveCharacterTextSplitter`` character fallback
+
+    Each chunk carries code-specific metadata (``source_class``, ``language``,
+    ``symbol_type``, ``symbol_name``, ``qualified_name``, ``signature``,
+    ``start_line``, ``end_line``, ``imports``, ``has_docstring``,
+    ``is_entrypoint``, ``is_test``) per the code graph schema from the
+    SCRIPT_CHUNKING_AND_CODE_GRAPH_REPORT_2026_03_18 qualification report.
+    """
+
+    LANGUAGE_MAP: dict[str, str] = {
+        ".py": "python",
+        ".go": "go",
+        ".rs": "rust",
+        ".cpp": "cpp",
+        ".c": "cpp",
+        ".h": "cpp",
+        ".hpp": "cpp",
+        ".js": "javascript",
+        ".jsx": "javascript",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".rb": "ruby",
+        ".sh": "bash",
+        ".bash": "bash",
+        ".zsh": "bash",
+        ".pl": "perl",
+        ".pm": "perl",
+        ".jl": "julia",
+        ".java": "java",
+        ".kt": "kotlin",
+        ".cs": "csharp",
+        ".php": "php",
+        ".scala": "scala",
+        ".swift": "swift",
+    }
+
+    # Regex patterns matching the first line of a top-level symbol definition.
+    # Only applied to lines with no leading whitespace (indentation level 0).
+    _SYMBOL_PATTERNS: dict[str, re.Pattern] = {
+        "go": re.compile(r"^(?:func|type)\s+\w"),
+        "rust": re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:fn|struct|enum|trait|impl|mod)\s+\w"),
+        "javascript": re.compile(
+            r"^(?:(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+\w"
+            r"|(?:export\s+)?class\s+\w"
+            r"|(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\()"
+        ),
+        "typescript": re.compile(
+            r"^(?:(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+\w"
+            r"|(?:export\s+)?class\s+\w"
+            r"|(?:export\s+)?(?:interface|type)\s+\w"
+            r"|(?:export\s+)?(?:const|let|var)\s+\w+\s*[=:])"
+        ),
+        "ruby": re.compile(r"^(?:def|class|module)\s+\w"),
+        "bash": re.compile(r"^(?:function\s+\w+\s*(?:\(\s*\)\s*)?(?:\{|$)|\w+\s*\(\)\s*(?:\{|$))"),
+        "perl": re.compile(r"^sub\s+\w"),
+        "julia": re.compile(r"^(?:function|struct|mutable struct|module|macro)\s+\w"),
+        "java": re.compile(
+            r"^(?:(?:public|private|protected|static|abstract|final|synchronized)\s+)*"
+            r"(?:class|interface|enum|record)\s+\w"
+        ),
+        "cpp": re.compile(
+            r"^(?:(?:template\s*<[^>]*>\s*)?(?:class|struct|namespace|enum)\s+\w"
+            r"|(?:(?:inline|static|virtual|explicit|constexpr|friend)\s+)*\w[\w:*&<>]+\s+\w+\s*\()"
+        ),
+        "kotlin": re.compile(
+            r"^(?:(?:fun|class|object|interface|data\s+class|sealed\s+class)\s+\w)"
+        ),
+        "csharp": re.compile(
+            r"^(?:(?:public|private|protected|internal|static|abstract|sealed|partial|override|virtual)\s+)*"
+            r"(?:class|interface|struct|enum|void|\w+)\s+\w+\s*[({<]"
+        ),
+        "scala": re.compile(r"^(?:def|class|object|trait|case\s+class|case\s+object)\s+\w"),
+        "swift": re.compile(
+            r"^(?:(?:public|private|internal|open|fileprivate|final|override|static|class)\s+)*"
+            r"(?:func|class|struct|enum|protocol|extension)\s+\w"
+        ),
+    }
+
+    def __init__(
+        self,
+        max_symbol_size: int = 4000,
+        fallback_chunk_size: int = 800,
+        fallback_overlap: int = 100,
+    ) -> None:
+        self.max_symbol_size = max_symbol_size
+        self.fallback_chunk_size = fallback_chunk_size
+        self.fallback_overlap = fallback_overlap
+        # Telemetry: counts blocks produced via character fallback (not AST).
+        # Reset to 0 before each ingest run if you want per-file stats.
+        self.fallback_chunks_produced: int = 0
+
+    # ── language detection ────────────────────────────────────────────────
+
+    def _detect_language(self, source: str) -> str:
+        if not source:
+            return "unknown"
+        ext = os.path.splitext(source)[1].lower()
+        return self.LANGUAGE_MAP.get(ext, "unknown")
+
+    # ── import extraction ─────────────────────────────────────────────────
+
+    def _extract_imports(self, text: str, language: str) -> list[str]:
+        imports: list[str] = []
+        for line in text.splitlines():
+            s = line.strip()
+            if language == "python" and (s.startswith("import ") or s.startswith("from ")):
+                imports.append(s)
+            elif language == "go" and s.startswith("import "):
+                imports.append(s)
+            elif language == "rust" and s.startswith("use "):
+                imports.append(s)
+            elif language in ("javascript", "typescript") and (
+                s.startswith("import ") or "require(" in s
+            ):
+                imports.append(s)
+            elif language == "ruby" and (
+                s.startswith("require ") or s.startswith("require_relative ")
+            ):
+                imports.append(s)
+            elif language == "perl" and (s.startswith("use ") or s.startswith("require ")):
+                imports.append(s)
+            elif language == "julia" and (s.startswith("using ") or s.startswith("import ")):
+                imports.append(s)
+            elif language in ("java", "csharp") and s.startswith("import "):
+                imports.append(s)
+            elif language == "cpp" and s.startswith("#include"):
+                imports.append(s)
+            if len(imports) >= 30:
+                break
+        return imports
+
+    # ── Python AST chunking ───────────────────────────────────────────────
+
+    def _split_python_ast(self, text: str, source: str) -> list[dict]:
+        import ast as _ast
+
+        try:
+            tree = _ast.parse(text)
+        except SyntaxError:
+            return []
+
+        lines = text.splitlines()
+        chunks: list[dict] = []
+
+        for node in tree.body:
+            if not isinstance(
+                node,
+                _ast.FunctionDef | _ast.AsyncFunctionDef | _ast.ClassDef | _ast.If,
+            ):
+                continue
+
+            # Only handle if __name__ == "__main__": blocks
+            if isinstance(node, _ast.If):
+                try:
+                    test_src = _ast.unparse(node.test) if hasattr(_ast, "unparse") else ""
+                except Exception:
+                    test_src = ""
+                if "__name__" not in test_src or "__main__" not in test_src:
+                    continue
+                start, end = node.lineno - 1, node.end_lineno
+                chunks.append(
+                    {
+                        "text": "\n".join(lines[start:end]),
+                        "symbol_type": "entrypoint",
+                        "symbol_name": "__main__",
+                        "qualified_name": "__main__",
+                        "signature": 'if __name__ == "__main__":',
+                        "start_line": node.lineno,
+                        "end_line": node.end_lineno,
+                        "has_docstring": False,
+                        "is_entrypoint": True,
+                        "is_test": False,
+                    }
+                )
+                continue
+
+            start, end = node.lineno - 1, node.end_lineno
+            name = node.name
+            is_class = isinstance(node, _ast.ClassDef)
+            symbol_type = "class" if is_class else "function"
+
+            try:
+                if isinstance(node, _ast.ClassDef):
+                    bases = (
+                        [_ast.unparse(b) for b in node.bases] if hasattr(_ast, "unparse") else []
+                    )
+                    sig = f"class {name}({', '.join(bases)})" if bases else f"class {name}"
+                else:
+                    args = _ast.unparse(node.args) if hasattr(_ast, "unparse") else "..."
+                    prefix = "async def" if isinstance(node, _ast.AsyncFunctionDef) else "def"
+                    sig = f"{prefix} {name}({args})"
+            except Exception:
+                sig = f"{'class' if is_class else 'def'} {name}(...)"
+
+            has_doc = False
+            if node.body and isinstance(node.body[0], _ast.Expr):
+                _expr_val = node.body[0].value
+                if isinstance(_expr_val, _ast.Constant) and isinstance(_expr_val.value, str):
+                    has_doc = True
+            body_text = "\n".join(lines[start:end])
+
+            # Large class: sub-chunk its methods individually
+            if is_class and len(body_text) > self.max_symbol_size:
+                sub_chunks: list[dict] = []
+                for child in node.body:
+                    if isinstance(child, _ast.FunctionDef | _ast.AsyncFunctionDef):
+                        cs, ce = child.lineno - 1, child.end_lineno
+                        ct = "\n".join(lines[cs:ce])
+                        try:
+                            ca = _ast.unparse(child.args) if hasattr(_ast, "unparse") else "..."
+                            prefix = (
+                                "async def" if isinstance(child, _ast.AsyncFunctionDef) else "def"
+                            )
+                            csig = f"{prefix} {name}.{child.name}({ca})"
+                        except Exception:
+                            csig = f"def {name}.{child.name}(...)"
+                        child_has_doc = False
+                        if child.body and isinstance(child.body[0], _ast.Expr):
+                            _cv = child.body[0].value
+                            if isinstance(_cv, _ast.Constant) and isinstance(_cv.value, str):
+                                child_has_doc = True
+                        sub_chunks.append(
+                            {
+                                "text": ct,
+                                "symbol_type": "method",
+                                "symbol_name": child.name,
+                                "qualified_name": f"{name}.{child.name}",
+                                "signature": csig,
+                                "start_line": child.lineno,
+                                "end_line": child.end_lineno,
+                                "has_docstring": child_has_doc,
+                                "is_entrypoint": child.name in ("main", "__init__"),
+                                "is_test": child.name.startswith("test_"),
+                            }
+                        )
+                if sub_chunks:
+                    chunks.extend(sub_chunks)
+                    continue
+
+            # Large single symbol: character fallback
+            if len(body_text) > self.max_symbol_size:
+                for j, part in enumerate(
+                    RecursiveCharacterTextSplitter(
+                        chunk_size=self.fallback_chunk_size,
+                        chunk_overlap=self.fallback_overlap,
+                    ).split(body_text)
+                ):
+                    chunks.append(
+                        {
+                            "text": part,
+                            "symbol_type": symbol_type,
+                            "symbol_name": name,
+                            "qualified_name": f"{name}[{j}]",
+                            "signature": sig,
+                            "start_line": node.lineno,
+                            "end_line": node.end_lineno,
+                            "has_docstring": has_doc and j == 0,
+                            "is_entrypoint": name == "main",
+                            "is_test": name.startswith("test") or name.startswith("Test"),
+                        }
+                    )
+                continue
+
+            chunks.append(
+                {
+                    "text": body_text,
+                    "symbol_type": symbol_type,
+                    "symbol_name": name,
+                    "qualified_name": name,
+                    "signature": sig,
+                    "start_line": node.lineno,
+                    "end_line": node.end_lineno,
+                    "has_docstring": has_doc,
+                    "is_entrypoint": name == "main",
+                    "is_test": name.startswith("test") or name.startswith("Test"),
+                }
+            )
+
+        return chunks
+
+    # ── Regex heuristic chunking ──────────────────────────────────────────
+
+    def _parse_symbol_from_line(self, line: str, language: str) -> tuple[str, str]:
+        """Return (symbol_type, symbol_name) from a definition line."""
+        patterns_by_lang: dict[str, list[tuple[str, str]]] = {
+            "go": [
+                (r"^func\s+(?:\([^)]+\)\s+)?(\w+)", "function"),
+                (r"^type\s+(\w+)", "type"),
+            ],
+            "rust": [
+                (r"^(?:pub(?:\([^)]*\))?\s+)?fn\s+(\w+)", "function"),
+                (r"^(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)", "struct"),
+                (r"^(?:pub(?:\([^)]*\))?\s+)?trait\s+(\w+)", "trait"),
+                (r"^(?:pub(?:\([^)]*\))?\s+)?enum\s+(\w+)", "enum"),
+                (r"^(?:pub(?:\([^)]*\))?\s+)?impl\s+(?:<[^>]+>\s+)?(\w+)", "impl"),
+                (r"^(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)", "module"),
+            ],
+            "javascript": [
+                (
+                    r"^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)",
+                    "function",
+                ),
+                (r"^(?:export\s+)?class\s+(\w+)", "class"),
+                (r"^(?:export\s+)?(?:const|let|var)\s+(\w+)", "variable"),
+            ],
+            "typescript": [
+                (
+                    r"^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)",
+                    "function",
+                ),
+                (r"^(?:export\s+)?class\s+(\w+)", "class"),
+                (r"^(?:export\s+)?interface\s+(\w+)", "interface"),
+                (r"^(?:export\s+)?type\s+(\w+)", "type"),
+                (r"^(?:export\s+)?(?:const|let|var)\s+(\w+)", "variable"),
+            ],
+            "ruby": [
+                (r"^def\s+(\w+)", "method"),
+                (r"^class\s+(\w+)", "class"),
+                (r"^module\s+(\w+)", "module"),
+            ],
+            "bash": [
+                (r"^function\s+(\w+)", "function"),
+                (r"^(\w+)\s*\(\)", "function"),
+            ],
+            "perl": [(r"^sub\s+(\w+)", "function")],
+            "julia": [
+                (r"^function\s+(\w+)", "function"),
+                (r"^(?:mutable\s+)?struct\s+(\w+)", "struct"),
+                (r"^module\s+(\w+)", "module"),
+                (r"^macro\s+(\w+)", "macro"),
+            ],
+        }
+        for pattern_str, sym_type in patterns_by_lang.get(language, []):
+            m = re.match(pattern_str, line)
+            if m:
+                return sym_type, m.group(1)
+        words = [w for w in line.split() if re.match(r"^\w+$", w)]
+        name = words[1] if len(words) > 1 else (words[0] if words else "unknown")
+        return "block", name
+
+    def _split_regex_heuristic(self, text: str, language: str) -> list[dict]:
+        pattern = self._SYMBOL_PATTERNS.get(language)
+        if pattern is None:
+            return []
+        lines = text.splitlines()
+        # Only match at indentation level 0 (no leading whitespace)
+        boundaries = [
+            i
+            for i, line in enumerate(lines)
+            if not line[:1].isspace() and pattern.match(line.rstrip())
+        ]
+        if not boundaries:
+            return []
+
+        chunks: list[dict] = []
+        for idx, start in enumerate(boundaries):
+            end = boundaries[idx + 1] if idx + 1 < len(boundaries) else len(lines)
+            body = "\n".join(lines[start:end]).rstrip()
+            first_line = lines[start].strip()
+            sym_type, sym_name = self._parse_symbol_from_line(first_line, language)
+
+            if len(body) > self.max_symbol_size:
+                for j, part in enumerate(
+                    RecursiveCharacterTextSplitter(
+                        chunk_size=self.fallback_chunk_size,
+                        chunk_overlap=self.fallback_overlap,
+                    ).split(body)
+                ):
+                    chunks.append(
+                        {
+                            "text": part,
+                            "symbol_type": sym_type,
+                            "symbol_name": sym_name,
+                            "qualified_name": f"{sym_name}[{j}]",
+                            "signature": first_line[:200],
+                            "start_line": start + 1,
+                            "end_line": end,
+                            "has_docstring": False,
+                            "is_entrypoint": sym_name == "main",
+                            "is_test": sym_name.startswith("test") or sym_name.startswith("Test"),
+                        }
+                    )
+            else:
+                chunks.append(
+                    {
+                        "text": body,
+                        "symbol_type": sym_type,
+                        "symbol_name": sym_name,
+                        "qualified_name": sym_name,
+                        "signature": first_line[:200],
+                        "start_line": start + 1,
+                        "end_line": end,
+                        "has_docstring": body.lstrip()[:3] in ('"""', "'''", "/**"),
+                        "is_entrypoint": sym_name == "main",
+                        "is_test": sym_name.startswith("test") or sym_name.startswith("Test"),
+                    }
+                )
+        return chunks
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    def split_code(self, text: str, source: str = "") -> list[dict]:
+        """Split code text into symbol-aware chunks with rich metadata.
+
+        Returns a list of dicts, each with ``text`` plus code metadata fields.
+        """
+        language = self._detect_language(source)
+        imports = self._extract_imports(text, language)
+
+        chunks: list[dict] = []
+        if language == "python":
+            chunks = self._split_python_ast(text, source)
+        if not chunks:
+            chunks = self._split_regex_heuristic(text, language)
+        if not chunks:
+            # Character fallback for unknown languages or files with no symbol boundaries
+            raw = RecursiveCharacterTextSplitter(
+                chunk_size=self.fallback_chunk_size,
+                chunk_overlap=self.fallback_overlap,
+            ).split(text)
+            chunks = [
+                {
+                    "text": part,
+                    "symbol_type": "block",
+                    "symbol_name": f"block_{i}",
+                    "qualified_name": "",
+                    "signature": "",
+                    "start_line": None,
+                    "end_line": None,
+                    "has_docstring": False,
+                    "is_entrypoint": False,
+                    "is_test": False,
+                    "is_fallback": True,
+                }
+                for i, part in enumerate(raw)
+            ]
+            self.fallback_chunks_produced += len(chunks)
+
+        module_path = source.replace("\\", "/") if source else ""
+        for chunk in chunks:
+            chunk.setdefault("source_class", "code")
+            chunk.setdefault("language", language)
+            chunk.setdefault("file_path", source)
+            chunk.setdefault("module_path", module_path)
+            chunk.setdefault("imports", imports)
+            chunk.setdefault("calls", [])
+            chunk.setdefault("env_vars", [])
+            chunk.setdefault("commands", [])
+        return chunks
+
+    def transform_documents(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Split a list of code documents into symbol-aware chunks."""
+        all_chunks: list[dict[str, Any]] = []
+        for doc in documents:
+            source = doc.get("metadata", {}).get("source", "") or doc.get("id", "")
+            code_chunks = self.split_code(doc["text"], source=source)
+            for i, chunk_data in enumerate(code_chunks):
+                metadata = doc.get("metadata", {}).copy()
+                for k, v in chunk_data.items():
+                    if k == "text":
+                        continue
+                    # Skip empty lists — vector stores (e.g. ChromaDB) reject them
+                    if isinstance(v, list) and not v:
+                        continue
+                    metadata[k] = v
+                metadata.update({"chunk": i, "total_chunks": len(code_chunks)})
+                all_chunks.append(
+                    {
+                        "id": f"{doc['id']}_chunk_{i}",
+                        "text": chunk_data["text"],
+                        "metadata": metadata,
+                    }
                 )
         return all_chunks

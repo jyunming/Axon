@@ -14,7 +14,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from axon import shares as _shares
@@ -212,6 +212,14 @@ class QueryRequest(BaseModel):
         None, ge=0.0, le=2.0, description="Override LLM temperature for this request (0.0–2.0)"
     )
     timeout: float | None = Field(None, gt=0, description="Query timeout in seconds (default 120)")
+    include_diagnostics: bool = Field(
+        False,
+        description="When True, include retrieval diagnostics in response (code_mode, channels, etc.)",
+    )
+    dry_run: bool = Field(
+        False,
+        description="Skip LLM; return ranked chunks + diagnostics without calling generation model",
+    )
 
 
 class SearchRequest(BaseModel):
@@ -764,26 +772,51 @@ async def list_tracked_docs():
 
 @app.post("/ingest/refresh")
 async def refresh_docs():
-    """Re-check all tracked files and re-ingest changed ones."""
+    """Re-ingest any tracked files whose content has changed since last ingest."""
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     import hashlib as _hashlib
 
+    from axon.loaders import DirectoryLoader
+
     versions = brain.get_doc_versions()
-    results: dict[str, list[str]] = {"skipped": [], "reingest_needed": [], "missing": []}
+    results: dict[str, list] = {"skipped": [], "reingested": [], "missing": [], "errors": []}
     for source_id, record in versions.items():
         if not os.path.exists(source_id):
             results["missing"].append(source_id)
             continue
         try:
-            with open(source_id, "rb") as f:
-                content_hash = _hashlib.md5(f.read()).hexdigest()
-            if content_hash != record.get("content_hash"):
-                results["reingest_needed"].append(source_id)
-            else:
+            import functools
+
+            loop = asyncio.get_running_loop()
+            loader = DirectoryLoader()
+            suffix = os.path.splitext(source_id)[1].lower()
+            loader_instance = loader.loaders.get(suffix)
+            if loader_instance is None:
+                results["errors"].append(
+                    {"source": source_id, "error": f"no loader for extension '{suffix}'"}
+                )
+                continue
+            # Load first so we can compute the hash the same way ingest does:
+            # MD5 of concatenated chunk texts (not raw file bytes).
+            docs = await loop.run_in_executor(
+                None, functools.partial(loader_instance.load, source_id)
+            )
+            if not docs:
+                results["errors"].append(
+                    {"source": source_id, "error": "loader returned no documents"}
+                )
+                continue
+            combined = "".join(d.get("text", "") for d in docs)
+            current_hash = _hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
+            if current_hash == record.get("content_hash"):
                 results["skipped"].append(source_id)
-        except Exception:
-            results["missing"].append(source_id)
+                continue
+            # Content changed — re-ingest
+            await loop.run_in_executor(None, functools.partial(brain.ingest, docs))
+            results["reingested"].append(source_id)
+        except Exception as exc:
+            results["errors"].append({"source": source_id, "error": str(exc)})
     return results
 
 
@@ -813,6 +846,28 @@ async def query_brain(request: QueryRequest):
             loop = asyncio.get_event_loop()
 
         timeout = request.timeout or float(os.getenv("AXON_QUERY_TIMEOUT", "120"))
+
+        # Dry-run: skip LLM, return ranked candidates + diagnostics
+        if request.dry_run:
+            try:
+                results, diag, _trace = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: brain.search_raw(
+                            request.query, filters=request.filters, overrides=overrides
+                        ),
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=504, detail="Dry-run retrieval timed out")
+            return {
+                "query": request.query,
+                "dry_run": True,
+                "results": results,
+                "diagnostics": diag.to_dict(),
+            }
+
         try:
             response = await asyncio.wait_for(
                 loop.run_in_executor(
@@ -841,7 +896,10 @@ async def query_brain(request: QueryRequest):
             "compress": cfg.compress_context,
             "discuss": cfg.discussion_fallback,
         }
-        return {"query": request.query, "response": response, "settings": settings}
+        out: dict = {"query": request.query, "response": response, "settings": settings}
+        if request.include_diagnostics:
+            out["diagnostics"] = brain._last_diagnostics.to_dict()
+        return out
     except HTTPException:
         raise
     except Exception as e:
@@ -907,6 +965,44 @@ async def search_brain(request: SearchRequest):
         return results[:top_k]
     except Exception as e:
         logger.error(f"Error during search: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/search/raw")
+async def search_raw_endpoint(request: SearchRequest, include_trace: bool = False):
+    """Run retrieval without calling the LLM.
+
+    Returns ranked results plus typed diagnostics (and optionally the internal
+    debug trace when ``include_trace=true``).  Useful for benchmark harnesses,
+    CI failure classification, and manual retrieval tuning.
+    """
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        loop = asyncio.get_running_loop()
+        overrides: dict = {}
+        if request.top_k is not None:
+            overrides["top_k"] = int(request.top_k)
+        if request.threshold is not None:
+            overrides["similarity_threshold"] = float(request.threshold)
+        results, diag, trace = await loop.run_in_executor(
+            None,
+            lambda: brain.search_raw(
+                request.query,
+                filters=request.filters,
+                overrides=overrides or None,
+            ),
+        )
+        out: dict = {
+            "query": request.query,
+            "results": results,
+            "diagnostics": diag.to_dict(),
+        }
+        if include_trace:
+            out["trace"] = trace.to_dict()
+        return out
+    except Exception as e:
+        logger.error(f"Error during /search/raw: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1030,6 +1126,36 @@ async def finalize_graph():
     except Exception as e:
         logger.error(f"finalize_graph failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/graph/visualize", tags=["graph"])
+async def get_graph_visualization():
+    """Return the entity–relation graph as an interactive HTML page (requires internet for CDN JS)."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    try:
+        html = brain.export_graph_html()
+        return HTMLResponse(content=html)
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/graph/data", tags=["graph"])
+async def graph_data():
+    """Return the entity/relation graph as JSON for VS Code webview consumption."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    return brain.build_graph_payload()
+
+
+@app.get("/code-graph/data", tags=["graph"])
+async def code_graph_data():
+    """Return the code structure graph (files, classes, functions) as JSON for VS Code webview."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    return brain.build_code_graph_payload()
 
 
 @app.post("/add_text")
@@ -1285,7 +1411,7 @@ async def delete_documents(request: DeleteRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}(?:/[A-Za-z0-9_\-]{1,64}){0,4}$")
+_VALID_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}(?:/[a-z0-9][a-z0-9_-]{0,49}){0,4}$")
 
 
 @app.post("/project/new")

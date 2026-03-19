@@ -211,9 +211,16 @@ def test_ingest_refresh_reingest_needed(tmp_path):
     real_file = tmp_path / "changed.txt"
     real_file.write_bytes(b"new content")
     brain.get_doc_versions.return_value = {str(real_file): {"content_hash": "old_hash"}}
-    resp = client.post("/ingest/refresh")
+    # Mock the loader so we don't touch the real filesystem loader internals
+    fake_doc = [{"id": "doc1", "text": "new content", "metadata": {"source": str(real_file)}}]
+    mock_loader_instance = MagicMock()
+    mock_loader_instance.load.return_value = fake_doc
+    with patch("axon.loaders.DirectoryLoader") as mock_loader_cls:
+        mock_loader_cls.return_value.loaders = {".txt": mock_loader_instance}
+        resp = client.post("/ingest/refresh")
     assert resp.status_code == 200
-    assert str(real_file) in resp.json()["reingest_needed"]
+    data = resp.json()
+    assert str(real_file) in data["reingested"]
 
 
 def test_ingest_refresh_missing_file():

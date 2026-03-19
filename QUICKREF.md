@@ -136,6 +136,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
+| `/graph-viz [path]` | Export entity–relation graph as interactive HTML (requires `pip install axon[graphrag]`); omit path to save to temp dir. For a live VS Code panel use `Axon: Show Graph for Query…` instead. |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
 | `/quit`, `/exit` | Exit the REPL |
@@ -214,6 +215,12 @@ rag:
   top_k: 10
   hybrid_search: true
 
+  # Fast-graph mode (default): entity graph with zero LLM calls at ingest time.
+  # graph_rag_depth: light        → regex noun-phrase extraction, no LLM
+  # graph_rag_relations: false    → skip relation extraction (LLM-heavy)
+  # → VS Code Graph Panel KG tab populated; ingest speed unchanged vs graph_rag: false
+  # To upgrade: set graph_rag_depth: standard + graph_rag_relations: true
+  #
   # GraphRAG-style indexing and retrieval. Implements: hierarchical community detection
   # (Leiden via graspologic, or Louvain fallback), LLM community reports, map-reduce global
   # search, token-budgeted local search, entity/relation graphs, optional claim/covariate
@@ -241,13 +248,29 @@ rag:
   #     run before communities are ready (graph_rag_community_async: false to block).
   #
   # Requires an LLM at ingest time. Adds per-chunk latency.
-  graph_rag: false
-  graph_rag_budget: 3              # extra entity-linked slots beyond top_k (0 = no guarantee)
-  graph_rag_relations: true        # extract relation triples for 1-hop traversal
-  # graph_rag_community: false     # run Louvain community detection (needs networkx)
-  # graph_rag_community_async: true
-  # graph_rag_community_top_k: 5
-  # graph_rag_mode: local          # local | global | hybrid
+  # ── RAPTOR + GraphRAG (both ON by default) ───────────────────────────────────
+  # > ⚠ First ingest will be significantly slower (LLM calls per chunk).
+  # > To disable: set raptor: false and graph_rag: false
+  raptor: true
+  raptor_max_levels: 1
+  raptor_max_source_size_mb: 5.0
+
+  graph_rag: true
+  graph_rag_budget: 3
+  graph_rag_relations: true
+  graph_rag_include_raptor_summaries: true   # use RAPTOR summaries for large sources (auto-composition)
+  raptor_graphrag_leaf_skip_threshold: 3     # skip leaf extraction when source has >= N leaves (use RAPTOR summaries instead)
+  graph_rag_min_entities_for_relations: 3    # skip relation extraction for sparse chunks
+  graph_rag_relation_budget: 30              # cap relation extraction to top-30 chunks by entity density (0 = unlimited)
+  graph_rag_entity_min_frequency: 2          # prune entities seen in < 2 chunks before community detection
+  graph_rag_community: true
+  graph_rag_community_backend: leidenalg    # leidenalg = documented Python 3.13 path; "auto" tries graspologic first
+  graph_rag_auto_route: heuristic
+  graph_rag_mode: hybrid
+  graph_rag_global_top_communities: 20       # lazy mode: generate LLM summaries for top-20 query-relevant communities only
+
+  # Extraction depth — light/standard/deep:
+  # graph_rag_depth: standard   # light (no LLM, fast) | standard (default) | deep (+ claims)
 ```
 
 ### Offline / Air-gapped Mode
@@ -324,13 +347,14 @@ curl http://localhost:8000/ingest/status/abc123
 ### List Tracked Documents
 ```bash
 curl http://localhost:8000/tracked-docs
-# Response: {"sources": [{"source_id": "/path/file.txt", "chunks": 5, "ingested_at": "..."}]}
+# Response: {"docs": {"/path/file.txt": {"content_hash": "...", "chunk_count": 5, "ingested_at": "..."}}}
 ```
 
-### Refresh (Re-check Changed Files)
+### Refresh (Re-ingest Changed Files)
 ```bash
 curl -X POST http://localhost:8000/ingest/refresh
-# Re-ingests any files whose content has changed since last ingest
+# Re-ingests files whose content has changed since last ingest
+# Response: {"skipped": [...], "reingested": [...], "missing": [...], "errors": [...]}
 ```
 
 ### Projects
@@ -550,5 +574,5 @@ MIT License - See [LICENSE](LICENSE) file.
 
 ---
 
-**Last Updated:** 2026-03-13
+**Last Updated:** 2026-03-17
 **Version:** 1.0.0

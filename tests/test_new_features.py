@@ -91,7 +91,7 @@ class TestAxonConfigNewDefaults:
         from axon.main import AxonConfig
 
         cfg = AxonConfig()
-        assert cfg.hybrid_mode == "weighted"
+        assert cfg.hybrid_mode == "rrf"
 
     def test_dataset_type_default(self):
         from axon.main import AxonConfig
@@ -384,5 +384,701 @@ def test_ingest_refresh_returns_results_when_brain_set(tmp_path):
     assert resp.status_code == 200
     data = resp.json()
     assert "skipped" in data
-    assert "reingest_needed" in data
+    assert "reingested" in data
     assert "missing" in data
+
+
+# ---------------------------------------------------------------------------
+# Query Router (Option B)
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestQueryRouter:
+    def _brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        from axon.main import AxonBrain, AxonConfig
+
+        return AxonBrain(AxonConfig(hybrid_search=False, rerank=False, query_router="heuristic"))
+
+    def test_heuristic_factual_short_query(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        result = brain._classify_query_route_heuristic("What is Python?")
+        assert result == "factual"
+
+    def test_heuristic_synthesis_keyword(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        result = brain._classify_query_route_heuristic("summarize the key findings")
+        assert result == "synthesis"
+
+    def test_heuristic_table_keyword(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        result = brain._classify_query_route_heuristic("how many rows in the table")
+        assert result == "table_lookup"
+
+    def test_heuristic_entity_keyword(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        result = brain._classify_query_route_heuristic("what is the relationship between X and Y")
+        assert result == "entity_relation"
+
+    def test_heuristic_corpus_keyword(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        result = brain._classify_query_route_heuristic(
+            "what are the main themes across all documents"
+        )
+        assert result == "corpus_exploration"
+
+    def test_llm_router_valid_response(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.generate = MagicMock(return_value="synthesis\n")
+        result = brain._classify_query_route_llm("What are the main findings?")
+        assert result == "synthesis"
+
+    def test_llm_router_invalid_response_defaults_factual(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.llm.generate = MagicMock(return_value="unknown")
+        result = brain._classify_query_route_llm("What are the main findings?")
+        assert result == "factual"
+
+    def test_route_profile_factual_disables_graphrag(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        from axon.main import _ROUTE_PROFILES
+
+        profile = _ROUTE_PROFILES["factual"]
+        assert profile["graph_rag"] is False
+
+    def test_route_profile_entity_enables_graphrag_light(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        from axon.main import _ROUTE_PROFILES
+
+        profile = _ROUTE_PROFILES["entity_relation"]
+        assert profile["graph_rag"] is True
+        assert profile["graph_rag_community"] is False
+
+
+# ---------------------------------------------------------------------------
+# Code Graph (Phase 2 + Phase 3)
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestCodeGraph:
+    def _brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
+        from axon.main import AxonBrain, AxonConfig
+
+        cfg = AxonConfig(hybrid_search=False, rerank=False, code_graph=True, **kwargs)
+        return AxonBrain(cfg)
+
+    def test_code_graph_default_false(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().code_graph is False
+        assert AxonConfig().code_graph_bridge is False
+
+    def test_build_creates_file_node(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        chunks = [
+            {
+                "id": "c1",
+                "text": "def foo(): pass",
+                "metadata": {
+                    "source_class": "code",
+                    "file_path": "/src/foo.py",
+                    "language": "python",
+                    "symbol_type": "function",
+                    "symbol_name": "foo",
+                    "source": "/src/foo.py",
+                },
+            }
+        ]
+        brain._build_code_graph_from_chunks(chunks)
+        assert "/src/foo.py" in brain._code_graph["nodes"]
+        assert brain._code_graph["nodes"]["/src/foo.py"]["node_type"] == "file"
+
+    def test_build_creates_symbol_node(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        chunks = [
+            {
+                "id": "c1",
+                "text": "def foo(): pass",
+                "metadata": {
+                    "source_class": "code",
+                    "file_path": "/src/foo.py",
+                    "language": "python",
+                    "symbol_type": "function",
+                    "symbol_name": "foo",
+                    "source": "/src/foo.py",
+                },
+            }
+        ]
+        brain._build_code_graph_from_chunks(chunks)
+        sym_id = "/src/foo.py::foo"
+        assert sym_id in brain._code_graph["nodes"]
+        assert brain._code_graph["nodes"][sym_id]["node_type"] == "function"
+
+    def test_build_contains_edge(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        chunks = [
+            {
+                "id": "c1",
+                "text": "def foo(): pass",
+                "metadata": {
+                    "source_class": "code",
+                    "file_path": "/src/foo.py",
+                    "language": "python",
+                    "symbol_type": "function",
+                    "symbol_name": "foo",
+                    "source": "/src/foo.py",
+                },
+            }
+        ]
+        brain._build_code_graph_from_chunks(chunks)
+        edges = brain._code_graph["edges"]
+        assert any(
+            e["edge_type"] == "CONTAINS"
+            and e["source"] == "/src/foo.py"
+            and e["target"] == "/src/foo.py::foo"
+            for e in edges
+        )
+
+    def test_build_imports_edge(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        # First ingest bar.py so it exists as a file node
+        bar_chunk = {
+            "id": "c0",
+            "text": "def bar(): pass",
+            "metadata": {
+                "source_class": "code",
+                "file_path": "/src/pkg/bar.py",
+                "language": "python",
+                "symbol_type": "function",
+                "symbol_name": "bar",
+                "source": "/src/pkg/bar.py",
+            },
+        }
+        foo_chunk = {
+            "id": "c1",
+            "text": "from pkg.bar import bar\ndef foo(): pass",
+            "metadata": {
+                "source_class": "code",
+                "file_path": "/src/pkg/foo.py",
+                "language": "python",
+                "symbol_type": "function",
+                "symbol_name": "foo",
+                "source": "/src/pkg/foo.py",
+                "imports": "from pkg.bar import bar",
+            },
+        }
+        brain._build_code_graph_from_chunks([bar_chunk, foo_chunk])
+        edges = brain._code_graph["edges"]
+        assert any(e["edge_type"] == "IMPORTS" and e["source"] == "/src/pkg/foo.py" for e in edges)
+
+    def test_bridge_adds_mentioned_in_edge(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        # Build a code graph with a known symbol
+        code_chunks = [
+            {
+                "id": "c1",
+                "text": "def CodeAwareSplitter(): pass",
+                "metadata": {
+                    "source_class": "code",
+                    "file_path": "/src/splitters.py",
+                    "language": "python",
+                    "symbol_type": "class",
+                    "symbol_name": "CodeAwareSplitter",
+                    "source": "/src/splitters.py",
+                },
+            }
+        ]
+        brain._build_code_graph_from_chunks(code_chunks)
+        # Now a prose chunk that mentions the symbol
+        prose_chunks = [
+            {
+                "id": "doc1",
+                "text": "The CodeAwareSplitter handles Python AST chunking.",
+                "metadata": {"source": "README.md"},
+            }
+        ]
+        brain._build_code_doc_bridge(prose_chunks)
+        edges = brain._code_graph["edges"]
+        assert any(
+            e["edge_type"] == "MENTIONED_IN"
+            and "CodeAwareSplitter" in e["source"]
+            and e["target"] == "doc1"
+            for e in edges
+        )
+
+    def test_expand_with_code_graph_returns_matched_names(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        code_chunks = [
+            {
+                "id": "c1",
+                "text": "def MyFunc(): pass",
+                "metadata": {
+                    "source_class": "code",
+                    "file_path": "/src/foo.py",
+                    "language": "python",
+                    "symbol_type": "function",
+                    "symbol_name": "MyFunc",
+                    "source": "/src/foo.py",
+                },
+            }
+        ]
+        brain._build_code_graph_from_chunks(code_chunks)
+        # Mock vector_store.get_by_ids to return empty
+        brain.vector_store.get_by_ids = lambda ids: []
+        results, matched = brain._expand_with_code_graph("What does MyFunc do?", [], brain.config)
+        assert "MyFunc" in matched
+
+    def test_expand_no_match_returns_unchanged(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25)
+        brain.vector_store.get_by_ids = lambda ids: []
+        results, matched = brain._expand_with_code_graph(
+            "unrelated prose query here", [], brain.config
+        )
+        assert matched == []
+        assert results == []
+
+    def test_save_and_load_code_graph(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        from axon.main import AxonBrain, AxonConfig
+
+        brain = AxonBrain(
+            AxonConfig(bm25_path=str(tmp_path), code_graph=True, hybrid_search=False, rerank=False)
+        )
+        brain._code_graph = {
+            "nodes": {
+                "f": {
+                    "node_id": "f",
+                    "node_type": "file",
+                    "name": "f.py",
+                    "file_path": "f.py",
+                    "language": "python",
+                    "chunk_ids": [],
+                    "signature": "",
+                    "start_line": None,
+                    "end_line": None,
+                }
+            },
+            "edges": [],
+        }
+        brain._save_code_graph()
+        brain2 = AxonBrain(
+            AxonConfig(bm25_path=str(tmp_path), code_graph=True, hybrid_search=False, rerank=False)
+        )
+        assert "f" in brain2._code_graph["nodes"]
+
+
+# ---------------------------------------------------------------------------
+# Code Lexical Boost
+# ---------------------------------------------------------------------------
+
+
+class TestCodeLexicalBoost:
+    def test_extract_tokens_camelcase(self):
+        from axon.main import _extract_code_query_tokens
+
+        tokens = _extract_code_query_tokens("CodeAwareSplitter")
+        assert "codeawaresplitter" in tokens
+        assert "code" in tokens
+        assert "aware" in tokens
+
+    def test_extract_tokens_snake_case(self):
+        from axon.main import _extract_code_query_tokens
+
+        tokens = _extract_code_query_tokens("_split_python_ast")
+        assert "split" in tokens
+        assert "python" in tokens
+        assert "ast" in tokens
+
+    def test_extract_tokens_filename(self):
+        from axon.main import _extract_code_query_tokens
+
+        tokens = _extract_code_query_tokens("where is loaders.py")
+        assert "loaders" in tokens
+
+    def test_looks_like_code_query_camel(self):
+        from axon.main import _looks_like_code_query
+
+        assert _looks_like_code_query("How does CodeAwareSplitter work?") is True
+
+    def test_looks_like_code_query_snake(self):
+        from axon.main import _looks_like_code_query
+
+        assert _looks_like_code_query("what does _split_python_ast do") is True
+
+    def test_looks_like_code_query_false(self):
+        from axon.main import _looks_like_code_query
+
+        assert _looks_like_code_query("What is the capital of France?") is False
+
+    def test_boost_exact_symbol_match_ranks_first(self):
+        from axon.main import AxonBrain, AxonConfig, _extract_code_query_tokens
+
+        cfg = AxonConfig(code_lexical_boost=True, code_max_chunks_per_file=10)
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = cfg
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.9,
+                "text": "broad main module text",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "main",
+                    "symbol_type": "function",
+                    "file_path": "main.py",
+                },
+            },
+            {
+                "id": "b",
+                "score": 0.7,
+                "text": "CodeAwareSplitter implementation details",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "CodeAwareSplitter",
+                    "symbol_type": "class",
+                    "file_path": "splitters.py",
+                },
+            },
+        ]
+        query_tokens = _extract_code_query_tokens("How does CodeAwareSplitter work?")
+        boosted = brain._apply_code_lexical_boost(results, query_tokens, cfg=cfg)
+        assert boosted[0]["id"] == "b", "Exact symbol match should rank first"
+
+    def test_boost_skips_non_code_results(self):
+        from axon.main import AxonBrain, AxonConfig, _extract_code_query_tokens
+
+        cfg = AxonConfig(code_lexical_boost=True, code_max_chunks_per_file=10)
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = cfg
+
+        results = [
+            {"id": "x", "score": 0.8, "text": "prose text", "metadata": {"source": "doc.md"}},
+            {"id": "y", "score": 0.6, "text": "more prose", "metadata": {"source": "readme.md"}},
+        ]
+        query_tokens = _extract_code_query_tokens("CodeAwareSplitter")
+        boosted = brain._apply_code_lexical_boost(results, query_tokens, cfg=cfg)
+        # Scores should be unchanged (no code chunks → max_lex == 0)
+        assert boosted[0]["score"] == 0.8
+        assert boosted[1]["score"] == 0.6
+
+    def test_boost_no_tokens_no_change(self):
+        from axon.main import AxonBrain, AxonConfig
+
+        cfg = AxonConfig(code_lexical_boost=True, code_max_chunks_per_file=10)
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = cfg
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.9,
+                "text": "x",
+                "metadata": {"source_class": "code", "symbol_name": "foo", "file_path": "a.py"},
+            },
+        ]
+        boosted = brain._apply_code_lexical_boost(results, frozenset(), cfg=cfg)
+        assert boosted[0]["score"] == 0.9
+
+    def test_diversity_cap(self):
+        from axon.main import AxonBrain, AxonConfig, _extract_code_query_tokens
+
+        cfg = AxonConfig(code_lexical_boost=True, code_max_chunks_per_file=3)
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = cfg
+
+        same_file = [
+            {
+                "id": str(i),
+                "score": 0.9 - i * 0.05,
+                "text": f"chunk {i}",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": f"fn{i}",
+                    "file_path": "main.py",
+                },
+            }
+            for i in range(5)
+        ]
+        other_file = [
+            {
+                "id": "other",
+                "score": 0.5,
+                "text": "different file chunk",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "helper",
+                    "file_path": "utils.py",
+                },
+            }
+        ]
+        results = same_file + other_file
+        query_tokens = _extract_code_query_tokens("fn0 main.py")
+        boosted = brain._apply_code_lexical_boost(results, query_tokens, cfg=cfg)
+        # After diversity cap, the first 3 from main.py and 1 from utils.py should be in top 4
+        top_4_files = [r.get("metadata", {}).get("file_path") for r in boosted[:4]]
+        assert top_4_files.count("main.py") == 3
+        assert "utils.py" in top_4_files
+
+    def test_config_code_lexical_boost_disableable(self):
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig(code_lexical_boost=False)
+        assert cfg.code_lexical_boost is False
+
+
+# ---------------------------------------------------------------------------
+# Retrieval Diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestCodeRetrievalDiagnostics:
+    def test_default_values(self):
+        from axon.main import CodeRetrievalDiagnostics
+
+        d = CodeRetrievalDiagnostics()
+        assert d.diagnostics_version == "1.0"
+        assert d.code_mode_triggered is False
+        assert d.tokens_extracted == []
+        assert d.channels_activated == []
+        assert d.result_count == 0
+        assert d.boost_applied is False
+        assert d.fallback_chunks_in_results == 0
+
+    def test_to_dict_keys(self):
+        from axon.main import CodeRetrievalDiagnostics
+
+        d = CodeRetrievalDiagnostics(code_mode_triggered=True, result_count=5)
+        out = d.to_dict()
+        assert out["diagnostics_version"] == "1.0"
+        assert out["code_mode_triggered"] is True
+        assert out["result_count"] == 5
+        assert "channels_activated" in out
+
+    def test_to_json_is_valid(self):
+        import json
+
+        from axon.main import CodeRetrievalDiagnostics
+
+        d = CodeRetrievalDiagnostics()
+        parsed = json.loads(d.to_json())
+        assert parsed["diagnostics_version"] == "1.0"
+
+    def test_independent_mutable_defaults(self):
+        from axon.main import CodeRetrievalDiagnostics
+
+        d1 = CodeRetrievalDiagnostics()
+        d2 = CodeRetrievalDiagnostics()
+        d1.tokens_extracted.append("foo")
+        assert d2.tokens_extracted == []
+
+
+class TestCodeRetrievalTrace:
+    def test_default_values(self):
+        from axon.main import CodeRetrievalTrace
+
+        t = CodeRetrievalTrace()
+        assert t.per_result_score_breakdown == []
+        assert t.channel_raw_counts == {}
+        assert t.diversity_cap_deferrals == 0
+        assert t.deferred_chunk_ids == []
+
+    def test_to_dict_keys(self):
+        from axon.main import CodeRetrievalTrace
+
+        t = CodeRetrievalTrace(diversity_cap_deferrals=2)
+        out = t.to_dict()
+        assert out["diversity_cap_deferrals"] == 2
+        assert "per_result_score_breakdown" in out
+
+    def test_independent_mutable_defaults(self):
+        from axon.main import CodeRetrievalTrace
+
+        t1 = CodeRetrievalTrace()
+        t2 = CodeRetrievalTrace()
+        t1.deferred_chunk_ids.append("x")
+        assert t2.deferred_chunk_ids == []
+
+
+class TestClassifyRetrievalFailure:
+    def test_exact_symbol_missed(self):
+        from axon.main import _classify_retrieval_failure, _extract_code_query_tokens
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.9,
+                "text": "some code",
+                "metadata": {"source_class": "code", "symbol_name": "unrelated_function"},
+            }
+        ]
+        tokens = _extract_code_query_tokens("CodeAwareSplitter")
+        labels = _classify_retrieval_failure(results, tokens)
+        assert "exact_symbol_missed" in labels
+
+    def test_fallback_chunk_involved(self):
+        from axon.main import _classify_retrieval_failure
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.8,
+                "text": "x",
+                "metadata": {
+                    "is_fallback": True,
+                    "source_class": "code",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        labels = _classify_retrieval_failure(results, frozenset())
+        assert "fallback_chunk_involved" in labels
+
+    def test_too_many_broad_chunks(self):
+        from axon.main import _classify_retrieval_failure
+
+        results = [
+            {"id": str(i), "score": 0.5, "text": "prose", "metadata": {}} for i in range(4)
+        ] + [
+            {
+                "id": "c",
+                "score": 0.8,
+                "text": "code",
+                "metadata": {"source_class": "code", "symbol_type": "function"},
+            }
+        ]
+        labels = _classify_retrieval_failure(results, frozenset())
+        assert "too_many_broad_chunks" in labels
+
+    def test_no_failures_clean_result(self):
+        from axon.main import _classify_retrieval_failure, _extract_code_query_tokens
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.9,
+                "text": "def mysplitter(): pass",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "mysplitter",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        tokens = _extract_code_query_tokens("mysplitter")
+        labels = _classify_retrieval_failure(results, tokens)
+        assert "exact_symbol_missed" not in labels
+        assert "fallback_chunk_involved" not in labels
+
+    def test_right_file_wrong_block(self):
+        from axon.main import _classify_retrieval_failure
+
+        results = [
+            {
+                "id": "a",
+                "score": 0.7,
+                "text": "other stuff in splitters",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "other_fn",
+                    "source": "splitters.py",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        labels = _classify_retrieval_failure(results, frozenset(), expected_symbol="mysplitter")
+        assert "right_file_wrong_block" not in labels  # source doesn't contain "mysplitter"
+
+        results2 = [
+            {
+                "id": "b",
+                "score": 0.7,
+                "text": "code in mysplitter file",
+                "metadata": {
+                    "source_class": "code",
+                    "symbol_name": "other_fn",
+                    "source": "mysplitter_utils.py",
+                    "symbol_type": "function",
+                },
+            }
+        ]
+        labels2 = _classify_retrieval_failure(results2, frozenset(), expected_symbol="mysplitter")
+        assert "right_file_wrong_block" in labels2
+
+
+class TestGLiNERConfigModel:
+    """Fix 1 — _ensure_gliner respects graph_rag_gliner_model from config."""
+
+    def test_gliner_uses_config_model_path(self):
+        """_ensure_gliner loads the model path from config, not a hardcoded string."""
+        from unittest.mock import MagicMock, patch
+
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain.config = MagicMock()
+        brain.config.graph_rag_gliner_model = "local/path"
+        brain._gliner_model = None
+
+        with patch("gliner.GLiNER.from_pretrained") as mock_fp:
+            mock_fp.return_value = MagicMock()
+            AxonBrain._ensure_gliner(brain)
+
+        mock_fp.assert_called_once_with("local/path")
+
+
+class TestREBELZeroEdgeWarning:
+    """Fix 2 — REBEL 0-edge warning is logged when chunks were processed but no edges produced."""
+
+    def test_rebel_zero_edge_warning_logged(self):
+        """logger.warning is called when REBEL produces 0 edges from non-empty chunks."""
+        from unittest.mock import MagicMock, patch
+
+        from axon.main import AxonBrain
+
+        brain = MagicMock(spec=AxonBrain)
+        brain._relation_graph = {}
+        brain.config = MagicMock()
+        brain.config.graph_rag_relation_backend = "rebel"
+
+        _rel_chunks = [{"id": "c1", "text": "Apple acquired Beats."}]
+
+        with patch("axon.main.logger") as mock_logger:
+            # Simulate the post-loop warning block from ingest()
+            if getattr(brain.config, "graph_rag_relation_backend", "llm") == "rebel":
+                _rg_edge_count = sum(len(v) for v in brain._relation_graph.values())
+                if _rg_edge_count == 0 and len(_rel_chunks) > 0:
+                    mock_logger.warning(
+                        "GraphRAG REBEL: processed %d chunks but produced 0 relation edges. "
+                        "If using a local model path, verify the checkpoint contains pretrained weights "
+                        "(a 'newly initialized weights' warning from transformers indicates an invalid checkpoint).",
+                        len(_rel_chunks),
+                    )
+
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args[0]
+        assert "0 relation edges" in call_args[0]

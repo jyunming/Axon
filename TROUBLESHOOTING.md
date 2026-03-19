@@ -267,12 +267,17 @@ pip install -e ".[graphrag]"
 # installs: networkx, leidenalg, igraph
 ```
 
-The Axon community-detection fallback chain is:
-1. **graspologic** hierarchical Leiden (if installed separately and compatible with your Python/NumPy)
-2. **leidenalg** multi-resolution Leiden ← installed by `axon[graphrag]`
-3. **networkx** Louvain ← always available (no extra install needed)
+The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which uses the documented Python 3.13 path directly and bypasses `graspologic`.
 
-> If you have `graspologic` installed from a compatible environment (Python ≤ 3.12, NumPy 1.x), Axon will prefer it for true hierarchical parent-child community structure.
+The community-detection backend can be configured explicitly:
+```yaml
+rag:
+  graph_rag_community_backend: leidenalg  # recommended for Python 3.13 (default)
+  # graph_rag_community_backend: auto     # graspologic → leidenalg → networkx Louvain
+  # graph_rag_community_backend: louvain  # networkx only, no extra deps required
+```
+
+If you have `graspologic` installed from a Python ≤ 3.12 / NumPy 1.x environment and want Axon to use it, set `graph_rag_community_backend: auto`.
 
 ---
 
@@ -281,3 +286,120 @@ The Axon community-detection fallback chain is:
 **Cause:** Same as above — `gensim` 3.8.x does not support Python 3.13 or NumPy 2.x.
 
 **Fix:** Skip `graspologic`. Install `leidenalg` instead via `pip install axon[graphrag]`. The Leiden algorithm quality is equivalent; only the parent-child hierarchy output differs slightly (synthetic instead of true hierarchical).
+
+---
+
+## First ingest is very slow with RAPTOR + GraphRAG enabled
+
+**Symptom:** Ingest of a 10–50 document corpus takes several minutes instead of seconds.
+
+**Cause:** RAPTOR and GraphRAG are on by default. RAPTOR makes ~1 LLM call per 5 chunks
+(summary generation). GraphRAG makes ~1–3 LLM calls per chunk (entity extraction, optionally
+relation extraction). For 100 chunks that is 100–300 LLM calls before any query can be answered.
+
+**Mitigations (choose one or combine):**
+
+1. **Use the light extraction tier** — no LLM calls for entity extraction, ~0 ms per chunk:
+   ```yaml
+   rag:
+     graph_rag_depth: light
+   ```
+
+2. **Budget relation extraction** — the default ships with `graph_rag_relation_budget: 30`, which caps
+   relation extraction to the 30 most entity-dense chunks per batch. Reduce further if needed:
+   ```yaml
+   rag:
+     graph_rag_relation_budget: 15      # strict budget (0 = unlimited)
+     graph_rag_min_entities_for_relations: 5  # also skip sparse chunks
+   ```
+
+3. **Prune singleton entities** — `graph_rag_entity_min_frequency: 2` (default) excludes entities that
+   appear in only one chunk before community detection, reducing graph size and community count:
+   ```yaml
+   rag:
+     graph_rag_entity_min_frequency: 3  # stricter: entities must appear in >= 3 chunks
+   ```
+
+4. **Limit RAPTOR to small sources** — skip RAPTOR for files larger than N MB:
+   ```yaml
+   rag:
+     raptor_max_source_size_mb: 2.0
+   ```
+
+5. **Reduce RAPTOR group size** — fewer chunks per summary = fewer LLM calls:
+   ```yaml
+   rag:
+     raptor_chunk_group_size: 10   # default is 5
+   ```
+
+6. **Disable both for bulk ingest**, then re-enable for daily use (dedup skips unchanged chunks):
+   ```yaml
+   rag:
+     raptor: false
+     graph_rag: false
+   ```
+
+---
+
+## `ImportError: No module named 'gliner'`
+
+**Cause:** `graph_rag_ner_backend: gliner` is set in `config.yaml` but the `gliner` package is not installed.
+
+**Fix:**
+```bash
+pip install axon[gliner]
+```
+
+Or revert to the default LLM backend:
+```yaml
+rag:
+  graph_rag_ner_backend: llm   # default — no extra install needed
+```
+
+---
+
+## `ImportError: No module named 'transformers'` when using REBEL
+
+**Cause:** `graph_rag_relation_backend: rebel` is set but the `transformers` package is not installed.
+
+**Fix:**
+```bash
+pip install axon[rebel]
+```
+
+Or revert to the default LLM backend:
+```yaml
+rag:
+  graph_rag_relation_backend: llm   # default
+```
+
+---
+
+## Community generation hangs / takes very long on first global query
+
+**Cause:** In lazy mode (`graph_rag_community_lazy: true`), community summaries are generated on
+the first global query. If many communities exist and no pre-filter is applied, the LLM is called
+once per community — this can be 50–200+ calls on large corpora.
+
+**Mitigations:**
+
+1. **Limit community summaries at query time** (pre-filters before LLM calls):
+   ```yaml
+   rag:
+     graph_rag_global_top_communities: 10   # default is 20
+   ```
+
+2. **Reduce community depth** (fewer clusters = fewer summaries):
+   ```yaml
+   rag:
+     graph_rag_community_levels: 1
+   ```
+
+3. **Pre-generate summaries at ingest time** instead of lazily:
+   ```yaml
+   rag:
+     graph_rag_community_lazy: false   # generate immediately after ingest
+   ```
+
+4. **Use the `/finalize` command** (REPL) or `POST /graph/finalize` (API) after batch ingest
+   to trigger community detection and summary generation before the first query.

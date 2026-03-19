@@ -219,6 +219,15 @@ What files have I ingested?
 Describe and ingest this diagram: /path/to/architecture.png
 ```
 
+**Graph panel** (see [Show Graph Panel](#visualize-graphs--vs-code-graph-panel-recommended) above):
+```
+Axon: Show Graph for Query…        ← Command Palette
+Axon: Show Graph for Selection     ← Command Palette, with text selected
+
+@workspace show me the graph for how retrieval works
+@workspace visualise the authentication module
+```
+
 ---
 
 ## Projects — Multiple Knowledge Bases
@@ -242,6 +251,127 @@ curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the main topics?", "project": "work"}'
 ```
+
+---
+
+---
+
+## RAPTOR + GraphRAG — Best-Known Method
+
+RAPTOR and GraphRAG are **on by default** as of v1.0.0. They make Axon much better at multi-hop
+and corpus-wide questions, but they add LLM calls during ingest. Here is how to get the most out
+of them without paying unnecessary cost.
+
+### What each feature does
+
+| Feature | What it adds | Ingest cost |
+|---|---|---|
+| **RAPTOR** | Hierarchical summaries — groups ~5 leaf chunks per source into a summary node; summary nodes are retrieved alongside leaf chunks for multi-hop questions | ~1 LLM call per 5 chunks |
+| **GraphRAG (light — default)** | Entity graph via regex noun-phrase extraction; zero LLM calls; populates the VS Code Graph Panel KG tab; entity co-occurrence used to expand retrieval | **Zero LLM calls** |
+| **GraphRAG (standard)** | Adds LLM entity descriptions + typed relation triples; richer graph, better retrieval expansion | ~1–3 LLM calls per chunk |
+| **RAPTOR + GraphRAG** | Auto-composition — large sources use RAPTOR summaries as GraphRAG extraction units, cutting costs by ~50–80% | Shared cost — not additive |
+
+### Default config: fast graph, no extra LLM calls
+
+The default `config.yaml` ships with **fast graph mode**:
+
+```yaml
+rag:
+  graph_rag: true
+  graph_rag_depth: light      # regex noun-phrase extraction — zero LLM calls
+  graph_rag_relations: false  # relation extraction (LLM-heavy) is off
+  graph_rag_community: false  # community detection is off
+```
+
+This gives you the VS Code Graph Panel KG tab for free, with no ingest slowdown. Ingest speed is the same as having `graph_rag: false`.
+
+### Upgrading to a richer graph
+
+When you want typed entities with descriptions and relation edges (at the cost of LLM calls per chunk):
+
+```yaml
+rag:
+  graph_rag_depth: standard   # LLM entity descriptions
+  graph_rag_relations: true   # SUBJECT | RELATION | OBJECT triples
+```
+
+### Further reducing ingest time
+
+**Skip RAPTOR for large sources:**
+```yaml
+rag:
+  raptor_max_source_size_mb: 2.0   # skip RAPTOR for sources > 2 MB
+```
+
+**Disable both for bulk ingest, enable for daily use:**
+```yaml
+rag:
+  raptor: false
+  graph_rag: false
+```
+
+### Visualize graphs — VS Code Graph Panel (recommended)
+
+The **Axon Graph Panel** opens a live split-view directly inside VS Code. No browser, no extra tools needed.
+
+```
+Command Palette (Ctrl+Shift+P) → Axon: Show Graph for Query…
+```
+
+Or select a block of code / text, then:
+
+```
+Command Palette → Axon: Show Graph for Selection
+```
+
+Or from Copilot Chat:
+
+```
+@workspace visualise how the retrieval pipeline works
+@workspace show me the graph for authentication
+```
+
+**What the panel shows:**
+
+```
+┌──────────────────────┬──────────────────────────────────────┐
+│  Q: How does         │  [ Knowledge Graph ]  [ Code Graph ] │
+│     retrieval work?  │                                      │
+│  ────────────────    │   ●─────────────◆                   │
+│  LLM answer with     │      3D force-graph                  │
+│  inline citations    │   ▼              ▼                   │
+│  ────────────────    │   ●              ●                   │
+│  [1] retrievers.py ▸ │                                      │
+│  [2] main.py:142  ▸  │   click node → jump to source file  │
+└──────────────────────┴──────────────────────────────────────┘
+```
+
+| Tab | What it shows | Requires |
+|---|---|---|
+| **Knowledge Graph** | Entity–relation graph extracted from **any document** (PDF, DOCX, Markdown…) | `graph_rag: true` — **on by default**, just ingest your docs |
+| **Code Graph** | File/class/function structure with import/call edges for source code | `code_graph: true` in `config.yaml` (opt-in) |
+
+Disabled tabs show a tooltip explaining which flag to enable. Both tabs can be present in the same panel.
+
+Clicking any **citation** or **graph node** opens the associated source file at the exact line in the editor.
+
+### Visualize graphs — HTML export (REPL / headless)
+
+For offline use or sharing, export the entity graph as a self-contained HTML file:
+
+**REPL:**
+```
+/graph-viz                        # saves to temp dir and prints the path
+/graph-viz /path/to/output.html   # saves to a specific file
+```
+
+**API:**
+```bash
+curl http://localhost:8000/graph/visualize -o graph.html
+# Open graph.html in any browser — no server required
+```
+
+Requires `pyvis`: `pip install axon[graphrag]`
 
 ---
 

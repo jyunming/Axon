@@ -87,8 +87,9 @@ pip install -e ".[all]"
 | `loaders` | EPUB, RTF, and `.msg` (Outlook) file loaders | `pip install -e ".[loaders]"` |
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
-> The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x due to its `gensim` build dependency — do not use it on Python 3.13.
-> The fallback chain is: graspologic hierarchical Leiden → leidenalg multi-resolution Leiden → networkx Louvain.
+> The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x — do not install it on Python 3.13.
+> The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which skips `graspologic` entirely and uses the documented Python 3.13 path directly.
+> To restore the legacy preference order (graspologic → leidenalg → networkx Louvain) set `graph_rag_community_backend: auto`.
 
 Verify the install:
 
@@ -381,9 +382,44 @@ print(f"Embedding dimension: {len(embeddings[0])}")  # Should print 384
 
 ---
 
-## 6. Vision / Multimodal Setup (Optional)
+## 6. Code Corpus Setup (Optional)
 
-Only needed if you want to ingest image files. The system uses a Vision-Language Model (VLM) to auto-caption images before indexing.
+Only needed if you want to ingest source code repositories and enable
+syntax-aware chunking and code graph traversal.
+
+**Supported code extensions:** `.py`, `.go`, `.rs`, `.ts`, `.js`, `.tsx`,
+`.jsx`, `.java`, `.cpp`, `.c`, `.cs`, `.rb`, `.sh`, `.bash`, `.zsh`, `.pl`,
+`.pm`, `.jl`, `.h`, `.hpp`, `.swift`, `.kt`, `.php`
+
+The `ingest_path` tool (or `POST /ingest`) handles code directories the same
+way it handles document directories — no extra setup needed. The system
+auto-detects code files and routes them through `CodeAwareSplitter`, which
+uses Python AST for `.py` files and regex boundary detection for all other
+languages. No path prefix is injected into code file content (it lives in
+metadata only), so Python AST parsing is not disrupted.
+
+**Enable structural code graph for cross-file awareness:**
+
+```yaml
+# config.yaml
+rag:
+  code_graph: true        # build File + Symbol nodes with CONTAINS/IMPORTS edges
+  code_graph_bridge: true # also link prose chunks that mention code symbols
+```
+
+With `code_graph: true`, a query that retrieves a function chunk will
+automatically expand to include its containing file, its callers/callees, and
+files it imports — at zero extra LLM cost.
+
+> **Note:** The `graph_rag` flag is intentionally disabled for code corpora
+> (`_SOURCE_POLICY["codebase"] = (False, False)`). Code-to-code links come
+> from the code graph; `graph_rag` is reserved for prose document corpora.
+
+---
+
+## 6b. Vision / Multimodal Setup (Optional)
+
+Only needed if you want to ingest image files. The system uses a Vision-Language Model (VLM) to auto-caption images before indexing. See §6 for code corpus setup.
 
 **Supported image formats:** `.bmp`, `.png`, `.tif`, `.tiff`, `.pgm`
 
@@ -480,6 +516,26 @@ rag:
   # graph_rag: false
   # graph_rag_budget: 3       # extra slots beyond top_k (0 = no guarantee)
   # graph_rag_relations: true # enable 1-hop relation traversal
+  # graph_rag_community: false  # community detection (expensive; off by default)
+
+  # Query router — selects the cheapest retrieval strategy per query automatically.
+  # "heuristic": keyword + length signals, zero LLM calls (default)
+  # "llm":       single LLM classification call per query, more accurate
+  # "off":       legacy behaviour; falls back to graph_rag_auto_route flag
+  # query_router: heuristic
+
+  # Contextual retrieval — prepend a 1-sentence LLM-generated situating context
+  # to each prose chunk before embedding (Anthropic method).
+  # Only applies to dataset_type: doc / paper / discussion. Adds N LLM calls
+  # per ingest (one per chunk). Use with a fast local model.
+  # contextual_retrieval: false
+
+  # Code graph — build a structural symbol graph from code corpora at ingest time.
+  # CONTAINS edges link File nodes to their functions/classes; IMPORTS edges link
+  # files by import statement. At query time, 1-hop neighbours of matched code
+  # chunks are retrieved for free (independent of graph_rag flag).
+  # code_graph: false
+  # code_graph_bridge: false  # also build MENTIONED_IN edges from prose chunks
 
 chunk:
   size: 1000
@@ -950,7 +1006,7 @@ Copilot will automatically call `axon_getCollection` or `axon_listProjects` to a
 Search my Axon knowledge base for information about neural networks.
 ```
 
-### Available tools (17 total)
+### Available tools (18 total)
 
 | Tool | What it does |
 |---|---|
@@ -971,6 +1027,7 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_listShares` | List active project shares (AxonStore mode) |
 | `axon_initStore` | Initialise AxonStore multi-user mode |
 | `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+| `axon_showGraph` | Open the Axon Graph Panel for a query — shows answer, citations, and 3D entity/code graph side by side |
 
 ### Available VS Code commands
 
@@ -990,6 +1047,64 @@ Access via Ctrl+Shift+P:
 | `Axon: Redeem Share` | Join a project shared by another user |
 | `Axon: Revoke Share` | Revoke an active share |
 | `Axon: List Shares` | View all active shares |
+| `Axon: Show Graph for Query…` | Open the Graph Panel — prompts for a query, then shows answer + citations + 3D graph |
+| `Axon: Show Graph for Selection` | Open the Graph Panel using the current editor selection as the query |
+
+### Graph Panel
+
+The Graph Panel opens a **split webview** directly inside VS Code — no external browser required.
+
+```
+┌──────────────────────┬──────────────────────────────────────┐
+│  Q: <your query>     │  [ Knowledge Graph ]  [ Code Graph ] │
+│  ────────────────    │                                      │
+│  LLM-synthesised     │         ●─────◆─────●               │
+│  answer with         │        /   3D force   \              │
+│  inline citations    │       ▼    graph       ▼             │
+│  ────────────────    │      ●                  ●            │
+│  [1] file.py:42  ▸   │                                      │
+│  [2] module.py   ▸   │  click node/citation → open file    │
+└──────────────────────┴──────────────────────────────────────┘
+```
+
+**Knowledge Graph tab** — entity–relation graph extracted from **any document** (PDF, DOCX, Markdown, HTML, etc.) during ingest. Nodes are named entities (people, concepts, components); edges are extracted relations. Requires `graph_rag: true` in `config.yaml` — **enabled by default**, so you get this for free just by ingesting documents.
+
+**Code Graph tab** — structural file/class/function graph. Nodes are files, classes, and functions; edges are `IMPORTS`, `CONTAINS`, and `CALLS` relationships. Requires `code_graph: true` in `config.yaml` (opt-in, off by default):
+
+```yaml
+# config.yaml
+rag:
+  code_graph: true        # build File + Symbol nodes with CONTAINS/IMPORTS edges
+  code_graph_bridge: true # also link prose chunks that mention code symbols
+```
+
+> **No CLI flag for code graph.** `code_graph` is a config-only setting — enable it in `config.yaml`, then re-ingest. The `--graph-rag` CLI flag controls GraphRAG (knowledge graph) only.
+
+**Ingest before opening the panel:**
+
+```bash
+# Knowledge graph (prose documents)
+axon --ingest ./docs/ --graph-rag
+
+# Code graph (source code) — set code_graph: true in config.yaml first
+axon --ingest ./src/
+
+# Both at once — set code_graph: true in config.yaml, then:
+axon --ingest ./project/ --graph-rag
+```
+
+**Open the panel:**
+
+```
+Ctrl+Shift+P → Axon: Show Graph for Query…
+Ctrl+Shift+P → Axon: Show Graph for Selection   (select text first)
+
+Copilot Chat:
+  @workspace show me the graph for how retrieval works
+  @workspace visualise the authentication module
+```
+
+Tabs that have no data are automatically disabled with a tooltip explaining which flag to enable. Clicking any citation or graph node opens the source file at the exact line.
 
 ### Typical workflow
 

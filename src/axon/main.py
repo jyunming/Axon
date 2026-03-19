@@ -20,7 +20,7 @@ import sys  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 import uuid  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, Literal  # noqa: E402
 
@@ -67,6 +67,43 @@ _GRAPHRAG_NO_DATA_ANSWER = (
     "I am sorry but I am unable to answer this question given the provided data."
 )
 
+# Route profiles for the multi-class query router (Option B).
+# Each key maps to a set of AxonConfig field overrides applied to the per-request config copy.
+_ROUTE_PROFILES: dict = {
+    "factual": {
+        "raptor": False,
+        "graph_rag": False,
+        "parent_doc": False,
+        "hyde": False,
+        "multi_query": False,
+        "step_back": False,
+        "query_decompose": False,
+    },
+    "synthesis": {
+        "parent_doc": True,
+        "raptor": True,
+        "graph_rag": False,
+    },
+    "table_lookup": {
+        "graph_rag": False,
+        "raptor": False,
+        "parent_doc": False,
+        "dataset_type": "knowledge",
+    },
+    "entity_relation": {
+        "graph_rag": True,
+        "graph_rag_community": False,
+        "parent_doc": False,
+        "raptor": False,
+    },
+    "corpus_exploration": {
+        "raptor": True,
+        "graph_rag": False,
+        "parent_doc": True,
+        "multi_query": True,
+    },
+}
+
 
 @dataclass
 class AxonConfig:
@@ -80,11 +117,22 @@ class AxonConfig:
         "sentence_transformers", "ollama", "fastembed", "openai"
     ] = "sentence_transformers"
     embedding_model: str = "all-MiniLM-L6-v2"
+    # Local path override for the embedding model (sentence_transformers / fastembed).
+    # When set, this path is passed directly to the model loader instead of downloading.
+    # sentence_transformers: absolute path to a local model folder.
+    # fastembed: treated as cache_dir so the model is loaded from there.
+    # Takes precedence over embedding_model when non-empty.
+    embedding_model_path: str = ""
     ollama_base_url: str = "http://localhost:11434"
+    # Local directory where Ollama stores its model blobs.
+    # Equivalent to setting the OLLAMA_MODELS environment variable.
+    # Useful when models live on a secondary disk or network share.
+    # Can also be set via the OLLAMA_MODELS env var (env var takes priority).
+    ollama_models_dir: str = ""
 
     # LLM
     llm_provider: Literal[
-        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot"
+        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot", "github_copilot"
     ] = "ollama"
     llm_model: str = "gemma"
     llm_temperature: float = 0.7
@@ -94,6 +142,12 @@ class AxonConfig:
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
     vllm_base_url: str = "http://localhost:8000/v1"
+
+    # GitHub OAuth token for the "github_copilot" provider.
+    # Obtained via the OAuth device flow (/keys set github_copilot).
+    # Classic PATs are NOT accepted by the Copilot API.
+    # Can also be set via GITHUB_COPILOT_PAT env var.
+    copilot_pat: str = ""
 
     # Projects
     # Root directory for all named projects. Defaults to ~/.axon/projects.
@@ -129,6 +183,10 @@ class AxonConfig:
                 self.vllm_base_url = env_val
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
+        if not self.copilot_pat:
+            self.copilot_pat = os.environ.get("GITHUB_COPILOT_PAT") or os.environ.get(
+                "GITHUB_TOKEN", ""
+            )
 
         # 2. Environment variable overrides for paths
         env_root = os.getenv("AXON_PROJECTS_ROOT")
@@ -213,7 +271,7 @@ class AxonConfig:
     similarity_threshold: float = 0.3
     hybrid_search: bool = True
     hybrid_weight: float = 0.7  # 1.0 = Pure Semantic, 0.0 = Pure Keyword
-    hybrid_mode: Literal["weighted", "rrf"] = "weighted"  # Hybrid fusion mode
+    hybrid_mode: Literal["weighted", "rrf"] = "rrf"  # Hybrid fusion mode (rrf is more robust)
 
     # Chunking
     chunk_strategy: Literal["recursive", "semantic", "markdown", "cosine_semantic"] = "semantic"
@@ -286,7 +344,7 @@ class AxonConfig:
     raptor_retrieval_mode: str = (
         "tree_traversal"  # P4: tree_traversal|summary_first|corpus_overview
     )
-    raptor_graphrag_leaf_skip_threshold: int = 20  # P2: skip GraphRAG on sources >= N leaf chunks
+    raptor_graphrag_leaf_skip_threshold: int = 3  # P2: skip GraphRAG on sources >= N leaf chunks
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
@@ -305,7 +363,8 @@ class AxonConfig:
 
     # Community detection: cluster the entity graph into thematic communities after ingest.
     # Requires: pip install networkx
-    graph_rag_community: bool = True
+    # Default is False (off by default) for cost control; enable explicitly when needed.
+    graph_rag_community: bool = False
 
     # Run community detection in the background (non-blocking) after ingest.
     graph_rag_community_async: bool = True
@@ -375,9 +434,9 @@ class AxonConfig:
 
     # TASK 12: Runtime cost reduction — community triage
     graph_rag_community_min_size: int = 3  # communities smaller than this → template only
-    graph_rag_community_llm_top_n_per_level: int = 50  # max LLM-summarized per level (0=unlimited)
+    graph_rag_community_llm_top_n_per_level: int = 15  # max LLM-summarized per level (0=unlimited)
     graph_rag_community_llm_max_total: int = (
-        200  # hard cap on LLM calls across all levels (0=unlimited)
+        30  # hard cap on LLM calls across all levels (0=unlimited)
     )
     # TASK 12: Lazy community generation — skip summarization at finalize; generate on first global query
     graph_rag_community_lazy: bool = True
@@ -411,8 +470,47 @@ class AxonConfig:
     # TASK 7: Deferred community rebuild (batch ingest mode)
     graph_rag_community_defer: bool = True
 
-    # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction
-    graph_rag_include_raptor_summaries: bool = False
+    # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction.
+    # Defaults to True so large-source RAPTOR summaries are used as GraphRAG units.
+    graph_rag_include_raptor_summaries: bool = True
+
+    # A2: Skip relation extraction for chunks with fewer than this many entities.
+    # 0 = always extract. Saves ~30-50% of relation LLM calls on typical corpora.
+    graph_rag_min_entities_for_relations: int = 3
+
+    # Budget-based relation gating: max chunks to run relation extraction on per ingest batch.
+    # Chunks are ranked by entity density (entities/text-length) and only the top-N are processed.
+    # 0 = unlimited (fall back to entity-count threshold gate only).
+    graph_rag_relation_budget: int = 0
+
+    # Community detection backend preference.
+    # "auto"      = graspologic → leidenalg → louvain (legacy order)
+    # "leidenalg" = skip graspologic; use leidenalg/igraph directly (recommended for Python 3.13)
+    # "louvain"   = skip both; use networkx Louvain only
+    graph_rag_community_backend: str = "auto"
+
+    # Structural code graph (Phase 2 + Phase 3).
+    # Phase 2: builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.
+    # Phase 3 (code_graph_bridge): scans prose chunks for code symbol mentions → MENTIONED_IN edges.
+    # Query time: traverses the code graph to expand retrieval results.
+    code_graph: bool = False  # build + query structural code graph
+    code_graph_bridge: bool = False  # Phase 3: link code symbols to prose chunks
+
+    # Query-time lexical boost for code corpora.
+    code_lexical_boost: bool = True  # apply identifier-aware re-scoring to code result sets
+    code_top_k_multiplier: int = 2  # extra fetch_k factor when code query detected
+    code_max_chunks_per_file: int = 3  # per-file cap in final top_k (diversity)
+    # Code query mode tuning (active when code_lexical_boost=True and code query detected).
+    # code_bm25_weight only affects weighted fusion mode — silently ignored in RRF (default).
+    code_bm25_weight: float = 0.7  # BM25 weight override for code queries (weighted mode only)
+    code_top_k: int = 6  # top-K override when code mode active (0 = use top_k)
+    # Retrieval dry-run: skip LLM, return ranked candidates + diagnostics only.
+    retrieval_dry_run: bool = False
+
+    # Minimum entity appearance frequency to include in community detection graph.
+    # Entities appearing in fewer than this many chunks are pruned before building the graph.
+    # 1 = no pruning (include all entities). 2 = prune singletons (recommended).
+    graph_rag_entity_min_frequency: int = 1
 
     # TASK 14: Dedicated thread pool size for map-reduce phase (0 = use max_workers).
     # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
@@ -423,6 +521,12 @@ class AxonConfig:
     # Relations and claims still use LLM. pip install axon[gliner]
     graph_rag_ner_backend: Literal["llm", "gliner"] = "llm"
 
+    # A3: Extraction depth tier.
+    # "light" = regex noun-phrase extractor, no LLM, no relations (fastest)
+    # "standard" = current LLM-based NER (default)
+    # "deep" = standard + claims + canonicalize
+    graph_rag_depth: Literal["light", "standard", "deep"] = "standard"
+
     # TASK 14: Token-level compression of community reports before map-reduce LLM calls.
     # Uses LLMLingua-2. pip install axon[llmlingua]
     graph_rag_report_compress: bool = False
@@ -432,6 +536,32 @@ class AxonConfig:
     # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
     # "off" (default): use graph_rag_mode as configured.
     graph_rag_auto_route: Literal["off", "heuristic", "llm"] = "off"
+
+    # Option B: Multi-class query router
+    # "heuristic": keyword-based classifier (zero latency, default)
+    # "llm": one LLM call per query to classify route
+    # "off": skip router, use graph_rag_auto_route legacy behaviour
+    query_router: str = "heuristic"
+
+    # Contextual retrieval — prepend LLM-generated situating context to each chunk at ingest time.
+    # Based on Anthropic's contextual retrieval technique.
+    contextual_retrieval: bool = False
+
+    # P1: Semantic entity alias resolution — merge near-duplicate entity names (e.g.
+    # "Apple" / "Apple Inc." / "Apple Corporation") into a single canonical node before
+    # community detection.  Uses cosine similarity on entity-name embeddings.
+    # pip install axon[graphrag]  (no extra deps — uses the already-loaded embedding model)
+    graph_rag_entity_resolve: bool = False
+    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0–1)
+    graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
+
+    # P2: Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
+    # "rebel" skips the LLM for relation extraction; produces structured (subject, relation,
+    # object) triples directly from a fine-tuned seq2seq model.
+    # pip install axon[rebel]
+    graph_rag_relation_backend: Literal["llm", "rebel"] = "llm"
+    graph_rag_rebel_model: str = "Babelscape/rebel-large"
+    graph_rag_gliner_model: str = "urchade/gliner_mediumv2.1"
 
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
@@ -593,6 +723,10 @@ offline:
         if "ollama_base_url" not in config_dict and "llm_base_url" in config_dict:
             config_dict["ollama_base_url"] = config_dict["llm_base_url"]
 
+        # llm.models_dir → ollama_models_dir
+        if "llm_models_dir" in config_dict and "ollama_models_dir" not in config_dict:
+            config_dict["ollama_models_dir"] = config_dict.pop("llm_models_dir")
+
         if "api_key" not in config_dict and "llm_api_key" in config_dict:
             config_dict["api_key"] = config_dict["llm_api_key"]
 
@@ -637,6 +771,9 @@ offline:
         env_projects_root = os.getenv("AXON_PROJECTS_ROOT")
         if env_projects_root:
             config_dict["projects_root"] = env_projects_root
+        env_ollama_models = os.getenv("OLLAMA_MODELS")
+        if env_ollama_models:
+            config_dict["ollama_models_dir"] = env_ollama_models
 
         # Filter only valid fields
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
@@ -740,11 +877,12 @@ offline:
 
 
 class OpenReranker:
-    """Document reranker supporting cross-encoder and LLM (RankGPT) providers.
+    """Document reranker supporting cross-encoder and pointwise LLM providers.
 
     When ``reranker_provider="cross-encoder"`` a sentence-transformers CrossEncoder
     scores each (query, document) pair.  When ``reranker_provider="llm"`` the
-    active LLM rates each document on a 1–10 scale in parallel threads.
+    active LLM rates each document on a 1–10 scale in parallel threads
+    (pointwise LLM reranker, not listwise RankGPT).
     """
 
     def __init__(self, config: AxonConfig):
@@ -762,7 +900,7 @@ class OpenReranker:
                     logger.error("sentence-transformers not installed. Reranking disabled.")
                     self.config.rerank = False
             elif self.config.reranker_provider == "llm":
-                logger.info("Using LLM for Re-ranking (RankGPT)")
+                logger.info("Using LLM for Re-ranking (pointwise)")
                 self.llm = OpenLLM(self.config)
 
     def rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -794,7 +932,7 @@ class OpenReranker:
         return reranked_docs
 
     def _llm_rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """RankGPT pointwise scoring implementation."""
+        """Pointwise LLM scoring implementation (scores each document independently on 1–10 scale)."""
         system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
 
         from concurrent.futures import ThreadPoolExecutor
@@ -847,11 +985,13 @@ class OpenEmbedding:
 
     def _load_model(self):
         """Load the embedding model."""
+        _model_path = getattr(self.config, "embedding_model_path", "")
         if self.provider == "sentence_transformers":
             from sentence_transformers import SentenceTransformer
 
-            logger.info(f"Loading Sentence Transformers: {self.config.embedding_model}")
-            self.model = SentenceTransformer(self.config.embedding_model)
+            _src = _model_path or self.config.embedding_model
+            logger.info(f"Loading Sentence Transformers: {_src}")
+            self.model = SentenceTransformer(_src)
             self.dimension = self.model.get_sentence_embedding_dimension()
 
         elif self.provider == "ollama":
@@ -861,8 +1001,14 @@ class OpenEmbedding:
         elif self.provider == "fastembed":
             from fastembed import TextEmbedding
 
-            logger.info(f"Loading FastEmbed: {self.config.embedding_model}")
-            self.model = TextEmbedding(model_name=self.config.embedding_model)
+            _kwargs: dict = {"model_name": self.config.embedding_model}
+            if _model_path:
+                _kwargs["cache_dir"] = _model_path
+            logger.info(
+                f"Loading FastEmbed: {self.config.embedding_model}"
+                + (f" (cache_dir={_model_path})" if _model_path else "")
+            )
+            self.model = TextEmbedding(**_kwargs)
             self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 384)
 
         elif self.provider == "openai":
@@ -943,6 +1089,30 @@ class OpenLLM:
                 kwargs["base_url"] = base_url
             self._openai_clients[cache_key] = OpenAI(**kwargs)
         return self._openai_clients[cache_key]
+
+    def _get_copilot_client(self):
+        """Return an OpenAI client authenticated with the current Copilot session token.
+
+        The session token is obtained by exchanging the stored GitHub OAuth token
+        (copilot_pat field) via the copilot_internal/v2/token endpoint.  It expires
+        every ~30 minutes; this method refreshes it transparently and rebuilds the
+        client only when the token changes.
+        """
+        from openai import OpenAI
+
+        session_token = _get_copilot_session_token(self)
+        if self._openai_clients.get("_copilot_token") != session_token:
+            self._openai_clients["_copilot"] = OpenAI(
+                base_url="https://api.githubcopilot.com",
+                api_key=session_token,
+                default_headers={
+                    "Editor-Version": "axon/1.0.0",
+                    "Editor-Plugin-Version": "axon/1.0.0",
+                    "Copilot-Integration-Id": "axon",
+                },
+            )
+            self._openai_clients["_copilot_token"] = session_token
+        return self._openai_clients["_copilot"]
 
     def complete(
         self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None
@@ -1073,6 +1243,23 @@ class OpenLLM:
             response = self._get_openai_client(
                 base_url=self.config.vllm_base_url
             ).chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                timeout=self.config.llm_timeout,
+            )
+            return response.choices[0].message.content
+
+        elif provider == "github_copilot":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+            response = self._get_copilot_client().chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -1273,6 +1460,26 @@ class OpenLLM:
                 if chunk.choices[0].delta.content is not None:
                     yield chunk.choices[0].delta.content
 
+        elif provider == "github_copilot":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+            stream = self._get_copilot_client().chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                stream=True,
+                timeout=self.config.llm_timeout,
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+
         elif provider == "copilot":
             # For streaming, we'll just use the blocking complete() logic but yield it as one chunk.
             # True streaming via the bridge would require a more complex WebSocket setup.
@@ -1365,6 +1572,33 @@ class OpenVectorStore:
     # Chroma hard limit per collection.add() call.
     _CHROMA_MAX_BATCH = 5000
 
+    @staticmethod
+    def _sanitize_chroma_meta(metadatas: list[dict] | None) -> list[dict] | None:
+        """Coerce metadata dicts to Chroma-safe scalar types.
+
+        Chroma only accepts ``str | int | float | bool`` per field.
+        - list  → pipe-joined string (e.g. imports, calls, env_vars)
+        - None  → omitted
+        - other → str(v)
+        """
+        if metadatas is None:
+            return None
+        result: list[dict] = []
+        for meta in metadatas:
+            sanitized: dict = {}
+            for k, v in meta.items():
+                if isinstance(v, str | int | float | bool):
+                    sanitized[k] = v
+                elif isinstance(v, list):
+                    if v:
+                        sanitized[k] = "|".join(str(x) for x in v)
+                    # empty list → omit
+                elif v is not None:
+                    sanitized[k] = str(v)
+                # None → omit
+            result.append(sanitized)
+        return result
+
     def add(
         self,
         ids: list[str],
@@ -1376,12 +1610,13 @@ class OpenVectorStore:
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
             # so that large post-split payloads (e.g. long-contract corpora) do not crash.
             _bs = OpenVectorStore._CHROMA_MAX_BATCH
+            _safe_meta = OpenVectorStore._sanitize_chroma_meta(metadatas)
             for _start in range(0, max(len(ids), 1), _bs):
                 _end = _start + _bs
                 _ids_b = ids[_start:_end]
                 _texts_b = texts[_start:_end]
                 _emb_b = embeddings[_start:_end]
-                _meta_b = metadatas[_start:_end] if metadatas is not None else None
+                _meta_b = _safe_meta[_start:_end] if _safe_meta is not None else None
                 if not _ids_b:
                     break
                 try:
@@ -1733,6 +1968,358 @@ class MultiBM25Retriever:
     batch_add_documents = add_documents
 
 
+# ---------------------------------------------------------------------------
+# Code-query lexical boost — module-level utilities
+# ---------------------------------------------------------------------------
+
+_SYMBOL_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "class",
+        "method",
+        "function",
+        "def",
+        "func",
+        "import",
+        "module",
+        "package",
+        "splitter",
+        "loader",
+        "retriever",
+    }
+)
+
+_CODE_EXTENSIONS: frozenset[str] = frozenset(
+    {".py", ".go", ".rs", ".ts", ".js", ".sh", ".rb", ".jl", ".cpp", ".c", ".java", ".kt"}
+)
+
+
+def _extract_code_query_tokens(query: str) -> frozenset[str]:
+    """Extract identifier-like tokens from a query for lexical code matching.
+
+    Returns a frozenset of lowercase token strings covering:
+    - CamelCase identifiers and their split parts
+    - snake_case parts
+    - Basename references (loaders.py → "loaders")
+    - Qualified names (foo.bar → "foo", "bar", "foo.bar")
+    - All identifiers of length >= 4
+    """
+    tokens: set[str] = set()
+
+    # Basename references: strip known code extensions
+    for ext in _CODE_EXTENSIONS:
+        for m in re.finditer(r"\b(\w+)" + re.escape(ext) + r"\b", query):
+            tokens.add(m.group(1).lower())
+
+    # Qualified names: foo.bar → {"foo", "bar", "foo.bar"}
+    for m in re.finditer(r"\b([A-Za-z_]\w+)\.([A-Za-z_]\w+)\b", query):
+        tokens.add(m.group(1).lower())
+        tokens.add(m.group(2).lower())
+        tokens.add((m.group(1) + "." + m.group(2)).lower())
+
+    # All identifier-like tokens (length >= 4)
+    for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b", query):
+        word = m.group(0)
+        tokens.add(word.lower())
+
+        # CamelCase split: CodeAwareSplitter → ["Code", "Aware", "Splitter"]
+        camel_parts = re.findall(r"[A-Z][a-z0-9]*|[a-z][a-z0-9]*", word)
+        for part in camel_parts:
+            if len(part) >= 3:
+                tokens.add(part.lower())
+
+        # snake_case split: _split_python_ast → ["split", "python", "ast"]
+        if "_" in word:
+            for part in word.split("_"):
+                if len(part) >= 3:
+                    tokens.add(part.lower())
+
+    return frozenset(tokens)
+
+
+def _looks_like_code_query(query: str) -> bool:
+    """Return True if the query is likely asking about code identifiers or files."""
+    # CamelCase identifier
+    if re.search(r"[a-z][A-Z]", query):
+        return True
+    # snake_case identifier
+    if re.search(r"[a-z]_[a-z]", query):
+        return True
+    # Filename with a known code extension
+    for ext in _CODE_EXTENSIONS:
+        if ext in query:
+            return True
+    # Symbol keyword
+    query_lower = query.lower()
+    for kw in _SYMBOL_KEYWORDS:
+        if kw in query_lower.split():
+            return True
+    return False
+
+
+def _build_code_bm25_queries(query: str, query_tokens: frozenset) -> list[str]:
+    """Build deterministic BM25-only sub-queries from code identifier tokens.
+
+    Expands CamelCase, snake_case, dotted module paths, and filename stems
+    into short search strings that target BM25's lexical index.  These are
+    *not* fed to vector search — they are added to the BM25 pool only.
+
+    Returns a list of query strings (may be empty if no useful variants found).
+    """
+    variants: list[str] = []
+    seen: set[str] = {query.lower()}
+
+    for tok in sorted(query_tokens):  # deterministic order
+        if len(tok) < 4:
+            continue
+        if tok in seen:
+            continue
+
+        # CamelCase → spaced words (e.g. "CodeAwareSplitter" → "Code Aware Splitter")
+        camel_parts = re.findall(r"[A-Z][a-z0-9]*|[a-z][a-z0-9]*", tok)
+        if len(camel_parts) > 1:
+            spaced = " ".join(p for p in camel_parts if len(p) >= 2)
+            if spaced.lower() not in seen:
+                variants.append(spaced)
+                seen.add(spaced.lower())
+
+        # snake_case → spaced words (e.g. "split_python_ast" → "split python ast")
+        if "_" in tok:
+            parts = [p for p in tok.split("_") if len(p) >= 2]
+            if len(parts) > 1:
+                spaced = " ".join(parts)
+                if spaced not in seen:
+                    variants.append(spaced)
+                    seen.add(spaced)
+
+        # Dotted module path → base name (e.g. "axon.loaders" → "loaders")
+        if "." in tok:
+            base = tok.rsplit(".", 1)[-1]
+            if len(base) >= 4 and base not in seen:
+                variants.append(base)
+                seen.add(base)
+
+        # Raw token itself as a BM25 exact-ish search
+        if tok not in seen:
+            variants.append(tok)
+            seen.add(tok)
+
+    return variants
+
+
+# ---------------------------------------------------------------------------
+# Feature evidence surface registry
+# ---------------------------------------------------------------------------
+# Every retrieval feature must declare its evidence surface here so that:
+#   1. Diagnostics remain coherent as the feature set grows.
+#   2. Benchmark authors know which query slice exercises each feature.
+#   3. Silent complexity growth is prevented — if a feature has no measurable
+#      counter and no benchmark slice it should not exist.
+#
+# Schema per entry:
+#   diagnostic_field   — field name on CodeRetrievalDiagnostics (str, or None for trace-only)
+#   activation_counter — attribute on CodeRetrievalDiagnostics that counts activations
+#                        (int field, or None if boolean flag suffices)
+#   benchmark_slice    — human-readable description of the query type / corpus slice
+#                        where this feature is expected to improve results
+# ---------------------------------------------------------------------------
+
+_RETRIEVAL_FEATURES: dict[str, dict] = {
+    "code_mode_detection": {
+        "diagnostic_field": "code_mode_triggered",
+        "activation_counter": None,  # boolean: True/False per query
+        "benchmark_slice": (
+            "Queries containing CamelCase identifiers, snake_case names, "
+            "file extensions (.py/.go/etc.), or symbol keywords (class/function/def)"
+        ),
+    },
+    "lexical_boost": {
+        "diagnostic_field": "boost_applied",
+        "activation_counter": None,  # boolean: True when lex scores are non-zero
+        "benchmark_slice": (
+            "Code queries where exact symbol_name or qualified_name appears in the query; "
+            "expected to rank exact-match chunks above broad module-level chunks"
+        ),
+    },
+    "symbol_channel": {
+        "diagnostic_field": "channels_activated",  # entry 'symbol' in list
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Queries with a known function/class/method name that exists verbatim in "
+            "BM25 corpus metadata (symbol_name or qualified_name field)"
+        ),
+    },
+    "code_bm25_rewrite": {
+        "diagnostic_field": "channels_activated",  # entry 'bm25_variants' in list
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Code queries with multi-part identifiers (CamelCase, snake_case, dotted paths); "
+            "rewrite expands to spaced tokens for improved BM25 recall"
+        ),
+    },
+    "per_file_diversity": {
+        "diagnostic_field": None,  # trace-only: diversity_cap_deferrals / deferred_chunk_ids
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Queries over a corpus with many chunks per file (e.g. large main.py); "
+            "diversity cap prevents top-k from being monopolised by a single file"
+        ),
+    },
+    "line_range_tightness": {
+        "diagnostic_field": None,  # trace-only: per_result_score_breakdown 'tightness' key
+        "activation_counter": None,
+        "benchmark_slice": (
+            "Deep implementation-location queries (e.g. 'how does X work') where the correct "
+            "answer is a ≤30-line function chunk rather than a broad 80-line module chunk"
+        ),
+    },
+    "fallback_chunk_telemetry": {
+        "diagnostic_field": "fallback_chunks_in_results",
+        "activation_counter": "fallback_chunks_in_results",
+        "benchmark_slice": (
+            "Queries where the correct chunk was produced by the splitter's fallback path "
+            "(e.g. non-Python/non-supported language files); "
+            "high fallback count indicates the code corpus needs better loader coverage"
+        ),
+    },
+    "dry_run_mode": {
+        "diagnostic_field": None,  # mode flag, not a per-query metric
+        "activation_counter": None,
+        "benchmark_slice": (
+            "All queries in benchmark harness; dry-run surfaces diagnostics+trace without "
+            "an LLM call, enabling fast iterative ranking evaluation"
+        ),
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Retrieval accountability types (Layer 1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CodeRetrievalDiagnostics:
+    """Stable external contract for code retrieval observability.
+
+    Versioned and serializable. Returned in API responses (include_diagnostics=True)
+    and benchmark output. Schema version bumps when field semantics change.
+    """
+
+    diagnostics_version: str = "1.0"
+    code_mode_triggered: bool = False
+    tokens_extracted: list = field(default_factory=list)
+    channels_activated: list = field(default_factory=list)
+    result_count: int = 0
+    boost_applied: bool = False
+    fallback_chunks_in_results: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "diagnostics_version": self.diagnostics_version,
+            "code_mode_triggered": self.code_mode_triggered,
+            "tokens_extracted": list(self.tokens_extracted),
+            "channels_activated": list(self.channels_activated),
+            "result_count": self.result_count,
+            "boost_applied": self.boost_applied,
+            "fallback_chunks_in_results": self.fallback_chunks_in_results,
+        }
+
+    def to_json(self) -> str:
+        import json as _j
+
+        return _j.dumps(self.to_dict())
+
+
+@dataclass
+class CodeRetrievalTrace:
+    """Internal debug trace — volatile, not returned in API by default.
+
+    Contains per-result score breakdowns, channel raw counts, query variants,
+    and diversity-cap deferral details. Use for offline tuning only.
+    """
+
+    per_result_score_breakdown: list = field(default_factory=list)
+    channel_raw_counts: dict = field(default_factory=dict)
+    query_rewrite_variants: list = field(default_factory=list)
+    diversity_cap_deferrals: int = 0
+    deferred_chunk_ids: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "per_result_score_breakdown": list(self.per_result_score_breakdown),
+            "channel_raw_counts": dict(self.channel_raw_counts),
+            "query_rewrite_variants": list(self.query_rewrite_variants),
+            "diversity_cap_deferrals": self.diversity_cap_deferrals,
+            "deferred_chunk_ids": list(self.deferred_chunk_ids),
+        }
+
+
+def _classify_retrieval_failure(
+    results: list[dict],
+    query_tokens: frozenset,
+    expected_symbol: str | None = None,
+) -> list[str]:
+    """Classify automatable retrieval failure modes for CI benchmarking.
+
+    Returns a list of applicable labels. Labels that require ground truth
+    (e.g. synthesis failures) are NOT included — those are benchmark-only.
+
+    Labels:
+    - ``exact_symbol_missed``: query had symbol tokens but none matched result symbol_names
+    - ``right_file_wrong_block``: expected_symbol's file appeared but not the exact symbol chunk
+    - ``too_many_broad_chunks``: >50% results lack code source_class or symbol_type
+    - ``fallback_chunk_involved``: any result has is_fallback=True in metadata
+    """
+    if not results:
+        return []
+
+    labels: list[str] = []
+
+    result_symbols = [(r.get("metadata", {}).get("symbol_name") or "").lower() for r in results]
+    result_sources = [
+        (
+            r.get("metadata", {}).get("source") or r.get("metadata", {}).get("file_path") or ""
+        ).lower()
+        for r in results
+    ]
+
+    # exact_symbol_missed
+    code_tokens = frozenset(t for t in query_tokens if len(t) >= 3)
+    if code_tokens:
+        any_symbol_hit = any(
+            sym and any(tok in sym or sym in tok for tok in code_tokens) for sym in result_symbols
+        )
+        if not any_symbol_hit:
+            labels.append("exact_symbol_missed")
+
+    # right_file_wrong_block
+    if expected_symbol:
+        exp_lower = expected_symbol.lower()
+        file_hit = any(exp_lower in src for src in result_sources)
+        sym_hit = any(exp_lower in sym for sym in result_symbols if sym)
+        if file_hit and not sym_hit:
+            labels.append("right_file_wrong_block")
+
+    # too_many_broad_chunks
+    broad = sum(
+        1
+        for r in results
+        if r.get("metadata", {}).get("source_class") != "code"
+        or r.get("metadata", {}).get("symbol_type") is None
+    )
+    if broad / len(results) > 0.5:
+        labels.append("too_many_broad_chunks")
+
+    # fallback_chunk_involved
+    if any(r.get("metadata", {}).get("is_fallback") for r in results):
+        labels.append("fallback_chunk_involved")
+
+    return labels
+
+
+# ---------------------------------------------------------------------------
+
+
 class AxonBrain:
     """Core RAG engine that wires together embedding, vector store, BM25, reranker, and LLM.
 
@@ -1823,6 +2410,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 f"Offline mode ON  |  models dir: {self.config.local_models_dir or '(not set)'}"
             )
 
+        # Apply Ollama model directory override before any Ollama client is constructed.
+        # Sets OLLAMA_MODELS so the Ollama daemon resolves blobs from the given path.
+        if self.config.ollama_models_dir and not os.getenv("OLLAMA_MODELS"):
+            os.environ["OLLAMA_MODELS"] = self.config.ollama_models_dir
+            logger.info("Ollama models dir: %s", self.config.ollama_models_dir)
+
         # Apply custom projects root from config before any project operations
         if self.config.projects_root:
             from axon import projects as _proj_mod
@@ -1904,6 +2497,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._query_cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
+        self._last_diagnostics: CodeRetrievalDiagnostics = CodeRetrievalDiagnostics()
 
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()
@@ -1915,6 +2509,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
+
+        # Structural code graph: {nodes: {node_id: {...}}, edges: [{source, target, edge_type, chunk_id}]}
+        self._code_graph: dict = self._load_code_graph()
 
         # GraphRAG relation graph: {source_entity_lower: [{target, relation, chunk_id, description}]}
         self._relation_graph: dict = self._load_relation_graph()
@@ -2454,6 +3051,30 @@ Your primary goal is to help the user by answering questions based on the provid
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
 
+    def _load_code_graph(self) -> dict:
+        """Load code graph from disk. Returns empty graph if not found."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and "nodes" in data and "edges" in data:
+                    return data
+            except Exception:
+                pass
+        return {"nodes": {}, "edges": []}
+
+    def _save_code_graph(self) -> None:
+        """Persist code graph to disk."""
+        import json
+        import pathlib
+
+        path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._code_graph), encoding="utf-8")
+
     def _load_relation_graph(self) -> dict:
         """Load persisted relation graph from disk.
 
@@ -2701,8 +3322,12 @@ Your primary goal is to help the user by answering questions based on the provid
         """Build a NetworkX undirected graph from entity and relation data."""
         import networkx as nx
 
+        _min_freq_raw = getattr(self.config, "graph_rag_entity_min_frequency", 1)
+        _min_freq = int(_min_freq_raw) if isinstance(_min_freq_raw, int | float) else 1
         G = nx.Graph()
         for entity, node in self._entity_graph.items():
+            if isinstance(node, dict) and node.get("frequency", 1) < _min_freq:
+                continue
             desc = node.get("description", "") if isinstance(node, dict) else ""
             G.add_node(entity, description=desc)
         for src, entries in self._relation_graph.items():
@@ -2794,8 +3419,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 f"({G.number_of_nodes()} total nodes)"
             )
 
+        _backend = getattr(self.config, "graph_rag_community_backend", "auto")
+
         try:
-            # Try graspologic hierarchical Leiden
+            # Try graspologic hierarchical Leiden — skipped when backend != "auto"
+            if _backend != "auto":
+                raise ImportError("backend override — skipping graspologic")
             from graspologic.partition import hierarchical_leiden
 
             partitions = hierarchical_leiden(G, max_cluster_size=max_cluster_size, random_seed=seed)
@@ -2854,8 +3483,10 @@ Your primary goal is to help the user by answering questions based on the provid
                 "pip install axon[graphrag]"
             )
 
-        # Tier-2 fallback: multi-resolution Leiden via leidenalg (better than Louvain)
+        # Tier-2: multi-resolution Leiden via leidenalg — skipped when backend="louvain"
         try:
+            if _backend == "louvain":
+                raise ImportError("backend override — skipping leidenalg")
             import igraph as _ig
             import leidenalg as _la
 
@@ -3003,6 +3634,9 @@ Your primary goal is to help the user by answering questions based on the provid
     def _rebuild_communities(self) -> None:
         """Run community detection and generate summaries."""
         with self._community_rebuild_lock:
+            # P1: Entity alias resolution — merge near-duplicates before community detection
+            if getattr(self.config, "graph_rag_entity_resolve", False):
+                self._resolve_entity_aliases()
             logger.info("GraphRAG: Running community detection...")
             result = self._run_hierarchical_community_detection()
             if isinstance(result, tuple) and len(result) == 3:
@@ -3053,6 +3687,9 @@ Your primary goal is to help the user by answering questions based on the provid
             if getattr(self, "_claims_graph", None):
                 self._save_claims_graph()
             logger.info("finalize_ingest: entity/relation/claims graphs saved.")
+            if self._code_graph.get("nodes"):
+                self._save_code_graph()
+                logger.info("finalize_ingest: code graph saved.")
         self.finalize_graph()
 
     def finalize_graph(self) -> None:
@@ -3065,8 +3702,334 @@ Your primary goal is to help the user by answering questions based on the provid
             self._community_graph_dirty = False
             self._rebuild_communities()
 
-    def _generate_community_summaries(self) -> None:
-        """Generate LLM summaries for each detected community cluster across all levels."""
+    # ── Graph visualization ──────────────────────────────────────────────────
+
+    _VIZ_TYPE_COLORS: dict[str, str] = {
+        "PERSON": "#4e79a7",
+        "ORGANIZATION": "#f28e2b",
+        "GEO": "#59a14f",
+        "EVENT": "#e15759",
+        "CONCEPT": "#76b7b2",
+        "PRODUCT": "#edc948",
+        "UNKNOWN": "#bab0ab",
+    }
+
+    def build_graph_payload(self) -> dict:
+        """Return a renderer-neutral graph payload normalised from internal graph state.
+
+        The payload shape is::
+
+            {
+                "nodes": [{"id", "name", "label", "type", "color", "val",
+                           "chunk_count", "degree", "community", "description",
+                           "tooltip"}, ...],
+                "links": [{"source", "target", "label", "relation",
+                           "description", "value", "width"}, ...]
+            }
+
+        This method separates graph extraction from rendering.  Feed the result
+        to :meth:`export_graph_html` or any other renderer.
+        """
+        from html import escape
+
+        # community_levels level-0 schema: {entity -> community_id (int)}
+        entity_to_community: dict[str, int] = {}
+        if self._community_levels:
+            for entity, cid in self._community_levels.get(0, {}).items():
+                try:
+                    entity_to_community[entity] = int(cid)
+                except (TypeError, ValueError):
+                    pass
+
+        def _tooltip(name: str, node: dict, community: int | None) -> str:
+            desc = (node.get("description") or "").strip()
+            desc = escape(desc[:220]) if desc else "No description"
+            ntype = escape(node.get("type") or "UNKNOWN")
+            chunk_count = len(node.get("chunk_ids", []))
+            degree = node.get("degree", 0)
+            comm = "None" if community is None else str(community)
+            return (
+                f"<div style='max-width:320px'>"
+                f"<div><b>{escape(name)}</b></div>"
+                f"<div><b>Type:</b> {ntype}</div>"
+                f"<div><b>Chunks:</b> {chunk_count}</div>"
+                f"<div><b>Degree:</b> {degree}</div>"
+                f"<div><b>Community:</b> {comm}</div>"
+                f"<div style='margin-top:6px'>{desc}</div>"
+                f"</div>"
+            )
+
+        nodes: list[dict] = []
+        node_ids: set[str] = set()
+        for name, node in self._entity_graph.items():
+            if not isinstance(node, dict):
+                continue
+            community = entity_to_community.get(name)
+            chunk_count = len(node.get("chunk_ids", []))
+            nodes.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "label": name[:24],
+                    "type": node.get("type") or "UNKNOWN",
+                    "color": self._VIZ_TYPE_COLORS.get(node.get("type") or "UNKNOWN", "#aec7e8"),
+                    "val": 4 + min(chunk_count, 18),
+                    "chunk_count": chunk_count,
+                    "degree": node.get("degree", 0),
+                    "community": community,
+                    "description": (node.get("description") or "")[:220],
+                    "tooltip": _tooltip(name, node, community),
+                }
+            )
+            node_ids.add(name)
+
+        links: list[dict] = []
+        seen_edges: set[tuple] = set()
+        for src, rels in self._relation_graph.items():
+            if src not in node_ids:
+                continue
+            for rel in rels:
+                if not isinstance(rel, dict):
+                    continue
+                tgt = rel.get("target") or rel.get("object", "")
+                if not tgt or tgt not in node_ids:
+                    continue
+                relation = rel.get("relation", "")
+                key = (src, tgt, relation)
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                strength = float(rel.get("weight") or rel.get("strength") or 5)
+                links.append(
+                    {
+                        "source": src,
+                        "target": tgt,
+                        "label": relation[:32],
+                        "relation": relation,
+                        "description": rel.get("description", ""),
+                        "value": strength,
+                        "width": 1 + strength / 8,
+                    }
+                )
+
+        return {"nodes": nodes, "links": links}
+
+    def build_code_graph_payload(self) -> dict:
+        """Return the code structure graph as {nodes, links} for VS Code webview.
+
+        Node types: ``file``, ``class``, ``function``, ``method``, ``module``.
+        Edge types: ``CONTAINS`` (file→symbol), ``IMPORTS`` (file→file).
+        Returns ``{"nodes": [], "links": []}`` when no code graph has been built.
+        """
+        _COLORS = {
+            "file": "#4ec9b0",
+            "module": "#569cd6",
+            "class": "#c586c0",
+            "function": "#dcdcaa",
+            "method": "#dcdcaa",
+        }
+        nodes: list[dict] = []
+        for node_id, node in self._code_graph.get("nodes", {}).items():
+            ntype = node.get("node_type", "unknown")
+            sig = node.get("signature", "")
+            label = node.get("name", node_id)
+            nodes.append(
+                {
+                    "id": node_id,
+                    "name": label,
+                    "label": label[:28],
+                    "type": ntype,
+                    "color": _COLORS.get(ntype, "#888888"),
+                    "val": 5 if ntype == "file" else 3,
+                    "file_path": node.get("file_path", ""),
+                    "start_line": node.get("start_line") or 1,
+                    "chunk_ids": node.get("chunk_ids", []),
+                    "tooltip": f"[{ntype}] {label}" + (f"\n{sig}" if sig else ""),
+                }
+            )
+        links: list[dict] = []
+        for edge in self._code_graph.get("edges", []):
+            links.append(
+                {
+                    "source": edge.get("source", ""),
+                    "target": edge.get("target", ""),
+                    "label": edge.get("edge_type", ""),
+                    "edge_type": edge.get("edge_type", ""),
+                    "value": 1,
+                    "width": 1,
+                }
+            )
+        return {"nodes": nodes, "links": links}
+
+    @staticmethod
+    def _render_graph_html(graph: dict) -> str:
+        """Render a graph payload (from :meth:`build_graph_payload`) as a 3D HTML viewer.
+
+        The viewer loads three.js and 3d-force-graph from unpkg.com CDN — requires
+        internet access to render.  The HTML file itself needs no server.
+        """
+        import json as _json
+
+        # Escape </script> so a crafted entity string cannot break out of the script context.
+        data_json = _json.dumps(graph, ensure_ascii=False).replace("</script>", "<\\/script>")
+        n_nodes = len(graph["nodes"])
+        n_links = len(graph["links"])
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GraphRAG 3D Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body, #graph {{
+      margin: 0; width: 100%; height: 100%;
+      overflow: hidden;
+      background: #0b1020; color: #e8edf7;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+    }}
+    .hud {{
+      position: fixed; top: 14px; left: 14px; z-index: 20;
+      max-width: 360px; padding: 12px 14px;
+      border: 1px solid rgba(255,255,255,0.14); border-radius: 12px;
+      background: rgba(8,12,20,0.84); backdrop-filter: blur(10px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.28);
+    }}
+    .hud h1 {{ margin: 0 0 8px; font-size: 14px; }}
+    .hud p  {{ margin: 4px 0; font-size: 12px; line-height: 1.45; opacity: 0.9; }}
+    .legend {{ display: grid; grid-template-columns: auto 1fr;
+               gap: 6px 10px; margin-top: 10px; font-size: 11px; }}
+    .swatch {{ width: 10px; height: 10px; border-radius: 999px; margin-top: 3px; }}
+  </style>
+  <script src="https://unpkg.com/three"></script>
+  <script src="https://unpkg.com/3d-force-graph"></script>
+</head>
+<body>
+  <div class="hud">
+    <h1>GraphRAG 3D Viewer</h1>
+    <p>Left drag rotates &nbsp;·&nbsp; Right drag pans &nbsp;·&nbsp; Scroll zooms.</p>
+    <p>Hover a node for details &nbsp;·&nbsp; Click to focus camera.</p>
+    <p>Nodes: {n_nodes} &nbsp;|&nbsp; Edges: {n_links}</p>
+    <div class="legend">
+      <div class="swatch" style="background:#4e79a7"></div><div>PERSON</div>
+      <div class="swatch" style="background:#f28e2b"></div><div>ORGANIZATION</div>
+      <div class="swatch" style="background:#59a14f"></div><div>GEO</div>
+      <div class="swatch" style="background:#e15759"></div><div>EVENT</div>
+      <div class="swatch" style="background:#76b7b2"></div><div>CONCEPT</div>
+      <div class="swatch" style="background:#edc948"></div><div>PRODUCT</div>
+      <div class="swatch" style="background:#bab0ab"></div><div>UNKNOWN</div>
+    </div>
+  </div>
+  <div id="graph"></div>
+  <script>
+    const graphData = {data_json};
+    const elem = document.getElementById('graph');
+    const Graph = ForceGraph3D()(elem)
+      .graphData(graphData)
+      .backgroundColor('#0b1020')
+      .nodeLabel(node => node.tooltip)
+      .nodeColor(node => node.color)
+      .nodeVal(node => node.val)
+      .nodeOpacity(0.95)
+      .linkLabel(link => `<div><b>${{link.relation || 'relation'}}</b><br>${{link.description || ''}}</div>`)
+      .linkWidth(link => link.width || 1)
+      .linkOpacity(0.45)
+      .linkDirectionalParticles(link => Math.min(4, Math.max(1, Math.round((link.value || 1) / 10))))
+      .linkDirectionalParticleSpeed(0.004)
+      .linkDirectionalParticleWidth(2)
+      .d3Force('charge').strength(-140);
+    Graph.d3Force('link').distance(90);
+    Graph.onNodeClick(node => {{
+      const distance = 120;
+      const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+      Graph.cameraPosition(
+        {{ x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }},
+        node, 1400
+      );
+    }});
+    Graph.controls().autoRotate = false;
+    Graph.controls().enableDamping = true;
+    Graph.controls().dampingFactor = 0.12;
+  </script>
+</body>
+</html>
+"""
+
+    def export_graph_html(
+        self,
+        path: str | None = None,
+        json_path: str | None = None,
+        open_browser: bool = True,
+    ) -> str:
+        """Export the entity–relation graph as a self-contained 3D interactive HTML viewer.
+
+        Normalises internal graph state into a renderer-neutral payload via
+        :meth:`build_graph_payload`, then renders it with three.js + 3d-force-graph.
+
+        Args:
+            path: File path to write the HTML to.  Defaults to a temp file when
+                  *open_browser* is True and no path is provided.
+            json_path: Optional path to also write the normalised graph JSON payload.
+            open_browser: If True (default), open the generated HTML in the default
+                          web browser immediately after writing.
+
+        Returns:
+            The rendered HTML string.
+        """
+        import json as _json
+        import pathlib
+        import tempfile
+
+        graph = self.build_graph_payload()
+        html = self._render_graph_html(graph)
+
+        if json_path:
+            pathlib.Path(json_path).write_text(
+                _json.dumps(graph, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            logger.info(
+                "Graph JSON payload saved to %s (%d nodes, %d edges)",
+                json_path,
+                len(graph["nodes"]),
+                len(graph["links"]),
+            )
+
+        if path:
+            pathlib.Path(path).write_text(html, encoding="utf-8")
+            logger.info(
+                "Graph visualization saved to %s (%d nodes, %d edges)",
+                path,
+                len(graph["nodes"]),
+                len(graph["links"]),
+            )
+            out_path = path
+        elif open_browser:
+            # Write to a temp file so the browser can load it
+            tmp = tempfile.NamedTemporaryFile(
+                suffix=".html", prefix="axon_graph_", delete=False, mode="w", encoding="utf-8"
+            )
+            tmp.write(html)
+            tmp.close()
+            out_path = tmp.name
+            logger.info("Graph visualization written to temp file %s", out_path)
+        else:
+            out_path = None
+
+        if open_browser and out_path:
+            import webbrowser
+
+            webbrowser.open(f"file://{pathlib.Path(out_path).resolve()}")
+            logger.info("Opened graph visualization in default browser.")
+
+        return html
+
+    def _generate_community_summaries(self, query_hint: str = "") -> None:
+        """Generate LLM summaries for each detected community cluster across all levels.
+
+        When *query_hint* is provided (lazy mode), communities are ranked by relevance to
+        the query first so the most useful ones get LLM treatment before the budget cap.
+        The LLM cap is tightened to ``graph_rag_global_top_communities`` in lazy mode,
+        replacing the full ``graph_rag_community_llm_max_total`` limit.
+        """
         if not self._community_levels:
             return
         import hashlib as _hashlib
@@ -3081,11 +4044,35 @@ Your primary goal is to help the user by answering questions based on the provid
 
         summaries = {}
         total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
-        logger.info(f"GraphRAG: Generating summaries for {total_communities} communities...")
 
         _min_size = getattr(self.config, "graph_rag_community_min_size", 3)
-        _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 50)
-        _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 200)
+        _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 15)
+        _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 30)
+
+        # Lazy mode: tighten cap to graph_rag_global_top_communities so only the most
+        # query-relevant communities receive LLM treatment on the first global query.
+        _lazy_cap = getattr(self.config, "graph_rag_global_top_communities", 0)
+        if query_hint and _lazy_cap > 0:
+            _max_total = min(_max_total, _lazy_cap)
+            logger.info(
+                "GraphRAG: lazy mode — generating community summaries for query "
+                "(LLM cap: %d of %d communities).",
+                _max_total,
+                total_communities,
+            )
+        else:
+            logger.info("GraphRAG: Generating summaries for %d communities...", total_communities)
+
+        # Pre-compute query relevance scores when a hint is provided.
+        _query_words: set = set(query_hint.lower().split()) if query_hint else set()
+
+        def _query_relevance(members: list) -> float:
+            """Fraction of query words present in community entity names."""
+            if not _query_words:
+                return 0.0
+            member_words = {w for m in members for w in m.lower().split()}
+            return len(_query_words & member_words) / len(_query_words)
+
         _llm_calls_issued = 0
 
         def _community_score(members: list) -> float:
@@ -3270,9 +4257,19 @@ Your primary goal is to help the user by answering questions based on the provid
                 community_entities[cid].append(entity)
 
             llm_items, template_items = [], []
-            ranked = sorted(
-                community_entities.items(), key=lambda kv: _community_score(kv[1]), reverse=True
-            )
+            if query_hint:
+                # Prioritise query-relevant communities so they consume LLM budget first.
+                ranked = sorted(
+                    community_entities.items(),
+                    key=lambda kv: (_query_relevance(kv[1]), _community_score(kv[1])),
+                    reverse=True,
+                )
+            else:
+                ranked = sorted(
+                    community_entities.items(),
+                    key=lambda kv: _community_score(kv[1]),
+                    reverse=True,
+                )
 
             for rank_pos, (cid, members) in enumerate(ranked):
                 summary_key = f"{level_idx}_{cid}"
@@ -3894,6 +4891,103 @@ Your primary goal is to help the user by answering questions based on the provid
                 return False
         return False
 
+    # ── keyword sets for multi-class router ───────────────────────────────────
+    _SYNTHESIS_KEYWORDS: frozenset = frozenset(
+        {
+            "summarize",
+            "overview",
+            "compare",
+            "contrast",
+            "explain",
+            "discuss",
+            "survey",
+            "themes",
+            "analysis",
+        }
+    )
+    _TABLE_KEYWORDS: frozenset = frozenset(
+        {
+            "table",
+            "row",
+            "column",
+            "value",
+            "count",
+            "average",
+            "maximum",
+            "minimum",
+            "statistic",
+            "how many",
+            "list all",
+        }
+    )
+    _ENTITY_KEYWORDS: frozenset = frozenset(
+        {
+            "relationship",
+            "related to",
+            "who",
+            "works with",
+            "connected",
+            "linked",
+            "colleague",
+            "dependency",
+        }
+    )
+    _CORPUS_KEYWORDS: frozenset = frozenset(
+        {
+            "all documents",
+            "entire corpus",
+            "everything",
+            "main topics",
+            "key themes",
+            "across all",
+        }
+    )
+
+    def _classify_query_route(self, query: str, cfg: "AxonConfig") -> str:
+        """Return one of: factual | synthesis | table_lookup | entity_relation | corpus_exploration."""
+        if cfg.query_router == "llm":
+            return self._classify_query_route_llm(query)
+        return self._classify_query_route_heuristic(query)
+
+    def _classify_query_route_heuristic(self, query: str) -> str:
+        q = query.lower()
+        words = set(q.split())
+        # corpus_exploration
+        if any(kw in q for kw in self._CORPUS_KEYWORDS) or (
+            len(query) > 120 and any(kw in words for kw in self._SYNTHESIS_KEYWORDS)
+        ):
+            return "corpus_exploration"
+        # entity_relation
+        if any(kw in q for kw in self._ENTITY_KEYWORDS):
+            return "entity_relation"
+        # table_lookup
+        if any(kw in q for kw in self._TABLE_KEYWORDS):
+            return "table_lookup"
+        # synthesis
+        if any(kw in words for kw in self._SYNTHESIS_KEYWORDS) or len(query) > 80:
+            return "synthesis"
+        return "factual"
+
+    def _classify_query_route_llm(self, query: str) -> str:
+        prompt = (
+            "Classify this query into exactly one category. Respond with only the category name.\n\n"
+            "Categories:\n"
+            "- factual: short lookup, specific named fact or definition\n"
+            "- synthesis: broad question needing information from multiple sections or documents\n"
+            "- table_lookup: asks for numerical data, statistics, or structured rows/columns\n"
+            "- entity_relation: asks about relationships, connections, or dependencies between entities\n"
+            "- corpus_exploration: asks about themes, topics, or a high-level summary of the entire corpus\n\n"
+            f"Query: {query}\n\nCategory:"
+        )
+        valid = {"factual", "synthesis", "table_lookup", "entity_relation", "corpus_exploration"}
+        try:
+            response = self.llm.generate(prompt, max_tokens=20).strip().lower()
+            if response in valid:
+                return response
+        except Exception:
+            pass
+        return "factual"
+
     def _ensure_llmlingua(self):
         """Lazy-initialise the LLMLingua-2 prompt compressor (TASK 14)."""
         if not hasattr(self, "_llmlingua") or self._llmlingua is None:
@@ -3911,7 +5005,9 @@ Your primary goal is to help the user by answering questions based on the provid
         if not hasattr(self, "_gliner_model") or self._gliner_model is None:
             from gliner import GLiNER
 
-            self._gliner_model = GLiNER.from_pretrained("urchade/gliner_mediumv2.1")
+            _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_mediumv2.1")
+            logger.info("GraphRAG GLiNER: loading model '%s'…", _model)
+            self._gliner_model = GLiNER.from_pretrained(_model)
         return self._gliner_model
 
     _GLINER_LABELS = ["person", "organization", "location", "event", "concept", "product"]
@@ -3923,6 +5019,92 @@ Your primary goal is to help the user by answering questions based on the provid
         "concept": "CONCEPT",
         "product": "PRODUCT",
     }
+
+    def _ensure_rebel(self):
+        """Lazy-initialise the REBEL relation extraction pipeline (P2)."""
+        if not hasattr(self, "_rebel_pipeline") or self._rebel_pipeline is None:
+            try:
+                from transformers import pipeline as _hf_pipeline
+            except ImportError:
+                raise ImportError("REBEL backend requires transformers. pip install axon[rebel]")
+            _model = getattr(self.config, "graph_rag_rebel_model", "Babelscape/rebel-large")
+            logger.info(
+                "GraphRAG REBEL: loading model '%s' (first-run download may take time)…", _model
+            )
+            self._rebel_pipeline = _hf_pipeline(
+                "text2text-generation",
+                model=_model,
+                tokenizer=_model,
+                device=-1,  # CPU — avoids CUDA dependency
+            )
+        return self._rebel_pipeline
+
+    @staticmethod
+    def _parse_rebel_output(text: str) -> list[dict]:
+        """Parse REBEL's ``<triplet> SUBJ <subj> OBJ <obj> REL`` output format.
+
+        REBEL encodes triplets as:
+            <triplet> head_entity <subj> tail_entity <obj> relation_type
+
+        Returns a list of relation dicts compatible with ``_extract_relations``.
+        """
+        triplets: list[dict] = []
+        subject = object_ = relation = ""
+        current = "x"
+        tokens = text.replace("<s>", "").replace("<pad>", "").replace("</s>", "").split()
+        for token in tokens:
+            if token == "<triplet>":
+                if subject and relation and object_:
+                    triplets.append(
+                        {
+                            "subject": subject.strip(),
+                            "relation": relation.strip(),
+                            "object": object_.strip(),
+                            "description": "",
+                            "strength": 5,
+                        }
+                    )
+                subject = object_ = relation = ""
+                current = "t"
+            elif token == "<subj>":
+                current = "s"
+            elif token == "<obj>":
+                current = "o"
+            elif current == "t":
+                subject += " " + token
+            elif current == "s":
+                object_ += " " + token
+            elif current == "o":
+                relation += " " + token
+        # Flush final triplet
+        if subject and relation and object_:
+            triplets.append(
+                {
+                    "subject": subject.strip(),
+                    "relation": relation.strip(),
+                    "object": object_.strip(),
+                    "description": "",
+                    "strength": 5,
+                }
+            )
+        return triplets
+
+    def _extract_relations_rebel(self, text: str) -> list[dict]:
+        """Extract relations using REBEL — no LLM call, structured triplet output (P2)."""
+        try:
+            pipe = self._ensure_rebel()
+            # REBEL's tokeniser caps at 512 tokens; truncate input to ~1 000 chars
+            outputs = pipe(text[:1000], max_length=512, return_tensors=False)
+            raw = outputs[0]["generated_text"] if outputs else ""
+            return AxonBrain._parse_rebel_output(raw)[:15]
+        except ImportError:
+            logger.warning(
+                "graph_rag_relation_backend='rebel' but transformers is not installed. "
+                "pip install axon[rebel]"
+            )
+            return []
+        except Exception:
+            return []
 
     def _extract_entities_gliner(self, text: str) -> list[dict]:
         """Extract entities using GLiNER (TASK 14 — NER-only; no LLM call)."""
@@ -3947,6 +5129,27 @@ Your primary goal is to help the user by answering questions based on the provid
         except Exception:
             return []
 
+    def _extract_entities_light(self, text: str) -> list[dict]:
+        """Lightweight entity extraction using regex noun-phrase heuristics (no LLM).
+
+        Picks capitalized multi-word phrases (2–4 tokens) from the text.
+        Returns up to 20 entities with type=CONCEPT and empty description.
+        """
+        import re as _re
+
+        pattern = _re.compile(r"\b([A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3})\b")
+        seen: set = set()
+        entities: list[dict] = []
+        for match in pattern.finditer(text):
+            phrase = match.group(1)
+            key = phrase.lower()
+            if key not in seen:
+                seen.add(key)
+                entities.append({"name": phrase, "type": "CONCEPT", "description": ""})
+            if len(entities) >= 20:
+                break
+        return entities
+
     def _extract_entities(self, text: str) -> list[dict]:
         """Extract named entities from text using the LLM.
 
@@ -3954,6 +5157,10 @@ Your primary goal is to help the user by answering questions based on the provid
           {"name": str, "type": str, "description": str}
         Returns an empty list on failure or when the LLM produces no output.
         """
+        # A3: light tier — skip LLM entirely
+        if getattr(self.config, "graph_rag_depth", "standard") == "light":
+            return self._extract_entities_light(text)
+
         # TASK 14: GLiNER fast-path — skip LLM for NER when backend is "gliner"
         if getattr(self.config, "graph_rag_ner_backend", "llm") == "gliner":
             return self._extract_entities_gliner(text)
@@ -4015,6 +5222,14 @@ Your primary goal is to help the user by answering questions based on the provid
         {"subject": str, "relation": str, "object": str, "description": str}.
         Returns an empty list on failure or when the LLM produces no output.
         """
+        # A3: light tier skips all relation extraction
+        if getattr(self.config, "graph_rag_depth", "standard") == "light":
+            return []
+
+        # P2: REBEL fast-path — skip LLM when backend is "rebel"
+        if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
+            return self._extract_relations_rebel(text)
+
         prompt = (
             "Extract key relationships from the following text.\n"
             "For each relationship output one line:\n"
@@ -4178,6 +5393,131 @@ Your primary goal is to help the user by answering questions based on the provid
             return claims[:10]
         except Exception:
             return []
+
+    def _resolve_entity_aliases(self) -> int:
+        """Merge semantically equivalent entity nodes into a single canonical node (P1).
+
+        Uses cosine similarity on entity-name embeddings from the active embedding model.
+        Entities whose name-embeddings exceed ``graph_rag_entity_resolve_threshold`` are
+        grouped; within each group the node with the most chunk_ids becomes canonical and
+        all alias nodes are merged into it (chunk_ids, description, relations).
+
+        Returns the number of alias nodes merged (0 if nothing to merge).
+        """
+        import numpy as np
+
+        threshold = getattr(self.config, "graph_rag_entity_resolve_threshold", 0.92)
+        max_entities = getattr(self.config, "graph_rag_entity_resolve_max", 5000)
+
+        keys = [k for k, v in self._entity_graph.items() if isinstance(v, dict)]
+        n = len(keys)
+        if n < 2:
+            return 0
+        if n > max_entities:
+            logger.warning(
+                "GraphRAG entity resolution: entity graph has %d nodes (limit=%d). "
+                "Skipping alias resolution — increase graph_rag_entity_resolve_max to enable.",
+                n,
+                max_entities,
+            )
+            return 0
+
+        # Embed entity names (not descriptions) — aliases share similar surface forms
+        try:
+            raw_emb = self.embedding.embed(keys)
+        except Exception as exc:
+            logger.warning("GraphRAG entity resolution: embedding failed (%s). Skipping.", exc)
+            return 0
+
+        emb = np.array(raw_emb, dtype=np.float32)
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        emb = emb / norms  # unit-normalise for cosine via dot product
+
+        # Union-Find for grouping similar entities
+        parent = list(range(n))
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(a: int, b: int) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        # O(n²) pairwise similarity — acceptable for n ≤ max_entities (default 5 000)
+        sim = emb @ emb.T  # shape (n, n)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if sim[i, j] >= threshold:
+                    _union(i, j)
+
+        # Collect groups
+        groups: dict[int, list[int]] = {}
+        for i in range(n):
+            groups.setdefault(_find(i), []).append(i)
+
+        merged = 0
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            # Canonical = entity with most chunk_ids (highest coverage)
+            canon_idx = max(
+                members,
+                key=lambda i: len(self._entity_graph[keys[i]].get("chunk_ids", [])),
+            )
+            canon_key = keys[canon_idx]
+            canon_node = self._entity_graph[canon_key]
+
+            for idx in members:
+                if idx == canon_idx:
+                    continue
+                alias_key = keys[idx]
+                alias_node = self._entity_graph[alias_key]
+
+                # Merge chunk_ids
+                for cid in alias_node.get("chunk_ids", []):
+                    if cid not in canon_node["chunk_ids"]:
+                        canon_node["chunk_ids"].append(cid)
+
+                # Inherit description if canonical has none
+                if not canon_node.get("description") and alias_node.get("description"):
+                    canon_node["description"] = alias_node["description"]
+
+                # Migrate relation_graph entries keyed by the alias
+                if alias_key in self._relation_graph:
+                    canon_rels = self._relation_graph.setdefault(canon_key, [])
+                    canon_rels.extend(self._relation_graph.pop(alias_key))
+
+                # Rewrite subject/object references inside all relation lists
+                for rel_list in self._relation_graph.values():
+                    for rel in rel_list:
+                        if isinstance(rel, dict):
+                            if rel.get("subject", "").lower() == alias_key:
+                                rel["subject"] = canon_key
+                            if rel.get("object", "").lower() == alias_key:
+                                rel["object"] = canon_key
+
+                del self._entity_graph[alias_key]
+                merged += 1
+
+            # Refresh frequency for canonical
+            canon_node["frequency"] = len(canon_node["chunk_ids"])
+
+        if merged > 0:
+            logger.info(
+                "GraphRAG entity resolution: merged %d alias nodes into canonical entities "
+                "(threshold=%.2f, %d nodes remaining).",
+                merged,
+                threshold,
+                len(self._entity_graph),
+            )
+            self._community_graph_dirty = True
+
+        return merged
 
     def _canonicalize_entity_descriptions(self) -> None:
         """Synthesize canonical descriptions for entities with multiple descriptions (Item 10)."""
@@ -4669,6 +6009,481 @@ Your primary goal is to help the user by answering questions based on the provid
             r.pop("_artifact_score", None)
         return ranked
 
+    # ------------------------------------------------------------------
+    # Structural Code Graph (Phase 2 + Phase 3)
+    # ------------------------------------------------------------------
+
+    def _build_code_graph_from_chunks(self, chunks: list[dict]) -> None:
+        """Build/update code graph nodes and CONTAINS/IMPORTS edges from codebase chunks.
+
+        Nodes:
+        - File node  — one per unique file_path
+        - Symbol node — one per (file_path, symbol_name) with a real symbol_type
+
+        Edges:
+        - CONTAINS : File → Symbol
+        - IMPORTS  : File → File  (resolved from imports metadata)
+        """
+        nodes: dict = self._code_graph.setdefault("nodes", {})
+        edges_list: list = self._code_graph.setdefault("edges", [])
+        existing_edges: set = {(e["source"], e["target"], e["edge_type"]) for e in edges_list}
+
+        file_nodes_seen: set = set()
+
+        for chunk in chunks:
+            meta = chunk.get("metadata", {})
+            if meta.get("source_class") != "code":
+                continue
+
+            file_path = meta.get("file_path") or meta.get("source", "")
+            language = meta.get("language", "unknown")
+            symbol_type = meta.get("symbol_type", "block")
+            symbol_name = meta.get("symbol_name", "")
+            chunk_id = chunk.get("id", "")
+            file_node_id = file_path
+
+            # ── File node ───────────────────────────────────────────────────
+            if file_path and file_path not in file_nodes_seen:
+                file_nodes_seen.add(file_path)
+                if file_node_id not in nodes:
+                    nodes[file_node_id] = {
+                        "node_id": file_node_id,
+                        "node_type": "file",
+                        "name": os.path.basename(file_path),
+                        "file_path": file_path,
+                        "language": language,
+                        "chunk_ids": [],
+                        "signature": "",
+                        "start_line": None,
+                        "end_line": None,
+                    }
+
+            if file_path and chunk_id:
+                cids = nodes[file_node_id]["chunk_ids"]
+                if chunk_id not in cids:
+                    cids.append(chunk_id)
+
+            # ── Symbol node ──────────────────────────────────────────────────
+            if symbol_type not in ("block", "") and symbol_name and file_path:
+                sym_node_id = f"{file_path}::{symbol_name}"
+                if sym_node_id not in nodes:
+                    nodes[sym_node_id] = {
+                        "node_id": sym_node_id,
+                        "node_type": symbol_type,
+                        "name": symbol_name,
+                        "file_path": file_path,
+                        "language": language,
+                        "chunk_ids": [chunk_id] if chunk_id else [],
+                        "signature": meta.get("signature", ""),
+                        "start_line": meta.get("start_line"),
+                        "end_line": meta.get("end_line"),
+                    }
+                else:
+                    if chunk_id and chunk_id not in nodes[sym_node_id]["chunk_ids"]:
+                        nodes[sym_node_id]["chunk_ids"].append(chunk_id)
+
+                # CONTAINS edge: File → Symbol
+                ek = (file_node_id, sym_node_id, "CONTAINS")
+                if ek not in existing_edges and file_path:
+                    edges_list.append(
+                        {
+                            "source": file_node_id,
+                            "target": sym_node_id,
+                            "edge_type": "CONTAINS",
+                            "chunk_id": chunk_id,
+                        }
+                    )
+                    existing_edges.add(ek)
+
+            # ── IMPORTS edges ────────────────────────────────────────────────
+            imports_raw = meta.get("imports", "")
+            if isinstance(imports_raw, str):
+                import_stmts = [s for s in imports_raw.split("|") if s.strip()]
+            elif isinstance(imports_raw, list):
+                import_stmts = imports_raw
+            else:
+                import_stmts = []
+
+            for stmt in import_stmts:
+                target_file_id = self._resolve_import_to_file(stmt.strip())
+                if target_file_id and target_file_id != file_node_id:
+                    ek = (file_node_id, target_file_id, "IMPORTS")
+                    if ek not in existing_edges:
+                        edges_list.append(
+                            {
+                                "source": file_node_id,
+                                "target": target_file_id,
+                                "edge_type": "IMPORTS",
+                                "chunk_id": chunk_id,
+                            }
+                        )
+                        existing_edges.add(ek)
+
+    def _resolve_import_to_file(self, stmt: str) -> str | None:
+        """Resolve an import statement to a file node_id in the code graph, or None."""
+        m = re.match(r"^from\s+([\w.]+)\s+import", stmt)
+        if not m:
+            m = re.match(r"^import\s+([\w.]+)", stmt)
+        if not m:
+            return None
+        module = m.group(1)
+        # e.g. "axon.splitters" → look for file_path ending in axon/splitters.py
+        module_rel = module.replace(".", "/") + ".py"
+        for node_id, node in self._code_graph.get("nodes", {}).items():
+            if node.get("node_type") == "file":
+                fp = node.get("file_path", "").replace("\\", "/")
+                if fp.endswith(module_rel):
+                    return node_id
+        return None
+
+    def _build_code_doc_bridge(self, prose_chunks: list[dict]) -> None:
+        """Phase 3: add MENTIONED_IN edges from code symbol nodes to prose chunks.
+
+        Scans prose chunk text for occurrences of known code symbol/file names.
+        Only matches names >= 4 chars to avoid false positives on short tokens.
+        """
+        nodes: dict = self._code_graph.get("nodes", {})
+        if not nodes:
+            return
+
+        edges_list: list = self._code_graph.setdefault("edges", [])
+        existing_edges: set = {(e["source"], e["target"], e["edge_type"]) for e in edges_list}
+
+        # Build lookup: name → node_id  (symbols + file basenames/stems)
+        sym_lookup: dict[str, str] = {}
+        for node_id, node in nodes.items():
+            name = node.get("name", "")
+            if len(name) >= 4:
+                sym_lookup[name] = node_id
+            if node.get("node_type") == "file":
+                stem = os.path.splitext(name)[0]
+                if len(stem) >= 4:
+                    sym_lookup[stem] = node_id
+
+        for chunk in prose_chunks:
+            text = chunk.get("text", "")
+            chunk_id = chunk.get("id", "")
+            if not text or not chunk_id:
+                continue
+            for sym_name, node_id in sym_lookup.items():
+                if re.search(r"\b" + re.escape(sym_name) + r"\b", text):
+                    ek = (node_id, chunk_id, "MENTIONED_IN")
+                    if ek not in existing_edges:
+                        edges_list.append(
+                            {
+                                "source": node_id,
+                                "target": chunk_id,
+                                "edge_type": "MENTIONED_IN",
+                                "chunk_id": chunk_id,
+                            }
+                        )
+                        existing_edges.add(ek)
+
+    def _apply_code_lexical_boost(
+        self,
+        results: list[dict],
+        query_tokens: frozenset,
+        cfg=None,
+        diagnostics: "CodeRetrievalDiagnostics | None" = None,
+        trace: "CodeRetrievalTrace | None" = None,
+    ) -> list[dict]:
+        """Re-score code results by lexical identifier match, then enforce per-file diversity.
+
+        Only results with ``metadata.source_class == "code"`` are re-scored; all
+        others pass through unchanged.  If no query tokens match any result, the
+        original scores are preserved (no degradation on non-identifier queries).
+        Fills ``diagnostics`` and ``trace`` in-place when provided.
+        """
+        if cfg is None:
+            cfg = self.config
+
+        if not query_tokens:
+            return results
+
+        long_tokens = frozenset(t for t in query_tokens if len(t) >= 4)
+
+        lex_scores: list[float] = []
+        score_signals: list[dict] = []  # per-result signal breakdown for trace
+        for r in results:
+            meta = r.get("metadata", {})
+            if meta.get("source_class") != "code":
+                lex_scores.append(0.0)
+                score_signals.append({})
+                continue
+
+            score = 0.0
+            signals: dict = {}
+            sym_name = (meta.get("symbol_name") or "").lower()
+            sym_type = (meta.get("symbol_type") or "").lower()
+            file_path = meta.get("file_path") or meta.get("source") or ""
+            basename = os.path.splitext(os.path.basename(file_path))[0].lower()
+            qualified = f"{basename}.{sym_name}" if sym_name and basename else ""
+            text_lower = r.get("text", "").lower()
+
+            # Exact symbol name match
+            if sym_name and sym_name in query_tokens:
+                score += 1.0
+                signals["symbol_hit"] = "exact"
+            # Partial symbol name match
+            elif sym_name:
+                for tok in long_tokens:
+                    if tok in sym_name:
+                        score += 0.5
+                        signals["symbol_hit"] = "partial"
+                        break
+
+            # Basename match
+            if basename and basename in query_tokens:
+                score += 0.4
+                signals["file_hit"] = True
+
+            # Qualified name match
+            if qualified and qualified in query_tokens:
+                score += 1.0
+                signals["qualified_hit"] = True
+
+            # Token-in-text hits (capped)
+            text_hits = sum(1 for tok in long_tokens if tok in text_lower)
+            score += min(text_hits * 0.08, 0.32)
+            if text_hits:
+                signals["text_hits"] = text_hits
+
+            # Multiplier for function/method results that matched anything
+            if score > 0.0 and sym_type in {"function", "method"}:
+                score *= 1.1
+                signals["sym_type_boost"] = True
+
+            # Line-range tightness tie-breaker: reward narrowly scoped chunks.
+            # +0.05 for ≤30 lines, +0.02 for ≤80 lines (secondary signal only).
+            start_line = meta.get("start_line")
+            end_line = meta.get("end_line")
+            if start_line is not None and end_line is not None:
+                span = max(int(end_line) - int(start_line), 1)
+                if span <= 30:
+                    score += 0.05
+                    signals["line_range_tight"] = span
+                elif span <= 80:
+                    score += 0.02
+
+            lex_scores.append(score)
+            score_signals.append(signals)
+
+        max_lex = max(lex_scores) if lex_scores else 0.0
+        if max_lex == 0.0:
+            # No matches — skip re-scoring entirely
+            return results
+
+        if diagnostics is not None:
+            diagnostics.boost_applied = True
+
+        # Blend: normalize lex scores then mix with original score
+        boosted: list[dict] = []
+        for r, lex, signals in zip(results, lex_scores, score_signals):
+            norm_lex = lex / max_lex
+            orig = r.get("score", 0.0)
+            r = dict(r)
+            final = orig * 0.45 + norm_lex * 0.55
+            r["score"] = final
+            if trace is not None and signals:
+                trace.per_result_score_breakdown.append(
+                    {
+                        "id": r.get("id", ""),
+                        "orig_score": orig,
+                        "final_score": final,
+                        "lex_score": lex,
+                        **signals,
+                    }
+                )
+            boosted.append(r)
+
+        # Per-file diversity cap
+        cap = cfg.code_max_chunks_per_file
+        seen_files: dict[str, int] = {}
+        diverse: list[dict] = []
+        deferred: list[dict] = []
+        for r in sorted(boosted, key=lambda x: x["score"], reverse=True):
+            fp = r.get("metadata", {}).get("file_path") or r.get("metadata", {}).get("source", "")
+            count = seen_files.get(fp, 0)
+            if count < cap:
+                diverse.append(r)
+                seen_files[fp] = count + 1
+            else:
+                deferred.append(r)
+
+        if trace is not None:
+            trace.diversity_cap_deferrals = len(deferred)
+            trace.deferred_chunk_ids = [r.get("id", "") for r in deferred]
+
+        return diverse + deferred
+
+    def _symbol_channel_search(
+        self,
+        query_tokens: frozenset,
+        top_k: int,
+        filters: dict = None,
+    ) -> list[dict]:
+        """Dedicated symbol_name + qualified_name retrieval channel.
+
+        Scans the in-memory BM25 corpus for chunks whose ``symbol_name`` or
+        ``qualified_name`` metadata field exactly (or partially) matches any
+        query token.  Returns scored result dicts with ``metadata.channel``
+        set to ``"symbol_name"`` or ``"qualified_name"``.
+
+        Handles both ``BM25Retriever`` (single corpus) and
+        ``MultiBM25Retriever`` (fan-out across projects).
+        """
+        if not self.bm25 or not query_tokens:
+            return []
+
+        long_tokens = frozenset(t for t in query_tokens if len(t) >= 3)
+        if not long_tokens:
+            return []
+
+        # Collect all corpora (handles single and multi-project fan-out)
+        if hasattr(self.bm25, "_retrievers"):
+            corpora = [r.corpus for r in self.bm25._retrievers if hasattr(r, "corpus")]
+        elif hasattr(self.bm25, "corpus"):
+            corpora = [self.bm25.corpus]
+        else:
+            return []
+
+        hits: dict[str, dict] = {}  # id → best result
+        for corpus in corpora:
+            for doc in corpus:
+                meta = doc.get("metadata", {})
+                sym = (meta.get("symbol_name") or "").lower()
+                qname = (meta.get("qualified_name") or "").lower()
+                if not sym and not qname:
+                    continue
+
+                # Apply metadata filters if provided
+                if filters:
+                    match = all(meta.get(k) == v for k, v in filters.items())
+                    if not match:
+                        continue
+
+                # Score: exact match = 1.0, partial = 0.6
+                best_score = 0.0
+                best_channel = "symbol_name"
+                if sym:
+                    if sym in long_tokens:
+                        best_score = 1.0
+                        best_channel = "symbol_name"
+                    elif any(tok in sym for tok in long_tokens):
+                        best_score = max(best_score, 0.6)
+                        best_channel = "symbol_name"
+                if qname:
+                    if qname in long_tokens:
+                        if 1.0 >= best_score:
+                            best_score = 1.0
+                            best_channel = "qualified_name"
+                    elif any(tok in qname for tok in long_tokens):
+                        if 0.6 > best_score:
+                            best_score = 0.6
+                            best_channel = "qualified_name"
+
+                if best_score == 0.0:
+                    continue
+
+                doc_id = doc.get("id", "")
+                if doc_id not in hits or best_score > hits[doc_id]["score"]:
+                    result = dict(doc)
+                    result["score"] = best_score
+                    result["metadata"] = dict(meta)
+                    result["metadata"]["channel"] = best_channel
+                    hits[doc_id] = result
+
+        ranked = sorted(hits.values(), key=lambda x: x["score"], reverse=True)
+        return ranked[:top_k]
+
+    def _expand_with_code_graph(
+        self, query: str, results: list[dict], cfg=None
+    ) -> tuple[list[dict], list[str]]:
+        """Expand retrieval results using structural code graph traversal.
+
+        Matches query tokens against code node names, then follows CONTAINS,
+        IMPORTS, and MENTIONED_IN edges to fetch related chunks.
+        """
+        nodes: dict = self._code_graph.get("nodes", {})
+        edges_list: list = self._code_graph.get("edges", [])
+        if not nodes:
+            return results, []
+
+        # Build edge index
+        outgoing: dict[str, list[tuple[str, str]]] = {}
+        incoming: dict[str, list[tuple[str, str]]] = {}
+        for edge in edges_list:
+            src, tgt, et = edge["source"], edge["target"], edge["edge_type"]
+            outgoing.setdefault(src, []).append((tgt, et))
+            incoming.setdefault(tgt, []).append((src, et))
+
+        # Extract tokens from query (identifier-like words, >= 3 chars)
+        query_tokens: set[str] = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_.]{2,}\b", query))
+
+        # Match against node names
+        matched_node_ids: set[str] = set()
+        matched_names: list[str] = []
+        for node_id, node in nodes.items():
+            name = node.get("name", "")
+            if name in query_tokens or any(t in name for t in query_tokens if len(t) >= 4):
+                matched_node_ids.add(node_id)
+                if name not in matched_names:
+                    matched_names.append(name)
+
+        # Also match file_path from already-retrieved results
+        for r in results:
+            fp = r.get("metadata", {}).get("file_path", "")
+            if fp and fp in nodes:
+                matched_node_ids.add(fp)
+
+        if not matched_node_ids:
+            return results, []
+
+        # Collect extra chunk_ids via 1-hop traversal
+        already_ids: set[str] = {r["id"] for r in results}
+        extra_chunk_ids: set[str] = set()
+
+        for node_id in list(matched_node_ids):
+            # Own chunk_ids
+            for cid in nodes[node_id].get("chunk_ids", []):
+                extra_chunk_ids.add(cid)
+            # Outgoing: IMPORTS → target file chunks; CONTAINS → symbol chunks; MENTIONED_IN → prose chunks
+            for tgt_id, et in outgoing.get(node_id, []):
+                if et in ("IMPORTS", "CONTAINS", "MENTIONED_IN"):
+                    tgt_node = nodes.get(tgt_id)
+                    if tgt_node:
+                        for cid in tgt_node.get("chunk_ids", []):
+                            extra_chunk_ids.add(cid)
+            # Incoming CONTAINS: if we matched a symbol, also get 2 chunks from its parent file
+            for src_id, et in incoming.get(node_id, []):
+                if et == "CONTAINS":
+                    src_node = nodes.get(src_id)
+                    if src_node:
+                        for cid in src_node.get("chunk_ids", [])[:2]:
+                            extra_chunk_ids.add(cid)
+
+        extra_chunk_ids -= already_ids
+        if not extra_chunk_ids:
+            return results, matched_names
+
+        budget = getattr(cfg, "graph_rag_budget", 3)
+        fetch_ids = list(extra_chunk_ids)[: budget * 2]
+
+        try:
+            extra_docs = self.vector_store.get_by_ids(fetch_ids)
+            for doc in extra_docs:
+                if doc["id"] not in already_ids:
+                    doc.setdefault("score", 0.5)
+                    doc["_code_graph_expanded"] = True
+                    results.append(doc)
+                    already_ids.add(doc["id"])
+                    if len(results) > getattr(cfg, "top_k", 10) + budget:
+                        break
+        except Exception:
+            pass
+
+        return results, matched_names
+
     def _expand_with_entity_graph(
         self, query: str, results: list[dict], cfg=None
     ) -> tuple[list[dict], list[str]]:
@@ -4770,6 +6585,23 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
 
+    def _prepend_contextual_context(self, chunk: dict, whole_doc_text: str) -> dict:
+        """Prepend LLM-generated situating context to chunk text (Anthropic method)."""
+        prompt = (
+            "<document>\n{doc}\n</document>\n\n"
+            "Here is the chunk we want to situate within the whole document:\n"
+            "<chunk>\n{chunk}\n</chunk>\n\n"
+            "Provide a concise sentence (≤30 words) that situates this chunk "
+            "within the document. Output ONLY that sentence, no preamble."
+        ).format(doc=whole_doc_text[:3000], chunk=chunk["text"][:800])
+        try:
+            ctx_sentence = self.llm.generate(prompt, max_tokens=60).strip()
+            chunk = dict(chunk)
+            chunk["text"] = ctx_sentence + "\n" + chunk["text"]
+        except Exception:
+            pass  # graceful degradation
+        return chunk
+
     def _make_cache_key(self, query: str, filters, cfg) -> str:
         """Return a stable cache key for the given query + active config.
 
@@ -4790,7 +6622,11 @@ Your primary goal is to help the user by answering questions based on the provid
             "f": filters_key,
             "top_k": cfg.top_k,
             "hybrid": cfg.hybrid_search,
+            "hybrid_mode": cfg.hybrid_mode,
+            "hybrid_weight": cfg.hybrid_weight,
             "rerank": cfg.rerank,
+            "reranker_provider": cfg.reranker_provider,
+            "reranker_model": cfg.reranker_model,
             "hyde": cfg.hyde,
             "multi_query": cfg.multi_query,
             "step_back": cfg.step_back,
@@ -4798,13 +6634,16 @@ Your primary goal is to help the user by answering questions based on the provid
             "threshold": cfg.similarity_threshold,
             "discuss": cfg.discussion_fallback,
             "compress_context": cfg.compress_context,
+            "cite": cfg.cite,
             "truth_grounding": cfg.truth_grounding,
             "graph_rag": cfg.graph_rag,
+            "raptor": cfg.raptor,
+            "raptor_chunk_group_size": cfg.raptor_chunk_group_size,
+            "parent_chunk_size": cfg.parent_chunk_size,
             "llm_provider": cfg.llm_provider,
             "llm_model": cfg.llm_model,
             "embedding_provider": cfg.embedding_provider,
             "embedding_model": cfg.embedding_model,
-            "reranker_model": cfg.reranker_model,
         }
         return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
@@ -4833,7 +6672,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     "after_filter": filtered_count,
                     "final": final_count,
                 },
-                "top_score": round(top_score, 4) if top_score else None,
+                "top_score": round(top_score, 4) if top_score is not None else None,
                 "hybrid": active.hybrid_search,
                 "rerank": active.rerank,
                 "transformations": transformations or {},
@@ -4847,7 +6686,7 @@ Your primary goal is to help the user by answering questions based on the provid
         "doc": (True, True),
         "knowledge": (False, False),
         "discussion": (False, True),
-        "codebase": (False, True),
+        "codebase": (False, False),  # prose GraphRAG off; code graph is separate
         "manifest": (False, False),
         "reference": (False, False),
     }
@@ -4862,8 +6701,15 @@ Your primary goal is to help the user by answering questions based on the provid
         ".java",
         ".cpp",
         ".c",
+        ".h",
+        ".hpp",
         ".sh",
+        ".bash",
+        ".zsh",
         ".rb",
+        ".pl",
+        ".pm",
+        ".jl",
         ".kt",
         ".swift",
         ".jsx",
@@ -5011,7 +6857,9 @@ Your primary goal is to help the user by answering questions based on the provid
         from axon.splitters import RecursiveCharacterTextSplitter, SemanticTextSplitter
 
         if dataset_type == "codebase":
-            return RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+            from axon.splitters import CodeAwareSplitter
+
+            return CodeAwareSplitter()
         elif dataset_type == "paper":
             return SemanticTextSplitter(chunk_size=600, chunk_overlap=100)
         elif dataset_type == "discussion":
@@ -5058,6 +6906,13 @@ Your primary goal is to help the user by answering questions based on the provid
             if has_code:
                 doc["metadata"]["has_code"] = True
 
+            # Use type-specific child splitter so parent mode honours the same
+            # chunking policy (e.g. code-aware splitting) as the normal ingest path.
+            source = doc.get("metadata", {}).get("source", "")
+            child_splitter = self._get_splitter_for_type(dataset_type, has_code, source=source)
+            if child_splitter is None:
+                child_splitter = self.splitter
+
             parent_texts = parent_splitter.split(doc["text"])
             for p_idx, parent_text in enumerate(parent_texts):
                 p_doc = {
@@ -5065,7 +6920,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     "text": parent_text,
                     "metadata": doc.get("metadata", {}).copy(),
                 }
-                child_chunks = self.splitter.transform_documents([p_doc])
+                child_chunks = child_splitter.transform_documents([p_doc])
                 for child in child_chunks:
                     child["metadata"]["parent_text"] = parent_text
                 all_chunks.extend(child_chunks)
@@ -5091,6 +6946,7 @@ Your primary goal is to help the user by answering questions based on the provid
         _policy_on = getattr(self.config, "source_policy_enabled", False)
 
         t0 = time.time()
+        _ingest_fallback_count = 0
         from tqdm import tqdm
 
         logger.info(f"Ingesting {len(documents)} documents...")
@@ -5109,6 +6965,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 splitter = self._get_splitter_for_type(dataset_type, has_code, source=source)
                 if splitter is not None:
                     chunked.extend(splitter.transform_documents([doc]))
+                    if hasattr(splitter, "fallback_chunks_produced"):
+                        _ingest_fallback_count += splitter.fallback_chunks_produced
                 else:
                     chunked.append(doc)
             documents = chunked
@@ -5156,6 +7014,18 @@ Your primary goal is to help the user by answering questions based on the provid
                 return
             self._ingested_hashes.update(new_hashes)
             self._save_hash_store()
+
+        # Contextual retrieval: prepend LLM context to each chunk
+        if self.config.contextual_retrieval and self.config.dataset_type in {
+            "doc",
+            "paper",
+            "discussion",
+        }:
+            raw_docs = documents
+            whole_doc_text = " ".join(d.get("text", "") for d in raw_docs)
+            documents = [
+                self._prepend_contextual_context(chunk, whole_doc_text) for chunk in raw_docs
+            ]
 
         # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
         if self.config.raptor:
@@ -5236,11 +7106,15 @@ Your primary goal is to help the user by answering questions based on the provid
             for _doc in documents:
                 _lvl = _doc.get("metadata", {}).get("raptor_level")
                 _src = _doc.get("metadata", {}).get("source", _doc["id"])
-                if not _lvl:
+                if not _lvl:  # leaf chunk
                     if _src not in _large_sources:
                         chunks_to_process.append(_doc)
-                elif _include_raptor and _lvl == 1:
-                    chunks_to_process.append(_doc)
+                    # else: leaf from large source → skip; RAPTOR summary will cover it
+                elif _lvl == 1:  # RAPTOR level-1 summary
+                    # Auto-include for large sources when RAPTOR is on (regardless of include flag)
+                    _auto_raptor = self.config.raptor and _src in _large_sources
+                    if _include_raptor or _auto_raptor:
+                        chunks_to_process.append(_doc)
 
             if _policy_on:
                 _grag_ok_list: list = []
@@ -5363,14 +7237,41 @@ Your primary goal is to help the user by answering questions based on the provid
 
             # Relation extraction: build SUBJECT | RELATION | OBJECT triples
             if self.config.graph_rag_relations:
-                logger.info(
-                    f"   GraphRAG: Extracting relations from {len(chunks_to_process)} chunks..."
-                )
+                # A2: skip relation extraction for chunks below the entity count threshold
+                _min_ent = getattr(self.config, "graph_rag_min_entities_for_relations", 3)
+                _entity_count_by_doc = {doc_id: len(ents) for doc_id, ents in results}
+                if _min_ent > 0:
+                    _rel_chunks = [
+                        doc
+                        for doc in chunks_to_process
+                        if _entity_count_by_doc.get(doc["id"], 0) >= _min_ent
+                    ]
+                else:
+                    _rel_chunks = chunks_to_process
+                # Budget-based relation gating: rank by entity density, cap at budget
+                _rel_budget = getattr(self.config, "graph_rag_relation_budget", 0)
+                if _rel_budget > 0 and len(_rel_chunks) > _rel_budget:
+                    _rel_chunks = sorted(
+                        _rel_chunks,
+                        key=lambda d: _entity_count_by_doc.get(d["id"], 0)
+                        / max(len(d.get("text", "")), 1),
+                        reverse=True,
+                    )[:_rel_budget]
+                    logger.info(
+                        f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
+                        f"(budget cap; {len(chunks_to_process) - len(_rel_chunks)} skipped)..."
+                    )
+                else:
+                    logger.info(
+                        f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
+                        f"(skipped {len(chunks_to_process) - len(_rel_chunks)} below "
+                        f"{_min_ent}-entity threshold)..."
+                    )
 
                 def _proc_rel(doc):
                     return doc["id"], self._extract_relations(doc["text"])
 
-                rel_results = list(self._executor.map(_proc_rel, chunks_to_process))
+                rel_results = list(self._executor.map(_proc_rel, _rel_chunks))
                 rg_updated = False
                 for doc_id, triples in rel_results:
                     for triple in triples:
@@ -5440,6 +7341,22 @@ Your primary goal is to help the user by answering questions based on the provid
                 if rg_updated and not _defer_saves:
                     self._save_relation_graph()
 
+                if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
+                    _rg_edge_count = sum(len(v) for v in self._relation_graph.values())
+                    if _rg_edge_count == 0 and len(_rel_chunks) > 0:
+                        logger.warning(
+                            "GraphRAG REBEL: processed %d chunks but produced 0 relation edges. "
+                            "If using a local model path, verify the checkpoint contains pretrained weights "
+                            "(a 'newly initialized weights' warning from transformers indicates an invalid checkpoint).",
+                            len(_rel_chunks),
+                        )
+                    else:
+                        logger.info(
+                            "GraphRAG REBEL: %d relation edges from %d chunks.",
+                            _rg_edge_count,
+                            len(_rel_chunks),
+                        )
+
                 # TASK 11: Normalize relation targets into entity graph so traversal never KeyErrors
                 if rg_updated or updated:
                     _stub_added = False
@@ -5495,7 +7412,11 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._embed_entities(entity_keys_this_batch)
 
             # Item 10: Canonicalize entity descriptions
-            if self.config.graph_rag and getattr(self.config, "graph_rag_canonicalize", False):
+            # A3: also run for "deep" tier
+            _depth = getattr(self.config, "graph_rag_depth", "standard")
+            if self.config.graph_rag and (
+                getattr(self.config, "graph_rag_canonicalize", False) or _depth == "deep"
+            ):
                 self._canonicalize_entity_descriptions()
             if self.config.graph_rag and getattr(
                 self.config, "graph_rag_canonicalize_relations", False
@@ -5503,8 +7424,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._canonicalize_relation_descriptions()
 
             # Item 11: Extract claims
+            # A3: also run for "deep" tier
             claims_changed = False
-            if getattr(self.config, "graph_rag_claims", False):
+            if getattr(self.config, "graph_rag_claims", False) or _depth == "deep":
                 logger.info(
                     f"   GraphRAG: Extracting claims from {len(chunks_to_process)} chunks..."
                 )
@@ -5568,6 +7490,45 @@ Your primary goal is to help the user by answering questions based on the provid
         # Persist embedding meta after first successful ingest (idempotent on subsequent calls)
         self._save_embedding_meta()
 
+        # Update doc-version tracking: record content hash + chunk count per source path.
+        # This powers /tracked-docs and /ingest/refresh.
+        import hashlib as _hl
+        import time as _time_mod
+
+        _chunks_by_src: dict = {}
+        for _d in documents:
+            _src = _d.get("metadata", {}).get("source", _d["id"])
+            _chunks_by_src.setdefault(_src, []).append(_d)
+        for _src, _src_docs in _chunks_by_src.items():
+            _combined = "".join(d.get("text", "") for d in _src_docs)
+            _content_hash = _hl.md5(_combined.encode("utf-8", errors="replace")).hexdigest()
+            self._doc_versions[_src] = {
+                "content_hash": _content_hash,
+                "chunk_count": len(_src_docs),
+                "ingested_at": _time_mod.strftime("%Y-%m-%dT%H:%M:%SZ", _time_mod.gmtime()),
+            }
+        self._save_doc_versions()
+
+        # ── Code graph (Phase 2 + Phase 3) ──────────────────────────────
+        if getattr(self.config, "code_graph", False):
+            _code_chunks = [
+                d for d in documents if d.get("metadata", {}).get("source_class") == "code"
+            ]
+            if _code_chunks:
+                self._build_code_graph_from_chunks(_code_chunks)
+                logger.info("   Code graph: %d code chunks indexed.", len(_code_chunks))
+            if getattr(self.config, "code_graph_bridge", False):
+                _prose_chunks = [
+                    d for d in documents if d.get("metadata", {}).get("source_class") != "code"
+                ]
+                if _prose_chunks:
+                    self._build_code_doc_bridge(_prose_chunks)
+                    logger.info(
+                        "   Code graph bridge: scanned %d prose chunks.", len(_prose_chunks)
+                    )
+            if not _defer_saves:
+                self._save_code_graph()
+
         logger.info(
             {
                 "event": "ingest_complete",
@@ -5575,6 +7536,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 "embed_ms": round(embed_ms, 1),
                 "store_ms": round(store_ms, 1),
                 "total_ms": round((time.time() - t0) * 1000, 1),
+                "entity_count": len(self._entity_graph),
+                "relation_edge_count": sum(len(v) for v in self._relation_graph.values()),
+                "fallback_chunks": _ingest_fallback_count,
             }
         )
 
@@ -5808,20 +7772,50 @@ Your primary goal is to help the user by answering questions based on the provid
 
         transforms["queries"] = search_queries
 
+        # --- Retrieval accountability objects ---
+        diagnostics = CodeRetrievalDiagnostics()
+        trace = CodeRetrievalTrace()
+        trace.query_rewrite_variants = list(search_queries[1:])
+
+        # --- Code mode detection ---
+        _code_mode = cfg.code_lexical_boost and _looks_like_code_query(query)
+        _code_query_tokens: frozenset = frozenset()
+        _effective_top_k = cfg.top_k
+        if _code_mode:
+            _code_query_tokens = _extract_code_query_tokens(query)
+            diagnostics.code_mode_triggered = True
+            diagnostics.tokens_extracted = sorted(_code_query_tokens)
+            if getattr(cfg, "code_top_k", 0) > 0:
+                _effective_top_k = cfg.code_top_k
+
         # --- Phase 2: Retrieval ---
         fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
+        if _code_mode:
+            fetch_k = int(fetch_k * cfg.code_top_k_multiplier)
 
         all_vector_results = []
         all_bm25_results = []
 
         # Vector Search
         if cfg.hyde:
-            # HyDE uses a single hypothetical document as the vector query
+            # HyDE: embed the hypothetical document and search with it.
+            # If multi-query/step-back/decompose also produced variants, search with
+            # those as well so transforms compose rather than HyDE replacing them.
             all_vector_results.extend(
                 self.vector_store.search(
                     self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters
                 )
             )
+            if len(search_queries) > 1:
+                # search_queries[0] is the original query; additional entries are transform variants
+                for variant in search_queries[1:]:
+                    all_vector_results.extend(
+                        self.vector_store.search(
+                            self.embedding.embed_query(variant),
+                            top_k=fetch_k,
+                            filter_dict=filters,
+                        )
+                    )
         else:
             # Batch embed all unique queries
             if len(search_queries) == 1:
@@ -5846,15 +7840,29 @@ Your primary goal is to help the user by answering questions based on the provid
                 dedup_vector[r["id"]] = r
         vector_results = list(dedup_vector.values())
         vector_count = len(vector_results)
+        diagnostics.channels_activated.append("dense")
+        trace.channel_raw_counts["dense"] = vector_count
 
         # Hybrid Search (Keyword component)
         bm25_count = 0
         if cfg.hybrid_search and self.bm25:
-            # Parallelize BM25 searches across multiple queries
+            # Deterministic code query rewriting — extra BM25-only sub-queries
+            bm25_queries = list(search_queries)
+            if _code_mode and _code_query_tokens:
+                code_variants = _build_code_bm25_queries(query, _code_query_tokens)
+                for v in code_variants:
+                    if v not in bm25_queries:
+                        bm25_queries.append(v)
+                if code_variants:
+                    trace.query_rewrite_variants = [
+                        v for v in code_variants if v not in search_queries
+                    ]
+
+            # Parallelize BM25 searches across all queries (original + code variants)
             def _bm25_search(q):
                 return self.bm25.search(q, top_k=fetch_k)
 
-            all_bm25_lists = list(self._executor.map(_bm25_search, search_queries))
+            all_bm25_lists = list(self._executor.map(_bm25_search, bm25_queries))
             for b_list in all_bm25_lists:
                 all_bm25_results.extend(b_list)
 
@@ -5862,8 +7870,39 @@ Your primary goal is to help the user by answering questions based on the provid
             for r in all_bm25_results:
                 if r["id"] not in dedup_bm25 or r["score"] > dedup_bm25[r["id"]]["score"]:
                     dedup_bm25[r["id"]] = r
+
+            # --- Symbol channel injection (code mode only) ---
+            if _code_mode and _code_query_tokens:
+                sym_hits = self._symbol_channel_search(
+                    _code_query_tokens, top_k=fetch_k, filters=filters
+                )
+                if sym_hits:
+                    sym_channels = {
+                        r.get("metadata", {}).get("channel", "symbol_name") for r in sym_hits
+                    }
+                    for ch in sym_channels:
+                        if ch not in diagnostics.channels_activated:
+                            diagnostics.channels_activated.append(ch)
+                        trace.channel_raw_counts[ch] = sum(
+                            1 for r in sym_hits if r.get("metadata", {}).get("channel") == ch
+                        )
+                    # Merge into BM25 dedup (best score wins)
+                    for sr in sym_hits:
+                        sid = sr["id"]
+                        if sid not in dedup_bm25 or sr["score"] > dedup_bm25[sid]["score"]:
+                            dedup_bm25[sid] = sr
+
             bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
+            diagnostics.channels_activated.append("bm25")
+            trace.channel_raw_counts["bm25"] = bm25_count
+
+            # Code mode: override BM25 weight (effective only in weighted mode)
+            _fusion_weight = (
+                getattr(cfg, "code_bm25_weight", cfg.hybrid_weight)
+                if _code_mode
+                else cfg.hybrid_weight
+            )
 
             if cfg.hybrid_mode == "rrf":
                 from axon.retrievers import reciprocal_rank_fusion
@@ -5872,9 +7911,7 @@ Your primary goal is to help the user by answering questions based on the provid
             else:
                 from axon.retrievers import weighted_score_fusion
 
-                results = weighted_score_fusion(
-                    vector_results, bm25_results, weight=cfg.hybrid_weight
-                )
+                results = weighted_score_fusion(vector_results, bm25_results, weight=_fusion_weight)
         else:
             results = vector_results
 
@@ -5907,6 +7944,17 @@ Your primary goal is to help the user by answering questions based on the provid
         if getattr(cfg, "mmr", False) and results:
             results = self._mmr_deduplicate(results, cfg)
 
+        # Code lexical boost pass (before graph expansion, after threshold filtering)
+        if cfg.code_lexical_boost and results:
+            code_fraction = sum(
+                1 for r in results if r.get("metadata", {}).get("source_class") == "code"
+            ) / max(len(results), 1)
+            if code_fraction >= 0.3:
+                boost_tokens = _code_query_tokens or _extract_code_query_tokens(query)
+                results = self._apply_code_lexical_boost(
+                    results, boost_tokens, cfg=cfg, diagnostics=diagnostics, trace=trace
+                )
+
         # Save base count before GraphRAG expansion for accurate metrics
         base_count = len(results)
 
@@ -5914,6 +7962,18 @@ Your primary goal is to help the user by answering questions based on the provid
         _matched_entities: list = []
         if cfg.graph_rag and self._entity_graph:
             results, _matched_entities = self._expand_with_entity_graph(query, results, cfg=cfg)
+
+        # Code graph expansion (structural, independent of prose GraphRAG)
+        if getattr(cfg, "code_graph", False) and self._code_graph.get("nodes"):
+            results, _matched_code_syms = self._expand_with_code_graph(query, results, cfg=cfg)
+            if _matched_code_syms:
+                logger.debug("code_graph: matched symbols=%s", _matched_code_syms)
+
+        # Finalize diagnostics
+        diagnostics.result_count = len(results)
+        diagnostics.fallback_chunks_in_results = sum(
+            1 for r in results if r.get("metadata", {}).get("is_fallback")
+        )
 
         return {
             "results": results,
@@ -5923,7 +7983,47 @@ Your primary goal is to help the user by answering questions based on the provid
             "graph_expanded_count": len(results) - base_count,
             "matched_entities": _matched_entities,
             "transforms": transforms,
+            "diagnostics": diagnostics,
+            "trace": trace,
+            "_effective_top_k": _effective_top_k,
         }
+
+    def search_raw(
+        self,
+        query: str,
+        filters: dict = None,
+        overrides: dict = None,
+    ) -> tuple:
+        """Run retrieval without calling the LLM.
+
+        Returns ``(results, diagnostics, trace)`` — useful for benchmark harnesses,
+        the ``/search/raw`` API endpoint, and the ``--dry-run`` CLI flag.
+        The result list is already sliced to the effective top-k.
+        """
+        cfg = self._apply_overrides(overrides)
+        retrieval = self._execute_retrieval(query, filters=filters, cfg=cfg)
+        results = retrieval["results"]
+        diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
+        trace = retrieval.get("trace", CodeRetrievalTrace())
+
+        if cfg.rerank:
+            results = self.reranker.rerank(query, results)
+
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
+        if cfg.graph_rag and cfg.graph_rag_budget > 0:
+            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
+            expanded = [r for r in results if r.get("_graph_expanded")]
+            base_ids = {r["id"] for r in base}
+            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
+            results = base + graph_slots
+        else:
+            results = results[:_top_k]
+        for r in results:
+            r.pop("_graph_expanded", None)
+
+        diagnostics.result_count = len(results)
+        self._last_diagnostics = diagnostics
+        return results, diagnostics, trace
 
     def _build_context(self, results: list[dict]) -> tuple:
         """Build context string from results, labelling web vs local sources distinctly.
@@ -5941,7 +8041,24 @@ Your primary goal is to help the user by answering questions based on the provid
             else:
                 # Small-to-big: prefer parent passage for richer LLM context
                 context_text = r.get("metadata", {}).get("parent_text") or r["text"]
-                parts.append(f"[Document {i+1} (ID: {r['id']})]\n{context_text}")
+                meta = r.get("metadata", {})
+                if meta.get("source_class") == "code":
+                    basename = os.path.basename(
+                        meta.get("file_path") or meta.get("source") or "unknown"
+                    )
+                    sym = meta.get("symbol_name", "")
+                    sym_type = meta.get("symbol_type", "")
+                    if sym:
+                        label = (
+                            f"{basename} :: {sym} ({sym_type})"
+                            if sym_type
+                            else f"{basename} :: {sym}"
+                        )
+                    else:
+                        label = basename
+                else:
+                    label = meta.get("source", r["id"])
+                parts.append(f"[Document {i+1} — {label}]\n{context_text}")
         return "\n\n".join(parts), has_web
 
     def _build_system_prompt(self, has_web: bool, cfg=None) -> str:
@@ -6013,10 +8130,17 @@ Your primary goal is to help the user by answering questions based on the provid
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
 
-        # TASK 14: Adaptive query routing — bypass GraphRAG for non-holistic queries
-        _route = getattr(cfg, "graph_rag_auto_route", "off")
-        if _route != "off" and cfg.graph_rag:
-            _needs_grag = self._classify_query_needs_graphrag(query, _route)
+        # --- System-level query router ---
+        if cfg.query_router != "off":
+            route = self._classify_query_route(query, cfg)
+            profile_overrides = _ROUTE_PROFILES.get(route, {})
+            for k, v in profile_overrides.items():
+                if hasattr(cfg, k):
+                    object.__setattr__(cfg, k, v)
+            logger.debug("query_router: route=%s overrides=%s", route, profile_overrides)
+        elif cfg.graph_rag_auto_route != "off" and cfg.graph_rag:
+            # legacy binary classifier fallback
+            _needs_grag = self._classify_query_needs_graphrag(query, cfg.graph_rag_auto_route)
             if not _needs_grag:
                 cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
                 logger.debug("Auto-route: GraphRAG bypassed for query '%s...'", query[:60])
@@ -6034,6 +8158,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
+        self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
 
         if not results:
             self._log_query_metrics(
@@ -6059,14 +8184,15 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
-            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
             expanded = [r for r in results if r.get("_graph_expanded")]
             base_ids = {r["id"] for r in base}
             graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
             results = base + graph_slots
         else:
-            results = results[: cfg.top_k]
+            results = results[:_top_k]
         for r in results:
             r.pop("_graph_expanded", None)
 
@@ -6095,8 +8221,25 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.compress_context:
             results = self._compress_context(query, results)
         final_count = len(results)
-        top_score = results[0].get("score", 0) if results else 0
-        context, has_web = self._build_context(results)
+        # Use rerank_score when reranking was active (reflects the actual ranking signal)
+        if results:
+            r0 = results[0]
+            top_score = (
+                r0.get("rerank_score", r0.get("score", 0)) if cfg.rerank else r0.get("score", 0)
+            )
+        else:
+            top_score = 0
+
+        # A4: Exclude community report synthetic docs from citation candidates.
+        # They are internal artifacts and confuse users when cited as source documents.
+        # Global community context is injected separately via _global_search_map_reduce.
+        citation_results = [
+            r
+            for r in results
+            if r.get("metadata", {}).get("graph_rag_type") != "community_report"
+            and not r.get("id", "").startswith("__community__")
+        ]
+        context, has_web = self._build_context(citation_results)
 
         # GraphRAG global context injection
         # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
@@ -6107,10 +8250,7 @@ Your primary goal is to help the user by answering questions based on the provid
             and self._community_levels
             and getattr(self.config, "graph_rag_community_lazy", False)
         ):
-            logger.info(
-                "GraphRAG: lazy mode — generating community summaries on first global query."
-            )
-            self._generate_community_summaries()
+            self._generate_community_summaries(query_hint=query)
             if getattr(self.config, "graph_rag_index_community_reports", True):
                 self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
@@ -6176,6 +8316,7 @@ Your primary goal is to help the user by answering questions based on the provid
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
+        self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
 
         if not results:
             if cfg.discussion_fallback:
@@ -6190,14 +8331,15 @@ Your primary goal is to help the user by answering questions based on the provid
         if cfg.rerank:
             results = self.reranker.rerank(query, results)
 
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
-            base = [r for r in results if not r.get("_graph_expanded")][: cfg.top_k]
+            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
             expanded = [r for r in results if r.get("_graph_expanded")]
             base_ids = {r["id"] for r in base}
             graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
             results = base + graph_slots
         else:
-            results = results[: cfg.top_k]
+            results = results[:_top_k]
         for r in results:
             r.pop("_graph_expanded", None)
 
@@ -6225,7 +8367,15 @@ Your primary goal is to help the user by answering questions based on the provid
 
         if cfg.compress_context:
             results = self._compress_context(query, results)
-        context, has_web = self._build_context(results)
+
+        # A4: Exclude community report synthetic docs from citation candidates.
+        citation_results = [
+            r
+            for r in results
+            if r.get("metadata", {}).get("graph_rag_type") != "community_report"
+            and not r.get("id", "").startswith("__community__")
+        ]
+        context, has_web = self._build_context(citation_results)
 
         # GraphRAG global context injection
         # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
@@ -6236,10 +8386,7 @@ Your primary goal is to help the user by answering questions based on the provid
             and self._community_levels
             and getattr(self.config, "graph_rag_community_lazy", False)
         ):
-            logger.info(
-                "GraphRAG: lazy mode — generating community summaries on first global query."
-            )
-            self._generate_community_summaries()
+            self._generate_community_summaries(query_hint=query)
             if getattr(self.config, "graph_rag_index_community_reports", True):
                 self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
@@ -6375,7 +8522,7 @@ def main():
     parser.add_argument("--stream", action="store_true", help="Stream the response")
     parser.add_argument(
         "--provider",
-        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm"],
+        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm", "github_copilot"],
         help="LLM provider to use (overrides config)",
     )
     parser.add_argument(
@@ -6483,6 +8630,12 @@ def main():
         help="Enable/disable in-memory query result caching",
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Skip LLM; run retrieval only and print diagnostics + ranked chunks (requires --query)",
+    )
+    parser.add_argument(
         "--raptor",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -6534,7 +8687,7 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm")
+        _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm", "github_copilot")
         if "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
             if _prov in _PROVIDERS:
@@ -6823,7 +8976,21 @@ def main():
         return
 
     if args.query:
-        if args.stream:
+        if getattr(args, "dry_run", False):
+            results, diag, trace = brain.search_raw(args.query)
+            import json as _json_cli
+
+            print(f"\n  [DRY RUN] {diag.result_count} chunk(s) retrieved")
+            print(f"  Diagnostics:\n{_json_cli.dumps(diag.to_dict(), indent=4)}")
+            print("\n  Ranked chunks:")
+            for i, r in enumerate(results, 1):
+                meta = r.get("metadata", {})
+                src = meta.get("source") or meta.get("file_path") or r["id"]
+                sym = meta.get("symbol_name", "")
+                label = f"{src} :: {sym}" if sym else src
+                print(f"  {i:>2}. [{r['score']:.3f}]  {label}")
+                print(f"      {r['text'][:100]!r}")
+        elif args.stream:
             for chunk in brain.query_stream(args.query):
                 if isinstance(chunk, dict):
                     continue
@@ -6859,6 +9026,7 @@ _SLASH_COMMANDS = [
     "/discuss",
     "/embed ",
     "/exit",
+    "/graph-viz",
     "/help",
     "/ingest ",
     "/keys",
@@ -6875,6 +9043,222 @@ _SLASH_COMMANDS = [
     "/sessions",
     "/vllm-url ",
 ]
+
+
+def _save_env_key(env_name: str, key: str) -> None:
+    """Persist *key* to ~/.axon/.env and os.environ."""
+    _env_file = Path.home() / ".axon" / ".env"
+    _env_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = _env_file.read_text(encoding="utf-8") if _env_file.exists() else ""
+    lines = [ln for ln in existing.splitlines() if not ln.startswith(f"{env_name}=")]
+    lines.append(f"{env_name}={key}")
+    _env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[env_name] = key
+
+
+def _prompt_key_if_missing(provider: str, brain) -> bool:
+    """If *provider* needs an API key/token and none is set, prompt the user.
+
+    For github_copilot: runs the OAuth device flow (browser-based).
+    For other providers: prompts for the API key via getpass.
+    Saves to ~/.axon/.env and patches brain.config in-place.
+    Returns True when a key is available (already set or just obtained).
+    """
+    _key_map = {
+        "gemini": ("gemini_api_key", "GEMINI_API_KEY"),
+        "ollama_cloud": ("ollama_cloud_key", "OLLAMA_CLOUD_KEY"),
+        "openai": ("api_key", "OPENAI_API_KEY"),
+        "github_copilot": ("copilot_pat", "GITHUB_COPILOT_PAT"),
+    }
+    if provider not in _key_map:
+        return True
+    attr, env_name = _key_map[provider]
+    if getattr(brain.config, attr, ""):
+        return True  # already configured
+
+    if provider == "github_copilot":
+        print("  ⚠️  No GitHub OAuth token set for the 'github_copilot' provider.")
+        print("  Starting GitHub OAuth device flow…")
+        try:
+            key = _copilot_device_flow()
+        except (EOFError, KeyboardInterrupt, RuntimeError) as e:
+            print(f"\n  Cancelled: {e}")
+            return False
+        _save_env_key(env_name, key)
+        brain.config.copilot_pat = key
+        # Clear cached session so the new OAuth token is exchanged on next use
+        brain.llm._openai_clients.pop("_copilot", None)
+        brain.llm._openai_clients.pop("_copilot_session", None)
+        brain.llm._openai_clients.pop("_copilot_token", None)
+        print(f"  {env_name} saved and applied.")
+        return True
+
+    print(f"  ⚠️  No {env_name} set for the '{provider}' provider.")
+    try:
+        import getpass
+
+        key = getpass.getpass(f"  Enter {env_name} (hidden, Enter to skip): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Skipped.")
+        return False
+    if not key:
+        print("  Skipped — you can set it later with /keys set " + provider)
+        return False
+    _save_env_key(env_name, key)
+    setattr(brain.config, attr, key)
+    print(f"  {env_name} saved and applied.")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# GitHub Copilot OAuth helpers
+# ---------------------------------------------------------------------------
+# GitHub Copilot does NOT accept Personal Access Tokens.  The required flow is:
+#   1. OAuth device flow  →  GitHub OAuth token  (stored in ~/.axon/.env)
+#   2. OAuth token        →  Copilot session token  (in-memory, ~30 min TTL)
+#   3. Session token used as Bearer on every API call.
+# ---------------------------------------------------------------------------
+
+_COPILOT_OAUTH_CLIENT_ID = "Iv1.b507a08c87ecfe98"  # GitHub Copilot Vim plugin client ID
+_COPILOT_SESSION_REFRESH_BUFFER = 60  # seconds before expiry to pre-refresh
+
+
+def _copilot_device_flow() -> str:
+    """Run GitHub OAuth device flow and return the resulting GitHub OAuth token.
+
+    Prints the user code and verification URL, then polls until the user
+    completes authorisation in the browser.
+    """
+    import time
+
+    import httpx
+
+    resp = httpx.post(
+        "https://github.com/login/device/code",
+        json={"client_id": _COPILOT_OAUTH_CLIENT_ID, "scope": "read:user"},
+        headers={"Accept": "application/json"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    print(f"  Open in your browser: {data['verification_uri']}")
+    print(f"  Enter this code:      {data['user_code']}")
+    print("  Waiting for authorisation", end="", flush=True)
+
+    interval = data.get("interval", 5)
+    deadline = time.time() + data.get("expires_in", 900)
+
+    while time.time() < deadline:
+        time.sleep(interval)
+        print(".", end="", flush=True)
+        token_resp = httpx.post(
+            "https://github.com/login/oauth/access_token",
+            json={
+                "client_id": _COPILOT_OAUTH_CLIENT_ID,
+                "device_code": data["device_code"],
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            },
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        token_data = token_resp.json()
+        if "access_token" in token_data:
+            print()
+            return token_data["access_token"]
+        err = token_data.get("error", "")
+        if err == "slow_down":
+            interval += 5
+        elif err != "authorization_pending":
+            print()
+            raise RuntimeError(f"GitHub OAuth error: {err}")
+    print()
+    raise RuntimeError("GitHub OAuth device flow timed out.")
+
+
+def _refresh_copilot_session(oauth_token: str) -> dict:
+    """Exchange a GitHub OAuth token for a short-lived Copilot session token.
+
+    Returns {"token": str, "expires_at": float} where expires_at is a Unix
+    timestamp.  The session token is valid for ~30 minutes.
+    """
+    import httpx
+
+    resp = httpx.get(
+        "https://api.github.com/copilot_internal/v2/token",
+        headers={
+            "Authorization": f"token {oauth_token}",
+            "Editor-Version": "axon/1.0.0",
+            "Editor-Plugin-Version": "axon/1.0.0",
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return {"token": data["token"], "expires_at": float(data["expires_at"])}
+
+
+def _get_copilot_session_token(llm) -> str:
+    """Return a valid Copilot session token, refreshing if needed."""
+    import time
+
+    oauth_token = llm.config.copilot_pat
+    if not oauth_token:
+        raise ValueError(
+            "GitHub Copilot token not set. "
+            "Run /keys set github_copilot or export GITHUB_COPILOT_PAT=<oauth_token>."
+        )
+    session = llm._openai_clients.get("_copilot_session")
+    if not session or time.time() >= session["expires_at"] - _COPILOT_SESSION_REFRESH_BUFFER:
+        session = _refresh_copilot_session(oauth_token)
+        llm._openai_clients["_copilot_session"] = session
+    return session["token"]
+
+
+# Static fallback used when the Copilot token isn't set or the network call fails.
+# The live list is fetched from https://api.githubcopilot.com/models at completion time.
+_COPILOT_MODELS_FALLBACK: list[str] = [
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "claude-3.5-sonnet",
+    "claude-3.7-sonnet",
+    "o1",
+    "o3-mini",
+]
+
+
+def _fetch_copilot_models(llm) -> list[str]:
+    """Return chat model IDs from https://api.githubcopilot.com/models.
+
+    Uses the Copilot session token (not the raw OAuth token / PAT) because the
+    /models endpoint requires a session token.  Falls back to
+    _COPILOT_MODELS_FALLBACK on any error.
+    """
+    try:
+        if not llm.config.copilot_pat:
+            return list(_COPILOT_MODELS_FALLBACK)
+        session_token = _get_copilot_session_token(llm)
+        import httpx
+
+        resp = httpx.get(
+            "https://api.githubcopilot.com/models",
+            headers={
+                "Authorization": f"Bearer {session_token}",
+                "Editor-Version": "axon/1.0.0",
+                "Copilot-Integration-Id": "axon",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        ids = [
+            m["id"]
+            for m in resp.json().get("data", [])
+            if m.get("capabilities", {}).get("type") == "chat"
+        ]
+        return ids if ids else list(_COPILOT_MODELS_FALLBACK)
+    except Exception:
+        return list(_COPILOT_MODELS_FALLBACK)
 
 
 def _make_completer(brain: "AxonBrain"):
@@ -6901,9 +9285,23 @@ def _make_completer(brain: "AxonBrain"):
                 matches = [m + "/" if os.path.isdir(m) else m for m in matches]
                 return matches[state] if state < len(matches) else None
 
-            # /model or /pull — complete Ollama model names
+            # /model or /pull — complete model names
             if full_line.startswith("/model ") or full_line.startswith("/pull "):
                 model_prefix = full_line.split(" ", 1)[1]
+                # Explicit github_copilot/ prefix typed
+                if model_prefix.startswith("github_copilot/") or model_prefix in (
+                    "github_copilot",
+                    "github_copilot/",
+                ):
+                    cp_prefix = model_prefix[len("github_copilot/") :]
+                    cp_models = _fetch_copilot_models(brain.llm)
+                    matches = [f"github_copilot/{m}" for m in cp_models if m.startswith(cp_prefix)]
+                    return matches[state] if state < len(matches) else None
+                # Active provider is github_copilot — complete bare model names
+                if brain.config.llm_provider == "github_copilot" and "/" not in model_prefix:
+                    cp_models = _fetch_copilot_models(brain.llm)
+                    matches = [m for m in cp_models if m.startswith(model_prefix)]
+                    return matches[state] if state < len(matches) else None
                 try:
                     import ollama as _ollama
 
@@ -7921,17 +10319,38 @@ def _interactive_repl(
                 elif text.startswith("/model ") or text.startswith("/embed "):
                     cmd_len = len("/model ") if text.startswith("/model ") else len("/embed ")
                     prefix = text[cmd_len:]
-                    try:
-                        import ollama as _ol
+                    if prefix.startswith("github_copilot/") or prefix in (
+                        "github_copilot",
+                        "github_copilot/",
+                    ):
+                        cp_prefix = prefix[len("github_copilot/") :]
+                        for mid in _fetch_copilot_models(self._brain.llm):
+                            if mid.startswith(cp_prefix):
+                                full = f"github_copilot/{mid}"
+                                yield Completion(
+                                    full[len(prefix) :], display=full, display_meta="copilot"
+                                )
+                    elif self._brain.config.llm_provider == "github_copilot" and "/" not in prefix:
+                        # Active provider is github_copilot — complete bare model names
+                        for mid in _fetch_copilot_models(self._brain.llm):
+                            if mid.startswith(prefix):
+                                yield Completion(
+                                    mid[len(prefix) :], display=mid, display_meta="copilot"
+                                )
+                    else:
+                        try:
+                            import ollama as _ol
 
-                        resp = _ol.list()
-                        mods = resp.models if hasattr(resp, "models") else resp.get("models", [])
-                        for m in mods:
-                            name = m.model if hasattr(m, "model") else m.get("name", "")
-                            if name.startswith(prefix):
-                                yield Completion(name[len(prefix) :], display=name)
-                    except Exception:
-                        pass
+                            resp = _ol.list()
+                            mods = (
+                                resp.models if hasattr(resp, "models") else resp.get("models", [])
+                            )
+                            for m in mods:
+                                name = m.model if hasattr(m, "model") else m.get("name", "")
+                                if name.startswith(prefix):
+                                    yield Completion(name[len(prefix) :], display=name)
+                        except Exception:
+                            pass
                 # ── /resume <session-id> ──────────────────────────────────
                 elif text.startswith("/resume "):
                     prefix = text[len("/resume ") :]
@@ -8185,7 +10604,7 @@ def _interactive_repl(
                     _detail = {
                         "model": "  /model <model>              keep current provider\n"
                         "  /model <provider>/<model>   switch provider + model\n"
-                        "  providers: ollama, gemini, openai, ollama_cloud, vllm\n"
+                        "  providers: ollama, gemini, openai, ollama_cloud, vllm, github_copilot\n"
                         "  e.g.  /model gemini/gemini-2.0-flash\n"
                         "        /model ollama/gemma:2b\n"
                         "        /model openai/gpt-4o\n"
@@ -8347,7 +10766,14 @@ def _interactive_repl(
                         print(f"  Done — {ingested} ingested, {skipped} skipped.")
 
             elif cmd == "/model":
-                _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm")
+                _PROVIDERS = (
+                    "ollama",
+                    "gemini",
+                    "openai",
+                    "ollama_cloud",
+                    "vllm",
+                    "github_copilot",
+                )
                 if not arg:
                     print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
                     print(
@@ -8375,15 +10801,14 @@ def _interactive_repl(
                                 f"  ℹ️  vLLM server: {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
                             )
                         elif provider != "ollama":
-                            print("  ℹ️  Make sure the required API key env var is set.")
+                            _prompt_key_if_missing(provider, brain)
                 else:
                     inferred = _infer_provider(arg)
                     brain.config.llm_provider = inferred
                     brain.config.llm_model = arg
                     brain.llm = OpenLLM(brain.config)
                     print(f"  Switched LLM to {inferred}/{arg}")
-                    if inferred != "ollama":
-                        print("  ℹ️  Make sure the required API key env var is set.")
+                    _prompt_key_if_missing(inferred, brain)
 
             elif cmd == "/vllm-url":
                 if not arg:
@@ -8470,6 +10895,24 @@ def _interactive_repl(
                         print(f"\r  '{arg}' ready.{' ' * 50}")
                     except Exception as e:
                         print(f"  Pull failed: {e}")
+
+            elif cmd == "/graph-viz":
+                import os as _os
+                import tempfile
+
+                _out_path = (
+                    arg.strip()
+                    if arg.strip()
+                    else _os.path.join(tempfile.gettempdir(), "axon_graph.html")
+                )
+                try:
+                    brain.export_graph_html(_out_path)
+                    print(f"  Graph visualization saved → {_out_path}")
+                    print("  Open in your browser to explore the entity–relation graph.")
+                except ImportError as _e:
+                    print(f"  {_e}")
+                except Exception as _e:
+                    print(f"  Failed to export graph: {_e}")
 
             elif cmd == "/clear":
                 chat_history.clear()
@@ -8776,10 +11219,11 @@ def _interactive_repl(
             elif cmd == "/keys":
                 _env_file = Path.home() / ".axon" / ".env"
                 _provider_keys = {
-                    "gemini": ("GEMINI_API_KEY", "https://aistudio.google.com/app/apikey"),
-                    "openai": ("OPENAI_API_KEY", "https://platform.openai.com/api-keys"),
-                    "brave": ("BRAVE_API_KEY", "https://api.search.brave.com/app/keys"),
-                    "ollama_cloud": ("OLLAMA_CLOUD_KEY", "https://ollama.com/settings"),
+                    "gemini": "GEMINI_API_KEY",
+                    "openai": "OPENAI_API_KEY",
+                    "brave": "BRAVE_API_KEY",
+                    "ollama_cloud": "OLLAMA_CLOUD_KEY",
+                    "github_copilot": "GITHUB_COPILOT_PAT",
                 }
                 if arg.lower().startswith("set"):
                     set_parts = arg.split(maxsplit=1)
@@ -8787,9 +11231,22 @@ def _interactive_repl(
                     if not prov or prov not in _provider_keys:
                         print("  Usage: /keys set <provider>")
                         print(f"  Providers: {', '.join(_provider_keys)}")
+                    elif prov == "github_copilot":
+                        print("  Starting GitHub OAuth device flow…")
+                        try:
+                            new_key = _copilot_device_flow()
+                        except (EOFError, KeyboardInterrupt, RuntimeError) as e:
+                            print(f"\n  Cancelled: {e}")
+                        else:
+                            env_name = _provider_keys[prov]
+                            _save_env_key(env_name, new_key)
+                            brain.config.copilot_pat = new_key
+                            for k in ("_copilot", "_copilot_session", "_copilot_token"):
+                                brain.llm._openai_clients.pop(k, None)
+                            print(f"  {env_name} saved to {_env_file} and applied.")
+                            print("  Switch provider: /model github_copilot/<model>")
                     else:
-                        env_name, url = _provider_keys[prov]
-                        print(f"  Get your key at: {url}")
+                        env_name = _provider_keys[prov]
                         try:
                             import getpass
 
@@ -8798,20 +11255,7 @@ def _interactive_repl(
                             print("\n  Cancelled.")
                         else:
                             if new_key:
-                                _env_file.parent.mkdir(parents=True, exist_ok=True)
-                                existing = (
-                                    _env_file.read_text(encoding="utf-8")
-                                    if _env_file.exists()
-                                    else ""
-                                )
-                                lines = [
-                                    ln
-                                    for ln in existing.splitlines()
-                                    if not ln.startswith(f"{env_name}=")
-                                ]
-                                lines.append(f"{env_name}={new_key}")
-                                _env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                                os.environ[env_name] = new_key
+                                _save_env_key(env_name, new_key)
                                 if prov == "brave":
                                     brain.config.brave_api_key = new_key
                                 elif prov == "gemini":
@@ -8826,7 +11270,7 @@ def _interactive_repl(
                                 print("  No key entered — nothing saved.")
                 else:
                     print("\n  API Key Status\n  " + "─" * 50)
-                    for prov, (env_name, _url) in _provider_keys.items():
+                    for prov, env_name in _provider_keys.items():
                         val = os.environ.get(env_name, "")
                         if val:
                             masked = val[:4] + "****" + val[-2:] if len(val) > 6 else "****"

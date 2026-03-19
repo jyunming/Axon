@@ -1486,3 +1486,30 @@ class TestIngestPathSyncLoader:
 
         brain.ingest.assert_called_once_with(fake_docs)
         api_module._jobs.pop(job_id, None)
+
+
+# ---------------------------------------------------------------------------
+# /graph/data
+# ---------------------------------------------------------------------------
+
+
+def test_graph_data_returns_nodes_and_links():
+    """GET /graph/data returns {"nodes": list, "links": list}."""
+    brain = _make_brain()
+    brain.build_graph_payload.return_value = {"nodes": [], "links": []}
+    api_module.brain = brain
+
+    resp = client.get("/graph/data")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "nodes" in data
+    assert "links" in data
+    assert isinstance(data["nodes"], list)
+    assert isinstance(data["links"], list)
+
+
+def test_graph_data_returns_503_no_brain():
+    """GET /graph/data returns 503 when brain is not initialized."""
+    api_module.brain = None
+    resp = client.get("/graph/data")
+    assert resp.status_code == 503
