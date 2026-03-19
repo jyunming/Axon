@@ -187,34 +187,77 @@ async function showGraphForQuery(
   panel.showLoading(query);
 
   try {
-    const [queryRes, searchRes, kgRes, cgRes] = await Promise.all([
+    const [querySettled, searchSettled, kgSettled, cgSettled] = await Promise.allSettled([
       httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey),
       httpPost(`${apiBase}/search/raw`, { query }, apiKey),
       httpGet(`${apiBase}/graph/data`, apiKey),
       httpGet(`${apiBase}/code-graph/data`, apiKey),
     ]);
 
-    const answer = JSON.parse(queryRes.body);
-    const search = JSON.parse(searchRes.body);
-    const knowledgeGraph = JSON.parse(kgRes.body);
-    const codeGraph      = JSON.parse(cgRes.body);
+    let queryFailed = false;
+    let answerText = '';
+    let sources: any[] = [];
+    let knowledgeGraph: { nodes: any[]; links: any[] } = { nodes: [], links: [] };
+    let codeGraph: { nodes: any[]; links: any[] } = { nodes: [], links: [] };
+    let queryStatus = 0;
+    let searchStatus = 0;
+    let kgStatus = 0;
+    let cgStatus = 0;
 
-    if (queryRes.status !== 200) {
-      vscode.window.showErrorMessage(`Axon query failed: ${formatDetail(answer, queryRes.body)}`);
-      panel.dispose();
-      return 'query_failed';
+    if (querySettled.status === 'fulfilled') {
+      queryStatus = querySettled.value.status;
+      const answer = parseJsonSafe(querySettled.value.body);
+      if (querySettled.value.status === 200) {
+        answerText = answer.response || '';
+      } else {
+        queryFailed = true;
+        answerText = `(Query unavailable: ${formatDetail(answer, querySettled.value.body)})`;
+      }
+    } else {
+      queryFailed = true;
+      answerText = `(Query unavailable: ${String(querySettled.reason)})`;
     }
+
+    if (searchSettled.status === 'fulfilled') {
+      searchStatus = searchSettled.value.status;
+      const search = parseJsonSafe(searchSettled.value.body);
+      if (searchSettled.value.status === 200) {
+        sources = Array.isArray(search.results) ? search.results : [];
+      }
+    }
+
+    if (kgSettled.status === 'fulfilled') {
+      kgStatus = kgSettled.value.status;
+      if (kgSettled.value.status === 200) {
+        knowledgeGraph = normalizeGraphPayload(parseJsonSafe(kgSettled.value.body));
+      }
+    }
+
+    if (cgSettled.status === 'fulfilled') {
+      cgStatus = cgSettled.value.status;
+      if (cgSettled.value.status === 200) {
+        codeGraph = normalizeGraphPayload(parseJsonSafe(cgSettled.value.body));
+      }
+    }
+
+    const kgNodes = Array.isArray(knowledgeGraph.nodes) ? knowledgeGraph.nodes.length : 0;
+    const cgNodes = Array.isArray(codeGraph.nodes) ? codeGraph.nodes.length : 0;
+    outputChannel.appendLine(
+      `[axon.showGraph] query="${query}" statuses query=${queryStatus} search=${searchStatus} kg=${kgStatus} cg=${cgStatus} nodes kg=${kgNodes} cg=${cgNodes}`
+    );
 
     panel.update({
       query,
-      answer: answer.response || '',
-      sources: search.results ?? [],
+      answer: answerText,
+      sources,
       knowledgeGraph,
       codeGraph,
     });
 
-    const hasAny = (knowledgeGraph.nodes?.length ?? 0) > 0 || (codeGraph.nodes?.length ?? 0) > 0;
-    return hasAny ? 'opened' : 'no_graph_available';
+    if (kgNodes > 0 || cgNodes > 0) {
+      return 'opened';
+    }
+    return queryFailed ? 'query_failed' : 'no_graph_available';
   } catch (err) {
     vscode.window.showErrorMessage(`Axon graph panel error: ${err}`);
     panel.dispose();
@@ -1128,6 +1171,21 @@ function formatDetail(data: any, fallback: string): string {
   if (d === undefined || d === null) { return fallback; }
   if (typeof d === 'string') { return d; }
   return JSON.stringify(d);
+}
+
+function parseJsonSafe(body: string): any {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return {};
+  }
+}
+
+function normalizeGraphPayload(data: any): { nodes: any[]; links: any[] } {
+  if (data && Array.isArray(data.nodes) && Array.isArray(data.links)) {
+    return data;
+  }
+  return { nodes: [], links: [] };
 }
 
 function httpGet(url: string, apiKey?: string): Promise<HttpResult> {
