@@ -2607,6 +2607,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self._base_vector_store_path: str = os.path.abspath(self.config.vector_store_path)
         self._base_bm25_path: str = os.path.abspath(self.config.bm25_path)
         self._active_project: str = "default"
+        self._read_only_scope: bool = False
 
         try:
             from axon.retrievers import BM25Retriever
@@ -2728,7 +2729,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._executor = ThreadPoolExecutor(max_workers=self.config.max_workers)
 
-        logger.info("Axon ready!")
+        self._log_startup_summary()
 
     def close(self):
         """Explicitly release all resources (connections, file handles)."""
@@ -2747,6 +2748,31 @@ Your primary goal is to help the user by answering questions based on the provid
             if hasattr(self._own_bm25, "close"):
                 self._own_bm25.close()
 
+    def _log_startup_summary(self) -> None:
+        """Log a one-line startup summary: active project, namespace ID, scope type."""
+        from axon.projects import get_project_namespace_id
+
+        scope = "read-only merged" if getattr(self, "_read_only_scope", False) else "authoritative"
+        ns_id = get_project_namespace_id(self._active_project)
+        if ns_id is None:
+            # Try reading from the actual project dir (for default which maps to config path)
+            try:
+                pdir = Path(self.config.bm25_path).parent
+                meta_file = pdir / "meta.json"
+                if meta_file.exists():
+                    import json as _json
+
+                    meta = _json.loads(meta_file.read_text())
+                    ns_id = meta.get("project_namespace_id", "none")
+            except Exception:
+                ns_id = "none"
+        logger.info(
+            "Axon ready  |  project: %s  |  ns: %s  |  scope: %s",
+            self._active_project,
+            ns_id or "none",
+            scope,
+        )
+
     def should_recommend_project(self) -> bool:
         """Return True if we should recommend creating a dedicated project.
 
@@ -2764,6 +2790,138 @@ Your primary goal is to help the user by answering questions based on the provid
             return len(named_projects) == 0
         except Exception:
             return False
+
+    # Reserved directory names excluded from @projects / @store scope merges
+    _SCOPE_RESERVED_DIRS: frozenset = frozenset({"default", "mounts", ".shares", "ShareMount"})
+
+    def _switch_to_scope(self, scope: str) -> None:
+        """Switch to a merged read-only scope (@projects, @mounts, or @store).
+
+        Collects vector stores and BM25 indices from the relevant project dirs,
+        wraps them in MultiVectorStore / MultiBM25Retriever, and marks the brain
+        as read-only so ingest() raises a clear error.
+
+        Args:
+            scope: One of "@projects", "@mounts", or "@store".
+
+        Raises:
+            ValueError: If no projects are found for the requested scope.
+        """
+        import copy
+
+        from axon.projects import PROJECTS_ROOT, project_bm25_path, project_vector_path
+        from axon.retrievers import BM25Retriever as _BM25
+
+        _valid_scopes = {"@projects", "@mounts", "@store"}
+        if scope not in _valid_scopes:
+            raise ValueError(
+                f"Unknown scope '{scope}'. Valid scopes: {', '.join(sorted(_valid_scopes))}"
+            )
+
+        # ── Collect authoritative project dirs (exclude reserved names) ──────
+        def _authoritative_project_dirs() -> list[Path]:
+            dirs = []
+            if not PROJECTS_ROOT.exists():
+                return dirs
+            for entry in sorted(PROJECTS_ROOT.iterdir()):
+                if not entry.is_dir():
+                    continue
+                if entry.name in self._SCOPE_RESERVED_DIRS:
+                    continue
+                if not (entry / "meta.json").exists():
+                    continue
+                dirs.append(entry)
+            return dirs
+
+        # ── Collect mount dirs ────────────────────────────────────────────────
+        def _mount_dirs() -> list[Path]:
+            mounts_root = PROJECTS_ROOT / "mounts"
+            if not mounts_root.exists():
+                return []
+            dirs = []
+            for entry in sorted(mounts_root.iterdir()):
+                if entry.is_dir() and (entry / "meta.json").exists():
+                    dirs.append(entry)
+            return []  # Placeholder: mounts not yet fully implemented
+
+        # ── Build the list of (vector_path, bm25_path) pairs for the scope ───
+        project_paths: list[tuple[str, str]] = []
+
+        if scope in ("@projects", "@store"):
+            for pdir in _authoritative_project_dirs():
+                pname = pdir.name
+                try:
+                    vpath = project_vector_path(pname)
+                    bpath = project_bm25_path(pname)
+                    project_paths.append((vpath, bpath))
+                except Exception as e:
+                    logger.warning("Scope %s: skipping project '%s': %s", scope, pname, e)
+
+        if scope == "@store":
+            # Include the default project
+            project_paths.insert(0, (self._base_vector_store_path, self._base_bm25_path))
+
+        # @mounts — graceful empty case
+        if scope == "@mounts":
+            _mount_dirs()  # no-op placeholder
+
+        if not project_paths:
+            raise ValueError(f"No authoritative projects found under {scope} scope.")
+
+        # ── Close existing stores and rebuild executor ────────────────────────
+        self.close()
+        from concurrent.futures import ThreadPoolExecutor
+
+        self._executor = ThreadPoolExecutor(max_workers=self.config.max_workers)
+
+        # ── Build Multi* wrappers ─────────────────────────────────────────────
+        all_vs = []
+        all_bm25 = []
+        for vpath, bpath in project_paths:
+            cfg = copy.copy(self.config)
+            cfg.vector_store_path = vpath
+            cfg.bm25_path = bpath
+            all_vs.append(OpenVectorStore(cfg))
+            try:
+                all_bm25.append(_BM25(storage_path=bpath))
+            except Exception:
+                pass
+
+        self.vector_store = MultiVectorStore(all_vs)
+        self.bm25 = MultiBM25Retriever(all_bm25) if all_bm25 else None
+        # Scope stores are read-only; own store points to first real store for
+        # diagnostic methods that inspect self._own_vector_store.
+        self._own_vector_store = all_vs[0]
+        self._own_bm25 = all_bm25[0] if all_bm25 else None
+
+        # ── Reload project state (use base paths for GraphRAG state) ─────────
+        from collections import OrderedDict
+
+        with self._cache_lock:
+            self._query_cache = OrderedDict()
+        self._ingested_hashes = set()
+        self._entity_graph = {}
+        self._relation_graph = {}
+        self._community_levels = {}
+        self._community_summaries = {}
+        self._entity_embeddings = {}
+        self._entity_description_buffer = {}
+        self._claims_graph = {}
+        self._community_graph_dirty = False
+        self._community_hierarchy = {}
+        self._community_children = {}
+        self._relation_description_buffer = {}
+        self._text_unit_entity_map = {}
+        self._text_unit_relation_map = {}
+        self._raptor_summary_cache = {}
+
+        self._active_project = scope
+        self._read_only_scope = True
+        logger.info(
+            "Switched to %s scope  |  %d store(s) merged  |  read-only",
+            scope,
+            len(all_vs),
+        )
 
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
@@ -2790,6 +2948,10 @@ Your primary goal is to help the user by answering questions based on the provid
             project_vector_path,
             set_active_project,
         )
+
+        # ── @-scope handling: merged read-only views ──────────────────────────
+        if name.startswith("@"):
+            return self._switch_to_scope(name)
 
         if name == "default":
             self.config.vector_store_path = self._base_vector_store_path
@@ -3036,6 +3198,7 @@ Your primary goal is to help the user by answering questions based on the provid
                         logger.warning(f"Could not merge community summaries for '{desc}': {e}")
 
         self._active_project = name
+        self._read_only_scope = False
         set_active_project(name)
         logger.info(f"Switched to project '{name}'")
 
@@ -7118,6 +7281,13 @@ Your primary goal is to help the user by answering questions based on the provid
         if not documents:
             return
 
+        # Phase 6: block ingest on read-only merged scopes
+        if getattr(self, "_read_only_scope", False):
+            raise ValueError(
+                "Cannot ingest into a read-only scope (@projects / @mounts / @store). "
+                "Switch to a specific project first."
+            )
+
         # Guard: raise immediately if the embedding model has changed since this
         # collection was created — mixing models silently corrupts retrieval.
         self._validate_embedding_meta(on_mismatch="raise")
@@ -7721,6 +7891,28 @@ Your primary goal is to help the user by answering questions based on the provid
                 "fallback_chunks": _ingest_fallback_count,
             }
         )
+
+        # Phase 7: ingest diagnostics — source IDs and collision check
+        if n_chunks > 0:
+            _batch_source_ids = {
+                chunk.get("metadata", {}).get("source_id", "")
+                for chunk in documents
+                if chunk.get("metadata", {}).get("source_id", "")
+            }
+            _batch_chunk_ids = [chunk.get("id", "") for chunk in documents if chunk.get("id", "")]
+            _collision_count = len(_batch_chunk_ids) - len(set(_batch_chunk_ids))
+            logger.info(
+                "Ingest diagnostics  |  source_ids: %d  |  chunk_ids: %d  |  collisions: %d",
+                len(_batch_source_ids),
+                len(_batch_chunk_ids),
+                _collision_count,
+            )
+            if _collision_count > 0:
+                logger.warning(
+                    "Ingest: %d duplicate chunk IDs detected in this batch. "
+                    "This may indicate basename-derived IDs colliding. Re-ingest with current version to fix.",
+                    _collision_count,
+                )
 
     def _decompose_query(self, query: str) -> list[str]:
         """Break a complex query into atomic sub-questions for independent retrieval.

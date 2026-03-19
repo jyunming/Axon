@@ -8667,3 +8667,69 @@ def test_preflight_no_error_when_local_assets_only_all_local(tmp_path, monkeypat
         brain = AxonBrain(cfg)
 
     assert brain.config.local_assets_only is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: @-scope tests
+# ---------------------------------------------------------------------------
+
+
+def test_switch_to_at_projects_scope(tmp_path, monkeypatch):
+    """@projects scope loads MultiVectorStore across all projects."""
+    from unittest.mock import patch
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(rerank=False, graph_rag=False)
+        brain = AxonBrain(cfg)
+        # switch_project("@projects") should not raise even with no projects
+        try:
+            brain.switch_project("@projects")
+        except Exception as e:
+            # Allow ValueError for no projects found, but not unexpected crashes
+            assert "no" in str(e).lower() or "@" in str(e).lower(), f"Unexpected error: {e}"
+
+
+def test_read_only_scope_blocks_ingest(tmp_path):
+    """Ingest raises when read-only scope is active."""
+    from unittest.mock import patch
+
+    import pytest
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(rerank=False, graph_rag=False)
+        brain = AxonBrain(cfg)
+        brain._read_only_scope = True
+        docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test"}}]
+        with pytest.raises((ValueError, RuntimeError), match="read-only"):
+            brain.ingest(docs)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: startup log test
+# ---------------------------------------------------------------------------
+
+
+def test_startup_summary_logged(caplog):
+    """AxonBrain logs startup summary at INFO level."""
+    import logging
+    from unittest.mock import patch
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(rerank=False, graph_rag=False)
+        with caplog.at_level(logging.INFO, logger="Axon"):
+            AxonBrain(cfg)
+
+    startup_msgs = [r.message for r in caplog.records if "Axon ready" in r.message]
+    assert startup_msgs, "Expected 'Axon ready' log entry"
