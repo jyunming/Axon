@@ -7,7 +7,7 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
-        exclude: '\.(gif|mp4|webm|png|jpg|jpeg|svg)$|integrations/vscode-axon/media/.*\.js$|integrations/vscode-axon/.*\.vsix$'
+        exclude: '\.(gif|mp4|webm|png|jpg|jpeg|svg)$|integrations/vscode-axon/media/.*\.js$|integrations/vscode-axon/.*\.vsix$|docs/demos/.*\.html$'
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict
