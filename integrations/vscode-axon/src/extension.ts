@@ -38,6 +38,8 @@ class AxonGraphPanel {
     return AxonGraphPanel.currentPanel;
   }
 
+  private _disposed = false;
+
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
     this._panel = panel;
     this._extensionUri = extensionUri;
@@ -156,6 +158,8 @@ class AxonGraphPanel {
   }
 
   dispose() {
+    if (this._disposed) { return; }
+    this._disposed = true;
     AxonGraphPanel.currentPanel = undefined;
     this._panel.dispose();
     this._disposables.forEach(d => d.dispose());

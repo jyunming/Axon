@@ -562,8 +562,8 @@ async def store_init(request: StoreInitRequest):
     config.axon_store_base = str(base)
     config.axon_store_mode = True
     config.projects_root = str(user_dir)
-    config.vector_store_path = str(user_dir / "_default" / "chroma_data")
-    config.bm25_path = str(user_dir / "_default" / "bm25_index")
+    config.vector_store_path = str(user_dir / "default" / "chroma_data")
+    config.bm25_path = str(user_dir / "default" / "bm25_index")
 
     # Save config — migrate: add store block, remove projects_root if present
     try:
@@ -593,9 +593,7 @@ async def store_whoami():
             "username": username,
             "store_path": str(Path(brain.config.projects_root).parent.parent),
             "user_dir": brain.config.projects_root,
-            "active_project": brain.config.project
-            if hasattr(brain.config, "project")
-            else "_default",
+            "active_project": getattr(brain, "_active_project", "default"),
             "store_mode": True,
         }
     return {"username": username, "store_mode": False}

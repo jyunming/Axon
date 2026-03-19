@@ -1132,11 +1132,12 @@ def test_store_whoami_no_store_mode():
 
 
 def test_store_whoami_store_mode_active():
-    """whoami returns store paths when axon_store_mode is True."""
+    """whoami returns store paths and _active_project (not config.project) when store mode is on."""
     mock_brain = _make_brain()
     mock_brain.config.axon_store_mode = True
     mock_brain.config.projects_root = "/data/AxonStore/alice"
-    mock_brain.config.project = "_default"
+    mock_brain.config.project = "_default"  # stale value — must NOT appear in response
+    mock_brain._active_project = "research"  # real active project after a switch
     api_module.brain = mock_brain
 
     resp = client.get("/store/whoami")
@@ -1145,6 +1146,7 @@ def test_store_whoami_store_mode_active():
     assert data["store_mode"] is True
     assert "user_dir" in data
     assert "username" in data
+    assert data["active_project"] == "research"  # must use _active_project, not config.project
 
 
 # ---------------------------------------------------------------------------
