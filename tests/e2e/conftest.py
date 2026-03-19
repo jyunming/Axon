@@ -1,9 +1,7 @@
 import hashlib
 import math
 import re
-import shutil
 import socket
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -40,7 +38,9 @@ class FakeEmbedding:
     def _embed_text(self, text: str) -> list[float]:
         vector = [0.0] * self.dimension
         for token in _tokenize(text):
-            bucket = int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % self.dimension
+            bucket = (
+                int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % self.dimension
+            )
             vector[bucket] += 1.0
         norm = math.sqrt(sum(v * v for v in vector))
         if norm:
@@ -261,23 +261,11 @@ class FakeLLM:
             yield token + " "
 
 
-@pytest.fixture
-def tmp_path():
-    base = Path("tests/e2e/.test_tmp").resolve()
-    base.mkdir(parents=True, exist_ok=True)
-    path = Path(tempfile.mkdtemp(prefix="axon-e2e-", dir=str(base)))
-    yield path
-    try:
-        shutil.rmtree(path)
-    except Exception as exc:
-        # Log instead of silently swallowing — locked handles on Windows leave artifacts
-        import warnings
-
-        warnings.warn(
-            f"E2E tmp_path cleanup failed for {path}: {exc}. "
-            "Directory may be leaked under tests/e2e/.test_tmp/",
-            stacklevel=2,
-        )
+# NOTE: tmp_path is intentionally NOT overridden here.
+# pytest's built-in tmp_path fixture (uses tempfile.gettempdir()) is used directly.
+# A previous custom implementation that wrote to tests/e2e/.test_tmp caused Windows
+# PermissionError failures because locked handles from prior test runs prevent both
+# directory creation and ruff/black scans of the project tree.
 
 
 @pytest.fixture(autouse=True)

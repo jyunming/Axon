@@ -9047,6 +9047,26 @@ def main():
         help="Enable/disable GraphRAG entity-centric retrieval expansion",
     )
     parser.add_argument(
+        "--cite",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable inline [Document N] citations in the response (default: from config, usually on)",
+    )
+    parser.add_argument(
+        "--code-graph",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable structural code-symbol graph construction during ingest "
+        "(requires code files; stored in .code_graph.json)",
+    )
+    parser.add_argument(
+        "--code-graph-bridge",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable Phase-3 code-graph bridge: link prose chunks that mention code "
+        "symbols to their definition nodes (requires --code-graph)",
+    )
+    parser.add_argument(
         "--no-dedup",
         action="store_true",
         help="Disable ingest deduplication (allow re-ingesting identical content)",
@@ -9146,6 +9166,12 @@ def main():
         config.raptor_chunk_group_size = args.raptor_group_size
     if args.graph_rag is not None:
         config.graph_rag = args.graph_rag
+    if args.cite is not None:
+        config.cite = args.cite
+    if args.code_graph is not None:
+        config.code_graph = args.code_graph
+    if args.code_graph_bridge is not None:
+        config.code_graph_bridge = args.code_graph_bridge
 
     if args.list_models:
         print("\n  Supported LLM providers and example models:\n")

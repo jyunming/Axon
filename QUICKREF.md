@@ -93,11 +93,13 @@ axon --pull gemma:2b
 axon --list-models
 
 # CLI — advanced RAG flags (can be combined)
-axon --cite "Summarise my documents"        # inline source citations
+axon --cite "Summarise my documents"        # inline [Document N] citations
+axon --no-cite "Your question"              # suppress citations for cleaner output
 axon --decompose "Complex multi-part query" # split into sub-questions
 axon --compress "Your question"             # compress retrieved context
 axon --raptor --ingest ./docs/              # hierarchical indexing on ingest
 axon --graph-rag "Your question"            # entity-graph retrieval expansion
+axon --code-graph --ingest ./src/           # build structural code-symbol graph
 
 # CLI — project management
 axon --project myproject "Your question"    # use a named project
