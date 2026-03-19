@@ -252,6 +252,19 @@ curl -X POST http://localhost:8000/query \
   -d '{"query": "What are the main topics?", "project": "work"}'
 ```
 
+### Search across multiple projects
+
+Switch to a merged read-only scope to query across all your projects at once:
+
+```bash
+/project @store      # default + all local projects + mounts
+/project @projects   # all local projects only
+/project @mounts     # all mounted projects only
+/project myproject   # switch back to a writable project
+```
+
+Merged scopes are read-only. Use `/project <name>` to switch back before ingesting.
+
 ---
 
 ---
@@ -372,6 +385,42 @@ curl http://localhost:8000/graph/visualize -o graph.html
 ```
 
 Requires `pyvis`: `pip install axon[graphrag]`
+
+---
+
+## Fully local model deployment
+
+To run with local HuggingFace checkpoints and keep RAPTOR + GraphRAG enabled, use `local_assets_only`:
+
+```yaml
+offline:
+  local_assets_only: true
+  embedding_models_dir: /path/to/embedding_models   # sentence-transformers root
+  hf_models_dir: /path/to/hf_models                 # GLiNER, REBEL, LLMLingua root
+  tokenizer_cache_dir: /path/to/tiktoken_cache       # tiktoken BPE cache
+```
+
+On startup, Axon audits each model and fails fast if any required model is missing locally. Look for the `Model asset audit:` block in the startup log to verify your configuration:
+
+```
+[local]         embedding    /path/to/embedding_models/all-MiniLM-L6-v2
+[n/a]           reranker     (disabled)
+[local]         gliner       /path/to/hf_models/gliner_medium-v2.1
+[remote]        rebel        Babelscape/rebel-large
+```
+
+Use `offline_mode: true` (under `offline: enabled: true`) instead if you also want to disable RAPTOR and GraphRAG (e.g. a pure embedding-only setup with no LLM calls at all).
+
+---
+
+## Interactive graph demos
+
+Standalone graph visualizations (no server required) are in `docs/demos/`:
+
+- `code-graph-demo.html` — 3D code structure graph
+- `knowledge-graph-demo.html` — 3D knowledge/semantic graph
+
+Open them directly in a browser.
 
 ---
 

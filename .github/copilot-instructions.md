@@ -22,7 +22,7 @@ store collection and BM25 index are read and written.
 
 | Project name | Use for |
 |---|---|
-| `default` | General-purpose knowledge, catch-all |
+| `default` | General-purpose knowledge, catch-all (canonical name; was `_default` in earlier versions) |
 | (add project-specific rows here as namespaces are created) |
 
 Switch the active project with `POST /project/switch` before ingesting if the
@@ -52,6 +52,19 @@ Writes (ingestion) always go to the parent's own store. Reads fan out.
 searches both in one call.
 
 Use `list_projects` to discover available namespaces before switching.
+
+### Merged read-only scopes
+
+Three special project names give a unified read-only view across multiple stores:
+
+| Scope | What it searches |
+|---|---|
+| `@projects` | All authoritative local projects |
+| `@mounts` | All mounted (shared) projects |
+| `@store` | `default` + `@projects` + `@mounts` |
+
+Switch using `switch_project("@store")` etc. Ingest is blocked while a merged scope
+is active — switch to a specific project before writing.
 
 ---
 
@@ -222,6 +235,42 @@ tool names (they differ deliberately from the OpenAI-format `tools.py` names):
 | `delete_documents` | Remove by ID |
 | `list_projects` | List all project namespaces |
 | `get_stale_docs` | Find docs not re-ingested in N days |
+
+---
+
+## Local Model Configuration Fields
+
+The following `config.yaml` fields under the `offline:` key control local model routing:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `offline.enabled` | bool | Full offline mode — locks HF network access; disables RAPTOR + GraphRAG |
+| `offline.local_models_dir` | str | Legacy fallback root for both embedding and HF models |
+| `offline.local_assets_only` | bool | Enforce local HF files **without** disabling RAPTOR or GraphRAG |
+| `offline.embedding_models_dir` | str | Root directory for sentence-transformers / fastembed model files |
+| `offline.hf_models_dir` | str | Root directory for GLiNER, REBEL, LLMLingua, and cross-encoder reranker |
+| `offline.tokenizer_cache_dir` | str | tiktoken BPE encoding cache directory (maps to `TIKTOKEN_CACHE_DIR`) |
+
+When `local_assets_only: true`, Axon runs a preflight model audit at startup and logs
+`[local]`, `[hf_cache]`, `[remote]`, or `[MISSING]` for each active model. Startup is
+aborted with a `RuntimeError` if any active model is `[remote]` or `[MISSING]`.
+
+## Store Identity and Migration
+
+Each AxonStore has a `store_meta.json` at its root containing `store_version`,
+`store_namespace_id`, and `created_at`. Each project's `meta.json` contains a
+`project_namespace_id` used as the namespace for all chunk and source IDs.
+
+To migrate existing projects (backfill `project_namespace_id` and rename `_default` →
+`default`), use the `axon.migration` module:
+
+```python
+from axon.migration import run_migration
+from pathlib import Path
+run_migration(Path.home() / ".axon/projects")
+```
+
+`audit_legacy_chunk_ids(project_dir)` can report chunks with old basename-derived IDs.
 
 ---
 

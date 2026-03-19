@@ -293,6 +293,42 @@ Effects when enabled:
 
 For Ollama models (gemma3, gpt-oss, etc.) copy `~/.ollama/models/` to the same path on the confined machine. See `scripts/README.md`.
 
+### Local / offline model deployment
+
+**`offline_mode`** (existing) — locks all HF network access; disables RAPTOR + GraphRAG (they need LLM calls):
+```yaml
+offline:
+  enabled: true
+  local_models_dir: C:/models
+```
+
+**`local_assets_only`** (new) — enforces local HF asset files **without** disabling RAPTOR or GraphRAG:
+```yaml
+offline:
+  local_assets_only: true
+  embedding_models_dir: C:/dev/embedding_models   # sentence-transformers root
+  hf_models_dir: C:/dev/HF_models                 # GLiNER, REBEL, LLMLingua root
+  tokenizer_cache_dir: C:/dev/tokenizer_cache      # tiktoken BPE cache
+  # local_models_dir: C:/models                    # legacy fallback for both kinds
+```
+
+On startup, Axon prints a model asset audit:
+```
+[local]         embedding    C:/dev/embedding_models/all-MiniLM-L6-v2
+[n/a]           reranker     (disabled)
+[local]         gliner       C:/dev/HF_models/gliner_medium-v2.1
+[remote]        rebel        Babelscape/rebel-large
+```
+If `local_assets_only: true` and any active model shows `[remote]` or `[MISSING]`, startup is aborted with a clear error.
+
+### Merged read-only scopes
+```bash
+/project @projects   # search across all local authoritative projects
+/project @mounts     # search across all mounted projects
+/project @store      # search across default + all projects + all mounts
+```
+Merged scopes are read-only — ingest is blocked until you switch to a specific project.
+
 ## API Endpoints
 
 ### Health Check
