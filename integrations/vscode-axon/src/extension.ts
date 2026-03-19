@@ -283,6 +283,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('axon.redeemShare', () => redeemShare(apiBase)),
     vscode.commands.registerCommand('axon.revokeShare', () => revokeShare(apiBase)),
     vscode.commands.registerCommand('axon.listShares', () => listShares(apiBase)),
+    vscode.commands.registerCommand('axon.refreshIngest', () => refreshIngest(apiBase)),
+    vscode.commands.registerCommand('axon.listStaleDocs', () => listStaleDocs(apiBase)),
+    vscode.commands.registerCommand('axon.clearKnowledgeBase', () => clearKnowledgeBase(apiBase)),
+    vscode.commands.registerCommand('axon.showGraphStatus', () => showGraphStatus(apiBase)),
     vscode.commands.registerCommand('axon.showGraphForQuery', async () => {
       const query = await vscode.window.showInputBox({ prompt: 'Axon: Enter query to visualise' });
       if (query) { await showGraphForQuery(context, query); }
@@ -1367,6 +1371,120 @@ async function listShares(apiBase: string): Promise<void> {
     outputChannel.appendLine(`\n=== Axon Shares ===\nSharing with others:\n${sharing}\n\nShared with me:\n${shared}\n`);
   } catch (err) {
     vscode.window.showErrorMessage(`Axon: Failed to list shares.`);
+  }
+}
+
+async function refreshIngest(apiBase: string): Promise<void> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const apiKey = config.get<string>('apiKey', '');
+  try {
+    vscode.window.showInformationMessage('Axon: Checking for changed documents…');
+    const result = await httpPost(`${apiBase}/ingest/refresh`, {}, apiKey);
+    const data = JSON.parse(result.body);
+    if (result.status !== 200) {
+      vscode.window.showErrorMessage(`Axon: Refresh failed — ${formatDetail(data, result.body)}`);
+      return;
+    }
+    const reingested = (data.reingested || []).length;
+    const skipped = (data.skipped || []).length;
+    const missing = (data.missing || []).length;
+    const errors = (data.errors || []).length;
+    outputChannel.show();
+    outputChannel.appendLine(`\n=== Axon Refresh ===`);
+    outputChannel.appendLine(`Re-ingested: ${reingested}  |  Unchanged: ${skipped}  |  Missing: ${missing}  |  Errors: ${errors}`);
+    if (reingested > 0) {
+      outputChannel.appendLine('Updated:');
+      (data.reingested || []).forEach((s: string) => outputChannel.appendLine(`  ${s}`));
+    }
+    if (errors > 0) {
+      outputChannel.appendLine('Errors:');
+      (data.errors || []).forEach((e: any) => outputChannel.appendLine(`  ${e.source || e}: ${e.error || ''}`));
+    }
+    vscode.window.showInformationMessage(
+      `Axon: Refresh complete — ${reingested} updated, ${skipped} unchanged${missing ? `, ${missing} missing` : ''}`
+    );
+  } catch (err) {
+    vscode.window.showErrorMessage(`Axon: Refresh failed. Is the server running?`);
+  }
+}
+
+async function listStaleDocs(apiBase: string): Promise<void> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const apiKey = config.get<string>('apiKey', '');
+  const daysInput = await vscode.window.showInputBox({
+    prompt: 'Show documents not refreshed in N days',
+    value: '7',
+    placeHolder: '7',
+  });
+  if (daysInput === undefined) { return; }
+  const days = parseInt(daysInput, 10) || 7;
+  try {
+    const result = await httpGet(`${apiBase}/collection/stale?days=${days}`, apiKey);
+    const data = JSON.parse(result.body);
+    if (result.status !== 200) {
+      vscode.window.showErrorMessage(`Axon: Stale list failed — ${formatDetail(data, result.body)}`);
+      return;
+    }
+    const stale: any[] = data.stale_docs || [];
+    outputChannel.show();
+    outputChannel.appendLine(`\n=== Axon Stale Docs (>${days} days) ===`);
+    if (stale.length === 0) {
+      outputChannel.appendLine('All documents are fresh.');
+      vscode.window.showInformationMessage(`Axon: All documents are fresh (threshold: ${days} days).`);
+    } else {
+      stale.sort((a, b) => b.age_days - a.age_days);
+      stale.forEach(s => outputChannel.appendLine(`  ${String(s.age_days).padStart(5)}d  [${s.project}]  ${s.doc_id}`));
+      outputChannel.appendLine(`Total: ${stale.length}`);
+      vscode.window.showInformationMessage(`Axon: ${stale.length} stale document(s) found. Check Axon output panel.`);
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(`Axon: Failed to list stale documents.`);
+  }
+}
+
+async function clearKnowledgeBase(apiBase: string): Promise<void> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const apiKey = config.get<string>('apiKey', '');
+  const confirmed = await vscode.window.showWarningMessage(
+    'Axon: Clear the entire knowledge base for the current project? This cannot be undone.',
+    { modal: true },
+    'Clear Knowledge Base',
+  );
+  if (confirmed !== 'Clear Knowledge Base') { return; }
+  try {
+    const result = await httpPost(`${apiBase}/clear`, {}, apiKey);
+    const data = JSON.parse(result.body);
+    if (result.status !== 200) {
+      vscode.window.showErrorMessage(`Axon: Clear failed — ${formatDetail(data, result.body)}`);
+      return;
+    }
+    vscode.window.showInformationMessage('Axon: Knowledge base cleared for current project.');
+  } catch (err) {
+    vscode.window.showErrorMessage(`Axon: Failed to clear knowledge base.`);
+  }
+}
+
+async function showGraphStatus(apiBase: string): Promise<void> {
+  const config = vscode.workspace.getConfiguration('axon');
+  const apiKey = config.get<string>('apiKey', '');
+  try {
+    const result = await httpGet(`${apiBase}/graph/status`, apiKey);
+    const data = JSON.parse(result.body);
+    if (result.status !== 200) {
+      vscode.window.showErrorMessage(`Axon: Graph status failed — ${formatDetail(data, result.body)}`);
+      return;
+    }
+    const inProgress = data.community_build_in_progress;
+    const count = data.community_summary_count;
+    outputChannel.show();
+    outputChannel.appendLine(`\n=== Axon GraphRAG Status ===`);
+    outputChannel.appendLine(`Community summaries: ${count}`);
+    outputChannel.appendLine(`Build in progress:   ${inProgress ? 'yes' : 'no'}`);
+    vscode.window.showInformationMessage(
+      `Axon GraphRAG: ${count} community summaries${inProgress ? ' (build in progress)' : ''}`
+    );
+  } catch (err) {
+    vscode.window.showErrorMessage(`Axon: Failed to get graph status.`);
   }
 }
 

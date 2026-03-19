@@ -1047,7 +1047,9 @@ class OpenEmbedding:
 
             logger.info(f"Using OpenAI API Embedding: {self.config.embedding_model}")
             kwargs = (
-                {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
+                {"api_key": self.config.api_key}
+                if self.config.api_key
+                else {"api_key": "sk-dummy"}
             )
             # ollama_base_url doubles as the generic base_url for OpenAI-compatible servers
             if (
@@ -1858,7 +1860,9 @@ class OpenVectorStore:
                 return []
             try:
                 id_str = ", ".join(f"'{i}'" for i in ids)
-                rows = self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
+                rows = (
+                    self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
+                )
                 return [
                     {
                         "id": r["id"],
@@ -3082,7 +3086,9 @@ Your primary goal is to help the user by answering questions based on the provid
                                         self._entity_graph[entity] = {
                                             "description": node.get("description", ""),
                                             "type": node.get("type", "UNKNOWN"),
-                                            "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
+                                            "chunk_ids": [
+                                                d for d in doc_ids if isinstance(d, str)
+                                            ],
                                             "frequency": len(
                                                 [d for d in doc_ids if isinstance(d, str)]
                                             ),
@@ -3753,7 +3759,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 raise ImportError("backend override — skipping graspologic")
             from graspologic.partition import hierarchical_leiden
 
-            partitions = hierarchical_leiden(G, max_cluster_size=max_cluster_size, random_seed=seed)
+            partitions = hierarchical_leiden(
+                G, max_cluster_size=max_cluster_size, random_seed=seed
+            )
             community_levels: dict = {}
             community_hierarchy: dict = {}
             community_children: dict = {}
@@ -4740,7 +4748,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 level_summaries.items(), key=_community_relevance, reverse=True
             )
             level_summaries = dict(sorted_summaries[:_top_n_communities])
-            logger.debug("GraphRAG global: pre-filtered to top %d communities.", _top_n_communities)
+            logger.debug(
+                "GraphRAG global: pre-filtered to top %d communities.", _top_n_communities
+            )
 
         # Chunk reports so large reports don't get hard-truncated and later sections aren't lost
         _MAP_CHUNK_CHARS = int(getattr(cfg, "graph_rag_global_map_max_length", 500) or 500) * 4
@@ -5578,7 +5588,8 @@ Your primary goal is to help the user by answering questions based on the provid
             "For each relationship output one line:\n"
             "  SUBJECT | RELATION | OBJECT | one-sentence description | strength (1-10)\n"
             "Strength: 1=weak/incidental, 10=core/defining. "
-            "No bullets or extra text. If no clear relationships, output nothing.\n\n" + text[:3000]
+            "No bullets or extra text. If no clear relationships, output nothing.\n\n"
+            + text[:3000]
         )
         try:
             raw = self.llm.complete(
@@ -5873,7 +5884,9 @@ Your primary goal is to help the user by answering questions based on the provid
         if not to_canonicalize:
             return
 
-        logger.info(f"GraphRAG: Canonicalizing descriptions for {len(to_canonicalize)} entities...")
+        logger.info(
+            f"GraphRAG: Canonicalizing descriptions for {len(to_canonicalize)} entities..."
+        )
 
         def _synthesize(args):
             entity_key, descs = args
@@ -6165,9 +6178,9 @@ Your primary goal is to help the user by answering questions based on the provid
                     content_sig = _hl.md5(
                         summary_text.encode("utf-8", errors="replace")
                     ).hexdigest()[:8]
-                    uid = _hl.md5(f"{source}|raptor|L{lvl}|{i}|{content_sig}".encode()).hexdigest()[
-                        :12
-                    ]
+                    uid = _hl.md5(
+                        f"{source}|raptor|L{lvl}|{i}|{content_sig}".encode()
+                    ).hexdigest()[:12]
                     children_ids = [c["id"] for c in window]
                     node = {
                         "id": f"raptor_{uid}",
@@ -6864,7 +6877,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         for query_entity in query_entities:
             # Support both new dict-node format and legacy list format
-            q_name = query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
+            q_name = (
+                query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
+            )
             if not q_name:
                 continue
             for eid, node in self._entity_graph.items():
@@ -7485,7 +7500,9 @@ Your primary goal is to help the user by answering questions based on the provid
                     )
                 chunks_to_process = _grag_ok_list
 
-            logger.info(f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks...")
+            logger.info(
+                f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks..."
+            )
 
             def _proc(doc):
                 return doc["id"], self._extract_entities(doc["text"])
@@ -7559,7 +7576,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 doc = doc_by_id.get(doc_id)
                 if doc is not None and entities and doc.get("metadata") is not None:
                     doc["metadata"]["entity_ids"] = [
-                        e["name"].lower() for e in entities if isinstance(e, dict) and e.get("name")
+                        e["name"].lower()
+                        for e in entities
+                        if isinstance(e, dict) and e.get("name")
                     ]
                 # GAP 9: Update text_unit_entity_map
                 self._text_unit_entity_map[doc_id] = [
@@ -8283,7 +8302,9 @@ Your primary goal is to help the user by answering questions based on the provid
             else:
                 from axon.retrievers import weighted_score_fusion
 
-                results = weighted_score_fusion(vector_results, bm25_results, weight=_fusion_weight)
+                results = weighted_score_fusion(
+                    vector_results, bm25_results, weight=_fusion_weight
+                )
         else:
             results = vector_results
 
@@ -9167,7 +9188,9 @@ def main():
                     else getattr(chunk, "status", "")
                 )
                 total = (
-                    chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, "total", 0)
+                    chunk.get("total", 0)
+                    if isinstance(chunk, dict)
+                    else getattr(chunk, "total", 0)
                 )
                 completed = (
                     chunk.get("completed", 0)
@@ -9949,7 +9972,9 @@ def _show_context(
             f"   ({ctx_size:,} token context window)"
         )
     )
-    lines.append(row(f"Embed  ·  {brain.config.embedding_provider}/{brain.config.embedding_model}"))
+    lines.append(
+        row(f"Embed  ·  {brain.config.embedding_provider}/{brain.config.embedding_model}")
+    )
     lines.append(BLANK)
 
     # ── Token usage ───────────────────────────────────────────────────────────
@@ -11028,6 +11053,37 @@ def _interactive_repl(
                         "  Sub-projects use nested subs/ directories (max depth: 3).\n"
                         "  Switching to a parent project shows merged data across all sub-projects.\n"
                         "  Use /ingest after switching to add documents to the current project.",
+                        "share": "  /share list                              list all issued and received shares\n"
+                        "  /share generate <project> <grantee>      generate a read-only share key\n"
+                        "  /share generate <project> <grantee> --write  generate a read-write share key\n"
+                        "  /share redeem <share_string>              mount a shared project (Linux only)\n"
+                        "  /share revoke <key_id>                   revoke a previously issued share\n"
+                        "\n"
+                        "  Requires AxonStore mode — run /store init first.\n"
+                        "  Share strings are cryptographic HMAC tokens; send them out-of-band.\n"
+                        "  Mounted shares appear under ShareMount/ in your projects list.",
+                        "store": "  /store whoami                  show AxonStore identity and active project\n"
+                        "  /store init <base_path>        initialise multi-user AxonStore at a path\n"
+                        "\n"
+                        "  Example: /store init ~/axon_data\n"
+                        "  Creates: <base_path>/AxonStore/<username>/{default,projects,mounts,.shares}/\n"
+                        "  Config is updated and persisted to ~/.config/axon/config.yaml.",
+                        "graph": "  /graph status                  show entity count, edges, community summaries\n"
+                        "  /graph finalize                trigger community detection rebuild\n"
+                        "  /graph viz [path]              export graph as HTML (opens in browser)\n"
+                        "\n"
+                        "  GraphRAG must be enabled: /rag graph-rag\n"
+                        "  Finalize is useful after batch ingest with community summarisation deferred.",
+                        "refresh": "  /refresh                       re-ingest files whose content has changed\n"
+                        "\n"
+                        "  Computes current content hash for each tracked file and compares\n"
+                        "  to the stored hash from the last ingest. Only changed files are re-ingested.\n"
+                        "  Use /stale to preview which files are old before refreshing.",
+                        "stale": "  /stale                         list documents older than 7 days\n"
+                        "  /stale <days>                  list documents older than N days\n"
+                        "\n"
+                        "  Reports age based on the last ingest timestamp for each source.\n"
+                        "  Use /refresh to re-ingest any changed files.",
                     }
                     key = arg.lstrip("/")
                     if key in _detail:
@@ -11042,6 +11098,7 @@ def _interactive_repl(
                         "  /context        show current conversation context size\n"
                         "  /discuss        toggle discussion fallback (general knowledge)\n"
                         "  /embed [model]  show or switch embedding model\n"
+                        "  /graph [sub]    GraphRAG status, finalize communities, or viz export\n"
                         "  /help [cmd]     show this help or details for a command\n"
                         "  /ingest <path>  ingest a file, directory, or glob\n"
                         "  /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
@@ -11052,15 +11109,19 @@ def _interactive_repl(
                         "  /pull <name>    pull an Ollama model\n"
                         "  /quit           exit Axon\n"
                         "  /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
+                        "  /refresh        re-ingest documents whose content has changed\n"
                         "  /resume <id>    load a saved session\n"
                         "  /retry          retry the last query\n"
                         "  /search         toggle Brave web search fallback\n"
                         "  /sessions       list recent saved sessions\n"
+                        "  /share [sub]    share projects (generate, redeem, revoke, list)\n"
+                        "  /stale [days]   list documents not refreshed in N days (default: 7)\n"
+                        "  /store [sub]    AxonStore multi-user mode (init, whoami)\n"
                         "\n"
                         "  Shell:   !<cmd>  run a shell command\n"
                         "  Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
                         "\n"
-                        "  /help <cmd>  for details  ·  e.g.  /help rag   /help llm   /help project\n"
+                        "  /help <cmd>  for details  ·  e.g.  /help rag   /help share   /help project\n"
                         "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
                     )
 
@@ -11657,6 +11718,331 @@ def _interactive_repl(
                     print("  /keys set <provider>  to set a key interactively")
                     print("  /help keys            for provider URLs and usage\n")
 
+            elif cmd == "/share":
+                # ── /share — project sharing lifecycle ──────────────────────────
+                from axon import shares as _shares_mod
+
+                sub_parts = arg.split(maxsplit=1)
+                sub = sub_parts[0].lower() if sub_parts else ""
+                sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
+
+                if not brain.config.axon_store_mode:
+                    print("  AxonStore mode is not active. Run /store init <path> first.")
+                elif not sub or sub == "list":
+                    user_dir = Path(brain.config.projects_root)
+                    _shares_mod.validate_received_shares(user_dir)
+                    data = _shares_mod.list_shares(user_dir)
+                    sharing = data.get("sharing", [])
+                    shared = data.get("shared", [])
+                    print("\n  Shares — issued by me:")
+                    if sharing:
+                        for s in sharing:
+                            tag = " [revoked]" if s.get("revoked") else ""
+                            acc = "rw" if s.get("write_access") else "ro"
+                            print(f"    {s['project']} → {s['grantee']}  [{acc}]{tag}")
+                    else:
+                        print("    (none)")
+                    print("\n  Shares — received:")
+                    if shared:
+                        for s in shared:
+                            acc = "rw" if s.get("write_access") else "ro"
+                            print(
+                                f"    {s['owner']}/{s['project']} mounted as {s['mount']}  [{acc}]"
+                            )
+                    else:
+                        print("    (none)")
+                    print()
+
+                elif sub == "generate":
+                    # Usage: /share generate <project> <grantee> [--write]
+                    parts = sub_arg.split()
+                    if len(parts) < 2:
+                        print("  Usage: /share generate <project> <grantee> [--write]")
+                    else:
+                        proj = parts[0]
+                        grantee = parts[1]
+                        write_access = "--write" in parts
+                        user_dir = Path(brain.config.projects_root)
+                        proj_dir = user_dir / proj
+                        if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
+                            print(
+                                f"  Project '{proj}' not found. Use /project list to see projects."
+                            )
+                        else:
+                            try:
+                                result = _shares_mod.generate_share_key(
+                                    owner_user_dir=user_dir,
+                                    project=proj,
+                                    grantee=grantee,
+                                    write_access=write_access,
+                                )
+                                print(f"\n  Share key generated for project '{proj}'")
+                                print(f"  Grantee:      {grantee}")
+                                print(
+                                    f"  Access:       {'read-write' if write_access else 'read-only'}"
+                                )
+                                print(f"  Key ID:       {result['key_id']}")
+                                print(f"\n  Share string (send this to {grantee}):")
+                                print(f"\n    {result['share_string']}\n")
+                                print(f"  Revoke with:  /share revoke {result['key_id']}\n")
+                            except Exception as e:
+                                print(f"  Share generation failed: {e}")
+
+                elif sub == "redeem":
+                    # Usage: /share redeem <share_string>
+                    if not sub_arg:
+                        print("  Usage: /share redeem <share_string>")
+                    else:
+                        user_dir = Path(brain.config.projects_root)
+                        try:
+                            result = _shares_mod.redeem_share_key(
+                                grantee_user_dir=user_dir,
+                                share_string=sub_arg.strip(),
+                            )
+                            print("\n  Share redeemed!")
+                            print(f"  Project '{result['project']}' from {result['owner']}")
+                            print(
+                                f"  Mounted at:  {result.get('mount', 'ShareMount/' + result['project'])}"
+                            )
+                            print(
+                                f"  Access:      {'read-write' if result.get('write_access') else 'read-only'}\n"
+                            )
+                        except (ValueError, NotImplementedError) as e:
+                            print(f"  Redeem failed: {e}")
+                        except Exception as e:
+                            print(f"  Redeem failed: {e}")
+
+                elif sub == "revoke":
+                    # Usage: /share revoke <key_id>
+                    if not sub_arg:
+                        print("  Usage: /share revoke <key_id>")
+                    else:
+                        user_dir = Path(brain.config.projects_root)
+                        try:
+                            result = _shares_mod.revoke_share_key(
+                                owner_user_dir=user_dir,
+                                key_id=sub_arg.strip(),
+                            )
+                            print(f"  Share '{result['key_id']}' revoked.")
+                        except ValueError as e:
+                            print(f"  Revoke failed: {e}")
+                        except Exception as e:
+                            print(f"  Revoke failed: {e}")
+
+                else:
+                    print(f"  Unknown sub-command '{sub}'.")
+                    print(
+                        "  Usage: /share list | generate <project> <grantee> [--write] | redeem <string> | revoke <key_id>"
+                    )
+
+            elif cmd == "/store":
+                # ── /store — AxonStore initialisation + identity ─────────────────
+                sub_parts = arg.split(maxsplit=1)
+                sub = sub_parts[0].lower() if sub_parts else ""
+                sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
+
+                if not sub or sub == "whoami":
+                    import getpass as _gp
+
+                    username = _gp.getuser()
+                    if brain.config.axon_store_mode:
+                        print("\n  AxonStore  active")
+                        print(f"  User:       {username}")
+                        print(f"  Store dir:  {brain.config.projects_root}")
+                        store_path = str(Path(brain.config.projects_root).parent.parent)
+                        print(f"  Base path:  {store_path}")
+                        print(f"  Project:    {brain._active_project}\n")
+                    else:
+                        print("\n  AxonStore  not active")
+                        print(f"  User:       {username}")
+                        print("  Run /store init <path> to enable multi-user mode.\n")
+
+                elif sub == "init":
+                    if not sub_arg:
+                        print("  Usage: /store init <base_path>")
+                        print("  Example: /store init ~/axon_data")
+                    else:
+                        import getpass as _gp
+
+                        from axon.projects import ensure_user_namespace
+
+                        base = Path(sub_arg.strip()).expanduser().resolve()
+                        username = _gp.getuser()
+                        store_root = base / "AxonStore"
+                        user_dir = store_root / username
+                        try:
+                            ensure_user_namespace(user_dir)
+                            brain.config.axon_store_base = str(base)
+                            brain.config.axon_store_mode = True
+                            brain.config.projects_root = str(user_dir)
+                            brain.config.vector_store_path = str(
+                                user_dir / "default" / "chroma_data"
+                            )
+                            brain.config.bm25_path = str(user_dir / "default" / "bm25_index")
+                            try:
+                                brain.config.save()
+                            except Exception as _save_exc:
+                                print(f"  Warning: could not save config: {_save_exc}")
+                            print(f"\n  AxonStore initialised at {store_root}")
+                            print(f"  Your directory:  {user_dir}")
+                            print(f"  Username:        {username}")
+                            print("  Use /share generate to share projects with others.\n")
+                        except Exception as e:
+                            print(f"  Store init failed: {e}")
+
+                else:
+                    print(f"  Unknown sub-command '{sub}'.")
+                    print("  Usage: /store whoami | /store init <base_path>")
+
+            elif cmd == "/refresh":
+                # ── /refresh — re-ingest changed documents ───────────────────────
+                import hashlib as _hl_r
+
+                from axon.loaders import DirectoryLoader as _DL
+
+                versions = brain.get_doc_versions()
+                if not versions:
+                    print("  No tracked documents. Use /ingest to add documents.")
+                else:
+                    _dl = _DL()
+                    reingested, skipped, missing, errors = [], [], [], []
+                    for source_path, record in versions.items():
+                        if not os.path.exists(source_path):
+                            missing.append(source_path)
+                            continue
+                        suffix = os.path.splitext(source_path)[1].lower()
+                        loader_inst = _dl.loaders.get(suffix)
+                        if loader_inst is None:
+                            errors.append(f"{source_path}: no loader for extension '{suffix}'")
+                            continue
+                        try:
+                            docs = loader_inst.load(source_path)
+                            if not docs:
+                                errors.append(f"{source_path}: loader returned no documents")
+                                continue
+                            combined = "".join(d.get("text", "") for d in docs)
+                            current_hash = _hl_r.md5(
+                                combined.encode("utf-8", errors="replace")
+                            ).hexdigest()
+                            if current_hash == record.get("content_hash"):
+                                skipped.append(source_path)
+                            else:
+                                brain.ingest(docs)
+                                reingested.append(source_path)
+                        except Exception as _e:
+                            errors.append(f"{source_path}: {_e}")
+                    print("\n  Refresh complete:")
+                    print(f"    Re-ingested: {len(reingested)}")
+                    print(f"    Unchanged:   {len(skipped)}")
+                    print(f"    Missing:     {len(missing)}")
+                    if errors:
+                        print(f"    Errors:      {len(errors)}")
+                        for err in errors:
+                            print(f"      {err}")
+                    if reingested:
+                        print("  Updated:")
+                        for s in reingested:
+                            print(f"    {s}")
+                    print()
+
+            elif cmd == "/stale":
+                # ── /stale [days] — list documents not refreshed in N days ───────
+                from datetime import datetime, timezone
+
+                try:
+                    threshold_days = int(arg) if arg.strip() else 7
+                except ValueError:
+                    print("  Usage: /stale [days]  (default: 7)")
+                    threshold_days = -1
+
+                if threshold_days >= 0:
+                    cutoff = datetime.now(timezone.utc).timestamp() - threshold_days * 86400
+                    versions = brain.get_doc_versions()
+                    stale = []
+                    for src, record in versions.items():
+                        ts_str = record.get("ingested_at") or record.get("last_ingested_at")
+                        if not ts_str:
+                            continue
+                        try:
+                            ts = (
+                                datetime.fromisoformat(ts_str.rstrip("Z"))
+                                .replace(tzinfo=timezone.utc)
+                                .timestamp()
+                            )
+                        except ValueError:
+                            continue
+                        if ts < cutoff:
+                            age_days = round(
+                                (datetime.now(timezone.utc).timestamp() - ts) / 86400, 1
+                            )
+                            stale.append((age_days, src, ts_str))
+                    stale.sort(reverse=True)
+                    if stale:
+                        print(f"\n  Stale documents (>{threshold_days} days):")
+                        for age, src, _ts in stale:
+                            print(f"    {age:6.1f}d  {src}")
+                        print(f"\n  Total: {len(stale)}")
+                        print("  Run /refresh to re-ingest changed documents.\n")
+                    else:
+                        print(f"  All documents are fresh (threshold: {threshold_days} days).")
+
+            elif cmd == "/graph":
+                # ── /graph — GraphRAG status + finalize ──────────────────────────
+                sub_parts = arg.split(maxsplit=1)
+                sub = sub_parts[0].lower() if sub_parts else ""
+
+                if not sub or sub == "status":
+                    in_progress = getattr(brain, "_community_build_in_progress", False)
+                    summaries = getattr(brain, "_community_summaries", {}) or {}
+                    entities = getattr(brain, "_entity_graph", {})
+                    relations = getattr(brain, "_relation_graph", {})
+                    relation_edges = sum(len(v) for v in relations.values())
+                    print("\n  GraphRAG status:")
+                    print(f"    Entities:              {len(entities)}")
+                    print(f"    Relation edges:        {relation_edges}")
+                    print(f"    Community summaries:   {len(summaries)}")
+                    print(f"    Community build:       {'in progress' if in_progress else 'idle'}")
+                    print(f"    graph_rag enabled:     {brain.config.graph_rag}")
+                    print()
+
+                elif sub == "finalize":
+                    if not brain.config.graph_rag:
+                        print("  GraphRAG is disabled. Enable with /rag graph-rag first.")
+                    else:
+                        print("  Finalizing graph communities… (this may take a moment)")
+                        try:
+                            brain.finalize_graph()
+                            summaries = getattr(brain, "_community_summaries", {}) or {}
+                            print(f"  Done. {len(summaries)} community summaries generated.\n")
+                        except Exception as e:
+                            print(f"  Finalize failed: {e}")
+
+                elif sub == "viz":
+                    # Reuse /graph-viz logic
+                    sub_parts2 = arg.split(maxsplit=1)
+                    out_path = sub_parts2[1] if len(sub_parts2) > 1 else ""
+                    try:
+                        html = brain.build_graph_visualization()
+                        out = (
+                            Path(out_path).expanduser()
+                            if out_path
+                            else Path.home() / "axon_graph.html"
+                        )
+                        out.write_text(html, encoding="utf-8")
+                        print(f"  Graph saved to: {out}")
+                        import subprocess as _sp_g
+
+                        if os.name == "nt":
+                            _sp_g.Popen(["start", str(out)], shell=True)
+                        elif sys.platform == "darwin":
+                            _sp_g.Popen(["open", str(out)])
+                    except Exception as e:
+                        print(f"  Graph visualisation failed: {e}")
+
+                else:
+                    print(f"  Unknown sub-command '{sub}'.")
+                    print("  Usage: /graph status | /graph finalize | /graph viz [path]")
+
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")
 
@@ -11721,7 +12107,9 @@ def _interactive_repl(
                         transient=True,
                         refresh_per_second=10,
                     ) as _spin_live:
-                        _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
+                        _st = threading.Thread(
+                            target=_spin_update, args=(_spin_live,), daemon=True
+                        )
                         _st.start()
                         for chunk in token_gen:
                             if isinstance(chunk, dict):

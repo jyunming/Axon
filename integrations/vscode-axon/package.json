@@ -460,6 +460,22 @@
         "title": "Axon: List Active Shares"
       },
       {
+        "command": "axon.refreshIngest",
+        "title": "Axon: Refresh — Re-ingest Changed Files"
+      },
+      {
+        "command": "axon.listStaleDocs",
+        "title": "Axon: List Stale Documents…"
+      },
+      {
+        "command": "axon.clearKnowledgeBase",
+        "title": "Axon: Clear Knowledge Base"
+      },
+      {
+        "command": "axon.showGraphStatus",
+        "title": "Axon: Show GraphRAG Status"
+      },
+      {
         "command": "axon.showGraphForQuery",
         "title": "Axon: Show Graph for Query…"
       },
