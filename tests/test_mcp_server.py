@@ -35,6 +35,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "redeem_share",
     "list_shares",
     "init_store",
+    # Operator tooling (Phase 5)
+    "get_active_leases",
 }
 
 

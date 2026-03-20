@@ -32,6 +32,7 @@ namespace under {axon_store_base}/AxonStore/{username}/ containing:
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -39,6 +40,8 @@ import uuid
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_projects_root() -> Path:
@@ -427,8 +430,15 @@ def set_maintenance_state(name: str, state: str) -> None:
         data = json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise ValueError(f"Could not read meta.json for '{name}': {exc}") from exc
+    old_state = data.get("maintenance_state", "normal")
     data["maintenance_state"] = state
     meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    logger.info(
+        "audit: project '%s' maintenance_state %s → %s",
+        name,
+        old_state,
+        state,
+    )
 
 
 def list_projects() -> list[dict]:

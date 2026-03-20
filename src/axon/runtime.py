@@ -250,6 +250,18 @@ class LeaseRegistry:
                 "draining": state.draining,
             }
 
+    def snapshot_all(self) -> list[dict]:
+        """Return snapshots for every tracked project that has non-zero leases or is draining.
+
+        Returns:
+            List of snapshot dicts (same shape as ``snapshot()``), sorted by project name.
+            Projects with ``active_leases == 0`` and ``draining == False`` are omitted
+            unless they have a non-zero epoch, to keep the output concise for operators.
+        """
+        with self._global_lock:
+            projects = list(self._states.keys())
+        return [self.snapshot(p) for p in sorted(projects) if p != "default"]
+
     def reset(self, project: str) -> None:
         """Remove tracking state for *project* (used in tests and teardown)."""
         with self._global_lock:

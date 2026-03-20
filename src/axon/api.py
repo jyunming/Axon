@@ -1572,6 +1572,22 @@ async def get_project_maintenance(name: str):
     }
 
 
+@app.get("/registry/leases")
+async def get_registry_leases():
+    """Return active write-lease counts for all tracked projects.
+
+    Operator endpoint — shows which projects currently have in-flight write
+    operations, their drain state, and their epoch.  Projects with no tracked
+    state are not listed.  Use this to determine when it is safe to transition
+    a project to 'readonly' or 'offline'.
+    """
+    from axon.runtime import get_registry as _get_registry
+
+    reg = _get_registry()
+    snapshots = reg.snapshot_all()
+    return {"leases": snapshots, "total_projects_tracked": len(snapshots)}
+
+
 def main():
     """Main entry point for axon-api command."""
     host = os.getenv("AXON_HOST", "0.0.0.0")

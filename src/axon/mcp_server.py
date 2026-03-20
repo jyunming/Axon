@@ -402,6 +402,18 @@ async def init_store(base_path: str) -> Any:
     return await _post("/store/init", {"base_path": base_path})
 
 
+@mcp.tool()
+async def get_active_leases() -> Any:
+    """Return active write-lease counts for all projects currently tracked by the server.
+
+    Operator tool — shows which projects have in-flight write operations,
+    whether they are draining, and their epoch counter.  Use this to check
+    whether it is safe to put a project into 'readonly' or 'offline' maintenance
+    state (wait for active_leases to reach 0 first).
+    """
+    return await _get("/registry/leases")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
