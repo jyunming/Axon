@@ -755,17 +755,18 @@ class TestMcpToolCoverage:
                 mock_post.return_value = _make_mock_resp(
                     {"share_string": "AXON.abcd", "key_id": "k1"}
                 )
-                result = await share_project(project="myproj", grantee="bob", write_access=False)
+                result = await share_project(project="myproj", grantee="bob")
                 args, kwargs = mock_post.call_args
                 assert args[0].endswith("/share/generate")
                 assert kwargs["json"]["project"] == "myproj"
                 assert kwargs["json"]["grantee"] == "bob"
-                assert kwargs["json"]["write_access"] is False
+                assert kwargs["json"]["write_access"] is False  # always read-only
                 assert result["share_string"] == "AXON.abcd"
 
         asyncio.run(_run())
 
     def test_share_project_write_access(self):
+        """write_access is always False — the flag is fully removed from the tool."""
         import asyncio
         from unittest.mock import AsyncMock, patch
 
@@ -776,9 +777,9 @@ class TestMcpToolCoverage:
                 mock_post.return_value = _make_mock_resp(
                     {"share_string": "AXON.xyz", "key_id": "k2"}
                 )
-                await share_project(project="p", grantee="carol", write_access=True)
+                await share_project(project="p", grantee="carol")
                 _, kwargs = mock_post.call_args
-                assert kwargs["json"]["write_access"] is True
+                assert kwargs["json"]["write_access"] is False  # always read-only
 
         asyncio.run(_run())
 

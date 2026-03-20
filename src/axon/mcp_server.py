@@ -340,22 +340,21 @@ async def get_session(session_id: str) -> Any:
 async def share_project(
     project: str,
     grantee: str,
-    write_access: bool = False,
 ) -> Any:
     """Generate a share key allowing another user to access one of your projects.
 
     Requires AxonStore mode to be active. The returned share_string should be
     transmitted to the grantee out-of-band (e.g. Slack, email). The grantee
     then calls redeem_share to mount the project in their ShareMount/.
+    All shares are read-only; write access is not supported.
 
     Args:
         project: Name of the project to share (must exist).
         grantee: OS username of the recipient.
-        write_access: If True, grantee may ingest into the shared project. Default: False.
     """
     return await _post(
         "/share/generate",
-        {"project": project, "grantee": grantee, "write_access": write_access},
+        {"project": project, "grantee": grantee, "write_access": False},
     )
 
 

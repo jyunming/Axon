@@ -9,10 +9,21 @@ import { spawn, ChildProcess } from 'child_process';
 let serverProcess: ChildProcess | undefined;
 let externalServerPid: number | undefined; // PID of a server we didn't spawn but own on deactivate
 let outputChannel: vscode.OutputChannel;
+const SERVER_START_TIMEOUT_MS = 120_000; // Keep >= 1 min; startup may include model warmup.
+const GRAPH_ANSWER_TIMEOUT_MS = 60_000; // Query synthesis can be slower than regular API calls.
 
 // ---------------------------------------------------------------------------
 // Graph Panel
 // ---------------------------------------------------------------------------
+
+interface GraphViewPayload {
+  query: string;
+  answer: string;
+  sources: Array<{ id: string; source?: string; start_line?: number; text?: string; metadata?: Record<string, any>; content?: string }>;
+  knowledgeGraph: { nodes: any[]; links: any[] };
+  codeGraph: { nodes: any[]; links: any[] };
+  meta: { created_at: string; query_status: number; graph_source: string };
+}
 
 class AxonGraphPanel {
   static currentPanel: AxonGraphPanel | undefined;
@@ -51,7 +62,7 @@ class AxonGraphPanel {
     this._panel.webview.html = this._loadingHtml('Axon Graph');
   }
 
-  update(data: { query: string; answer: string; sources: any[]; knowledgeGraph: any; codeGraph: any }) {
+  update(data: GraphViewPayload) {
     this._panel.title = `Axon: ${data.query.slice(0, 40)}`;
     this._panel.webview.html = this._buildHtml(data);
   }
@@ -75,7 +86,7 @@ class AxonGraphPanel {
 
   private _loadingHtml(query: string): string {
     const csp = `default-src 'none'; style-src 'unsafe-inline';`;
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body style="background:#1e1e1e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body style="background:var(--vscode-editor-background,#1e1e1e);color:var(--vscode-editor-foreground,#cccccc);font-family:var(--vscode-font-family,sans-serif);display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
       <div style="text-align:center">
         <div style="font-size:2em;margin-bottom:1em">⟳</div>
         <div>Loading graph for: <em>${escapeHtml(query)}</em></div>
@@ -83,7 +94,7 @@ class AxonGraphPanel {
     </body></html>`;
   }
 
-  private _buildHtml(data: { query: string; answer: string; sources: any[]; knowledgeGraph: any; codeGraph: any }): string {
+  private _buildHtml(data: GraphViewPayload): string {
     // Serialize data for the webview — injected via <script type="application/json">,
     // which the browser treats as opaque data (never executed), so it is NOT subject
     // to script-src CSP. This eliminates the need for 'unsafe-inline'.
@@ -106,28 +117,53 @@ class AxonGraphPanel {
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>
+  :root {
+    --ax-bg: var(--vscode-editor-background, #1e1e1e);
+    --ax-fg: var(--vscode-editor-foreground, #d4d4d4);
+    --ax-muted: var(--vscode-descriptionForeground, #888888);
+    --ax-border: var(--vscode-panel-border, #333333);
+    --ax-header-bg: var(--vscode-editorGroupHeader-tabsBackground, #252526);
+    --ax-hover-bg: var(--vscode-list-hoverBackground, #2a2d2e);
+    --ax-accent: var(--vscode-focusBorder, #569cd6);
+    --ax-link: var(--vscode-textLink-foreground, #4ec9b0);
+    --ax-query: var(--vscode-textPreformat-foreground, #9cdcfe);
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #1e1e1e; color: #d4d4d4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100vh; display: flex; overflow: hidden; }
-  #left { width: 35%; min-width: 260px; display: flex; flex-direction: column; border-right: 1px solid #333; overflow: hidden; }
+  body {
+    background: var(--ax-bg);
+    color: var(--ax-fg);
+    font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+    font-size: var(--vscode-font-size, 13px);
+    font-weight: var(--vscode-font-weight, 400);
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+  }
+  #left { width: 35%; min-width: 260px; display: flex; flex-direction: column; border-right: 1px solid var(--ax-border); overflow: hidden; }
   #right { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-  #tab-bar { display: flex; border-bottom: 1px solid #333; background: #252526; flex-shrink: 0; }
-  .tab { padding: 6px 16px; font-size: 0.78em; cursor: pointer; border-bottom: 2px solid transparent; color: #888; user-select: none; }
-  .tab:hover { color: #d4d4d4; }
-  .tab-active { color: #d4d4d4; border-bottom-color: #569cd6; }
+  #tab-bar { display: flex; border-bottom: 1px solid var(--ax-border); background: var(--ax-header-bg); flex-shrink: 0; }
+  .tab { padding: 6px 16px; font-size: 0.78em; cursor: pointer; border-bottom: 2px solid transparent; color: var(--ax-muted); user-select: none; }
+  .tab:hover { color: var(--ax-fg); background: var(--ax-hover-bg); }
+  .tab-active { color: var(--ax-fg); border-bottom-color: var(--ax-accent); }
   .tab-disabled { opacity: 0.38; cursor: not-allowed; }
   #graph-area { flex: 1; position: relative; overflow: hidden; }
   #graph-kg, #graph-cg { position: absolute; inset: 0; display: none; }
-  #graph-placeholder { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: #888; font-style: italic; padding: 24px; text-align: center; }
-  .graph-tooltip { position: absolute; display: none; background: #252526; color: #d4d4d4; padding: 6px 10px; border-radius: 4px; font-size: 0.78em; max-width: 260px; pointer-events: none; border: 1px solid #444; z-index: 10; word-break: break-word; }
-  #query-text { padding: 12px 16px; font-size: 0.85em; color: #9cdcfe; border-bottom: 1px solid #333; font-weight: 600; word-break: break-word; }
-  #answer-text { padding: 12px 16px; font-size: 0.82em; line-height: 1.5; overflow-y: auto; flex: 1; border-bottom: 1px solid #333; }
+  #graph-placeholder { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--ax-muted); font-style: italic; padding: 24px; text-align: center; }
+  #graph-placeholder code { color: var(--ax-query); }
+  .graph-tooltip { position: absolute; display: none; background: var(--ax-header-bg); color: var(--ax-fg); padding: 6px 10px; border-radius: 4px; font-size: 0.78em; max-width: 260px; pointer-events: none; border: 1px solid var(--ax-border); z-index: 10; word-break: break-word; }
+  #query-text { padding: 12px 16px; font-size: 0.85em; color: var(--ax-query); border-bottom: 1px solid var(--ax-border); font-weight: 600; word-break: break-word; }
+  #answer-text { padding: 12px 16px; font-size: 0.82em; line-height: 1.5; overflow-y: auto; flex: 1; border-bottom: 1px solid var(--ax-border); }
   #citations { overflow-y: auto; max-height: 200px; padding: 8px; }
-  #citations-heading { padding: 6px 16px; font-size: 0.75em; color: #888; text-transform: uppercase; letter-spacing: 0.05em; background: #252526; border-bottom: 1px solid #333; }
-  .citation { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #2a2a2a; font-size: 0.78em; }
-  .citation:hover { background: #2a2d2e; }
-  .cite-num { color: #569cd6; margin-right: 4px; }
-  .cite-src { color: #4ec9b0; font-weight: 500; }
-  .cite-text { color: #888; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #citations-heading { padding: 6px 16px; font-size: 0.75em; color: var(--ax-muted); text-transform: uppercase; letter-spacing: 0.05em; background: var(--ax-header-bg); border-bottom: 1px solid var(--ax-border); }
+  .citation { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--ax-border); font-size: 0.78em; }
+  .citation:hover { background: var(--ax-hover-bg); }
+  .cite-num { color: var(--ax-accent); margin-right: 4px; }
+  .cite-src { color: var(--ax-link); font-weight: 500; }
+  .cite-text { color: var(--ax-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.vscode-high-contrast #left,
+  body.vscode-high-contrast #tab-bar {
+    border-color: var(--vscode-contrastBorder, var(--ax-border));
+  }
 </style>
 </head>
 <body>
@@ -175,6 +211,24 @@ function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function saveGraphSnapshot(payload: GraphViewPayload): void {
+  try {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const queryHash = Buffer.from(payload.query).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+    const snapshotDir = path.join(os.homedir(), '.axon', 'cache', 'graphs', `${ts}_${queryHash}`);
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    fs.writeFileSync(path.join(snapshotDir, 'payload.json'), JSON.stringify(payload, null, 2));
+    fs.writeFileSync(path.join(snapshotDir, 'meta.json'), JSON.stringify({
+      timestamp: new Date().toISOString(),
+      query_hash: queryHash,
+      vscode_version: vscode.version,
+    }, null, 2));
+    outputChannel.appendLine(`[axon.showGraph] snapshot saved → ${snapshotDir}`);
+  } catch (err) {
+    outputChannel.appendLine(`[axon.showGraph] snapshot save failed: ${err}`);
+  }
+}
+
 async function showGraphForQuery(
   context: vscode.ExtensionContext,
   query: string
@@ -188,8 +242,8 @@ async function showGraphForQuery(
 
   try {
     const [querySettled, searchSettled, kgSettled, cgSettled] = await Promise.allSettled([
-      httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey),
-      httpPost(`${apiBase}/search/raw`, { query }, apiKey),
+      httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey, GRAPH_ANSWER_TIMEOUT_MS),
+      httpPost(`${apiBase}/search/raw`, { query }, apiKey, GRAPH_ANSWER_TIMEOUT_MS),
       httpGet(`${apiBase}/graph/data`, apiKey),
       httpGet(`${apiBase}/code-graph/data`, apiKey),
     ]);
@@ -246,13 +300,21 @@ async function showGraphForQuery(
       `[axon.showGraph] query="${query}" statuses query=${queryStatus} search=${searchStatus} kg=${kgStatus} cg=${cgStatus} nodes kg=${kgNodes} cg=${cgNodes}`
     );
 
-    panel.update({
+    const payload: GraphViewPayload = {
       query,
       answer: answerText,
       sources,
       knowledgeGraph,
       codeGraph,
-    });
+      meta: {
+        created_at: new Date().toISOString(),
+        query_status: queryStatus,
+        graph_source: kgNodes > 0 ? 'knowledge' : cgNodes > 0 ? 'code' : 'none',
+      },
+    };
+
+    panel.update(payload);
+    saveGraphSnapshot(payload);
 
     if (kgNodes > 0 || cgNodes > 0) {
       return 'opened';
@@ -298,7 +360,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Start the worker loop
     startCopilotLlmWorker(apiBase, apiKey);
     // Tell the backend to use the 'copilot' provider and PERSIST it
-    waitForHealth(apiBase, 120_000).then((running) => {
+    waitForHealth(apiBase, SERVER_START_TIMEOUT_MS).then((running) => {
       if (running) {
         httpPost(`${apiBase}/config/update`, { llm_provider: 'copilot', persist: true }, apiKey)
           .then(() => outputChannel.appendLine('Axon backend configured to use Copilot provider (persistent).'))
@@ -899,13 +961,13 @@ async function ensureServerRunning(apiBase: string, context: vscode.ExtensionCon
     serverProcess = undefined;
   });
 
-  const started = await waitForHealth(apiBase, 120_000); // 2 min — model loading takes time
+  const started = await waitForHealth(apiBase, SERVER_START_TIMEOUT_MS);
 
   if (started) {
     outputChannel.appendLine('Axon API server is ready.');
     vscode.window.showInformationMessage('Axon API server started successfully.');
   } else {
-    outputChannel.appendLine('Axon API server did not become ready within 30 seconds.');
+    outputChannel.appendLine(`Axon API server did not become ready within ${Math.round(SERVER_START_TIMEOUT_MS / 1000)} seconds.`);
     vscode.window.showWarningMessage('Axon API server failed to start. Check the Axon output panel.');
   }
 }
@@ -1195,7 +1257,7 @@ function normalizeGraphPayload(data: any): { nodes: any[]; links: any[] } {
   return { nodes: [], links: [] };
 }
 
-function httpGet(url: string, apiKey?: string): Promise<HttpResult> {
+function httpGet(url: string, apiKey?: string, timeoutMs: number = 5000): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const lib = parsed.protocol === 'https:' ? https : http;
@@ -1209,11 +1271,14 @@ function httpGet(url: string, apiKey?: string): Promise<HttpResult> {
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
     });
     req.on('error', reject);
-    req.setTimeout(5000, () => { req.destroy(); reject(new Error('Request timed out')); });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      reject(new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`));
+    });
   });
 }
 
-function httpPost(url: string, payload: unknown, apiKey?: string): Promise<HttpResult> {
+function httpPost(url: string, payload: unknown, apiKey?: string, timeoutMs: number = 20_000): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const lib = parsed.protocol === 'https:' ? https : http;
@@ -1234,7 +1299,10 @@ function httpPost(url: string, payload: unknown, apiKey?: string): Promise<HttpR
       },
     );
     req.on('error', reject);
-    req.setTimeout(20_000, () => { req.destroy(); reject(new Error('Request timed out')); });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      reject(new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`));
+    });
     req.write(body);
     req.end();
   });
@@ -1345,10 +1413,8 @@ async function shareProject(apiBase: string): Promise<void> {
   if (!project) { return; }
   const grantee = await vscode.window.showInputBox({ prompt: 'Grantee username (OS username on shared filesystem)', placeHolder: 'bob' });
   if (!grantee) { return; }
-  const writeChoice = await vscode.window.showQuickPick(['Read-only', 'Read + Write'], { placeHolder: 'Access level' });
-  const write_access = writeChoice === 'Read + Write';
   try {
-    const result = await httpPost(`${apiBase}/share/generate`, { project, grantee, write_access }, apiKey);
+    const result = await httpPost(`${apiBase}/share/generate`, { project, grantee, write_access: false }, apiKey);
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
       vscode.window.showErrorMessage(`Axon: Share generation failed — ${formatDetail(data, result.body)}`);
@@ -1399,7 +1465,7 @@ async function revokeShare(apiBase: string): Promise<void> {
     }
     const items = active.map((s: any) => ({
       label: `${s.project} → ${s.grantee}`,
-      description: `key: ${s.key_id} | ${s.write_access ? 'read+write' : 'read-only'}`,
+      description: `key: ${s.key_id} | read-only`,
       key_id: s.key_id,
     }));
     const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select share to revoke' });
@@ -1427,10 +1493,10 @@ async function listShares(apiBase: string): Promise<void> {
       return;
     }
     const sharing = (data.sharing || []).map((s: any) =>
-      `  • ${s.project} → ${s.grantee} [${s.write_access ? 'rw' : 'ro'}]${s.revoked ? ' (revoked)' : ''}`
+      `  • ${s.project} → ${s.grantee} [ro]${s.revoked ? ' (revoked)' : ''}`
     ).join('\n') || '  (none)';
     const shared = (data.shared || []).map((s: any) =>
-      `  • ${s.owner}/${s.project} mounted as ${s.mount} [${s.write_access ? 'rw' : 'ro'}]`
+      `  • ${s.owner}/${s.project} mounted as ${s.mount} [ro]`
     ).join('\n') || '  (none)';
     outputChannel.show();
     outputChannel.appendLine(`\n=== Axon Shares ===\nSharing with others:\n${sharing}\n\nShared with me:\n${shared}\n`);
@@ -1567,15 +1633,15 @@ class AxonShareProjectTool implements vscode.LanguageModelTool<any> {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
-    const { project, grantee, write_access = false } = options.input ?? {};
+    const { project, grantee } = options.input ?? {};
     try {
-      const result = await httpPost(`${apiBase}/share/generate`, { project, grantee, write_access }, apiKey);
+      const result = await httpPost(`${apiBase}/share/generate`, { project, grantee, write_access: false }, apiKey);
       const data = parseJsonSafe(result.body);
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Share generation failed: ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-        `Share key generated.\nProject: ${data.project}\nGrantee: ${data.grantee}\nAccess: ${data.write_access ? 'read+write' : 'read-only'}\nKey ID: ${data.key_id}\n\nShare string (send to ${data.grantee}):\n${data.share_string}`
+        `Share key generated.\nProject: ${data.project}\nGrantee: ${data.grantee}\nAccess: read-only\nKey ID: ${data.key_id}\n\nShare string (send to ${data.grantee}):\n${data.share_string}`
       )]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Share generation error: ${err}`)]);

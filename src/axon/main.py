@@ -2608,6 +2608,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self._base_bm25_path: str = os.path.abspath(self.config.bm25_path)
         self._active_project: str = "default"
         self._read_only_scope: bool = False
+        self._mounted_share: bool = False
 
         try:
             from axon.retrievers import BM25Retriever
@@ -2861,9 +2862,18 @@ Your primary goal is to help the user by answering questions based on the provid
             # Include the default project
             project_paths.insert(0, (self._base_vector_store_path, self._base_bm25_path))
 
-        # @mounts — graceful empty case
+        # @mounts — ShareMount symlinks
         if scope == "@mounts":
-            _mount_dirs()  # no-op placeholder
+            sharemount_dir = PROJECTS_ROOT / "ShareMount"
+            if sharemount_dir.exists():
+                for entry in sorted(sharemount_dir.iterdir()):
+                    if entry.is_dir() and (entry / "meta.json").exists():
+                        project_paths.append(
+                            (
+                                str(entry / "chroma_data"),
+                                str(entry / "bm25_index"),
+                            )
+                        )
 
         if not project_paths:
             raise ValueError(f"No authoritative projects found under {scope} scope.")
@@ -2923,6 +2933,36 @@ Your primary goal is to help the user by answering questions based on the provid
             len(all_vs),
         )
 
+    def _is_mounted_share(self) -> bool:
+        """Return True if the active project is a received share mount (always read-only)."""
+        return getattr(self, "_mounted_share", False)
+
+    def _assert_write_allowed(self, operation: str = "write") -> None:
+        """Raise PermissionError if current project is read-only (scope, mounted share, or maintenance state)."""
+        if getattr(self, "_read_only_scope", False):
+            raise PermissionError(
+                f"Cannot {operation}: active scope is read-only (@projects / @mounts / @store)."
+            )
+        if self._is_mounted_share():
+            raise PermissionError(
+                f"Cannot {operation} on mounted share '{self._active_project}'. "
+                "Mounted projects are always read-only. Use your own project for writes."
+            )
+        if self._active_project != "default":
+            try:
+                from axon.projects import get_maintenance_state
+
+                _state = get_maintenance_state(self._active_project)
+                if _state in ("readonly", "offline", "draining"):
+                    raise PermissionError(
+                        f"Cannot {operation}: project '{self._active_project}' is in "
+                        f"'{_state}' maintenance state."
+                    )
+            except PermissionError:
+                raise
+            except Exception:
+                pass
+
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
 
@@ -2941,6 +2981,8 @@ Your primary goal is to help the user by answering questions based on the provid
         Raises:
             ValueError: If the project does not exist (use /project new first).
         """
+        _prev_project = self._active_project  # stash for epoch bump below
+
         from axon.projects import (
             list_descendants,
             project_bm25_path,
@@ -3199,8 +3241,15 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._active_project = name
         self._read_only_scope = False
+        self._mounted_share = name != "default" and "ShareMount" in name.split("/")
         set_active_project(name)
         logger.info(f"Switched to project '{name}'")
+
+        # Phase 3: bump epoch on the old project to fence any stale in-flight writers.
+        if _prev_project != "default" and not _prev_project.startswith("@"):
+            from axon.runtime import get_registry as _get_registry
+
+            _get_registry().bump_epoch(_prev_project)
 
     def _load_hash_store(self) -> set:
         """Load persisted content hashes for ingest deduplication."""
@@ -4004,6 +4053,7 @@ Your primary goal is to help the user by answering questions based on the provid
         Safe to call when ``ingest_batch_mode=False`` (flush is a no-op; community
         rebuild still runs as normal).
         """
+        self._assert_write_allowed("finalize_ingest")
         if getattr(self.config, "ingest_batch_mode", False):
             if self._own_bm25:
                 self._own_bm25.flush()
@@ -4024,6 +4074,7 @@ Your primary goal is to help the user by answering questions based on the provid
         Use after batch ingest with ``graph_rag_community_defer=True`` to run
         community detection once when all documents have been ingested.
         """
+        self._assert_write_allowed("finalize_graph")
         if self._community_graph_dirty:
             self._community_graph_dirty = False
             self._rebuild_communities()
@@ -4048,10 +4099,16 @@ Your primary goal is to help the user by answering questions based on the provid
             {
                 "nodes": [{"id", "name", "label", "type", "color", "val",
                            "chunk_count", "degree", "community", "description",
-                           "tooltip"}, ...],
+                           "tooltip",
+                           "evidence": [{"chunk_id", "source", "start_line", "excerpt"}, ...]
+                           }, ...],
                 "links": [{"source", "target", "label", "relation",
                            "description", "value", "width"}, ...]
             }
+
+        ``evidence`` is populated from the vector store for each chunk ID
+        referenced by the node.  It may be empty if the store is unavailable or
+        no chunks have been ingested yet.
 
         This method separates graph extraction from rendering.  Feed the result
         to :meth:`export_graph_html` or any other renderer.
@@ -4085,6 +4142,21 @@ Your primary goal is to help the user by answering questions based on the provid
                 f"</div>"
             )
 
+        # Build a chunk_id → metadata lookup for evidence population.
+        all_chunk_ids: list[str] = []
+        for _node in self._entity_graph.values():
+            if isinstance(_node, dict):
+                all_chunk_ids.extend(_node.get("chunk_ids", []))
+        chunk_meta_lookup: dict[str, dict] = {}
+        if all_chunk_ids and hasattr(self, "vector_store"):
+            try:
+                for _doc in self.vector_store.get_by_ids(list(dict.fromkeys(all_chunk_ids))):
+                    _cid = _doc.get("id") or _doc.get("chunk_id", "")
+                    if _cid:
+                        chunk_meta_lookup[_cid] = _doc.get("metadata", _doc)
+            except Exception:
+                pass
+
         nodes: list[dict] = []
         node_ids: set[str] = set()
         for name, node in self._entity_graph.items():
@@ -4092,6 +4164,16 @@ Your primary goal is to help the user by answering questions based on the provid
                 continue
             community = entity_to_community.get(name)
             chunk_count = len(node.get("chunk_ids", []))
+            evidence = [
+                {
+                    "chunk_id": cid,
+                    "source": meta.get("source", ""),
+                    "start_line": meta.get("start_line"),
+                    "excerpt": (meta.get("text") or meta.get("page_content") or "")[:200],
+                }
+                for cid in node.get("chunk_ids", [])
+                if (meta := chunk_meta_lookup.get(cid)) is not None
+            ]
             nodes.append(
                 {
                     "id": name,
@@ -4105,6 +4187,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     "community": community,
                     "description": (node.get("description") or "")[:220],
                     "tooltip": _tooltip(name, node, community),
+                    "evidence": evidence,
                 }
             )
             node_ids.add(name)
@@ -7281,12 +7364,14 @@ Your primary goal is to help the user by answering questions based on the provid
         if not documents:
             return
 
-        # Phase 6: block ingest on read-only merged scopes
-        if getattr(self, "_read_only_scope", False):
-            raise ValueError(
-                "Cannot ingest into a read-only scope (@projects / @mounts / @store). "
-                "Switch to a specific project first."
-            )
+        # Phase 6: block ingest on read-only scopes and mounted shares
+        self._assert_write_allowed("ingest")
+
+        # Phase 3: acquire a write lease so drain-mode can track in-flight writes.
+        # _WriteLease.__del__ guarantees release even if an exception is raised.
+        from axon.runtime import get_registry as _get_registry
+
+        _ingest_lease = _get_registry().acquire(self._active_project)
 
         # Guard: raise immediately if the embedding model has changed since this
         # collection was created — mixing models silently corrupts retrieval.
@@ -7913,6 +7998,9 @@ Your primary goal is to help the user by answering questions based on the provid
                     "This may indicate basename-derived IDs colliding. Re-ingest with current version to fix.",
                     _collision_count,
                 )
+
+        # Phase 3: explicitly release lease (fallback: _WriteLease.__del__ handles it)
+        _ingest_lease.close()
 
     def _decompose_query(self, query: str) -> list[str]:
         """Break a complex query into atomic sub-questions for independent retrieval.
@@ -8829,7 +8917,9 @@ def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
         desc = f"  {p.get('description', '')}" if p.get("description") else ""
         merged = "  [merged]" if p.get("children") else ""
         short = p["name"].split("/")[-1]
-        print(f"  {pad}{marker} {short:<22} {ts}{merged}{desc}")
+        state = p.get("maintenance_state", "normal")
+        maint = f"  [{state}]" if state != "normal" else ""
+        print(f"  {pad}{marker} {short:<22} {ts}{merged}{maint}{desc}")
         _print_project_tree(p.get("children", []), active, indent + 1)
 
 
@@ -11056,7 +11146,7 @@ def _interactive_repl(
                         "  Use /ingest after switching to add documents to the current project.",
                         "share": "  /share list                              list all issued and received shares\n"
                         "  /share generate <project> <grantee>      generate a read-only share key\n"
-                        "  /share generate <project> <grantee> --write  generate a read-write share key\n"
+                        "  /share generate <project> <grantee> --write  generate a read-write share key [deprecated]\n"
                         "  /share redeem <share_string>              mount a shared project (Linux only)\n"
                         "  /share revoke <key_id>                   revoke a previously issued share\n"
                         "\n"
@@ -11331,14 +11421,18 @@ def _interactive_repl(
                         print(f"  Pull failed: {e}")
 
             elif cmd == "/graph-viz":
-                import os as _os
-                import tempfile
+                import hashlib as _hashlib
+                import time as _time
+                from pathlib import Path as _Path
 
-                _out_path = (
-                    arg.strip()
-                    if arg.strip()
-                    else _os.path.join(tempfile.gettempdir(), "axon_graph.html")
-                )
+                if arg.strip():
+                    _out_path = arg.strip()
+                else:
+                    _ts = _time.strftime("%Y%m%dT%H%M%S")
+                    _qhash = _hashlib.sha1(b"graph").hexdigest()[:8]
+                    _snap_dir = _Path.home() / ".axon" / "cache" / "graphs" / f"{_ts}_{_qhash}"
+                    _snap_dir.mkdir(parents=True, exist_ok=True)
+                    _out_path = str(_snap_dir / "knowledge-graph.html")
                 try:
                     brain.export_graph_html(_out_path)
                     print(f"  Graph visualization saved → {_out_path}")
@@ -11763,6 +11857,11 @@ def _interactive_repl(
                         proj = parts[0]
                         grantee = parts[1]
                         write_access = "--write" in parts
+                        if write_access:
+                            print(
+                                "  ⚠️  --write is deprecated: write access on mounted shares "
+                                "is not enforced. All mounts are read-only."
+                            )
                         user_dir = Path(brain.config.projects_root)
                         proj_dir = user_dir / proj
                         if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
@@ -12019,16 +12118,23 @@ def _interactive_repl(
                             print(f"  Finalize failed: {e}")
 
                 elif sub == "viz":
-                    # Reuse /graph-viz logic
+                    import hashlib as _hashlib_g
+                    import time as _time_g
+
                     sub_parts2 = arg.split(maxsplit=1)
                     out_path = sub_parts2[1] if len(sub_parts2) > 1 else ""
                     try:
                         html = brain.build_graph_visualization()
-                        out = (
-                            Path(out_path).expanduser()
-                            if out_path
-                            else Path.home() / "axon_graph.html"
-                        )
+                        if out_path:
+                            out = Path(out_path).expanduser()
+                        else:
+                            _ts_g = _time_g.strftime("%Y%m%dT%H%M%S")
+                            _qh_g = _hashlib_g.sha1(b"graph").hexdigest()[:8]
+                            _snap_g = (
+                                Path.home() / ".axon" / "cache" / "graphs" / f"{_ts_g}_{_qh_g}"
+                            )
+                            _snap_g.mkdir(parents=True, exist_ok=True)
+                            out = _snap_g / "knowledge-graph.html"
                         out.write_text(html, encoding="utf-8")
                         print(f"  Graph saved to: {out}")
                         import subprocess as _sp_g

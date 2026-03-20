@@ -363,8 +363,7 @@
           "type": "object",
           "properties": {
             "project": { "type": "string", "description": "Name of the project to share (must exist in your AxonStore)" },
-            "grantee": { "type": "string", "description": "OS username of the recipient on the shared filesystem" },
-            "write_access": { "type": "boolean", "description": "If true, grantee can ingest into the shared project. Default: false (read-only).", "default": false }
+            "grantee": { "type": "string", "description": "OS username of the recipient on the shared filesystem" }
           },
           "required": ["project", "grantee"]
         }

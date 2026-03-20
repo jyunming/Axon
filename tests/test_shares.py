@@ -409,3 +409,65 @@ class TestValidateReceivedShares:
         # Don't revoke — validate should return empty list
         removed = shares.validate_received_shares(grantee_dir)
         assert removed == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: write-enforcement tests
+# ---------------------------------------------------------------------------
+
+
+class TestMountedShareWriteEnforcement:
+    """Verify that AxonBrain refuses mutation when the active project is a mounted share."""
+
+    def _make_brain(self):
+        """Return a minimal AxonBrain-like mock with write-guard methods."""
+        from unittest.mock import MagicMock
+
+        brain = MagicMock()
+        # Wire the real methods from AxonBrain onto the mock
+        from axon.main import AxonBrain
+
+        brain._is_mounted_share = AxonBrain._is_mounted_share.__get__(brain, type(brain))
+        brain._assert_write_allowed = AxonBrain._assert_write_allowed.__get__(brain, type(brain))
+        brain._active_project = "ShareMount/alice_myproject"
+        brain._read_only_scope = False
+        brain._mounted_share = True
+        return brain
+
+    def test_ingest_on_mounted_share_raises_permission_error(self):
+        brain = self._make_brain()
+        with pytest.raises(PermissionError, match="mounted share"):
+            brain._assert_write_allowed("ingest")
+
+    def test_delete_on_mounted_share_raises_permission_error(self):
+        brain = self._make_brain()
+        with pytest.raises(PermissionError, match="mounted share"):
+            brain._assert_write_allowed("delete")
+
+    def test_finalize_on_mounted_share_raises_permission_error(self):
+        brain = self._make_brain()
+        with pytest.raises(PermissionError, match="mounted share"):
+            brain._assert_write_allowed("finalize_ingest")
+
+    def test_read_only_scope_raises_permission_error(self):
+        brain = self._make_brain()
+        brain._mounted_share = False
+        brain._read_only_scope = True
+        with pytest.raises(PermissionError, match="read-only"):
+            brain._assert_write_allowed("write")
+
+    def test_own_project_allows_write(self):
+        brain = self._make_brain()
+        brain._mounted_share = False
+        brain._read_only_scope = False
+        # Should not raise
+        brain._assert_write_allowed("ingest")
+
+    def test_is_mounted_share_returns_true_when_flag_set(self):
+        brain = self._make_brain()
+        assert brain._is_mounted_share() is True
+
+    def test_is_mounted_share_returns_false_when_flag_clear(self):
+        brain = self._make_brain()
+        brain._mounted_share = False
+        assert brain._is_mounted_share() is False

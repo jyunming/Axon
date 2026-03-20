@@ -322,7 +322,8 @@ class ShareGenerateRequest(BaseModel):
     project: str = Field(..., description="Project name to share.")
     grantee: str = Field(..., description="OS username of the recipient.")
     write_access: bool = Field(
-        False, description="Grant write (ingest) access. Default: read-only."
+        False,
+        description="Ignored. All mounted shares are enforced read-only regardless of this value.",
     )
 
 
@@ -813,6 +814,8 @@ async def refresh_docs():
             # Content changed — re-ingest
             await loop.run_in_executor(None, functools.partial(brain.ingest, docs))
             results["reingested"].append(source_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
         except Exception as exc:
             results["errors"].append({"source": source_id, "error": str(exc)})
     return results
@@ -1018,6 +1021,12 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
 
+    # Reject writes on mounted shares before spawning background task
+    try:
+        brain._assert_write_allowed("ingest")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
     # P1-C: create a tracked job
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc)
@@ -1121,6 +1130,8 @@ async def finalize_graph():
     try:
         await asyncio.to_thread(brain.finalize_graph)
         return {"status": "ok", "community_summary_count": len(brain._community_summaries)}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.error(f"finalize_graph failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1132,7 +1143,7 @@ async def get_graph_visualization():
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
-        html = brain.export_graph_html()
+        html = brain.export_graph_html(open_browser=False)
         return HTMLResponse(content=html)
     except ImportError as e:
         raise HTTPException(status_code=501, detail=str(e))
@@ -1147,6 +1158,10 @@ async def graph_data():
     Primary payload is the entity/relation graph. For compatibility with
     clients that only request ``/graph/data``, this falls back to the code
     graph when the entity graph is empty.
+
+    Each knowledge-graph node includes an ``evidence`` list
+    (``[{chunk_id, source, start_line, excerpt}]``) populated from the vector
+    store.  Code-graph nodes carry ``file_path`` and ``start_line`` directly.
     """
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
@@ -1416,6 +1431,7 @@ async def delete_documents(request: DeleteRequest):
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
+        brain._assert_write_allowed("delete")
         # Resolve which IDs actually exist before deleting so the count is accurate
         existing = brain.vector_store.get_by_ids(request.doc_ids)
         existing_ids_set = {doc["id"] for doc in existing}
@@ -1434,6 +1450,8 @@ async def delete_documents(request: DeleteRequest):
             "doc_ids": existing_ids,
             "not_found": not_found,
         }
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1480,6 +1498,78 @@ async def switch_project(request: ProjectSwitchRequest):
     except Exception as e:
         logger.error(f"Project switch failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class MaintenanceStateRequest(BaseModel):
+    name: str = Field(..., description="Project name (slash-separated for sub-projects).")
+    state: str = Field(
+        ...,
+        description="Maintenance state: 'normal', 'draining', 'readonly', or 'offline'.",
+    )
+
+
+@app.post("/project/maintenance")
+async def set_project_maintenance(request: MaintenanceStateRequest):
+    """Set the maintenance state of a project.
+
+    States:
+    - ``normal``   — fully operational (default)
+    - ``draining`` — accepting reads; new writes are queued but not blocked (reserved for Phase 3 lease drain)
+    - ``readonly`` — reads allowed; all writes rejected with 403
+    - ``offline``  — reads and writes rejected; project is under maintenance
+
+    Setting ``readonly`` or ``offline`` immediately blocks ingest, delete, refresh, and
+    graph finalize via ``_assert_write_allowed()``.
+    """
+    from axon.projects import set_maintenance_state
+    from axon.runtime import get_registry as _get_registry
+
+    if not _VALID_PROJECT_NAME_RE.match(request.name):
+        raise HTTPException(status_code=422, detail=f"Invalid project name: '{request.name}'")
+    try:
+        set_maintenance_state(request.name, request.state)
+        _reg = _get_registry()
+        if request.state == "draining":
+            _reg.start_drain(request.name)
+        elif request.state == "normal":
+            _reg.stop_drain(request.name)
+        snap = _reg.snapshot(request.name)
+        return {
+            "status": "ok",
+            "project": request.name,
+            "maintenance_state": request.state,
+            "active_leases": snap["active_leases"],
+            "epoch": snap["epoch"],
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404 if "does not exist" in str(e) else 422, detail=str(e))
+    except Exception as e:
+        logger.error(f"set_maintenance_state failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/project/maintenance")
+async def get_project_maintenance(name: str):
+    """Get the current maintenance state of a project.
+
+    Query parameter: ``?name=<project-name>``
+    """
+    from axon.projects import get_maintenance_state, project_dir
+    from axon.runtime import get_registry as _get_registry
+
+    if not _VALID_PROJECT_NAME_RE.match(name):
+        raise HTTPException(status_code=422, detail=f"Invalid project name: '{name}'")
+    if not (project_dir(name) / "meta.json").exists():
+        raise HTTPException(status_code=404, detail=f"Project '{name}' not found.")
+    state = get_maintenance_state(name)
+    snap = _get_registry().snapshot(name)
+    return {
+        "project": name,
+        "maintenance_state": state,
+        "active_leases": snap["active_leases"],
+        "epoch": snap["epoch"],
+        "draining": snap["draining"],
+    }
 
 
 def main():

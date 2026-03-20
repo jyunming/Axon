@@ -367,12 +367,14 @@ def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
         except Exception:
             meta = {}
         full_name = f"{parent_name}/{entry.name}"
+        state = meta.get("maintenance_state", "normal")
         result.append(
             {
                 "name": full_name,
                 "description": meta.get("description", ""),
                 "created_at": meta.get("created_at", ""),
                 "path": str(entry),
+                "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
                 "children": _list_sub_projects(entry, full_name),
             }
         )
@@ -380,10 +382,59 @@ def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
     return result
 
 
+_VALID_MAINTENANCE_STATES: frozenset[str] = frozenset({"normal", "draining", "readonly", "offline"})
+
+
+def get_maintenance_state(name: str) -> str:
+    """Return the maintenance state of a project (defaults to 'normal' if unset).
+
+    Args:
+        name: Project name (slash-separated for sub-projects).
+
+    Returns:
+        One of: 'normal', 'draining', 'readonly', 'offline'.
+    """
+    meta_path = project_dir(name) / "meta.json"
+    if not meta_path.exists():
+        return "normal"
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        state = data.get("maintenance_state", "normal")
+        return state if state in _VALID_MAINTENANCE_STATES else "normal"
+    except Exception:
+        return "normal"
+
+
+def set_maintenance_state(name: str, state: str) -> None:
+    """Persist a maintenance state to a project's meta.json.
+
+    Args:
+        name: Project name (slash-separated for sub-projects).
+        state: One of 'normal', 'draining', 'readonly', 'offline'.
+
+    Raises:
+        ValueError: If state is not valid or project does not exist.
+    """
+    if state not in _VALID_MAINTENANCE_STATES:
+        raise ValueError(
+            f"Invalid maintenance state '{state}'. "
+            f"Valid states: {sorted(_VALID_MAINTENANCE_STATES)}"
+        )
+    meta_path = project_dir(name) / "meta.json"
+    if not meta_path.exists():
+        raise ValueError(f"Project '{name}' does not exist.")
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Could not read meta.json for '{name}': {exc}") from exc
+    data["maintenance_state"] = state
+    meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def list_projects() -> list[dict]:
     """Return all top-level projects sorted by creation time (newest first).
 
-    Each dict contains: name, description, created_at, path, children.
+    Each dict contains: name, description, created_at, path, maintenance_state, children.
     The 'children' list recursively contains sub-project dicts in the same format.
     """
     if not PROJECTS_ROOT.exists():
@@ -399,12 +450,14 @@ def list_projects() -> list[dict]:
             meta = json.loads(meta_file.read_text())
         except Exception:
             meta = {}
+        state = meta.get("maintenance_state", "normal")
         result.append(
             {
                 "name": entry.name,
                 "description": meta.get("description", ""),
                 "created_at": meta.get("created_at", ""),
                 "path": str(entry),
+                "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
                 "children": _list_sub_projects(entry, entry.name),
             }
         )
