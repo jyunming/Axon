@@ -38,9 +38,7 @@ class FakeEmbedding:
     def _embed_text(self, text: str) -> list[float]:
         vector = [0.0] * self.dimension
         for token in _tokenize(text):
-            bucket = (
-                int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % self.dimension
-            )
+            bucket = int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % self.dimension
             vector[bucket] += 1.0
         norm = math.sqrt(sum(v * v for v in vector))
         if norm:

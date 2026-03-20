@@ -299,9 +299,7 @@ class TestReplShareCommand:
         user_dir = tmp_path / "store" / "alice"
         proj_dir = user_dir / "myproject"
         proj_dir.mkdir(parents=True)
-        (proj_dir / "meta.json").write_text(
-            '{"project_namespace_id": "ns_test"}', encoding="utf-8"
-        )
+        (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_test"}', encoding="utf-8")
         (user_dir / ".shares").mkdir(parents=True)
         (user_dir / "ShareMount").mkdir(parents=True)
 

@@ -1047,9 +1047,7 @@ class OpenEmbedding:
 
             logger.info(f"Using OpenAI API Embedding: {self.config.embedding_model}")
             kwargs = (
-                {"api_key": self.config.api_key}
-                if self.config.api_key
-                else {"api_key": "sk-dummy"}
+                {"api_key": self.config.api_key} if self.config.api_key else {"api_key": "sk-dummy"}
             )
             # ollama_base_url doubles as the generic base_url for OpenAI-compatible servers
             if (
@@ -1860,9 +1858,7 @@ class OpenVectorStore:
                 return []
             try:
                 id_str = ", ".join(f"'{i}'" for i in ids)
-                rows = (
-                    self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
-                )
+                rows = self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
                 return [
                     {
                         "id": r["id"],
@@ -3086,9 +3082,7 @@ Your primary goal is to help the user by answering questions based on the provid
                                         self._entity_graph[entity] = {
                                             "description": node.get("description", ""),
                                             "type": node.get("type", "UNKNOWN"),
-                                            "chunk_ids": [
-                                                d for d in doc_ids if isinstance(d, str)
-                                            ],
+                                            "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
                                             "frequency": len(
                                                 [d for d in doc_ids if isinstance(d, str)]
                                             ),
@@ -3759,9 +3753,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 raise ImportError("backend override — skipping graspologic")
             from graspologic.partition import hierarchical_leiden
 
-            partitions = hierarchical_leiden(
-                G, max_cluster_size=max_cluster_size, random_seed=seed
-            )
+            partitions = hierarchical_leiden(G, max_cluster_size=max_cluster_size, random_seed=seed)
             community_levels: dict = {}
             community_hierarchy: dict = {}
             community_children: dict = {}
@@ -4748,9 +4740,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 level_summaries.items(), key=_community_relevance, reverse=True
             )
             level_summaries = dict(sorted_summaries[:_top_n_communities])
-            logger.debug(
-                "GraphRAG global: pre-filtered to top %d communities.", _top_n_communities
-            )
+            logger.debug("GraphRAG global: pre-filtered to top %d communities.", _top_n_communities)
 
         # Chunk reports so large reports don't get hard-truncated and later sections aren't lost
         _MAP_CHUNK_CHARS = int(getattr(cfg, "graph_rag_global_map_max_length", 500) or 500) * 4
@@ -5588,8 +5578,7 @@ Your primary goal is to help the user by answering questions based on the provid
             "For each relationship output one line:\n"
             "  SUBJECT | RELATION | OBJECT | one-sentence description | strength (1-10)\n"
             "Strength: 1=weak/incidental, 10=core/defining. "
-            "No bullets or extra text. If no clear relationships, output nothing.\n\n"
-            + text[:3000]
+            "No bullets or extra text. If no clear relationships, output nothing.\n\n" + text[:3000]
         )
         try:
             raw = self.llm.complete(
@@ -5884,9 +5873,7 @@ Your primary goal is to help the user by answering questions based on the provid
         if not to_canonicalize:
             return
 
-        logger.info(
-            f"GraphRAG: Canonicalizing descriptions for {len(to_canonicalize)} entities..."
-        )
+        logger.info(f"GraphRAG: Canonicalizing descriptions for {len(to_canonicalize)} entities...")
 
         def _synthesize(args):
             entity_key, descs = args
@@ -6178,9 +6165,9 @@ Your primary goal is to help the user by answering questions based on the provid
                     content_sig = _hl.md5(
                         summary_text.encode("utf-8", errors="replace")
                     ).hexdigest()[:8]
-                    uid = _hl.md5(
-                        f"{source}|raptor|L{lvl}|{i}|{content_sig}".encode()
-                    ).hexdigest()[:12]
+                    uid = _hl.md5(f"{source}|raptor|L{lvl}|{i}|{content_sig}".encode()).hexdigest()[
+                        :12
+                    ]
                     children_ids = [c["id"] for c in window]
                     node = {
                         "id": f"raptor_{uid}",
@@ -6877,9 +6864,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         for query_entity in query_entities:
             # Support both new dict-node format and legacy list format
-            q_name = (
-                query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
-            )
+            q_name = query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
             if not q_name:
                 continue
             for eid, node in self._entity_graph.items():
@@ -7500,9 +7485,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     )
                 chunks_to_process = _grag_ok_list
 
-            logger.info(
-                f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks..."
-            )
+            logger.info(f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks...")
 
             def _proc(doc):
                 return doc["id"], self._extract_entities(doc["text"])
@@ -7576,9 +7559,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 doc = doc_by_id.get(doc_id)
                 if doc is not None and entities and doc.get("metadata") is not None:
                     doc["metadata"]["entity_ids"] = [
-                        e["name"].lower()
-                        for e in entities
-                        if isinstance(e, dict) and e.get("name")
+                        e["name"].lower() for e in entities if isinstance(e, dict) and e.get("name")
                     ]
                 # GAP 9: Update text_unit_entity_map
                 self._text_unit_entity_map[doc_id] = [
@@ -8302,9 +8283,7 @@ Your primary goal is to help the user by answering questions based on the provid
             else:
                 from axon.retrievers import weighted_score_fusion
 
-                results = weighted_score_fusion(
-                    vector_results, bm25_results, weight=_fusion_weight
-                )
+                results = weighted_score_fusion(vector_results, bm25_results, weight=_fusion_weight)
         else:
             results = vector_results
 
@@ -9214,9 +9193,7 @@ def main():
                     else getattr(chunk, "status", "")
                 )
                 total = (
-                    chunk.get("total", 0)
-                    if isinstance(chunk, dict)
-                    else getattr(chunk, "total", 0)
+                    chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, "total", 0)
                 )
                 completed = (
                     chunk.get("completed", 0)
@@ -9998,9 +9975,7 @@ def _show_context(
             f"   ({ctx_size:,} token context window)"
         )
     )
-    lines.append(
-        row(f"Embed  ·  {brain.config.embedding_provider}/{brain.config.embedding_model}")
-    )
+    lines.append(row(f"Embed  ·  {brain.config.embedding_provider}/{brain.config.embedding_model}"))
     lines.append(BLANK)
 
     # ── Token usage ───────────────────────────────────────────────────────────
@@ -12133,9 +12108,7 @@ def _interactive_repl(
                         transient=True,
                         refresh_per_second=10,
                     ) as _spin_live:
-                        _st = threading.Thread(
-                            target=_spin_update, args=(_spin_live,), daemon=True
-                        )
+                        _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
                         _st.start()
                         for chunk in token_gen:
                             if isinstance(chunk, dict):

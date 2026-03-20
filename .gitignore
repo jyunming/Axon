@@ -145,6 +145,7 @@ docs/*.md
 
 # Test temp directories
 tests/.test_tmp/
+tests/e2e/.test_tmp/
 
 # Qualification artifacts
 Qualification/

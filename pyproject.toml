@@ -120,12 +120,14 @@ extend-exclude = '''
   | \.venv
   | build
   | dist
+  | \.test_tmp
 )/
 '''
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+exclude = [".test_tmp"]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -181,6 +183,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+tmp_path_retention_policy = "none"
 addopts = [
     "-v",
     "--strict-markers",
@@ -190,6 +193,7 @@ addopts = [
     "--cov-report=xml",
 ]
 markers = [
+    "e2e: marks end-to-end feature tests",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "eval: marks RAG evaluation smoke tests (precision@k, context relevance, faithfulness)",

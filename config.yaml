@@ -1,297 +1,58 @@
-# Axon Configuration
-# Copy to config.yaml and customize
-
-# Projects root directory (where named projects are stored).
-# Defaults to ~/.axon/projects (Linux/macOS) or %USERPROFILE%\.axon\projects (Windows).
-# Override here or via the AXON_PROJECTS_ROOT environment variable (env var takes priority).
-# Useful for shared network drives, external disks, or CI environments.
-# Examples:
-#   Linux/macOS: /mnt/nas/axon-projects
-#   Windows:     C:/axon-projects
-# projects_root: ~/.axon/projects
-
 embedding:
-  # Provider: sentence_transformers, ollama, fastembed, openai
   provider: sentence_transformers
-
-  # Model names by provider:
-  # sentence_transformers: all-MiniLM-L6-v2, BAAI/bge-large-en, etc.
-  # ollama: nomic-embed-text, mxbai-embed-large, embeddinggemma, etc.
-  # fastembed: BAAI/bge-small-en-v1.5, etc.
-  # openai: text-embedding-3-small, etc.
   model: all-MiniLM-L6-v2
-
-  # Local path to a pre-downloaded embedding model directory.
-  # Overrides 'model' for sentence_transformers (passed as the model path).
-  # For fastembed, used as cache_dir so no network download is needed.
-  # Leave empty to download from HuggingFace Hub as usual.
-  # Examples:
-  #   Windows: C:/models/all-MiniLM-L6-v2
-  #   Linux:   /srv/models/all-MiniLM-L6-v2
-  # model_path: ""
-
-  # For Ollama provider:
-  # base_url: http://localhost:11434
-
 llm:
-  # Provider: ollama, gemini, ollama_cloud, openai, vllm
   provider: ollama
-
-  # Model names:
-  # ollama: llama3.1, gemma, llama3.1:70b, qwen2.5:32b, mistral-nemo
-  # gemini: gemini-1.5-pro, gemini-1.5-flash
-  # openai: gpt-4o, gpt-4o-mini, local-model...
-  model: gemma
-
-  # Base URL for API connections. Useful to point the 'openai' client to an Open Source Docker Engine like vLLM.
-  base_url: http://localhost:11434
-
-  # Directory where Ollama stores its model blobs.
-  # Equivalent to the OLLAMA_MODELS environment variable.
-  # Use this to redirect Ollama to a secondary disk, NAS, or shared network volume.
-  # The OLLAMA_MODELS env var takes priority if both are set.
-  # Examples:
-  #   Windows: D:/ollama-models
-  #   Linux:   /mnt/nas/ollama-models
-  # models_dir: ""
-
-  # API Key for cloud providers (or fake string for local open-source API engines)
-  api_key: ""
-
-  # Provider specific keys (can also be set via env vars)
-  gemini_api_key: ""
-  ollama_cloud_key: ""
-  ollama_cloud_url: "https://ollama.com/api"
-
-  # vLLM — OpenAI-compatible local inference server (default port 8000)
-  # Start with: python -m vllm.entrypoints.openai.api_server \
-  #   --model meta-llama/Llama-3.1-8B-Instruct --port 8000
-  # Override at runtime with: /vllm-url http://host:port/v1
-  # Or set env var: VLLM_BASE_URL=http://host:port/v1
-  vllm_base_url: "http://localhost:8000/v1"
-
-  # GitHub Copilot API (OAuth-based, no VS Code extension required)
-  # Provider: github_copilot
-  # Requires a GitHub OAuth token (NOT a PAT) and an active Copilot subscription.
-  # Get the token by running: /keys set github_copilot  (OAuth device flow)
-  # Or set env var: GITHUB_COPILOT_PAT=<github_oauth_token>
-  # copilot_pat: ""
-  # Run the REPL command '/model github_copilot/<Tab>' for a live model list.
-  # Known models (varies by subscription): gpt-4o, gpt-4.1, gpt-4o-mini,
-  #   claude-3.5-sonnet, claude-3.7-sonnet, o1, o3-mini
-
-  # Generation parameters
+  model: llama3.2:1b
   temperature: 0.7
   max_tokens: 2048
-
-  # LLM request timeout in seconds (for openai/vllm providers that support it)
-  # llm_timeout: 60
-
+  api_key: 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
+  gemini_api_key: AIzaSyChSViJ8a2mQEIXQQ4o5MuO1QxGNAOxzqk
+  ollama_cloud_key: 29a07f6a47454bcb878597e3e3c5fa71.CWJHhmBWbTAew9scl6Js-8lt
+  ollama_cloud_url: https://ollama.com/api
+  vllm_base_url: http://localhost:8000/v1
+  timeout: 60
 vector_store:
-  # Provider: chroma, qdrant, lancedb
   provider: chroma
-
-  # Storage path
-  path: ~/.axon/projects/default/chroma_data
-
-# BM25 Keyword Search
+  path: C:\Users\jyunm\.axon\projects\codeaware-auto\chroma_data
 bm25:
-  path: ~/.axon/projects/default/bm25_index
-
-# Maximum parallel worker threads for background ingestion and query tasks
-max_workers: 8
-
-# Remote Qdrant (uncomment to use instead of local ChromaDB)
-# qdrant_url: http://localhost:6333   # Qdrant HTTP endpoint
-# qdrant_api_key: ""                  # leave empty for local Docker
-
-# HPC multi-user: set this to shared storage mount point
-# projects_base: /data/dbstore
-
+  path: C:\Users\jyunm\.axon\projects\codeaware-auto\bm25_index
 rag:
-  # Number of documents to retrieve
-  top_k: 10
-
-  # Minimum similarity score (0-1).
-  # Calibrated for all-MiniLM-L6-v2 (typical relevant scores: 0.30–0.60).
-  # Raise to 0.5+ for stricter matching; lower to 0.2 for broader recall.
-  # Also used as the web-search fallback trigger: if best cosine score < this
-  # value, Brave Search fires (when truth_grounding is enabled).
+  top_k: 1
   similarity_threshold: 0.3
-
-  # Enable hybrid search (vector + keyword)
-  hybrid_search: true
-
-  # Hybrid fusion mode: "rrf" (Reciprocal Rank Fusion, default) or "weighted" (min-max heuristic)
-  hybrid_mode: rrf
-
-  # Parent-document / small-to-big retrieval.
-  # Set to a value larger than chunk.size (e.g. 3000) to index small child chunks
-  # for precision but return the richer parent passage to the LLM as context.
-  # 0 = disabled (use retrieval chunks directly).
-  # parent_chunk_size: 0
-
-  # Query decomposition — break complex multi-part questions into 2–4 atomic sub-questions,
-  # run retrieval for each, and merge results before generation.
-  # Also: --decompose CLI flag, "decompose": true API override.
-  # query_decompose: false
-
-  # LLM context compression — after retrieval, use the generation LLM to extract only
-  # query-relevant sentences from each chunk before passing context to the answer step.
-  # Falls back to the original chunk if compression would expand the text.
-  # Also: --compress CLI flag, "compress": true API override.
-  # compress_context: false
-
-  # ── RAPTOR hierarchical indexing ─────────────────────────────────────────────
-  # Requires LLM during ingest. Groups consecutive chunks per source and generates
-  # summary nodes indexed alongside leaf chunks for multi-hop questions.
-  raptor: true
-  raptor_chunk_group_size: 5      # chunks per summary node (5 ≈ ~5 000 chars)
-  raptor_max_levels: 1            # 1 level of summaries (2 doubles LLM calls, diminishing return)
-  raptor_max_source_size_mb: 5.0  # skip RAPTOR for sources > 5 MB (prevents runaway costs)
-
-  # ── GraphRAG entity-centric retrieval ────────────────────────────────────────
-  # Fast-graph mode (default): entity graph built with zero LLM calls.
-  #   - Entities extracted by regex noun-phrase heuristics (no LLM, no GLiNER)
-  #   - Relations disabled (the expensive LLM pass)
-  #   - Community detection off
-  #   → Ingest speed identical to having graph_rag: false
-  #   → VS Code Graph Panel KG tab populated; entity-based retrieval expansion active
-  #
-  # To enable richer graph (LLM entity descriptions + relations), set:
-  #   graph_rag_depth: standard
-  #   graph_rag_relations: true
-  graph_rag: true
-  graph_rag_depth: light          # light = regex only, zero LLM calls; standard = LLM entity descriptions
-  graph_rag_budget: 3             # extra graph-expanded docs added beyond top_k
-  graph_rag_relations: false      # set true to extract SUBJECT | RELATION | OBJECT triples (LLM-heavy)
-  graph_rag_include_raptor_summaries: true  # use RAPTOR summaries as GraphRAG units for large sources
-  raptor_graphrag_leaf_skip_threshold: 3    # skip leaf extraction for sources with >= N leaf chunks (use RAPTOR summaries instead)
-  graph_rag_min_entities_for_relations: 3   # skip relation extraction for chunks with fewer entities
-  graph_rag_relation_budget: 30             # max chunks for relation extraction; ranked by entity density (0 = unlimited)
-  graph_rag_entity_min_frequency: 2         # prune entities seen in fewer than N chunks before community detection
-
-  # Community detection — clusters entity graph after ingest.
-  # Runs async in the background; summaries generated lazily on first global query.
-  # Requires: pip install axon[graphrag]  (networkx, igraph, leidenalg)
-  # Default: false (cost-control). Enable explicitly for global/community-based queries.
-  graph_rag_community: false
-  graph_rag_community_async: true     # non-blocking: community detection runs after ingest
-  code_graph: false          # Phase 2: build structural code graph (File/Symbol nodes, CONTAINS/IMPORTS edges)
-  code_graph_bridge: false   # Phase 3: link code symbols to prose chunks via MENTIONED_IN edges
-  # code_lexical_boost: true    # identifier-aware re-scoring for code result sets (default: true)
-  # code_top_k_multiplier: 2    # fetch_k multiplier when a code query is detected (default: 2)
-  # code_max_chunks_per_file: 3 # per-file cap in final top_k for diversity (default: 3)
-  # code_bm25_weight: 0.7       # BM25 weight when code mode active (weighted mode only; ignored in rrf)
-  # code_top_k: 6               # top-K override for code queries (0 = use top_k)
-  # retrieval_dry_run: false    # skip LLM; return ranked candidates + diagnostics only
-  graph_rag_community_lazy: true      # defer LLM summarisation to first global query
-  # Community detection backend: "auto" (graspologic→leidenalg→louvain) | "leidenalg" | "louvain"
-  # "leidenalg" is the documented supported path for Python 3.13 — avoids graspologic instability.
-  graph_rag_community_backend: leidenalg
-
-  # Query routing — "heuristic" detects holistic queries (summarize/compare/list all)
-  # at zero cost and upgrades them to global search; factual queries use local mode.
-  graph_rag_auto_route: heuristic
-  graph_rag_mode: hybrid              # local for factual | global when routed
-
-  # Multi-class query router (Option B).
-  # "heuristic": keyword-based, zero latency (default)
-  # "llm": one classifier LLM call per query
-  # "off": skip router entirely (falls back to graph_rag_auto_route)
-  query_router: heuristic
-  contextual_retrieval: false
-
-  # Map-reduce tuning for global search
-  graph_rag_global_top_communities: 20  # pre-filter: only top-20 relevant communities enter map-reduce
-  # graph_rag_community_llm_top_n_per_level: 15  # max communities summarised per level (default: 15)
-  # graph_rag_community_llm_max_total: 30         # hard cap on total LLM summarisation calls (default: 30)
-  graph_rag_map_workers: 2             # dedicated thread pool; avoids starving ingest workers
-  graph_rag_community_top_k: 5         # top community summaries injected into prompt
-
-  # Entity matching at query time (uses cached embeddings — fast)
-  graph_rag_entity_embedding_match: true
-  graph_rag_entity_match_threshold: 0.5
-
-  # Community report vector-store index (speeds up report retrieval at query time)
-  graph_rag_index_community_reports: true
-
-  # ── Expensive optional passes (off by default) ────────────────────────────────
-  # graph_rag_canonicalize: false        # LLM description synthesis — enable for quality
-  # graph_rag_claims: false              # claim/covariate extraction — enable for fact-checking
-  # graph_rag_ner_backend: llm           # "gliner" skips LLM for NER (pip install axon[gliner])
-  # graph_rag_report_compress: false     # LLMLingua-2 token compression (pip install axon[llmlingua])
-  # P1: Semantic entity alias resolution (merges "Apple" / "Apple Inc." before community detection)
-  # graph_rag_entity_resolve: false
-  # graph_rag_entity_resolve_threshold: 0.92
-  # graph_rag_entity_resolve_max: 5000
-  # P2: REBEL relation extraction backend (replaces LLM for relation triples)
-  # graph_rag_relation_backend: llm  # "rebel" = pip install axon[rebel]
-  # graph_rag_gliner_model: "urchade/gliner_medium-v2.1"
-  # Set to a local path for fully offline operation: "C:/dev/HF_models/gliner_medium_v21"
-  # graph_rag_rebel_model: "Babelscape/rebel-large"
-  # Set to a local path: "C:/dev/HF_models/rebel_large"
-  # graph_rag_llmlingua_model: "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank"
-  # Set to a local path: "C:/dev/HF_models/llmlingua2_meetingbank"
-  # A3: Extraction depth tier: light (no LLM, noun-phrases only) | standard (LLM entity descriptions) | deep (+ claims + canonicalize)
-  # graph_rag_depth: light  ← already set above; override here only if you need per-run variation
-
-  # In-memory query result cache (LRU eviction, keyed on query + active flags).
-  # Speeds up repeated identical queries. Bypassed when chat history is non-empty.
-  # query_cache: false
-  # query_cache_size: 128
-
-  # Ingest deduplication — skip chunks with identical content (MD5 hash).
-  # Persisted to {bm25_path}/.content_hashes across restarts.
-  # dedup_on_ingest: true
-
-# Chunking Settings
+  hybrid_search: false
+  hybrid_weight: 0.7
+  parent_chunk_size: 1500
+  raptor: false
+  raptor_chunk_group_size: 5
+  graph_rag: false
+  code_graph: true
+  code_graph_bridge: true
+  dedup_on_ingest: true
 chunk:
   strategy: semantic
   size: 1000
   overlap: 200
-
-# Re-ranking Settings
 rerank:
   enabled: false
   provider: cross-encoder
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
-
-# Query Transformations
 query_transformations:
   multi_query: false
   hyde: false
-  discussion_fallback: true
-  # step_back: false     # generate a more abstract query before retrieval
-  # query_decompose: false  # break complex questions into sub-questions
-
-# Context Compression
-# Uses the generation LLM to extract only query-relevant sentences from each
-# retrieved chunk before generation. Falls back to the full chunk if compression
-# would expand the text.
-# context_compression:
-#   enabled: false
-
-# Web Search / Truth Grounding
-# Uses Brave Search API to ground answers with live web results
+  step_back: false
+  query_decompose: false
+  discussion_fallback: false
+context_compression:
+  enabled: false
 web_search:
   enabled: false
-  # brave_api_key: "your-brave-api-key-here"  # or set BRAVE_API_KEY env var
-
-# Offline Mode
-# Enable this on air-gapped / confined machines with no internet access.
-# All model references (embedding, reranker) are resolved to local paths
-# under local_models_dir. Web search is automatically disabled.
-# Use scripts/prefetch_models.py on an internet machine first to download models.
+  brave_api_key: BSAGezh03jBvmVUh-fuaUmiZBuMa7i7
 offline:
-  enabled: false          # strict no-egress: also disables RAPTOR + GraphRAG (LLM calls need network)
-  local_assets_only: false  # enforce local model files only; RAPTOR + GraphRAG stay enabled
-
-  # Multi-root model directories — set the paths that match your local layout.
-  # Each directory is checked before local_models_dir when resolving a bare model ID.
-  # embedding_models_dir: C:/dev/embedding_models   # sentence-transformers / fastembed
-  # hf_models_dir: C:/dev/HF_models                 # GLiNER, REBEL, LLMLingua, reranker
-  # tokenizer_cache_dir: C:/dev/HF_models/tokenizers  # tiktoken BPE cache → TIKTOKEN_CACHE_DIR
-
-  # Legacy single-root (still supported; checked after the per-type dirs above)
-  local_models_dir: ""
+  enabled: false
+  local_models_dir: ''
+  local_assets_only: false
+  embedding_models_dir: ''
+  hf_models_dir: ''
+  tokenizer_cache_dir: ''
+projects_root: C:\Users\jyunm\.axon\projects

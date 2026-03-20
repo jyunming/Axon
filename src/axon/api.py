@@ -1142,10 +1142,40 @@ async def get_graph_visualization():
 
 @app.get("/graph/data", tags=["graph"])
 async def graph_data():
-    """Return the entity/relation graph as JSON for VS Code webview consumption."""
+    """Return graph payload JSON for VS Code webview consumption.
+
+    Primary payload is the entity/relation graph. For compatibility with
+    clients that only request ``/graph/data``, this falls back to the code
+    graph when the entity graph is empty.
+    """
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    return brain.build_graph_payload()
+
+    payload = brain.build_graph_payload()
+    if (
+        isinstance(payload, dict)
+        and isinstance(payload.get("nodes"), list)
+        and isinstance(payload.get("links"), list)
+        and payload["nodes"]
+    ):
+        return payload
+
+    try:
+        code_payload = brain.build_code_graph_payload()
+        if (
+            isinstance(code_payload, dict)
+            and isinstance(code_payload.get("nodes"), list)
+            and isinstance(code_payload.get("links"), list)
+            and code_payload["nodes"]
+        ):
+            return code_payload
+    except Exception:
+        # Keep /graph/data resilient even if code graph generation fails.
+        pass
+
+    if isinstance(payload, dict):
+        return payload
+    return {"nodes": [], "links": []}
 
 
 @app.get("/code-graph/data", tags=["graph"])
