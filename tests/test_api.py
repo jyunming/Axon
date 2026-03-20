@@ -1801,3 +1801,14 @@ def test_set_normal_stops_registry_drain(tmp_path):
     snap = reg.snapshot("myproject")
     assert snap["draining"] is False
     reg.reset("myproject")
+
+
+def test_get_registry_leases_returns_shape():
+    """GET /registry/leases returns 200 with expected response shape."""
+    resp = client.get("/registry/leases")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "leases" in data
+    assert "total_projects_tracked" in data
+    assert isinstance(data["leases"], list)
+    assert isinstance(data["total_projects_tracked"], int)

@@ -2936,29 +2936,14 @@ Your primary goal is to help the user by answering questions based on the provid
 
     def _assert_write_allowed(self, operation: str = "write") -> None:
         """Raise PermissionError if current project is read-only (scope, mounted share, or maintenance state)."""
-        if getattr(self, "_read_only_scope", False):
-            raise PermissionError(
-                f"Cannot {operation}: active scope is read-only (@projects / @mounts / @store)."
-            )
-        if self._is_mounted_share():
-            raise PermissionError(
-                f"Cannot {operation} on mounted share '{self._active_project}'. "
-                "Mounted projects are always read-only. Use your own project for writes."
-            )
-        if self._active_project != "default":
-            try:
-                from axon.projects import get_maintenance_state
+        from axon.access import check_write_allowed
 
-                _state = get_maintenance_state(self._active_project)
-                if _state in ("readonly", "offline", "draining"):
-                    raise PermissionError(
-                        f"Cannot {operation}: project '{self._active_project}' is in "
-                        f"'{_state}' maintenance state."
-                    )
-            except PermissionError:
-                raise
-            except Exception:
-                pass
+        check_write_allowed(
+            operation,
+            self._active_project,
+            getattr(self, "_read_only_scope", False),
+            self._is_mounted_share(),
+        )
 
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
@@ -3223,7 +3208,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._active_project = name
         self._read_only_scope = False
-        self._mounted_share = name != "default" and "ShareMount" in name.split("/")
+        from axon.access import is_mounted_share_path
+
+        self._mounted_share = is_mounted_share_path(name)
         set_active_project(name)
         logger.info(f"Switched to project '{name}'")
 

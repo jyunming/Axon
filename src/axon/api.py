@@ -1489,26 +1489,12 @@ async def set_project_maintenance(request: MaintenanceStateRequest):
     Setting ``readonly`` or ``offline`` immediately blocks ingest, delete, refresh, and
     graph finalize via ``_assert_write_allowed()``.
     """
-    from axon.projects import set_maintenance_state
-    from axon.runtime import get_registry as _get_registry
+    from axon.maintenance import apply_maintenance_state
 
     if not _VALID_PROJECT_NAME_RE.match(request.name):
         raise HTTPException(status_code=422, detail=f"Invalid project name: '{request.name}'")
     try:
-        set_maintenance_state(request.name, request.state)
-        _reg = _get_registry()
-        if request.state == "draining":
-            _reg.start_drain(request.name)
-        elif request.state == "normal":
-            _reg.stop_drain(request.name)
-        snap = _reg.snapshot(request.name)
-        return {
-            "status": "ok",
-            "project": request.name,
-            "maintenance_state": request.state,
-            "active_leases": snap["active_leases"],
-            "epoch": snap["epoch"],
-        }
+        return apply_maintenance_state(request.name, request.state)
     except ValueError as e:
         raise HTTPException(status_code=404 if "does not exist" in str(e) else 422, detail=str(e))
     except Exception as e:
@@ -1522,22 +1508,14 @@ async def get_project_maintenance(name: str):
 
     Query parameter: ``?name=<project-name>``
     """
-    from axon.projects import get_maintenance_state, project_dir
-    from axon.runtime import get_registry as _get_registry
+    from axon.maintenance import get_maintenance_status
+    from axon.projects import project_dir
 
     if not _VALID_PROJECT_NAME_RE.match(name):
         raise HTTPException(status_code=422, detail=f"Invalid project name: '{name}'")
     if not (project_dir(name) / "meta.json").exists():
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found.")
-    state = get_maintenance_state(name)
-    snap = _get_registry().snapshot(name)
-    return {
-        "project": name,
-        "maintenance_state": state,
-        "active_leases": snap["active_leases"],
-        "epoch": snap["epoch"],
-        "draining": snap["draining"],
-    }
+    return get_maintenance_status(name)
 
 
 @app.get("/registry/leases")

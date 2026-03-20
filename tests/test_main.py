@@ -8702,6 +8702,22 @@ def test_ingest_blocked_in_draining_maintenance(tmp_path):
         brain._assert_write_allowed("ingest")
 
 
+def test_mounted_share_blocks_write(tmp_path):
+    """_assert_write_allowed raises PermissionError when _mounted_share is True."""
+    import pytest
+
+    brain = _make_brain_with_project(tmp_path, "ShareMount/alice_proj", "normal")
+    brain._mounted_share = True
+    with pytest.raises(PermissionError, match="mounted share"):
+        brain._assert_write_allowed("ingest")
+
+
+def test_assert_write_allowed_passes_for_normal_project(tmp_path):
+    """_assert_write_allowed does not raise for a normal authoritative project."""
+    brain = _make_brain_with_project(tmp_path, "myproj", "normal")
+    brain._assert_write_allowed("ingest")  # must not raise
+
+
 # ---------------------------------------------------------------------------
 # Phase 7: startup log test
 # ---------------------------------------------------------------------------
