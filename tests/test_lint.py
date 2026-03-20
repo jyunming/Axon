@@ -18,6 +18,10 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     ("embeddings.py", ""),
     ("vector_store.py", ""),
     ("config.py", ""),
+    # Phase 3 extracted modules — REPL, CLI, and session persistence.
+    ("sessions.py", ""),
+    ("repl.py", ""),
+    ("cli.py", ""),
 ]
 
 

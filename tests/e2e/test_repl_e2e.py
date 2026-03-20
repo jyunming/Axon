@@ -5,6 +5,8 @@ from collections.abc import Iterable
 import pytest
 
 import axon.main as main_module
+import axon.repl as repl_module
+import axon.sessions as sessions_module
 
 pytestmark = [pytest.mark.e2e, pytest.mark.integration]
 
@@ -22,8 +24,8 @@ def _run_repl_transcript(monkeypatch, home_dir, commands: Iterable[str]):
 
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("USERPROFILE", str(home_dir))
-    monkeypatch.setattr(main_module, "_draw_header", lambda *args, **kwargs: None)
-    monkeypatch.setattr(main_module, "_SESSIONS_DIR", str(home_dir / ".axon" / "sessions"))
+    monkeypatch.setattr(repl_module, "_draw_header", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sessions_module, "_SESSIONS_DIR", str(home_dir / ".axon" / "sessions"))
     monkeypatch.setattr(prompt_toolkit, "PromptSession", _FakePromptSession)
 
 

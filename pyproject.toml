@@ -100,7 +100,7 @@ all = [
 ]
 
 [project.scripts]
-axon = "axon.main:main"
+axon = "axon.cli:main"
 axon-ui = "axon.webapp:main_ui"
 axon-api = "axon.api:main"
 axon-mcp = "axon.mcp_server:main"
