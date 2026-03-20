@@ -28,6 +28,15 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     ("code_graph.py", ""),
     ("code_retrieval.py", ""),
     ("query_router.py", ""),
+    # Phase 5 extracted modules — API route families.
+    ("api_schemas.py", ""),
+    ("api_routes/query.py", ""),
+    ("api_routes/ingest.py", ""),
+    ("api_routes/projects.py", ""),
+    ("api_routes/graph.py", ""),
+    ("api_routes/shares.py", ""),
+    ("api_routes/maintenance.py", ""),
+    ("api_routes/registry.py", ""),
 ]
 
 
