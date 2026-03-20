@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from axon.loaders import (
-    BMPLoader,
     CSVLoader,
     DirectoryLoader,
     DOCXLoader,
@@ -351,10 +350,7 @@ class TestJSONLoader:
 
 
 class TestImageLoader:
-    """Tests for the ImageLoader (VLM-based image captioning) and BMPLoader alias."""
-
-    def test_bmp_loader_is_alias_for_image_loader(self):
-        assert BMPLoader is ImageLoader
+    """Tests for the ImageLoader (VLM-based image captioning)."""
 
     def test_image_loader_returns_empty_when_ollama_missing(self, tmp_path):
         """ImageLoader returns [] gracefully when ollama is not installed."""
