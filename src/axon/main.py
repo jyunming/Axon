@@ -3107,30 +3107,22 @@ Your primary goal is to help the user by answering questions based on the provid
                             for entity, node in raw.items():
                                 if not isinstance(entity, str):
                                     continue
-                                if isinstance(node, dict):
-                                    doc_ids = node.get("chunk_ids", [])
-                                elif isinstance(node, list):
-                                    doc_ids = node
-                                else:
+                                if not isinstance(node, dict):
                                     continue
+                                doc_ids = node.get("chunk_ids", [])
                                 if not doc_ids:
                                     continue
                                 existing = self._entity_graph.get(entity)
                                 if existing is None:
-                                    if isinstance(node, dict):
-                                        self._entity_graph[entity] = {
-                                            "description": node.get("description", ""),
-                                            "type": node.get("type", "UNKNOWN"),
-                                            "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
-                                            "frequency": len(
-                                                [d for d in doc_ids if isinstance(d, str)]
-                                            ),
-                                            "degree": node.get("degree", 0),
-                                        }
-                                    else:
-                                        self._entity_graph[entity] = [
-                                            d for d in doc_ids if isinstance(d, str)
-                                        ]
+                                    self._entity_graph[entity] = {
+                                        "description": node.get("description", ""),
+                                        "type": node.get("type", "UNKNOWN"),
+                                        "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
+                                        "frequency": len(
+                                            [d for d in doc_ids if isinstance(d, str)]
+                                        ),
+                                        "degree": node.get("degree", 0),
+                                    }
                                 elif isinstance(existing, dict):
                                     existing_ids = set(existing.get("chunk_ids", []))
                                     new_ids = [
@@ -3141,13 +3133,6 @@ Your primary goal is to help the user by answering questions based on the provid
                                     if new_ids:
                                         existing.setdefault("chunk_ids", []).extend(new_ids)
                                         existing["frequency"] = len(existing["chunk_ids"])
-                                else:
-                                    # existing is legacy list
-                                    existing_ids = set(existing)
-                                    for doc_id in doc_ids:
-                                        if isinstance(doc_id, str) and doc_id not in existing_ids:
-                                            existing.append(doc_id)
-                                            existing_ids.add(doc_id)
                     except Exception as e:
                         logger.warning(f"Could not merge entity graph for '{desc}': {e}")
 
@@ -3376,8 +3361,7 @@ Your primary goal is to help the user by answering questions based on the provid
     def _load_entity_graph(self) -> dict:
         """Load persisted entity→doc_id graph from disk.
 
-        Shape (new): {entity_lower: {"description": str, "chunk_ids": list[str]}}
-        Migrates legacy flat-list format: {entity_lower: [chunk_id, ...]}
+        Shape: {entity_lower: {"description": str, "chunk_ids": list[str]}}
         """
         import json
         import pathlib
@@ -3392,18 +3376,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 for key, value in raw.items():
                     if not isinstance(key, str):
                         continue
-                    if isinstance(value, list):
-                        # Legacy flat-list format — migrate
-                        cleaned[key] = {
-                            "description": "",
-                            "type": "UNKNOWN",
-                            "chunk_ids": [v for v in value if isinstance(v, str)],
-                            "frequency": len([v for v in value if isinstance(v, str)]),
-                            "degree": 0,
-                        }
-                    elif isinstance(value, dict) and "chunk_ids" in value:
+                    if isinstance(value, dict) and "chunk_ids" in value:
                         node = value
-                        # Migration: add missing fields with defaults
                         node.setdefault("type", "UNKNOWN")
                         node.setdefault("frequency", len(node.get("chunk_ids", [])))
                         node.setdefault("degree", 0)
@@ -3487,19 +3461,10 @@ Your primary goal is to help the user by answering questions based on the provid
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._relation_graph), encoding="utf-8")
 
-    def _load_community_map(self) -> dict:
-        """Backward-compat: returns finest community level map."""
-        return self._community_map  # uses the property
-
-    def _save_community_map(self) -> None:
-        """Backward-compat: delegates to _save_community_levels."""
-        self._save_community_levels()
-
     def _load_community_levels(self) -> dict:
         """Load persisted hierarchical community levels from disk.
 
         Shape: {level_int: {entity_lower: community_id}}
-        Falls back to old .community_map.json if levels file is missing.
         """
         import json
         import pathlib
@@ -3510,19 +3475,6 @@ Your primary goal is to help the user by answering questions based on the provid
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
                     return {int(k): v for k, v in raw.items() if isinstance(v, dict)}
-        except Exception:
-            pass
-        # Fall back to old .community_map.json if levels file missing
-        old_path = pathlib.Path(self.config.bm25_path) / ".community_map.json"
-        try:
-            if old_path.exists():
-                raw = json.loads(old_path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    filtered = {
-                        k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, int)
-                    }
-                    if filtered:
-                        return {0: filtered}
         except Exception:
             pass
         return {}
@@ -3589,22 +3541,6 @@ Your primary goal is to help the user by answering questions based on the provid
             )
         except Exception as e:
             logger.debug(f"Could not save community hierarchy: {e}")
-
-    @property
-    def _community_map(self) -> dict:
-        """Alias for the finest-grained community level (backward compat)."""
-        if not self._community_levels:
-            return {}
-        finest = max(self._community_levels.keys())
-        return self._community_levels.get(finest, {})
-
-    @_community_map.setter
-    def _community_map(self, value: dict) -> None:
-        """For backward compat: setting _community_map sets level 0 in a single-level structure."""
-        if value:
-            self._community_levels = {0: value}
-        else:
-            self._community_levels = {}
 
     def _load_community_summaries(self) -> dict:
         """Load persisted community summaries from disk."""
@@ -6002,22 +5938,18 @@ Your primary goal is to help the user by answering questions based on the provid
         """Remove deleted chunk IDs from entity graph and relation graph.
 
         Entries that become empty are deleted entirely.  Persists changes to disk.
-        Handles both new dict-node format and legacy list format.
         """
         eg_changed = False
         for entity in list(self._entity_graph):
             node = self._entity_graph[entity]
-            chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else node
+            chunk_ids = node.get("chunk_ids", [])
             after = [d for d in chunk_ids if d not in deleted_ids]
             if len(after) != len(chunk_ids):
                 eg_changed = True
                 if after:
-                    if isinstance(node, dict):
-                        self._entity_graph[entity]["chunk_ids"] = after
-                        # Recompute frequency after pruning (Item 2)
-                        self._entity_graph[entity]["frequency"] = len(after)
-                    else:
-                        self._entity_graph[entity] = {"description": "", "chunk_ids": after}
+                    self._entity_graph[entity]["chunk_ids"] = after
+                    # Recompute frequency after pruning
+                    self._entity_graph[entity]["frequency"] = len(after)
                 else:
                     del self._entity_graph[entity]
         if eg_changed:
@@ -6921,7 +6853,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 # Scale matched score into [0.5, 0.8) range so it is clearly below
                 # a direct vector-match score but still meaningfully ranked.
                 doc_score = 0.5 + score * 0.3
-                doc_ids = node.get("chunk_ids", []) if isinstance(node, dict) else node
+                doc_ids = node.get("chunk_ids", [])
                 for did in doc_ids:
                     if did not in existing_ids:
                         if extra_id_scores.get(did, 0.0) < doc_score:
@@ -6936,11 +6868,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     if not target:
                         continue
                     target_node = self._entity_graph.get(target, {})
-                    target_chunk_ids = (
-                        target_node.get("chunk_ids", [])
-                        if isinstance(target_node, dict)
-                        else target_node
-                    )
+                    target_chunk_ids = target_node.get("chunk_ids", [])
                     for did in target_chunk_ids:
                         if did not in existing_ids:
                             # 1-hop score: lower than direct match

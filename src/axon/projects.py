@@ -37,7 +37,6 @@ import os
 import re
 import shutil
 import uuid
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -541,28 +540,8 @@ def ensure_user_namespace(user_dir: Path) -> None:
 
     Creates: default/, projects/, mounts/, .shares/, and store_meta.json.
     Safe to call multiple times (idempotent).
-
-    Phase 0 migration: if ``_default`` exists and ``default`` does not,
-    renames ``_default`` → ``default`` automatically.  If both exist, raises
-    ``RuntimeError`` to prevent silent data loss.
     """
     user_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Phase 0: migrate _default → default ──────────────────────────────────
-    old_default = user_dir / "_default"
-    new_default = user_dir / "default"
-    if old_default.exists() and not new_default.exists():
-        warnings.warn(
-            f"Migrating '{old_default}' → '{new_default}'. "
-            "The '_default' project name is no longer supported.",
-            stacklevel=2,
-        )
-        old_default.rename(new_default)
-    elif old_default.exists() and new_default.exists():
-        raise RuntimeError(
-            f"Both '_default' and 'default' exist under {user_dir}. "
-            "Remove or merge '_default' manually before starting Axon."
-        )
 
     # ── Standard structure ────────────────────────────────────────────────────
     (user_dir / "projects").mkdir(exist_ok=True)
@@ -571,8 +550,8 @@ def ensure_user_namespace(user_dir: Path) -> None:
     # ShareMount kept for backwards compatibility with share-link helpers
     (user_dir / "ShareMount").mkdir(exist_ok=True)
 
-    # Default project (canonical — no underscore)
-    _ensure_single_project_at(new_default, "default", "Default project")
+    # Default project
+    _ensure_single_project_at(user_dir / "default", "default", "Default project")
 
     # ── Phase 1: store_meta.json ─────────────────────────────────────────────
     store_meta = user_dir / "store_meta.json"

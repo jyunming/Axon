@@ -418,39 +418,6 @@ class TestEnsureUserNamespace:
         assert meta["name"] == "default"
         assert meta["project_namespace_id"].startswith("proj_")
 
-    def test_migrates_underscore_default(self, tmp_path):
-        """_default/ is automatically renamed to default/ if default/ does not exist."""
-        import json
-
-        from axon.projects import ensure_user_namespace
-
-        user_dir = tmp_path / "AxonStore" / "alice"
-        old = user_dir / "_default"
-        old.mkdir(parents=True)
-        (old / "chroma_data").mkdir()
-        (old / "bm25_index").mkdir()
-        (old / "meta.json").write_text(json.dumps({"name": "_default"}))
-
-        import warnings
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            ensure_user_namespace(user_dir)
-        assert any("_default" in str(x.message) for x in w)
-        assert (user_dir / "default").is_dir()
-        assert not (user_dir / "_default").exists()
-
-    def test_raises_when_both_defaults_exist(self, tmp_path):
-        """RuntimeError when both _default and default already exist."""
-        from axon.projects import ensure_user_namespace
-
-        user_dir = tmp_path / "AxonStore" / "alice"
-        (user_dir / "_default").mkdir(parents=True)
-        (user_dir / "default").mkdir(parents=True)
-
-        with pytest.raises(RuntimeError, match="[Bb]oth"):
-            ensure_user_namespace(user_dir)
-
 
 # ---------------------------------------------------------------------------
 # Phase 1: namespace IDs

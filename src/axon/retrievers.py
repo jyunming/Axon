@@ -18,8 +18,6 @@ class BM25Retriever:
     def __init__(self, storage_path: str = "./bm25_index"):
         self.storage_path = storage_path
         self.corpus_file = os.path.join(storage_path, "bm25_corpus.json")
-        # Kept for reference; the pickle path is also derived locally in load() during migration.
-        self.index_file = os.path.join(storage_path, "bm25_index.pkl")
         self.bm25 = None
         self.corpus: list[
             dict[str, Any]
@@ -116,23 +114,8 @@ class BM25Retriever:
         logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
 
     def load(self):
-        """Load corpus from JSON (or migrate from legacy pickle)."""
-        # Migrate legacy pickle if it exists
-        legacy_pkl = os.path.join(self.storage_path, "bm25_index.pkl")
-        if os.path.exists(legacy_pkl) and not os.path.exists(self.corpus_file):
-            try:
-                import pickle
-
-                with open(legacy_pkl, "rb") as f:
-                    corpus, _ = pickle.load(f)
-                self.corpus = corpus
-                self.save()  # save as JSON
-                os.remove(legacy_pkl)
-                logger.info("Migrated BM25 index from pickle to JSON")
-            except Exception as e:
-                logger.error(f"Failed to migrate BM25 pickle: {e}")
-                return
-        elif os.path.exists(self.corpus_file):
+        """Load corpus from JSON."""
+        if os.path.exists(self.corpus_file):
             try:
                 with open(self.corpus_file, encoding="utf-8") as f:
                     self.corpus = json.load(f)

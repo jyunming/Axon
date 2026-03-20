@@ -281,7 +281,7 @@ def test_clear_resets_bm25_and_hashes():
     brain.bm25 = MagicMock()
     brain.bm25.corpus = ["fake_chunk"]
     brain._ingested_hashes = {"abc123"}
-    brain._entity_graph = {"entity": ["neighbor"]}
+    brain._entity_graph = {"entity": {"description": "", "chunk_ids": ["neighbor"]}}
 
     with patch.object(brain, "_save_hash_store") as mock_save_hash, patch.object(
         brain, "_save_entity_graph"

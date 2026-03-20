@@ -1804,8 +1804,7 @@ class TestGraphRAG:
         # doc id (possibly with chunk suffix from splitter) should appear under at least one entity
         all_ids = set()
         for node in brain._entity_graph.values():
-            chunk_ids = node["chunk_ids"] if isinstance(node, dict) else node
-            all_ids.update(chunk_ids)
+            all_ids.update(node["chunk_ids"])
         assert any(doc_id.startswith("d1") for doc_id in all_ids)
 
     def test_graph_rag_expands_results_at_query_time(
@@ -1823,7 +1822,7 @@ class TestGraphRAG:
             query_router="off",  # disable router so graph_rag=True is preserved
         )
         # Pre-populate entity graph
-        brain._entity_graph = {"transformer": ["d2"]}
+        brain._entity_graph = {"transformer": {"description": "", "chunk_ids": ["d2"]}}
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         # Primary retrieval returns only d1
         brain.vector_store.search = MagicMock(
@@ -1858,7 +1857,9 @@ class TestGraphRAG:
             graph_rag=True,
             similarity_threshold=0.0,
         )
-        brain._entity_graph = {"transformer": ["d1"]}  # d1 already in primary results
+        brain._entity_graph = {
+            "transformer": {"description": "", "chunk_ids": ["d1"]}
+        }  # d1 already in primary results
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "Attention", "score": 0.9, "metadata": {}}]
@@ -3086,7 +3087,7 @@ class TestGraphRAGRobustness:
     def test_graph_expanded_score_in_range(self):
         """Scores assigned to expanded docs are in [0.5, 0.8)."""
         brain = self._make_brain()
-        brain._entity_graph = {"machine learning": ["doc_ml_1"]}
+        brain._entity_graph = {"machine learning": {"description": "", "chunk_ids": ["doc_ml_1"]}}
         brain._relation_graph = {}
         brain.config.graph_rag_relations = False
 
@@ -3109,7 +3110,7 @@ class TestGraphRAGRobustness:
     def test_graph_expanded_score_not_hardcoded(self):
         """Expanded doc scores must not be exactly 1.0 (the old bug)."""
         brain = self._make_brain()
-        brain._entity_graph = {"python": ["doc_py_1"]}
+        brain._entity_graph = {"python": {"description": "", "chunk_ids": ["doc_py_1"]}}
         brain._relation_graph = {}
         brain.config.graph_rag_relations = False
         brain._extract_entities = MagicMock(return_value=["python"])
@@ -3128,22 +3129,22 @@ class TestGraphRAGRobustness:
     def test_entity_graph_pruned_on_delete(self):
         """Deleted doc IDs are removed from the entity graph."""
         brain = self._make_brain()
-        brain._entity_graph = {"python": ["doc_1", "doc_2"], "machine learning": ["doc_2"]}
+        brain._entity_graph = {
+            "python": {"description": "", "chunk_ids": ["doc_1", "doc_2"]},
+            "machine learning": {"description": "", "chunk_ids": ["doc_2"]},
+        }
         brain._relation_graph = {}
 
         brain._prune_entity_graph({"doc_2"})
 
-        # Legacy list format is migrated to dict-node format on modification
-        node = brain._entity_graph["python"]
-        chunk_ids = node["chunk_ids"] if isinstance(node, dict) else node
-        assert chunk_ids == ["doc_1"]
+        assert brain._entity_graph["python"]["chunk_ids"] == ["doc_1"]
         assert "machine learning" not in brain._entity_graph
         brain._save_entity_graph.assert_called_once()
 
     def test_empty_entity_entry_removed_on_prune(self):
         """Entity entries that become empty after pruning are deleted entirely."""
         brain = self._make_brain()
-        brain._entity_graph = {"solo_entity": ["only_doc"]}
+        brain._entity_graph = {"solo_entity": {"description": "", "chunk_ids": ["only_doc"]}}
         brain._relation_graph = {}
 
         brain._prune_entity_graph({"only_doc"})
@@ -3201,8 +3202,8 @@ class TestGraphRAGRobustness:
         brain = self._make_brain()
         # Entity graph: "python" has doc_py, "machine learning" has doc_ml
         brain._entity_graph = {
-            "python": ["doc_py"],
-            "machine learning": ["doc_ml"],
+            "python": {"description": "", "chunk_ids": ["doc_py"]},
+            "machine learning": {"description": "", "chunk_ids": ["doc_ml"]},
         }
         # Relation graph: python → machine learning
         brain._relation_graph = {
@@ -3228,8 +3229,8 @@ class TestGraphRAGRobustness:
         """1-hop traversal scores (0.62) are lower than direct entity match scores."""
         brain = self._make_brain()
         brain._entity_graph = {
-            "python": ["doc_py"],
-            "machine learning": ["doc_ml"],
+            "python": {"description": "", "chunk_ids": ["doc_py"]},
+            "machine learning": {"description": "", "chunk_ids": ["doc_ml"]},
         }
         brain._relation_graph = {
             "python": [{"target": "machine learning", "relation": "used for", "chunk_id": "doc_py"}]
@@ -3456,7 +3457,6 @@ class TestGraphRAGCommunity:
         )
         brain._save_entity_graph = MagicMock()
         brain._save_relation_graph = MagicMock()
-        brain._save_community_map = MagicMock()
         brain._save_community_summaries = MagicMock()
         brain._save_community_levels = MagicMock()
         brain._save_community_hierarchy = MagicMock()
@@ -3517,30 +3517,6 @@ class TestGraphRAGCommunity:
         assert result[0]["object"] == "Beats"
         assert result[0]["description"] == ""
 
-    # ── Phase 1.3: entity graph migration ────────────────────────────────
-
-    def test_entity_graph_migration_from_flat_list(self, tmp_path):
-        """_load_entity_graph migrates legacy flat list format to new dict-node format."""
-        import json
-        from unittest.mock import MagicMock
-
-        from axon.main import AxonBrain, AxonConfig
-
-        brain = MagicMock(spec=AxonBrain)
-        brain.config = AxonConfig(bm25_path=str(tmp_path))
-        brain._load_entity_graph = AxonBrain._load_entity_graph.__get__(brain, AxonBrain)
-
-        # Write legacy format
-        legacy = {"openai": ["chunk1", "chunk2"]}
-        (tmp_path / ".entity_graph.json").write_text(json.dumps(legacy), encoding="utf-8")
-
-        result = brain._load_entity_graph()
-        assert result["openai"]["description"] == ""
-        assert result["openai"]["chunk_ids"] == ["chunk1", "chunk2"]
-        assert result["openai"]["type"] == "UNKNOWN"
-        assert result["openai"]["frequency"] == 2
-        assert result["openai"]["degree"] == 0
-
     # ── Phase 2.5: community detection ───────────────────────────────────
 
     def test_community_detection_requires_networkx(self):
@@ -3555,9 +3531,9 @@ class TestGraphRAGCommunity:
             result = brain._run_community_detection()
         assert result == {}
 
-    # ── Phase 2.4: community map persist ─────────────────────────────────
+    # ── Phase 2.4: community levels persist ──────────────────────────────
 
-    def test_community_map_persisted(self, tmp_path):
+    def test_community_levels_persisted(self, tmp_path):
         """_save_community_levels / _load_community_levels round-trips correctly."""
         from unittest.mock import MagicMock
 
@@ -3669,8 +3645,7 @@ class TestGraphRAGCommunity:
         # Simulate the frequency update logic from ingest
         for entity_key in brain._entity_graph:
             node = brain._entity_graph[entity_key]
-            if isinstance(node, dict):
-                node["frequency"] = len(node.get("chunk_ids", []))
+            node["frequency"] = len(node.get("chunk_ids", []))
         assert brain._entity_graph["apple"]["frequency"] == 2
 
     def test_community_report_has_title_and_findings(self):
@@ -3830,17 +3805,6 @@ class TestGraphRAGCommunity:
         assert 0 in community_levels
         assert 1 in community_levels
 
-    def test_community_map_property_returns_finest_level(self):
-        """_community_map property returns the finest (highest-index) level map."""
-        brain = self._make_brain()
-        brain._community_levels = {0: {"a": 0}, 1: {"a": 0, "b": 1}}
-        # Access through the property on the real class — but brain is a MagicMock,
-        # so we call the property getter directly
-        from axon.main import AxonBrain
-
-        result = AxonBrain._community_map.fget(brain)
-        assert result == {"a": 0, "b": 1}
-
     def test_relationship_weight_incremented(self):
         """Relation weight is incremented when same (target, relation) pair appears again."""
         brain = self._make_brain()
@@ -3983,7 +3947,6 @@ class TestGraphRAGRealImplementation:
         brain._rebuild_communities = AxonBrain._rebuild_communities.__get__(brain, AxonBrain)
         brain._save_entity_graph = MagicMock()
         brain._save_relation_graph = MagicMock()
-        brain._save_community_map = MagicMock()
         brain._save_community_summaries = MagicMock()
         brain._save_community_levels = MagicMock()
         brain._save_community_hierarchy = MagicMock()
@@ -6349,12 +6312,11 @@ class TestFundamentalFixes:
                 _cid = _entry.get("chunk_id", "")
                 if _cid:
                     _tgt_node = brain._entity_graph[_tgt]
-                    if isinstance(_tgt_node, dict):
-                        _tgt_node.setdefault("chunk_ids", [])
-                        if _cid not in _tgt_node["chunk_ids"]:
-                            _tgt_node["chunk_ids"].append(_cid)
-                            _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
-                            _stub_added = True
+                    _tgt_node.setdefault("chunk_ids", [])
+                    if _cid not in _tgt_node["chunk_ids"]:
+                        _tgt_node["chunk_ids"].append(_cid)
+                        _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
+                        _stub_added = True
         if _stub_added:
             brain._save_entity_graph()
 
@@ -6394,11 +6356,10 @@ class TestFundamentalFixes:
                 _cid = _entry.get("chunk_id", "")
                 if _cid:
                     _tgt_node = brain._entity_graph[_tgt]
-                    if isinstance(_tgt_node, dict):
-                        _tgt_node.setdefault("chunk_ids", [])
-                        if _cid not in _tgt_node["chunk_ids"]:
-                            _tgt_node["chunk_ids"].append(_cid)
-                            _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
+                    _tgt_node.setdefault("chunk_ids", [])
+                    if _cid not in _tgt_node["chunk_ids"]:
+                        _tgt_node["chunk_ids"].append(_cid)
+                        _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
 
         assert (
             "c2" in brain._entity_graph["charlie"]["chunk_ids"]
@@ -8805,21 +8766,6 @@ class TestGraphRagPersistence:
         assert brain._entity_graph["foo"]["type"] == "PERSON"
         assert brain._entity_graph["foo"]["chunk_ids"] == ["c1"]
 
-    def test_load_entity_graph_legacy_format(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
-    ):
-        import json as _json
-        import pathlib
-
-        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
-        # Write old flat-list format
-        path = pathlib.Path(tmp_path) / ".entity_graph.json"
-        path.write_text(_json.dumps({"Foo": ["c1", "c2"]}), encoding="utf-8")
-        result = brain._load_entity_graph()
-        assert "Foo" in result
-        assert isinstance(result["Foo"], dict)
-        assert result["Foo"]["chunk_ids"] == ["c1", "c2"]
-
     def test_load_entity_graph_corrupted(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
     ):
@@ -8864,20 +8810,6 @@ class TestGraphRagPersistence:
         brain._community_levels = brain._load_community_levels()
         assert 0 in brain._community_levels
         assert brain._community_levels[0]["alice"] == 0
-
-    def test_load_community_levels_fallback_to_old_format(
-        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
-    ):
-        import json as _json
-        import pathlib
-
-        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
-        # Write old .community_map.json (no .community_levels.json)
-        old_path = pathlib.Path(tmp_path) / ".community_map.json"
-        old_path.write_text(_json.dumps({"alice": 0, "bob": 1}), encoding="utf-8")
-        result = brain._load_community_levels()
-        assert 0 in result
-        assert result[0]["alice"] == 0
 
     def test_save_and_load_community_hierarchy(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
