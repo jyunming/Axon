@@ -421,6 +421,7 @@ class TestMountedShareWriteEnforcement:
         brain._active_project = "ShareMount/alice_myproject"
         brain._read_only_scope = False
         brain._mounted_share = True
+        brain._active_project_kind = "mounted"
         return brain
 
     def test_ingest_on_mounted_share_raises_permission_error(self):
@@ -441,6 +442,7 @@ class TestMountedShareWriteEnforcement:
     def test_read_only_scope_raises_permission_error(self):
         brain = self._make_brain()
         brain._mounted_share = False
+        brain._active_project_kind = "local"
         brain._read_only_scope = True
         with pytest.raises(PermissionError, match="read-only"):
             brain._assert_write_allowed("write")
@@ -448,6 +450,7 @@ class TestMountedShareWriteEnforcement:
     def test_own_project_allows_write(self):
         brain = self._make_brain()
         brain._mounted_share = False
+        brain._active_project_kind = "local"
         brain._read_only_scope = False
         # Should not raise
         brain._assert_write_allowed("ingest")
@@ -459,4 +462,5 @@ class TestMountedShareWriteEnforcement:
     def test_is_mounted_share_returns_false_when_flag_clear(self):
         brain = self._make_brain()
         brain._mounted_share = False
+        brain._active_project_kind = "local"
         assert brain._is_mounted_share() is False

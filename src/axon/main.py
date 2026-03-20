@@ -2605,7 +2605,9 @@ Your primary goal is to help the user by answering questions based on the provid
         self._base_bm25_path: str = os.path.abspath(self.config.bm25_path)
         self._active_project: str = "default"
         self._read_only_scope: bool = False
-        self._mounted_share: bool = False
+        self._mounted_share: bool = False  # legacy alias — use _active_project_kind
+        self._active_project_kind: str = "default"  # "default" | "local" | "mounted" | "scope"
+        self._active_mount_descriptor: dict | None = None
 
         try:
             from axon.retrievers import BM25Retriever
@@ -2922,6 +2924,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._active_project = scope
         self._read_only_scope = True
+        self._active_project_kind = "scope"
+        self._active_mount_descriptor = None
+        self._mounted_share = False
         logger.info(
             "Switched to %s scope  |  %d store(s) merged  |  read-only",
             scope,
@@ -2929,7 +2934,14 @@ Your primary goal is to help the user by answering questions based on the provid
         )
 
     def _is_mounted_share(self) -> bool:
-        """Return True if the active project is a received share mount (always read-only)."""
+        """Return True if the active project is a received share mount (always read-only).
+
+        Uses descriptor-based kind state when available; falls back to legacy
+        ``_mounted_share`` flag set by older code paths.
+        """
+        kind = getattr(self, "_active_project_kind", None)
+        if kind is not None:
+            return kind == "mounted"
         return getattr(self, "_mounted_share", False)
 
     def _assert_write_allowed(self, operation: str = "write") -> None:
@@ -3222,9 +3234,31 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._active_project = name
         self._read_only_scope = False
-        from axon.access import is_mounted_share_path
+        # Resolve kind from switch operation — descriptor-based, not string-pattern
+        if name.startswith("mounts/"):
+            self._active_project_kind = "mounted"
+            # descriptor was already loaded above; store it for write-guard and UI
+            mount_name = name[len("mounts/") :]
+            from axon.mounts import load_mount_descriptor as _lmd
 
-        self._mounted_share = is_mounted_share_path(name)
+            self._active_mount_descriptor = _lmd(Path(self.config.projects_root), mount_name)
+        elif name == "default":
+            self._active_project_kind = "default"
+            self._active_mount_descriptor = None
+        elif name.startswith("@"):
+            self._active_project_kind = "scope"
+            self._active_mount_descriptor = None
+        else:
+            # Legacy ShareMount/ paths still work through string detection
+            from axon.access import is_mounted_share_path as _imp
+
+            if _imp(name):
+                self._active_project_kind = "mounted"
+                self._active_mount_descriptor = None
+            else:
+                self._active_project_kind = "local"
+                self._active_mount_descriptor = None
+        self._mounted_share = self._active_project_kind == "mounted"
         set_active_project(name)
         logger.info(f"Switched to project '{name}'")
 
