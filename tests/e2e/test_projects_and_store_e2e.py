@@ -104,13 +104,11 @@ def test_store_init_whoami_and_share_lifecycle(api_client, make_brain, tmp_path)
         json={
             "project": "sharedproj",
             "grantee": getpass.getuser(),
-            "write_access": True,
         },
     )
     assert share_generate.status_code == 200
     share_payload = share_generate.json()
     assert share_payload["project"] == "sharedproj"
-    assert share_payload["write_access"] is True
     assert share_payload["share_string"]
 
     shares = api_client.get("/share/list")

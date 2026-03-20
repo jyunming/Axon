@@ -1445,7 +1445,7 @@ async function redeemShare(apiBase: string): Promise<void> {
       return;
     }
     vscode.window.showInformationMessage(
-      `Axon: Mounted "${data.owner}/${data.project}" as "${data.mount_name}" (${data.write_access ? 'read+write' : 'read-only'})`
+      `Axon: Mounted "${data.owner}/${data.project}" as "${data.mount_name}" (read-only)`
     );
   } catch (err) {
     vscode.window.showErrorMessage(`Axon: Failed to redeem share.`);
@@ -1666,7 +1666,7 @@ class AxonRedeemShareTool implements vscode.LanguageModelTool<any> {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Redeem failed: ${formatDetail(data, result.body)}`)]);
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
-        `Share redeemed. Project "${data.owner}/${data.project}" mounted as "${data.mount_name}" (${data.write_access ? 'read+write' : 'read-only'}).`
+        `Share redeemed. Project "${data.owner}/${data.project}" mounted as "${data.mount_name}" (read-only).`
       )]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Redeem error: ${err}`)]);

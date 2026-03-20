@@ -1200,7 +1200,7 @@ def test_share_generate_404_missing_project(tmp_path):
 
     resp = client.post(
         "/share/generate",
-        json={"project": "nonexistent", "grantee": "bob", "write_access": False},
+        json={"project": "nonexistent", "grantee": "bob"},
     )
     assert resp.status_code == 404
 
@@ -1222,14 +1222,13 @@ def test_share_generate_success(tmp_path):
         "share_string": "abc:def:alice:myproject:/data/store",
         "project": "myproject",
         "grantee": "bob",
-        "write_access": False,
         "owner": "alice",
     }
 
     with patch("axon.api._shares.generate_share_key", return_value=fake_result):
         resp = client.post(
             "/share/generate",
-            json={"project": "myproject", "grantee": "bob", "write_access": False},
+            json={"project": "myproject", "grantee": "bob"},
         )
 
     assert resp.status_code == 200

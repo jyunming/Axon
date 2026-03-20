@@ -354,7 +354,7 @@ async def share_project(
     """
     return await _post(
         "/share/generate",
-        {"project": project, "grantee": grantee, "write_access": False},
+        {"project": project, "grantee": grantee},
     )
 
 

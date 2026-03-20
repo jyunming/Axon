@@ -307,11 +307,9 @@ class TestReplShareCommand:
             owner_user_dir=user_dir,
             project="myproject",
             grantee="bob",
-            write_access=False,
         )
         assert result["project"] == "myproject"
         assert result["grantee"] == "bob"
-        assert result["write_access"] is False
         assert result["share_string"]
         key_id = result["key_id"]
 
@@ -333,7 +331,6 @@ class TestReplShareCommand:
             owner_user_dir=user_dir,
             project="proj",
             grantee="carol",
-            write_access=True,
         )
 
         data = list_shares(user_dir)
@@ -350,23 +347,6 @@ class TestReplShareCommand:
 
         with pytest.raises(ValueError, match="not found"):
             revoke_share_key(owner_user_dir=user_dir, key_id="nonexistent_key")
-
-    def test_generate_write_access_true(self, tmp_path):
-        from axon.shares import generate_share_key
-
-        user_dir = tmp_path / "store" / "alice"
-        proj_dir = user_dir / "proj2"
-        proj_dir.mkdir(parents=True)
-        (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_w"}', encoding="utf-8")
-        (user_dir / ".shares").mkdir(parents=True)
-
-        result = generate_share_key(
-            owner_user_dir=user_dir,
-            project="proj2",
-            grantee="dave",
-            write_access=True,
-        )
-        assert result["write_access"] is True
 
 
 # ---------------------------------------------------------------------------

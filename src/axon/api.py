@@ -321,10 +321,6 @@ class StoreInitRequest(BaseModel):
 class ShareGenerateRequest(BaseModel):
     project: str = Field(..., description="Project name to share.")
     grantee: str = Field(..., description="OS username of the recipient.")
-    write_access: bool = Field(
-        False,
-        description="Ignored. All mounted shares are enforced read-only regardless of this value.",
-    )
 
 
 class ShareRedeemRequest(BaseModel):
@@ -612,7 +608,6 @@ async def share_generate(request: ShareGenerateRequest):
         owner_user_dir=user_dir,
         project=request.project,
         grantee=request.grantee,
-        write_access=request.write_access,
     )
     return result
 

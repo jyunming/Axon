@@ -762,7 +762,7 @@ class TestMcpToolCoverage:
                 assert args[0].endswith("/share/generate")
                 assert kwargs["json"]["project"] == "myproj"
                 assert kwargs["json"]["grantee"] == "bob"
-                assert kwargs["json"]["write_access"] is False  # always read-only
+                assert "write_access" not in kwargs["json"]
                 assert result["share_string"] == "AXON.abcd"
 
         asyncio.run(_run())
@@ -781,7 +781,7 @@ class TestMcpToolCoverage:
                 )
                 await share_project(project="p", grantee="carol")
                 _, kwargs = mock_post.call_args
-                assert kwargs["json"]["write_access"] is False  # always read-only
+                assert "write_access" not in kwargs["json"]
 
         asyncio.run(_run())
 

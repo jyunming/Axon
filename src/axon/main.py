@@ -11833,35 +11833,25 @@ def _interactive_repl(
                     if sharing:
                         for s in sharing:
                             tag = " [revoked]" if s.get("revoked") else ""
-                            acc = "rw" if s.get("write_access") else "ro"
-                            print(f"    {s['project']} → {s['grantee']}  [{acc}]{tag}")
+                            print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
                     else:
                         print("    (none)")
                     print("\n  Shares — received:")
                     if shared:
                         for s in shared:
-                            acc = "rw" if s.get("write_access") else "ro"
-                            print(
-                                f"    {s['owner']}/{s['project']} mounted as {s['mount']}  [{acc}]"
-                            )
+                            print(f"    {s['owner']}/{s['project']} mounted as {s['mount']}  [ro]")
                     else:
                         print("    (none)")
                     print()
 
                 elif sub == "generate":
-                    # Usage: /share generate <project> <grantee> [--write]
+                    # Usage: /share generate <project> <grantee>
                     parts = sub_arg.split()
                     if len(parts) < 2:
-                        print("  Usage: /share generate <project> <grantee> [--write]")
+                        print("  Usage: /share generate <project> <grantee>")
                     else:
                         proj = parts[0]
                         grantee = parts[1]
-                        write_access = "--write" in parts
-                        if write_access:
-                            print(
-                                "  ⚠️  --write is deprecated: write access on mounted shares "
-                                "is not enforced. All mounts are read-only."
-                            )
                         user_dir = Path(brain.config.projects_root)
                         proj_dir = user_dir / proj
                         if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
@@ -11874,13 +11864,10 @@ def _interactive_repl(
                                     owner_user_dir=user_dir,
                                     project=proj,
                                     grantee=grantee,
-                                    write_access=write_access,
                                 )
                                 print(f"\n  Share key generated for project '{proj}'")
                                 print(f"  Grantee:      {grantee}")
-                                print(
-                                    f"  Access:       {'read-write' if write_access else 'read-only'}"
-                                )
+                                print("  Access:       read-only")
                                 print(f"  Key ID:       {result['key_id']}")
                                 print(f"\n  Share string (send this to {grantee}):")
                                 print(f"\n    {result['share_string']}\n")
@@ -11904,9 +11891,7 @@ def _interactive_repl(
                             print(
                                 f"  Mounted at:  {result.get('mount', 'ShareMount/' + result['project'])}"
                             )
-                            print(
-                                f"  Access:      {'read-write' if result.get('write_access') else 'read-only'}\n"
-                            )
+                            print("  Access:      read-only\n")
                         except (ValueError, NotImplementedError) as e:
                             print(f"  Redeem failed: {e}")
                         except Exception as e:

@@ -38,12 +38,10 @@ class TestGenerateShareKey:
             owner_user_dir=owner_dir,
             project="myproject",
             grantee="bob",
-            write_access=False,
         )
         assert result["key_id"].startswith("sk_")
         assert result["project"] == "myproject"
         assert result["grantee"] == "bob"
-        assert result["write_access"] is False
         assert result["owner"] == "alice"
         assert "share_string" in result
         assert isinstance(result["share_string"], str)
@@ -55,13 +53,6 @@ class TestGenerateShareKey:
         owner_dir = _make_user_dir(tmp_path, "alice")
         result = shares.generate_share_key(owner_dir, "myproject", "bob")
         assert result["key_id"].startswith("sk_")
-
-    def test_write_access_true(self, tmp_path):
-        from axon import shares
-
-        owner_dir = _make_user_dir(tmp_path, "alice")
-        result = shares.generate_share_key(owner_dir, "myproject", "bob", write_access=True)
-        assert result["write_access"] is True
 
     def test_records_in_keys_file(self, tmp_path):
         from axon import shares
@@ -284,7 +275,6 @@ class TestRedeemShareKeyPlatformIndependentErrors:
                     "key_id": key_id,
                     "project": "myproject",
                     "grantee": "bob",
-                    "write_access": False,
                     "revoked": True,
                     "revoked_at": "2026-01-01T00:00:00+00:00",
                     "created_at": "2026-01-01T00:00:00+00:00",
@@ -316,7 +306,6 @@ class TestRedeemShareKeyPlatformIndependentErrors:
                     "key_id": key_id,
                     "project": "myproject",
                     "grantee": "bob",
-                    "write_access": False,
                     "revoked": False,
                     "revoked_at": None,
                     "created_at": "2026-01-01T00:00:00+00:00",
