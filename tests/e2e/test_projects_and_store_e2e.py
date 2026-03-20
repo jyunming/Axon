@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import getpass
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -117,12 +116,13 @@ def test_store_init_whoami_and_share_lifecycle(api_client, make_brain, tmp_path)
     assert len(shares_payload["sharing"]) == 1
     assert shares_payload["sharing"][0]["project"] == "sharedproj"
 
-    if sys.platform != "linux":
-        redeem = api_client.post(
-            "/share/redeem", json={"share_string": share_payload["share_string"]}
-        )
-        assert redeem.status_code == 400
-        assert "currently only supported on Linux" in redeem.json()["detail"]
+    # Redeem is now platform-independent (descriptor model); succeeds on all platforms
+    redeem = api_client.post("/share/redeem", json={"share_string": share_payload["share_string"]})
+    assert redeem.status_code == 200
+    redeem_payload = redeem.json()
+    assert redeem_payload["mount_name"] == f"{getpass.getuser()}_sharedproj"
+    assert redeem_payload["owner"] == getpass.getuser()
+    assert "descriptor" in redeem_payload
 
     revoke = api_client.post("/share/revoke", json={"key_id": share_payload["key_id"]})
     assert revoke.status_code == 200
