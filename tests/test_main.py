@@ -3437,7 +3437,6 @@ class TestGraphRAGCommunity:
         brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
             brain, AxonBrain
         )
-        brain._global_search_context = AxonBrain._global_search_context.__get__(brain, AxonBrain)
         brain._global_search_map_reduce = AxonBrain._global_search_map_reduce.__get__(
             brain, AxonBrain
         )
@@ -3598,32 +3597,6 @@ class TestGraphRAGCommunity:
         assert "0_0" in brain._community_summaries
         assert brain._community_summaries["0_0"]["summary"] != ""
         brain._save_community_summaries.assert_called_once()
-
-    # ── Phase 4: global search context ───────────────────────────────────
-
-    def test_global_search_context_returns_summaries(self):
-        """_global_search_context returns text containing community summary content."""
-        brain = self._make_brain()
-        brain._community_summaries = {
-            "0_0": {
-                "title": "Tech cluster",
-                "summary": "Apple and Beats tech cluster",
-                "full_content": "# Tech cluster\n\nApple and Beats tech cluster",
-                "findings": [],
-                "rank": 5.0,
-                "entities": ["apple", "beats"],
-                "size": 2,
-                "level": 0,
-            }
-        }
-
-        class _Cfg:
-            graph_rag_community_top_k = 5
-
-        # Disable embedding path so token-overlap fallback is used
-        brain.embedding.embed_query.side_effect = Exception("no embed")
-        result = brain._global_search_context("Apple products", _Cfg())
-        assert "Apple" in result or "Beats" in result
 
     # ── Phase 5: local search context ────────────────────────────────────
 

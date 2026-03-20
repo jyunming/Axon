@@ -55,9 +55,6 @@ class BM25Retriever:
         if not save_deferred:
             self.save()
 
-    # Explicit alias for callers that batch their writes; semantics are identical.
-    batch_add_documents = add_documents
-
     def flush(self) -> None:
         """Explicitly save corpus — call after deferred batch ingest session."""
         self.save()

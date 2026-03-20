@@ -1995,9 +1995,6 @@ class MultiBM25Retriever:
     def add_documents(self, *args, **kwargs):
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
-    # Alias used by ingest code
-    batch_add_documents = add_documents
-
 
 # ---------------------------------------------------------------------------
 # Code-query lexical boost — module-level utilities
@@ -4753,40 +4750,6 @@ Your primary goal is to help the user by answering questions based on the provid
                 )
             except Exception as e:
                 logger.warning(f"Could not index community reports: {e}")
-
-    def _global_search_context(self, query: str, cfg) -> str:
-        """Score community summaries against the query; return top-K as context (legacy method)."""
-        if not self._community_summaries:
-            return ""
-        top_k = getattr(cfg, "graph_rag_community_top_k", 5)
-        query_tokens = set(query.lower().split())
-        scored = []
-        for cid, cs in self._community_summaries.items():
-            summary = cs.get("full_content") or cs.get("summary", "(no summary)")
-            if not summary:
-                continue
-            # Try embedding similarity first, fall back to token overlap
-            try:
-                import numpy as np
-
-                q_vec = self.embedding.embed_query(query)
-                s_vec = self.embedding.embed([summary])[0]
-                sim = float(
-                    np.dot(q_vec, s_vec) / (np.linalg.norm(q_vec) * np.linalg.norm(s_vec) + 1e-9)
-                )
-            except Exception:
-                summary_tokens = set(summary.lower().split())
-                sim = len(query_tokens & summary_tokens) / max(len(query_tokens), 1)
-            scored.append((sim, cid, cs))
-        scored.sort(reverse=True)
-        parts = []
-        for rank, (_, _cid, cs) in enumerate(scored[:top_k]):
-            entities_preview = ", ".join(cs.get("entities", [])[:10])
-            parts.append(
-                f"[Community Report {rank + 1} — {cs.get('size', 0)} entities: "
-                f"{entities_preview}]\n{cs.get('full_content') or cs.get('summary', '(no summary)')}"
-            )
-        return "\n\n".join(parts)
 
     def _global_search_map_reduce(self, query: str, cfg) -> str:
         """Map-reduce global search over community reports (Item 4)."""

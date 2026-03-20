@@ -1527,23 +1527,6 @@ def test_graph_data_returns_nodes_and_links():
     assert isinstance(data["links"], list)
 
 
-def test_graph_data_falls_back_to_code_graph_when_entity_graph_empty():
-    """GET /graph/data returns code graph payload when entity graph has no nodes."""
-    brain = _make_brain()
-    brain.build_graph_payload.return_value = {"nodes": [], "links": []}
-    brain.build_code_graph_payload.return_value = {
-        "nodes": [{"id": "file::src/axon/main.py", "type": "file"}],
-        "links": [],
-    }
-    api_module.brain = brain
-
-    resp = client.get("/graph/data")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["nodes"] == [{"id": "file::src/axon/main.py", "type": "file"}]
-    assert data["links"] == []
-
-
 def test_graph_data_returns_503_no_brain():
     """GET /graph/data returns 503 when brain is not initialized."""
     api_module.brain = None
