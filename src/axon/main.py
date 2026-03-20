@@ -2832,15 +2832,21 @@ Your primary goal is to help the user by answering questions based on the provid
             return dirs
 
         # ── Collect mount dirs ────────────────────────────────────────────────
-        def _mount_dirs() -> list[Path]:
-            mounts_root = PROJECTS_ROOT / "mounts"
-            if not mounts_root.exists():
-                return []
-            dirs = []
-            for entry in sorted(mounts_root.iterdir()):
-                if entry.is_dir() and (entry / "meta.json").exists():
-                    dirs.append(entry)
-            return []  # Placeholder: mounts not yet fully implemented
+        def _mount_dirs() -> list[tuple[str, str]]:
+            """Return (vector_path, bm25_path) pairs from active mount descriptors."""
+            from axon.mounts import list_mount_descriptors
+
+            paths = []
+            for desc in list_mount_descriptors(PROJECTS_ROOT):
+                target = desc.get("target_project_dir", "")
+                if target and Path(target).exists():
+                    paths.append(
+                        (
+                            str(Path(target) / "chroma_data"),
+                            str(Path(target) / "bm25_index"),
+                        )
+                    )
+            return paths
 
         # ── Build the list of (vector_path, bm25_path) pairs for the scope ───
         project_paths: list[tuple[str, str]] = []
@@ -2859,18 +2865,10 @@ Your primary goal is to help the user by answering questions based on the provid
             # Include the default project
             project_paths.insert(0, (self._base_vector_store_path, self._base_bm25_path))
 
-        # @mounts — ShareMount symlinks
+        # @mounts — descriptor-backed mounted projects
         if scope == "@mounts":
-            sharemount_dir = PROJECTS_ROOT / "ShareMount"
-            if sharemount_dir.exists():
-                for entry in sorted(sharemount_dir.iterdir()):
-                    if entry.is_dir() and (entry / "meta.json").exists():
-                        project_paths.append(
-                            (
-                                str(entry / "chroma_data"),
-                                str(entry / "bm25_index"),
-                            )
-                        )
+            for vpath, bpath in _mount_dirs():
+                project_paths.append((vpath, bpath))
 
         if not project_paths:
             raise ValueError(f"No authoritative projects found under {scope} scope.")
@@ -2977,7 +2975,22 @@ Your primary goal is to help the user by answering questions based on the provid
         if name.startswith("@"):
             return self._switch_to_scope(name)
 
-        if name == "default":
+        # ── Descriptor-backed mounted project (mounts/<mount_name>) ───────────
+        if name.startswith("mounts/"):
+            mount_name = name[len("mounts/") :]
+            from axon.mounts import load_mount_descriptor, validate_mount_descriptor
+
+            user_dir = Path(self.config.projects_root)
+            desc = load_mount_descriptor(user_dir, mount_name)
+            if desc is None:
+                raise ValueError(f"Mounted project '{name}' not found. Redeem the share first.")
+            valid, reason = validate_mount_descriptor(desc)
+            if not valid:
+                raise ValueError(f"Mounted project '{name}' is not accessible: {reason}")
+            target = Path(desc["target_project_dir"])
+            self.config.vector_store_path = str(target / "chroma_data")
+            self.config.bm25_path = str(target / "bm25_index")
+        elif name == "default":
             self.config.vector_store_path = self._base_vector_store_path
             self.config.bm25_path = self._base_bm25_path
         else:
@@ -3010,7 +3023,8 @@ Your primary goal is to help the user by answering questions based on the provid
         self._own_bm25 = own_bm25
 
         # If the project has sub-projects, build fan-out stores for reads
-        if name != "default":
+        # Mounted projects are leaf-only; skip descendant lookup for them.
+        if name != "default" and not name.startswith("mounts/"):
             descendants = list_descendants(name)
         else:
             descendants = []
@@ -11030,7 +11044,7 @@ def _interactive_repl(
                         "\n"
                         "  Requires AxonStore mode — run /store init first.\n"
                         "  Share strings are cryptographic HMAC tokens; send them out-of-band.\n"
-                        "  Mounted shares appear under ShareMount/ in your projects list.",
+                        "  Mounted shares appear under mounts/ in your projects list.",
                         "store": "  /store whoami                  show AxonStore identity and active project\n"
                         "  /store init <base_path>        initialise multi-user AxonStore at a path\n"
                         "\n"
@@ -11767,7 +11781,7 @@ def _interactive_repl(
                             print("\n  Share redeemed!")
                             print(f"  Project '{result['project']}' from {result['owner']}")
                             print(
-                                f"  Mounted at:  {result.get('mount', 'ShareMount/' + result['project'])}"
+                                f"  Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
                             )
                             print("  Access:      read-only\n")
                         except (ValueError, NotImplementedError) as e:

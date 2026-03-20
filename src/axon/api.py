@@ -506,11 +506,16 @@ async def delete_project_endpoint(name: str):
     """Delete a project and all its data."""
     from axon.projects import ProjectHasChildrenError, delete_project
 
-    # Reject attempts to delete ShareMount symlinks (those are not owned data)
-    if name.startswith("ShareMount/") or name == "ShareMount":
+    # Reject attempts to delete mounted shares (those are read-only, not owned data)
+    if (
+        name.startswith("mounts/")
+        or name == "mounts"
+        or name.startswith("ShareMount/")
+        or name == "ShareMount"
+    ):
         raise HTTPException(
             status_code=400,
-            detail="ShareMount entries are symlinks to shared projects and cannot be deleted via this endpoint.",
+            detail="Mounted share entries are read-only and cannot be deleted via this endpoint.",
         )
 
     # In store mode: check if project has active (non-revoked) issued share keys
@@ -1374,7 +1379,7 @@ async def get_projects():
             mounts = list_share_mounts(user_dir)
             shared_mounts = [
                 {
-                    "name": f"ShareMount/{m['name']}",
+                    "name": f"mounts/{m['name']}",
                     "owner": m["owner"],
                     "project": m["project"],
                     "is_broken": m["is_broken"],

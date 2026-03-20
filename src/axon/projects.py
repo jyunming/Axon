@@ -625,10 +625,33 @@ def _remove_share_link(link: Path) -> bool:
 
 
 def list_share_mounts(user_dir: Path) -> list[dict]:
-    """List all symlinks under user_dir/ShareMount/.
+    """List all active received share mounts for *user_dir*.
+
+    Reads from ``mounts/`` descriptor files (canonical).  Falls back to
+    scanning ``ShareMount/`` symlinks when no descriptors exist yet (legacy
+    transitional path for installs that pre-date PR2).
 
     Returns list of dicts with: name, target, is_broken, owner, project.
     """
+    from axon.mounts import list_mount_descriptors, validate_mount_descriptor
+
+    descriptors = list_mount_descriptors(user_dir)
+    if descriptors:
+        results = []
+        for desc in descriptors:
+            valid, _ = validate_mount_descriptor(desc)
+            results.append(
+                {
+                    "name": desc["mount_name"],
+                    "target": desc.get("target_project_dir", ""),
+                    "is_broken": not valid,
+                    "owner": desc.get("owner", ""),
+                    "project": desc.get("project", ""),
+                }
+            )
+        return results
+
+    # Legacy fallback: scan ShareMount/ symlinks (pre-descriptor installs only)
     mount_dir = user_dir / "ShareMount"
     if not mount_dir.exists():
         return []

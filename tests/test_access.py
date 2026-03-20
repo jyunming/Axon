@@ -18,15 +18,19 @@ class TestIsMountedSharePath:
     def test_nested_share_mount_is_mounted(self):
         assert is_mounted_share_path("ShareMount/alice/subproj") is True
 
+    def test_mounts_prefix_is_mounted(self):
+        assert is_mounted_share_path("mounts/alice_proj") is True
+
     def test_default_project_is_not_mounted(self):
         assert is_mounted_share_path("default") is False
 
     def test_regular_project_is_not_mounted(self):
         assert is_mounted_share_path("myproject") is False
 
-    def test_project_with_sharemount_anywhere_in_path_is_mounted(self):
-        # any path segment named "ShareMount" qualifies — mirrors production behaviour
-        assert is_mounted_share_path("projects/ShareMount/foo") is True
+    def test_sharemount_not_first_segment_is_not_mounted(self):
+        # Only the first path segment is checked — a sub-project under "projects"
+        # named "ShareMount" is not a mounted share.
+        assert is_mounted_share_path("projects/ShareMount/foo") is False
 
 
 # ---------------------------------------------------------------------------

@@ -12,9 +12,13 @@ __all__ = ["check_write_allowed", "is_mounted_share_path"]
 def is_mounted_share_path(project_name: str) -> bool:
     """Return True when *project_name* refers to a received share mount.
 
-    Share mounts are paths whose first path segment is ``ShareMount``.
+    Detects both the canonical ``mounts/<name>`` format and the legacy
+    ``ShareMount/<name>`` format for backwards compatibility.
     """
-    return project_name != "default" and "ShareMount" in project_name.split("/")
+    if project_name == "default":
+        return False
+    parts = project_name.split("/")
+    return parts[0] in ("mounts", "ShareMount")
 
 
 def check_write_allowed(
