@@ -4,8 +4,8 @@ Each received share is recorded as a ``mount.json`` descriptor under
 ``{user_dir}/mounts/{mount_name}/``.  This is the canonical, platform-
 independent source of truth for mounted projects.
 
-The ``ShareMount/`` symlink directory is kept transitionally but is not
-required for the descriptor model to function.
+The ``mounts/`` descriptor model is the sole source of truth for received
+share mounts.
 """
 
 from __future__ import annotations

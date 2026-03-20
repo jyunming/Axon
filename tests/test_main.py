@@ -8706,7 +8706,7 @@ def test_mounted_share_blocks_write(tmp_path):
     """_assert_write_allowed raises PermissionError when active project is a mounted share."""
     import pytest
 
-    brain = _make_brain_with_project(tmp_path, "ShareMount/alice_proj", "normal")
+    brain = _make_brain_with_project(tmp_path, "mounts/alice_proj", "normal")
     brain._mounted_share = True
     brain._active_project_kind = "mounted"
     with pytest.raises(PermissionError, match="mounted share"):

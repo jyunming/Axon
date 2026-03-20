@@ -1,7 +1,6 @@
 """Tests for AxonStore share key management (axon/shares.py)."""
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -14,7 +13,6 @@ import pytest
 def _make_user_dir(tmp_path: Path, username: str) -> Path:
     """Create a minimal AxonStore user directory for testing."""
     user_dir = tmp_path / "AxonStore" / username
-    (user_dir / "ShareMount").mkdir(parents=True, exist_ok=True)
     (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
     # Create a dummy project so redeem can find it
     (user_dir / "myproject" / "chroma_data").mkdir(parents=True, exist_ok=True)
@@ -324,10 +322,10 @@ class TestRedeemShareKeyPlatformIndependentErrors:
             shares.redeem_share_key(grantee_dir, share_string)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="AxonStore sharing is Linux-only")
 class TestRedeemShareKey:
-    def test_creates_symlink(self, tmp_path):
+    def test_creates_descriptor(self, tmp_path):
         from axon import shares
+        from axon.mounts import load_mount_descriptor
 
         owner_dir = _make_user_dir(tmp_path, "alice")
         grantee_dir = _make_user_dir(tmp_path, "bob")
@@ -338,10 +336,11 @@ class TestRedeemShareKey:
         assert result["mount_name"] == "alice_myproject"
         assert result["owner"] == "alice"
         assert result["project"] == "myproject"
+        assert "descriptor" in result
 
-        link_path = Path(result["mount_path"])
-        assert link_path.is_symlink()
-        assert link_path.resolve() == (owner_dir / "myproject").resolve()
+        desc = load_mount_descriptor(grantee_dir, "alice_myproject")
+        assert desc is not None
+        assert desc["state"] == "active"
 
     def test_invalid_share_string_raises(self, tmp_path):
         from axon import shares
@@ -363,28 +362,27 @@ class TestRedeemShareKey:
             shares.redeem_share_key(grantee_dir, gen["share_string"])
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="AxonStore sharing is Linux-only")
 class TestValidateReceivedShares:
-    def test_removes_stale_symlinks(self, tmp_path):
+    def test_removes_stale_descriptor_on_revocation(self, tmp_path):
         from axon import shares
+        from axon.mounts import load_mount_descriptor
 
         owner_dir = _make_user_dir(tmp_path, "alice")
         grantee_dir = _make_user_dir(tmp_path, "bob")
 
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
-        redeem_result = shares.redeem_share_key(grantee_dir, gen["share_string"])
+        shares.redeem_share_key(grantee_dir, gen["share_string"])
 
-        # Verify symlink exists
-        link = Path(redeem_result["mount_path"])
-        assert link.is_symlink()
+        # Verify descriptor exists
+        assert load_mount_descriptor(grantee_dir, "alice_myproject") is not None
 
         # Revoke the key
         shares.revoke_share_key(owner_dir, gen["key_id"])
 
-        # Validate should remove the symlink
+        # Validate should remove the descriptor
         removed = shares.validate_received_shares(grantee_dir)
         assert "alice_myproject" in removed
-        assert not link.exists()
+        assert load_mount_descriptor(grantee_dir, "alice_myproject") is None
 
     def test_nothing_removed_if_not_revoked(self, tmp_path):
         from axon import shares
@@ -418,7 +416,7 @@ class TestMountedShareWriteEnforcement:
 
         brain._is_mounted_share = AxonBrain._is_mounted_share.__get__(brain, type(brain))
         brain._assert_write_allowed = AxonBrain._assert_write_allowed.__get__(brain, type(brain))
-        brain._active_project = "ShareMount/alice_myproject"
+        brain._active_project = "mounts/alice_myproject"
         brain._read_only_scope = False
         brain._mounted_share = True
         brain._active_project_kind = "mounted"

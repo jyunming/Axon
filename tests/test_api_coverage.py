@@ -310,11 +310,10 @@ def test_switch_project_503_no_brain():
 # ---------------------------------------------------------------------------
 
 
-def test_delete_project_sharemount_blocked():
-    """ShareMount prefix is blocked — the name contains a slash so path-encode it."""
+def test_delete_project_mounts_blocked():
+    """mounts/ prefix is blocked — mounted share entries are read-only."""
     api_module.brain = _make_brain()
-    # URL-encode the slash so FastAPI routes it to /project/delete/{name}
-    resp = client.post("/project/delete/ShareMount")
+    resp = client.post("/project/delete/mounts")
     assert resp.status_code == 400
 
 

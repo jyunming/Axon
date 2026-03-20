@@ -2792,7 +2792,7 @@ Your primary goal is to help the user by answering questions based on the provid
             return False
 
     # Reserved directory names excluded from @projects / @store scope merges
-    _SCOPE_RESERVED_DIRS: frozenset = frozenset({"default", "mounts", ".shares", "ShareMount"})
+    _SCOPE_RESERVED_DIRS: frozenset = frozenset({"default", "mounts", ".shares"})
 
     def _switch_to_scope(self, scope: str) -> None:
         """Switch to a merged read-only scope (@projects, @mounts, or @store).
@@ -3249,15 +3249,8 @@ Your primary goal is to help the user by answering questions based on the provid
             self._active_project_kind = "scope"
             self._active_mount_descriptor = None
         else:
-            # Legacy ShareMount/ paths still work through string detection
-            from axon.access import is_mounted_share_path as _imp
-
-            if _imp(name):
-                self._active_project_kind = "mounted"
-                self._active_mount_descriptor = None
-            else:
-                self._active_project_kind = "local"
-                self._active_mount_descriptor = None
+            self._active_project_kind = "local"
+            self._active_mount_descriptor = None
         self._mounted_share = self._active_project_kind == "mounted"
         set_active_project(name)
         logger.info(f"Switched to project '{name}'")

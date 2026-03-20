@@ -366,7 +366,7 @@ class TestSetProjectsRoot:
 
 class TestEnsureUserNamespace:
     def test_creates_expected_directories(self, tmp_path):
-        """ensure_user_namespace creates default/, projects/, mounts/, ShareMount/, .shares/."""
+        """ensure_user_namespace creates default/, projects/, mounts/, .shares/."""
         from axon.projects import ensure_user_namespace
 
         user_dir = tmp_path / "AxonStore" / "alice"
@@ -375,10 +375,10 @@ class TestEnsureUserNamespace:
         assert (user_dir / "default").is_dir()
         assert (user_dir / "projects").is_dir()
         assert (user_dir / "mounts").is_dir()
-        assert (user_dir / "ShareMount").is_dir()
         assert (user_dir / ".shares").is_dir()
-        # Legacy _default must NOT be created
+        # Legacy _default and ShareMount/ must NOT be created
         assert not (user_dir / "_default").exists()
+        assert not (user_dir / "ShareMount").exists()
 
     def test_creates_store_meta_json(self, tmp_path):
         """ensure_user_namespace creates store_meta.json with store_namespace_id."""
@@ -597,32 +597,42 @@ class TestReservedNames:
 
 class TestListShareMounts:
     def test_empty_when_no_mounts(self, tmp_path):
-        """list_share_mounts returns [] when ShareMount dir is empty."""
+        """list_share_mounts returns [] when no mount descriptors exist."""
         from axon.projects import list_share_mounts
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        (user_dir / "ShareMount").mkdir(parents=True)
+        user_dir.mkdir(parents=True)
 
         result = list_share_mounts(user_dir)
         assert result == []
 
-    @pytest.mark.skipif(not hasattr(__import__("os"), "symlink"), reason="symlinks not supported")
-    def test_returns_mount_entries(self, tmp_path):
-        """list_share_mounts returns dicts for symlinks in ShareMount."""
-        import os
+    def test_returns_mount_entries_from_descriptors(self, tmp_path):
+        """list_share_mounts returns dicts from mounts/ descriptors."""
+        import json
 
+        from axon.mounts import mount_descriptor_path
         from axon.projects import list_share_mounts
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        share_mount = user_dir / "ShareMount"
-        share_mount.mkdir(parents=True)
-
         target = tmp_path / "AxonStore" / "bob" / "research"
         target.mkdir(parents=True)
-        try:
-            os.symlink(str(target), str(share_mount / "bob_research"))
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not available")
+
+        desc_path = mount_descriptor_path(user_dir, "bob_research")
+        desc_path.parent.mkdir(parents=True)
+        desc_path.write_text(
+            json.dumps(
+                {
+                    "mount_name": "bob_research",
+                    "owner": "bob",
+                    "project": "research",
+                    "target_project_dir": str(target),
+                    "state": "active",
+                    "revoked": False,
+                    "descriptor_version": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         result = list_share_mounts(user_dir)
         names = [entry["name"] for entry in result]

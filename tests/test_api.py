@@ -1172,7 +1172,6 @@ def test_share_list_returns_sharing_and_shared(tmp_path):
     api_module.brain = mock_brain
 
     # Create minimal dir structure expected by _get_user_dir
-    (tmp_path / "ShareMount").mkdir()
     (tmp_path / ".shares").mkdir()
 
     with patch("axon.api._shares.validate_received_shares", return_value=[]), patch(
@@ -1249,7 +1248,6 @@ def test_share_revoke_404_unknown_key(tmp_path):
     mock_brain.config.projects_root = str(tmp_path)
     api_module.brain = mock_brain
 
-    (tmp_path / "ShareMount").mkdir()
     (tmp_path / ".shares").mkdir()
 
     with patch("axon.api._shares.revoke_share_key", side_effect=ValueError("not found")):
@@ -1265,7 +1263,6 @@ def test_share_revoke_success(tmp_path):
     mock_brain.config.projects_root = str(tmp_path)
     api_module.brain = mock_brain
 
-    (tmp_path / "ShareMount").mkdir()
     (tmp_path / ".shares").mkdir()
 
     with patch(
@@ -1604,7 +1601,7 @@ def test_ingest_mounted_share_returns_403(tmp_path):
     """POST /ingest returns 403 when _assert_write_allowed raises PermissionError."""
     api_module.brain = _make_brain()
     api_module.brain._assert_write_allowed.side_effect = PermissionError(
-        "Cannot ingest on mounted share 'ShareMount/alice_proj'. "
+        "Cannot ingest on mounted share 'mounts/alice_proj'. "
         "Mounted projects are always read-only."
     )
     doc_file = tmp_path / "doc.txt"
@@ -1619,7 +1616,7 @@ def test_delete_mounted_share_returns_403():
     """POST /delete returns 403 when active project is a mounted share."""
     api_module.brain = _make_brain()
     api_module.brain._assert_write_allowed.side_effect = PermissionError(
-        "Cannot delete on mounted share 'ShareMount/alice_proj'."
+        "Cannot delete on mounted share 'mounts/alice_proj'."
     )
     resp = client.post("/delete", json={"doc_ids": ["id1"]})
     assert resp.status_code == 403
@@ -1636,7 +1633,7 @@ def test_refresh_mounted_share_returns_403(tmp_path):
         str(doc_file): {"content_hash": "stale_hash_that_wont_match"}
     }
     api_module.brain.ingest.side_effect = PermissionError(
-        "Cannot ingest on mounted share 'ShareMount/alice_proj'."
+        "Cannot ingest on mounted share 'mounts/alice_proj'."
     )
     resp = client.post("/ingest/refresh")
     assert resp.status_code == 403
@@ -1646,7 +1643,7 @@ def test_finalize_mounted_share_returns_403():
     """POST /graph/finalize returns 403 when active project is a mounted share."""
     api_module.brain = _make_brain()
     api_module.brain.finalize_graph.side_effect = PermissionError(
-        "Cannot finalize_graph on mounted share 'ShareMount/alice_proj'."
+        "Cannot finalize_graph on mounted share 'mounts/alice_proj'."
     )
     resp = client.post("/graph/finalize")
     assert resp.status_code == 403

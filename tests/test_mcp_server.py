@@ -797,7 +797,7 @@ class TestMcpToolCoverage:
         async def _run():
             with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value = _make_mock_resp(
-                    {"status": "redeemed", "mount": "ShareMount/alice_myproj"}
+                    {"status": "redeemed", "mount_name": "alice_myproj"}
                 )
                 result = await redeem_share(share_string="AXON.efgh")
                 args, kwargs = mock_post.call_args

@@ -467,7 +467,6 @@ class TestRedeemShareKeyDescriptor:
 
     def _make_user_dir(self, tmp_path: Path, username: str) -> Path:
         user_dir = tmp_path / "AxonStore" / username
-        (user_dir / "ShareMount").mkdir(parents=True, exist_ok=True)
         (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
         (user_dir / "myproject" / "chroma_data").mkdir(parents=True, exist_ok=True)
         (user_dir / "myproject" / "meta.json").write_text(

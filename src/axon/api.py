@@ -507,12 +507,7 @@ async def delete_project_endpoint(name: str):
     from axon.projects import ProjectHasChildrenError, delete_project
 
     # Reject attempts to delete mounted shares (those are read-only, not owned data)
-    if (
-        name.startswith("mounts/")
-        or name == "mounts"
-        or name.startswith("ShareMount/")
-        or name == "ShareMount"
-    ):
+    if name.startswith("mounts/") or name == "mounts":
         raise HTTPException(
             status_code=400,
             detail="Mounted share entries are read-only and cannot be deleted via this endpoint.",
@@ -619,7 +614,7 @@ async def share_generate(request: ShareGenerateRequest):
 
 @app.post("/share/redeem")
 async def share_redeem(request: ShareRedeemRequest):
-    """Redeem a share string, mounting the owner's project in your ShareMount/."""
+    """Redeem a share string, creating a mount descriptor in your mounts/ directory."""
     user_dir = _get_user_dir()
     try:
         result = _shares.redeem_share_key(

@@ -12,14 +12,11 @@ from axon.access import check_write_allowed, is_mounted_share_path
 
 
 class TestIsMountedSharePath:
-    def test_share_mount_path_is_mounted(self):
-        assert is_mounted_share_path("ShareMount/alice_proj") is True
-
-    def test_nested_share_mount_is_mounted(self):
-        assert is_mounted_share_path("ShareMount/alice/subproj") is True
-
     def test_mounts_prefix_is_mounted(self):
         assert is_mounted_share_path("mounts/alice_proj") is True
+
+    def test_mounts_nested_is_mounted(self):
+        assert is_mounted_share_path("mounts/alice_research") is True
 
     def test_default_project_is_not_mounted(self):
         assert is_mounted_share_path("default") is False
@@ -27,10 +24,9 @@ class TestIsMountedSharePath:
     def test_regular_project_is_not_mounted(self):
         assert is_mounted_share_path("myproject") is False
 
-    def test_sharemount_not_first_segment_is_not_mounted(self):
-        # Only the first path segment is checked — a sub-project under "projects"
-        # named "ShareMount" is not a mounted share.
-        assert is_mounted_share_path("projects/ShareMount/foo") is False
+    def test_mounts_not_first_segment_is_not_mounted(self):
+        # Only the first path segment is checked
+        assert is_mounted_share_path("projects/mounts/foo") is False
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +54,7 @@ class TestCheckWriteAllowed:
     def test_raises_for_mounted_share(self):
         with pytest.raises(PermissionError, match="mounted share"):
             check_write_allowed(
-                "ingest", "ShareMount/alice_proj", read_only_scope=False, is_mounted=True
+                "ingest", "mounts/alice_proj", read_only_scope=False, is_mounted=True
             )
 
     def test_raises_for_readonly_maintenance(self, tmp_path, monkeypatch):
@@ -88,7 +84,7 @@ class TestCheckWriteAllowed:
     def test_read_only_scope_takes_precedence_over_mounted(self):
         """read_only_scope is checked first — error message reflects scope, not mount."""
         with pytest.raises(PermissionError, match="read-only"):
-            check_write_allowed("ingest", "ShareMount/proj", read_only_scope=True, is_mounted=True)
+            check_write_allowed("ingest", "mounts/proj", read_only_scope=True, is_mounted=True)
 
     def test_default_project_skips_maintenance_check(self):
         """'default' never has a maintenance state — must not raise."""

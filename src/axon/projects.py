@@ -25,8 +25,7 @@ namespace under {axon_store_base}/AxonStore/{username}/ containing:
     store_meta.json  — store-level identity and version metadata
     default/         — the user's default project
     projects/        — authoritative local projects
-    mounts/          — read-only mount descriptors
-    ShareMount/      — symlinks to shared projects (legacy compat)
+    mounts/          — read-only mount descriptors (canonical)
     .shares/         — share key manifests
 """
 
@@ -547,8 +546,6 @@ def ensure_user_namespace(user_dir: Path) -> None:
     (user_dir / "projects").mkdir(exist_ok=True)
     (user_dir / "mounts").mkdir(exist_ok=True)
     (user_dir / ".shares").mkdir(exist_ok=True)
-    # ShareMount kept for backwards compatibility with share-link helpers
-    (user_dir / "ShareMount").mkdir(exist_ok=True)
 
     # Default project
     _ensure_single_project_at(user_dir / "default", "default", "Default project")
@@ -599,25 +596,12 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
     return root
 
 
-def _make_share_link(target: Path, link: Path) -> None:
-    """Create a symlink from link -> target (Linux only).
-
-    Raises:
-        OSError: If symlink creation fails.
-        NotImplementedError: If called on non-Linux platform.
-    """
-    import sys
-
-    if sys.platform != "linux":
-        raise NotImplementedError("AxonStore sharing is currently only supported on Linux.")
-    link.parent.mkdir(parents=True, exist_ok=True)
-    if link.exists() or link.is_symlink():
-        link.unlink()
-    os.symlink(target.resolve(), link)
-
-
 def _remove_share_link(link: Path) -> bool:
-    """Remove a symlink from ShareMount/. Returns True if removed, False if not found."""
+    """Remove a legacy ShareMount/ symlink if present.
+
+    Kept for the transitional cleanup pass in ``validate_received_shares()``.
+    Returns True if a symlink was removed, False otherwise.
+    """
     if link.is_symlink():
         link.unlink()
         return True
@@ -627,50 +611,22 @@ def _remove_share_link(link: Path) -> bool:
 def list_share_mounts(user_dir: Path) -> list[dict]:
     """List all active received share mounts for *user_dir*.
 
-    Reads from ``mounts/`` descriptor files (canonical).  Falls back to
-    scanning ``ShareMount/`` symlinks when no descriptors exist yet (legacy
-    transitional path for installs that pre-date PR2).
+    Reads from ``mounts/`` descriptor files (canonical source of truth).
 
     Returns list of dicts with: name, target, is_broken, owner, project.
     """
     from axon.mounts import list_mount_descriptors, validate_mount_descriptor
 
-    descriptors = list_mount_descriptors(user_dir)
-    if descriptors:
-        results = []
-        for desc in descriptors:
-            valid, _ = validate_mount_descriptor(desc)
-            results.append(
-                {
-                    "name": desc["mount_name"],
-                    "target": desc.get("target_project_dir", ""),
-                    "is_broken": not valid,
-                    "owner": desc.get("owner", ""),
-                    "project": desc.get("project", ""),
-                }
-            )
-        return results
-
-    # Legacy fallback: scan ShareMount/ symlinks (pre-descriptor installs only)
-    mount_dir = user_dir / "ShareMount"
-    if not mount_dir.exists():
-        return []
     results = []
-    for entry in sorted(mount_dir.iterdir()):
-        if not entry.is_symlink():
-            continue
-        raw_target = os.readlink(str(entry))
-        is_broken = not Path(raw_target).exists()
-        parts = entry.name.split("_", 1)
-        owner = parts[0] if len(parts) == 2 else ""
-        project = parts[1] if len(parts) == 2 else entry.name
+    for desc in list_mount_descriptors(user_dir):
+        valid, _ = validate_mount_descriptor(desc)
         results.append(
             {
-                "name": entry.name,
-                "target": raw_target,
-                "is_broken": is_broken,
-                "owner": owner,
-                "project": project,
+                "name": desc["mount_name"],
+                "target": desc.get("target_project_dir", ""),
+                "is_broken": not valid,
+                "owner": desc.get("owner", ""),
+                "project": desc.get("project", ""),
             }
         )
     return results

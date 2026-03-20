@@ -371,7 +371,7 @@
       {
         "name": "axon_redeemShare",
         "displayName": "Axon: Redeem Share",
-        "modelDescription": "Redeem a share string received from another user to mount their project in your ShareMount/ directory. After redemption the shared project appears in your project list and can be queried. Mounting uses symlinks — currently only supported on Linux.",
+        "modelDescription": "Redeem a share string received from another user to create a mount descriptor in your mounts/ directory. After redemption the shared project appears in your project list as mounts/{owner}_{project} and can be queried.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonRedeemShare",
         "inputSchema": {

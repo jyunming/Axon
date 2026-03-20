@@ -301,7 +301,6 @@ class TestReplShareCommand:
         proj_dir.mkdir(parents=True)
         (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_test"}', encoding="utf-8")
         (user_dir / ".shares").mkdir(parents=True)
-        (user_dir / "ShareMount").mkdir(parents=True)
 
         result = generate_share_key(
             owner_user_dir=user_dir,
@@ -325,7 +324,6 @@ class TestReplShareCommand:
         proj_dir.mkdir(parents=True)
         (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_q"}', encoding="utf-8")
         (user_dir / ".shares").mkdir(parents=True)
-        (user_dir / "ShareMount").mkdir(parents=True)
 
         generate_share_key(
             owner_user_dir=user_dir,
@@ -377,7 +375,7 @@ class TestReplStoreCommand:
         assert (user_dir / "projects").exists()
         assert (user_dir / "mounts").exists()
         assert (user_dir / ".shares").exists()
-        assert (user_dir / "ShareMount").exists()
+        assert not (user_dir / "ShareMount").exists()
 
     def test_store_init_idempotent(self, tmp_path):
         from axon.projects import ensure_user_namespace
