@@ -22,6 +22,12 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     ("sessions.py", ""),
     ("repl.py", ""),
     ("cli.py", ""),
+    # Phase 4 extracted modules — AxonBrain service boundary mixins.
+    ("graph_render.py", ""),
+    ("graph_rag.py", ""),
+    ("code_graph.py", ""),
+    ("code_retrieval.py", ""),
+    ("query_router.py", ""),
 ]
 
 

@@ -1351,7 +1351,7 @@ class TestLogQueryMetrics:
         config = AxonConfig(hybrid_search=False, rerank=False)
         brain = AxonBrain(config)
 
-        with _patch("axon.main.logger") as mock_logger:
+        with _patch("axon.query_router.logger") as mock_logger:
             brain._log_query_metrics(
                 query="test query that is fairly long",
                 vector_count=5,
@@ -1379,7 +1379,7 @@ class TestLogQueryMetrics:
         config = AxonConfig(hybrid_search=False, rerank=False)
         brain = AxonBrain(config)
 
-        with _patch("axon.main.logger") as mock_logger:
+        with _patch("axon.query_router.logger") as mock_logger:
             brain._log_query_metrics(
                 query="q",
                 vector_count=0,
@@ -3462,6 +3462,12 @@ class TestGraphRAGCommunity:
         brain._save_community_hierarchy = MagicMock()
         brain._save_entity_embeddings = MagicMock()
         brain._save_claims_graph = MagicMock()
+        # Class attributes moved to GraphRagMixin — set explicitly so mock returns real values
+        from axon.graph_rag import GraphRagMixin
+
+        brain._VALID_ENTITY_TYPES = GraphRagMixin._VALID_ENTITY_TYPES
+        brain._GLINER_TYPE_MAP = GraphRagMixin._GLINER_TYPE_MAP
+        brain._GLINER_LABELS = GraphRagMixin._GLINER_LABELS
         return brain
 
     # ── Phase 1.1: _extract_entities returns dicts ────────────────────────
@@ -7542,6 +7548,7 @@ class TestGLiNERExtraction:
     """Item 5 — graph_rag_ner_backend=gliner → GLiNER path, not llm.complete."""
 
     def _make_brain(self, backend="gliner"):
+        from axon.graph_rag import GraphRagMixin
         from axon.main import AxonBrain
 
         brain = MagicMock(spec=AxonBrain)
@@ -7550,6 +7557,9 @@ class TestGLiNERExtraction:
         brain.llm = MagicMock()
         brain.llm.complete = MagicMock(return_value="Paris | GEO | Capital of France")
         brain._gliner_model = None
+        brain._GLINER_TYPE_MAP = GraphRagMixin._GLINER_TYPE_MAP
+        brain._GLINER_LABELS = GraphRagMixin._GLINER_LABELS
+        brain._VALID_ENTITY_TYPES = GraphRagMixin._VALID_ENTITY_TYPES
         return brain
 
     def test_gliner_path_skips_llm(self):
@@ -7716,11 +7726,13 @@ class TestAutoRoute:
     """Item 3 — Adaptive query routing / Self-RAG."""
 
     def _make_brain(self):
+        from axon.graph_rag import GraphRagMixin
         from axon.main import AxonBrain
 
         brain = MagicMock(spec=AxonBrain)
         brain.config = MagicMock()
         brain.llm = MagicMock()
+        brain._HOLISTIC_KEYWORDS = GraphRagMixin._HOLISTIC_KEYWORDS
         return brain
 
     def test_heuristic_holistic_query_returns_true(self):
