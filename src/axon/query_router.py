@@ -68,20 +68,28 @@ class QueryRouterMixin:
 
     def _classify_query_route_heuristic(self, query: str) -> str:
         q = query.lower()
-        words = set(q.split())
+
+        def contains_keyword(text: str, keywords: set[str], full_text_match: bool = False) -> bool:
+            for kw in keywords:
+                # Use regex with word boundaries for both single and multi-word keywords
+                pattern = rf"\b{re.escape(kw)}\b"
+                if re.search(pattern, text):
+                    return True
+            return False
+
         # corpus_exploration
-        if any(kw in q for kw in self._CORPUS_KEYWORDS) or (
-            len(query) > 120 and any(kw in words for kw in self._SYNTHESIS_KEYWORDS)
+        if contains_keyword(q, self._CORPUS_KEYWORDS) or (
+            len(query) > 120 and contains_keyword(q, self._SYNTHESIS_KEYWORDS)
         ):
             return "corpus_exploration"
         # entity_relation
-        if any(kw in q for kw in self._ENTITY_KEYWORDS):
+        if contains_keyword(q, self._ENTITY_KEYWORDS):
             return "entity_relation"
         # table_lookup
-        if any(kw in q for kw in self._TABLE_KEYWORDS):
+        if contains_keyword(q, self._TABLE_KEYWORDS):
             return "table_lookup"
         # synthesis
-        if any(kw in words for kw in self._SYNTHESIS_KEYWORDS) or len(query) > 80:
+        if contains_keyword(q, self._SYNTHESIS_KEYWORDS) or len(query) > 80:
             return "synthesis"
         return "factual"
 

@@ -138,6 +138,18 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
+| `/llm [temp=N]` | Show or set LLM temperature |
+| `/refresh [path]` | Re-ingest updated local files |
+| `/stale [days=N]` | List docs not refreshed in N days (default 30) |
+| `/share list` | List outgoing and incoming shares |
+| `/share generate <project> <grantee>` | Generate a read-only share key |
+| `/share redeem <key>` | Mount a shared project (read-only) |
+| `/share revoke <key_id>` | Revoke an outgoing share |
+| `/store whoami` | Show AxonStore identity and status |
+| `/store init <path>` | Initialise AxonStore at a base path |
+| `/graph status` | Show GraphRAG community build status |
+| `/graph finalize` | Trigger explicit community rebuild |
+| `/graph viz` | Open the interactive graph panel in VS Code |
 | `/graph-viz [path]` | Export entity–relation graph as interactive HTML (requires `pip install axon[graphrag]`); omit path to save to temp dir. For a live VS Code panel use `Axon: Show Graph for Query…` instead. |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
@@ -407,8 +419,47 @@ curl -X POST http://localhost:8000/query \
   -d '{"query": "What is RAG?", "project": "my-project"}'
 ```
 
+### Collection & Management
+```bash
+# Source and chunk counts for active project
+curl http://localhost:8000/collection
+
+# Documents not refreshed in N days
+curl "http://localhost:8000/collection/stale?days=30"
+
+# Batch ingest multiple text strings
+curl -X POST http://localhost:8000/add_texts \
+  -H "Content-Type: application/json" \
+  -d '{"texts": ["First text", "Second text"], "metadata": [{"source": "a"}, {"source": "b"}]}'
+
+# Ingest content from a remote URL
+curl -X POST http://localhost:8000/ingest_url \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/page"}'
+
+# Remove documents by source ID list
+curl -X POST http://localhost:8000/delete \
+  -H "Content-Type: application/json" \
+  -d '{"sources": ["path/to/file.txt", "https://example.com/page"]}'
+```
+
+### GraphRAG
+```bash
+# GraphRAG community build status
+curl http://localhost:8000/graph/status
+
+# Trigger community rebuild
+curl -X POST http://localhost:8000/graph/finalize
+
+# Knowledge graph payload (VS Code panel)
+curl http://localhost:8000/graph/data
+```
+
 ### AxonStore (Multi-User Sharing)
 ```bash
+# AxonStore identity / status check
+curl http://localhost:8000/store/whoami
+
 # Initialise store for a user
 curl -X POST http://localhost:8000/store/init \
   -H "Content-Type: application/json" \
@@ -417,7 +468,7 @@ curl -X POST http://localhost:8000/store/init \
 # Generate a share key
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
-  -d '{"project": "my-project", "grantee": "<os-username>", "write_access": false}'
+  -d '{"project": "my-project", "grantee": "<os-username>"}'
 
 # Redeem a share key
 curl -X POST http://localhost:8000/share/redeem \

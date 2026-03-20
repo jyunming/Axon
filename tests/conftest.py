@@ -5,12 +5,12 @@ Project-level pytest fixtures for the Axon test suite.
 """
 
 import logging
+import os
 import shutil
-import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # tmp_path override — Windows: the system pytest temp dir
@@ -19,13 +19,17 @@ import pytest
 # that.  black/ruff exclude .test_tmp (see pyproject.toml) so locked
 # directories from prior runs do not break linting.
 # ---------------------------------------------------------------------------
+BASE_TEST_TMP = Path(__file__).parent / ".test_tmp"
+
+
 @pytest.fixture
 def tmp_path():
     """Provide a temporary directory under the project tree."""
-    base = Path(__file__).parent / ".test_tmp"
-    base.mkdir(exist_ok=True)
-    d = tempfile.mkdtemp(dir=base)
-    yield Path(d)
+    base = Path(os.environ.get("AXON_TEST_TMP", BASE_TEST_TMP))
+    base.mkdir(parents=True, exist_ok=True)
+    d = base / f"tmp{uuid.uuid4().hex}"
+    d.mkdir()
+    yield d
     shutil.rmtree(d, ignore_errors=True)
 
 

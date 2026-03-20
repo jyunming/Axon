@@ -35,6 +35,7 @@ _SLASH_COMMANDS = [
     "/discuss",
     "/embed ",
     "/exit",
+    "/graph ",
     "/graph-viz",
     "/help",
     "/ingest ",
@@ -46,10 +47,14 @@ _SLASH_COMMANDS = [
     "/pull ",
     "/quit",
     "/rag ",
+    "/refresh",
     "/resume ",
     "/retry",
     "/search",
     "/sessions",
+    "/share ",
+    "/stale",
+    "/store ",
     "/vllm-url ",
 ]
 

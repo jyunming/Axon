@@ -457,22 +457,24 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._log_startup_summary()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
     def close(self):
         """Explicitly release all resources (connections, file handles)."""
         if hasattr(self, "_executor") and self._executor:
             self._executor.shutdown(wait=False)
-        if hasattr(self, "vector_store") and self.vector_store:
-            if hasattr(self.vector_store, "close"):
-                self.vector_store.close()
-        if hasattr(self, "bm25") and self.bm25:
-            if hasattr(self.bm25, "close"):
-                self.bm25.close()
-        if hasattr(self, "_own_vector_store") and self._own_vector_store:
-            if hasattr(self._own_vector_store, "close"):
-                self._own_vector_store.close()
-        if hasattr(self, "_own_bm25") and self._own_bm25:
-            if hasattr(self._own_bm25, "close"):
-                self._own_bm25.close()
+
+        # Close all unique store objects to avoid double-closure
+        seen_stores: set[int] = set()
+        for attr in ("vector_store", "_own_vector_store", "bm25", "_own_bm25"):
+            store = getattr(self, attr, None)
+            if store and hasattr(store, "close") and id(store) not in seen_stores:
+                store.close()
+                seen_stores.add(id(store))
 
     def _log_startup_summary(self) -> None:
         """Log a one-line startup summary: active project, namespace ID, scope type."""

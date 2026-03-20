@@ -156,7 +156,7 @@ Copilot Chat:
 - **Multi-LLM** — Ollama (local), Gemini, OpenAI, vLLM; switch live from the REPL
 - **Multi-embedding** — sentence-transformers, Ollama, FastEmbed
 - **Vector stores** — ChromaDB (default), Qdrant, LanceDB
-- **14+ file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM with VLM auto-captioning)
+- **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)
 - **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
 - **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression

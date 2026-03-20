@@ -1554,6 +1554,7 @@ class GraphRagMixin:
             "linked",
             "colleague",
             "dependency",
+            "relate",
         }
     )
     _CORPUS_KEYWORDS: frozenset = frozenset(
