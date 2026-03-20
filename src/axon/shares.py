@@ -337,10 +337,11 @@ def list_shares(user_dir: Path) -> dict[str, list]:
 
 
 def validate_received_shares(user_dir: Path) -> list[str]:
-    """Check all received shares for revocation; remove stale symlinks.
+    """Check all received shares for revocation; update descriptors and remove stale symlinks.
 
-    Called on each project list or access attempt. Removes symlinks for
-    any share that the owner has revoked.
+    Scans received share records against the owner's manifest.  When a share
+    has been revoked, the ``mounts/`` descriptor is removed (primary) and any
+    legacy ``ShareMount/`` symlink is also cleaned up (transitional).
 
     Args:
         user_dir: Path to the grantee's user directory.
@@ -348,6 +349,7 @@ def validate_received_shares(user_dir: Path) -> list[str]:
     Returns:
         List of mount names that were removed due to revocation.
     """
+    from axon.mounts import remove_mount_descriptor
     from axon.projects import _remove_share_link
 
     keys = _read_json(_keys_path(user_dir))
@@ -358,7 +360,7 @@ def validate_received_shares(user_dir: Path) -> list[str]:
     for record in list(received):
         manifest_path = Path(record.get("owner_manifest_path", ""))
         if not manifest_path.exists():
-            continue  # Can't check — leave symlink in place
+            continue  # Can't check — leave descriptor in place
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:
@@ -368,10 +370,14 @@ def validate_received_shares(user_dir: Path) -> list[str]:
             (r for r in manifest.get("issued", []) if r["key_id"] == key_id), None
         )
         if manifest_record and manifest_record.get("revoked"):
-            # Remove symlink from grantee's ShareMount
-            link = Path(record["symlink_path"])
-            _remove_share_link(link)
-            removed.append(record["mount_name"])
+            mount_name = record["mount_name"]
+            # Primary: remove descriptor from mounts/
+            remove_mount_descriptor(user_dir, mount_name)
+            # Transitional: remove legacy ShareMount/ symlink if present
+            link = Path(record.get("symlink_path", ""))
+            if link.name:
+                _remove_share_link(link)
+            removed.append(mount_name)
             received.remove(record)
             updated = True
 

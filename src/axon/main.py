@@ -2867,8 +2867,8 @@ Your primary goal is to help the user by answering questions based on the provid
             # Include the default project
             project_paths.insert(0, (self._base_vector_store_path, self._base_bm25_path))
 
-        # @mounts — descriptor-backed mounted projects
-        if scope == "@mounts":
+        # @mounts and @store — descriptor-backed mounted projects
+        if scope in ("@mounts", "@store"):
             for vpath, bpath in _mount_dirs():
                 project_paths.append((vpath, bpath))
 
