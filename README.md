@@ -65,7 +65,7 @@ The VSIX ships with the repo — no download needed:
 
 ```
 1. Extensions panel (Ctrl+Shift+X) → "..." → Install from VSIX...
-2. Select:  integrations/vscode-axon/axon-copilot-1.0.0.vsix
+2. Select:  integrations/vscode-axon/axon-copilot-0.9.0.vsix
 3. Reload VS Code  (Ctrl+Shift+P → "Reload Window")
 ```
 

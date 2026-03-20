@@ -242,7 +242,7 @@ make lint
    - `src/axon/__init__.py`
    - `src/axon/api.py` (FastAPI `version=` field)
 2. Run all tests: `make ci`
-3. Create git tag: `git tag v1.0.0`
+3. Create git tag: `git tag v0.9.0`
 4. Push tag: `git push --tags`
 5. GitHub Actions will build and publish
 

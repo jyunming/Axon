@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Axon API",
     description="REST API for agent orchestration and document retrieval",
-    version="1.0.0",
+    version="0.9.0",
     lifespan=lifespan,
 )
 

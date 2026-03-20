@@ -950,7 +950,7 @@ The Axon VS Code extension (`axon-copilot`) gives GitHub Copilot direct access t
 
 **Option A — Install from release (recommended)**
 
-Download `axon-copilot-1.0.0.vsix` from the [GitHub Releases](https://github.com/jyunming/Axon/releases) page or find it in `integrations/vscode-axon/` in the repo.
+Download `axon-copilot-0.9.0.vsix` from the [GitHub Releases](https://github.com/jyunming/Axon/releases) page or find it in `integrations/vscode-axon/` in the repo.
 
 Open VS Code and install:
 
@@ -958,7 +958,7 @@ Open VS Code and install:
 1. Open the Extensions panel (Ctrl+Shift+X)
 2. Click the "..." (More Actions) button at the top-right of the panel
 3. Select "Install from VSIX..."
-4. Navigate to axon-copilot-1.0.0.vsix and click Install
+4. Navigate to axon-copilot-0.9.0.vsix and click Install
 5. Reload VS Code when prompted (Ctrl+Shift+P → "Reload Window")
 ```
 
@@ -967,7 +967,7 @@ Open VS Code and install:
 ```bash
 cd integrations/vscode-axon
 npm install
-npm run package   # produces axon-copilot-1.0.0.vsix
+npm run package   # produces axon-copilot-0.9.0.vsix
 ```
 
 Then install the generated `.vsix` as above.

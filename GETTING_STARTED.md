@@ -19,7 +19,7 @@ ollama pull phi3:mini     # minimal  — 2.3 GB, ~4 GB RAM
 
 ## Install the VS Code Extension
 
-Install the bundled extension: open Extensions panel (`Ctrl+Shift+X`) → `···` → **Install from VSIX** → select `integrations/vscode-axon/axon-copilot-1.0.0.vsix` → reload VS Code.
+Install the bundled extension: open Extensions panel (`Ctrl+Shift+X`) → `···` → **Install from VSIX** → select `integrations/vscode-axon/axon-copilot-0.9.0.vsix` → reload VS Code.
 
 > Full setup guide including Python discovery, settings, and troubleshooting: [SETUP.md § 11](SETUP.md#11-vs-code-extension-github-copilot-integration)
 
