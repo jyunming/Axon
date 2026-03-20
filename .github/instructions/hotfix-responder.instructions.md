@@ -43,7 +43,7 @@ PR: hotfix/<name> → main
 
 ### 6. Patch release
 After merging to `main`:
-- Bump the PATCH version in `setup.py` and `pyproject.toml` (e.g., `2.0.0` → `2.0.1`).
+- Bump the PATCH version in `setup.py` and `pyproject.toml` (e.g., `0.9.0` → `0.9.1`).
 - Tag and push — this triggers the `release.yml` workflow:
   ```bash
   git tag -a v<version> -m "Hotfix v<version>: <short description>"

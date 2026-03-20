@@ -1137,8 +1137,8 @@ class OpenLLM:
                 base_url="https://api.githubcopilot.com",
                 api_key=session_token,
                 default_headers={
-                    "Editor-Version": "axon/1.0.0",
-                    "Editor-Plugin-Version": "axon/1.0.0",
+                    "Editor-Version": "axon/0.9.0",
+                    "Editor-Plugin-Version": "axon/0.9.0",
                     "Copilot-Integration-Id": "axon",
                 },
             )
@@ -9586,8 +9586,8 @@ def _refresh_copilot_session(oauth_token: str) -> dict:
         "https://api.github.com/copilot_internal/v2/token",
         headers={
             "Authorization": f"token {oauth_token}",
-            "Editor-Version": "axon/1.0.0",
-            "Editor-Plugin-Version": "axon/1.0.0",
+            "Editor-Version": "axon/0.9.0",
+            "Editor-Plugin-Version": "axon/0.9.0",
         },
         timeout=10,
     )
@@ -9643,7 +9643,7 @@ def _fetch_copilot_models(llm) -> list[str]:
             "https://api.githubcopilot.com/models",
             headers={
                 "Authorization": f"Bearer {session_token}",
-                "Editor-Version": "axon/1.0.0",
+                "Editor-Version": "axon/0.9.0",
                 "Copilot-Integration-Id": "axon",
             },
             timeout=10,
