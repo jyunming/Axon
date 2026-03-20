@@ -89,3 +89,21 @@ def test_audit_legacy_chunk_ids_clean(tmp_path):
     (proj / "bm25_index" / "corpus.json").write_text(json.dumps(corpus))
     result = audit_legacy_chunk_ids(proj)
     assert result["legacy_id_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2b — run_migration prints output
+# ---------------------------------------------------------------------------
+
+
+def test_run_migration_prints_output(tmp_path, capsys):
+    from axon.migration import run_migration
+
+    # Create two project dirs with meta.json needing backfill
+    for name in ("proj_a", "proj_b"):
+        p = tmp_path / name
+        p.mkdir()
+        (p / "meta.json").write_text(json.dumps({"name": name}))
+    run_migration(tmp_path)
+    captured = capsys.readouterr()
+    assert "Migration target" in captured.out or "backfilled" in captured.out

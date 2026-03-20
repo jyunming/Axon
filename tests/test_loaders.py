@@ -818,3 +818,533 @@ def test_two_files_same_name_different_dirs_get_different_ids(tmp_path):
     docs_a = TextLoader().load(str(dir_a / "doc.txt"))
     docs_b = TextLoader().load(str(dir_b / "doc.txt"))
     assert docs_a[0]["id"] != docs_b[0]["id"]
+
+
+# ---------------------------------------------------------------------------
+# SmartTextLoader — file-path load
+# ---------------------------------------------------------------------------
+
+
+class TestSmartTextLoaderFile:
+    def test_load_txt_file(self, tmp_path):
+        from axon.loaders import SmartTextLoader
+
+        p = tmp_path / "notes.txt"
+        p.write_text("This is plain prose text without many commas.", encoding="utf-8")
+        docs = SmartTextLoader().load(str(p))
+        assert len(docs) >= 1
+        _assert_doc(docs[0])
+
+    def test_load_csv_delegates_to_table(self, tmp_path):
+        from axon.loaders import SmartTextLoader
+
+        p = tmp_path / "data.csv"
+        p.write_text("name,age,city\nAlice,30,NYC\nBob,25,LA\nCarol,28,Chicago\n", encoding="utf-8")
+        docs = SmartTextLoader().load(str(p))
+        # should detect as table and delegate
+        assert len(docs) >= 1
+        _assert_doc(docs[0])
+
+
+# ---------------------------------------------------------------------------
+# CodeFileLoader
+# ---------------------------------------------------------------------------
+
+
+class TestCodeFileLoader:
+    def test_basic_python_file(self, tmp_path):
+        from axon.loaders import CodeFileLoader
+
+        p = tmp_path / "example.py"
+        p.write_text("def hello():\n    return 'world'\n", encoding="utf-8")
+        docs = CodeFileLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "code"
+        assert docs[0]["metadata"]["source"] == str(p)
+        assert docs[0]["id"].startswith("code_")
+        assert "def hello" in docs[0]["text"]
+
+    def test_id_is_stable_hash(self, tmp_path):
+        from axon.loaders import CodeFileLoader
+
+        p = tmp_path / "stable.py"
+        p.write_text("x = 1")
+        docs1 = CodeFileLoader().load(str(p))
+        docs2 = CodeFileLoader().load(str(p))
+        assert docs1[0]["id"] == docs2[0]["id"]
+
+
+# ---------------------------------------------------------------------------
+# NotebookLoader
+# ---------------------------------------------------------------------------
+
+
+class TestNotebookLoader:
+    def test_basic_notebook(self, tmp_path):
+        from axon.loaders import NotebookLoader
+
+        nb = tmp_path / "demo.ipynb"
+        nb.write_text(
+            json.dumps(
+                {
+                    "nbformat": 4,
+                    "nbformat_minor": 5,
+                    "cells": [
+                        {"cell_type": "code", "source": "x = 1", "outputs": []},
+                        {"cell_type": "markdown", "source": "## heading"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        docs = NotebookLoader().load(str(nb))
+        assert len(docs) == 2
+        _assert_doc(docs[0])
+        assert any("x = 1" in d["text"] for d in docs)
+        assert docs[0]["metadata"]["type"] == "notebook"
+
+    def test_empty_cells_skipped(self, tmp_path):
+        from axon.loaders import NotebookLoader
+
+        nb = tmp_path / "empty.ipynb"
+        nb.write_text(
+            json.dumps(
+                {
+                    "nbformat": 4,
+                    "nbformat_minor": 5,
+                    "cells": [
+                        {"cell_type": "code", "source": "", "outputs": []},
+                        {"cell_type": "markdown", "source": "## real content"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        docs = NotebookLoader().load(str(nb))
+        assert len(docs) == 1
+        assert "real content" in docs[0]["text"]
+
+    def test_malformed_json_returns_empty(self, tmp_path):
+        from axon.loaders import NotebookLoader
+
+        nb = tmp_path / "bad.ipynb"
+        nb.write_text("not json", encoding="utf-8")
+        docs = NotebookLoader().load(str(nb))
+        assert docs == []
+
+
+# ---------------------------------------------------------------------------
+# XMLLoader
+# ---------------------------------------------------------------------------
+
+
+class TestXMLLoader:
+    def test_basic_xml(self, tmp_path):
+        from axon.loaders import XMLLoader
+
+        p = tmp_path / "data.xml"
+        p.write_text(
+            '<?xml version="1.0"?>'
+            '<root><item id="1">Hello world</item><item id="2">Foo bar</item></root>',
+            encoding="utf-8",
+        )
+        docs = XMLLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "xml"
+        assert "Hello world" in docs[0]["text"] or "Foo bar" in docs[0]["text"]
+
+    def test_malformed_xml_falls_back_to_regex(self, tmp_path):
+        from axon.loaders import XMLLoader
+
+        p = tmp_path / "broken.xml"
+        p.write_text("<unclosed><item>some text</item>", encoding="utf-8")
+        docs = XMLLoader().load(str(p))
+        # Should return something, not crash
+        assert isinstance(docs, list)
+
+
+# ---------------------------------------------------------------------------
+# JSONLLoader
+# ---------------------------------------------------------------------------
+
+
+class TestJSONLLoader:
+    def test_basic_jsonl(self, tmp_path):
+        from axon.loaders import JSONLLoader
+
+        p = tmp_path / "data.jsonl"
+        p.write_text(
+            '{"text": "line one"}\n{"text": "line two"}\n{"text": "line three"}\n', encoding="utf-8"
+        )
+        docs = JSONLLoader().load(str(p))
+        assert len(docs) == 3
+        _assert_doc(docs[0])
+        assert docs[0]["text"] == "line one"
+        assert docs[0]["metadata"]["type"] == "jsonl"
+
+    def test_malformed_line_skipped(self, tmp_path):
+        from axon.loaders import JSONLLoader
+
+        p = tmp_path / "mixed.jsonl"
+        p.write_text('{"text": "good"}\nnot json here\n{"text": "also good"}\n', encoding="utf-8")
+        docs = JSONLLoader().load(str(p))
+        assert len(docs) == 2
+        assert docs[0]["text"] == "good"
+        assert docs[1]["text"] == "also good"
+
+    def test_empty_lines_skipped(self, tmp_path):
+        from axon.loaders import JSONLLoader
+
+        p = tmp_path / "sparse.jsonl"
+        p.write_text('{"text": "hello"}\n\n\n{"text": "world"}\n', encoding="utf-8")
+        docs = JSONLLoader().load(str(p))
+        assert len(docs) == 2
+
+    def test_non_text_field_uses_full_json(self, tmp_path):
+        from axon.loaders import JSONLLoader
+
+        p = tmp_path / "ntext.jsonl"
+        p.write_text('{"value": 42, "label": "x"}\n', encoding="utf-8")
+        docs = JSONLLoader().load(str(p))
+        assert len(docs) == 1
+        # should fall back to json.dumps of item
+        assert "42" in docs[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# RTFLoader
+# ---------------------------------------------------------------------------
+
+
+class TestRTFLoader:
+    def test_basic_rtf(self, tmp_path):
+        p = tmp_path / "doc.rtf"
+        p.write_text(r"{\rtf1\ansi Hello World}", encoding="utf-8")
+        # Mock striprtf
+        mock_striprtf = MagicMock()
+        mock_striprtf.striprtf.rtf_to_text.return_value = "Hello World"
+        with patch.dict(
+            sys.modules, {"striprtf": mock_striprtf, "striprtf.striprtf": mock_striprtf.striprtf}
+        ):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import RTFLoader as _RTFLoader
+
+            docs = _RTFLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "rtf"
+
+    def test_missing_dep_returns_empty(self, tmp_path):
+        p = tmp_path / "doc.rtf"
+        p.write_bytes(b"fake rtf")
+        with patch.dict(sys.modules, {"striprtf": None, "striprtf.striprtf": None}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import RTFLoader as _RTFLoader
+
+            docs = _RTFLoader().load(str(p))
+        assert docs == []
+
+
+# ---------------------------------------------------------------------------
+# LaTeXLoader
+# ---------------------------------------------------------------------------
+
+
+class TestLaTeXLoader:
+    def test_basic_latex(self, tmp_path):
+        from axon.loaders import LaTeXLoader
+
+        p = tmp_path / "paper.tex"
+        p.write_text(
+            r"""\documentclass{article}
+\begin{document}
+\section{Introduction}
+This is the \textbf{introduction} to our paper.
+\end{document}""",
+            encoding="utf-8",
+        )
+        docs = LaTeXLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "latex"
+        # Should contain the prose without latex commands
+        assert "introduction" in docs[0]["text"].lower()
+
+    def test_math_discarded(self, tmp_path):
+        from axon.loaders import LaTeXLoader
+
+        p = tmp_path / "math.tex"
+        p.write_text(
+            r"""\begin{document}
+Text before equation.
+\begin{equation}
+E = mc^2
+\end{equation}
+Text after equation.
+\end{document}""",
+            encoding="utf-8",
+        )
+        docs = LaTeXLoader().load(str(p))
+        assert "Text before equation" in docs[0]["text"]
+        assert "mc^2" not in docs[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# EMLLoader
+# ---------------------------------------------------------------------------
+
+
+class TestEMLLoader:
+    def test_basic_eml(self, tmp_path):
+        from axon.loaders import EMLLoader
+
+        p = tmp_path / "test.eml"
+        p.write_bytes(
+            b"From: alice@example.com\r\n"
+            b"To: bob@example.com\r\n"
+            b"Subject: Hello\r\n"
+            b"Date: Mon, 1 Jan 2024 12:00:00 +0000\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"\r\n"
+            b"Hello Bob, this is the email body.\r\n"
+        )
+        docs = EMLLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "eml"
+        assert docs[0]["metadata"]["email_from"] == "alice@example.com"
+        assert docs[0]["metadata"]["email_subject"] == "Hello"
+        assert "Hello Bob" in docs[0]["text"]
+
+    def test_from_to_subject_in_text(self, tmp_path):
+        from axon.loaders import EMLLoader
+
+        p = tmp_path / "meta.eml"
+        p.write_bytes(
+            b"From: sender@test.com\r\n"
+            b"To: receiver@test.com\r\n"
+            b"Subject: Test Subject\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"\r\n"
+            b"Body text.\r\n"
+        )
+        docs = EMLLoader().load(str(p))
+        text = docs[0]["text"]
+        assert "From:" in text
+        assert "Subject:" in text
+
+
+# ---------------------------------------------------------------------------
+# MSGLoader
+# ---------------------------------------------------------------------------
+
+
+class TestMSGLoader:
+    def test_basic_msg(self, tmp_path):
+        p = tmp_path / "email.msg"
+        p.write_bytes(b"fake msg")
+        mock_msg = MagicMock()
+        mock_msg.sender = "alice@example.com"
+        mock_msg.to = "bob@example.com"
+        mock_msg.subject = "Test Subject"
+        mock_msg.date = None
+        mock_msg.body = "Hello Bob"
+        mock_msg.htmlBody = None
+        mock_extract_msg = MagicMock()
+        mock_extract_msg.Message.return_value = mock_msg
+        with patch.dict(sys.modules, {"extract_msg": mock_extract_msg}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import MSGLoader as _MSGLoader
+
+            docs = _MSGLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "msg"
+        assert "Hello Bob" in docs[0]["text"]
+        assert docs[0]["metadata"]["email_from"] == "alice@example.com"
+
+    def test_missing_dep_returns_empty(self, tmp_path):
+        p = tmp_path / "email.msg"
+        p.write_bytes(b"fake")
+        with patch.dict(sys.modules, {"extract_msg": None}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import MSGLoader as _MSGLoader
+
+            docs = _MSGLoader().load(str(p))
+        assert docs == []
+
+
+# ---------------------------------------------------------------------------
+# PPTXLoader
+# ---------------------------------------------------------------------------
+
+
+class TestPPTXLoader:
+    def test_basic_pptx(self, tmp_path):
+        p = tmp_path / "slides.pptx"
+        p.write_bytes(b"fake pptx")
+        # Build mock Presentation with 2 slides
+        shape1 = MagicMock()
+        shape1.text = "Slide one content"
+        shape2 = MagicMock()
+        shape2.text = "Slide two content"
+        slide1 = MagicMock()
+        slide1.shapes = [shape1]
+        slide2 = MagicMock()
+        slide2.shapes = [shape2]
+        prs_mock = MagicMock()
+        prs_mock.slides = [slide1, slide2]
+        mock_pptx = MagicMock()
+        mock_pptx.Presentation.return_value = prs_mock
+        with patch.dict(sys.modules, {"pptx": mock_pptx}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import PPTXLoader as _PPTXLoader
+
+            docs = _PPTXLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "pptx"
+        assert "Slide one content" in docs[0]["text"]
+        assert "Slide two content" in docs[0]["text"]
+
+    def test_missing_dep_returns_empty(self, tmp_path):
+        p = tmp_path / "slides.pptx"
+        p.write_bytes(b"fake")
+        with patch.dict(sys.modules, {"pptx": None}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import PPTXLoader as _PPTXLoader
+
+            docs = _PPTXLoader().load(str(p))
+        assert docs == []
+
+
+# ---------------------------------------------------------------------------
+# ExcelLoader
+# ---------------------------------------------------------------------------
+
+
+class TestExcelLoader:
+    def test_missing_pandas_returns_empty(self, tmp_path):
+        p = tmp_path / "data.xlsx"
+        p.write_bytes(b"fake xlsx")
+        with patch.dict(sys.modules, {"pandas": None}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import ExcelLoader as _ExcelLoader
+
+            docs = _ExcelLoader().load(str(p))
+        assert docs == []
+
+
+# ---------------------------------------------------------------------------
+# ParquetLoader
+# ---------------------------------------------------------------------------
+
+
+class TestParquetLoader:
+    def test_missing_pandas_returns_empty(self, tmp_path):
+        p = tmp_path / "data.parquet"
+        p.write_bytes(b"fake parquet")
+        with patch.dict(sys.modules, {"pandas": None}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import ParquetLoader as _ParquetLoader
+
+            docs = _ParquetLoader().load(str(p))
+        assert docs == []
+
+    def test_missing_pyarrow_returns_empty(self, tmp_path):
+        p = tmp_path / "data.parquet"
+        p.write_bytes(b"fake parquet")
+        mock_pd = MagicMock()
+        mock_pd.read_parquet.side_effect = ImportError("No module named 'pyarrow'")
+        with patch.dict(sys.modules, {"pandas": mock_pd}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import ParquetLoader as _ParquetLoader
+
+            docs = _ParquetLoader().load(str(p))
+        assert docs == []
+
+
+# ---------------------------------------------------------------------------
+# EPUBLoader
+# ---------------------------------------------------------------------------
+
+
+class TestEPUBLoader:
+    def test_missing_dep_returns_empty(self, tmp_path):
+        p = tmp_path / "book.epub"
+        p.write_bytes(b"fake epub")
+        with patch.dict(sys.modules, {"ebooklib": None, "ebooklib.epub": None}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import EPUBLoader as _EPUBLoader
+
+            docs = _EPUBLoader().load(str(p))
+        assert docs == []
+
+    def test_basic_epub(self, tmp_path):
+        p = tmp_path / "book.epub"
+        p.write_bytes(b"fake epub")
+        # Mock ebooklib
+        mock_item = MagicMock()
+        mock_item.get_content.return_value = (
+            b"<html><body><p>Chapter content here</p></body></html>"
+        )
+        mock_item.get_name.return_value = "chapter1.xhtml"
+        mock_book = MagicMock()
+        mock_book.get_items_of_type.return_value = [mock_item]
+        mock_ebooklib = MagicMock()
+        mock_ebooklib.ITEM_DOCUMENT = 9
+        mock_epub_mod = MagicMock()
+        mock_epub_mod.read_epub.return_value = mock_book
+        mock_ebooklib.epub = mock_epub_mod
+        with patch.dict(sys.modules, {"ebooklib": mock_ebooklib, "ebooklib.epub": mock_epub_mod}):
+            sys.modules.pop("axon.loaders", None)
+            from axon.loaders import EPUBLoader as _EPUBLoader
+
+            docs = _EPUBLoader().load(str(p))
+        assert len(docs) == 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "epub"
+        assert "Chapter content" in docs[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# SQLLoader
+# ---------------------------------------------------------------------------
+
+
+class TestSQLLoader:
+    def test_basic_sql_statements(self, tmp_path):
+        from axon.loaders import SQLLoader
+
+        p = tmp_path / "schema.sql"
+        p.write_text(
+            "CREATE TABLE users (id INT, name VARCHAR(100));\n"
+            "INSERT INTO users VALUES (1, 'Alice');\n",
+            encoding="utf-8",
+        )
+        docs = SQLLoader().load(str(p))
+        assert len(docs) >= 1
+        _assert_doc(docs[0])
+        assert docs[0]["metadata"]["type"] == "sql"
+        assert any("CREATE TABLE" in d["text"] for d in docs)
+
+    def test_no_semicolons_returns_whole_file(self, tmp_path):
+        from axon.loaders import SQLLoader
+
+        p = tmp_path / "query.sql"
+        p.write_text("SELECT * FROM products WHERE price > 100", encoding="utf-8")
+        docs = SQLLoader().load(str(p))
+        assert len(docs) == 1
+        assert "SELECT" in docs[0]["text"]
+
+    def test_comment_only_statements_skipped(self, tmp_path):
+        from axon.loaders import SQLLoader
+
+        p = tmp_path / "commented.sql"
+        p.write_text(
+            "-- This is just a comment\n" "CREATE TABLE items (id INT);\n", encoding="utf-8"
+        )
+        docs = SQLLoader().load(str(p))
+        assert any("CREATE TABLE" in d["text"] for d in docs)
