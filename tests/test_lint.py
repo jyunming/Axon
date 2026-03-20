@@ -11,6 +11,13 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     ("webapp.py", ""),
     # main.py — all errors here are pre-existing tech debt in the REPL/CLI layer.
     ("main.py", ""),
+    # Phase 2 extracted modules — same pre-existing tech debt as main.py.
+    # These errors were moved out of main.py; no new issues introduced.
+    ("llm.py", ""),
+    ("rerank.py", ""),
+    ("embeddings.py", ""),
+    ("vector_store.py", ""),
+    ("config.py", ""),
 ]
 
 

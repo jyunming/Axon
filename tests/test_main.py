@@ -884,7 +884,7 @@ _FAKE_COPILOT_SESSION = {"token": "fake_session_token_abc", "expires_at": 9_999_
 
 
 class TestGitHubCopilotProvider:
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_complete_calls_copilot_endpoint(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -903,7 +903,7 @@ class TestGitHubCopilotProvider:
         assert result == "hello"
         assert MockOpenAI.call_args[1]["base_url"] == "https://api.githubcopilot.com"
 
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_complete_passes_required_headers(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -923,7 +923,7 @@ class TestGitHubCopilotProvider:
         assert "Editor-Version" in headers
         assert "Copilot-Integration-Id" in headers
 
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_complete_returns_response(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -941,7 +941,7 @@ class TestGitHubCopilotProvider:
         result = llm.complete("What is 2+2?")
         assert result == "copilot answer"
 
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_stream_yields_tokens(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -978,7 +978,7 @@ class TestGitHubCopilotProvider:
         with pytest.raises(ValueError, match="GITHUB_COPILOT_PAT"):
             llm._get_copilot_client()
 
-    @patch("axon.main._refresh_copilot_session")
+    @patch("axon.llm._refresh_copilot_session")
     @patch("openai.OpenAI")
     def test_client_cache_invalidated_on_pat_change(self, MockOpenAI, mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -5192,6 +5192,19 @@ class TestGraphRAGTask7Fixes:
         b._rebuild_communities = MagicMock()
 
         AxonBrain.finalize_graph(b)
+
+        b._rebuild_communities.assert_called_once()
+        assert b._community_graph_dirty is False
+
+    def test_finalize_graph_force_rebuilds_when_not_dirty(self):
+        """finalize_graph(force=True) rebuilds even when dirty flag is not set."""
+        from axon.main import AxonBrain
+
+        b = self._make_brain()
+        b._community_graph_dirty = False
+        b._rebuild_communities = MagicMock()
+
+        AxonBrain.finalize_graph(b, force=True)
 
         b._rebuild_communities.assert_called_once()
         assert b._community_graph_dirty is False
