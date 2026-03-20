@@ -160,7 +160,7 @@ Copilot Chat:
 - **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
 - **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
-- **RAPTOR + GraphRAG (fast mode by default)** — RAPTOR hierarchical summaries + entity graph via zero-LLM regex extraction; both on by default with no ingest slowdown; interactive 3D graph panel in VS Code, or `/graph-viz` HTML export
+- **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph; disabled in the shipped config for fast first-run ingest; enable when your corpus is ready; interactive 3D graph panel in VS Code, or `/graph-viz` HTML export
 - **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS` edges for code corpora; visualise alongside the knowledge graph in the VS Code panel
 - **Reranking** — cross-encoder (BGE) reranking
 - **Agent-ready** — FastAPI REST API + MCP server for Copilot agent mode

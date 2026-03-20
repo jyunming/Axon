@@ -271,22 +271,25 @@ Merged scopes are read-only. Use `/project <name>` to switch back before ingesti
 
 ## RAPTOR + GraphRAG — Best-Known Method
 
-RAPTOR and GraphRAG are **on by default** as of v1.0.0. They make Axon much better at multi-hop
-and corpus-wide questions, but they add LLM calls during ingest. Here is how to get the most out
-of them without paying unnecessary cost.
+RAPTOR and GraphRAG are **disabled in the shipped `config.yaml`** to keep first-run ingest fast.
+Enable them once your corpus is ingested and you want richer multi-hop retrieval. The code
+dataclass defaults are `raptor=True` / `graph_rag=True`, but the shipped config overrides those.
+Here is how to get the most out of them without paying unnecessary cost.
 
 ### What each feature does
 
 | Feature | What it adds | Ingest cost |
 |---|---|---|
 | **RAPTOR** | Hierarchical summaries — groups ~5 leaf chunks per source into a summary node; summary nodes are retrieved alongside leaf chunks for multi-hop questions | ~1 LLM call per 5 chunks |
-| **GraphRAG (light — default)** | Entity graph via regex noun-phrase extraction; zero LLM calls; populates the VS Code Graph Panel KG tab; entity co-occurrence used to expand retrieval | **Zero LLM calls** |
+| **GraphRAG (light)** | Entity graph via regex noun-phrase extraction; zero LLM calls; populates the VS Code Graph Panel KG tab; entity co-occurrence used to expand retrieval | **Zero LLM calls** |
 | **GraphRAG (standard)** | Adds LLM entity descriptions + typed relation triples; richer graph, better retrieval expansion | ~1–3 LLM calls per chunk |
 | **RAPTOR + GraphRAG** | Auto-composition — large sources use RAPTOR summaries as GraphRAG extraction units, cutting costs by ~50–80% | Shared cost — not additive |
 
-### Default config: fast graph, no extra LLM calls
+### Recommended starting config: fast graph, no extra LLM calls
 
-The default `config.yaml` ships with **fast graph mode**:
+The shipped `config.yaml` has `graph_rag: false` for a fast first-run experience. Once you have
+your corpus ingested and want the VS Code Graph Panel KG tab, enable light mode — zero LLM calls,
+ingest cost is the same as `graph_rag: false`:
 
 ```yaml
 rag:
@@ -295,8 +298,6 @@ rag:
   graph_rag_relations: false  # relation extraction (LLM-heavy) is off
   graph_rag_community: false  # community detection is off
 ```
-
-This gives you the VS Code Graph Panel KG tab for free, with no ingest slowdown. Ingest speed is the same as having `graph_rag: false`.
 
 ### Upgrading to a richer graph
 

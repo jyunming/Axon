@@ -267,12 +267,11 @@ pip install -e ".[graphrag]"
 # installs: networkx, leidenalg, igraph
 ```
 
-The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which uses the documented Python 3.13 path directly and bypasses `graspologic`.
+The code default is `graph_rag_community_backend: auto` (graspologic → leidenalg → networkx Louvain). On Python 3.13 we recommend pinning to `leidenalg` explicitly to skip the unavailable `graspologic` step:
 
-The community-detection backend can be configured explicitly:
 ```yaml
 rag:
-  graph_rag_community_backend: leidenalg  # recommended for Python 3.13 (default)
+  graph_rag_community_backend: leidenalg  # recommended for Python 3.13
   # graph_rag_community_backend: auto     # graspologic → leidenalg → networkx Louvain
   # graph_rag_community_backend: louvain  # networkx only, no extra deps required
 ```
@@ -293,7 +292,7 @@ If you have `graspologic` installed from a Python ≤ 3.12 / NumPy 1.x environme
 
 **Symptom:** Ingest of a 10–50 document corpus takes several minutes instead of seconds.
 
-**Cause:** RAPTOR and GraphRAG are on by default. RAPTOR makes ~1 LLM call per 5 chunks
+**Cause:** RAPTOR and GraphRAG are disabled in the shipped `config.yaml` but enabled in the code dataclass defaults — if you are hitting this, you have explicitly enabled them. RAPTOR makes ~1 LLM call per 5 chunks
 (summary generation). GraphRAG makes ~1–3 LLM calls per chunk (entity extraction, optionally
 relation extraction). For 100 chunks that is 100–300 LLM calls before any query can be answered.
 

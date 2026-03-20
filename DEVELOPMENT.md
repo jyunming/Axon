@@ -68,7 +68,6 @@ Axon/
 │   └── test_tools.py       # Agent tool definition tests
 ├── examples/               # Example scripts
 ├── .github/workflows/      # CI/CD pipelines
-├── config.yaml             # Configuration template
 ├── pyproject.toml         # Package metadata
 ├── Makefile               # Development commands
 └── README.md              # User documentation
@@ -236,9 +235,14 @@ make lint
 
 ### 10. Release Process
 
-1. Update version in `setup.py` and `pyproject.toml`
+1. Update version in **all** version files (must stay in sync):
+   - `pyproject.toml` (single source of truth)
+   - `setup.py`
+   - `src/__init__.py`
+   - `src/axon/__init__.py`
+   - `src/axon/api.py` (FastAPI `version=` field)
 2. Run all tests: `make ci`
-3. Create git tag: `git tag v2.0.0`
+3. Create git tag: `git tag v1.0.0`
 4. Push tag: `git push --tags`
 5. GitHub Actions will build and publish
 

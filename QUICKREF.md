@@ -217,7 +217,8 @@ rag:
   top_k: 10
   hybrid_search: true
 
-  # Fast-graph mode (default): entity graph with zero LLM calls at ingest time.
+  # Fast-graph mode (recommended starting point): entity graph with zero LLM calls at ingest time.
+  # Shipped config.yaml has graph_rag: false; enable once your corpus is ingested.
   # graph_rag_depth: light        → regex noun-phrase extraction, no LLM
   # graph_rag_relations: false    → skip relation extraction (LLM-heavy)
   # → VS Code Graph Panel KG tab populated; ingest speed unchanged vs graph_rag: false
@@ -250,9 +251,9 @@ rag:
   #     run before communities are ready (graph_rag_community_async: false to block).
   #
   # Requires an LLM at ingest time. Adds per-chunk latency.
-  # ── RAPTOR + GraphRAG (both ON by default) ───────────────────────────────────
+  # ── RAPTOR + GraphRAG (disabled in shipped config; enable for richer retrieval) ─────
   # > ⚠ First ingest will be significantly slower (LLM calls per chunk).
-  # > To disable: set raptor: false and graph_rag: false
+  # > Shipped config.yaml has raptor: false and graph_rag: false for fast first-run.
   raptor: true
   raptor_max_levels: 1
   raptor_max_source_size_mb: 5.0
@@ -266,7 +267,7 @@ rag:
   graph_rag_relation_budget: 30              # cap relation extraction to top-30 chunks by entity density (0 = unlimited)
   graph_rag_entity_min_frequency: 2          # prune entities seen in < 2 chunks before community detection
   graph_rag_community: true
-  graph_rag_community_backend: leidenalg    # leidenalg = documented Python 3.13 path; "auto" tries graspologic first
+  graph_rag_community_backend: leidenalg    # recommended for Python 3.13; default code value is "auto" (graspologic → leidenalg → louvain)
   graph_rag_auto_route: heuristic
   graph_rag_mode: hybrid
   graph_rag_global_top_communities: 20       # lazy mode: generate LLM summaries for top-20 query-relevant communities only

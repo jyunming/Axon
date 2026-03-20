@@ -619,7 +619,7 @@ class AxonConfig:
         """
         _DEFAULT_CONFIG_YAML = """\
 # Axon Configuration — edit to customise behaviour.
-# Full option reference: see config.yaml in the project repository.
+# Full option reference: axon --help or https://github.com/...
 
 embedding:
   provider: sentence_transformers

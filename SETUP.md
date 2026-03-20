@@ -88,8 +88,12 @@ pip install -e ".[all]"
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
 > The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x — do not install it on Python 3.13.
-> The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which skips `graspologic` entirely and uses the documented Python 3.13 path directly.
-> To restore the legacy preference order (graspologic → leidenalg → networkx Louvain) set `graph_rag_community_backend: auto`.
+> The code default is `graph_rag_community_backend: auto` (graspologic → leidenalg → networkx Louvain). For Python 3.13 we recommend pinning to `leidenalg` explicitly:
+>
+> ```yaml
+> rag:
+>   graph_rag_community_backend: leidenalg  # recommended for Python 3.13
+> ```
 
 Verify the install:
 
@@ -437,12 +441,12 @@ No additional config changes are needed — the system automatically uses `llava
 
 ## 7. Configure config.yaml
 
-Copy the template and customize it:
+Axon auto-creates `~/.config/axon/config.yaml` on first run with sensible defaults.
+Edit that file to customise behaviour, or pass `--config /path/to/your.yaml` to use a different file:
 
 ```bash
-# config.yaml already exists in the repo root — edit it directly
-# Or copy it as a personal override
-cp config.yaml config.local.yaml  # pass --config config.local.yaml to the CLI
+# Edit the auto-generated user config
+$EDITOR ~/.config/axon/config.yaml
 ```
 
 Here are complete configurations for each tier:
@@ -1096,7 +1100,7 @@ The Graph Panel opens a **split webview** directly inside VS Code — no externa
 └──────────────────────┴──────────────────────────────────────┘
 ```
 
-**Knowledge Graph tab** — entity–relation graph extracted from **any document** (PDF, DOCX, Markdown, HTML, etc.) during ingest. Nodes are named entities (people, concepts, components); edges are extracted relations. Requires `graph_rag: true` in `config.yaml` — **enabled by default**, so you get this for free just by ingesting documents.
+**Knowledge Graph tab** — entity–relation graph extracted from **any document** (PDF, DOCX, Markdown, HTML, etc.) during ingest. Nodes are named entities (people, concepts, components); edges are extracted relations. Requires `graph_rag: true` in `config.yaml` (disabled in the shipped config by default — enable it once your corpus is ready).
 
 **Code Graph tab** — structural file/class/function graph. Nodes are files, classes, and functions; edges are `IMPORTS`, `CONTAINS`, and `CALLS` relationships. Requires `code_graph: true` in `config.yaml` (opt-in, off by default):
 
@@ -1107,7 +1111,7 @@ rag:
   code_graph_bridge: true # also link prose chunks that mention code symbols
 ```
 
-> **No CLI flag for code graph.** `code_graph` is a config-only setting — enable it in `config.yaml`, then re-ingest. The `--graph-rag` CLI flag controls GraphRAG (knowledge graph) only.
+> **CLI flags also available:** `--code-graph` / `--no-code-graph` toggle `code_graph` at runtime. `--code-graph-bridge` / `--no-code-graph-bridge` toggles the bridge. `--graph-rag` / `--no-graph-rag` controls the knowledge graph. Config file and CLI flags are both supported.
 
 **Ingest before opening the panel:**
 
