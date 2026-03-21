@@ -389,6 +389,10 @@ messages = current_session["messages"]
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
+if "brain" not in st.session_state:
+    st.error("Axon Brain failed to initialize. Please check your configuration and restart.")
+    st.stop()
+
 with st.sidebar:
     config = st.session_state.brain.config
 

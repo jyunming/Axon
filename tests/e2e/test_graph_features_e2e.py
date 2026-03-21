@@ -7,6 +7,7 @@ import pytest
 pytestmark = [pytest.mark.e2e, pytest.mark.integration]
 
 
+@pytest.mark.timeout(60)
 def test_graphrag_endpoints_build_payload_and_html(api_client, make_brain, monkeypatch):
     brain = make_brain(
         graph_rag=True,
@@ -96,6 +97,7 @@ def test_graphrag_endpoints_build_payload_and_html(api_client, make_brain, monke
     assert finalize.json()["status"] == "ok"
 
 
+@pytest.mark.timeout(60)
 def test_code_graph_endpoints_and_code_query_diagnostics(api_client, make_brain, tmp_path: Path):
     make_brain(code_graph=True)
 

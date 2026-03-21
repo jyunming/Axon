@@ -120,15 +120,34 @@ class TestQueryRouterRobustness:
 
         assert router._classify_query_route("Give me stats", router.config) == "factual"
 
-    @pytest.mark.parametrize(
-        "query,expected",
-        [
-            ("what is axon?", "factual"),
-            ("summarize everything", "corpus_exploration"),
-            ("how does x relate to y?", "entity_relation"),
-            ("list all rows in the data", "table_lookup"),
-            ("give me an overview of the whole thing", "synthesis"),
-        ],
-    )
+    @pytest.mark.parametrize("query,expected", [
+        ("what is axon?", "factual"),
+        ("summarize everything", "corpus_exploration"),
+        ("how does x relate to y?", "entity_relation"),
+        ("list all rows in the data", "table_lookup"),
+        ("give me an overview of the whole thing", "synthesis"),
+    ])
     def test_heuristic_parameterized(self, router, query, expected):
         assert router._classify_query_route_heuristic(query) == expected
+
+    def test_classification_latency_benchmark(self, router):
+        import time
+        queries = [
+            "What is the capital of France?",
+            "Summarize the entire documentation for the project.",
+            "How are entities A and B related in the context of the new architecture?",
+            "Show me a table of the revenue by region.",
+            "Provide a comprehensive overview of the system's security features."
+        ]
+        
+        start = time.perf_counter()
+        iterations = 1000
+        for _ in range(iterations):
+            for q in queries:
+                router._classify_query_route_heuristic(q)
+        end = time.perf_counter()
+        
+        avg_ms = ((end - start) / (iterations * len(queries))) * 1000
+        print(f"\nAverage classification latency: {avg_ms:.4f} ms")
+        # Assert that it's fast enough (e.g., < 1ms per query)
+        assert avg_ms < 1.0

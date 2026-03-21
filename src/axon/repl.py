@@ -1729,7 +1729,10 @@ def _interactive_repl(
                 else:
                     _ts = _time.strftime("%Y%m%dT%H%M%S")
                     _qhash = _hashlib.sha1(b"graph").hexdigest()[:8]
-                    _snap_dir = _Path.home() / ".axon" / "cache" / "graphs" / f"{_ts}_{_qhash}"
+                    import os as _os
+
+                    _axon_home = _Path(_os.environ.get("AXON_HOME", str(_Path.home() / ".axon")))
+                    _snap_dir = _axon_home / "cache" / "graphs" / f"{_ts}_{_qhash}"
                     _snap_dir.mkdir(parents=True, exist_ok=True)
                     _out_path = str(_snap_dir / "knowledge-graph.html")
                 try:
