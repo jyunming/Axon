@@ -861,7 +861,7 @@ class TestCodeRetrievalDiagnostics:
         from axon.main import CodeRetrievalDiagnostics
 
         d = CodeRetrievalDiagnostics()
-        assert d.diagnostics_version == "1.2"
+        assert d.diagnostics_version == "1.3"
         assert d.code_mode_triggered is False
         assert d.tokens_extracted == []
         assert d.channels_activated == []
@@ -874,7 +874,7 @@ class TestCodeRetrievalDiagnostics:
 
         d = CodeRetrievalDiagnostics(code_mode_triggered=True, result_count=5)
         out = d.to_dict()
-        assert out["diagnostics_version"] == "1.2"
+        assert out["diagnostics_version"] == "1.3"
         assert out["code_mode_triggered"] is True
         assert out["result_count"] == 5
         assert "channels_activated" in out
@@ -886,7 +886,7 @@ class TestCodeRetrievalDiagnostics:
 
         d = CodeRetrievalDiagnostics()
         parsed = json.loads(d.to_json())
-        assert parsed["diagnostics_version"] == "1.2"
+        assert parsed["diagnostics_version"] == "1.3"
 
     def test_independent_mutable_defaults(self):
         from axon.main import CodeRetrievalDiagnostics

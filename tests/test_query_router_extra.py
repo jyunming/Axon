@@ -904,23 +904,30 @@ class TestQueryRerank:
 class TestQueryCompressContext:
     def test_compress_context_called_when_enabled(self):
         """Line 1033: compress_context=True triggers _compress_context."""
+        from axon.compression import CompressionResult
+
         stub = _make_full_stub(compress_context=True, similarity_threshold=0.0)
+        compressed_chunks = [
+            {"id": "d1", "text": "compressed", "score": 0.9, "metadata": {"source": "f.txt"}}
+        ]
         stub._compress_context = MagicMock(
-            return_value=[
-                {
-                    "id": "d1",
-                    "text": "compressed",
-                    "score": 0.9,
-                    "metadata": {"source": "f.txt"},
-                }
-            ]
+            return_value=(
+                compressed_chunks,
+                CompressionResult(
+                    chunks=compressed_chunks,
+                    strategy_used="sentence",
+                    pre_tokens=10,
+                    post_tokens=5,
+                    compression_ratio=0.5,
+                ),
+            )
         )
         stub.query("test query with compression")
         stub._compress_context.assert_called_once()
 
     def test_compress_context_not_called_when_disabled(self):
         stub = _make_full_stub(compress_context=False, similarity_threshold=0.0)
-        stub._compress_context = MagicMock(return_value=[])
+        stub._compress_context = MagicMock(return_value=([], None))
         stub.query("test query")
         stub._compress_context.assert_not_called()
 
@@ -1017,9 +1024,21 @@ class TestQueryStream:
 
     def test_compress_context_in_stream(self):
         """Line 1180: compress_context in query_stream."""
+        from axon.compression import CompressionResult
+
         stub = _make_full_stub(compress_context=True, similarity_threshold=0.0)
+        compressed_chunks = [{"id": "d1", "text": "compressed", "score": 0.9, "metadata": {}}]
         stub._compress_context = MagicMock(
-            return_value=[{"id": "d1", "text": "compressed", "score": 0.9, "metadata": {}}]
+            return_value=(
+                compressed_chunks,
+                CompressionResult(
+                    chunks=compressed_chunks,
+                    strategy_used="sentence",
+                    pre_tokens=10,
+                    post_tokens=5,
+                    compression_ratio=0.5,
+                ),
+            )
         )
         stub.llm.stream.return_value = iter(["out"])
         list(stub.query_stream("compressed stream"))
@@ -1116,7 +1135,8 @@ class TestQueryStream:
 class TestCompressContext:
     def test_empty_results_returned_unchanged(self):
         stub = _make_full_stub()
-        assert stub._compress_context("q", []) == []
+        chunks, _ = stub._compress_context("q", [])
+        assert chunks == []
 
     def test_web_results_not_compressed(self):
         stub = _make_full_stub()
@@ -1127,16 +1147,16 @@ class TestCompressContext:
             "is_web": True,
             "metadata": {},
         }
-        out = stub._compress_context("q", [web_result])
-        assert out[0]["text"] == "web text"
+        chunks, _ = stub._compress_context("q", [web_result])
+        assert chunks[0]["text"] == "web text"
 
     def test_local_chunk_compressed_when_shorter(self):
         stub = _make_full_stub()
         stub.llm.complete.return_value = "Short."  # shorter than source
         chunk = {"id": "c1", "text": "A very long passage that has lots of text.", "metadata": {}}
-        out = stub._compress_context("question", [chunk])
-        assert out[0]["text"] == "Short."
-        assert out[0]["metadata"].get("compressed") is True
+        chunks, _ = stub._compress_context("question", [chunk])
+        assert chunks[0]["text"] == "Short."
+        assert chunks[0]["metadata"].get("compressed") is True
 
     def test_compression_not_applied_when_longer_result(self):
         stub = _make_full_stub()
@@ -1144,16 +1164,16 @@ class TestCompressContext:
             "A much longer response than the original source passage text here."
         )
         chunk = {"id": "c1", "text": "Short.", "metadata": {}}
-        out = stub._compress_context("q", [chunk])
+        chunks, _ = stub._compress_context("q", [chunk])
         # Compressed is longer → original kept
-        assert out[0]["text"] == "Short."
+        assert chunks[0]["text"] == "Short."
 
     def test_llm_exception_returns_original(self):
         stub = _make_full_stub()
         stub.llm.complete.side_effect = RuntimeError("error")
         chunk = {"id": "c1", "text": "original text", "metadata": {}}
-        out = stub._compress_context("q", [chunk])
-        assert out[0]["text"] == "original text"
+        chunks, _ = stub._compress_context("q", [chunk])
+        assert chunks[0]["text"] == "original text"
 
     def test_parent_text_compressed_when_present(self):
         stub = _make_full_stub()
@@ -1165,9 +1185,9 @@ class TestCompressContext:
                 "parent_text": "Parent passage with more content that is longer than compressed."
             },
         }
-        out = stub._compress_context("question about parent", [chunk])
-        assert out[0]["metadata"]["parent_text"] == "Compressed parent."
-        assert out[0]["metadata"].get("compressed") is True
+        chunks, _ = stub._compress_context("question about parent", [chunk])
+        assert chunks[0]["metadata"]["parent_text"] == "Compressed parent."
+        assert chunks[0]["metadata"].get("compressed") is True
 
 
 # ===========================================================================

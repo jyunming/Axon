@@ -1242,7 +1242,7 @@ class TestQueryDecomposeAndCompress:
         brain.llm.complete = MagicMock(return_value="The answer is 42.")
 
         results = [{"id": "d1", "text": long_text, "score": 0.9, "metadata": {}}]
-        compressed = brain._compress_context("What is the answer?", results)
+        compressed, _ = brain._compress_context("What is the answer?", results)
 
         assert compressed[0]["text"] == "The answer is 42."
 
@@ -1259,7 +1259,7 @@ class TestQueryDecomposeAndCompress:
             "metadata": {},
             "is_web": True,
         }
-        results = brain._compress_context("q", [web_result])
+        results, _ = brain._compress_context("q", [web_result])
 
         # Web results must pass through unchanged; LLM must not be called
         brain.llm.complete.assert_not_called()
@@ -1274,7 +1274,7 @@ class TestQueryDecomposeAndCompress:
 
         original_text = "original chunk text"
         results = [{"id": "d1", "text": original_text, "score": 0.9, "metadata": {}}]
-        compressed = brain._compress_context("q", results)
+        compressed, _ = brain._compress_context("q", results)
 
         assert compressed[0]["text"] == original_text
 
@@ -1289,7 +1289,7 @@ class TestQueryDecomposeAndCompress:
         )
 
         results = [{"id": "d1", "text": short_text, "score": 0.9, "metadata": {}}]
-        compressed = brain._compress_context("q", results)
+        compressed, _ = brain._compress_context("q", results)
 
         assert compressed[0]["text"] == short_text
 
@@ -1308,7 +1308,7 @@ class TestQueryDecomposeAndCompress:
                 "metadata": {"parent_text": "large parent passage " * 10},
             }
         ]
-        compressed = brain._compress_context("q", results)
+        compressed, _ = brain._compress_context("q", results)
 
         # Compression prompt should have used parent_text, result stored back in parent_text
         call_prompt = brain.llm.complete.call_args[0][0]
@@ -2068,8 +2068,8 @@ class TestCompressContextGuard:
         from axon.main import AxonBrain, AxonConfig
 
         brain = AxonBrain(AxonConfig())
-        result = brain._compress_context("any query", [])
-        assert result == []
+        chunks, _ = brain._compress_context("any query", [])
+        assert chunks == []
 
     def test_compress_context_single_item(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
@@ -2080,7 +2080,7 @@ class TestCompressContextGuard:
         brain = AxonBrain(AxonConfig())
         brain.llm.complete = MagicMock(return_value="short")
         doc = {"id": "d1", "text": "this is a longer original text for the test", "metadata": {}}
-        result = brain._compress_context("query", [doc])
+        result, _ = brain._compress_context("query", [doc])
         assert len(result) == 1
 
 

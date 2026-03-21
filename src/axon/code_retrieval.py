@@ -241,7 +241,7 @@ class CodeRetrievalDiagnostics:
     and benchmark output. Schema version bumps when field semantics change.
     """
 
-    diagnostics_version: str = "1.2"
+    diagnostics_version: str = "1.3"
     code_mode_triggered: bool = False
     tokens_extracted: list = field(default_factory=list)
     channels_activated: list = field(default_factory=list)
@@ -257,6 +257,12 @@ class CodeRetrievalDiagnostics:
     crag_factors: dict = field(default_factory=dict)  # per-signal contributions
     crag_fallback_triggered: bool = False
     crag_fallback_reason: str = ""
+    # Compression telemetry (Epic 3, Story 3.3)
+    compression_strategy: str = ""  # "none" | "sentence" | "llmlingua" | "" = not run
+    compression_pre_tokens: int = 0
+    compression_post_tokens: int = 0
+    compression_ratio: float = 1.0  # post/pre; 1.0 = no reduction
+    compression_fallback_reason: str = ""  # non-empty when fell back from requested strategy
 
     def to_dict(self) -> dict:
         return {
@@ -274,6 +280,11 @@ class CodeRetrievalDiagnostics:
             "crag_factors": dict(self.crag_factors),
             "crag_fallback_triggered": self.crag_fallback_triggered,
             "crag_fallback_reason": self.crag_fallback_reason,
+            "compression_strategy": self.compression_strategy,
+            "compression_pre_tokens": self.compression_pre_tokens,
+            "compression_post_tokens": self.compression_post_tokens,
+            "compression_ratio": self.compression_ratio,
+            "compression_fallback_reason": self.compression_fallback_reason,
         }
 
     def to_json(self) -> str:

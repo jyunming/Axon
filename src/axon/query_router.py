@@ -377,47 +377,35 @@ class QueryRouterMixin:
                 unique.append(q)
         return unique
 
-    def _compress_context(self, query: str, results: list[dict]) -> list[dict]:
-        """Extract only query-relevant sentences from each retrieved chunk (parallel).
+    def _compress_context(
+        self, query: str, results: list[dict], cfg=None
+    ) -> tuple[list[dict], Any]:
+        """Delegate to :class:`axon.compression.ContextCompressor` (Epic 3, Story 3.2).
 
-        Compresses non-web results by asking the LLM to strip irrelevant text.
-        Falls back to the original chunk if compression fails or makes it longer.
+        Selects strategy and token budget from *cfg* when provided; falls back to
+        ``sentence`` compression with no budget for backward compatibility.
+
+        Returns ``(compressed_chunks, CompressionResult)`` so the caller can
+        record telemetry without re-computing token counts.
         """
+        from axon.compression import CompressionResult, ContextCompressor
+
         if not results:
-            return results
-
-        from concurrent.futures import ThreadPoolExecutor
-
-        def _compress_one(result: dict) -> dict:
-            if result.get("is_web"):
-                return result
-            # Use parent_text if available (small-to-big path), else chunk text
-            source_text = result.get("metadata", {}).get("parent_text") or result["text"]
-            prompt = (
-                "Extract only the sentences from the passage below that directly help answer "
-                "the question. Output only those sentences verbatim, nothing else. "
-                "If no sentence is relevant, keep the single most informative sentence.\n\n"
-                f"Question: {query}\n\nPassage:\n{source_text}"
+            return results, CompressionResult(
+                chunks=results,
+                strategy_used="none",
+                pre_tokens=0,
+                post_tokens=0,
+                compression_ratio=1.0,
             )
-            try:
-                compressed = self.llm.complete(
-                    prompt, system_prompt="You are an expert at extracting relevant information."
-                )
-                if compressed and len(compressed.strip()) < len(source_text):
-                    r = {**result, "metadata": {**result.get("metadata", {})}}
-                    # Overwrite whichever field _build_context reads
-                    if "parent_text" in r["metadata"]:
-                        r["metadata"]["parent_text"] = compressed.strip()
-                    else:
-                        r["text"] = compressed.strip()
-                    r["metadata"]["compressed"] = True
-                    return r
-            except Exception as e:
-                logger.debug(f"Context compression failed for {result.get('id')}: {e}")
-            return result
 
-        with ThreadPoolExecutor(max_workers=min(len(results), 4)) as pool:
-            return list(pool.map(_compress_one, results))
+        strategy = getattr(cfg, "compression_strategy", "sentence") if cfg else "sentence"
+        token_budget = getattr(cfg, "compression_token_budget", 0) if cfg else 0
+        llmlingua_model = getattr(cfg, "graph_rag_llmlingua_model", "") if cfg else ""
+
+        compressor = ContextCompressor(llm=self.llm, llmlingua_model=llmlingua_model)
+        result = compressor.compress(query, results, strategy=strategy, token_budget=token_budget)
+        return result.chunks, result
 
     def _get_step_back_query(self, query: str) -> str:
         """Generate a more abstract, step-back version of the query for retrieval."""
@@ -1127,7 +1115,14 @@ class QueryRouterMixin:
             _local_ctx = ""
 
         if cfg.compress_context:
-            results = self._compress_context(query, results)
+            results, _comp = self._compress_context(query, results, cfg=cfg)
+            # Story 3.3: write compression telemetry into diagnostics
+            _d = self._last_diagnostics
+            _d.compression_strategy = _comp.strategy_used
+            _d.compression_pre_tokens = _comp.pre_tokens
+            _d.compression_post_tokens = _comp.post_tokens
+            _d.compression_ratio = _comp.compression_ratio
+            _d.compression_fallback_reason = _comp.fallback_reason
         final_count = len(results)
         # Use rerank_score when reranking was active (reflects the actual ranking signal)
         if results:
@@ -1274,7 +1269,14 @@ class QueryRouterMixin:
             _local_ctx = ""
 
         if cfg.compress_context:
-            results = self._compress_context(query, results)
+            results, _comp = self._compress_context(query, results, cfg=cfg)
+            # Story 3.3: telemetry on the streaming path
+            _sd = self._last_diagnostics
+            _sd.compression_strategy = _comp.strategy_used
+            _sd.compression_pre_tokens = _comp.pre_tokens
+            _sd.compression_post_tokens = _comp.post_tokens
+            _sd.compression_ratio = _comp.compression_ratio
+            _sd.compression_fallback_reason = _comp.fallback_reason
 
         # A4: Exclude community report synthetic docs from citation candidates.
         citation_results = [

@@ -234,10 +234,16 @@ class AxonConfig:
     query_decompose: bool = False
     discussion_fallback: bool = True
 
-    # Context Compression
-    # Uses the generation LLM to extract only query-relevant sentences from each
-    # retrieved chunk before passing context to the final answer generation step.
+    # Context Compression (Epic 3, Stories 3.1–3.3)
+    # compress_context: master on/off switch (backward-compatible).
+    # compression_strategy selects the algorithm when compress_context is True:
+    #   "sentence"   — LLM-based sentence extraction (default, existing behaviour)
+    #   "llmlingua"  — LLMLingua-2 token compression (pip install axon[llmlingua])
+    #   "none"       — disabled (same as compress_context=False)
+    # compression_token_budget: target output tokens for llmlingua (0 = use model default ratio).
     compress_context: bool = False
+    compression_strategy: str = "sentence"  # "none" | "sentence" | "llmlingua"
+    compression_token_budget: int = 0  # 0 = no explicit budget (llmlingua uses default ratio)
 
     # Inline Citations
     # When True, instructs the LLM to include [Document N (ID: ...)] citations in
