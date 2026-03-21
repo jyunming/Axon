@@ -31,6 +31,8 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     # Epic 1/2 new modules — numpy typing limitation in sentence_window.
     ("sentence_window.py", ""),
     ("crag.py", ""),
+    # Epic 4 Story 4.3 — sparse_retrieval Protocol uses runtime_checkable; mypy flags Any in Protocol stubs.
+    ("sparse_retrieval.py", ""),
     # Epic 3 — compression.py dict.get() return typed as Any by mypy.
     ("compression.py", ""),
     # Phase 5 extracted modules — API route families.
