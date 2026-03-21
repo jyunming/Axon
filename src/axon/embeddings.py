@@ -51,10 +51,21 @@ class OpenEmbedding:
 
         elif self.provider == "ollama":
             logger.info(f"Using Ollama Embedding: {self.config.embedding_model}")
+            if self.config.embedding_model not in _KNOWN_DIMS:
+                logger.warning(
+                    "Ollama embedding model '%s' is not in the dimension registry; "
+                    "defaulting to 768-dim.  If this is wrong, set embedding_dim in config.",
+                    self.config.embedding_model,
+                )
             self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 768)
 
         elif self.provider == "fastembed":
-            from fastembed import TextEmbedding
+            try:
+                from fastembed import TextEmbedding
+            except ImportError as exc:
+                raise ImportError(
+                    "FastEmbed is not installed. " "Install it with: pip install 'axon[fastembed]'"
+                ) from exc
 
             _kwargs: dict = {"model_name": self.config.embedding_model}
             if _model_path:
@@ -64,7 +75,19 @@ class OpenEmbedding:
                 + (f" (cache_dir={_model_path})" if _model_path else "")
             )
             self.model = TextEmbedding(**_kwargs)
-            self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 384)
+            if self.config.embedding_model in _KNOWN_DIMS:
+                self.dimension = _KNOWN_DIMS[self.config.embedding_model]
+            else:
+                # Auto-detect dimension by probing the model with a short sentinel string.
+                # This avoids a silent 384-dim fallback that can corrupt existing collections.
+                _probe = list(self.model.embed(["dim-probe"]))
+                self.dimension = len(_probe[0]) if _probe else 384
+                logger.info(
+                    "FastEmbed: auto-detected dimension %d for model '%s'. "
+                    "Add it to _KNOWN_DIMS to skip this probe on future loads.",
+                    self.dimension,
+                    self.config.embedding_model,
+                )
 
         elif self.provider == "openai":
             from openai import OpenAI

@@ -246,6 +246,126 @@ class TestOpenEmbeddingOpenAI:
             assert result == [[0.1, 0.2]]
 
 
+class TestBGEM3FastEmbed:
+    """Story 4.1 — BGE-M3 dense support hardening."""
+
+    def test_bge_m3_resolves_1024_dim(self):
+        """BAAI/bge-m3 is in _KNOWN_DIMS and must always resolve to 1024."""
+        from axon.embeddings import _KNOWN_DIMS, OpenEmbedding
+
+        assert _KNOWN_DIMS["BAAI/bge-m3"] == 1024
+
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="BAAI/bge-m3")
+        mock_te = MagicMock()
+        mock_te_cls = MagicMock(return_value=mock_te)
+
+        with patch.dict("sys.modules", {"fastembed": MagicMock(TextEmbedding=mock_te_cls)}):
+            emb = OpenEmbedding(cfg)
+            # Dimension must come from registry, not from a probe call
+            mock_te.embed.assert_not_called()
+            assert emb.dimension == 1024
+
+    def test_bge_m3_embed_produces_1024_dim_vectors(self):
+        """embed() for BGE-M3 must return 1024-element vectors."""
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="BAAI/bge-m3")
+        mock_te = MagicMock()
+        vec = MagicMock()
+        vec.tolist.return_value = list(range(1024))
+        mock_te.embed.return_value = [vec]
+        mock_te_cls = MagicMock(return_value=mock_te)
+
+        with patch.dict("sys.modules", {"fastembed": MagicMock(TextEmbedding=mock_te_cls)}):
+            emb = OpenEmbedding(cfg)
+            result = emb.embed(["test sentence"])
+            assert len(result[0]) == 1024
+
+    def test_bge_m3_embed_query_returns_single_vector(self):
+        """embed_query() for BGE-M3 returns a flat list, not a list of lists."""
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="BAAI/bge-m3")
+        mock_te = MagicMock()
+        vec = MagicMock()
+        vec.tolist.return_value = list(range(1024))
+        mock_te.embed.return_value = [vec]
+        mock_te_cls = MagicMock(return_value=mock_te)
+
+        with patch.dict("sys.modules", {"fastembed": MagicMock(TextEmbedding=mock_te_cls)}):
+            emb = OpenEmbedding(cfg)
+            result = emb.embed_query("query")
+            assert isinstance(result, list)
+            assert len(result) == 1024
+
+    def test_unknown_fastembed_model_auto_detects_dimension(self):
+        """A model not in _KNOWN_DIMS auto-detects its dimension via a probe embedding."""
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="custom/my-model-512")
+        mock_te = MagicMock()
+        probe_vec = MagicMock()
+        probe_vec.__len__ = lambda self: 512
+        # probe call: embed(["dim-probe"]) → list with one vector of length 512
+        mock_te.embed.return_value = iter([[0.0] * 512])
+        mock_te_cls = MagicMock(return_value=mock_te)
+
+        with patch.dict("sys.modules", {"fastembed": MagicMock(TextEmbedding=mock_te_cls)}):
+            emb = OpenEmbedding(cfg)
+            assert emb.dimension == 512
+
+    def test_unknown_fastembed_model_probe_fallback_on_empty(self):
+        """If the probe returns an empty list, dimension falls back to 384 gracefully."""
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="custom/empty-probe")
+        mock_te = MagicMock()
+        mock_te.embed.return_value = iter([])  # empty probe result
+        mock_te_cls = MagicMock(return_value=mock_te)
+
+        with patch.dict("sys.modules", {"fastembed": MagicMock(TextEmbedding=mock_te_cls)}):
+            emb = OpenEmbedding(cfg)
+            assert emb.dimension == 384
+
+    def test_fastembed_import_error_gives_actionable_message(self):
+        """Missing fastembed dependency raises ImportError with install hint."""
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="BAAI/bge-m3")
+
+        with patch.dict("sys.modules", {"fastembed": None}):
+            with pytest.raises(ImportError, match="pip install"):
+                OpenEmbedding(cfg)
+
+
+class TestOllamaUnknownModelWarning:
+    def test_unknown_ollama_model_logs_warning(self, caplog):
+        """Ollama with a model not in _KNOWN_DIMS must log a warning, not fail silently."""
+        import logging
+
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(
+            embedding_provider="ollama", embedding_model="totally-unknown-embed-model"
+        )
+        with caplog.at_level(logging.WARNING, logger="Axon"):
+            emb = OpenEmbedding(cfg)
+        assert emb.dimension == 768  # fallback
+        assert any("not in the dimension registry" in r.message for r in caplog.records)
+
+    def test_known_ollama_model_no_warning(self, caplog):
+        """Ollama with a known model must not log the unknown-model warning."""
+        import logging
+
+        from axon.embeddings import OpenEmbedding
+
+        cfg = _make_config(embedding_provider="ollama", embedding_model="nomic-embed-text")
+        with caplog.at_level(logging.WARNING, logger="Axon"):
+            emb = OpenEmbedding(cfg)
+        assert emb.dimension == 768
+        assert not any("not in the dimension registry" in r.message for r in caplog.records)
+
+
 class TestOpenEmbeddingUnknown:
     def test_unknown_provider_raises(self):
         from axon.embeddings import OpenEmbedding

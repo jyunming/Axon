@@ -159,9 +159,14 @@ class OpenVectorStore:
                     )
                 except Exception as e:
                     if "dimension" in str(e).lower():
+                        _actual_dim = len(_emb_b[0]) if _emb_b and _emb_b[0] else "unknown"
                         logger.error(
-                            f"Embedding dimension mismatch in ChromaDB! Expected: {self.config.embedding_model}. "
-                            "Try clearing the project data or switch to a different project."
+                            "Embedding dimension mismatch in ChromaDB: model '%s' produced "
+                            "%s-dim vectors but this collection was initialized with a "
+                            "different dimension.  Run 'axon --reset' or delete the project "
+                            "data directory, then re-ingest from scratch.",
+                            self.config.embedding_model,
+                            _actual_dim,
                         )
                     raise
         elif self.provider == "qdrant":

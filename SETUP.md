@@ -369,14 +369,34 @@ embedding:
 
 **Available FastEmbed models:**
 
-| Model | Dims | Context | Quality |
-|-------|------|---------|---------|
-| `BAAI/bge-small-en-v1.5` | 384 | 512 tokens | Good |
-| `BAAI/bge-base-en-v1.5` | 768 | 512 tokens | Better |
-| `BAAI/bge-large-en-v1.5` | 1024 | 512 tokens | Best |
-| `sentence-transformers/all-MiniLM-L6-v2` | 384 | 256 tokens | Good |
+| Model | Dims | Context | Quality | Notes |
+|-------|------|---------|---------|-------|
+| `BAAI/bge-small-en-v1.5` | 384 | 512 tokens | Good | Default; fastest |
+| `BAAI/bge-base-en-v1.5` | 768 | 512 tokens | Better | Balanced |
+| `BAAI/bge-large-en-v1.5` | 1024 | 512 tokens | Best (English) | Slower |
+| `BAAI/bge-m3` | 1024 | 8192 tokens | Best (multilingual) | Long-context; recommended for prose-heavy corpora |
+| `sentence-transformers/all-MiniLM-L6-v2` | 384 | 256 tokens | Good | Lightweight |
 
-**Verify:**
+**Using BGE-M3 (recommended for long documents and multilingual content):**
+```yaml
+embedding:
+  provider: fastembed
+  model: BAAI/bge-m3
+```
+
+> **Dimension note:** BGE-M3 produces 1024-dim vectors. If you switch to BGE-M3 after
+> ingesting data with a 384-dim model (e.g. `bge-small`), ChromaDB will raise a dimension
+> mismatch error. Start a fresh project or run `axon --reset` before switching.
+
+**Verify BGE-M3:**
+```python
+from fastembed import TextEmbedding
+model = TextEmbedding("BAAI/bge-m3")
+embeddings = list(model.embed(["test sentence"]))
+print(f"Embedding dimension: {len(embeddings[0])}")  # Should print 1024
+```
+
+**Verify bge-small (default):**
 ```python
 from fastembed import TextEmbedding
 model = TextEmbedding("BAAI/bge-small-en-v1.5")
