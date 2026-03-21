@@ -430,17 +430,17 @@ curl "http://localhost:8000/collection/stale?days=30"
 # Batch ingest multiple text strings
 curl -X POST http://localhost:8000/add_texts \
   -H "Content-Type: application/json" \
-  -d '{"texts": ["First text", "Second text"], "metadata": [{"source": "a"}, {"source": "b"}]}'
+  -d '{"docs": [{"text": "First text", "metadata": {"source": "a"}}, {"text": "Second text", "metadata": {"source": "b"}}]}'
 
 # Ingest content from a remote URL
 curl -X POST http://localhost:8000/ingest_url \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/page"}'
 
-# Remove documents by source ID list
+# Remove documents by doc_id list (get IDs from /tracked-docs)
 curl -X POST http://localhost:8000/delete \
   -H "Content-Type: application/json" \
-  -d '{"sources": ["path/to/file.txt", "https://example.com/page"]}'
+  -d '{"doc_ids": ["chunk-abc123", "chunk-def456"]}'
 ```
 
 ### GraphRAG

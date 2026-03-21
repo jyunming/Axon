@@ -79,6 +79,19 @@ class _WriteLease:
             self._released = True
             self._registry._release(self._project, self._epoch)
 
+    def is_stale(self) -> bool:
+        """Return True if the project epoch advanced since this lease was acquired.
+
+        A stale lease means a project switch happened after ingest started.
+        Writers should abort their commit phase and discard results rather than
+        committing data to the wrong project's stores.
+        """
+        if self._epoch == -1:  # default project — no epoch tracking
+            return False
+        state = self._registry._state(self._project)
+        with state._lock:
+            return state.epoch != self._epoch
+
     def __del__(self) -> None:  # CPython: called immediately when refcount → 0
         self.close()
 

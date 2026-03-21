@@ -2234,6 +2234,18 @@ Your primary goal is to help the user by answering questions based on the provid
                     else:
                         self._rebuild_communities()
 
+        # Phase 3: abort if a project switch happened mid-ingest (stale epoch).
+        # Without this check, computed embeddings would be committed to the new
+        # project's stores instead of the original project.
+        if _ingest_lease.is_stale():
+            logger.warning(
+                "Ingest abandoned for '%s': project was switched mid-ingest "
+                "(epoch mismatch). Data was NOT committed to prevent "
+                "cross-project contamination.",
+                _ingest_lease._project,
+            )
+            return
+
         n_chunks = len(documents)
         if self._own_bm25:
             self._own_bm25.add_documents(documents, save_deferred=_defer_saves)

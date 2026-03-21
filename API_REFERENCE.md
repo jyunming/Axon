@@ -68,10 +68,13 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 **`POST /add_texts` body:**
 ```json
 {
-  "texts": ["First document", "Second document"],
-  "metadata": [{"source": "a.txt"}, {"source": "b.txt"}]
+  "docs": [
+    {"doc_id": "a", "text": "First document", "metadata": {"source": "a.txt"}},
+    {"doc_id": "b", "text": "Second document", "metadata": {"source": "b.txt"}}
+  ]
 }
 ```
+`doc_id` is optional and defaults to a content hash. Each item in `docs` is a `BatchDocItem`.
 
 ---
 
@@ -87,8 +90,10 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 
 **`POST /delete` body:**
 ```json
-{"sources": ["path/to/file.txt", "https://example.com/page"]}
+{"doc_ids": ["chunk-abc123", "chunk-def456"]}
 ```
+Pass the `doc_ids` returned by `/tracked-docs` or `/collection`. To delete by source path,
+look up the doc IDs with `GET /tracked-docs` first.
 
 ---
 
@@ -97,8 +102,9 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/projects` | List all local and mounted projects |
-| `POST` | `/projects` | Create a new named project |
-| `DELETE` | `/projects/{name}` | Delete a project and all its data |
+| `POST` | `/project/new` | Create a new named project |
+| `POST` | `/project/switch` | Switch the active project |
+| `POST` | `/project/delete/{name}` | Delete a project and all its data |
 
 Pass `"project": "<name>"` in any request body to target a specific project instead of the
 active default.
