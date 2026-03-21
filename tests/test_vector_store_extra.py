@@ -11,14 +11,11 @@ Target missed coverage lines: 46-63, 93-94, 97-101, 127-128, 152, 168-186,
 381, 383-385, 391, 433-442, 445-449, 481-483.
 """
 
-import importlib
-import sys
-from unittest.mock import MagicMock, PropertyMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from axon.config import AxonConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,7 +23,7 @@ from axon.config import AxonConfig
 
 
 def _make_config(**kwargs):
-    defaults = dict(bm25_path="/tmp/bm25", vector_store_path="/tmp/vs")
+    defaults = {"bm25_path": "/tmp/bm25", "vector_store_path": "/tmp/vs"}
     defaults.update(kwargs)
     return AxonConfig(**defaults)
 
@@ -868,7 +865,6 @@ class TestOpenVectorStoreLanceDB:
     def test_search_distance_gt_1_score_clamps_to_zero(self):
         mock_lancedb, mock_db, mock_table = _make_lancedb_mocks()
         mock_db.open_table.return_value = mock_table
-        import json
 
         mock_table.search.return_value.limit.return_value.to_list.return_value = [
             {"id": "id1", "text": "t", "_distance": 1.5, "metadata_json": "{}"}
@@ -1070,7 +1066,7 @@ class TestMultiVectorStore:
     def test_search_empty_stores(self):
         from axon.vector_store import MultiVectorStore
 
-        m = MultiVectorStore([])
+        MultiVectorStore([])
         # ThreadPoolExecutor with max_workers=min(4,0) — might raise; skip gracefully
         # Actually min(4,0) = 0 which raises; let's use a single-store
         s = self._make_mock_store()
@@ -1332,8 +1328,9 @@ class TestOpenVectorStoreEdgeCases:
         assert result == []
 
     def test_lancedb_add_metadata_json_serialized(self):
-        from axon.vector_store import OpenVectorStore
         import json
+
+        from axon.vector_store import OpenVectorStore
 
         mock_lancedb, mock_db, mock_table = _make_lancedb_mocks()
         mock_db.open_table.return_value = mock_table

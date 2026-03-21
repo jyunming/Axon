@@ -7,16 +7,12 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 import threading
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from axon.config import AxonConfig
 from axon.graph_rag import GraphRagMixin
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,10 +21,10 @@ from axon.graph_rag import GraphRagMixin
 
 def _make_config(**kwargs) -> AxonConfig:
     tmp = tempfile.mkdtemp()
-    d = dict(
-        bm25_path=os.path.join(tmp, "bm25"),
-        vector_store_path=os.path.join(tmp, "vs"),
-    )
+    d = {
+        "bm25_path": os.path.join(tmp, "bm25"),
+        "vector_store_path": os.path.join(tmp, "vs"),
+    }
     d.update(kwargs)
     return AxonConfig(**d)
 
@@ -609,7 +605,7 @@ class TestGenerateCommunitySummaries:
         brain = _make_brain(config=cfg)
         # Build 4 entities in one community
         entities = [f"e{i}" for i in range(4)]
-        brain._community_levels = {0: {e: 0 for e in entities}}
+        brain._community_levels = {0: dict.fromkeys(entities, 0)}
         brain._entity_graph = {
             e: {
                 "description": f"desc of {e}",
@@ -1638,7 +1634,6 @@ class TestResolveEntityAliases:
 
     def test_merges_similar_entities(self, tmp_path):
         """Lines 2060-2116: similar entities are merged."""
-        import numpy as np
 
         cfg = AxonConfig(
             bm25_path=str(tmp_path),

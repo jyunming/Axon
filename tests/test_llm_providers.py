@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import threading
 import time
-import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from axon.config import AxonConfig
-
 
 # ---------------------------------------------------------------------------
 # Helper factory
@@ -23,10 +21,10 @@ from axon.config import AxonConfig
 
 
 def _make_config(**kwargs) -> AxonConfig:
-    defaults = dict(
-        bm25_path="/tmp/bm25",
-        vector_store_path="/tmp/vs",
-    )
+    defaults = {
+        "bm25_path": "/tmp/bm25",
+        "vector_store_path": "/tmp/vs",
+    }
     defaults.update(kwargs)
     return AxonConfig(**defaults)
 
@@ -105,7 +103,7 @@ class TestOllamaProviderComplete:
             llm.complete("prompt", system_prompt="You are a helper")
 
         call_kwargs = mock_inst.chat.call_args
-        messages = (
+        (
             call_kwargs.kwargs.get("messages") or call_kwargs.args[1]
             if call_kwargs.args
             else call_kwargs.kwargs["messages"]
@@ -1011,7 +1009,7 @@ class TestGithubCopilotProviderComplete:
         )
         mock_openai, mock_client_inst = self._make_copilot_openai_mock("copilot says hi")
 
-        session = {"token": "session_tok", "expires_at": time.time() + 3600}
+        {"token": "session_tok", "expires_at": time.time() + 3600}
         with patch("axon.llm._get_copilot_session_token", return_value="session_tok"), patch.dict(
             "sys.modules", {"openai": mock_openai}
         ):
@@ -1152,7 +1150,6 @@ class TestGithubCopilotProviderStream:
 class TestCopilotBridgeProvider:
     def test_complete_returns_bridge_response(self):
         """Bridge resolver thread sets the result before event.wait() returns."""
-        import axon.llm as llm_mod
         from axon.llm import (
             OpenLLM,
             _copilot_bridge_lock,
@@ -1173,7 +1170,7 @@ class TestCopilotBridgeProvider:
             deadline = time.time() + 3.0
             while time.time() < deadline:
                 with _copilot_bridge_lock:
-                    for task_id, res in list(_copilot_responses.items()):
+                    for _task_id, res in list(_copilot_responses.items()):
                         if "event" in res and not res["event"].is_set():
                             res["result"] = "bridge response"
                             res["event"].set()
@@ -1189,7 +1186,6 @@ class TestCopilotBridgeProvider:
 
     def test_complete_puts_task_in_queue(self):
         """Ensures the task is enqueued with expected fields."""
-        import axon.llm as llm_mod
         from axon.llm import (
             OpenLLM,
             _copilot_bridge_lock,
@@ -1208,7 +1204,7 @@ class TestCopilotBridgeProvider:
             deadline = time.time() + 3.0
             while time.time() < deadline:
                 with _copilot_bridge_lock:
-                    for task_id, res in list(_copilot_responses.items()):
+                    for _task_id, res in list(_copilot_responses.items()):
                         if "event" in res and not res["event"].is_set():
                             res["result"] = "ok"
                             res["event"].set()
@@ -1265,7 +1261,7 @@ class TestCopilotBridgeProvider:
             deadline = time.time() + 3.0
             while time.time() < deadline:
                 with _copilot_bridge_lock:
-                    for task_id, res in list(_copilot_responses.items()):
+                    for _task_id, res in list(_copilot_responses.items()):
                         if "event" in res and not res["event"].is_set():
                             res["error"] = "something went wrong"
                             res["event"].set()
@@ -1300,7 +1296,7 @@ class TestCopilotBridgeProvider:
             deadline = time.time() + 3.0
             while time.time() < deadline:
                 with _copilot_bridge_lock:
-                    for task_id, res in list(_copilot_responses.items()):
+                    for _task_id, res in list(_copilot_responses.items()):
                         if "event" in res and not res["event"].is_set():
                             res["result"] = "streamed response"
                             res["event"].set()
@@ -1343,7 +1339,7 @@ class TestCopilotBridgeProvider:
                 with _copilot_bridge_lock:
                     if _copilot_task_queue:
                         captured_task.update(_copilot_task_queue[0])
-                    for task_id, res in list(_copilot_responses.items()):
+                    for _task_id, res in list(_copilot_responses.items()):
                         if "event" in res and not res["event"].is_set():
                             res["result"] = "ok"
                             res["event"].set()
@@ -1420,8 +1416,8 @@ class TestGetCopilotSessionToken:
     def test_refreshes_when_within_buffer(self):
         """Session expiring within _COPILOT_SESSION_REFRESH_BUFFER should be refreshed."""
         from axon.llm import (
-            OpenLLM,
             _COPILOT_SESSION_REFRESH_BUFFER,
+            OpenLLM,
             _get_copilot_session_token,
         )
 
@@ -1533,7 +1529,7 @@ class TestRefreshCopilotSession:
 
 class TestFetchCopilotModels:
     def test_returns_fallback_when_no_pat(self):
-        from axon.llm import OpenLLM, _COPILOT_MODELS_FALLBACK, _fetch_copilot_models
+        from axon.llm import _COPILOT_MODELS_FALLBACK, OpenLLM, _fetch_copilot_models
 
         cfg = _make_config(llm_provider="github_copilot", copilot_pat="")
         llm = OpenLLM(cfg)
@@ -1573,7 +1569,7 @@ class TestFetchCopilotModels:
         assert "text-embed" not in result  # non-chat type filtered out
 
     def test_returns_fallback_on_http_error(self):
-        from axon.llm import OpenLLM, _COPILOT_MODELS_FALLBACK, _fetch_copilot_models
+        from axon.llm import _COPILOT_MODELS_FALLBACK, OpenLLM, _fetch_copilot_models
 
         cfg = _make_config(llm_provider="github_copilot", copilot_pat="gh_tok")
         llm = OpenLLM(cfg)
@@ -1590,7 +1586,7 @@ class TestFetchCopilotModels:
         assert result == list(_COPILOT_MODELS_FALLBACK)
 
     def test_returns_fallback_when_empty_model_list(self):
-        from axon.llm import OpenLLM, _COPILOT_MODELS_FALLBACK, _fetch_copilot_models
+        from axon.llm import _COPILOT_MODELS_FALLBACK, OpenLLM, _fetch_copilot_models
 
         cfg = _make_config(llm_provider="github_copilot", copilot_pat="gh_tok")
         llm = OpenLLM(cfg)
@@ -1611,7 +1607,7 @@ class TestFetchCopilotModels:
         assert result == list(_COPILOT_MODELS_FALLBACK)
 
     def test_returns_fallback_when_no_chat_models(self):
-        from axon.llm import OpenLLM, _COPILOT_MODELS_FALLBACK, _fetch_copilot_models
+        from axon.llm import _COPILOT_MODELS_FALLBACK, OpenLLM, _fetch_copilot_models
 
         cfg = _make_config(llm_provider="github_copilot", copilot_pat="gh_tok")
         llm = OpenLLM(cfg)

@@ -5,7 +5,7 @@ import getpass
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from axon.api_schemas import (
     ShareGenerateRequest,
@@ -76,9 +76,10 @@ async def store_whoami():
 
 
 @router.post("/share/generate")
-async def share_generate(request: ShareGenerateRequest):
+async def share_generate(request: ShareGenerateRequest, req: Request):
     """Generate a share key allowing another user to access one of your projects."""
     from axon import api as _api
+    from axon import governance as gov
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
@@ -90,16 +91,27 @@ async def share_generate(request: ShareGenerateRequest):
         project=request.project,
         grantee=request.grantee,
     )
+    rid = getattr(req.state, "request_id", "")
+    gov.emit(
+        "share_generated",
+        "share",
+        result.get("key_id", ""),
+        project=request.project,
+        details={"grantee": request.grantee},
+        request_id=rid,
+    )
     return result
 
 
 @router.post("/share/redeem")
-async def share_redeem(request: ShareRedeemRequest):
+async def share_redeem(request: ShareRedeemRequest, req: Request):
     """Redeem a share string, creating a mount descriptor in your mounts/ directory."""
     from axon import api as _api
+    from axon import governance as gov
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
+    rid = getattr(req.state, "request_id", "")
     try:
         result = _shares.redeem_share_key(
             grantee_user_dir=user_dir,
@@ -107,20 +119,37 @@ async def share_redeem(request: ShareRedeemRequest):
         )
     except (ValueError, NotImplementedError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+    gov.emit(
+        "share_redeemed",
+        "share",
+        result.get("key_id", ""),
+        project=result.get("project", ""),
+        details={"owner": result.get("owner", "")},
+        request_id=rid,
+    )
     return result
 
 
 @router.post("/share/revoke")
-async def share_revoke(request: ShareRevokeRequest):
+async def share_revoke(request: ShareRevokeRequest, req: Request):
     """Revoke a share key."""
     from axon import api as _api
+    from axon import governance as gov
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
+    rid = getattr(req.state, "request_id", "")
     try:
         result = _shares.revoke_share_key(owner_user_dir=user_dir, key_id=request.key_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    gov.emit(
+        "share_revoked",
+        "share",
+        request.key_id,
+        project=result.get("project", ""),
+        request_id=rid,
+    )
     return result
 
 

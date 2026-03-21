@@ -71,7 +71,7 @@ def _run_repl_with_commands(commands, brain=None, env=None):
     def fake_print(*args, **kwargs):
         sep = kwargs.get("sep", " ")
         end = kwargs.get("end", "\n")
-        file = kwargs.get("file", None)
+        kwargs.get("file", None)
         text = sep.join(str(a) for a in args) + end
         output_buffer.write(text)
 
@@ -80,9 +80,7 @@ def _run_repl_with_commands(commands, brain=None, env=None):
             with patch("axon.sessions._save_session"):
                 with patch("axon.repl._draw_header"):
                     with patch("axon.repl._save_session"):
-                        with patch(
-                            "prompt_toolkit.PromptSession"
-                        ) as mock_ps_cls, patch(
+                        with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
                             "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
                         ):
                             mock_ps = mock_ps_cls.return_value
@@ -119,7 +117,7 @@ class TestReplList:
     def test_list_shows_documents(self):
         brain = _make_mock_brain()
         brain.list_documents.return_value = [{"source": "doc.txt", "chunks": 5}]
-        output = _run_repl_with_commands(["/list"], brain=brain)
+        _run_repl_with_commands(["/list"], brain=brain)
         brain.list_documents.assert_called()
 
     def test_list_empty_knowledge_base(self):
@@ -278,7 +276,9 @@ class TestReplEmbed:
     def test_embed_no_arg_prints_info(self):
         brain = _make_mock_brain()
         output = _run_repl_with_commands(["/embed"], brain=brain)
-        assert "embedding" in output.lower() or "provider" in output.lower() or isinstance(output, str)
+        assert (
+            "embedding" in output.lower() or "provider" in output.lower() or isinstance(output, str)
+        )
 
     def test_embed_switch_model(self):
         brain = _make_mock_brain()

@@ -7,12 +7,12 @@ from axon.config import AxonConfig
 
 
 def _make_config(**kwargs):
-    defaults = dict(
-        bm25_path="/tmp/bm25",
-        vector_store_path="/tmp/vs",
-        embedding_provider="sentence_transformers",
-        embedding_model="all-MiniLM-L6-v2",
-    )
+    defaults = {
+        "bm25_path": "/tmp/bm25",
+        "vector_store_path": "/tmp/vs",
+        "embedding_provider": "sentence_transformers",
+        "embedding_model": "all-MiniLM-L6-v2",
+    }
     defaults.update(kwargs)
     return AxonConfig(**defaults)
 
@@ -26,7 +26,9 @@ class TestOpenEmbeddingSentenceTransformers:
         mock_model.get_sentence_embedding_dimension.return_value = 384
         mock_st = MagicMock(return_value=mock_model)
 
-        with patch.dict("sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}):
+        with patch.dict(
+            "sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}
+        ):
             emb = OpenEmbedding(cfg)
             assert emb.dimension == 384
             assert emb.model is mock_model
@@ -40,7 +42,9 @@ class TestOpenEmbeddingSentenceTransformers:
         mock_model.get_sentence_embedding_dimension.return_value = 768
         mock_st = MagicMock(return_value=mock_model)
 
-        with patch.dict("sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}):
+        with patch.dict(
+            "sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}
+        ):
             emb = OpenEmbedding(cfg)
             mock_st.assert_called_once_with("/local/model")
             assert emb.dimension == 768
@@ -56,7 +60,9 @@ class TestOpenEmbeddingSentenceTransformers:
         mock_model.encode.return_value = np.array([[0.1, 0.2], [0.3, 0.4]])
         mock_st = MagicMock(return_value=mock_model)
 
-        with patch.dict("sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}):
+        with patch.dict(
+            "sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}
+        ):
             emb = OpenEmbedding(cfg)
             result = emb.embed(["hello", "world"])
             assert isinstance(result, list)
@@ -71,7 +77,9 @@ class TestOpenEmbeddingSentenceTransformers:
         mock_model.encode.return_value = [[0.1, 0.2], [0.3, 0.4]]  # plain list
         mock_st = MagicMock(return_value=mock_model)
 
-        with patch.dict("sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}):
+        with patch.dict(
+            "sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}
+        ):
             emb = OpenEmbedding(cfg)
             result = emb.embed(["hello"])
             assert isinstance(result, list)
@@ -85,7 +93,9 @@ class TestOpenEmbeddingSentenceTransformers:
         mock_model.encode.return_value = [[0.1, 0.2]]
         mock_st = MagicMock(return_value=mock_model)
 
-        with patch.dict("sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}):
+        with patch.dict(
+            "sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=mock_st)}
+        ):
             emb = OpenEmbedding(cfg)
             result = emb.embed_query("hello")
             assert isinstance(result, list)
@@ -143,9 +153,7 @@ class TestOpenEmbeddingFastembed:
     def test_init_loads_model(self):
         from axon.embeddings import OpenEmbedding
 
-        cfg = _make_config(
-            embedding_provider="fastembed", embedding_model="BAAI/bge-small-en-v1.5"
-        )
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="BAAI/bge-small-en-v1.5")
         mock_te = MagicMock()
         mock_te_cls = MagicMock(return_value=mock_te)
 
@@ -157,9 +165,7 @@ class TestOpenEmbeddingFastembed:
     def test_init_with_cache_dir(self):
         from axon.embeddings import OpenEmbedding
 
-        cfg = _make_config(
-            embedding_provider="fastembed", embedding_model="BAAI/bge-small-en-v1.5"
-        )
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="BAAI/bge-small-en-v1.5")
         cfg.embedding_model_path = "/cache/dir"
         mock_te = MagicMock()
         mock_te_cls = MagicMock(return_value=mock_te)
@@ -173,9 +179,7 @@ class TestOpenEmbeddingFastembed:
     def test_embed(self):
         from axon.embeddings import OpenEmbedding
 
-        cfg = _make_config(
-            embedding_provider="fastembed", embedding_model="BAAI/bge-small-en-v1.5"
-        )
+        cfg = _make_config(embedding_provider="fastembed", embedding_model="BAAI/bge-small-en-v1.5")
         mock_te = MagicMock()
         vec = MagicMock()
         vec.tolist.return_value = [0.1, 0.2]
@@ -192,9 +196,7 @@ class TestOpenEmbeddingOpenAI:
     def test_init_sets_dimension(self):
         from axon.embeddings import OpenEmbedding
 
-        cfg = _make_config(
-            embedding_provider="openai", embedding_model="text-embedding-3-small"
-        )
+        cfg = _make_config(embedding_provider="openai", embedding_model="text-embedding-3-small")
         mock_client = MagicMock()
         mock_openai_cls = MagicMock(return_value=mock_client)
 
@@ -205,9 +207,7 @@ class TestOpenEmbeddingOpenAI:
     def test_init_with_api_key(self):
         from axon.embeddings import OpenEmbedding
 
-        cfg = _make_config(
-            embedding_provider="openai", embedding_model="text-embedding-3-small"
-        )
+        cfg = _make_config(embedding_provider="openai", embedding_model="text-embedding-3-small")
         cfg.api_key = "sk-test-key"
         mock_client = MagicMock()
         mock_openai_cls = MagicMock(return_value=mock_client)
@@ -220,9 +220,7 @@ class TestOpenEmbeddingOpenAI:
     def test_init_with_custom_base_url(self):
         from axon.embeddings import OpenEmbedding
 
-        cfg = _make_config(
-            embedding_provider="openai", embedding_model="text-embedding-3-small"
-        )
+        cfg = _make_config(embedding_provider="openai", embedding_model="text-embedding-3-small")
         cfg.ollama_base_url = "http://custom:8080"
         mock_client = MagicMock()
         mock_openai_cls = MagicMock(return_value=mock_client)
@@ -235,9 +233,7 @@ class TestOpenEmbeddingOpenAI:
     def test_embed_calls_api(self):
         from axon.embeddings import OpenEmbedding
 
-        cfg = _make_config(
-            embedding_provider="openai", embedding_model="text-embedding-3-small"
-        )
+        cfg = _make_config(embedding_provider="openai", embedding_model="text-embedding-3-small")
         mock_client = MagicMock()
         data_item = MagicMock()
         data_item.embedding = [0.1, 0.2]

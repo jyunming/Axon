@@ -41,6 +41,7 @@ import {
   AxonShowGraphStatusTool, AxonShowGraphTool,
   showGraphStatus,
 } from './tools/graph';
+import { showGovernancePanel } from './governance/panel';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   state.outputChannel = vscode.window.createOutputChannel('Axon');
@@ -101,6 +102,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (query) { await showGraphForQuery(context, query); }
     }),
     vscode.commands.registerCommand('axon.showGraphForSelection', () => showGraphForSelection(context)),
+    vscode.commands.registerCommand('axon.showGovernancePanel', () => showGovernancePanel(context)),
   );
 
   // Register Language Model Tools (for Copilot Agent toolset)

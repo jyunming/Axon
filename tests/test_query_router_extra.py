@@ -15,10 +15,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from axon.config import AxonConfig
-from axon.query_router import QueryRouterMixin, _ROUTE_PROFILES
 from axon.code_retrieval import CodeRetrievalDiagnostics, CodeRetrievalTrace
-
+from axon.config import AxonConfig
+from axon.query_router import _ROUTE_PROFILES, QueryRouterMixin
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,31 +70,31 @@ _TABLE_KEYWORDS = {
 
 def _make_config(**kwargs) -> AxonConfig:
     tmp = tempfile.mkdtemp()
-    defaults = dict(
-        bm25_path=os.path.join(tmp, "bm25"),
-        vector_store_path=os.path.join(tmp, "vs"),
-        raptor=False,
-        graph_rag=False,
-        query_router="heuristic",
-        query_cache=False,
-        hybrid_search=False,
-        rerank=False,
-        hyde=False,
-        multi_query=False,
-        step_back=False,
-        query_decompose=False,
-        discussion_fallback=True,
-        compress_context=False,
-        truth_grounding=False,
-        similarity_threshold=0.0,
-        top_k=5,
-        code_lexical_boost=False,
-    )
+    defaults = {
+        "bm25_path": os.path.join(tmp, "bm25"),
+        "vector_store_path": os.path.join(tmp, "vs"),
+        "raptor": False,
+        "graph_rag": False,
+        "query_router": "heuristic",
+        "query_cache": False,
+        "hybrid_search": False,
+        "rerank": False,
+        "hyde": False,
+        "multi_query": False,
+        "step_back": False,
+        "query_decompose": False,
+        "discussion_fallback": True,
+        "compress_context": False,
+        "truth_grounding": False,
+        "similarity_threshold": 0.0,
+        "top_k": 5,
+        "code_lexical_boost": False,
+    }
     defaults.update(kwargs)
     return AxonConfig(**defaults)
 
 
-def _make_full_stub(**config_kwargs) -> "RouterStub":
+def _make_full_stub(**config_kwargs) -> RouterStub:
     """Return a RouterStub pre-wired with sensible mock components."""
     cfg = _make_config(**config_kwargs)
     stub = RouterStub(cfg)
@@ -972,7 +971,7 @@ class TestQueryGraphRAGCommunityContext:
         stub.config.graph_rag_mode = "hybrid"
         stub._community_summaries = {"c0": "summary"}
         stub._global_search_map_reduce = MagicMock(return_value="global ctx")
-        result = stub.query("hybrid query")
+        stub.query("hybrid query")
         call_args = stub.llm.complete.call_args
         system_prompt = call_args[0][1]
         assert "Knowledge Graph Community Reports" in system_prompt
@@ -1005,7 +1004,7 @@ class TestQueryStream:
         """Line 1143: rerank in query_stream."""
         stub = _make_full_stub(rerank=True, similarity_threshold=0.0)
         stub.llm.stream.return_value = iter(["token1", "token2"])
-        chunks = list(stub.query_stream("reranked stream query"))
+        list(stub.query_stream("reranked stream query"))
         stub.reranker.rerank.assert_called_once()
 
     def test_stream_yields_sources_marker_first(self):

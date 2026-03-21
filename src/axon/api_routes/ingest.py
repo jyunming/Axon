@@ -8,7 +8,7 @@ import pathlib
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from axon.api_schemas import (
     BatchTextIngestRequest,
@@ -75,7 +75,7 @@ async def refresh_docs():
 
 
 @router.post("/ingest")
-async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks):
+async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks, req: Request):
     from axon import api as _api
 
     brain = _api.brain
@@ -111,8 +111,20 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
     }
 
     def process_ingestion():
+        from axon import governance as gov
         from axon.loaders import DirectoryLoader
 
+        project = getattr(brain, "_active_project", "default")
+        rid = getattr(req.state, "request_id", job_id)
+        gov.emit(
+            "ingest_started",
+            "file",
+            str(requested_path),
+            project=project,
+            status="started",
+            details={"job_id": job_id},
+            request_id=rid,
+        )
         try:
             loader_mgr = DirectoryLoader()
             if requested_path.is_dir():
@@ -129,11 +141,28 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks)
             _api._jobs[job_id]["status"] = "completed"
             _api._jobs[job_id]["documents_ingested"] = len(docs)
             _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            gov.emit(
+                "ingest_completed",
+                "file",
+                str(requested_path),
+                project=project,
+                details={"job_id": job_id, "documents_ingested": len(docs)},
+                request_id=rid,
+            )
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
             _api._jobs[job_id]["status"] = "failed"
             _api._jobs[job_id]["error"] = str(e)
             _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            gov.emit(
+                "ingest_failed",
+                "file",
+                str(requested_path),
+                project=project,
+                status="failed",
+                details={"job_id": job_id, "error": "ingest error"},
+                request_id=rid,
+            )
 
     background_tasks.add_task(process_ingestion)
     return {
@@ -351,12 +380,15 @@ async def ingest_url(request: URLIngestRequest):
 
 
 @router.post("/delete")
-async def delete_documents(request: DeleteRequest):
+async def delete_documents(request: DeleteRequest, req: Request):
     from axon import api as _api
+    from axon import governance as gov
 
     brain = _api.brain
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    rid = getattr(req.state, "request_id", "")
+    project = getattr(brain, "_active_project", "default")
     try:
         brain._assert_write_allowed("delete")
         existing = brain.vector_store.get_by_ids(request.doc_ids)
@@ -369,6 +401,14 @@ async def delete_documents(request: DeleteRequest):
                 brain.bm25.delete_documents(existing_ids)
             if brain._entity_graph:
                 brain._prune_entity_graph(set(existing_ids))
+        gov.emit(
+            "delete",
+            "document",
+            ",".join(existing_ids[:10]),
+            project=project,
+            details={"deleted": len(existing_ids), "not_found": len(not_found)},
+            request_id=rid,
+        )
         return {
             "status": "success",
             "deleted": len(existing_ids),

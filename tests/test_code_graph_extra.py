@@ -1,9 +1,5 @@
 """Tests for CodeGraphMixin in axon.code_graph."""
 import json
-import os
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 from axon.config import AxonConfig
 

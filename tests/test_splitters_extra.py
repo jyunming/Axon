@@ -8,20 +8,19 @@ Targets missed coverage lines:
 
 import math
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from axon.splitters import (
-    CosineSemanticSplitter,
     CodeAwareSplitter,
+    CosineSemanticSplitter,
     MarkdownSplitter,
     RecursiveCharacterTextSplitter,
     SemanticTextSplitter,
     TableSplitter,
     _split_sentences,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _split_sentences
@@ -576,7 +575,6 @@ class TestCosineSemanticSplitter:
         # Lines 379-380: ImportError branch
         with patch.dict(sys.modules, {"tiktoken": None}):
             # Force ImportError by temporarily removing tiktoken
-            import importlib
 
             orig = sys.modules.pop("tiktoken", None)
             try:

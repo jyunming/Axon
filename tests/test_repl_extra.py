@@ -443,7 +443,6 @@ class TestInitDisplayEmit:
         """_tick appends label to tick_lines (lines 813-818)."""
         import sys
 
-
         d = self._make_display()
 
         with patch.object(sys.stdout, "write"):
@@ -455,7 +454,6 @@ class TestInitDisplayEmit:
     def test_emit_loading_sentence_transformers(self):
         """emit() sets _step for 'Loading Sentence Transformers' (lines 826-828)."""
         import logging
-
 
         d = self._make_display()
         record = logging.LogRecord(

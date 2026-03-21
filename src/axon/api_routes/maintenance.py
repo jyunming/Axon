@@ -119,14 +119,25 @@ async def submit_copilot_result(task_id: str, body: CopilotTaskResult):
 
 
 @router.post("/project/maintenance")
-async def set_project_maintenance(request: MaintenanceStateRequest):
+async def set_project_maintenance(request: MaintenanceStateRequest, req: Request):
     """Set the maintenance state of a project."""
+    from axon import governance as gov
     from axon.maintenance import apply_maintenance_state
 
     if not _VALID_PROJECT_NAME_RE.match(request.name):
         raise HTTPException(status_code=422, detail=f"Invalid project name: '{request.name}'")
+    rid = getattr(req.state, "request_id", "")
     try:
-        return apply_maintenance_state(request.name, request.state)
+        result = apply_maintenance_state(request.name, request.state)
+        gov.emit(
+            "maintenance_changed",
+            "project",
+            request.name,
+            project=request.name,
+            details={"state": request.state, "result": result},
+            request_id=rid,
+        )
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404 if "does not exist" in str(e) else 422, detail=str(e))
     except Exception as e:

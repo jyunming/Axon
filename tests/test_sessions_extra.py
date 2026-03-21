@@ -1,5 +1,4 @@
 """Tests for axon.sessions — covering uncovered lines."""
-import json
 import os
 from unittest.mock import MagicMock
 
@@ -28,7 +27,7 @@ class TestSessionsBasic:
         assert s["history"] == []
 
     def test_save_and_load_session(self, tmp_path):
-        from axon.sessions import _load_session, _save_session, _sessions_dir
+        from axon.sessions import _load_session, _save_session
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("HOME", str(tmp_path))
@@ -55,9 +54,8 @@ class TestSessionsBasic:
             _s._SESSIONS_DIR = orig
 
     def test_load_session_nonexistent_returns_none(self, tmp_path):
-        from axon.sessions import _load_session
-
         import axon.sessions as _s
+        from axon.sessions import _load_session
 
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
@@ -69,9 +67,8 @@ class TestSessionsBasic:
         _s._SESSIONS_DIR = orig
 
     def test_list_sessions_empty(self, tmp_path):
-        from axon.sessions import _list_sessions
-
         import axon.sessions as _s
+        from axon.sessions import _list_sessions
 
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
@@ -83,9 +80,8 @@ class TestSessionsBasic:
         _s._SESSIONS_DIR = orig
 
     def test_list_sessions_returns_saved(self, tmp_path):
-        from axon.sessions import _list_sessions, _save_session
-
         import axon.sessions as _s
+        from axon.sessions import _list_sessions, _save_session
 
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
@@ -136,9 +132,8 @@ class TestSessionsBasic:
         assert "llama3" in captured.out
 
     def test_save_session_bad_path_no_crash(self, tmp_path):
-        from axon.sessions import _save_session
-
         import axon.sessions as _s
+        from axon.sessions import _save_session
 
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = "/nonexistent/path/that/does/not/exist"
@@ -154,9 +149,8 @@ class TestSessionsBasic:
         _s._SESSIONS_DIR = orig
 
     def test_sessions_dir_default_project(self, tmp_path):
-        from axon.sessions import _sessions_dir
-
         import axon.sessions as _s
+        from axon.sessions import _sessions_dir
 
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
@@ -165,9 +159,8 @@ class TestSessionsBasic:
         _s._SESSIONS_DIR = orig
 
     def test_load_session_corrupt_json(self, tmp_path):
-        from axon.sessions import _load_session
-
         import axon.sessions as _s
+        from axon.sessions import _load_session
 
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")

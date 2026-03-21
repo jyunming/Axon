@@ -2,10 +2,7 @@
 import io
 import logging
 import os
-import sys
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 def _make_brain_mock(**kwargs):
@@ -418,10 +415,8 @@ class TestSaveEnvKey:
 class TestInitDisplay:
     def test_emit_message_parsing(self):
         """Test _InitDisplay.emit() message handling without the full threaded UI."""
-        import re as _re
-        import threading as _threading
 
-        from axon.repl import _InitDisplay, _brow
+        from axon.repl import _InitDisplay
 
         # Patch sys.stdout and immediately stop the thread to avoid hanging
         buf = io.StringIO()

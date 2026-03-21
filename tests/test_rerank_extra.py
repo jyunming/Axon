@@ -7,13 +7,13 @@ from axon.config import AxonConfig
 
 
 def _cfg(**kwargs):
-    defaults = dict(
-        bm25_path="/tmp/bm25",
-        vector_store_path="/tmp/vs",
-        rerank=True,
-        reranker_provider="cross-encoder",
-        reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
-    )
+    defaults = {
+        "bm25_path": "/tmp/bm25",
+        "vector_store_path": "/tmp/vs",
+        "rerank": True,
+        "reranker_provider": "cross-encoder",
+        "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    }
     defaults.update(kwargs)
     return AxonConfig(**defaults)
 

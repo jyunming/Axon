@@ -19,12 +19,10 @@ from __future__ import annotations
 
 import io
 import sys
-from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
+from contextlib import redirect_stdout
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helper: run main() with given args, capture output
@@ -208,8 +206,8 @@ class TestPrintProjectTree:
         parent = self._proj("parent", children=[child])
         out = self._capture([parent], active="")
         lines = out.splitlines()
-        parent_line = next(l for l in lines if "parent" in l and "child" not in l)
-        child_line = next(l for l in lines if "child" in l)
+        parent_line = next(ln for ln in lines if "parent" in ln and "child" not in ln)
+        child_line = next(ln for ln in lines if "child" in ln)
         parent_indent = len(parent_line) - len(parent_line.lstrip(" "))
         child_indent = len(child_line) - len(child_line.lstrip(" "))
         assert child_indent > parent_indent

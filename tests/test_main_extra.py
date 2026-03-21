@@ -15,12 +15,9 @@ Coverage targets:
 from __future__ import annotations
 
 import os
-import tempfile
-from collections import OrderedDict
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -30,22 +27,22 @@ import pytest
 def _make_config(tmp_path, **kwargs):
     from axon.config import AxonConfig
 
-    defaults = dict(
-        bm25_path=str(tmp_path / "bm25"),
-        vector_store_path=str(tmp_path / "vs"),
-        query_router="off",
-        query_cache=False,
-        raptor=False,
-        graph_rag=False,
-        rerank=False,
-        hybrid_search=False,
-        truth_grounding=False,
-        compress_context=False,
-        contextual_retrieval=False,
-        mmr=False,
-        discussion_fallback=False,
-        similarity_threshold=0.0,
-    )
+    defaults = {
+        "bm25_path": str(tmp_path / "bm25"),
+        "vector_store_path": str(tmp_path / "vs"),
+        "query_router": "off",
+        "query_cache": False,
+        "raptor": False,
+        "graph_rag": False,
+        "rerank": False,
+        "hybrid_search": False,
+        "truth_grounding": False,
+        "compress_context": False,
+        "contextual_retrieval": False,
+        "mmr": False,
+        "discussion_fallback": False,
+        "similarity_threshold": 0.0,
+    }
     defaults.update(kwargs)
     return AxonConfig(**defaults)
 
@@ -504,8 +501,8 @@ class TestPreflightModelAudit:
         for _k in ("TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE", "HF_HUB_OFFLINE"):
             monkeypatch.delenv(_k, raising=False)
         """local_assets_only=True + remote embedding model should raise RuntimeError."""
-        from axon.main import AxonBrain
         from axon.config import AxonConfig
+        from axon.main import AxonBrain
 
         cfg = AxonConfig(
             bm25_path=str(tmp_path / "bm25"),
@@ -640,7 +637,7 @@ class TestDocHash:
         import hashlib
 
         doc = {"text": "hello world"}
-        expected = hashlib.md5("hello world".encode()).hexdigest()
+        expected = hashlib.md5(b"hello world").hexdigest()
         assert brain._doc_hash(doc) == expected
 
     def test_empty_text(self, brain):
@@ -994,7 +991,9 @@ class TestIngest:
         from axon.runtime import _WriteLease
 
         with patch("axon.runtime.get_registry") as mock_reg:
-            mock_reg.return_value.acquire.return_value = MagicMock(spec=_WriteLease)
+            fake_lease = MagicMock(spec=_WriteLease)
+            fake_lease.is_stale.return_value = False
+            mock_reg.return_value.acquire.return_value = fake_lease
             brain.ingest([self._make_doc()])
 
         brain._own_vector_store.add.assert_called_once()
@@ -1019,7 +1018,9 @@ class TestIngest:
         from axon.runtime import _WriteLease
 
         with patch("axon.runtime.get_registry") as mock_reg:
-            mock_reg.return_value.acquire.return_value = MagicMock(spec=_WriteLease)
+            fake_lease = MagicMock(spec=_WriteLease)
+            fake_lease.is_stale.return_value = False
+            mock_reg.return_value.acquire.return_value = fake_lease
             brain.ingest([doc])
 
         brain._own_vector_store.add.assert_not_called()
@@ -1041,7 +1042,9 @@ class TestIngest:
         from axon.runtime import _WriteLease
 
         with patch("axon.runtime.get_registry") as mock_reg:
-            mock_reg.return_value.acquire.return_value = MagicMock(spec=_WriteLease)
+            fake_lease = MagicMock(spec=_WriteLease)
+            fake_lease.is_stale.return_value = False
+            mock_reg.return_value.acquire.return_value = fake_lease
             brain.ingest([self._make_doc()])
 
         brain._own_vector_store.add.assert_called_once()
@@ -1061,7 +1064,9 @@ class TestIngest:
         from axon.runtime import _WriteLease
 
         with patch("axon.runtime.get_registry") as mock_reg:
-            mock_reg.return_value.acquire.return_value = MagicMock(spec=_WriteLease)
+            fake_lease = MagicMock(spec=_WriteLease)
+            fake_lease.is_stale.return_value = False
+            mock_reg.return_value.acquire.return_value = fake_lease
             brain.ingest([self._make_doc("doc1")])
 
         assert "doc1.txt" in brain._doc_versions
@@ -1088,14 +1093,16 @@ class TestIngest:
             for i in range(5)
         ]
 
-        brain.embedding.embed = MagicMock(return_value=[[0.1], [0.1]])
+        brain.embedding.embed = MagicMock(side_effect=lambda texts: [[0.1]] * len(texts))
         brain._own_vector_store.add = MagicMock()
         brain._own_bm25 = MagicMock()
 
         from axon.runtime import _WriteLease
 
         with patch("axon.runtime.get_registry") as mock_reg:
-            mock_reg.return_value.acquire.return_value = MagicMock(spec=_WriteLease)
+            fake_lease = MagicMock(spec=_WriteLease)
+            fake_lease.is_stale.return_value = False
+            mock_reg.return_value.acquire.return_value = fake_lease
             brain.ingest(docs)
 
         # add should have been called with at most 2 items
@@ -1357,6 +1364,7 @@ class TestSwitchToScope:
     def test_no_projects_found_raises(self, brain):
         """_switch_to_scope(@projects) raises ValueError when no authoritative projects exist."""
         from pathlib import Path
+
         import axon.projects as proj_mod
 
         brain.close = MagicMock()
@@ -1393,7 +1401,7 @@ class TestWriteGuards:
 
     def test_assert_write_allowed_raises_on_scope(self, brain):
         brain._read_only_scope = True
-        with pytest.raises(Exception):
+        with pytest.raises((PermissionError, ValueError, RuntimeError)):
             brain._assert_write_allowed("ingest")
 
     def test_assert_write_allowed_passes_on_local(self, brain):

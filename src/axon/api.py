@@ -125,6 +125,18 @@ _RAG_API_KEY: str | None = os.getenv("RAG_API_KEY")
 
 
 @app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    """Attach X-Request-ID to every request/response for audit traceability."""
+    from uuid import uuid4
+
+    rid = request.headers.get("X-Request-ID", str(uuid4()))
+    request.state.request_id = rid
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+@app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     """Enforce X-API-Key header when RAG_API_KEY is configured."""
     if _RAG_API_KEY:
@@ -142,6 +154,7 @@ async def api_key_middleware(request: Request, call_next):
 # Router registration — each sub-module registers its own APIRouter
 # ---------------------------------------------------------------------------
 
+from axon.api_routes.governance import router as _governance_router  # noqa: E402
 from axon.api_routes.graph import router as _graph_router  # noqa: E402
 from axon.api_routes.ingest import router as _ingest_router  # noqa: E402
 from axon.api_routes.maintenance import router as _maintenance_router  # noqa: E402
@@ -157,6 +170,7 @@ app.include_router(_graph_router)
 app.include_router(_shares_router)
 app.include_router(_maintenance_router)
 app.include_router(_registry_router)
+app.include_router(_governance_router)
 
 # ---------------------------------------------------------------------------
 # Backward-compat re-exports so existing importers of axon.api still work

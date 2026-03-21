@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 logger = logging.getLogger("AxonAPI")
@@ -27,18 +27,30 @@ async def get_graph_status():
 
 
 @router.post("/graph/finalize")
-async def finalize_graph():
+async def finalize_graph(request: Request):
     """Trigger an explicit community rebuild."""
     import asyncio
 
     from axon import api as _api
+    from axon import governance as gov
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    rid = getattr(request.state, "request_id", "")
+    project = getattr(brain, "_active_project", "default")
     try:
         await asyncio.to_thread(brain.finalize_graph, True)
-        return {"status": "ok", "community_summary_count": len(brain._community_summaries)}
+        summary_count = len(brain._community_summaries)
+        gov.emit(
+            "graph_finalize",
+            "graph",
+            project,
+            project=project,
+            details={"community_summary_count": summary_count},
+            request_id=rid,
+        )
+        return {"status": "ok", "community_summary_count": summary_count}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:

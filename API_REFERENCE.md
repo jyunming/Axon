@@ -20,7 +20,9 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/query` | Full RAG query — returns synthesised answer with optional citations |
+| `POST` | `/query/stream` | Streaming RAG query — returns Server-Sent Events (`text/event-stream`) |
 | `POST` | `/search` | Semantic / hybrid search — returns raw document chunks with scores |
+| `POST` | `/search/raw` | Retrieval without LLM synthesis — returns chunks plus optional trace |
 
 **`POST /query` body:**
 ```json
@@ -32,6 +34,10 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 }
 ```
 
+**`POST /query/stream` body:** same as `/query`.
+Response: Server-Sent Events stream. Each event is `data: <json>\n\n` where `<json>` is a
+text chunk string. The stream ends with `data: [DONE]\n\n`.
+
 **`POST /search` body:**
 ```json
 {
@@ -40,6 +46,9 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
   "project": "my-project"
 }
 ```
+
+**`POST /search/raw` body:** same as `/search`. Accepts optional `?include_trace=true` query
+parameter to include retrieval diagnostics.
 
 ---
 
@@ -85,7 +94,7 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 | `GET` | `/collection` | Source and chunk counts for the active project |
 | `GET` | `/collection/stale` | Documents not refreshed in N days (`?days=30`) |
 | `GET` | `/tracked-docs` | Full tracked-document manifest with hashes and timestamps |
-| `POST` | `/delete` | Remove documents by source path or URL list |
+| `POST` | `/delete` | Remove documents by internal chunk ID list |
 | `POST` | `/clear` | Wipe entire active project store and index (irreversible) |
 
 **`POST /delete` body:**
@@ -148,7 +157,13 @@ Changes are scoped to the current server session and are not persisted to `confi
 |--------|------|-------------|
 | `GET` | `/graph/status` | Community detection build status (pending / complete / error) |
 | `POST` | `/graph/finalize` | Trigger explicit community rebuild |
-| `GET` | `/graph/data` | Full knowledge graph payload (used by VS Code panel) |
+| `GET` | `/graph/data` | Full knowledge graph payload as JSON (nodes + links) |
+| `GET` | `/graph/visualize` | Render the knowledge graph as a self-contained HTML page |
+| `GET` | `/code-graph/data` | Code structure graph payload for the VS Code code-graph panel |
+
+`/graph/visualize` returns `text/html` — open in a browser or embed in an iframe.
+`/graph/data` and `/code-graph/data` return `{"nodes": [...], "links": [...]}` JSON payloads
+consumed by the VS Code extension's graph panels.
 
 ---
 
@@ -156,8 +171,60 @@ Changes are scoped to the current server session and are not persisted to `confi
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/project/maintenance` | Enter maintenance mode — blocks ingest/query while rebuilding |
-| `GET` | `/project/maintenance` | Check maintenance mode status |
+| `POST` | `/project/maintenance` | Set maintenance state for a project |
+| `GET` | `/project/maintenance` | Check maintenance state (`?name=<project>`) |
+
+**`POST /project/maintenance` body:**
+```json
+{"name": "my-project", "state": "readonly"}
+```
+Valid states: `normal`, `readonly`, `rebuilding`.
+
+---
+
+## Copilot / VS Code Bridge
+
+These endpoints power the GitHub Copilot integration and VS Code extension LLM bridge.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/copilot/agent` | Chat endpoint consumed by the Copilot extension — returns SSE stream |
+| `GET` | `/llm/copilot/tasks` | Poll for pending LLM tasks queued by the backend for VS Code to execute |
+| `POST` | `/llm/copilot/result/{task_id}` | Submit the result of a Copilot LLM task back to the backend |
+
+**`POST /copilot/agent` body:**
+```json
+{
+  "messages": [{"role": "user", "content": "/search AxonBrain architecture"}],
+  "agent_request_id": "req-abc123"
+}
+```
+
+Response: Server-Sent Events stream (`text/event-stream`). Event sequence:
+
+| Event type | Payload | Description |
+|------------|---------|-------------|
+| `created` | `{"type": "created", "id": "<request_id>"}` | Stream opened |
+| `text` | `{"type": "text", "content": "<markdown>"}` | Response chunk |
+| `error` | `{"type": "error", "message": "<msg>"}` | Error during processing |
+| `[DONE]` | raw string | Stream closed |
+
+**Supported slash commands in the `content` field:**
+
+| Command | Effect |
+|---------|--------|
+| `/search <query>` | Run hybrid retrieval and return top-5 results |
+| `/ingest <url>` | Fetch and ingest a URL into the active project |
+| `/projects` | List available Axon projects |
+| _(any other text)_ | Full RAG query with chat history |
+
+**`GET /llm/copilot/tasks`** returns `{"tasks": [...]}` — the list is consumed and cleared on
+each poll. VS Code calls this to receive tasks queued while the user was offline.
+
+**`POST /llm/copilot/result/{task_id}` body:**
+```json
+{"result": "<llm_response_text>", "error": null}
+```
 
 ---
 
@@ -196,6 +263,28 @@ All endpoints return standard HTTP status codes:
 | `403` | Forbidden — attempted write to a read-only mount |
 | `404` | Not found — project, job, or session ID does not exist |
 | `409` | Conflict — duplicate project name or ongoing ingest |
+| `503` | Service unavailable — brain not initialized (start the server first) |
 | `500` | Internal server error — check server logs |
 
 Error bodies always include a `"detail"` field with a human-readable message.
+
+---
+
+## Governance Routes `/governance/*`
+
+Operator console routes for audit log, project state, and Copilot session management.
+Requires no additional auth beyond the standard `X-API-Key` header.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/governance/overview` | Aggregated operator status (project, graph, leases, Copilot) |
+| `GET` | `/governance/audit` | Audit log (`?project=&action=&surface=&status=&since=&limit=50`) |
+| `GET` | `/governance/copilot/sessions` | Active + recent Copilot bridge sessions |
+| `GET` | `/governance/projects` | All projects with maintenance + graph state |
+| `POST` | `/governance/graph/rebuild` | Audited graph community rebuild |
+| `POST` | `/governance/project/maintenance` | Audited maintenance state change (`?name=&state=`) |
+| `POST` | `/governance/copilot/session/{id}/expire` | Force-close a stuck Copilot session |
+
+All write routes emit `X-Request-ID` into the audit trail for end-to-end traceability.
+
+See [GOVERNANCE_CONSOLE.md](GOVERNANCE_CONSOLE.md) for full schema, runbooks, and the VS Code panel guide.
