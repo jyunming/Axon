@@ -92,11 +92,17 @@ class TestBM25Retriever:
         assert r.corpus == []
 
     def test_batch_add_rebuilds_once(self, tmp_path):
-        # Adding a batch of docs in one call correctly populates index
+        # Adding docs sets the dirty flag; index is rebuilt lazily on first search() (Story 6.2).
         r = BM25Retriever(storage_path=str(tmp_path))
         docs = [{"id": f"d{i}", "text": f"word{i}", "metadata": {}} for i in range(5)]
         r.add_documents(docs)
         assert len(r.corpus) == 5
+        # After add, index is NOT yet built — dirty flag is set instead (lazy rebuild)
+        assert r._dirty is True
+        assert r.bm25 is None
+        # First search triggers exactly one rebuild
+        r.search("word1")
+        assert r._dirty is False
         assert r.bm25 is not None
 
 
