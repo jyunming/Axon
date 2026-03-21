@@ -125,7 +125,7 @@ class TestJSONLoaderEdgeCases:
         assert len(docs) >= 1
         for doc in docs:
             for v in doc.get("metadata", {}).values():
-                assert not isinstance(v, (dict, list))
+                assert not isinstance(v, dict | list)
 
     def test_malformed_json_returns_empty(self, tmp_path):
         """Malformed JSON file returns empty list (lines 345-347)."""

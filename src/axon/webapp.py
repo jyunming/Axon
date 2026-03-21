@@ -939,7 +939,9 @@ with st.sidebar:
 
     _ws_col, _ws_lbl = st.columns([1, 4])
     with _ws_col:
-        config.truth_grounding = st.checkbox("", config.truth_grounding, key="ws_toggle")
+        config.truth_grounding = st.checkbox(
+            "Truth grounding", config.truth_grounding, key="ws_toggle", label_visibility="collapsed"
+        )
     with _ws_lbl:
         st.caption("🌐 Web search")
     if config.truth_grounding:

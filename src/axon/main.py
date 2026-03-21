@@ -450,6 +450,21 @@ Your primary goal is to help the user by answering questions based on the provid
             str, list[tuple[str, str]]
         ] = {}  # chunk_id -> [(src, tgt)]
 
+        # Sentence-Window Retrieval secondary index (Epic 1, Stories 1.1–1.2)
+        from axon.sentence_window import SentenceVectorStore, SentenceWindowIndex
+
+        self._sw_index_path: Path = Path(self.config.bm25_path)
+        self._sw_index: SentenceWindowIndex = SentenceWindowIndex()
+        self._sw_vs: SentenceVectorStore = SentenceVectorStore(self._sw_index_path)
+        if self.config.sentence_window:
+            self._sw_index.load(self._sw_index_path)
+            self._sw_vs.load()
+            logger.info(
+                "Sentence-Window: loaded %d sentence records, %d embeddings",
+                len(self._sw_index),
+                len(self._sw_vs),
+            )
+
         # Shared executor for background/parallel tasks
         from concurrent.futures import ThreadPoolExecutor
 
@@ -1645,6 +1660,64 @@ Your primary goal is to help the user by answering questions based on the provid
         else:
             return self.splitter  # Use default configured splitter
 
+    def _index_sentence_windows(self, documents: list[dict]) -> None:
+        """Segment eligible chunks into sentences and add to the sentence index.
+
+        Called at the end of :meth:`ingest` when ``config.sentence_window`` is
+        enabled.  Only non-code, non-RAPTOR-summary leaf chunks are eligible.
+        Overhead (embedding time in ms) is logged at INFO level.
+        """
+        import time as _sw_time
+
+        from axon.sentence_window import is_eligible, segment_chunk
+
+        eligible = [d for d in documents if is_eligible(d)]
+        if not eligible:
+            return
+
+        all_records = []
+        for chunk in eligible:
+            recs = segment_chunk(chunk)
+            if recs:
+                self._sw_index.add_records(recs)
+                all_records.extend(recs)
+
+        if not all_records:
+            return
+
+        logger.info(
+            "   Sentence-Window: indexing %d sentences from %d eligible chunks",
+            len(all_records),
+            len(eligible),
+        )
+
+        # Batch-embed all sentence texts
+        t_sw = _sw_time.time()
+        texts = [r.text for r in all_records]
+        batch_size = 64
+        all_embeddings: list = []
+        for i in range(0, len(texts), batch_size):
+            all_embeddings.extend(self.embedding.embed(texts[i : i + batch_size]))
+        sw_ms = (_sw_time.time() - t_sw) * 1000
+
+        ids = [r.sentence_id for r in all_records]
+        metadatas = [
+            {
+                "chunk_id": r.chunk_id,
+                "source": r.source,
+                "sentence_idx": r.sentence_idx,
+            }
+            for r in all_records
+        ]
+        self._sw_vs.add(ids, all_embeddings, metadatas)
+        self._sw_index.save(self._sw_index_path)
+        self._sw_vs.save()
+        logger.info(
+            "   Sentence-Window: %d sentences indexed (embedding %.0f ms)",
+            len(all_records),
+            sw_ms,
+        )
+
     def _split_with_parents(self, documents: list[dict]) -> list[dict]:
         """Split documents using parent-document (small-to-big) strategy.
 
@@ -2287,6 +2360,10 @@ Your primary goal is to help the user by answering questions based on the provid
                 "ingested_at": _time_mod.strftime("%Y-%m-%dT%H:%M:%SZ", _time_mod.gmtime()),
             }
         self._save_doc_versions()
+
+        # ── Sentence-Window secondary index (Epic 1, Story 1.2) ─────────
+        if self.config.sentence_window:
+            self._index_sentence_windows(documents)
 
         # ── Code graph (Phase 2 + Phase 3) ──────────────────────────────
         if getattr(self.config, "code_graph", False):

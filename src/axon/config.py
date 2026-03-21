@@ -198,6 +198,21 @@ class AxonConfig:
     mmr: bool = False
     mmr_lambda: float = 0.5  # 1.0 = pure relevance, 0.0 = pure diversity
 
+    # Sentence-Window Retrieval (Epic 1)
+    # Indexes prose chunks at sentence granularity; retrieves by sentence but
+    # expands each hit to ±sentence_window_size surrounding sentences for LLM
+    # context.  Only non-code, non-RAPTOR-summary leaf chunks are eligible.
+    # Disabled by default; enable via config.yaml (rag.sentence_window: true).
+    sentence_window: bool = False
+    sentence_window_size: int = 3  # ±N sentences around each sentence hit
+
+    # CRAG-Lite Retrieval Correction (Epic 2)
+    # Evaluates retrieval confidence before deciding whether to trust local
+    # results or escalate to web fallback.  Operates without LLM calls.
+    # Disabled by default; enable via config.yaml (rag.crag_lite: true).
+    crag_lite: bool = False
+    crag_lite_confidence_threshold: float = 0.4  # below → low-confidence fallback
+
     # Re-ranking
     rerank: bool = False
     reranker_provider: Literal["cross-encoder", "llm"] = "cross-encoder"

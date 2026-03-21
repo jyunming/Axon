@@ -654,6 +654,60 @@ class QueryRouterMixin:
         diagnostics.channels_activated.append("dense")
         trace.channel_raw_counts["dense"] = vector_count
 
+        # Sentence-Window channel (Story 1.4 — additive dense path)
+        # Retrieves by sentence granularity and expands each hit to a coherent
+        # ±N-sentence context window.  Window results use chunk-level IDs so they
+        # merge cleanly with dense results before BM25 fusion.
+        _sw_vs = getattr(self, "_sw_vs", None)
+        _sw_index = getattr(self, "_sw_index", None)
+        if getattr(cfg, "sentence_window", False) and _sw_vs is not None and len(_sw_vs) > 0:
+            _sw_window_size = getattr(cfg, "sentence_window_size", 3)
+            _sw_query_emb = self.embedding.embed_query(search_queries[0])
+            _sw_hits = _sw_vs.search(_sw_query_emb, top_k=fetch_k)
+            diagnostics.sentence_window_hits = len(_sw_hits)
+            if _sw_hits and _sw_index is not None:
+                # Expand sentence hits to windows, deduplicate by chunk_id
+                # (overlapping windows from the same chunk keep the highest score)
+                _best_by_chunk: dict[str, dict] = {}
+                for hit in _sw_hits:
+                    sent_id = hit["id"]
+                    chunk_id = hit["metadata"].get("chunk_id", sent_id)
+                    score = hit["score"]
+                    if chunk_id in _best_by_chunk and _best_by_chunk[chunk_id]["score"] >= score:
+                        continue
+                    window_text = _sw_index.get_window(sent_id, _sw_window_size)
+                    if not window_text:
+                        continue
+                    _best_by_chunk[chunk_id] = {
+                        "id": chunk_id,
+                        "text": window_text,
+                        "score": score,
+                        "vector_score": score,
+                        "metadata": {
+                            "source": hit["metadata"].get("source", chunk_id),
+                            "chunk_id": chunk_id,
+                            "_sw_sentence_id": sent_id,
+                            "_sw_expanded": True,
+                        },
+                    }
+                sw_window_results = list(_best_by_chunk.values())
+                if sw_window_results:
+                    diagnostics.sentence_window_used = True
+                    diagnostics.channels_activated.append("sentence_window")
+                    trace.channel_raw_counts["sentence_window"] = len(sw_window_results)
+                    # Merge into dense dedup dict — best score wins per chunk
+                    for sw_r in sw_window_results:
+                        cid = sw_r["id"]
+                        if cid not in dedup_vector or sw_r["score"] > dedup_vector[cid]["score"]:
+                            dedup_vector[cid] = sw_r
+                    vector_results = list(dedup_vector.values())
+                    vector_count = len(vector_results)
+                    logger.debug(
+                        "sentence_window: %d sentence hits → %d window results merged",
+                        len(_sw_hits),
+                        len(sw_window_results),
+                    )
+
         # Hybrid Search (Keyword component)
         bm25_count = 0
         if cfg.hybrid_search and self.bm25:
@@ -744,7 +798,50 @@ class QueryRouterMixin:
             if sig >= cfg.similarity_threshold:
                 filtered_results.append(r)
 
-        if not filtered_results and cfg.truth_grounding:
+        # CRAG-Lite correction policy (Epic 2, Stories 2.2–2.3)
+        _crag_lite_enabled = getattr(cfg, "crag_lite", False)
+        if _crag_lite_enabled:
+            from axon.crag import assess_confidence, evaluate_correction_policy
+
+            _crag_conf = assess_confidence(
+                filtered_results=filtered_results,
+                total_candidates=len(results),
+                similarity_threshold=cfg.similarity_threshold,
+            )
+            _crag_decision = evaluate_correction_policy(
+                confidence=_crag_conf,
+                has_local_results=bool(filtered_results),
+                truth_grounding_enabled=bool(cfg.truth_grounding),
+                crag_lite_threshold=getattr(cfg, "crag_lite_confidence_threshold", 0.4),
+            )
+            # Story 2.3 — populate diagnostics
+            diagnostics.crag_confidence = _crag_conf.score
+            diagnostics.crag_verdict = _crag_conf.verdict
+            diagnostics.crag_factors = dict(_crag_conf.factors)
+            diagnostics.crag_fallback_triggered = _crag_decision.trigger_web_fallback
+            diagnostics.crag_fallback_reason = _crag_decision.reason
+            logger.debug(
+                "CRAG-Lite: score=%.3f verdict=%s decision=%s",
+                _crag_conf.score,
+                _crag_conf.verdict,
+                _crag_decision.reason,
+            )
+            if _crag_decision.trigger_web_fallback:
+                transforms["web_search_applied"] = True
+                web_results = self._execute_web_search(query, count=5)
+                results = web_results
+            elif _crag_decision.trust_local:
+                if _crag_conf.verdict == "medium":
+                    logger.warning(
+                        "CRAG-Lite: medium confidence (%.3f) — trusting local results"
+                        " but knowledge-base may be shallow for this query.",
+                        _crag_conf.score,
+                    )
+                results = filtered_results
+            else:
+                results = filtered_results
+        elif not filtered_results and cfg.truth_grounding:
+            # Legacy hard-wired guard (active when crag_lite=False)
             transforms["web_search_applied"] = True
             web_results = self._execute_web_search(query, count=5)
             results = web_results

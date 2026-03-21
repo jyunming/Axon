@@ -241,13 +241,22 @@ class CodeRetrievalDiagnostics:
     and benchmark output. Schema version bumps when field semantics change.
     """
 
-    diagnostics_version: str = "1.0"
+    diagnostics_version: str = "1.2"
     code_mode_triggered: bool = False
     tokens_extracted: list = field(default_factory=list)
     channels_activated: list = field(default_factory=list)
     result_count: int = 0
     boost_applied: bool = False
     fallback_chunks_in_results: int = 0
+    # Sentence-window retrieval fields (Epic 1, Story 1.4)
+    sentence_window_used: bool = False
+    sentence_window_hits: int = 0  # unique sentence hits before window expansion
+    # CRAG-Lite confidence fields (Epic 2, Story 2.3)
+    crag_confidence: float = -1.0  # -1.0 = CRAG-Lite not run
+    crag_verdict: str = ""  # "high" | "medium" | "low" | ""
+    crag_factors: dict = field(default_factory=dict)  # per-signal contributions
+    crag_fallback_triggered: bool = False
+    crag_fallback_reason: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -258,6 +267,13 @@ class CodeRetrievalDiagnostics:
             "result_count": self.result_count,
             "boost_applied": self.boost_applied,
             "fallback_chunks_in_results": self.fallback_chunks_in_results,
+            "sentence_window_used": self.sentence_window_used,
+            "sentence_window_hits": self.sentence_window_hits,
+            "crag_confidence": self.crag_confidence,
+            "crag_verdict": self.crag_verdict,
+            "crag_factors": dict(self.crag_factors),
+            "crag_fallback_triggered": self.crag_fallback_triggered,
+            "crag_fallback_reason": self.crag_fallback_reason,
         }
 
     def to_json(self) -> str:
