@@ -7420,7 +7420,7 @@ class TestGraspoLogicFallbackWarning:
 
         src = inspect.getsource(AxonBrain._run_hierarchical_community_detection)
         assert "axon[graphrag]" in src
-        assert "graspologic not installed" in src
+        assert "graspologic not available" in src
 
     def test_warning_logged_on_import_error(self, caplog):
         """When graspologic ImportError occurs, a WARNING is emitted."""
@@ -8101,17 +8101,21 @@ class TestREBELRelationExtraction:
         """When graph_rag_relation_backend='rebel', LLM is not called."""
         brain = self._make_brain(tmp_path, graph_rag_relation_backend="rebel")
 
-        fake_pipe = MagicMock(
-            return_value=[
-                {"generated_text": "<triplet> Apple <subj> Microsoft <obj> competes with"}
-            ]
-        )
+        fake_pipe = MagicMock(return_value=[{"generated_token_ids": [0, 1, 2, 3]}])
+        fake_pipe.model = MagicMock()
+        fake_pipe.model.config = MagicMock(task_specific_params={"relation_extraction": {}})
+        fake_pipe.tokenizer = MagicMock()
+        fake_pipe.tokenizer.batch_decode.return_value = [
+            "<triplet> Apple <subj> Microsoft <obj> competes with"
+        ]
         brain._rebel_pipeline = fake_pipe
 
         result = brain._extract_relations("Apple competes with Microsoft.")
 
         brain.llm.complete.assert_not_called()
         assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["subject"] == "Apple"
 
     def test_llm_backend_still_works(self, tmp_path):
         """When graph_rag_relation_backend='llm' (default), LLM is called as before."""

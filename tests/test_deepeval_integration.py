@@ -313,37 +313,53 @@ class TestContextualRelevancy:
 # ---------------------------------------------------------------------------
 
 
+def _patch_metric_init():
+    """Context manager: patch deepeval's model init so metrics can be instantiated without API keys."""
+    return patch.dict("os.environ", {"OPENAI_API_KEY": "ci-dummy-key-not-used"})
+
+
 @_SKIP_IF_NO_DEEPEVAL
 class TestBatchEvaluate:
     """deepeval.evaluate() accepts lists of (test_cases, metrics)."""
 
     def test_single_metric_evaluate(self):
         tc = LLMTestCase(input=_QUERY, actual_output=_FAITHFUL_ANSWER, retrieval_context=_CONTEXT)
-        m = AnswerRelevancyMetric(threshold=0.7)
         if _USE_REAL_JUDGE:
+            m = AnswerRelevancyMetric(threshold=0.7)
             results = evaluate([tc], [m])
             assert results is not None
         else:
+            with _patch_metric_init():
+                m = AnswerRelevancyMetric(threshold=0.7)
             mock_result = MagicMock()
             mock_result.test_results = [MagicMock(success=True)]
-            with patch("deepeval.evaluate", return_value=mock_result) as mock_eval:
+            # Patch the local module reference so the call is intercepted
+            with patch(
+                "tests.test_deepeval_integration.evaluate", return_value=mock_result
+            ) as mock_eval:
                 results = evaluate([tc], [m])
                 mock_eval.assert_called_once_with([tc], [m])
             assert results is not None
 
     def test_multi_metric_evaluate(self):
         tc = LLMTestCase(input=_QUERY, actual_output=_FAITHFUL_ANSWER, retrieval_context=_CONTEXT)
-        metrics = [
-            AnswerRelevancyMetric(threshold=0.7),
-            FaithfulnessMetric(threshold=0.7),
-            ContextualRelevancyMetric(threshold=0.5),
-        ]
         if _USE_REAL_JUDGE:
+            metrics = [
+                AnswerRelevancyMetric(threshold=0.7),
+                FaithfulnessMetric(threshold=0.7),
+                ContextualRelevancyMetric(threshold=0.5),
+            ]
             results = evaluate([tc], metrics)
             assert results is not None
         else:
+            with _patch_metric_init():
+                metrics = [
+                    AnswerRelevancyMetric(threshold=0.7),
+                    FaithfulnessMetric(threshold=0.7),
+                    ContextualRelevancyMetric(threshold=0.5),
+                ]
             mock_result = MagicMock()
-            with patch("deepeval.evaluate", return_value=mock_result):
+            with patch("tests.test_deepeval_integration.evaluate", return_value=mock_result):
                 results = evaluate([tc], metrics)
             assert results is not None
 
@@ -361,10 +377,11 @@ class TestBatchEvaluate:
                 retrieval_context=_CONTEXT,
             ),
         ]
-        metrics = [FaithfulnessMetric(threshold=0.6)]
         if not _USE_REAL_JUDGE:
+            with _patch_metric_init():
+                metrics = [FaithfulnessMetric(threshold=0.6)]
             mock_result = MagicMock()
-            with patch("deepeval.evaluate", return_value=mock_result):
+            with patch("tests.test_deepeval_integration.evaluate", return_value=mock_result):
                 results = evaluate(cases, metrics)
             assert results is not None
 

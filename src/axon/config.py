@@ -434,10 +434,11 @@ class AxonConfig:
     graph_rag_relation_budget: int = 0
 
     # Community detection backend preference.
-    # "auto"      = graspologic → leidenalg → louvain (legacy order)
-    # "leidenalg" = skip graspologic; use leidenalg/igraph directly (recommended for Python 3.13)
-    # "louvain"   = skip both; use networkx Louvain only
-    graph_rag_community_backend: str = "auto"
+    # "louvain"   = networkx Louvain only (default — safe on all environments, fast for <10k nodes)
+    # "leidenalg" = leidenalg/igraph multi-resolution Leiden (recommended when available)
+    # "auto"      = graspologic → leidenalg → louvain fallback chain (legacy; unsafe on Python 3.13
+    #               because graspologic's import can hang; use only when graspologic is verified safe)
+    graph_rag_community_backend: str = "louvain"
 
     # Structural code graph (Phase 2 + Phase 3).
     # Phase 2: builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.

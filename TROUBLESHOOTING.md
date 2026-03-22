@@ -267,13 +267,14 @@ pip install -e ".[graphrag]"
 # installs: networkx, leidenalg, igraph
 ```
 
-The code default is `graph_rag_community_backend: auto` (graspologic → leidenalg → networkx Louvain). On Python 3.13 we recommend pinning to `leidenalg` explicitly to skip the unavailable `graspologic` step:
+The default is now `graph_rag_community_backend: louvain` (safe on all platforms). To upgrade to Leiden resolution-sweeping:
 
 ```yaml
 rag:
-  graph_rag_community_backend: leidenalg  # recommended for Python 3.13
-  # graph_rag_community_backend: auto     # graspologic → leidenalg → networkx Louvain
-  # graph_rag_community_backend: louvain  # networkx only, no extra deps required
+  graph_rag_community_backend: louvain    # default — networkx only, no extra deps
+  # graph_rag_community_backend: leidenalg  # recommended when igraph/leidenalg are installed
+  # graph_rag_community_backend: auto       # graspologic → leidenalg → louvain fallback chain
+  #                                          # (unsafe on Python 3.13 — graspologic import hangs)
 ```
 
 If you have `graspologic` installed from a Python ≤ 3.12 / NumPy 1.x environment and want Axon to use it, set `graph_rag_community_backend: auto`.

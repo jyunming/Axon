@@ -204,6 +204,7 @@ markers = [
     "demo: marks end-to-end happy-path demo tests",
     "perf: marks latency/throughput performance tests",
     "stress: marks high-volume concurrency stress tests",
+    "timeout: marks tests with a timeout limit",
 ]
 
 [tool.coverage.run]

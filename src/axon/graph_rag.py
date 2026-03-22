@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,6 +37,12 @@ _GRAPHRAG_NO_DATA_ANSWER = (
 
 
 class GraphRagMixin:
+    # Share heavyweight local model instances across threads and brain instances.
+    _shared_gliner_models: dict[tuple[str, bool], object] = {}
+    _shared_rebel_pipelines: dict[tuple[str, bool], object] = {}
+    _shared_gliner_lock = threading.Lock()
+    _shared_rebel_lock = threading.Lock()
+
     def _load_entity_graph(self) -> dict:
         """Load persisted entity→doc_id graph from disk.
 
@@ -405,149 +412,157 @@ class GraphRagMixin:
                 f"({G.number_of_nodes()} total nodes)"
             )
 
-        _backend = getattr(self.config, "graph_rag_community_backend", "auto")
+        _backend = getattr(self.config, "graph_rag_community_backend", "louvain")
 
-        try:
-            # Try graspologic hierarchical Leiden — skipped when backend != "auto"
-            if _backend != "auto":
-                raise ImportError("backend override — skipping graspologic")
-            from graspologic.partition import hierarchical_leiden
-
-            partitions = hierarchical_leiden(G, max_cluster_size=max_cluster_size, random_seed=seed)
-            community_levels: dict = {}
-            community_hierarchy: dict = {}
-            community_children: dict = {}
-
-            for triple in partitions:
-                level = triple.level
-                entity = triple.node
-                cluster = triple.cluster
-                parent = getattr(triple, "parent_cluster", None)
-
-                if level not in community_levels:
-                    community_levels[level] = {}
-                community_levels[level][entity] = cluster
-
-                if cluster not in community_hierarchy:
-                    community_hierarchy[cluster] = parent
-                if parent is not None:
-                    if parent not in community_children:
-                        community_children[parent] = []
-                    if cluster not in community_children[parent]:
-                        community_children[parent].append(cluster)
-
-            # Normalize Leiden hierarchy to level-qualified string keys to match Louvain format
-            # and avoid cross-level integer collisions.
-            normalized_hierarchy: dict = {}
-            normalized_children: dict = {}
-            # Build a level-lookup for each (level, cluster) → level-qualified key
-            cluster_to_level: dict = {}
-            for lvl, cmap in community_levels.items():
-                for _ent, cid in cmap.items():
-                    if cid not in cluster_to_level:
-                        cluster_to_level[cid] = lvl
-            for raw_cid, raw_parent in community_hierarchy.items():
-                lvl = cluster_to_level.get(raw_cid, 0)
-                norm_key = f"{lvl}_{raw_cid}"
-                if raw_parent is None:
-                    norm_parent = None
-                else:
-                    parent_lvl = cluster_to_level.get(raw_parent, max(0, lvl - 1))
-                    norm_parent = f"{parent_lvl}_{raw_parent}"
-                normalized_hierarchy[norm_key] = norm_parent
-                if norm_parent is not None:
-                    if norm_parent not in normalized_children:
-                        normalized_children[norm_parent] = []
-                    if norm_key not in normalized_children[norm_parent]:
-                        normalized_children[norm_parent].append(norm_key)
-
-            return community_levels, normalized_hierarchy, normalized_children
-
-        except ImportError:
-            logger.warning(
-                "GraphRAG: graspologic not installed — falling back to leidenalg/Louvain. "
-                "pip install axon[graphrag]"
-            )
-
-        # Tier-2: multi-resolution Leiden via leidenalg — skipped when backend="louvain"
-        try:
-            if _backend == "louvain":
-                raise ImportError("backend override — skipping leidenalg")
-            import igraph as _ig
-            import leidenalg as _la
-
+        # Tier-1: graspologic hierarchical Leiden — only attempted when backend="auto"
+        if _backend == "auto":
             try:
-                import numpy as np
+                from graspologic.partition import hierarchical_leiden
 
-                resolutions = list(np.linspace(0.5, 1.5, n_levels)) if n_levels > 1 else [1.0]
-            except ImportError:
-                step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
-                resolutions = [0.5 + i * step for i in range(n_levels)]
-
-            _G_ig = _ig.Graph.from_networkx(G)
-            community_levels: dict = {}
-            for level_idx, resolution in enumerate(resolutions):
-                try:
-                    partition = _la.find_partition(
-                        _G_ig,
-                        _la.ModularityVertexPartition,
-                        seed=seed,
-                    )
-                    node_names = (
-                        _G_ig.vs["_nx_name"]
-                        if "_nx_name" in _G_ig.vs.attributes()
-                        else list(G.nodes())
-                    )
-                    cmap = {}
-                    for cid, members in enumerate(partition):
-                        for idx in members:
-                            cmap[node_names[idx]] = cid
-                    community_levels[level_idx] = cmap
-                except Exception as _e:
-                    logger.debug("leidenalg at resolution %s failed: %s", resolution, _e)
-
-            if community_levels:
-                # Build synthetic hierarchy (same approach as Louvain fallback below)
+                partitions = hierarchical_leiden(
+                    G, max_cluster_size=max_cluster_size, random_seed=seed
+                )
+                community_levels: dict = {}
                 community_hierarchy: dict = {}
                 community_children: dict = {}
-                if len(community_levels) > 1:
-                    _levels_sorted = sorted(community_levels.keys())
-                    for _i in range(1, len(_levels_sorted)):
-                        _fine = _levels_sorted[_i]
-                        _coarse = _levels_sorted[_i - 1]
-                        for _fine_cid in set(community_levels[_fine].values()):
-                            _fine_key = f"{_fine}_{_fine_cid}"
-                            _members = [
-                                n for n, c in community_levels[_fine].items() if c == _fine_cid
-                            ]
-                            _votes: dict = {}
-                            for _m in _members:
-                                _p = community_levels[_coarse].get(_m)
-                                if _p is not None:
-                                    _votes[_p] = _votes.get(_p, 0) + 1
-                            _parent_cid = max(_votes, key=_votes.get) if _votes else None
-                            _parent_key = (
-                                f"{_coarse}_{_parent_cid}" if _parent_cid is not None else None
-                            )
-                            community_hierarchy[_fine_key] = _parent_key
-                            if _parent_key:
-                                community_children.setdefault(_parent_key, [])
-                                if _fine_key not in community_children[_parent_key]:
-                                    community_children[_parent_key].append(_fine_key)
-                    for _cid in set(community_levels[_levels_sorted[0]].values()):
-                        _root_key = f"{_levels_sorted[0]}_{_cid}"
-                        community_hierarchy.setdefault(_root_key, None)
-                else:
-                    for _cid in set(community_levels[0].values()):
-                        community_hierarchy[f"0_{_cid}"] = None
-                logger.debug(
-                    "GraphRAG: leidenalg produced %d community levels.", len(community_levels)
-                )
-                return community_levels, community_hierarchy, community_children
-        except ImportError:
-            pass  # fall through to networkx Louvain
 
-        # Synthetic parent-child mapping using multiple-resolution Louvain
+                for triple in partitions:
+                    level = triple.level
+                    entity = triple.node
+                    cluster = triple.cluster
+                    parent = getattr(triple, "parent_cluster", None)
+
+                    if level not in community_levels:
+                        community_levels[level] = {}
+                    community_levels[level][entity] = cluster
+
+                    if cluster not in community_hierarchy:
+                        community_hierarchy[cluster] = parent
+                    if parent is not None:
+                        if parent not in community_children:
+                            community_children[parent] = []
+                        if cluster not in community_children[parent]:
+                            community_children[parent].append(cluster)
+
+                # Normalize Leiden hierarchy to level-qualified string keys to match Louvain format
+                # and avoid cross-level integer collisions.
+                normalized_hierarchy: dict = {}
+                normalized_children: dict = {}
+                # Build a level-lookup for each (level, cluster) → level-qualified key
+                cluster_to_level: dict = {}
+                for lvl, cmap in community_levels.items():
+                    for _ent, cid in cmap.items():
+                        if cid not in cluster_to_level:
+                            cluster_to_level[cid] = lvl
+                for raw_cid, raw_parent in community_hierarchy.items():
+                    lvl = cluster_to_level.get(raw_cid, 0)
+                    norm_key = f"{lvl}_{raw_cid}"
+                    if raw_parent is None:
+                        norm_parent = None
+                    else:
+                        parent_lvl = cluster_to_level.get(raw_parent, max(0, lvl - 1))
+                        norm_parent = f"{parent_lvl}_{raw_parent}"
+                    normalized_hierarchy[norm_key] = norm_parent
+                    if norm_parent is not None:
+                        if norm_parent not in normalized_children:
+                            normalized_children[norm_parent] = []
+                        if norm_key not in normalized_children[norm_parent]:
+                            normalized_children[norm_parent].append(norm_key)
+
+                return community_levels, normalized_hierarchy, normalized_children
+
+            except ImportError:
+                logger.warning(
+                    "GraphRAG: graspologic not available — falling back to leidenalg/Louvain. "
+                    "pip install graspologic  (or set graph_rag_community_backend: leidenalg)"
+                )
+        else:
+            logger.debug("GraphRAG: community backend='%s' — skipping graspologic.", _backend)
+
+        # Tier-2: multi-resolution Leiden via leidenalg — used when backend="leidenalg" or
+        # when backend="auto" and graspologic was unavailable
+        if _backend in ("auto", "leidenalg"):
+            try:
+                import igraph as _ig
+                import leidenalg as _la
+
+                try:
+                    import numpy as np
+
+                    resolutions = list(np.linspace(0.5, 1.5, n_levels)) if n_levels > 1 else [1.0]
+                except ImportError:
+                    step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
+                    resolutions = [0.5 + i * step for i in range(n_levels)]
+
+                _G_ig = _ig.Graph.from_networkx(G)
+                community_levels: dict = {}
+                for level_idx, resolution in enumerate(resolutions):
+                    try:
+                        partition = _la.find_partition(
+                            _G_ig,
+                            _la.ModularityVertexPartition,
+                            seed=seed,
+                        )
+                        node_names = (
+                            _G_ig.vs["_nx_name"]
+                            if "_nx_name" in _G_ig.vs.attributes()
+                            else list(G.nodes())
+                        )
+                        cmap = {}
+                        for cid, members in enumerate(partition):
+                            for idx in members:
+                                cmap[node_names[idx]] = cid
+                        community_levels[level_idx] = cmap
+                    except Exception as _e:
+                        logger.debug("leidenalg at resolution %s failed: %s", resolution, _e)
+
+                if community_levels:
+                    # Build synthetic hierarchy (same approach as Louvain fallback below)
+                    community_hierarchy: dict = {}
+                    community_children: dict = {}
+                    if len(community_levels) > 1:
+                        _levels_sorted = sorted(community_levels.keys())
+                        for _i in range(1, len(_levels_sorted)):
+                            _fine = _levels_sorted[_i]
+                            _coarse = _levels_sorted[_i - 1]
+                            for _fine_cid in set(community_levels[_fine].values()):
+                                _fine_key = f"{_fine}_{_fine_cid}"
+                                _members = [
+                                    n for n, c in community_levels[_fine].items() if c == _fine_cid
+                                ]
+                                _votes: dict = {}
+                                for _m in _members:
+                                    _p = community_levels[_coarse].get(_m)
+                                    if _p is not None:
+                                        _votes[_p] = _votes.get(_p, 0) + 1
+                                _parent_cid = max(_votes, key=_votes.get) if _votes else None
+                                _parent_key = (
+                                    f"{_coarse}_{_parent_cid}" if _parent_cid is not None else None
+                                )
+                                community_hierarchy[_fine_key] = _parent_key
+                                if _parent_key:
+                                    community_children.setdefault(_parent_key, [])
+                                    if _fine_key not in community_children[_parent_key]:
+                                        community_children[_parent_key].append(_fine_key)
+                        for _cid in set(community_levels[_levels_sorted[0]].values()):
+                            _root_key = f"{_levels_sorted[0]}_{_cid}"
+                            community_hierarchy.setdefault(_root_key, None)
+                    else:
+                        for _cid in set(community_levels[0].values()):
+                            community_hierarchy[f"0_{_cid}"] = None
+                    logger.debug(
+                        "GraphRAG: leidenalg produced %d community levels.", len(community_levels)
+                    )
+                    return community_levels, community_hierarchy, community_children
+            except ImportError:
+                logger.warning(
+                    "GraphRAG: leidenalg/igraph not available — falling back to networkx Louvain. "
+                    "pip install axon[graphrag]"
+                )
+        else:
+            logger.debug("GraphRAG: community backend='%s' — skipping leidenalg.", _backend)
+
+        # Tier-3: NetworkX Louvain — always available; used when backend="louvain" or as final fallback
         try:
             import networkx.algorithms.community as nx_comm
         except ImportError:
@@ -1592,16 +1607,25 @@ class GraphRagMixin:
 
     def _ensure_gliner(self):
         """Lazy-initialise the GLiNER NER model (TASK 14)."""
-        if not hasattr(self, "_gliner_model") or self._gliner_model is None:
-            from gliner import GLiNER
+        cached = getattr(self, "_gliner_model", None)
+        if cached is not None:
+            return cached
 
-            _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_medium-v2.1")
-            _local = os.path.isabs(_model) or os.path.isdir(_model)
-            logger.info(
-                "GraphRAG GLiNER: loading model '%s'%s…", _model, " (local)" if _local else ""
-            )
-            self._gliner_model = GLiNER.from_pretrained(_model, local_files_only=_local)
-        return self._gliner_model
+        from gliner import GLiNER
+
+        _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_medium-v2.1")
+        _local = os.path.isabs(_model) or os.path.isdir(_model)
+        _cache_key = (_model, bool(_local))
+        with GraphRagMixin._shared_gliner_lock:
+            cached = GraphRagMixin._shared_gliner_models.get(_cache_key)
+            if cached is None:
+                logger.info(
+                    "GraphRAG GLiNER: loading model '%s'%s…", _model, " (local)" if _local else ""
+                )
+                cached = GLiNER.from_pretrained(_model, local_files_only=_local)
+                GraphRagMixin._shared_gliner_models[_cache_key] = cached
+        self._gliner_model = cached
+        return cached
 
     _GLINER_LABELS = ["person", "organization", "location", "event", "concept", "product"]
     _GLINER_TYPE_MAP = {
@@ -1615,26 +1639,38 @@ class GraphRagMixin:
 
     def _ensure_rebel(self):
         """Lazy-initialise the REBEL relation extraction pipeline (P2)."""
-        if not hasattr(self, "_rebel_pipeline") or self._rebel_pipeline is None:
-            try:
-                from transformers import pipeline as _hf_pipeline
-            except ImportError:
-                raise ImportError("REBEL backend requires transformers. pip install axon[rebel]")
-            _model = getattr(self.config, "graph_rag_rebel_model", "Babelscape/rebel-large")
-            _local = os.path.isabs(_model) or os.path.isdir(_model)
-            logger.info(
-                "GraphRAG REBEL: loading model '%s'%s…",
-                _model,
-                " (local)" if _local else " (first-run download may take time)",
-            )
-            self._rebel_pipeline = _hf_pipeline(
-                "text2text-generation",
-                model=_model,
-                tokenizer=_model,
-                device=-1,  # CPU — avoids CUDA dependency
-                **({"local_files_only": True} if _local else {}),
-            )
-        return self._rebel_pipeline
+        cached = getattr(self, "_rebel_pipeline", None)
+        if cached is not None:
+            return cached
+
+        try:
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            from transformers import pipeline as _hf_pipeline
+        except ImportError:
+            raise ImportError("REBEL backend requires transformers. pip install axon[rebel]")
+        _model = getattr(self.config, "graph_rag_rebel_model", "Babelscape/rebel-large")
+        _local = os.path.isabs(_model) or os.path.isdir(_model)
+        _cache_key = (_model, bool(_local))
+        with GraphRagMixin._shared_rebel_lock:
+            cached = GraphRagMixin._shared_rebel_pipelines.get(_cache_key)
+            if cached is None:
+                logger.info(
+                    "GraphRAG REBEL: loading model '%s'%s…",
+                    _model,
+                    " (local)" if _local else " (first-run download may take time)",
+                )
+                _load_kwargs = {"local_files_only": True} if _local else {}
+                _model_obj = AutoModelForSeq2SeqLM.from_pretrained(_model, **_load_kwargs)
+                _tokenizer = AutoTokenizer.from_pretrained(_model, **_load_kwargs)
+                cached = _hf_pipeline(
+                    "text2text-generation",
+                    model=_model_obj,
+                    tokenizer=_tokenizer,
+                    device=-1,  # CPU — avoids CUDA dependency
+                )
+                GraphRagMixin._shared_rebel_pipelines[_cache_key] = cached
+        self._rebel_pipeline = cached
+        return cached
 
     @staticmethod
     def _parse_rebel_output(text: str) -> list[dict]:
@@ -1690,17 +1726,47 @@ class GraphRagMixin:
         """Extract relations using REBEL — no LLM call, structured triplet output (P2)."""
         try:
             pipe = self._ensure_rebel()
-            # REBEL's tokeniser caps at 512 tokens; truncate input to ~1 000 chars
-            outputs = pipe(text[:1000], max_length=512, return_tensors=False)
-            raw = outputs[0]["generated_text"] if outputs else ""
-            return self._parse_rebel_output(raw)[:15]
+            # Preserve REBEL special tokens; the plain generated_text output strips them
+            # and makes the triplet parser return no relations.
+            _gen_cfg = dict(
+                getattr(getattr(pipe, "model", None), "config", {}).task_specific_params.get(
+                    "relation_extraction", {}
+                )
+                if getattr(getattr(pipe, "model", None), "config", None) is not None
+                and getattr(pipe.model.config, "task_specific_params", None)
+                else {}
+            )
+            _gen_cfg.setdefault("max_length", 256)
+            outputs = pipe(text[:1000], return_tensors=True, return_text=False, **_gen_cfg)
+            token_ids = outputs[0].get("generated_token_ids", []) if outputs else []
+            if hasattr(token_ids, "tolist"):
+                token_ids = token_ids.tolist()
+            if not token_ids:
+                logger.debug(
+                    "REBEL: pipeline returned empty token_ids for input (len=%d).", len(text)
+                )
+                return []
+            raw = pipe.tokenizer.batch_decode([token_ids], skip_special_tokens=False)[0]
+            logger.debug("REBEL decoded output (first 200 chars): %s", raw[:200])
+            triplets = self._parse_rebel_output(raw)[:15]
+            if not triplets and text.strip():
+                logger.warning(
+                    "REBEL: decoded %d tokens but parsed 0 relation triplets. "
+                    "Check that the model checkpoint is a relation-extraction variant "
+                    "(e.g. Babelscape/rebel-large) and that special tokens are preserved "
+                    "in decoding. Decoded prefix: %.120r",
+                    len(token_ids),
+                    raw,
+                )
+            return triplets
         except ImportError:
             logger.warning(
                 "graph_rag_relation_backend='rebel' but transformers is not installed. "
                 "pip install axon[rebel]"
             )
             return []
-        except Exception:
+        except Exception as e:
+            logger.debug("REBEL extraction failed: %s", e)
             return []
 
     def _extract_entities_gliner(self, text: str) -> list[dict]:

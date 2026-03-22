@@ -231,7 +231,7 @@ rag:
   graph_rag_budget: 3
   graph_rag_relations: true
   graph_rag_community: true
-  graph_rag_community_backend: auto  # graspologic → leidenalg → louvain fallback
+  graph_rag_community_backend: louvain  # safe default; set to leidenalg or auto if graspologic is verified
   graph_rag_auto_route: heuristic    # auto-select local/global/hybrid per query
 ```
 
