@@ -1178,6 +1178,16 @@ Tabs that have no data are automatically disabled with a tooltip explaining whic
    → extension calls axon_searchKnowledge → Copilot synthesises answer
 ```
 
+### `@axon` — Conversational Shortcut
+
+The Axon extension also registers a `@axon` chat participant. It is a **conversational shortcut** over the same `axon_*` toolset — not a separate integration path.
+
+```
+@axon What are the main API changes in the last sprint?
+```
+
+`@axon` posts your prompt to `/query` on the backend, the same path as `axon_queryKnowledge`. The result is identical. Use it when you prefer a conversational style; use `axon_*` tools directly when you want explicit tool invocations (e.g. in agent mode or pipelines). There is no behavioral difference.
+
 ### Troubleshooting the extension
 
 **Copilot says it cannot find Axon tools**

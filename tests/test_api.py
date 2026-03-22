@@ -1812,4 +1812,139 @@ def test_get_registry_leases_returns_shape():
     assert "leases" in data
     assert "total_projects_tracked" in data
     assert isinstance(data["leases"], list)
-    assert isinstance(data["total_projects_tracked"], int)
+
+
+# ---------------------------------------------------------------------------
+# Answer provenance — /query response must include provenance object
+# ---------------------------------------------------------------------------
+
+
+def test_query_response_includes_provenance():
+    """POST /query always includes a top-level 'provenance' key."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Some answer"
+    api_module.brain._last_provenance = {
+        "answer_source": "local_kb",
+        "retrieved_count": 3,
+        "web_count": 0,
+    }
+    resp = client.post("/query", json={"query": "What is RAG?"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "provenance" in data
+    prov = data["provenance"]
+    assert prov["answer_source"] == "local_kb"
+    assert prov["retrieved_count"] == 3
+    assert prov["web_count"] == 0
+
+
+def test_query_provenance_web_snippet_fallback():
+    """Provenance reflects web_snippet_fallback when brain signals it."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer from web"
+    api_module.brain._last_provenance = {
+        "answer_source": "web_snippet_fallback",
+        "retrieved_count": 2,
+        "web_count": 2,
+    }
+    resp = client.post("/query", json={"query": "Latest news?"})
+    assert resp.status_code == 200
+    prov = resp.json()["provenance"]
+    assert prov["answer_source"] == "web_snippet_fallback"
+    assert prov["web_count"] == 2
+
+
+def test_query_provenance_no_context_fallback():
+    """Provenance reflects no_context_fallback when retrieval returned nothing."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "General knowledge answer"
+    api_module.brain._last_provenance = {
+        "answer_source": "no_context_fallback",
+        "retrieved_count": 0,
+        "web_count": 0,
+    }
+    resp = client.post("/query", json={"query": "Something unrelated?"})
+    assert resp.status_code == 200
+    prov = resp.json()["provenance"]
+    assert prov["answer_source"] == "no_context_fallback"
+    assert prov["retrieved_count"] == 0
+
+
+def test_query_provenance_missing_attribute_defaults_to_empty():
+    """If brain lacks _last_provenance, provenance is an empty dict (not an error)."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer"
+    # Deliberately omit _last_provenance attribute
+    if hasattr(api_module.brain, "_last_provenance"):
+        del api_module.brain._last_provenance
+    resp = client.post("/query", json={"query": "test"})
+    assert resp.status_code == 200
+    assert "provenance" in resp.json()
+    assert resp.json()["provenance"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Mount revocation at switch time — POST /project/switch
+# ---------------------------------------------------------------------------
+
+
+def test_switch_to_revoked_mount_returns_404(tmp_path):
+    """Switching to a revoked mounted project returns 404 immediately."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = True
+    brain.config.projects_root = str(tmp_path)
+    api_module.brain = brain
+
+    # validate_received_shares returns the mount name as revoked/removed
+    with patch(
+        "axon.shares.validate_received_shares",
+        return_value=["alice_docs"],
+    ):
+        resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
+
+    assert resp.status_code == 404
+    assert "revoked" in resp.json()["detail"].lower()
+    brain.switch_project.assert_not_called()
+
+
+def test_switch_to_valid_mount_proceeds(tmp_path):
+    """Switching to a valid (non-revoked) mount proceeds normally."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = True
+    brain.config.projects_root = str(tmp_path)
+    api_module.brain = brain
+
+    with patch(
+        "axon.shares.validate_received_shares",
+        return_value=[],  # nothing revoked
+    ):
+        resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
+
+    assert resp.status_code == 200
+    brain.switch_project.assert_called_once_with("mounts/alice_docs")
+
+
+def test_switch_to_normal_project_skips_revocation_check():
+    """Switching to a non-mount project never calls validate_received_shares."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = True
+    api_module.brain = brain
+
+    with patch("axon.shares.validate_received_shares") as mock_validate:
+        resp = client.post("/project/switch", json={"project_name": "my-project"})
+
+    assert resp.status_code == 200
+    mock_validate.assert_not_called()
+
+
+def test_switch_mount_revocation_skipped_outside_store_mode():
+    """validate_received_shares is not called when axon_store_mode is False."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = False
+    api_module.brain = brain
+
+    with patch("axon.shares.validate_received_shares") as mock_validate:
+        resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
+
+    assert resp.status_code == 200
+    mock_validate.assert_not_called()

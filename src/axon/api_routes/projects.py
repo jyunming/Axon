@@ -194,6 +194,8 @@ async def switch_project(request: ProjectSwitchRequest):
 
         brain.switch_project(project_name)
         return {"status": "success", "active_project": project_name}
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
