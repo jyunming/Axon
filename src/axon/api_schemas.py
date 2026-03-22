@@ -79,6 +79,13 @@ def _compute_content_hash(text: str) -> str:
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The question or prompt to ask the brain")
+    project: str | None = Field(
+        None,
+        description=(
+            "Target project. Must match the brain's active project; use POST /project/switch "
+            "to change the active project before querying. Returns 409 on mismatch."
+        ),
+    )
     filters: dict[str, Any] | None = Field(None, description="Metadata filters for retrieval")
     stream: bool = Field(
         False, description="Whether to stream the response (use POST /query/stream instead)"
@@ -111,6 +118,13 @@ class QueryRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str = Field(..., description="The query string for semantic search")
+    project: str | None = Field(
+        None,
+        description=(
+            "Target project. Must match the brain's active project; use POST /project/switch "
+            "to change the active project before searching. Returns 409 on mismatch."
+        ),
+    )
     top_k: int | None = Field(None, description="Number of documents to return")
     filters: dict[str, Any] | None = Field(None, description="Metadata filters")
     threshold: float | None = Field(

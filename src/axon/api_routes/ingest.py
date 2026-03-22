@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
+from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import (
     BatchTextIngestRequest,
     DeleteRequest,
@@ -258,6 +259,7 @@ async def add_text(request: TextIngestRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
 
     if not request.text or not request.text.strip():
         raise HTTPException(status_code=400, detail="Text must not be empty.")
@@ -297,6 +299,7 @@ async def add_texts(request: BatchTextIngestRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
 
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
@@ -347,6 +350,7 @@ async def ingest_url(request: URLIngestRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
 
     loader = URLLoader()
     project_key = request.project or brain._active_project

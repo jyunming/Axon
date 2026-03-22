@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import QueryRequest, SearchRequest, SearchResult
 
 logger = logging.getLogger("AxonAPI")
@@ -23,6 +24,7 @@ async def query_brain(request: QueryRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
     try:
         overrides = {
             "top_k": request.top_k,
@@ -111,6 +113,7 @@ async def query_brain_stream(request: QueryRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
 
     overrides = {
         "top_k": request.top_k,
@@ -148,6 +151,7 @@ async def search_brain(request: SearchRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
     try:
         loop = asyncio.get_running_loop()
         overrides: dict[str, Any] = {}
@@ -176,6 +180,7 @@ async def search_raw_endpoint(request: SearchRequest, include_trace: bool = Fals
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(request.project, brain)
     try:
         loop = asyncio.get_running_loop()
         overrides: dict = {}

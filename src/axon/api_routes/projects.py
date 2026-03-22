@@ -225,17 +225,23 @@ async def delete_project_endpoint(name: str):
 @router.get("/sessions")
 async def list_sessions():
     """List all saved chat sessions for the active project."""
+    from axon import api as _api
     from axon.main import _list_sessions
 
-    return {"sessions": _list_sessions()}
+    brain = _api.brain
+    project = getattr(brain, "_active_project", None) if brain else None
+    return {"sessions": _list_sessions(project=project)}
 
 
 @router.get("/session/{session_id}")
 async def get_session(session_id: str):
     """Retrieve a specific session by ID."""
+    from axon import api as _api
     from axon.main import _load_session
 
-    session = _load_session(session_id)
+    brain = _api.brain
+    project = getattr(brain, "_active_project", None) if brain else None
+    session = _load_session(session_id, project=project)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session

@@ -151,7 +151,10 @@ class RouterStub(QueryRouterMixin):
     )
 
     def __init__(self, config: AxonConfig):
+        import threading
+
         self.config = config
+        self._community_rebuild_lock = threading.Lock()
         # Executor for parallel transforms
         from concurrent.futures import ThreadPoolExecutor
 

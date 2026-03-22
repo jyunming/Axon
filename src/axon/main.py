@@ -1839,6 +1839,21 @@ Your primary goal is to help the user by answering questions based on the provid
                     _capped.extend(_src_chunks)
             documents = _capped
 
+        # Namespace chunk IDs by project to prevent cross-project collisions in
+        # MultiVectorStore / MultiBM25Retriever dedup. The default project is left
+        # unchanged so existing single-project deployments are unaffected.
+        if self._active_project and self._active_project != "default":
+            from axon.projects import get_project_namespace_id
+
+            _ns = get_project_namespace_id(self._active_project) or self._active_project
+            _ns_prefix = f"{_ns}::"
+            for _doc in documents:
+                if not _doc["id"].startswith(_ns_prefix):
+                    _doc["id"] = _ns_prefix + _doc["id"]
+                _meta = _doc.get("metadata", {})
+                if "source_id" in _meta and not _meta["source_id"].startswith(_ns_prefix):
+                    _meta["source_id"] = _ns_prefix + _meta["source_id"]
+
         if self.config.dedup_on_ingest:
             before = len(documents)
             new_docs = []

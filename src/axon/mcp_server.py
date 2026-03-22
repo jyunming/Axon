@@ -148,7 +148,12 @@ async def get_job_status(job_id: str) -> Any:
 
 
 @mcp.tool()
-async def search_knowledge(query: str, top_k: int = 5, filters: dict | None = None) -> Any:
+async def search_knowledge(
+    query: str,
+    top_k: int = 5,
+    filters: dict | None = None,
+    project: str | None = None,
+) -> Any:
     """Retrieve raw document chunks from the knowledge base.
 
     Best for multi-step reasoning where you want to inspect individual chunks
@@ -158,15 +163,25 @@ async def search_knowledge(query: str, top_k: int = 5, filters: dict | None = No
         query: The search query string.
         top_k: Number of chunks to return (default 5).
         filters: Optional metadata filters, e.g. {"source": "https://..."}.
+        project: Expected active project. Returns 409 if it does not match
+            the brain's current active project. Use switch_project to change
+            the active project before calling this tool.
     """
     body: dict = {"query": query, "top_k": top_k}
     if filters:
         body["filters"] = filters
+    if project:
+        body["project"] = project
     return await _post("/search", body)
 
 
 @mcp.tool()
-async def query_knowledge(query: str, top_k: int | None = None, filters: dict | None = None) -> Any:
+async def query_knowledge(
+    query: str,
+    top_k: int | None = None,
+    filters: dict | None = None,
+    project: str | None = None,
+) -> Any:
     """Ask a question and get a synthesised answer from the knowledge base.
 
     Performs retrieval + generation in one call. Use search_knowledge instead
@@ -176,12 +191,17 @@ async def query_knowledge(query: str, top_k: int | None = None, filters: dict | 
         query: The question to ask.
         top_k: Number of chunks to retrieve for context (overrides global setting).
         filters: Optional metadata filters for retrieval.
+        project: Expected active project. Returns 409 if it does not match
+            the brain's current active project. Use switch_project to change
+            the active project before calling this tool.
     """
     body: dict = {"query": query}
     if top_k is not None:
         body["top_k"] = top_k
     if filters:
         body["filters"] = filters
+    if project:
+        body["project"] = project
     return await _post("/query", body)
 
 

@@ -379,7 +379,11 @@ class TestBuildNetworkxGraph:
         assert G.number_of_nodes() == 0
 
     def test_nodes_added(self, tmp_path):
-        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_entity_min_frequency=1,
+        )
         brain = _make_brain(config=cfg)
         brain._entity_graph = {
             "alice": {"description": "A person", "chunk_ids": ["c1"], "frequency": 1},
@@ -450,7 +454,11 @@ class TestRunCommunityDetection:
 
     def test_single_node_returns_community_zero(self, tmp_path):
         """Line 349: single node returns {node: 0}."""
-        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_entity_min_frequency=1,
+        )
         brain = _make_brain(config=cfg)
         brain._entity_graph = {"solo": {"description": "d", "chunk_ids": ["c1"], "frequency": 1}}
         result = brain._run_community_detection()
@@ -515,7 +523,11 @@ class TestHierarchicalCommunityDetection:
 
     def test_single_node_fallback(self, tmp_path):
         """Lines 381-382: single node returns level 0 dict."""
-        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_entity_min_frequency=1,
+        )
         brain = _make_brain(config=cfg)
         brain._entity_graph = {"solo": {"description": "d", "chunk_ids": ["c1"], "frequency": 1}}
         levels, hierarchy, children = brain._run_hierarchical_community_detection()

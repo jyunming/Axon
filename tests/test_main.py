@@ -26,11 +26,11 @@ class TestAxonConfig:
         config = AxonConfig()
         assert config.query_router == "heuristic"
 
-    def test_graph_rag_community_default_false(self):
+    def test_graph_rag_community_default_true(self):
         from axon.main import AxonConfig
 
         config = AxonConfig()
-        assert config.graph_rag_community is False
+        assert config.graph_rag_community is True
 
     def test_code_graph_default_false(self):
         from axon.main import AxonConfig
@@ -3609,8 +3609,8 @@ class TestGraphRAGCommunity:
         from axon.main import AxonConfig
 
         cfg = AxonConfig()
-        # graph_rag_community defaults to False (cost-control; enable explicitly)
-        assert cfg.graph_rag_community is False
+        # graph_rag_community defaults to True (best-tested GraphRAG profile)
+        assert cfg.graph_rag_community is True
         assert cfg.graph_rag_community_async is True
         assert cfg.graph_rag_community_top_k == 5
         assert cfg.graph_rag_mode == "local"

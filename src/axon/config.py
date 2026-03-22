@@ -311,8 +311,7 @@ class AxonConfig:
 
     # Community detection: cluster the entity graph into thematic communities after ingest.
     # Requires: pip install networkx
-    # Default is False (off by default) for cost control; enable explicitly when needed.
-    graph_rag_community: bool = False
+    graph_rag_community: bool = True
 
     # Run community detection in the background (non-blocking) after ingest.
     graph_rag_community_async: bool = True

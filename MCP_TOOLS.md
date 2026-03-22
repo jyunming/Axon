@@ -83,7 +83,10 @@ See [SETUP.md](SETUP.md) for instructions on connecting Axon as an MCP server.
 
 ## Usage Notes
 
-- All tools operate on the **active project** unless a `project` parameter is supplied.
+- All tools operate on the **active project**. All read and write tools accept an optional
+  `project` parameter. When supplied, it is validated against the brain's active project and
+  returns an error on mismatch — the brain serves one project at a time. Use `switch_project`
+  to change the active project before querying or ingesting into a different one.
 - Ingest tools (`ingest_path`, `ingest_url`) are async by default and return a `job_id`.
   Poll `get_job_status` until `status == "completed"`.
 - `clear_knowledge` is irreversible — it wipes all vectors and BM25 state for the project.

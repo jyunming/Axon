@@ -44,7 +44,7 @@ curl -X POST http://localhost:8000/store/init \
 **VS Code:**
 Run the command `Axon: Initialise Store` from the Command Palette (`Ctrl+Shift+P`).
 
-The `base_path` is stored in `~/.axon/store.json` and persists across restarts.
+The `base_path` is persisted in the active `config.yaml` via `config.save()` and is restored on the next `axon-api` startup.
 
 ---
 
@@ -100,7 +100,7 @@ The grantee redeems the share string to mount the sharer's project locally.
 curl -X POST http://localhost:8000/share/redeem \
   -H "Content-Type: application/json" \
   -d '{"share_string": "axon-share-v1:eyJ..."}'
-# Response: {"mounted_as": "alice/my-project", "status": "mounted"}
+# Response: {"mount_name": "alice_my-project", "owner": "alice", "project": "my-project", "status": "mounted"}
 ```
 
 **REPL:**
@@ -108,18 +108,13 @@ curl -X POST http://localhost:8000/share/redeem \
 /share redeem axon-share-v1:eyJ...
 ```
 
-The project is mounted as `<owner>/<project>` (e.g. `alice/my-project`). It appears in
-`/project list` alongside local projects but is flagged as `[mount]`.
+A mount descriptor is created under `mounts/alice_my-project/mount.json` (canonical,
+platform-independent record). The mount appears in `/project list` flagged as `[mount]`.
 
-To query the mounted project:
+To query the mounted project, switch to it using the `mount_name` returned above:
 ```
-/project switch alice/my-project
+/project switch alice_my-project
 What are the key findings?
-```
-
-Or via CLI:
-```bash
-axon --project alice/my-project "What are the key findings?"
 ```
 
 ---
@@ -140,9 +135,11 @@ curl -X POST http://localhost:8000/share/revoke \
 /share revoke sk_a1b2c3d4
 ```
 
-Revocation is **immediate**. The grantee's next query against the mounted project returns
-HTTP 403. The mount entry remains in the grantee's project list but all reads fail until
-the mount is removed.
+Revocation marks the key as revoked in the owner's manifest (`.share_manifest.json`). The
+effect on the grantee side is **lazy**: the mount descriptor is removed the next time the
+grantee's Axon calls `validate_received_shares()` (which runs on project list/switch
+operations). After the descriptor is removed the mounted project disappears from the
+grantee's project list. There is no real-time HTTP 403 on every mounted read path.
 
 ---
 
@@ -155,8 +152,8 @@ View all outgoing shares (grants you created) and incoming mounts (shares you re
 curl http://localhost:8000/share/list
 # Response:
 # {
-#   "outgoing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false}],
-#   "incoming": [{"mounted_as": "carol/research", "owner": "carol", "revoked": false}]
+#   "sharing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false}],
+#   "shared":  [{"mount": "carol_research", "owner": "carol", "project": "research", "revoked": false}]
 # }
 ```
 

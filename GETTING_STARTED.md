@@ -287,9 +287,10 @@ Here is how to get the most out of them without paying unnecessary cost.
 
 ### Recommended starting config: fast graph, no extra LLM calls
 
-The shipped `config.yaml` has `graph_rag: false` for a fast first-run experience. Once you have
-your corpus ingested and want the VS Code Graph Panel KG tab, enable light mode — zero LLM calls,
-ingest cost is the same as `graph_rag: false`:
+The dataclass default for `graph_rag` is `true` (best-tested profile). The shipped
+`config.yaml` overrides this to `false` for a fast first-run experience; edit it when you
+want the full graph. Light mode gives you the VS Code Graph Panel KG tab at zero extra LLM
+cost — ingest cost is the same as `graph_rag: false`:
 
 ```yaml
 rag:
@@ -362,7 +363,7 @@ Or from Copilot Chat:
 
 | Tab | What it shows | Requires |
 |---|---|---|
-| **Knowledge Graph** | Entity–relation graph extracted from **any document** (PDF, DOCX, Markdown…) | `graph_rag: true` — **on by default**, just ingest your docs |
+| **Knowledge Graph** | Entity–relation graph extracted from **any document** (PDF, DOCX, Markdown…) | `graph_rag: true` in `config.yaml` (dataclass default; shipped config sets `false` for fast first-run) |
 | **Code Graph** | File/class/function structure with import/call edges for source code | `code_graph: true` in `config.yaml` (opt-in) |
 
 Disabled tabs show a tooltip explaining which flag to enable. Both tabs can be present in the same panel.

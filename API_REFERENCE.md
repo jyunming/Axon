@@ -34,6 +34,10 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 }
 ```
 
+> **Project field:** `project` must match the brain's currently active project. If it
+> differs, the server returns `409 Conflict`. Use `POST /project/switch` first to change
+> the active project. Omit `project` to query whichever project is currently active.
+
 **`POST /query/stream` body:** same as `/query`.
 Response: Server-Sent Events stream. Each event is `data: <json>\n\n` where `<json>` is a
 text chunk string. The stream ends with `data: [DONE]\n\n`.
@@ -46,6 +50,8 @@ text chunk string. The stream ends with `data: [DONE]\n\n`.
   "project": "my-project"
 }
 ```
+
+> **Project field:** same enforcement as `/query` — returns `409` on mismatch.
 
 **`POST /search/raw` body:** same as `/search`. Accepts optional `?include_trace=true` query
 parameter to include retrieval diagnostics.
@@ -115,8 +121,10 @@ look up the doc IDs with `GET /tracked-docs` first.
 | `POST` | `/project/switch` | Switch the active project |
 | `POST` | `/project/delete/{name}` | Delete a project and all its data |
 
-Pass `"project": "<name>"` in any request body to target a specific project instead of the
-active default.
+Use `POST /project/switch` to change the active project before querying or searching.
+Ingest routes accept an optional `"project"` field for namespace targeting. Query and search
+routes accept `"project"` for validation only — they return `409` if it does not match the
+currently active project.
 
 ---
 

@@ -262,9 +262,14 @@ class QueryRouterMixin:
             "cite": cfg.cite,
             "truth_grounding": cfg.truth_grounding,
             "graph_rag": cfg.graph_rag,
+            "graph_rag_mode": getattr(cfg, "graph_rag_mode", "local"),
             "raptor": cfg.raptor,
             "raptor_chunk_group_size": cfg.raptor_chunk_group_size,
             "parent_chunk_size": cfg.parent_chunk_size,
+            "sentence_window": getattr(cfg, "sentence_window", False),
+            "sentence_window_size": getattr(cfg, "sentence_window_size", 3),
+            "crag_lite": getattr(cfg, "crag_lite", False),
+            "code_graph": getattr(cfg, "code_graph", False),
             "llm_provider": cfg.llm_provider,
             "llm_model": cfg.llm_model,
             "embedding_provider": cfg.embedding_provider,
@@ -1115,11 +1120,11 @@ class QueryRouterMixin:
             r.pop("_graph_expanded", None)
 
         # RAPTOR drill-down — replace summary hits with grounded leaf chunks
-        if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
+        if cfg.raptor and getattr(cfg, "raptor_drilldown", True):
             results = self._raptor_drilldown(query, results, cfg=cfg)
 
         # Artifact-type ranking pass
-        if self.config.raptor or self.config.graph_rag:
+        if cfg.raptor or cfg.graph_rag:
             results = self._apply_artifact_ranking(results, cfg=cfg)
 
         graph_mode = getattr(cfg, "graph_rag_mode", "local")
@@ -1173,11 +1178,13 @@ class QueryRouterMixin:
             and graph_mode in ("global", "hybrid")
             and not self._community_summaries
             and self._community_levels
-            and getattr(self.config, "graph_rag_community_lazy", False)
+            and getattr(cfg, "graph_rag_community_lazy", False)
         ):
-            self._generate_community_summaries(query_hint=query)
-            if getattr(self.config, "graph_rag_index_community_reports", True):
-                self._index_community_reports_in_vector_store()
+            with self._community_rebuild_lock:
+                if not self._community_summaries:
+                    self._generate_community_summaries(query_hint=query)
+                    if getattr(cfg, "graph_rag_index_community_reports", True):
+                        self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
             _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:
@@ -1265,11 +1272,11 @@ class QueryRouterMixin:
             r.pop("_graph_expanded", None)
 
         # RAPTOR drill-down — replace summary hits with grounded leaf chunks
-        if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
+        if cfg.raptor and getattr(cfg, "raptor_drilldown", True):
             results = self._raptor_drilldown(query, results, cfg=cfg)
 
         # Artifact-type ranking pass
-        if self.config.raptor or self.config.graph_rag:
+        if cfg.raptor or cfg.graph_rag:
             results = self._apply_artifact_ranking(results, cfg=cfg)
 
         graph_mode = getattr(cfg, "graph_rag_mode", "local")
@@ -1312,11 +1319,13 @@ class QueryRouterMixin:
             and graph_mode in ("global", "hybrid")
             and not self._community_summaries
             and self._community_levels
-            and getattr(self.config, "graph_rag_community_lazy", False)
+            and getattr(cfg, "graph_rag_community_lazy", False)
         ):
-            self._generate_community_summaries(query_hint=query)
-            if getattr(self.config, "graph_rag_index_community_reports", True):
-                self._index_community_reports_in_vector_store()
+            with self._community_rebuild_lock:
+                if not self._community_summaries:
+                    self._generate_community_summaries(query_hint=query)
+                    if getattr(cfg, "graph_rag_index_community_reports", True):
+                        self._index_community_reports_in_vector_store()
         if cfg.graph_rag and graph_mode in ("global", "hybrid") and self._community_summaries:
             _global_ctx = self._global_search_map_reduce(query, cfg)
             if _global_ctx:

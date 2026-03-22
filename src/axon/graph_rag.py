@@ -415,8 +415,35 @@ class GraphRagMixin:
         _backend = getattr(self.config, "graph_rag_community_backend", "louvain")
 
         # Tier-1: graspologic hierarchical Leiden — only attempted when backend="auto"
+        # The import is probed inside a thread with a 10-second timeout to avoid hanging the
+        # main process on Python 3.13+ where graspologic's numba/scipy initialisation can block.
         if _backend == "auto":
+            _graspologic_available = False
             try:
+                import subprocess as _sp
+                import sys as _sys
+
+                _result = _sp.run(
+                    [_sys.executable, "-c", "import graspologic.partition"],
+                    timeout=10,
+                    capture_output=True,
+                )
+                _graspologic_available = _result.returncode == 0
+            except _sp.TimeoutExpired:
+                logger.warning(
+                    "GraphRAG: graspologic import probe timed out (10 s) — "
+                    "treating as unavailable. Set graph_rag_community_backend: leidenalg "
+                    "to skip the probe."
+                )
+            except Exception:
+                pass
+
+            if not _graspologic_available:
+                logger.warning(
+                    "GraphRAG: graspologic not available — falling back to leidenalg/Louvain. "
+                    "pip install graspologic  (or set graph_rag_community_backend: leidenalg)"
+                )
+            else:
                 from graspologic.partition import hierarchical_leiden
 
                 partitions = hierarchical_leiden(
@@ -470,12 +497,6 @@ class GraphRagMixin:
                             normalized_children[norm_parent].append(norm_key)
 
                 return community_levels, normalized_hierarchy, normalized_children
-
-            except ImportError:
-                logger.warning(
-                    "GraphRAG: graspologic not available — falling back to leidenalg/Louvain. "
-                    "pip install graspologic  (or set graph_rag_community_backend: leidenalg)"
-                )
         else:
             logger.debug("GraphRAG: community backend='%s' — skipping graspologic.", _backend)
 
