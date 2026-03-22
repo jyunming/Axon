@@ -320,6 +320,14 @@ async def update_settings(
     compress_context: bool | None = None,
     graph_rag: bool | None = None,
     raptor: bool | None = None,
+    truth_grounding: bool | None = None,
+    discussion_fallback: bool | None = None,
+    sentence_window: bool | None = None,
+    sentence_window_size: int | None = None,
+    crag_lite: bool | None = None,
+    code_graph: bool | None = None,
+    graph_rag_mode: str | None = None,
+    cite: bool | None = None,
 ) -> Any:
     """Update global Axon RAG and retrieval settings for the current session.
 
@@ -335,6 +343,14 @@ async def update_settings(
         compress_context: Toggle LLM context compression before generation.
         raptor: Toggle RAPTOR hierarchical summaries.
         graph_rag: Toggle GraphRAG entity expansion.
+        truth_grounding: Toggle truth-grounding enforcement on retrieved chunks.
+        discussion_fallback: Allow general-knowledge fallback when no chunks found.
+        sentence_window: Toggle sentence-window retrieval (expands chunks with context sentences).
+        sentence_window_size: Number of surrounding sentences per side (1-10, default 2).
+        crag_lite: Toggle CRAG-lite corrective retrieval on low-confidence chunks.
+        code_graph: Toggle code-graph retrieval for code-related queries.
+        graph_rag_mode: GraphRAG query mode — "local", "global", or "hybrid".
+        cite: Include inline source citations in generated answers.
     """
     body = {k: v for k, v in locals().items() if v is not None and k != "body"}
     return await _post("/config/update", body)

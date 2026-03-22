@@ -530,8 +530,8 @@ rag:
   similarity_threshold: 0.3
   hybrid_search: true
 
-  # Graph-augmented retrieval expansion (inspired by GraphRAG; not the full
-  # Microsoft GraphRAG method — no community detection or global search).
+  # Graph-augmented retrieval expansion based on GraphRAG principles.
+  # Supports local (entity neighbourhood), global (community summaries), and hybrid modes.
   # Extracts entities and optionally relation triples from each chunk at ingest
   # time; at query time, entity-matched and 1-hop-related chunks are injected as
   # extra context slots beyond the normal top_k.
@@ -896,7 +896,7 @@ For a team where one person owns ingestion and others query:
 3. Each user's VS Code spawns its own lightweight `axon-mcp` proxy; the shared
    API handles all retrieval. The owner ingests; everyone else queries.
 
-### Available MCP tools (23 total)
+### Available MCP tools (24 total)
 
 | Tool | Purpose |
 |---|---|
@@ -1066,12 +1066,12 @@ Copilot will automatically call `axon_getCollection` or `axon_listProjects` to a
 Search my Axon knowledge base for information about neural networks.
 ```
 
-### Available tools (18 total)
+### Available tools (25 total)
 
 | Tool | What it does |
 |---|---|
 | `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer |
-| `axon_queryKnowledge` | Retrieval + answer via local LLM (requires Ollama) |
+| `axon_queryKnowledge` | Retrieval + answer via the configured LLM provider |
 | `axon_ingestText` | Ingest a text snippet directly |
 | `axon_ingestUrl` | Fetch and ingest a web page |
 | `axon_ingestPath` | Ingest a local file or directory (async; returns `job_id`) |

@@ -413,7 +413,7 @@ curl -X POST http://localhost:8000/ingest/refresh
 # List all projects
 curl http://localhost:8000/projects
 
-# Switch project (pass project param on any request)
+# Validate against active project (409 if mismatch — use POST /project/switch first)
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What is RAG?", "project": "my-project"}'

@@ -271,6 +271,12 @@ class ConfigUpdateRequest(BaseModel):
     discussion_fallback: bool | None = None
     raptor: bool | None = None
     graph_rag: bool | None = None
+    sentence_window: bool | None = None
+    sentence_window_size: int | None = Field(None, ge=1, le=10)
+    crag_lite: bool | None = None
+    code_graph: bool | None = None
+    graph_rag_mode: str | None = Field(None, pattern="^(local|global|hybrid)$")
+    cite: bool | None = None
     # Persistence
     persist: bool = Field(False, description="Whether to save these changes to config.yaml")
 

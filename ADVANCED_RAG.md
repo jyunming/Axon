@@ -1,7 +1,7 @@
 # Advanced RAG Pipeline Guide
 
 Axon's retrieval pipeline is modular. Every stage can be enabled or disabled independently via
-`config.yaml`, CLI flags, REPL `/rag` commands, or the REST API `overrides` field.
+`config.yaml`, CLI flags, REPL `/rag` commands, or per-request fields in the REST API `/query` body.
 
 ---
 
@@ -172,8 +172,9 @@ rag:
   crag_lite_confidence_threshold: 0.4   # 0.0–1.0; lower = less aggressive fallback
 ```
 
-**Diagnostics:** The `/query` response includes `confidence`, `fallback_triggered`, and
-`fallback_reason` fields when `crag_lite` is active.
+**Diagnostics:** When `include_diagnostics: true` is passed in the `/query` request, the
+response includes a `diagnostics` object containing `confidence`, `fallback_triggered`, and
+`fallback_reason` fields. These do not appear at the top level of the response.
 
 **Cost:** Negligible — heuristic only, no extra LLM call.
 
@@ -437,6 +438,8 @@ axon --hyde --rerank --multi-query "Your question"
 POST /query
 {
   "query": "Your question",
-  "overrides": {"hyde": true, "rerank": true, "top_k": 20}
+  "hyde": true,
+  "rerank": true,
+  "top_k": 20
 }
 ```

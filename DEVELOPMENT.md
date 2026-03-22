@@ -4,12 +4,17 @@
 
 ### 1. Setup Environment
 
-See [SETUP.md](SETUP.md) for platform-specific installation steps. Quick start:
+See [SETUP.md](SETUP.md) for platform-specific installation steps. Quick start (installs all features, dev tools, and evaluation suites):
 
 ```bash
 git clone https://github.com/jyunming/Axon.git && cd Axon
-pip install -e ".[dev]"
+pip install -e ".[all,dev,eval]"
 ```
+
+**Note on Offline / Local Support:**
+All core and optional dependencies (including `networkx`, `igraph`, `leidenalg`, and `graspologic`) are **local-first**. They perform all computations (graph clustering, embeddings, matrix math) on your local hardware and do not require internet access at runtime. For a fully air-gapped environment, ensure you also use a local LLM provider like **Ollama**.
+
+---
 
 ### 2. Common Development Tasks
 

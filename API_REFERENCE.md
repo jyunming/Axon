@@ -40,7 +40,8 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 
 **`POST /query/stream` body:** same as `/query`.
 Response: Server-Sent Events stream. Each event is `data: <json>\n\n` where `<json>` is a
-text chunk string. The stream ends with `data: [DONE]\n\n`.
+text chunk string. The stream closes when generation completes. Errors emit
+`data: [ERROR] <message>\n\n` instead of a normal chunk.
 
 **`POST /search` body:**
 ```json
@@ -89,7 +90,7 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
   ]
 }
 ```
-`doc_id` is optional and defaults to a content hash. Each item in `docs` is a `BatchDocItem`.
+`doc_id` is optional; if omitted it is auto-generated as `agent_doc_<8-hex>`. Each item in `docs` is a `BatchDocItem`.
 
 ---
 
@@ -146,7 +147,8 @@ currently active project.
 }
 ```
 
-Changes are scoped to the current server session and are not persisted to `config.yaml`.
+Changes are scoped to the current server session by default. To write them to `config.yaml`,
+add `"persist": true` to the request body.
 
 ---
 
@@ -192,11 +194,11 @@ Valid states: `normal`, `readonly`, `rebuilding`.
 
 ## Copilot / VS Code Bridge
 
-These endpoints power the GitHub Copilot integration and VS Code extension LLM bridge.
+These endpoints support GitHub Copilot agent integrations and the optional VS Code Copilot LLM bridge (`axon.useCopilotLlm=true`). The VS Code extension's standard query and tool flows use `/query` and `/search` directly — not `/copilot/agent`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/copilot/agent` | Chat endpoint consumed by the Copilot extension — returns SSE stream |
+| `POST` | `/copilot/agent` | Internal SSE chat endpoint for direct Copilot agent integrations — not used by the VS Code extension's primary query/tool flows |
 | `GET` | `/llm/copilot/tasks` | Poll for pending LLM tasks queued by the backend for VS Code to execute |
 | `POST` | `/llm/copilot/result/{task_id}` | Submit the result of a Copilot LLM task back to the backend |
 

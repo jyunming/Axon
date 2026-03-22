@@ -77,7 +77,7 @@ username, and a timestamp. The key is HMAC-signed with a secret derived from the
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "grantee": "bob"}'
-# Response: {"share_string": "axon-share-v1:...", "key_id": "sk_a1b2c3d4", "expires_at": null}
+# Response: {"share_string": "<base64-encoded-payload>", "key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "owner": "<your-username>"}
 ```
 
 **REPL:**
@@ -85,7 +85,7 @@ curl -X POST http://localhost:8000/share/generate \
 /share generate my-project bob
 ```
 
-The `share_string` (e.g. `axon-share-v1:eyJ...`) must be sent to the grantee out-of-band.
+The `share_string` (a raw base64 string) must be sent to the grantee out-of-band.
 Share strings do not expire by default. All shares are **read-only** — there is no
 `write_access` capability.
 
@@ -153,7 +153,7 @@ curl http://localhost:8000/share/list
 # Response:
 # {
 #   "sharing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false}],
-#   "shared":  [{"mount": "carol_research", "owner": "carol", "project": "research", "revoked": false}]
+#   "shared":  [{"mount": "carol_research", "owner": "carol", "project": "research"}]
 # }
 ```
 
@@ -174,8 +174,8 @@ Revoked entries are shown with `"revoked": true` so you can identify stale mount
   set during `store init`. Network latency affects ingest performance but not query performance
   (query uses local vector store; only metadata is read from the share path).
 - **Key security.** Share strings contain a base64-encoded payload and HMAC signature. Do not
-  share them over untrusted channels. A revoked key's signature is invalid server-side; the
-  store maintains a revocation list in `{base_path}/.revoked`.
+  share them over untrusted channels. Revocation is recorded in the owner's
+  `.share_manifest.json`; a revoked key's HMAC signature is rejected on access.
 - **Project isolation.** Each user's projects are stored under `{base_path}/{username}/`.
   Users cannot read each other's data without an explicit share key.
 - **No expiry by default.** Share keys do not expire. Revoke explicitly when access should end.
