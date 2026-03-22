@@ -85,6 +85,9 @@ loaders = [
     "striprtf>=0.0.26",
     "extract-msg>=0.28.0",
 ]
+eval = [
+    "deepeval>=0.21.0",
+]
 all = [
     "qdrant-client>=1.7.0,<2.0.0",
     "fastembed>=0.1.0,<1.0.0",
@@ -174,6 +177,7 @@ module = [
     "rank_bm25.*",
     "qdrant_client.*",
     "fastembed.*",
+    "deepeval.*",
 ]
 ignore_missing_imports = true
 
