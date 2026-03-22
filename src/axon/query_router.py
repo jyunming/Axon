@@ -884,6 +884,36 @@ class QueryRouterMixin:
             "_effective_top_k": _effective_top_k,
         }
 
+    @staticmethod
+    def _merge_graph_slots(results: list[dict], top_k: int, budget: int) -> list[dict]:
+        """Merge base and graph-expanded results, preserving graph budget.
+
+        After reranking, graph-expanded chunks may score above base chunks.  The
+        previous logic always appended them after base[:top_k], so they could be
+        dropped when synthesis only consumed the first ``top_k`` items.
+
+        This helper:
+        1. Selects the top ``top_k`` results by score (may include graph-expanded).
+        2. Guarantees that at least ``min(budget, n_expanded)`` graph-expanded
+           chunks survive, appending any not already in the top-k window.
+
+        Result size is bounded by ``top_k + budget``.
+        """
+        expanded = [r for r in results if r.get("_graph_expanded")]
+        # Sort all results by score descending; take the best top_k
+        merged = sorted(results, key=lambda r: r.get("score", 0.0), reverse=True)[:top_k]
+        merged_ids = {r["id"] for r in merged}
+        graph_in_merged = sum(1 for r in merged if r.get("_graph_expanded"))
+        # Guarantee budget: append high-scoring graph slots not yet represented
+        for r in expanded:
+            if graph_in_merged >= budget:
+                break
+            if r["id"] not in merged_ids:
+                merged.append(r)
+                merged_ids.add(r["id"])
+                graph_in_merged += 1
+        return merged
+
     def search_raw(
         self,
         query: str,
@@ -907,11 +937,7 @@ class QueryRouterMixin:
 
         _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
-            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
-            expanded = [r for r in results if r.get("_graph_expanded")]
-            base_ids = {r["id"] for r in base}
-            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
-            results = base + graph_slots
+            results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
             results = results[:_top_k]
         for r in results:
@@ -1082,11 +1108,7 @@ class QueryRouterMixin:
 
         _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
-            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
-            expanded = [r for r in results if r.get("_graph_expanded")]
-            base_ids = {r["id"] for r in base}
-            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
-            results = base + graph_slots
+            results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
             results = results[:_top_k]
         for r in results:
@@ -1236,11 +1258,7 @@ class QueryRouterMixin:
 
         _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
-            base = [r for r in results if not r.get("_graph_expanded")][:_top_k]
-            expanded = [r for r in results if r.get("_graph_expanded")]
-            base_ids = {r["id"] for r in base}
-            graph_slots = [r for r in expanded if r["id"] not in base_ids][: cfg.graph_rag_budget]
-            results = base + graph_slots
+            results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
             results = results[:_top_k]
         for r in results:

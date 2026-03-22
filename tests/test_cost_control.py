@@ -117,7 +117,7 @@ class TestP2EntityFrequencyPruning:
     def test_default_is_1_no_pruning(self):
         from axon.main import AxonConfig
 
-        assert AxonConfig().graph_rag_entity_min_frequency == 1
+        assert AxonConfig().graph_rag_entity_min_frequency == 2
 
     def test_prunes_singletons_from_graph(self, tmp_path):
         """Entities with frequency=1 are excluded when min_frequency=2."""
@@ -177,10 +177,10 @@ class TestP2EntityFrequencyPruning:
 class TestP3RelationBudget:
     """graph_rag_relation_budget caps relation extraction by entity-density ranking."""
 
-    def test_default_is_0_unlimited(self):
+    def test_default_is_30_bounded(self):
         from axon.main import AxonConfig
 
-        assert AxonConfig().graph_rag_relation_budget == 0
+        assert AxonConfig().graph_rag_relation_budget == 30
 
     def test_budget_selects_highest_density_chunks(self):
         """Top-N chunks by entity/text-length density are selected."""

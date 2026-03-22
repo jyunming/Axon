@@ -500,7 +500,8 @@ class GraphRagMixin:
                     try:
                         partition = _la.find_partition(
                             _G_ig,
-                            _la.ModularityVertexPartition,
+                            _la.CPMVertexPartition,
+                            resolution_parameter=resolution,
                             seed=seed,
                         )
                         node_names = (

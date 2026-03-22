@@ -431,7 +431,9 @@ class AxonConfig:
     # Budget-based relation gating: max chunks to run relation extraction on per ingest batch.
     # Chunks are ranked by entity density (entities/text-length) and only the top-N are processed.
     # 0 = unlimited (fall back to entity-count threshold gate only).
-    graph_rag_relation_budget: int = 0
+    # Product default is 30: prevents unbounded LLM/REBEL calls on large corpora. Set to 0 only
+    # for experiments where full coverage matters more than ingest cost.
+    graph_rag_relation_budget: int = 30
 
     # Community detection backend preference.
     # "louvain"   = networkx Louvain only (default — safe on all environments, fast for <10k nodes)
@@ -460,8 +462,9 @@ class AxonConfig:
 
     # Minimum entity appearance frequency to include in community detection graph.
     # Entities appearing in fewer than this many chunks are pruned before building the graph.
-    # 1 = no pruning (include all entities). 2 = prune singletons (recommended).
-    graph_rag_entity_min_frequency: int = 1
+    # 1 = no pruning (include all entities). 2 = prune singletons (recommended for non-trivial
+    # corpora — reduces noisy one-off entities; qualification studies used 2 for papers corpus).
+    graph_rag_entity_min_frequency: int = 2
 
     # TASK 14: Dedicated thread pool size for map-reduce phase (0 = use max_workers).
     # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
