@@ -130,7 +130,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/pull <name>` | Pull an Ollama model with progress indicator |
 | `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
-| `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match) |
+| `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match; answers in fallback mode are prefixed with a note that no grounded documents were found) |
 | `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `sentence-window`, `crag-lite`, `cite`, `raptor`, `graph-rag` |
 | `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
 | `/keys [set provider]` | Show API key status for all providers; `/keys set <provider>` saves a key interactively |
@@ -279,8 +279,8 @@ rag:
   graph_rag_relation_budget: 30              # cap relation extraction to top-30 chunks by entity density (0 = unlimited)
   graph_rag_entity_min_frequency: 2          # prune entities seen in < 2 chunks before community detection
   graph_rag_community: true
-  graph_rag_community_backend: leidenalg    # recommended for Python 3.13; default code value is "auto" (graspologic → leidenalg → louvain)
-  graph_rag_auto_route: heuristic
+  graph_rag_community_backend: leidenalg    # recommended for Python 3.13; default code value is "louvain" (use "auto" for graspologic → leidenalg → louvain fallback chain)
+  query_router: heuristic                   # replaces graph_rag_auto_route; heuristic | llm | off
   graph_rag_mode: hybrid
   graph_rag_global_top_communities: 20       # lazy mode: generate LLM summaries for top-20 query-relevant communities only
 
@@ -413,7 +413,9 @@ curl -X POST http://localhost:8000/ingest/refresh
 # List all projects
 curl http://localhost:8000/projects
 
-# Validate against active project (409 if mismatch — use POST /project/switch first)
+# On /query and /search: project field validates against the active project (409 on mismatch);
+# on /add_text, /add_texts, /ingest_url it also enforces active-project match;
+# /ingest (path-based) has no project field.
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What is RAG?", "project": "my-project"}'
@@ -437,7 +439,7 @@ curl -X POST http://localhost:8000/ingest_url \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/page"}'
 
-# Remove documents by doc_id list (get IDs from /tracked-docs)
+# Remove documents by chunk ID list (get IDs from ingest responses or /collection/stale)
 curl -X POST http://localhost:8000/delete \
   -H "Content-Type: application/json" \
   -d '{"doc_ids": ["chunk-abc123", "chunk-def456"]}'

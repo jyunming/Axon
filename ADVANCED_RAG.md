@@ -246,7 +246,7 @@ rag:
   graph_rag_community_backend: louvain     # safe default on all environments
   graph_rag_relation_budget: 30           # cap relation extraction per batch
   graph_rag_entity_min_frequency: 2       # prune singleton entities
-  graph_rag_auto_route: heuristic         # auto-select local/global/hybrid per query
+  query_router: heuristic                 # heuristic (default) | llm | off
 ```
 
 **When to use:** Multi-hop reasoning questions. Queries about relationships between entities.
@@ -374,7 +374,7 @@ where answer quality is paramount over latency.*
 
 ## 13. Smart Query Routing
 
-**Config:** `graph_rag_auto_route: heuristic` (default) or `graph_rag_auto_route: llm`
+**Config:** `query_router: heuristic` (default) or `query_router: llm`
 
 Axon's `QueryRouterMixin` automatically profiles every query before retrieval and selects the
 optimal RAG strategy for it. This happens transparently — no user action is required.
@@ -387,7 +387,7 @@ optimal RAG strategy for it. This happens transparently — no user action is re
 | `synthesis` | Broad questions drawing from multiple document sections | Multi-query + RAPTOR summaries |
 | `table_lookup` | Structured data, statistics, numerical queries | BM25-heavy; parent-doc retrieval |
 | `entity_relation` | Relationships and connections between entities | GraphRAG local mode |
-| `corpus_exploration` | Themes, topics, corpus-wide summaries | GraphRAG global mode |
+| `corpus_exploration` | Themes, topics, corpus-wide summaries | RAPTOR + multi-query, parent-doc retrieval (graph_rag disabled) |
 
 ### Routing Modes
 
@@ -404,7 +404,7 @@ The router inspects query length and matches against keyword sets:
 
 ```yaml
 rag:
-  graph_rag_auto_route: llm
+  query_router: llm
 ```
 
 The configured LLM classifies the query into one of the five profiles. More accurate for
@@ -412,7 +412,7 @@ ambiguous queries; adds ~1 LLM call per query.
 
 ### Disabling Auto-Routing
 
-Set `graph_rag_auto_route: "off"` to use fixed RAG flags from your config or `overrides`
+Set `query_router: "off"` to use fixed RAG flags from your config or `overrides`
 without any per-query profile override.
 
 ---

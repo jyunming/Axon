@@ -83,8 +83,12 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
-    project_dir = user_dir / request.project
-    if not project_dir.exists() or not (project_dir / "meta.json").exists():
+    # Resolve nested projects via subs/ layout (e.g. research/papers → research/subs/papers)
+    _segments = request.project.split("/")
+    project_path = user_dir / _segments[0]
+    for _seg in _segments[1:]:
+        project_path = project_path / "subs" / _seg
+    if not project_path.exists() or not (project_path / "meta.json").exists():
         raise HTTPException(status_code=404, detail=f"Project '{request.project}' not found.")
     result = _shares.generate_share_key(
         owner_user_dir=user_dir,

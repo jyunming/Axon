@@ -580,7 +580,7 @@
       {
         "name": "axon_showGraphStatus",
         "displayName": "Axon: Show GraphRAG Status",
-        "modelDescription": "Return the current state of the GraphRAG entity-relationship graph: entity count, relation edge count, community summary count, and whether a community build is in progress. Use to check whether GraphRAG data is available before querying.",
+        "modelDescription": "Return the current GraphRAG community build status: community_build_in_progress (bool) and community_summary_count (int). Use to check whether community summaries are ready before running a global-mode query.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonShowGraphStatus",
         "inputSchema": {

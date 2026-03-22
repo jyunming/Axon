@@ -506,7 +506,9 @@ class QueryRouterMixin:
             data = response.json()
 
             web_results = []
-            for item in data.get("web", {}).get("results", [])[:count]:
+            raw_results = data.get("web", {}).get("results", [])[:count]
+            total = max(len(raw_results), 1)
+            for i, item in enumerate(raw_results):
                 snippet = item.get("description", "")
                 title = item.get("title", "")
                 url = item.get("url", "")
@@ -514,7 +516,7 @@ class QueryRouterMixin:
                     {
                         "id": url,
                         "text": f"{title}\n{snippet}",
-                        "score": 1.0,
+                        "score": 1.0 - (i / total) * 0.5,
                         "metadata": {"source": url, "title": title},
                         "is_web": True,
                     }
@@ -525,8 +527,35 @@ class QueryRouterMixin:
             logger.warning(f"Web search failed: {e}")
             return []
 
+    def _check_mount_revocation(self) -> None:
+        """Raise PermissionError if the active mounted share has been revoked since switch."""
+        if getattr(self, "_active_project_kind", None) != "mounted":
+            return
+        desc = getattr(self, "_active_mount_descriptor", None)
+        if not desc:
+            return
+        owner_user_dir = desc.get("owner_user_dir", "")
+        key_id = desc.get("share_key_id", "")
+        if not owner_user_dir or not key_id:
+            return
+        import json as _json
+        from pathlib import Path as _Path
+
+        manifest_path = _Path(owner_user_dir) / "shares" / ".share_manifest.json"
+        try:
+            manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return  # Can't reach owner manifest — leave mounted
+        for record in manifest.get("issued", []):
+            if record.get("key_id") == key_id and record.get("revoked"):
+                raise PermissionError(
+                    f"Share '{desc.get('project', '')}' has been revoked by the owner. "
+                    "Run `/project switch default` to continue with your own projects."
+                )
+
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
+        self._check_mount_revocation()
         if cfg is None:
             cfg = self.config
         transforms = {
@@ -988,12 +1017,13 @@ class QueryRouterMixin:
                 parts.append(f"[Document {i+1} — {label}]\n{context_text}")
         return "\n\n".join(parts), has_web
 
-    def _build_system_prompt(self, has_web: bool, cfg=None) -> str:
+    def _build_system_prompt(self, has_web: bool, cfg=None, no_context: bool = False) -> str:
         """Return the system prompt based on discussion_fallback and web search state.
 
         When discussion_fallback is False, uses a strict context-only prompt.
         When True, uses the permissive prompt.
         When cite is False, the citation instruction is removed from the prompt.
+        When no_context is True, appends a disclaimer indicating general-knowledge fallback.
         """
         if cfg is None:
             cfg = self.config
@@ -1005,6 +1035,11 @@ class QueryRouterMixin:
 
             base = _re.sub(r"\d+\. \*\*Mandatory Citations\*\*:.*?\n", "", base)
 
+        if no_context:
+            return base + (
+                "\n\n**Note:** No relevant documents were found in the knowledge base for this query. "
+                "The following answer draws on general knowledge only and is not grounded in your documents."
+            )
         if not cfg.truth_grounding:
             return base
         if has_web:
@@ -1108,7 +1143,9 @@ class QueryRouterMixin:
                     "web_count": 0,
                 }
                 return self.llm.complete(
-                    query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history
+                    query,
+                    self._build_system_prompt(False, cfg=cfg, no_context=True),
+                    chat_history=chat_history,
                 )
 
             self._last_provenance = {
@@ -1275,7 +1312,9 @@ class QueryRouterMixin:
                     "web_count": 0,
                 }
                 yield from self.llm.stream(
-                    query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history
+                    query,
+                    self._build_system_prompt(False, cfg=cfg, no_context=True),
+                    chat_history=chat_history,
                 )
                 return
             self._last_provenance = {

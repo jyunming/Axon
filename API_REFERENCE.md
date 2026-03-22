@@ -39,7 +39,7 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 > differs, the server returns `409 Conflict`. Use `POST /project/switch` first to change
 > the active project. Omit `project` to query whichever project is currently active.
 
-**`POST /query` response** includes a `provenance` object on every response:
+**`POST /query` response** includes a `provenance` object on every non-dry-run response:
 ```json
 {
   "query": "...",
@@ -124,8 +124,10 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 ```json
 {"doc_ids": ["chunk-abc123", "chunk-def456"]}
 ```
-Pass the `doc_ids` returned by `GET /tracked-docs` (the full manifest). `/collection` returns
-only source names and chunk counts — it does not include IDs usable for deletion.
+Chunk IDs are returned by ingest endpoints: `doc_id` in `/add_text` and `/ingest_url` responses,
+`doc_ids` in `/add_texts` response. For stale files use `GET /collection/stale` (returns `doc_id`
+per stale entry). `GET /tracked-docs` returns version metadata (hashes and timestamps) — it does
+not include chunk IDs.
 
 ---
 
@@ -181,7 +183,7 @@ add `"persist": true` to the request body.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/graph/status` | Community detection build status (pending / complete / error) |
+| `GET` | `/graph/status` | Community detection build status — returns `community_build_in_progress` (bool) and `community_summary_count` (int) |
 | `POST` | `/graph/finalize` | Trigger explicit community rebuild |
 | `GET` | `/graph/data` | Full knowledge graph payload as JSON (nodes + links) |
 | `GET` | `/graph/visualize` | Render the knowledge graph as a self-contained HTML page |
@@ -204,7 +206,7 @@ consumed by the VS Code extension's graph panels.
 ```json
 {"name": "my-project", "state": "readonly"}
 ```
-Valid states: `normal`, `readonly`, `rebuilding`.
+Valid states: `normal`, `draining`, `readonly`, `offline`.
 
 ---
 

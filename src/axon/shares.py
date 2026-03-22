@@ -175,7 +175,11 @@ def redeem_share_key(
         raise ValueError("Invalid share_string format.")
 
     owner_user_dir = Path(owner_store_path) / owner
-    owner_project_dir = owner_user_dir / project
+    # Resolve nested projects via subs/ layout (e.g. research/papers → research/subs/papers)
+    _segments = project.split("/")
+    owner_project_dir = owner_user_dir / _segments[0]
+    for _seg in _segments[1:]:
+        owner_project_dir = owner_project_dir / "subs" / _seg
     if not owner_project_dir.exists():
         raise ValueError(f"Owner project directory does not exist: {owner_project_dir}")
 
@@ -198,7 +202,7 @@ def redeem_share_key(
     if not hmac.compare_digest(key_record["token_hmac"], expected_hmac):
         raise ValueError("Share key HMAC verification failed.")
 
-    mount_name = f"{owner}_{project}"
+    mount_name = f"{owner}_{project.replace('/', '_')}"
 
     # Create descriptor in mounts/ (canonical, platform-independent)
     from axon.mounts import create_mount_descriptor

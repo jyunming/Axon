@@ -1030,7 +1030,7 @@ Open VS Code Settings (Ctrl+,) and search for `axon`:
 | `axon.topK` | `5` | Default number of chunks returned per query |
 | `axon.autoStart` | `true` | Auto-start `axon-api` on extension activate (Linux/macOS only) |
 | `axon.pythonPath` | *(auto-detect)* | Explicit Python path override — leave blank for auto-detection (see above) |
-| `axon.useCopilotLlm` | `false` | Use Copilot's LLM (GPT-4o / Claude) for RAPTOR/GraphRAG instead of Ollama |
+| `axon.useCopilotLlm` | `false` | Switch the extension's active LLM provider to Copilot for all inference (query answering, RAPTOR summarization, etc.), not just a helper |
 | `axon.ingestBase` | *(empty)* | Restrict ingestion paths to a specific directory |
 | `axon.storeBase` | *(empty)* | Base path for AxonStore multi-user mode |
 
@@ -1129,7 +1129,7 @@ The Graph Panel opens a **split webview** directly inside VS Code — no externa
 
 **Knowledge Graph tab** — entity–relation graph extracted from **any document** (PDF, DOCX, Markdown, HTML, etc.) during ingest. Nodes are named entities (people, concepts, components); edges are extracted relations. Requires `graph_rag: true` in `config.yaml` (disabled in the shipped config by default — enable it once your corpus is ready).
 
-**Code Graph tab** — structural file/class/function graph. Nodes are files, classes, and functions; edges are `IMPORTS`, `CONTAINS`, and `CALLS` relationships. Requires `code_graph: true` in `config.yaml` (opt-in, off by default):
+**Code Graph tab** — structural file/class/function graph. Nodes are files, classes, and functions; edges are `IMPORTS`, `CONTAINS`, and `MENTIONED_IN` relationships (at query time, prose chunks mentioning code symbols are bridged via `MENTIONED_IN` edges). Requires `code_graph: true` in `config.yaml` (opt-in, off by default):
 
 ```yaml
 # config.yaml

@@ -592,6 +592,11 @@ query_transformations:
   hyde: false
   discussion_fallback: true
 
+advanced:
+  raptor: false
+  graph_rag: false
+  graph_rag_community: false
+
 web_search:
   enabled: false
 

@@ -194,11 +194,16 @@ class FlexibleTableLoader(BaseLoader):
         splitter = TableSplitter(table_name=table_name)
         chunks = splitter.transform_rows(final_rows, headers)
 
+        stable_base = (
+            _stable_file_id(source, "table")
+            if os.path.isabs(source) or os.sep in source
+            else ("table_" + hashlib.sha256(source.encode()).hexdigest()[:24])
+        )
         documents = []
         for i, text_chunk in enumerate(chunks):
             documents.append(
                 {
-                    "id": f"{table_name}_row_{i}",
+                    "id": f"{stable_base}_row_{i}",
                     "text": text_chunk,
                     "metadata": {"source": source, "type": "table", "row": i},
                 }
@@ -312,11 +317,12 @@ class TSVLoader(BaseLoader):
         splitter = TableSplitter(table_name=table_name)
         chunks = splitter.transform_rows(rows, headers)
 
+        stable_base = _stable_file_id(path, "tsv")
         documents = []
         for i, text in enumerate(chunks):
             documents.append(
                 {
-                    "id": f"{table_name}_row_{i}",
+                    "id": f"{stable_base}_row_{i}",
                     "text": text,
                     "metadata": {"source": path, "type": "tsv", "row": i},
                 }
@@ -354,7 +360,11 @@ class JSONLoader(BaseLoader):
                 metadata = self._sanitize_metadata(metadata)
                 metadata.update({"source": path, "type": "json", "index": i})
                 documents.append(
-                    {"id": f"{os.path.basename(path)}_{i}", "text": text, "metadata": metadata}
+                    {
+                        "id": f"{_stable_file_id(path, 'json')}_{i}",
+                        "text": text,
+                        "metadata": metadata,
+                    }
                 )
             return documents
         else:
@@ -386,11 +396,12 @@ class CSVLoader(BaseLoader):
         splitter = TableSplitter(table_name=table_name)
         chunks = splitter.transform_rows(rows, headers)
 
+        stable_base = _stable_file_id(path, "csv")
         documents = []
         for i, text in enumerate(chunks):
             documents.append(
                 {
-                    "id": f"{table_name}_row_{i}",
+                    "id": f"{stable_base}_row_{i}",
                     "text": text,
                     "metadata": {"source": path, "type": "csv", "row": i},
                 }
@@ -562,7 +573,7 @@ class PPTXLoader(BaseLoader):
 
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "pptx"),
                 "text": text,
                 "metadata": {"source": path, "type": "pptx"},
             }
@@ -620,7 +631,7 @@ class ImageLoader(BaseLoader):
 
             return [
                 {
-                    "id": os.path.basename(path),
+                    "id": _stable_file_id(path, "image"),
                     "text": f"Image Description: {description}",
                     "metadata": {
                         "source": path,
@@ -702,7 +713,7 @@ class JSONLLoader(BaseLoader):
 
     def load(self, path: str) -> list[dict[str, Any]]:
         _check_file_size(path)
-        fname = os.path.basename(path)
+        stable_base = _stable_file_id(path, "jsonl")
         documents = []
         with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f):
@@ -720,7 +731,7 @@ class JSONLLoader(BaseLoader):
                     text = json.dumps(item)
                 documents.append(
                     {
-                        "id": f"{fname}_{i}",
+                        "id": f"{stable_base}_{i}",
                         "text": text,
                         "metadata": {"source": path, "type": "jsonl", "line": i},
                     }
@@ -740,7 +751,7 @@ class NotebookLoader(BaseLoader):
                 logger.warning(f"Skipping malformed notebook {path}: {exc}")
                 return []
 
-        fname = os.path.basename(path)
+        stable_base = _stable_file_id(path, "notebook")
         documents = []
         for i, cell in enumerate(nb.get("cells", [])):
             cell_type = cell.get("cell_type", "")
@@ -753,7 +764,7 @@ class NotebookLoader(BaseLoader):
                 text = f"```python\n{text}\n```"
             documents.append(
                 {
-                    "id": f"{fname}_cell_{i}",
+                    "id": f"{stable_base}_cell_{i}",
                     "text": text,
                     "metadata": {
                         "source": path,
@@ -787,7 +798,7 @@ class ExcelLoader(BaseLoader):
 
         from axon.splitters import TableSplitter
 
-        fname = os.path.basename(path)
+        stable_base = _stable_file_id(path, "excel")
         documents = []
         doc_idx = 0
         for sheet_name in xl.sheet_names:
@@ -800,11 +811,11 @@ class ExcelLoader(BaseLoader):
                 continue
             headers = list(df.columns)
             rows = df.to_dict(orient="records")
-            splitter = TableSplitter(table_name=f"{fname}[{sheet_name}]")
+            splitter = TableSplitter(table_name=f"{os.path.basename(path)}[{sheet_name}]")
             for text in splitter.transform_rows(rows, headers):
                 documents.append(
                     {
-                        "id": f"{fname}_{sheet_name}_{doc_idx}",
+                        "id": f"{stable_base}_{sheet_name}_{doc_idx}",
                         "text": text,
                         "metadata": {
                             "source": path,
@@ -839,12 +850,12 @@ class ParquetLoader(BaseLoader):
 
         from axon.splitters import TableSplitter
 
-        fname = os.path.basename(path)
-        splitter = TableSplitter(table_name=fname)
+        stable_base = _stable_file_id(path, "parquet")
+        splitter = TableSplitter(table_name=os.path.basename(path))
         chunks = splitter.transform_rows(df.to_dict(orient="records"), list(df.columns))
         return [
             {
-                "id": f"{fname}_{i}",
+                "id": f"{stable_base}_{i}",
                 "text": text,
                 "metadata": {"source": path, "type": "parquet", "row": i},
             }
@@ -910,7 +921,7 @@ class RTFLoader(BaseLoader):
             return []
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "rtf"),
                 "text": text,
                 "metadata": {"source": path, "type": "rtf"},
             }
@@ -935,7 +946,7 @@ class XMLLoader(BaseLoader):
             text = re.sub(r"\s+", " ", text).strip()
             return [
                 {
-                    "id": os.path.basename(path),
+                    "id": _stable_file_id(path, "xml"),
                     "text": text,
                     "metadata": {"source": path, "type": "xml"},
                 }
@@ -963,7 +974,7 @@ class XMLLoader(BaseLoader):
         full_text = "\n".join(parts)
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "xml"),
                 "text": full_text,
                 "metadata": {"source": path, "type": "xml"},
             }
@@ -988,7 +999,7 @@ class SQLLoader(BaseLoader):
 
         # Split on statement boundaries (semicolons followed by whitespace/newline)
         raw_stmts = re.split(r";\s*\n", content)
-        fname = os.path.basename(path)
+        stable_base = _stable_file_id(path, "sql")
         documents = []
 
         for i, stmt in enumerate(raw_stmts):
@@ -1021,7 +1032,7 @@ class SQLLoader(BaseLoader):
 
             documents.append(
                 {
-                    "id": f"{fname}_stmt_{i}",
+                    "id": f"{stable_base}_stmt_{i}",
                     "text": text,
                     "metadata": {"source": path, "type": "sql", "statement_index": i},
                 }
@@ -1031,7 +1042,7 @@ class SQLLoader(BaseLoader):
         if not documents:
             return [
                 {
-                    "id": fname,
+                    "id": stable_base,
                     "text": content.strip(),
                     "metadata": {"source": path, "type": "sql"},
                 }
@@ -1086,7 +1097,7 @@ class EMLLoader(BaseLoader):
         )
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "eml"),
                 "text": text,
                 "metadata": {
                     "source": path,
@@ -1133,7 +1144,7 @@ class MSGLoader(BaseLoader):
         )
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "msg"),
                 "text": text,
                 "metadata": {
                     "source": path,
@@ -1208,7 +1219,7 @@ class LaTeXLoader(BaseLoader):
 
         return [
             {
-                "id": os.path.basename(path),
+                "id": _stable_file_id(path, "latex"),
                 "text": text,
                 "metadata": {"source": path, "type": "latex"},
             }
