@@ -216,6 +216,7 @@ async def governance_graph_rebuild(req: Request):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
     gov.emit(
         "graph_finalize",
@@ -223,6 +224,7 @@ async def governance_graph_rebuild(req: Request):
         project,
         project=project,
         status="started",
+        surface=surface,
         request_id=rid,
     )
     try:
@@ -234,6 +236,7 @@ async def governance_graph_rebuild(req: Request):
             project,
             project=project,
             details={"community_summary_count": summary_count},
+            surface=surface,
             request_id=rid,
         )
         return {"status": "ok", "community_summary_count": summary_count}
@@ -248,6 +251,7 @@ async def governance_graph_rebuild(req: Request):
             project=project,
             status="failed",
             details={"error": "rebuild error"},
+            surface=surface,
             request_id=rid,
         )
         raise HTTPException(status_code=500, detail="Graph rebuild failed")
@@ -267,6 +271,7 @@ async def governance_set_maintenance(
     if not _VALID_PROJECT_NAME_RE.match(name):
         raise HTTPException(status_code=422, detail=f"Invalid project name: '{name}'")
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     gov.emit(
         "maintenance_changed",
         "project",
@@ -274,6 +279,7 @@ async def governance_set_maintenance(
         project=name,
         status="started",
         details={"state": state},
+        surface=surface,
         request_id=rid,
     )
     try:
@@ -284,6 +290,7 @@ async def governance_set_maintenance(
             name,
             project=name,
             details={"state": state, "result": result},
+            surface=surface,
             request_id=rid,
         )
         return result
@@ -302,6 +309,7 @@ async def governance_expire_session(session_id: str, req: Request):
     from axon import governance as gov
 
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     store = gov.get_session_store()
     found = store.expire(session_id)
     if not found:
@@ -315,6 +323,7 @@ async def governance_expire_session(session_id: str, req: Request):
         session_id,
         project="",
         details={"reason": "operator-expired"},
+        surface=surface,
         request_id=rid,
     )
     return {"status": "expired", "session_id": session_id}

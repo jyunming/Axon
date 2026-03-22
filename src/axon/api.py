@@ -126,11 +126,12 @@ _RAG_API_KEY: str | None = os.getenv("RAG_API_KEY")
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
-    """Attach X-Request-ID to every request/response for audit traceability."""
+    """Attach X-Request-ID and X-Axon-Surface to every request for audit traceability."""
     from uuid import uuid4
 
     rid = request.headers.get("X-Request-ID", str(uuid4()))
     request.state.request_id = rid
+    request.state.surface = request.headers.get("X-Axon-Surface", "api")
     response = await call_next(request)
     response.headers["X-Request-ID"] = rid
     return response

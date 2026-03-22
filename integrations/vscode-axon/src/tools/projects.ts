@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 
 import { state } from '../shared';
-import { httpGet, httpPost, formatDetail } from '../client/http';
+import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
 
 // ---------------------------------------------------------------------------
 // LM Tools
@@ -25,7 +25,7 @@ export class AxonListProjectsTool implements vscode.LanguageModelTool<any> {
       const names = (data.projects || []).map((p: any) => p.name).join(', ');
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Projects: ${names || 'None'}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error listing projects: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -51,7 +51,7 @@ export class AxonSwitchProjectTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Switched to project: ${data.active_project || name}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error switching project: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -77,7 +77,7 @@ export class AxonCreateProjectTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Project: ${data.project}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error creating project: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -103,7 +103,7 @@ export class AxonDeleteProjectTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error deleting project: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -129,7 +129,7 @@ export class AxonDeleteDocumentsTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Deleted: ${data.deleted}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error deleting documents: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -149,7 +149,7 @@ export class AxonGetCollectionTool implements vscode.LanguageModelTool<any> {
       const files = (data.files || []).map((f: any) => `${f.source} (${f.chunks} chunks)`).join('\n');
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Total Files: ${data.total_files}\nTotal Chunks: ${data.total_chunks}\n\nFiles:\n${files}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error getting collection status: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -174,7 +174,7 @@ export class AxonClearCollectionTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error clearing collection: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -199,7 +199,7 @@ export class AxonUpdateSettingsTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Settings Applied.`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error updating settings: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -218,7 +218,7 @@ export async function switchProject(apiBase: string): Promise<void> {
     const data = JSON.parse(result.body);
     projects = data.projects ?? [];
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to list projects. Is the server running?`);
+    vscode.window.showErrorMessage(`Axon: Failed to list projects. ${apiConnectionError(err)}`);
     return;
   }
 
@@ -239,7 +239,7 @@ export async function switchProject(apiBase: string): Promise<void> {
     vscode.window.showInformationMessage(`Axon: Switched to project "${selected}".`);
     state.outputChannel.appendLine(`Switched to project: ${selected}`);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to switch project.`);
+    vscode.window.showErrorMessage(`Axon: Failed to switch project. ${apiConnectionError(err)}`);
   }
 }
 
@@ -267,6 +267,6 @@ export async function createNewProject(apiBase: string): Promise<void> {
     // Auto-switch to it
     await httpPost(`${apiBase}/project/switch`, { name }, apiKey);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to create project.`);
+    vscode.window.showErrorMessage(`Axon: Failed to create project. ${apiConnectionError(err)}`);
   }
 }

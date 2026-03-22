@@ -37,8 +37,8 @@ mcp = FastMCP("axon")
 
 
 def _headers() -> dict[str, str]:
-    """Return request headers, including X-API-Key when configured."""
-    h: dict[str, str] = {"Content-Type": "application/json"}
+    """Return request headers, including X-API-Key and surface attribution."""
+    h: dict[str, str] = {"Content-Type": "application/json", "X-Axon-Surface": "mcp"}
     if API_KEY:
         h["X-API-Key"] = API_KEY
     return h

@@ -76,7 +76,7 @@ export async function chatHandler(
   // discuss: false prevents the general-knowledge fallback from producing answers
   // when the knowledge base contains no matching content.
   try {
-    const result = await httpPost(`${apiBase}/query`, { query: request.prompt, discuss: false }, apiKey);
+    const result = await httpPost(`${apiBase}/query`, { query: request.prompt, discuss: false }, apiKey, 20_000, 'vscode_chat_participant');
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
       response.markdown(`> **Axon error** (${result.status}): ${formatDetail(data, result.body)}`);

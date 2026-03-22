@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 
 import { state } from '../shared';
-import { httpGet, formatDetail } from '../client/http';
+import { httpGet, formatDetail, apiConnectionError } from '../client/http';
 import { showGraphForQuery } from '../graph/panel';
 
 export class AxonShowGraphStatusTool implements vscode.LanguageModelTool<any> {
@@ -24,7 +24,7 @@ export class AxonShowGraphStatusTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph status error: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -71,6 +71,6 @@ export async function showGraphStatus(apiBase: string): Promise<void> {
       `Axon GraphRAG: ${count} community summaries${inProgress ? ' (build in progress)' : ''}`
     );
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to get graph status.`);
+    vscode.window.showErrorMessage(`Axon: Failed to get graph status. ${apiConnectionError(err)}`);
   }
 }

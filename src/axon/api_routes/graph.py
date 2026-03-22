@@ -38,6 +38,7 @@ async def finalize_graph(request: Request):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     rid = getattr(request.state, "request_id", "")
+    surface = getattr(request.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
     try:
         await asyncio.to_thread(brain.finalize_graph, True)
@@ -48,6 +49,7 @@ async def finalize_graph(request: Request):
             project,
             project=project,
             details={"community_summary_count": summary_count},
+            surface=surface,
             request_id=rid,
         )
         return {"status": "ok", "community_summary_count": summary_count}

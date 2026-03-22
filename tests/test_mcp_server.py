@@ -191,7 +191,8 @@ class TestMcpHeaders:
 
         monkeypatch.setattr(ms, "API_KEY", None)
         h = ms._headers()
-        assert h == {"Content-Type": "application/json"}
+        assert h["Content-Type"] == "application/json"
+        assert h["X-Axon-Surface"] == "mcp"
         assert "X-API-Key" not in h
 
     def test_headers_with_api_key(self, monkeypatch):
@@ -200,6 +201,7 @@ class TestMcpHeaders:
         monkeypatch.setattr(ms, "API_KEY", "secret-key")
         h = ms._headers()
         assert h["Content-Type"] == "application/json"
+        assert h["X-Axon-Surface"] == "mcp"
         assert h["X-API-Key"] == "secret-key"
 
 

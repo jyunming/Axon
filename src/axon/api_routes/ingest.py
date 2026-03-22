@@ -111,12 +111,14 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
         "error": None,
     }
 
+    rid = getattr(req.state, "request_id", job_id)
+    surface = getattr(req.state, "surface", "api")
+
     def process_ingestion():
         from axon import governance as gov
         from axon.loaders import DirectoryLoader
 
         project = getattr(brain, "_active_project", "default")
-        rid = getattr(req.state, "request_id", job_id)
         gov.emit(
             "ingest_started",
             "file",
@@ -124,6 +126,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
             project=project,
             status="started",
             details={"job_id": job_id},
+            surface=surface,
             request_id=rid,
         )
         try:
@@ -148,6 +151,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
                 str(requested_path),
                 project=project,
                 details={"job_id": job_id, "documents_ingested": len(docs)},
+                surface=surface,
                 request_id=rid,
             )
         except Exception as e:
@@ -162,6 +166,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
                 project=project,
                 status="failed",
                 details={"job_id": job_id, "error": "ingest error"},
+                surface=surface,
                 request_id=rid,
             )
 
@@ -392,6 +397,7 @@ async def delete_documents(request: DeleteRequest, req: Request):
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
     try:
         brain._assert_write_allowed("delete")
@@ -411,6 +417,7 @@ async def delete_documents(request: DeleteRequest, req: Request):
             ",".join(existing_ids[:10]),
             project=project,
             details={"deleted": len(existing_ids), "not_found": len(not_found)},
+            surface=surface,
             request_id=rid,
         )
         return {

@@ -92,12 +92,14 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
         grantee=request.grantee,
     )
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     gov.emit(
         "share_generated",
         "share",
         result.get("key_id", ""),
         project=request.project,
         details={"grantee": request.grantee},
+        surface=surface,
         request_id=rid,
     )
     return result
@@ -112,6 +114,7 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
 
     user_dir = _api._get_user_dir()
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     try:
         result = _shares.redeem_share_key(
             grantee_user_dir=user_dir,
@@ -125,6 +128,7 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
         result.get("key_id", ""),
         project=result.get("project", ""),
         details={"owner": result.get("owner", "")},
+        surface=surface,
         request_id=rid,
     )
     return result
@@ -139,6 +143,7 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
 
     user_dir = _api._get_user_dir()
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     try:
         result = _shares.revoke_share_key(owner_user_dir=user_dir, key_id=request.key_id)
     except ValueError as e:
@@ -148,6 +153,7 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
         "share",
         request.key_id,
         project=result.get("project", ""),
+        surface=surface,
         request_id=rid,
     )
     return result

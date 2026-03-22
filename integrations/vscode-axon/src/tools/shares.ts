@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 
 import { state } from '../shared';
-import { httpGet, httpPost, formatDetail, parseJsonSafe } from '../client/http';
+import { httpGet, httpPost, formatDetail, parseJsonSafe, apiConnectionError } from '../client/http';
 
 // ---------------------------------------------------------------------------
 // LM Tools
@@ -31,7 +31,7 @@ export class AxonShareProjectTool implements vscode.LanguageModelTool<any> {
         `Share key generated.\nProject: ${data.project}\nGrantee: ${data.grantee}\nAccess: read-only\nKey ID: ${data.key_id}\n\nShare string (send to ${data.grantee}):\n${data.share_string}`
       )]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Share generation error: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -56,7 +56,7 @@ export class AxonRedeemShareTool implements vscode.LanguageModelTool<any> {
         `Share redeemed. Project "${data.owner}/${data.project}" mounted as "${data.mount_name}" (read-only).`
       )]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Redeem error: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -81,7 +81,7 @@ export class AxonRevokeShareTool implements vscode.LanguageModelTool<any> {
         `Share ${data.key_id} revoked. Grantee "${data.grantee}" no longer has access to "${data.project}".`
       )]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Revoke error: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -100,7 +100,7 @@ export class AxonListSharesTool implements vscode.LanguageModelTool<any> {
       const text = JSON.stringify(data, null, 2);
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(text)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error listing shares: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -123,7 +123,7 @@ export class AxonInitStoreTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`AxonStore initialised at ${data.store_path} (user: ${data.username}). Share tools are now available.`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error initialising AxonStore: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -155,7 +155,7 @@ export async function initStore(apiBase: string): Promise<void> {
     );
     state.outputChannel.appendLine(`AxonStore: ${data.store_path}, user dir: ${data.user_dir}`);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to initialize store. Is the server running?`);
+    vscode.window.showErrorMessage(`Axon: Failed to initialize store. ${apiConnectionError(err)}`);
   }
 }
 
@@ -178,7 +178,7 @@ export async function shareProject(apiBase: string): Promise<void> {
       `Axon: Share key copied to clipboard (key: ${data.key_id}). Send the share string to ${grantee}.`
     );
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to generate share key.`);
+    vscode.window.showErrorMessage(`Axon: Failed to generate share key. ${apiConnectionError(err)}`);
   }
 }
 
@@ -201,7 +201,7 @@ export async function redeemShare(apiBase: string): Promise<void> {
       `Axon: Mounted "${data.owner}/${data.project}" as "${data.mount_name}" (read-only)`
     );
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to redeem share.`);
+    vscode.window.showErrorMessage(`Axon: Failed to redeem share. ${apiConnectionError(err)}`);
   }
 }
 
@@ -231,7 +231,7 @@ export async function revokeShare(apiBase: string): Promise<void> {
     }
     vscode.window.showInformationMessage(`Axon: Revoked access for ${revokeData.grantee} to ${revokeData.project}.`);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to revoke share.`);
+    vscode.window.showErrorMessage(`Axon: Failed to revoke share. ${apiConnectionError(err)}`);
   }
 }
 
@@ -254,6 +254,6 @@ export async function listShares(apiBase: string): Promise<void> {
     state.outputChannel.show();
     state.outputChannel.appendLine(`\n=== Axon Shares ===\nSharing with others:\n${sharing}\n\nShared with me:\n${shared}\n`);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to list shares.`);
+    vscode.window.showErrorMessage(`Axon: Failed to list shares. ${apiConnectionError(err)}`);
   }
 }

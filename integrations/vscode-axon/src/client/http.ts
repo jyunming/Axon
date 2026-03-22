@@ -39,11 +39,11 @@ export function normalizeGraphPayload(data: any): { nodes: any[]; links: any[] }
   return { nodes: [], links: [] };
 }
 
-export function httpGet(url: string, apiKey?: string, timeoutMs: number = 5000): Promise<HttpResult> {
+export function httpGet(url: string, apiKey?: string, timeoutMs: number = 5000, surface: string = 'vscode_extension_tool'): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const lib = parsed.protocol === 'https:' ? https : http;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Axon-Surface': surface };
     if (apiKey) {
       headers['X-API-Key'] = apiKey;
     }
@@ -60,7 +60,7 @@ export function httpGet(url: string, apiKey?: string, timeoutMs: number = 5000):
   });
 }
 
-export function httpPost(url: string, payload: unknown, apiKey?: string, timeoutMs: number = 20_000): Promise<HttpResult> {
+export function httpPost(url: string, payload: unknown, apiKey?: string, timeoutMs: number = 20_000, surface: string = 'vscode_extension_tool'): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const lib = parsed.protocol === 'https:' ? https : http;
@@ -68,6 +68,7 @@ export function httpPost(url: string, payload: unknown, apiKey?: string, timeout
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Content-Length': Buffer.byteLength(body).toString(),
+      'X-Axon-Surface': surface,
     };
     if (apiKey) {
       headers['X-API-Key'] = apiKey;
@@ -98,18 +99,27 @@ export async function searchAxon(
   threshold?: number,
   filters?: Record<string, any>,
   project?: string,
+  surface: string = 'vscode_extension_tool',
 ): Promise<SearchChunk[]> {
   const body: any = { query, top_k: topK };
   if (threshold != null) { body.threshold = threshold; }
   if (filters != null) { body.filters = filters; }
   if (project != null) { body.project = project; }
-  const result = await httpPost(`${apiBase}/search`, body, apiKey || undefined);
+  const result = await httpPost(`${apiBase}/search`, body, apiKey || undefined, 20_000, surface);
   if (result.status !== 200) {
     throw new Error(`Search returned HTTP ${result.status}: ${result.body}`);
   }
   const data = JSON.parse(result.body);
   // /search returns a plain array, not { results: [...] }
   return Array.isArray(data) ? data : (data.results ?? []);
+}
+
+/** Produce a consistent connection-error message for tool catch blocks.
+ *  Includes a platform-aware hint: auto-start works on Linux/macOS;
+ *  Windows users typically need to start axon-api manually. */
+export function apiConnectionError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return `Could not reach Axon API: ${msg}. Run \`axon-api\` in a terminal, or enable \`axon.autoStart\` (Linux/macOS only).`;
 }
 
 export function sleep(ms: number): Promise<void> {

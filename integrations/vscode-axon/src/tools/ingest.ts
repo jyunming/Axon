@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 
 import { state } from '../shared';
-import { httpGet, httpPost, formatDetail, parseJsonSafe } from '../client/http';
+import { httpGet, httpPost, formatDetail, parseJsonSafe, apiConnectionError } from '../client/http';
 
 // ---------------------------------------------------------------------------
 // LM Tools
@@ -28,7 +28,7 @@ export class AxonIngestTextTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Success: ${data.status}, ID: ${data.doc_id}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error during text ingest: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -50,7 +50,7 @@ export class AxonIngestUrlTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, URL: ${data.url}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error during URL ingest: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -76,7 +76,7 @@ export class AxonIngestPathTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Status: ${data.status}, Message: ${data.message}, JobID: ${data.job_id}`)]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error during path ingest: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -106,7 +106,7 @@ export class AxonGetIngestStatusTool implements vscode.LanguageModelTool<any> {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Ingestion still in progress (status: ${status}). Wait a moment and check again.`)]);
       }
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error checking ingest status: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -217,7 +217,7 @@ export class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
       ]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([
-        new (vscode as any).LanguageModelTextPart(`Error during image ingest: ${err}`)
+        new (vscode as any).LanguageModelTextPart(apiConnectionError(err))
       ]);
     }
   }
@@ -247,7 +247,7 @@ export class AxonRefreshIngestTool implements vscode.LanguageModelTool<any> {
         (data.reingested?.length ? `Updated: ${data.reingested.join(', ')}` : '')
       )]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Refresh error: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -271,7 +271,7 @@ export class AxonListStaleDocsTool implements vscode.LanguageModelTool<any> {
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(JSON.stringify(data, null, 2))]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Stale list error: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -293,7 +293,7 @@ export class AxonClearKnowledgeBaseTool implements vscode.LanguageModelTool<any>
       }
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart('Knowledge base cleared for current project.')]);
     } catch (err) {
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Clear error: ${err}`)]);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }
@@ -325,7 +325,7 @@ export async function ingestWorkspaceFolder(apiBase: string): Promise<void> {
     );
     state.outputChannel.appendLine(`Ingest workspace: ${folderPath} — job ${data.job_id}`);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to ingest workspace folder. Is the server running?`);
+    vscode.window.showErrorMessage(`Axon: Failed to ingest workspace folder. ${apiConnectionError(err)}`);
   }
 }
 
@@ -358,7 +358,7 @@ export async function ingestPickedFolder(apiBase: string): Promise<void> {
     );
     state.outputChannel.appendLine(`Ingest folder/file: ${selectedPath} — job ${data.job_id}`);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to ingest. Is the server running?`);
+    vscode.window.showErrorMessage(`Axon: Failed to ingest. ${apiConnectionError(err)}`);
   }
 }
 
@@ -383,7 +383,7 @@ export async function ingestCurrentFile(apiBase: string): Promise<void> {
     vscode.window.showInformationMessage(`Axon: Ingested "${source}" into the knowledge base.`);
     state.outputChannel.appendLine(`Ingested file: ${filePath}`);
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to ingest file. Is the server running?`);
+    vscode.window.showErrorMessage(`Axon: Failed to ingest file. ${apiConnectionError(err)}`);
   }
 }
 
@@ -417,7 +417,7 @@ export async function refreshIngest(apiBase: string): Promise<void> {
       `Axon: Refresh complete — ${reingested} updated, ${skipped} unchanged${missing ? `, ${missing} missing` : ''}`
     );
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Refresh failed. Is the server running?`);
+    vscode.window.showErrorMessage(`Axon: Refresh failed. ${apiConnectionError(err)}`);
   }
 }
 
@@ -451,7 +451,7 @@ export async function listStaleDocs(apiBase: string): Promise<void> {
       vscode.window.showInformationMessage(`Axon: ${stale.length} stale document(s) found. Check Axon output panel.`);
     }
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to list stale documents.`);
+    vscode.window.showErrorMessage(`Axon: Failed to list stale documents. ${apiConnectionError(err)}`);
   }
 }
 
@@ -473,6 +473,6 @@ export async function clearKnowledgeBase(apiBase: string): Promise<void> {
     }
     vscode.window.showInformationMessage('Axon: Knowledge base cleared for current project.');
   } catch (err) {
-    vscode.window.showErrorMessage(`Axon: Failed to clear knowledge base.`);
+    vscode.window.showErrorMessage(`Axon: Failed to clear knowledge base. ${apiConnectionError(err)}`);
   }
 }

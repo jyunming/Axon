@@ -127,6 +127,7 @@ async def set_project_maintenance(request: MaintenanceStateRequest, req: Request
     if not _VALID_PROJECT_NAME_RE.match(request.name):
         raise HTTPException(status_code=422, detail=f"Invalid project name: '{request.name}'")
     rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
     try:
         result = apply_maintenance_state(request.name, request.state)
         gov.emit(
@@ -135,6 +136,7 @@ async def set_project_maintenance(request: MaintenanceStateRequest, req: Request
             request.name,
             project=request.name,
             details={"state": request.state, "result": result},
+            surface=surface,
             request_id=rid,
         )
         return result
