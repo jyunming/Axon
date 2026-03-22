@@ -109,8 +109,8 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 ```json
 {"doc_ids": ["chunk-abc123", "chunk-def456"]}
 ```
-Pass the `doc_ids` returned by `/tracked-docs` or `/collection`. To delete by source path,
-look up the doc IDs with `GET /tracked-docs` first.
+Pass the `doc_ids` returned by `GET /tracked-docs` (the full manifest). `/collection` returns
+only source names and chunk counts — it does not include IDs usable for deletion.
 
 ---
 

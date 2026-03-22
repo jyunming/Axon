@@ -88,10 +88,11 @@ See [SETUP.md](SETUP.md) for connection instructions.
 
 ## Usage Notes
 
-- All tools operate on the **active project**. All read and write tools accept an optional
-  `project` parameter. When supplied, it is validated against the brain's active project and
-  returns an error on mismatch — the brain serves one project at a time. Use `switch_project`
-  to change the active project before querying or ingesting into a different one.
+- All tools operate on the **active project**. Most ingest, search, and query tools accept an
+  optional `project` parameter validated against the brain's active project (returns an error on
+  mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`,
+  `get_session`, `list_shares`. Use `switch_project` to change the active project before
+  querying or ingesting into a different one.
 - Ingest tools (`ingest_path`, `ingest_url`) are async by default and return a `job_id`.
   Poll `get_job_status` until `status == "completed"`.
 - `clear_knowledge` is irreversible — it wipes all vectors and BM25 state for the project.

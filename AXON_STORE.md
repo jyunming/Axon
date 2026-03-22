@@ -100,7 +100,7 @@ The grantee redeems the share string to mount the sharer's project locally.
 curl -X POST http://localhost:8000/share/redeem \
   -H "Content-Type: application/json" \
   -d '{"share_string": "eyJ..."}'
-# Response: {"mount_name": "alice_my-project", "owner": "alice", "project": "my-project", "status": "mounted"}
+# Response: {"mount_name": "alice_my-project", "owner": "alice", "project": "my-project", "descriptor": {...}}
 ```
 
 **REPL:**
@@ -109,11 +109,11 @@ curl -X POST http://localhost:8000/share/redeem \
 ```
 
 A mount descriptor is created under `mounts/alice_my-project/mount.json` (canonical,
-platform-independent record). The mount appears in `/project list` flagged as `[mount]`.
+platform-independent record). The mount appears in `/project list` as `mounts/alice_my-project`.
 
-To query the mounted project, switch to it using the `mount_name` returned above:
+To query the mounted project, switch to it using the prefixed name:
 ```
-/project switch alice_my-project
+/project switch mounts/alice_my-project
 What are the key findings?
 ```
 
@@ -152,8 +152,8 @@ View all outgoing shares (grants you created) and incoming mounts (shares you re
 curl http://localhost:8000/share/list
 # Response:
 # {
-#   "sharing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false}],
-#   "shared":  [{"mount": "carol_research", "owner": "carol", "project": "research"}]
+#   "sharing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false, "created_at": "..."}],
+#   "shared":  [{"key_id": "sk_...", "owner": "carol", "project": "research", "mount": "carol_research", "redeemed_at": "..."}]
 # }
 ```
 
@@ -162,7 +162,7 @@ curl http://localhost:8000/share/list
 /share list
 ```
 
-Revoked entries are shown with `"revoked": true` so you can identify stale mounts to remove.
+Revoked entries in `sharing` are shown with `"revoked": true`. Entries in `shared` do not include a `revoked` field — revoked mounts are removed lazily from the grantee's list on the next project list or switch operation.
 
 ---
 
@@ -172,7 +172,7 @@ Revoked entries are shown with `"revoked": true` so you can identify stale mount
   There is no `write_access` parameter — it was removed in v0.9.0.
 - **Shared filesystem required.** Both users must have filesystem access to the `base_path`
   set during `store init`. Network latency affects ingest performance but not query performance
-  (query uses local vector store; only metadata is read from the share path).
+  (mounted read scopes point at the mounted project's own vector and BM25 paths via the descriptor).
 - **Key security.** Share strings contain a base64-encoded payload and HMAC signature. Do not
   share them over untrusted channels. Revocation is recorded in the owner's
   `.share_manifest.json`; a revoked key's HMAC signature is rejected on access.

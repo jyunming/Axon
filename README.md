@@ -113,7 +113,7 @@ Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (ha
 
 ## Graph Panel — Investigate Your Knowledge Base Visually
 
-After asking a question, the **Axon Graph Panel** opens a split view directly inside VS Code — no browser, no extra tools:
+Invoke the **Axon Graph Panel** via the graph command or tool to open a split view directly inside VS Code — no browser, no extra tools:
 
 ```
 ┌──────────────────────┬──────────────────────────────────────────┐

@@ -906,7 +906,7 @@ For a team where one person owns ingestion and others query:
 | `ingest_path` | Ingest a local file or directory (async) |
 | `get_job_status` | Poll an async ingest job |
 | `search_knowledge` | Raw chunk retrieval (Copilot synthesises) |
-| `query_knowledge` | Retrieval + answer via local Ollama LLM |
+| `query_knowledge` | Retrieval + answer via the configured backend LLM provider |
 | `list_knowledge` | List indexed sources with chunk counts |
 | `switch_project` | Change active project namespace |
 | `delete_documents` | Remove documents by ID |
