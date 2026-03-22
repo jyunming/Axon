@@ -99,13 +99,13 @@ The grantee redeems the share string to mount the sharer's project locally.
 ```bash
 curl -X POST http://localhost:8000/share/redeem \
   -H "Content-Type: application/json" \
-  -d '{"share_string": "axon-share-v1:eyJ..."}'
+  -d '{"share_string": "eyJ..."}'
 # Response: {"mount_name": "alice_my-project", "owner": "alice", "project": "my-project", "status": "mounted"}
 ```
 
 **REPL:**
 ```
-/share redeem axon-share-v1:eyJ...
+/share redeem eyJ...
 ```
 
 A mount descriptor is created under `mounts/alice_my-project/mount.json` (canonical,

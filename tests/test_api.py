@@ -991,10 +991,12 @@ def test_add_text_same_content_different_projects_not_skipped():
 
     text = "project-scoped dedup test content"
 
+    api_module.brain._active_project = "alpha"
     resp1 = client.post("/add_text", json={"text": text, "project": "alpha"})
     assert resp1.status_code == 200
     assert resp1.json()["status"] == "success"
 
+    api_module.brain._active_project = "beta"
     resp2 = client.post("/add_text", json={"text": text, "project": "beta"})
     assert resp2.status_code == 200
     # Different project — must NOT be skipped
@@ -1006,6 +1008,7 @@ def test_add_text_same_content_same_project_is_skipped():
     """Same text sent twice to the same project must be skipped on the second call."""
     api_module.brain = _make_brain()
     api_module.brain.ingest.return_value = None
+    api_module.brain._active_project = "alpha"
 
     text = "project-scoped dedup same project content"
 
@@ -1103,6 +1106,7 @@ def test_get_projects_includes_memory_only_projects():
     """A project created via add_text in-memory should appear in memory_only."""
     api_module.brain = _make_brain()
     api_module.brain.ingest.return_value = None
+    api_module.brain._active_project = "sprint3-test"
 
     client.post("/add_text", json={"text": "project test doc", "project": "sprint3-test"})
 

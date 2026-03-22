@@ -29,8 +29,9 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 {
   "query": "What is the ingestion pipeline?",
   "project": "my-project",
-  "chat_history": [],
-  "overrides": {"hyde": true, "rerank": true, "top_k": 20}
+  "hyde": true,
+  "rerank": true,
+  "top_k": 20
 }
 ```
 
@@ -122,10 +123,10 @@ look up the doc IDs with `GET /tracked-docs` first.
 | `POST` | `/project/switch` | Switch the active project |
 | `POST` | `/project/delete/{name}` | Delete a project and all its data |
 
-Use `POST /project/switch` to change the active project before querying or searching.
-Ingest routes accept an optional `"project"` field for namespace targeting. Query and search
-routes accept `"project"` for validation only — they return `409` if it does not match the
-currently active project.
+Use `POST /project/switch` to change the active project before querying, searching, or ingesting.
+All routes that accept a `"project"` field validate it against the active project and return
+`409` if it does not match. The field is not a namespace-targeting mechanism — it is a safety
+check to prevent accidental writes or reads to the wrong corpus.
 
 ---
 
