@@ -1,10 +1,15 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server with 24 registered tools. When Axon is
-connected as an MCP server (e.g. with GitHub Copilot Agent or Claude Code), these tools are
-available to AI assistants without any additional configuration.
+Axon exposes a Model Context Protocol (MCP) server with 24 registered tools.
 
-See [SETUP.md](SETUP.md) for instructions on connecting Axon as an MCP server.
+> **Which integration should I use?**
+> - **VS Code users** (most users): install the Axon VS Code extension — the `axon_*` toolset appears in Copilot automatically. No `.vscode/mcp.json` required.
+> - **Copilot agent mode / non-VS Code hosts** (advanced): configure MCP as described in [SETUP.md § 10](SETUP.md).
+> - **Claude Code**: use MCP (this reference).
+
+When Axon is connected as an MCP server the tools below are available to the AI assistant.
+
+See [SETUP.md](SETUP.md) for connection instructions.
 
 ---
 

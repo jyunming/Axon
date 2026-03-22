@@ -729,11 +729,16 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ---
 
-## 10. MCP Setup (Copilot Agent Mode)
+## 10. MCP Setup (Advanced / External-Host Integration)
 
-The MCP (Model Context Protocol) server lets GitHub Copilot in **agent mode**
-call Axon tools directly — ingesting documents, searching knowledge, switching
-projects — all without leaving VS Code.
+> **Most VS Code users do not need this section.** The [VS Code extension](#11-vs-code-extension-github-copilot-integration) (Section 11) is the recommended integration. Use MCP when you need one of:
+> - Copilot **agent mode** with an explicit `.vscode/mcp.json` configuration
+> - A non-VS Code MCP host (Claude Code, Cursor, etc.)
+> - An advanced multi-tool workflow requiring direct MCP tool wiring
+
+The MCP (Model Context Protocol) server exposes Axon as a set of tools that any
+MCP-compatible host can call — ingesting documents, searching knowledge, switching
+projects — without the VS Code extension.
 
 ### How it works
 
@@ -958,7 +963,9 @@ The `axon.migration` module also provides `audit_legacy_chunk_ids(project_dir)` 
 
 The Axon VS Code extension (`axon-copilot`) gives GitHub Copilot direct access to your knowledge base as **language model tools** — available in Copilot Chat, inline chat, and agent mode. It also provides VS Code commands for project management, ingestion, and sharing.
 
-> **Difference from MCP:** The VS Code extension runs entirely inside VS Code using the VS Code Language Model API. The MCP server (Section 10) uses the Model Context Protocol and works with any MCP-compatible host. Both require `axon-api` to be running. Choose based on your workflow — both can coexist.
+> **This is the recommended VS Code integration.** The VS Code extension runs entirely inside VS Code using the VS Code Language Model API. It is the primary interface for most VS Code users — tools appear automatically in Copilot without any extra configuration file.
+>
+> The MCP server (Section 10) is an alternative for Copilot agent mode with explicit `.vscode/mcp.json` wiring, or for non-VS Code MCP hosts. Both require `axon-api` to be running. Advanced users can run both; for most users the extension alone is sufficient.
 
 ### Prerequisites
 

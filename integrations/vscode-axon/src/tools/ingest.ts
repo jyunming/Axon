@@ -16,10 +16,12 @@ export class AxonIngestTextTool implements vscode.LanguageModelTool<any> {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
-    const { text, source = 'agent_input' } = options.input;
+    const { text, source = 'agent_input', project } = options.input;
 
     try {
-      const result = await httpPost(`${apiBase}/add_text`, { text, metadata: { source } }, apiKey);
+      const body: any = { text, metadata: { source } };
+      if (project != null) { body.project = project; }
+      const result = await httpPost(`${apiBase}/add_text`, body, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);
@@ -36,10 +38,12 @@ export class AxonIngestUrlTool implements vscode.LanguageModelTool<any> {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
-    const { url } = options.input;
+    const { url, project } = options.input;
 
     try {
-      const result = await httpPost(`${apiBase}/ingest_url`, { url }, apiKey);
+      const body: any = { url };
+      if (project != null) { body.project = project; }
+      const result = await httpPost(`${apiBase}/ingest_url`, body, apiKey);
       const data = JSON.parse(result.body);
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon URL Ingest Error (${result.status}): ${formatDetail(data, result.body)}`)]);

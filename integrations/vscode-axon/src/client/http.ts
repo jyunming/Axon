@@ -90,9 +90,19 @@ export function httpPost(url: string, payload: unknown, apiKey?: string, timeout
   });
 }
 
-export async function searchAxon(apiBase: string, apiKey: string, query: string, topK: number, threshold?: number): Promise<SearchChunk[]> {
+export async function searchAxon(
+  apiBase: string,
+  apiKey: string,
+  query: string,
+  topK: number,
+  threshold?: number,
+  filters?: Record<string, any>,
+  project?: string,
+): Promise<SearchChunk[]> {
   const body: any = { query, top_k: topK };
   if (threshold != null) { body.threshold = threshold; }
+  if (filters != null) { body.filters = filters; }
+  if (project != null) { body.project = project; }
   const result = await httpPost(`${apiBase}/search`, body, apiKey || undefined);
   if (result.status !== 200) {
     throw new Error(`Search returned HTTP ${result.status}: ${result.body}`);
