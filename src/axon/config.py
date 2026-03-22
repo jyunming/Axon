@@ -287,14 +287,12 @@ class AxonConfig:
     # questions that no single leaf chunk can answer.
     raptor: bool = True
     raptor_chunk_group_size: int = 5
-    raptor_max_levels: int = 2  # P3: recursive summarization depth
-    raptor_cache_summaries: bool = True  # P5: skip LLM when window content unchanged
-    raptor_drilldown: bool = True  # P1: replace summary hits with leaf chunks
-    raptor_drilldown_top_k: int = 5  # P1: max leaves substituted per summary hit
-    raptor_retrieval_mode: str = (
-        "tree_traversal"  # P4: tree_traversal|summary_first|corpus_overview
-    )
-    raptor_graphrag_leaf_skip_threshold: int = 3  # P2: skip GraphRAG on sources >= N leaf chunks
+    raptor_max_levels: int = 2  # recursive summarization depth
+    raptor_cache_summaries: bool = True  # skip LLM when window content unchanged
+    raptor_drilldown: bool = True  # replace summary hits with leaf chunks
+    raptor_drilldown_top_k: int = 5  # max leaves substituted per summary hit
+    raptor_retrieval_mode: str = "tree_traversal"  # tree_traversal|summary_first|corpus_overview
+    raptor_graphrag_leaf_skip_threshold: int = 3  # skip GraphRAG on sources >= N leaf chunks
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
@@ -376,37 +374,37 @@ class AxonConfig:
     graph_rag_local_top_k_entities: int = 10
     graph_rag_local_top_k_relationships: int = 10
     graph_rag_local_include_relationship_weight: bool = False
-    # TASK 11: Unified candidate ranking weights
+    # Unified candidate ranking weights
     graph_rag_local_entity_weight: float = 3.0
     graph_rag_local_relation_weight: float = 2.0
     graph_rag_local_community_weight: float = 1.5
     graph_rag_local_text_unit_weight: float = 1.0
 
-    # TASK 12: Runtime cost reduction — community triage
+    # Runtime cost reduction — community triage
     graph_rag_community_min_size: int = 3  # communities smaller than this → template only
     graph_rag_community_llm_top_n_per_level: int = 15  # max LLM-summarized per level (0=unlimited)
     graph_rag_community_llm_max_total: int = (
         30  # hard cap on LLM calls across all levels (0=unlimited)
     )
-    # TASK 12: Lazy community generation — skip summarization at finalize; generate on first global query
+    # Lazy community generation — skip summarization at finalize; generate on first global query
     graph_rag_community_lazy: bool = True
-    # TASK 12: Global search pre-filter — cap communities entering map-reduce (0=no cap)
+    # Global search pre-filter — cap communities entering map-reduce (0=no cap)
     graph_rag_global_top_communities: int = 0
-    # TASK 12: RAPTOR source-size guard — skip RAPTOR for sources larger than this MB (0=no limit)
+    # RAPTOR source-size guard — skip RAPTOR for sources larger than this MB (0=no limit)
     raptor_max_source_size_mb: float = 0.0
 
-    # TASK 13A: Deferred batch saves — suppress per-call disk writes during batch ingest.
+    # Deferred batch saves — suppress per-call disk writes during batch ingest.
     # When True: BM25, entity graph, and relation graph saves deferred to finalize_ingest().
     # Reduces O(N²) disk writes to O(1) per session.
     # Crash recovery: in-memory state only; re-ingest affected sources on restart.
     ingest_batch_mode: bool = False
 
-    # TASK 13B: Per-source chunk count cap after splitting.
+    # Per-source chunk count cap after splitting.
     # Prevents chunk explosion from large structured files (JSON, TSV, CSV).
     # Keeps first N chunks (document order). 0 = unlimited (current behavior).
     max_chunks_per_source: int = 0
 
-    # TASK 13C: When True, detected dataset_type gates RAPTOR and GraphRAG.
+    # When True, detected dataset_type gates RAPTOR and GraphRAG.
     # Tabular, manifest, and reference sources skip both enrichments.
     # False (default) = current behavior.
     source_policy_enabled: bool = False
@@ -414,13 +412,13 @@ class AxonConfig:
     # GAP 6: Async rebuild debounce
     graph_rag_community_rebuild_debounce_s: float = 2.0
 
-    # TASK 7: Exact-token entity boost in local search
+    # Exact-token entity boost in local search
     graph_rag_exact_entity_boost: float = 3.0
 
-    # TASK 7: Deferred community rebuild (batch ingest mode)
+    # Deferred community rebuild (batch ingest mode)
     graph_rag_community_defer: bool = True
 
-    # TASK 7: Include RAPTOR level-1 summaries in GraphRAG entity extraction.
+    # Include RAPTOR level-1 summaries in GraphRAG entity extraction.
     # Defaults to True so large-source RAPTOR summaries are used as GraphRAG units.
     graph_rag_include_raptor_summaries: bool = True
 
@@ -442,12 +440,12 @@ class AxonConfig:
     #               because graspologic's import can hang; use only when graspologic is verified safe)
     graph_rag_community_backend: str = "louvain"
 
-    # Structural code graph (Phase 2 + Phase 3).
-    # Phase 2: builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.
-    # Phase 3 (code_graph_bridge): scans prose chunks for code symbol mentions → MENTIONED_IN edges.
+    # Structural code graph.
+    # Builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.
+    # code_graph_bridge: scans prose chunks for code symbol mentions → MENTIONED_IN edges.
     # Query time: traverses the code graph to expand retrieval results.
     code_graph: bool = False  # build + query structural code graph
-    code_graph_bridge: bool = False  # Phase 3: link code symbols to prose chunks
+    code_graph_bridge: bool = False  # link code symbols to prose chunks
 
     # Query-time lexical boost for code corpora.
     code_lexical_boost: bool = True  # apply identifier-aware re-scoring to code result sets
@@ -466,12 +464,12 @@ class AxonConfig:
     # corpora — reduces noisy one-off entities; qualification studies used 2 for papers corpus).
     graph_rag_entity_min_frequency: int = 2
 
-    # TASK 14: Dedicated thread pool size for map-reduce phase (0 = use max_workers).
+    # Dedicated thread pool size for map-reduce phase (0 = use max_workers).
     # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
     # from starving the shared executor during concurrent ingest.
     graph_rag_map_workers: int = 0
 
-    # TASK 14: Alternative NER backend. "gliner" skips LLM for entity extraction.
+    # Alternative NER backend. "gliner" skips LLM for entity extraction.
     # Relations and claims still use LLM. pip install axon[gliner]
     graph_rag_ner_backend: Literal["llm", "gliner"] = "llm"
 
@@ -481,12 +479,12 @@ class AxonConfig:
     # "deep" = standard + claims + canonicalize
     graph_rag_depth: Literal["light", "standard", "deep"] = "standard"
 
-    # TASK 14: Token-level compression of community reports before map-reduce LLM calls.
+    # Token-level compression of community reports before map-reduce LLM calls.
     # Uses LLMLingua-2. pip install axon[llmlingua]
     graph_rag_report_compress: bool = False
     graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0–1.0)
 
-    # TASK 14: Auto-route queries based on complexity.
+    # Auto-route queries based on complexity.
     # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
     # "off" (default): use graph_rag_mode as configured.
     graph_rag_auto_route: Literal["off", "heuristic", "llm"] = "off"
@@ -501,7 +499,7 @@ class AxonConfig:
     # Based on Anthropic's contextual retrieval technique.
     contextual_retrieval: bool = False
 
-    # P1: Semantic entity alias resolution — merge near-duplicate entity names (e.g.
+    # Semantic entity alias resolution — merge near-duplicate entity names (e.g.
     # "Apple" / "Apple Inc." / "Apple Corporation") into a single canonical node before
     # community detection.  Uses cosine similarity on entity-name embeddings.
     # pip install axon[graphrag]  (no extra deps — uses the already-loaded embedding model)
@@ -509,7 +507,7 @@ class AxonConfig:
     graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0–1)
     graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
 
-    # P2: Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
+    # Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
     # "rebel" skips the LLM for relation extraction; produces structured (subject, relation,
     # object) triples directly from a fine-tuned seq2seq model.
     # pip install axon[rebel]

@@ -222,39 +222,63 @@ reports) is prepended to the retrieved chunks before synthesis.
 - `global` — top community summaries ranked by embedding similarity (best for corpus-wide questions)
 - `hybrid` — combines community reports with document excerpts
 
+**Key parameters and safe defaults:**
+
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `graph_rag_community_backend` | `louvain` | Safe on all platforms; `leidenalg` when igraph available |
+| `graph_rag_relation_budget` | `30` | Max chunks per ingest batch for relation extraction; `0` = unlimited |
+| `graph_rag_entity_min_frequency` | `2` | Prune singleton entities; use `1` only for small corpora |
+| `graph_rag_budget` | `3` | Max graph-expanded chunks injected into synthesis context |
+| `graph_rag_community_defer` | `false` | Set `true` to build communities after ingest, not during |
+| `graph_rag_community_lazy` | `false` | Set `true` to generate summaries on first global query |
+
 **Config options:**
 ```yaml
 rag:
   graph_rag: true
-  graph_rag_depth: standard       # light (no LLM) | standard | deep (+ claims)
+  graph_rag_depth: standard                # light (no LLM) | standard | deep (+ claims)
   graph_rag_mode: hybrid
   graph_rag_budget: 3
   graph_rag_relations: true
   graph_rag_community: true
-  graph_rag_community_backend: louvain  # safe default; set to leidenalg or auto if graspologic is verified
-  graph_rag_auto_route: heuristic    # auto-select local/global/hybrid per query
+  graph_rag_community_backend: louvain     # safe default on all environments
+  graph_rag_relation_budget: 30           # cap relation extraction per batch
+  graph_rag_entity_min_frequency: 2       # prune singleton entities
+  graph_rag_auto_route: heuristic         # auto-select local/global/hybrid per query
 ```
 
 **When to use:** Multi-hop reasoning questions. Queries about relationships between entities.
 Corpus-wide summaries and thematic analysis.
 
-**Cost:** LLM calls per chunk at ingest time. Community detection runs async after ingest.
-Query time overhead is low (graph lookup + community snippet injection).
+**Cost:** LLM calls per chunk at ingest time (bounded by `graph_rag_relation_budget`). Community
+detection runs async after ingest when `graph_rag_community_defer: true`. Query time overhead is
+low (graph lookup + community snippet injection).
 
 ---
 
 ## 12. Recommended Configurations
 
-### Lean (default — fastest, no extra LLM calls)
+### Profile A — Default (fastest, no graph overhead)
+
+Use for routine QA, small–medium corpora, latency-sensitive ingest.
+
 ```yaml
 rag:
   hybrid_search: true
   rerank: true
   top_k: 20
-  # all other flags: false
+  # raptor, graph_rag: false (default)
 ```
 
-### Balanced (good recall, moderate cost)
+*No additional LLM calls. Answer quality is at parity with GraphRAG on most QA workloads.*
+
+---
+
+### Profile B — Balanced (good recall, moderate cost)
+
+Use for production deployments where answer quality matters more than ingest speed.
+
 ```yaml
 rag:
   hybrid_search: true
@@ -264,9 +288,57 @@ rag:
   top_k: 20
   cite: true
 ```
+
 *Adds ~2 LLM calls per query. Recommended for most production use cases.*
 
-### Maximum (best recall, highest cost and latency)
+---
+
+### Profile C — Best Tested GraphRAG
+
+Use for research corpora, cross-document synthesis, architecture/concept-network questions, or
+offline ingest where graph value matters. This profile is validated by qualification studies.
+
+```yaml
+rag:
+  raptor: true
+  graph_rag: true
+  graph_rag_relations: true
+  graph_rag_community: true
+  graph_rag_community_backend: louvain
+  graph_rag_community_defer: true
+  graph_rag_community_lazy: true
+  graph_rag_relation_budget: 30
+  graph_rag_entity_min_frequency: 2
+  graph_rag_ner_backend: llm
+  graph_rag_relation_backend: llm
+```
+
+*RAPTOR reduces graph fan-out on papers-style corpora. Deferred + lazy communities keep ingest
+operational. Significantly slower to ingest than Profile A — not recommended as a universal default.*
+
+---
+
+### Profile D — Graph Local Only (entity hops, no global reports)
+
+Use when relation-hop retrieval is needed but corpus-wide community summaries are not.
+
+```yaml
+rag:
+  raptor: true
+  graph_rag: true
+  graph_rag_relations: true
+  graph_rag_community: false
+  graph_rag_community_backend: louvain
+  graph_rag_relation_budget: 20
+  graph_rag_entity_min_frequency: 2
+```
+
+*Avoids community build cost. Good for structured knowledge graphs and entity-dense corpora.*
+
+---
+
+### Profile E — Maximum Recall (highest cost and latency)
+
 ```yaml
 rag:
   hybrid_search: true
@@ -278,11 +350,24 @@ rag:
   raptor: true
   graph_rag: true
   graph_rag_mode: hybrid
+  graph_rag_relation_budget: 30
+  graph_rag_entity_min_frequency: 2
   top_k: 30
   cite: true
 ```
+
 *Adds ~5–10 LLM calls per query plus cross-encoder reranking. Best for complex knowledge bases
 where answer quality is paramount over latency.*
+
+---
+
+### What NOT to do
+
+- Do not enable `graph_rag_community_backend: auto` on Python 3.13 (graspologic hangs).
+- Do not set `graph_rag_relation_budget: 0` on large corpora — unbounded relation extraction.
+- Do not enable GraphRAG for every project by default; Profile A is the right starting point.
+- Do not use `graph_rag_ner_backend: gliner` + `graph_rag_relation_backend: rebel` as the
+  default local path — relation coverage is materially weaker than the LLM extraction path.
 
 ---
 

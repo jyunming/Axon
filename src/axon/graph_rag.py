@@ -636,7 +636,7 @@ class GraphRagMixin:
     def _rebuild_communities(self) -> None:
         """Run community detection and generate summaries."""
         with self._community_rebuild_lock:
-            # P1: Entity alias resolution — merge near-duplicates before community detection
+            # Entity alias resolution — merge near-duplicates before community detection
             if getattr(self.config, "graph_rag_entity_resolve", False):
                 self._resolve_entity_aliases()
             logger.info("GraphRAG: Running community detection...")
@@ -1040,7 +1040,7 @@ class GraphRagMixin:
         if not level_summaries:
             level_summaries = self._community_summaries
 
-        # TASK 12: Dynamic community pre-filter — cheap token-overlap relevance score
+        # Dynamic community pre-filter — cheap token-overlap relevance score
         _top_n_communities = getattr(cfg, "graph_rag_global_top_communities", 0)
         if _top_n_communities > 0 and len(level_summaries) > _top_n_communities:
             _query_words = set(query.lower().split())
@@ -1079,7 +1079,7 @@ class GraphRagMixin:
         rng = _random.Random(42)
         rng.shuffle(all_chunks)
 
-        # TASK 14: Token-level compression of community report chunks before LLM map phase
+        # Token-level compression of community report chunks before LLM map phase
         if getattr(cfg, "graph_rag_report_compress", False) is True and all_chunks:
             _ratio = getattr(cfg, "graph_rag_report_compress_ratio", 0.5)
             try:
@@ -1140,9 +1140,9 @@ class GraphRagMixin:
             except Exception:
                 return []
 
-        # Map phase — parallel over shuffled chunks
-        # TASK 14: Use a dedicated pool when graph_rag_map_workers is set, so map-reduce
-        # does not starve the shared executor during concurrent ingest.
+        # Map phase — parallel over shuffled chunks; use a dedicated pool when
+        # graph_rag_map_workers is set, so map-reduce does not starve the shared executor
+        # during concurrent ingest.
         all_points = []
         _map_workers_cfg = getattr(cfg, "graph_rag_map_workers", 0)
         try:
@@ -1825,7 +1825,7 @@ class GraphRagMixin:
         if getattr(self.config, "graph_rag_depth", "standard") == "light":
             return self._extract_entities_light(text)
 
-        # TASK 14: GLiNER fast-path — skip LLM for NER when backend is "gliner"
+        # GLiNER fast-path — skip LLM for NER when backend is "gliner"
         if getattr(self.config, "graph_rag_ner_backend", "llm") == "gliner":
             return self._extract_entities_gliner(text)
 
@@ -1890,7 +1890,7 @@ class GraphRagMixin:
         if getattr(self.config, "graph_rag_depth", "standard") == "light":
             return []
 
-        # P2: REBEL fast-path — skip LLM when backend is "rebel"
+        # REBEL fast-path — skip LLM when backend is "rebel"
         if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
             return self._extract_relations_rebel(text)
 

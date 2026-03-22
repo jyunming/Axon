@@ -419,7 +419,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG entity description buffer (transient, not persisted)
         self._entity_description_buffer: dict = {}
 
-        # P5: In-memory RAPTOR summary cache {cache_key: summary_text}
+        # In-memory RAPTOR summary cache {cache_key: summary_text}
         self._raptor_summary_cache: dict[str, str] = {}
 
         # GraphRAG claims graph
@@ -998,7 +998,7 @@ Your primary goal is to help the user by answering questions based on the provid
         set_active_project(name)
         logger.info(f"Switched to project '{name}'")
 
-        # Phase 3: bump epoch on the old project to fence any stale in-flight writers.
+        # Bump epoch on the old project to fence any stale in-flight writers.
         if _prev_project != "default" and not _prev_project.startswith("@"):
             from axon.runtime import get_registry as _get_registry
 
@@ -1232,7 +1232,7 @@ Your primary goal is to help the user by answering questions based on the provid
             ]
             cache_key = f"{source}|L{level}|{i}|{content_hash}"
 
-            # P5: return cached summary when content is unchanged
+            # return cached summary when content is unchanged
             if self.config.raptor_cache_summaries and cache_key in self._raptor_summary_cache:
                 logger.debug(f"RAPTOR cache hit for {source} L{level}[{i}]")
                 return self._raptor_summary_cache[cache_key]
@@ -1287,7 +1287,7 @@ Your primary goal is to help the user by answering questions based on the provid
         if level_1_summaries:
             logger.info(f"   RAPTOR: generated {len(level_1_summaries)} level-1 summary node(s)")
 
-        # P3: Recursive summarization up to raptor_max_levels
+        # Recursive summarization up to raptor_max_levels
         max_levels = getattr(self.config, "raptor_max_levels", 2)
         all_summaries = list(level_1_summaries)
         prev_level_nodes = list(level_1_summaries)
@@ -1451,7 +1451,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
             final.extend(leaves[:drilldown_top_k])
 
-        # P4: Deduplicate by ID, keeping highest-scored occurrence
+        # Deduplicate by ID, keeping highest-scored occurrence
         seen: dict[str, dict] = {}
         deduped: list[dict] = []
         for res in final:
@@ -1773,10 +1773,10 @@ Your primary goal is to help the user by answering questions based on the provid
         if not documents:
             return
 
-        # Phase 6: block ingest on read-only scopes and mounted shares
+        # Block ingest on read-only scopes and mounted shares
         self._assert_write_allowed("ingest")
 
-        # Phase 3: acquire a write lease so drain-mode can track in-flight writes.
+        # Acquire a write lease so drain-mode can track in-flight writes.
         # _WriteLease.__del__ guarantees release even if an exception is raised.
         from axon.runtime import get_registry as _get_registry
 
@@ -1815,7 +1815,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     chunked.append(doc)
             documents = chunked
 
-        # TASK 13B: Per-source chunk budget enforcement
+        # Per-source chunk budget enforcement
         _max_chunks = getattr(self.config, "max_chunks_per_source", 0)
         if _max_chunks > 0:
             from collections import defaultdict as _dfl_b
@@ -1873,7 +1873,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
         if self.config.raptor:
-            # TASK 12: Source-size guard — skip RAPTOR for sources whose estimated text size exceeds threshold
+            # Source-size guard — skip RAPTOR for sources whose estimated text size exceeds threshold
             _raptor_max_mb = getattr(self.config, "raptor_max_source_size_mb", 0.0)
             if _raptor_max_mb > 0.0:
                 from collections import defaultdict as _dfl
@@ -1923,7 +1923,7 @@ Your primary goal is to help the user by answering questions based on the provid
             # Only extract entities from actual document chunks (optionally include RAPTOR level-1)
             _include_raptor = getattr(self.config, "graph_rag_include_raptor_summaries", False)
 
-            # P2: Skip GraphRAG entity extraction for large sources when raptor=True.
+            # Skip GraphRAG entity extraction for large sources when raptor=True.
             # Sources with >= raptor_graphrag_leaf_skip_threshold leaf chunks bypass
             # extraction; their RAPTOR summaries still enter GraphRAG if the include flag is set.
             _skip_threshold = getattr(self.config, "raptor_graphrag_leaf_skip_threshold", 20)
@@ -2197,7 +2197,7 @@ Your primary goal is to help the user by answering questions based on the provid
                             len(_rel_chunks),
                         )
 
-                # TASK 11: Normalize relation targets into entity graph so traversal never KeyErrors
+                # Normalize relation targets into entity graph so traversal never KeyErrors
                 if rg_updated or updated:
                     _stub_added = False
                     for _src, _entries in self._relation_graph.items():
@@ -2307,7 +2307,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     else:
                         self._rebuild_communities()
 
-        # Phase 3: abort if a project switch happened mid-ingest (stale epoch).
+        # Abort if a project switch happened mid-ingest (stale epoch).
         # Without this check, computed embeddings would be committed to the new
         # project's stores instead of the original project.
         if _ingest_lease.is_stale():
@@ -2398,7 +2398,7 @@ Your primary goal is to help the user by answering questions based on the provid
             }
         )
 
-        # Phase 7: ingest diagnostics — source IDs and collision check
+        # Ingest diagnostics — source IDs and collision check
         if n_chunks > 0:
             _batch_source_ids = {
                 chunk.get("metadata", {}).get("source_id", "")
@@ -2420,7 +2420,7 @@ Your primary goal is to help the user by answering questions based on the provid
                     _collision_count,
                 )
 
-        # Phase 3: explicitly release lease (fallback: _WriteLease.__del__ handles it)
+        # Explicitly release lease (fallback: _WriteLease.__del__ handles it)
         _ingest_lease.close()
 
 

@@ -1114,11 +1114,11 @@ class QueryRouterMixin:
         for r in results:
             r.pop("_graph_expanded", None)
 
-        # P1: RAPTOR drill-down — replace summary hits with grounded leaf chunks
+        # RAPTOR drill-down — replace summary hits with grounded leaf chunks
         if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
             results = self._raptor_drilldown(query, results, cfg=cfg)
 
-        # P4: Artifact-type ranking pass
+        # Artifact-type ranking pass
         if self.config.raptor or self.config.graph_rag:
             results = self._apply_artifact_ranking(results, cfg=cfg)
 
@@ -1167,7 +1167,7 @@ class QueryRouterMixin:
         context, has_web = self._build_context(citation_results)
 
         # GraphRAG global context injection
-        # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
+        # Lazy mode — generate summaries on first global query if not yet generated
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
@@ -1264,11 +1264,11 @@ class QueryRouterMixin:
         for r in results:
             r.pop("_graph_expanded", None)
 
-        # P1: RAPTOR drill-down — replace summary hits with grounded leaf chunks
+        # RAPTOR drill-down — replace summary hits with grounded leaf chunks
         if self.config.raptor and getattr(cfg, "raptor_drilldown", True):
             results = self._raptor_drilldown(query, results, cfg=cfg)
 
-        # P4: Artifact-type ranking pass
+        # Artifact-type ranking pass
         if self.config.raptor or self.config.graph_rag:
             results = self._apply_artifact_ranking(results, cfg=cfg)
 
@@ -1306,7 +1306,7 @@ class QueryRouterMixin:
         context, has_web = self._build_context(citation_results)
 
         # GraphRAG global context injection
-        # TASK 12: Lazy mode — generate summaries on first global query if not yet generated
+        # Lazy mode — generate summaries on first global query if not yet generated
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
