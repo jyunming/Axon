@@ -388,6 +388,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self._query_cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
         self._last_diagnostics: CodeRetrievalDiagnostics = CodeRetrievalDiagnostics()
+        self._last_provenance: dict = {}
 
         # Content hash store for ingest deduplication
         self._ingested_hashes: set = self._load_hash_store()

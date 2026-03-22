@@ -136,11 +136,11 @@ curl -X POST http://localhost:8000/share/revoke \
 ```
 
 Revocation marks the key as revoked in the owner's manifest (`.share_manifest.json`). The
-effect on the grantee side is **lazy**: the mount descriptor is removed the next time the
-grantee's Axon calls `validate_received_shares()` (which runs on project list and share-list
-operations — not on every switch or mounted read). After the descriptor is removed the mounted
-project disappears from the grantee's project list. There is no real-time HTTP 403 on every
-mounted read path.
+effect on the grantee side is **active at switch time and lazy otherwise**: when the grantee
+calls `POST /project/switch` targeting a mounted project, Axon validates the share against the
+owner's manifest first and returns `404` immediately if the share has been revoked. Revocation
+is also checked lazily on project-list and share-list operations for any mounts that were not
+explicitly switched to. There is no real-time HTTP 403 on every mounted read path.
 
 ---
 

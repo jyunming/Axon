@@ -1102,10 +1102,20 @@ class QueryRouterMixin:
 
             if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
+                self._last_provenance = {
+                    "answer_source": "no_context_fallback",
+                    "retrieved_count": 0,
+                    "web_count": 0,
+                }
                 return self.llm.complete(
                     query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history
                 )
 
+            self._last_provenance = {
+                "answer_source": "no_results",
+                "retrieved_count": 0,
+                "web_count": 0,
+            }
             return "I don't have any relevant information to answer that question."
 
         if cfg.rerank:
@@ -1208,6 +1218,12 @@ class QueryRouterMixin:
             self._build_system_prompt(has_web, cfg=cfg)
             + f"\n\n**Relevant context from documents:**\n{context}"
         )
+        _web_count = sum(1 for r in citation_results if r.get("is_web"))
+        self._last_provenance = {
+            "answer_source": "web_snippet_fallback" if has_web else "local_kb",
+            "retrieved_count": len(citation_results),
+            "web_count": _web_count,
+        }
         response = self.llm.complete(query, system_prompt, chat_history=chat_history)
         self._log_query_metrics(
             query,
@@ -1253,10 +1269,20 @@ class QueryRouterMixin:
         if not results:
             if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
+                self._last_provenance = {
+                    "answer_source": "no_context_fallback",
+                    "retrieved_count": 0,
+                    "web_count": 0,
+                }
                 yield from self.llm.stream(
                     query, self._build_system_prompt(False, cfg=cfg), chat_history=chat_history
                 )
                 return
+            self._last_provenance = {
+                "answer_source": "no_results",
+                "retrieved_count": 0,
+                "web_count": 0,
+            }
             yield "I don't have any relevant information to answer that question."
             return
 
@@ -1349,6 +1375,12 @@ class QueryRouterMixin:
             self._build_system_prompt(has_web, cfg=cfg)
             + f"\n\n**Relevant context from documents:**\n{context}"
         )
+        _web_count = sum(1 for r in citation_results if r.get("is_web"))
+        self._last_provenance = {
+            "answer_source": "web_snippet_fallback" if has_web else "local_kb",
+            "retrieved_count": len(citation_results),
+            "web_count": _web_count,
+        }
 
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}

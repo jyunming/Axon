@@ -95,7 +95,12 @@ async def query_brain(request: QueryRequest):
             "compress": cfg.compress_context,
             "discuss": cfg.discussion_fallback,
         }
-        out: dict = {"query": request.query, "response": response, "settings": settings}
+        out: dict = {
+            "query": request.query,
+            "response": response,
+            "settings": settings,
+            "provenance": getattr(brain, "_last_provenance", {}),
+        }
         if request.include_diagnostics:
             out["diagnostics"] = brain._last_diagnostics.to_dict()
         return out

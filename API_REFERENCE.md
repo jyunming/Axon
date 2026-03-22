@@ -39,6 +39,21 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 > differs, the server returns `409 Conflict`. Use `POST /project/switch` first to change
 > the active project. Omit `project` to query whichever project is currently active.
 
+**`POST /query` response** includes a `provenance` object on every response:
+```json
+{
+  "query": "...",
+  "response": "...",
+  "settings": {...},
+  "provenance": {
+    "answer_source": "local_kb",
+    "retrieved_count": 5,
+    "web_count": 0
+  }
+}
+```
+`answer_source` values: `"local_kb"` (retrieved from knowledge base), `"web_snippet_fallback"` (Brave web results used), `"no_context_fallback"` (no retrieval; LLM answered from general knowledge because `discussion_fallback=true`), `"no_results"` (no retrieval and strict mode returned a refusal).
+
 **`POST /query/stream` body:** same as `/query`.
 Response: Server-Sent Events stream. Each event is `data: <json>\n\n` where `<json>` is a
 text chunk string. The stream closes when generation completes. Errors emit

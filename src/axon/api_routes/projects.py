@@ -172,6 +172,26 @@ async def switch_project(request: ProjectSwitchRequest):
         raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
         project_name = request.final_name
+
+        # For mounted projects, validate revocation before switching so a revoked
+        # share is caught at switch time, not only at project-list time.
+        if project_name.startswith("mounts/") and brain.config.axon_store_mode:
+            from axon import shares as _shares
+
+            user_dir = Path(brain.config.projects_root)
+            mount_name = project_name[len("mounts/") :]
+            try:
+                removed = _shares.validate_received_shares(user_dir)
+                if mount_name in removed:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Mounted project '{project_name}' has been revoked by the owner.",
+                    )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.warning(f"Could not validate share before switch: {exc}")
+
         brain.switch_project(project_name)
         return {"status": "success", "active_project": project_name}
     except ValueError as e:
