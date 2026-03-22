@@ -39,7 +39,7 @@ See [SETUP.md](SETUP.md) for connection instructions.
 | Tool | Description |
 |------|-------------|
 | `list_knowledge` | List indexed sources with chunk counts for the active project |
-| `delete_documents` | Remove documents from the index by source path or URL list |
+| `delete_documents` | Remove documents from the index by document ID list (`doc_ids`) |
 | `clear_knowledge` | Wipe the active project's vector store and BM25 index entirely |
 | `get_stale_docs` | List documents that have not been refreshed in N days (default 30) |
 | `get_active_leases` | List active read/write leases held via AxonStore |

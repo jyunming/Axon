@@ -921,7 +921,7 @@ For a team where one person owns ingestion and others query:
 | `get_session` | Retrieve a saved conversation session |
 | `share_project` | Generate a share key for a project |
 | `redeem_share` | Redeem a share key to mount a shared project |
-| `list_shares` | List active outbound shares |
+| `list_shares` | List outgoing shares (`sharing`) and incoming mounted shares (`shared`) |
 | `init_store` | Initialise AxonStore multi-user mode |
 
 > **Recommended:** use `search_knowledge` (not `query_knowledge`) in agent mode.

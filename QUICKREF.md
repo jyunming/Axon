@@ -473,7 +473,7 @@ curl -X POST http://localhost:8000/share/generate \
 # Redeem a share key
 curl -X POST http://localhost:8000/share/redeem \
   -H "Content-Type: application/json" \
-  -d '{"share_string": "axon-share-..."}'
+  -d '{"share_string": "eyJ..."}'
 
 # List active shares
 curl http://localhost:8000/share/list
