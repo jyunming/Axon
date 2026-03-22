@@ -106,6 +106,15 @@ ollama pull nomic-embed-text
 | BGE-small | 130MB | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Better accuracy, still fast |
 | nomic-embed-text | 550MB | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Production RAG, long documents |
 | all-mpnet-base-v2 | 420MB | ⭐⭐ | ⭐⭐⭐⭐⭐ | Maximum accuracy (slower) |
+| **BAAI/bge-m3** | ~1.1GB | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Multilingual, 8192-token context, SOTA MTEB |
+
+**BGE-M3** (via FastEmbed) is the highest-quality supported embedding. Use it for multilingual corpora
+or documents with long passages. Requires `pip install 'axon[fastembed]'`:
+```yaml
+embedding:
+  provider: fastembed
+  model: BAAI/bge-m3
+```
 
 ---
 

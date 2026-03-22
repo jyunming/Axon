@@ -131,7 +131,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
 | `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match) |
-| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `cite`, `raptor`, `graph-rag` |
+| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `sentence-window`, `crag-lite`, `cite`, `raptor`, `graph-rag` |
 | `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
 | `/keys [set provider]` | Show API key status for all providers; `/keys set <provider>` saves a key interactively |
 | `/compact` | Summarize entire chat history via LLM to free context window space |

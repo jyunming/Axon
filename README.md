@@ -99,7 +99,7 @@ Create `.vscode/settings.json`:
 
 Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (hammer icon).
 
-> See **[Getting Started](GETTING_STARTED.md)** for full setup details, workflow diagrams, and per-entry-point examples.
+> See **[Setup Guide](SETUP.md)** for full setup details, workflow diagrams, and per-entry-point examples.
 
 ---
 
@@ -171,7 +171,6 @@ Copilot Chat:
 
 | Guide | What it covers |
 |---|---|
-| **[Getting Started](GETTING_STARTED.md)** | Ingest/query workflow for every entry point — with diagrams |
 | **[Setup Guide](SETUP.md)** | Full install for all platforms, models, VS Code extension config, MCP |
 | **[Quick Reference](QUICKREF.md)** | All CLI flags, REPL commands, API endpoints |
 | **[Model Guide](MODEL_GUIDE.md)** | Choosing an LLM and embedding model |

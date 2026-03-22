@@ -127,7 +127,59 @@ candidate pool.
 
 ---
 
-## 8. RAPTOR — Hierarchical Clustering Summaries
+## 8. Sentence-Window Retrieval
+
+**Flag:** `sentence_window: true`
+**Config:** `rag.sentence_window: true`, `rag.sentence_window_size: 3`
+
+Indexes documents at sentence granularity for precise semantic matching, then expands each hit to
+±N surrounding sentences before passing context to the LLM. Retrieval precision improves because
+sentence embeddings capture meaning more tightly than full-passage embeddings; the window keeps
+answers coherent.
+
+**When to use:** Prose-heavy corpora (articles, reports, manuals) where a single sentence contains
+the key fact but isolated context is insufficient for a coherent answer.
+
+**Config options:**
+```yaml
+rag:
+  sentence_window: true
+  sentence_window_size: 3   # ±3 sentences around each hit (default)
+```
+
+**Cost:** Slightly higher ingest overhead (sentence segmentation pass); query latency similar to
+chunk retrieval.
+
+---
+
+## 8b. CRAG-Lite — Corrective Retrieval
+
+**Flag:** `crag_lite: true`
+**Config:** `rag.crag_lite: true`, `rag.crag_lite_confidence_threshold: 0.4`
+
+After retrieval, a lightweight heuristic confidence assessment evaluates the result set using
+signals such as score spread, result count, source diversity, and threshold proximity. If
+confidence falls below the threshold, CRAG-Lite triggers the configured fallback (web search via
+`truth_grounding`, or a no-answer response). High-confidence retrievals proceed unmodified.
+
+**When to use:** Deployments where the KB may have gaps and silent hallucination is worse than an
+explicit fallback. Works well with `truth_grounding: true` for automatic web escalation.
+
+**Config options:**
+```yaml
+rag:
+  crag_lite: true
+  crag_lite_confidence_threshold: 0.4   # 0.0–1.0; lower = less aggressive fallback
+```
+
+**Diagnostics:** The `/query` response includes `confidence`, `fallback_triggered`, and
+`fallback_reason` fields when `crag_lite` is active.
+
+**Cost:** Negligible — heuristic only, no extra LLM call.
+
+---
+
+## 10. RAPTOR — Hierarchical Clustering Summaries
 
 **Flag:** `raptor: true` (also set at ingest time)
 **CLI:** `axon --raptor --ingest ./docs/`
@@ -154,7 +206,7 @@ Query time cost is negligible.
 
 ---
 
-## 9. GraphRAG — Entity Graph with Community Summaries
+## 11. GraphRAG — Entity Graph with Community Summaries
 
 **Flag:** `graph_rag: true` (also set at ingest time)
 **CLI:** `axon --graph-rag "your query"`
@@ -191,7 +243,7 @@ Query time overhead is low (graph lookup + community snippet injection).
 
 ---
 
-## 10. Recommended Configurations
+## 12. Recommended Configurations
 
 ### Lean (default — fastest, no extra LLM calls)
 ```yaml
@@ -234,7 +286,7 @@ where answer quality is paramount over latency.*
 
 ---
 
-## 11. Smart Query Routing
+## 13. Smart Query Routing
 
 **Config:** `graph_rag_auto_route: heuristic` (default) or `graph_rag_auto_route: llm`
 
@@ -274,7 +326,7 @@ ambiguous queries; adds ~1 LLM call per query.
 
 ### Disabling Auto-Routing
 
-Set `graph_rag_auto_route: false` to use fixed RAG flags from your config or `overrides`
+Set `graph_rag_auto_route: "off"` to use fixed RAG flags from your config or `overrides`
 without any per-query profile override.
 
 ---
