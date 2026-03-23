@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 
 import { state } from '../shared';
-import { httpGet, formatDetail, apiConnectionError } from '../client/http';
+import { httpGet, httpPost, formatDetail, apiConnectionError } from '../client/http';
 import { showGraphForQuery } from '../graph/panel';
 
 export class AxonShowGraphStatusTool implements vscode.LanguageModelTool<any> {
@@ -47,6 +47,29 @@ export class AxonShowGraphTool implements vscode.LanguageModelTool<any> {
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(`Error opening graph panel: ${err}`)
       ]);
+    }
+  }
+}
+
+export class AxonFinalizeGraphTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: 'Finalizing Axon knowledge graph (community rebuild)…' };
+  }
+
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    try {
+      const result = await httpPost(`${apiBase}/graph/finalize`, {}, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph finalize error: ${formatDetail(data, result.body)}`)]);
+      }
+      const summaries = data.community_summary_count ?? data.summaries ?? '?';
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph finalized. Community summaries: ${summaries}`)]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }
   }
 }

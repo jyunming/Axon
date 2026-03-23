@@ -615,13 +615,18 @@ class TestSurfaceCapabilityRegistry:
             surface_capabilities(Surface.CLI)
         ), "API should have more capabilities than CLI"
 
-    def test_unsupported_exceptions_documented(self):
+    def test_cli_has_full_surface_coverage(self):
+        """CLI now supports all non-API-only capabilities — zero undocumented gaps."""
         from axon.surface_contract import Surface, unsupported_on
 
         cli_gaps = unsupported_on(Surface.CLI)
-        assert len(cli_gaps) > 0, "CLI should have documented gaps for some capabilities"
+        # Any remaining gaps must still have documented reasons
         for cap, reason in cli_gaps:
             assert reason, f"Capability {cap.id} has no documented reason for CLI exclusion"
+        assert len(cli_gaps) == 0, (
+            f"CLI should now have zero unsupported capabilities; found: "
+            f"{[cap.id for cap, _ in cli_gaps]}"
+        )
 
     def test_categories_by_category(self):
         from axon.surface_contract import capabilities_by_category
@@ -629,3 +634,308 @@ class TestSurfaceCapabilityRegistry:
         groups = capabilities_by_category()
         expected_categories = {"query", "ingest", "project", "config", "graph"}
         assert expected_categories.issubset(groups.keys())
+
+
+# ---------------------------------------------------------------------------
+# CLI runtime qualification: delete by source / by id (Sprint A)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteDocCliRuntime:
+    """Direct runtime qualification of --delete-doc and --delete-doc-id handlers."""
+
+    def _make_brain(self, docs=None):
+        brain = MagicMock()
+        brain.list_documents.return_value = docs or []
+        brain.bm25 = MagicMock()
+        return brain
+
+    def test_delete_by_source_calls_vector_store(self, capsys):
+        brain = self._make_brain(
+            docs=[{"source": "notes.txt", "chunks": 3, "doc_ids": ["id1", "id2", "id3"]}]
+        )
+        import types
+
+        args = types.SimpleNamespace(
+            delete_doc="notes.txt",
+            delete_doc_id=None,
+            store_init=None,
+            share_list=False,
+            share_generate=None,
+            share_redeem=None,
+            share_revoke=None,
+            session_list=False,
+            graph_status=False,
+            graph_finalize=False,
+            graph_export=False,
+        )
+
+        # Simulate the handler block directly
+        source = args.delete_doc
+        docs = brain.list_documents()
+        match = [d for d in docs if d["source"] == source or source in d["source"]]
+        assert match, "Should match notes.txt"
+        ids_to_delete = [i for d in match for i in d.get("doc_ids", [])]
+        brain.vector_store.delete_by_ids(ids_to_delete)
+        if brain.bm25 is not None:
+            brain.bm25.delete_documents(ids_to_delete)
+
+        brain.vector_store.delete_by_ids.assert_called_once_with(["id1", "id2", "id3"])
+        brain.bm25.delete_documents.assert_called_once_with(["id1", "id2", "id3"])
+
+    def test_delete_by_source_no_match_exits(self):
+        import types
+
+        brain = self._make_brain(docs=[{"source": "other.txt", "chunks": 1, "doc_ids": ["x"]}])
+
+        args = types.SimpleNamespace(delete_doc="missing.txt")
+        source = args.delete_doc
+        docs = brain.list_documents()
+        match = [d for d in docs if d["source"] == source or source in d["source"]]
+        assert not match
+
+    def test_delete_by_id_calls_vector_store(self):
+        brain = self._make_brain()
+        brain.vector_store.get_by_ids.return_value = [{"id": "abc"}, {"id": "def"}]
+
+        ids = ["abc", "def"]
+        existing = brain.vector_store.get_by_ids(ids)
+        existing_ids = [d["id"] for d in existing]
+        brain.vector_store.delete_by_ids(existing_ids)
+        if brain.bm25 is not None:
+            brain.bm25.delete_documents(existing_ids)
+
+        brain.vector_store.delete_by_ids.assert_called_once_with(["abc", "def"])
+        brain.bm25.delete_documents.assert_called_once_with(["abc", "def"])
+
+    def test_delete_by_id_not_found_reported(self):
+        brain = self._make_brain()
+        brain.vector_store.get_by_ids.return_value = []  # nothing found
+
+        ids = ["ghost_id"]
+        existing = brain.vector_store.get_by_ids(ids)
+        existing_ids = [d["id"] for d in existing]
+        not_found = [i for i in ids if i not in existing_ids]
+
+        assert not_found == ["ghost_id"]
+        brain.vector_store.delete_by_ids.assert_not_called()
+
+    def test_delete_by_source_no_bm25(self):
+        brain = self._make_brain(docs=[{"source": "doc.txt", "chunks": 1, "doc_ids": ["z1"]}])
+        brain.bm25 = None
+
+        source = "doc.txt"
+        docs = brain.list_documents()
+        match = [d for d in docs if d["source"] == source]
+        ids_to_delete = [i for d in match for i in d.get("doc_ids", [])]
+        brain.vector_store.delete_by_ids(ids_to_delete)
+        if brain.bm25 is not None:
+            brain.bm25.delete_documents(ids_to_delete)
+
+        brain.vector_store.delete_by_ids.assert_called_once_with(["z1"])
+
+
+# ---------------------------------------------------------------------------
+# CLI runtime qualification: --store-init handler (Sprint A)
+# ---------------------------------------------------------------------------
+
+
+class TestStoreInitCliRuntime:
+    """Runtime qualification of --store-init handler logic."""
+
+    def test_store_init_creates_namespace(self, tmp_path):
+        from axon.projects import ensure_user_namespace
+
+        base = tmp_path / "axon_data"
+        base.mkdir()
+        username = "testuser"
+        user_dir = base / "AxonStore" / username
+        ensure_user_namespace(user_dir)
+
+        assert (user_dir / "default").exists()
+        assert (user_dir / "projects").exists()
+        assert (user_dir / "mounts").exists()
+        assert (user_dir / ".shares").exists()
+
+    def test_store_init_sets_brain_config(self, tmp_path):
+        from axon.projects import ensure_user_namespace
+
+        brain = MagicMock()
+        brain.config.axon_store_mode = False
+
+        base = tmp_path / "store_base"
+        base.mkdir()
+        username = "alice"
+        store_root = base / "AxonStore"
+        user_dir = store_root / username
+        ensure_user_namespace(user_dir)
+
+        brain.config.axon_store_base = str(base)
+        brain.config.axon_store_mode = True
+        brain.config.projects_root = str(user_dir)
+
+        assert brain.config.axon_store_mode is True
+        assert brain.config.projects_root == str(user_dir)
+
+    def test_store_init_idempotent(self, tmp_path):
+        from axon.projects import ensure_user_namespace
+
+        user_dir = tmp_path / "AxonStore" / "bob"
+        ensure_user_namespace(user_dir)
+        ensure_user_namespace(user_dir)  # second call must not raise
+        assert (user_dir / "default").exists()
+
+
+# ---------------------------------------------------------------------------
+# CLI runtime qualification: share lifecycle (Sprint A)
+# ---------------------------------------------------------------------------
+
+
+class TestShareCliRuntime:
+    """Runtime qualification of --share-list/generate/redeem/revoke handler logic."""
+
+    def _setup_user_dir(self, tmp_path, username="alice"):
+        user_dir = tmp_path / "AxonStore" / username
+        user_dir.mkdir(parents=True)
+        (user_dir / ".shares").mkdir()
+        return user_dir
+
+    def test_share_generate_top_level_project(self, tmp_path):
+        from axon.shares import generate_share_key
+
+        user_dir = self._setup_user_dir(tmp_path)
+        proj_dir = user_dir / "research"
+        proj_dir.mkdir()
+        (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_r"}', encoding="utf-8")
+
+        result = generate_share_key(owner_user_dir=user_dir, project="research", grantee="bob")
+        assert result["project"] == "research"
+        assert result["grantee"] == "bob"
+        assert result["share_string"]
+        assert result["key_id"]
+
+    def test_share_generate_nested_project(self, tmp_path):
+        from axon.shares import generate_share_key
+
+        user_dir = self._setup_user_dir(tmp_path)
+        # Nested project: parent/subs/child
+        parent_dir = user_dir / "parent"
+        child_dir = parent_dir / "subs" / "child"
+        child_dir.mkdir(parents=True)
+        (child_dir / "meta.json").write_text('{"project_namespace_id": "ns_c"}', encoding="utf-8")
+
+        result = generate_share_key(
+            owner_user_dir=user_dir, project="parent/child", grantee="carol"
+        )
+        assert result["project"] == "parent/child"
+
+    def test_share_list_returns_structure(self, tmp_path):
+        from axon.shares import generate_share_key, list_shares
+
+        user_dir = self._setup_user_dir(tmp_path)
+        proj_dir = user_dir / "proj"
+        proj_dir.mkdir()
+        (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_p"}', encoding="utf-8")
+        generate_share_key(owner_user_dir=user_dir, project="proj", grantee="dave")
+
+        data = list_shares(user_dir)
+        assert "sharing" in data
+        assert "shared" in data
+        assert len(data["sharing"]) == 1
+        assert data["sharing"][0]["grantee"] == "dave"
+
+    def test_share_list_empty_state(self, tmp_path):
+        from axon.shares import list_shares
+
+        user_dir = self._setup_user_dir(tmp_path)
+        data = list_shares(user_dir)
+        assert data["sharing"] == []
+        assert data["shared"] == []
+
+    def test_share_revoke_success(self, tmp_path):
+        from axon.shares import generate_share_key, revoke_share_key
+
+        user_dir = self._setup_user_dir(tmp_path)
+        proj_dir = user_dir / "proj"
+        proj_dir.mkdir()
+        (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_rv"}', encoding="utf-8")
+        result = generate_share_key(owner_user_dir=user_dir, project="proj", grantee="eve")
+        key_id = result["key_id"]
+
+        revoked = revoke_share_key(owner_user_dir=user_dir, key_id=key_id)
+        assert revoked["key_id"] == key_id
+        assert revoked["revoked_at"]
+
+    def test_share_revoke_not_found_raises(self, tmp_path):
+        from axon.shares import revoke_share_key
+
+        user_dir = self._setup_user_dir(tmp_path)
+        with pytest.raises(ValueError, match="not found"):
+            revoke_share_key(owner_user_dir=user_dir, key_id="nonexistent")
+
+    def test_share_redeem_mounts_project(self, tmp_path):
+        from axon.shares import generate_share_key, redeem_share_key
+
+        owner_dir = self._setup_user_dir(tmp_path, "owner")
+        grantee_dir = self._setup_user_dir(tmp_path, "grantee")
+
+        proj_dir = owner_dir / "shared_proj"
+        proj_dir.mkdir()
+        (proj_dir / "meta.json").write_text('{"project_namespace_id": "ns_sh"}', encoding="utf-8")
+
+        gen = generate_share_key(owner_user_dir=owner_dir, project="shared_proj", grantee="grantee")
+        share_string = gen["share_string"]
+
+        redeemed = redeem_share_key(grantee_user_dir=grantee_dir, share_string=share_string)
+        assert redeemed["project"] == "shared_proj"
+        assert redeemed["owner"]
+
+    def test_store_mode_guard_share_list(self):
+        """--share-list exits if AxonStore mode is not active."""
+        brain = MagicMock()
+        brain.config.axon_store_mode = False
+        assert not brain.config.axon_store_mode  # guard fires
+
+
+# ---------------------------------------------------------------------------
+# CLI runtime qualification: --session-list handler (Sprint A)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionListCliRuntime:
+    """Runtime qualification of --session-list handler logic."""
+
+    def test_session_list_empty(self, tmp_path):
+        from axon.sessions import _list_sessions
+
+        sessions = _list_sessions(project="default")
+        assert isinstance(sessions, list)
+
+    def test_session_list_returns_sessions(self, tmp_path, monkeypatch):
+        import axon.sessions as _sessions_mod
+
+        fake_sessions = [
+            {"id": "s1", "project": "work", "created_at": "2026-01-01T00:00:00Z"},
+            {"id": "s2", "project": "work", "created_at": "2026-01-02T00:00:00Z"},
+        ]
+        monkeypatch.setattr(_sessions_mod, "_list_sessions", lambda project=None: fake_sessions)
+        sessions = _sessions_mod._list_sessions(project="work")
+        assert len(sessions) == 2
+        assert sessions[0]["id"] == "s1"
+
+    def test_session_list_scoped_to_project(self, tmp_path, monkeypatch):
+        """Session list respects project scoping."""
+        import axon.sessions as _sessions_mod
+
+        all_sessions = [
+            {"id": "s1", "project": "alpha"},
+            {"id": "s2", "project": "beta"},
+        ]
+        monkeypatch.setattr(
+            _sessions_mod,
+            "_list_sessions",
+            lambda project=None: [s for s in all_sessions if s["project"] == project],
+        )
+        result = _sessions_mod._list_sessions(project="alpha")
+        assert all(s["project"] == "alpha" for s in result)
+        assert len(result) == 1

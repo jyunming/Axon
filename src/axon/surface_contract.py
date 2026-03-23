@@ -31,7 +31,6 @@ class Surface(str, Enum):
 
 
 ALL_SURFACES = frozenset(Surface)
-NO_CLI = frozenset({Surface.API, Surface.REPL, Surface.VSCODE})
 NO_VSCODE = frozenset({Surface.API, Surface.REPL, Surface.CLI})
 
 
@@ -166,8 +165,7 @@ REGISTRY: list[Capability] = [
         category="collection",
         tier=Tier.ONE,
         description="Remove specific document chunks by ID.",
-        supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.VSCODE}),
-        intentional_exceptions={Surface.CLI: "CLI uses --list; delete path not yet wired"},
+        supported_surfaces=ALL_SURFACES,
         api_route="/delete",
     ),
     Capability(
@@ -232,10 +230,7 @@ REGISTRY: list[Capability] = [
         category="config",
         tier=Tier.TWO,
         description="Inspect current retrieval and generation settings.",
-        supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
-        intentional_exceptions={
-            Surface.VSCODE: "No settings read tool currently; planned for SP-040"
-        },
+        supported_surfaces=ALL_SURFACES,
         api_route="/config",
     ),
     # ── Share / Store ────────────────────────────────────────────────────────
@@ -245,8 +240,7 @@ REGISTRY: list[Capability] = [
         category="store",
         tier=Tier.ONE,
         description="Initialise a user-scoped AxonStore namespace.",
-        supported_surfaces=NO_CLI,
-        intentional_exceptions={Surface.CLI: "Store init not yet wired in CLI; planned for SP-033"},
+        supported_surfaces=ALL_SURFACES,
         api_route="/store/init",
     ),
     Capability(
@@ -255,10 +249,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.ONE,
         description="Create an HMAC share token for a grantee.",
-        supported_surfaces=NO_CLI,
-        intentional_exceptions={
-            Surface.CLI: "Share lifecycle not yet wired in CLI; planned for SP-033"
-        },
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/generate",
     ),
     Capability(
@@ -267,10 +258,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.ONE,
         description="Mount a shared project using a share token.",
-        supported_surfaces=NO_CLI,
-        intentional_exceptions={
-            Surface.CLI: "Share lifecycle not yet wired in CLI; planned for SP-033"
-        },
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/redeem",
     ),
     Capability(
@@ -279,10 +267,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.ONE,
         description="Revoke an active share grant.",
-        supported_surfaces=NO_CLI,
-        intentional_exceptions={
-            Surface.CLI: "Share lifecycle not yet wired in CLI; planned for SP-033"
-        },
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/revoke",
     ),
     Capability(
@@ -291,10 +276,7 @@ REGISTRY: list[Capability] = [
         category="share",
         tier=Tier.ONE,
         description="List active shares granted and received.",
-        supported_surfaces=NO_CLI,
-        intentional_exceptions={
-            Surface.CLI: "Share lifecycle not yet wired in CLI; planned for SP-033"
-        },
+        supported_surfaces=ALL_SURFACES,
         api_route="/share/list",
     ),
     # ── Graph ────────────────────────────────────────────────────────────────
@@ -313,10 +295,7 @@ REGISTRY: list[Capability] = [
         category="graph",
         tier=Tier.TWO,
         description="Rebuild community summaries and finalize the knowledge graph.",
-        supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
-        intentional_exceptions={
-            Surface.VSCODE: "No graph finalize tool currently; planned for SP-040"
-        },
+        supported_surfaces=ALL_SURFACES,
         api_route="/graph/finalize",
     ),
     Capability(
@@ -338,10 +317,9 @@ REGISTRY: list[Capability] = [
         category="session",
         tier=Tier.TWO,
         description="List saved conversation sessions for the current project.",
-        supported_surfaces=frozenset({Surface.API, Surface.REPL}),
+        supported_surfaces=frozenset({Surface.API, Surface.REPL, Surface.CLI}),
         intentional_exceptions={
-            Surface.CLI: "Session management not yet wired in CLI; planned for SP-033",
-            Surface.VSCODE: "Session workflows not yet exposed in extension",
+            Surface.VSCODE: "Session management is a REPL/CLI workflow; extension focuses on single-turn tool calls",
         },
         api_route="/sessions",
     ),

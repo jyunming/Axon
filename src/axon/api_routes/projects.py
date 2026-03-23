@@ -49,7 +49,7 @@ async def update_config(request: ConfigUpdateRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
-    update_data = request.dict(exclude_unset=True)
+    update_data = request.model_dump(exclude_unset=True)
     persist = update_data.pop("persist", False)
 
     reinit_llm = "llm_provider" in update_data or "llm_model" in update_data

@@ -38,7 +38,7 @@ import {
   initStore, shareProject, redeemShare, revokeShare, listShares,
 } from './tools/shares';
 import {
-  AxonShowGraphStatusTool, AxonShowGraphTool,
+  AxonShowGraphStatusTool, AxonShowGraphTool, AxonFinalizeGraphTool,
   showGraphStatus,
 } from './tools/graph';
 import { showGovernancePanel } from './governance/panel';
@@ -135,6 +135,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_clearKnowledgeBase', new AxonClearKnowledgeBaseTool()),
         (vscode as any).lm.registerTool('axon_showGraphStatus', new AxonShowGraphStatusTool()),
         (vscode as any).lm.registerTool('axon_showGraph', new AxonShowGraphTool(context)),
+        (vscode as any).lm.registerTool('axon_finalizeGraph', new AxonFinalizeGraphTool()),
         (vscode as any).lm.registerTool('axon_getSettings', new AxonGetSettingsTool()),
       );
       state.outputChannel.appendLine('Successfully registered all Axon tools.');

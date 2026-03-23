@@ -38,7 +38,8 @@
     "onLanguageModelTool:axon_clearKnowledgeBase",
     "onLanguageModelTool:axon_showGraphStatus",
     "onLanguageModelTool:axon_showGraph",
-    "onLanguageModelTool:axon_getSettings"
+    "onLanguageModelTool:axon_getSettings",
+    "onLanguageModelTool:axon_finalizeGraph"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -595,6 +596,17 @@
         "modelDescription": "Read the current active Axon configuration: retrieval flags (top_k, rerank, hybrid, hyde, etc.), RAG mode settings (sentence_window, crag_lite, graph_rag_mode), and generation settings (llm_provider, llm_model, temperature). Use when the user asks what settings are active or wants to inspect before changing them.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonGetSettings",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "axon_finalizeGraph",
+        "displayName": "Axon: Finalize Knowledge Graph",
+        "modelDescription": "Trigger a community rebuild on the Axon knowledge graph. Rebuilds community summaries used for global-mode GraphRAG queries. Returns the number of community summaries generated. Run after ingesting a large batch of documents or when community_summary_count is 0.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonFinalizeGraph",
         "inputSchema": {
           "type": "object",
           "properties": {}

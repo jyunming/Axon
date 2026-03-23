@@ -331,6 +331,52 @@ def main():
         action="store_true",
         help="Suppress spinners and progress (auto-enabled when stdin is not a TTY)",
     )
+    # ── Document deletion ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--delete-doc",
+        metavar="SOURCE",
+        help="Delete all chunks for a source (match by source path/name), then exit",
+    )
+    parser.add_argument(
+        "--delete-doc-id",
+        nargs="+",
+        metavar="ID",
+        help="Delete specific chunk IDs directly (space-separated), then exit",
+    )
+    # ── Store init ───────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--store-init",
+        metavar="PATH",
+        help="Initialise AxonStore multi-user mode at PATH (e.g. ~/axon_data), then exit",
+    )
+    # ── Share lifecycle ──────────────────────────────────────────────────────
+    parser.add_argument(
+        "--share-list",
+        action="store_true",
+        help="List shares issued by and received by this user, then exit",
+    )
+    parser.add_argument(
+        "--share-generate",
+        nargs=2,
+        metavar=("PROJECT", "GRANTEE"),
+        help="Generate a read-only share key for PROJECT and GRANTEE, then exit",
+    )
+    parser.add_argument(
+        "--share-redeem",
+        metavar="SHARE_STRING",
+        help="Redeem a share string and mount the shared project, then exit",
+    )
+    parser.add_argument(
+        "--share-revoke",
+        metavar="KEY_ID",
+        help="Revoke a previously issued share by KEY_ID, then exit",
+    )
+    # ── Sessions ────────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--session-list",
+        action="store_true",
+        help="List saved conversation sessions for the current project, then exit",
+    )
     args = parser.parse_args()
 
     # Suppress httpx INFO noise before _InitDisplay is active (ollama.list fires early)
@@ -535,6 +581,14 @@ def main():
         and not getattr(args, "graph_status", False)
         and not getattr(args, "graph_finalize", False)
         and not getattr(args, "graph_export", False)
+        and not getattr(args, "delete_doc", None)
+        and not getattr(args, "delete_doc_id", None)
+        and not getattr(args, "store_init", None)
+        and not getattr(args, "share_list", False)
+        and not getattr(args, "share_generate", None)
+        and not getattr(args, "share_redeem", None)
+        and not getattr(args, "share_revoke", None)
+        and not getattr(args, "session_list", False)
         and sys.stdin.isatty()
     )
     _init_display: _InitDisplay | None = None
@@ -761,6 +815,165 @@ def main():
         except Exception as exc:
             print(f"  Error: {exc}")
             sys.exit(1)
+        return
+
+    if getattr(args, "delete_doc", None):
+        source = args.delete_doc
+        docs = brain.list_documents()
+        match = [d for d in docs if d["source"] == source or source in d["source"]]
+        if not match:
+            print(f"  No documents matching source '{source}'.")
+            sys.exit(1)
+        ids_to_delete = [i for d in match for i in d.get("doc_ids", [])]
+        brain.vector_store.delete_by_ids(ids_to_delete)
+        if brain.bm25 is not None:
+            brain.bm25.delete_documents(ids_to_delete)
+        total_chunks = sum(d["chunks"] for d in match)
+        print(f"  Deleted {total_chunks} chunk(s) from '{source}'.")
+        return
+
+    if getattr(args, "delete_doc_id", None):
+        ids_to_delete = args.delete_doc_id
+        existing = brain.vector_store.get_by_ids(ids_to_delete)
+        existing_ids = [d["id"] for d in existing]
+        not_found = [i for i in ids_to_delete if i not in existing_ids]
+        if existing_ids:
+            brain.vector_store.delete_by_ids(existing_ids)
+            if brain.bm25 is not None:
+                brain.bm25.delete_documents(existing_ids)
+        print(f"  Deleted: {len(existing_ids)}  Not found: {len(not_found)}")
+        return
+
+    if getattr(args, "store_init", None):
+        import getpass as _gp
+
+        from axon.projects import ensure_user_namespace
+
+        base = Path(args.store_init).expanduser().resolve()
+        username = _gp.getuser()
+        store_root = base / "AxonStore"
+        user_dir = store_root / username
+        try:
+            ensure_user_namespace(user_dir)
+            brain.config.axon_store_base = str(base)
+            brain.config.axon_store_mode = True
+            brain.config.projects_root = str(user_dir)
+            brain.config.vector_store_path = str(user_dir / "default" / "chroma_data")
+            brain.config.bm25_path = str(user_dir / "default" / "bm25_index")
+            try:
+                brain.config.save()
+            except Exception:
+                pass
+            print(f"  AxonStore initialised at {store_root}")
+            print(f"  User directory : {user_dir}")
+            print(f"  Username       : {username}")
+        except Exception as exc:
+            print(f"  Store init failed: {exc}")
+            sys.exit(1)
+        return
+
+    if getattr(args, "share_list", False):
+        if not brain.config.axon_store_mode:
+            print("  AxonStore mode is not active. Run --store-init <path> first.")
+            sys.exit(1)
+        from axon import shares as _shares_mod
+
+        user_dir = Path(brain.config.projects_root)
+        _shares_mod.validate_received_shares(user_dir)
+        data = _shares_mod.list_shares(user_dir)
+        sharing = data.get("sharing", [])
+        shared = data.get("shared", [])
+        print("\n  Shares — issued by me:")
+        if sharing:
+            for s in sharing:
+                tag = " [revoked]" if s.get("revoked") else ""
+                print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
+        else:
+            print("    (none)")
+        print("\n  Shares — received:")
+        if shared:
+            for s in shared:
+                print(f"    {s['owner']}/{s['project']} mounted as {s.get('mount', '')}")
+        else:
+            print("    (none)")
+        print()
+        return
+
+    if getattr(args, "share_generate", None):
+        if not brain.config.axon_store_mode:
+            print("  AxonStore mode is not active. Run --store-init <path> first.")
+            sys.exit(1)
+        from axon import shares as _shares_mod
+
+        proj, grantee = args.share_generate
+        user_dir = Path(brain.config.projects_root)
+        _segs = proj.split("/")
+        proj_dir = user_dir / _segs[0]
+        for _seg in _segs[1:]:
+            proj_dir = proj_dir / "subs" / _seg
+        if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
+            print(f"  Project '{proj}' not found.")
+            sys.exit(1)
+        try:
+            result = _shares_mod.generate_share_key(
+                owner_user_dir=user_dir, project=proj, grantee=grantee
+            )
+            print(f"\n  Share key generated for project '{proj}'")
+            print(f"  Grantee:  {grantee}")
+            print(f"  Key ID:   {result['key_id']}")
+            print(f"\n  Share string:\n\n    {result['share_string']}\n")
+            print(f"  Revoke:   axon --share-revoke {result['key_id']}\n")
+        except Exception as exc:
+            print(f"  Share generation failed: {exc}")
+            sys.exit(1)
+        return
+
+    if getattr(args, "share_redeem", None):
+        if not brain.config.axon_store_mode:
+            print("  AxonStore mode is not active. Run --store-init <path> first.")
+            sys.exit(1)
+        from axon import shares as _shares_mod
+
+        user_dir = Path(brain.config.projects_root)
+        try:
+            result = _shares_mod.redeem_share_key(
+                grantee_user_dir=user_dir, share_string=args.share_redeem.strip()
+            )
+            print("\n  Share redeemed!")
+            print(f"  Project '{result['project']}' from {result['owner']}")
+            mount = result.get("mount_name", result["owner"] + "_" + result["project"])
+            print(f"  Mounted at:  mounts/{mount}")
+            print("  Access:      read-only\n")
+        except Exception as exc:
+            print(f"  Redeem failed: {exc}")
+            sys.exit(1)
+        return
+
+    if getattr(args, "share_revoke", None):
+        if not brain.config.axon_store_mode:
+            print("  AxonStore mode is not active. Run --store-init <path> first.")
+            sys.exit(1)
+        from axon import shares as _shares_mod
+
+        user_dir = Path(brain.config.projects_root)
+        try:
+            result = _shares_mod.revoke_share_key(
+                owner_user_dir=user_dir, key_id=args.share_revoke.strip()
+            )
+            print(f"  Share '{result['key_id']}' revoked.")
+        except Exception as exc:
+            print(f"  Revoke failed: {exc}")
+            sys.exit(1)
+        return
+
+    if getattr(args, "session_list", False):
+        from axon.sessions import _list_sessions, _print_sessions
+
+        sessions = _list_sessions(project=brain._active_project)
+        if not sessions:
+            print("  No saved sessions.")
+        else:
+            _print_sessions(sessions)
         return
 
     if args.query:

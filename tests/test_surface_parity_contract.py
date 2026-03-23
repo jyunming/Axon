@@ -98,12 +98,12 @@ class TestVsCodeManifestContract:
             pytest.skip("VS Code extension directory not found")
 
     def test_manifest_tool_count(self):
-        """Extension manifest should declare 26 tools (25 original + axon_getSettings)."""
+        """Extension manifest should declare 27 tools (26 previous + axon_finalizeGraph)."""
         manifest = _extension_manifest()
         tools = manifest["contributes"]["languageModelTools"]
         assert (
-            len(tools) == 26
-        ), f"Expected 26 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+            len(tools) == 27
+        ), f"Expected 27 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
     def test_tier1_vscode_capabilities_in_manifest(self):
         """Every Tier 1 capability with VS Code support has a corresponding manifest tool."""
@@ -135,10 +135,12 @@ class TestVsCodeManifestContract:
             "share_revoke": "axon_revokeShare",
             "share_list": "axon_listShares",
             "graph_status": "axon_showGraphStatus",
+            "config_read": "axon_getSettings",
+            "graph_finalize": "axon_finalizeGraph",
         }
 
         for cap in REGISTRY:
-            if cap.tier != Tier.ONE or Surface.VSCODE not in cap.supported_surfaces:
+            if cap.tier not in (Tier.ONE, Tier.TWO) or Surface.VSCODE not in cap.supported_surfaces:
                 continue
             expected_tool = _CAP_TO_TOOL.get(cap.id)
             if expected_tool:
@@ -147,11 +149,12 @@ class TestVsCodeManifestContract:
                     f"but it is missing from manifest"
                 )
 
-    def test_get_settings_tool_in_manifest(self):
-        """axon_getSettings (Tier 2 config read) should be in manifest."""
+    def test_get_settings_and_finalize_in_manifest(self):
+        """axon_getSettings and axon_finalizeGraph should be in manifest."""
         manifest = _extension_manifest()
         tool_names = {t["name"] for t in manifest["contributes"]["languageModelTools"]}
         assert "axon_getSettings" in tool_names
+        assert "axon_finalizeGraph" in tool_names
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +187,14 @@ class TestCliSurfaceContract:
             "project_create": "--project-new",
             "project_delete": "--project-delete",
             "config_update": "sentence_window",  # new flags are config update surface
+            "collection_delete": "--delete-doc",
             "graph_status": "--graph-status",
+            "store_init": "--store-init",
+            "share_generate": "--share-generate",
+            "share_redeem": "--share-redeem",
+            "share_revoke": "--share-revoke",
+            "share_list": "--share-list",
+            "session_list": "--session-list",
         }
 
         for cap in REGISTRY:
@@ -219,6 +229,37 @@ class TestCliSurfaceContract:
             "--graph-export",
         ):
             assert flag in cli_src, f"Missing CLI operational flag: {flag}"
+
+    def test_tier2_cli_capabilities_in_source(self):
+        """Tier 2 capabilities on CLI have matching patterns in cli.py."""
+        from axon.surface_contract import REGISTRY, Surface, Tier
+
+        cli_src = _cli_source()
+
+        _TIER2_CLI_FLAGS = {
+            "session_list": "--session-list",
+        }
+
+        for cap in REGISTRY:
+            if cap.tier != Tier.TWO or Surface.CLI not in cap.supported_surfaces:
+                continue
+            flag = _TIER2_CLI_FLAGS.get(cap.id)
+            if flag is None:
+                continue
+            assert (
+                flag in cli_src
+            ), f"Tier 2 CLI capability '{cap.id}' expects flag '{flag}' in cli.py but not found"
+
+    def test_cli_has_full_tier1_parity(self):
+        """Every Tier 1 capability is now supported on CLI — zero undeclared gaps."""
+        from axon.surface_contract import REGISTRY, Surface, Tier
+
+        missing = [
+            cap.id
+            for cap in REGISTRY
+            if cap.tier == Tier.ONE and Surface.CLI not in cap.supported_surfaces
+        ]
+        assert not missing, f"Tier 1 capabilities not declared on CLI: {missing}"
 
 
 # ---------------------------------------------------------------------------
@@ -294,16 +335,14 @@ class TestReplSurfaceContract:
 class TestRegistrySurfaceGapCoherence:
     """Intentional exceptions in the registry align with actual gaps in code."""
 
-    def test_cli_share_gaps_are_documented(self):
-        """Share capabilities are documented as CLI exceptions (SP-033 pending)."""
+    def test_vscode_session_gap_is_documented(self):
+        """session_list VS Code exception is a deliberate product decision."""
         from axon.surface_contract import Surface, unsupported_on
 
-        cli_gaps = {cap.id: reason for cap, reason in unsupported_on(Surface.CLI)}
-        share_caps = {"share_generate", "share_redeem", "share_revoke", "share_list", "store_init"}
-        for cap_id in share_caps:
-            assert (
-                cap_id in cli_gaps
-            ), f"Share capability '{cap_id}' is not on CLI but no documented exception exists"
+        vscode_gaps = {cap.id: reason for cap, reason in unsupported_on(Surface.VSCODE)}
+        assert (
+            "session_list" in vscode_gaps
+        ), "session_list must have a documented VS Code exception (product decision)"
 
     def test_all_tier2_gaps_have_reasons(self):
         """Every Tier 2 capability missing from a surface has a documented reason."""
