@@ -384,3 +384,120 @@ class TestReplStoreCommand:
         ensure_user_namespace(user_dir)
         ensure_user_namespace(user_dir)  # second call should not raise
         assert (user_dir / "default").exists()
+
+
+# ---------------------------------------------------------------------------
+# CLI flag parity: new RAG controls (WS3 / WS6)
+# --sentence-window, --sentence-window-size, --crag-lite, --graph-rag-mode
+# ---------------------------------------------------------------------------
+
+
+def _make_modern_rag_parser():
+    """Parser mirroring the modern RAG flags added to cli.main()."""
+    p = argparse.ArgumentParser()
+    p.add_argument("query", nargs="?")
+    p.add_argument("--sentence-window", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--sentence-window-size", type=int, metavar="N")
+    p.add_argument("--crag-lite", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--graph-rag-mode", choices=["local", "global", "hybrid"])
+    return p
+
+
+class TestSentenceWindowCliFlag:
+    def test_flag_sets_true(self):
+        args = _make_modern_rag_parser().parse_args(["--sentence-window", "q"])
+        assert args.sentence_window is True
+
+    def test_no_flag_sets_false(self):
+        args = _make_modern_rag_parser().parse_args(["--no-sentence-window", "q"])
+        assert args.sentence_window is False
+
+    def test_absent_is_none(self):
+        args = _make_modern_rag_parser().parse_args(["q"])
+        assert args.sentence_window is None
+
+    def test_size_flag(self):
+        args = _make_modern_rag_parser().parse_args(["--sentence-window-size", "3", "q"])
+        assert args.sentence_window_size == 3
+
+    def test_size_absent_is_none(self):
+        args = _make_modern_rag_parser().parse_args(["q"])
+        assert args.sentence_window_size is None
+
+
+class TestCragLiteCliFlag:
+    def test_flag_sets_true(self):
+        args = _make_modern_rag_parser().parse_args(["--crag-lite", "q"])
+        assert args.crag_lite is True
+
+    def test_no_flag_sets_false(self):
+        args = _make_modern_rag_parser().parse_args(["--no-crag-lite", "q"])
+        assert args.crag_lite is False
+
+    def test_absent_is_none(self):
+        args = _make_modern_rag_parser().parse_args(["q"])
+        assert args.crag_lite is None
+
+
+class TestGraphRagModeCliFlag:
+    def test_local_mode(self):
+        args = _make_modern_rag_parser().parse_args(["--graph-rag-mode", "local", "q"])
+        assert args.graph_rag_mode == "local"
+
+    def test_global_mode(self):
+        args = _make_modern_rag_parser().parse_args(["--graph-rag-mode", "global", "q"])
+        assert args.graph_rag_mode == "global"
+
+    def test_hybrid_mode(self):
+        args = _make_modern_rag_parser().parse_args(["--graph-rag-mode", "hybrid", "q"])
+        assert args.graph_rag_mode == "hybrid"
+
+    def test_absent_is_none(self):
+        args = _make_modern_rag_parser().parse_args(["q"])
+        assert args.graph_rag_mode is None
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(SystemExit):
+            _make_modern_rag_parser().parse_args(["--graph-rag-mode", "auto", "q"])
+
+
+class TestModernRagCliConfigWiring:
+    """Simulate the argparse → config wiring block for modern RAG flags."""
+
+    def _apply_flags(self, **kwargs):
+        from axon.main import AxonConfig
+
+        cfg = AxonConfig()
+        if kwargs.get("sentence_window") is not None:
+            cfg.sentence_window = kwargs["sentence_window"]
+        if kwargs.get("sentence_window_size") is not None:
+            cfg.sentence_window_size = kwargs["sentence_window_size"]
+        if kwargs.get("crag_lite") is not None:
+            cfg.crag_lite = kwargs["crag_lite"]
+        if kwargs.get("graph_rag_mode") is not None:
+            cfg.graph_rag_mode = kwargs["graph_rag_mode"]
+        return cfg
+
+    def test_sentence_window_applied(self):
+        cfg = self._apply_flags(sentence_window=True)
+        assert cfg.sentence_window is True
+
+    def test_sentence_window_size_applied(self):
+        cfg = self._apply_flags(sentence_window_size=5)
+        assert cfg.sentence_window_size == 5
+
+    def test_crag_lite_applied(self):
+        cfg = self._apply_flags(crag_lite=True)
+        assert cfg.crag_lite is True
+
+    def test_graph_rag_mode_applied(self):
+        cfg = self._apply_flags(graph_rag_mode="hybrid")
+        assert cfg.graph_rag_mode == "hybrid"
+
+    def test_all_absent_leaves_defaults(self):
+        from axon.main import AxonConfig
+
+        cfg = self._apply_flags()
+        defaults = AxonConfig()
+        assert cfg.sentence_window == defaults.sentence_window
+        assert cfg.crag_lite == defaults.crag_lite

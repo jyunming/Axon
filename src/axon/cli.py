@@ -252,6 +252,31 @@ def main():
         "symbols to their definition nodes (requires --code-graph)",
     )
     parser.add_argument(
+        "--sentence-window",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable sentence-window retrieval (returns surrounding sentences for each matched chunk)",
+    )
+    parser.add_argument(
+        "--sentence-window-size",
+        type=int,
+        metavar="N",
+        help="Number of surrounding sentences to include per chunk (1-10, requires --sentence-window)",
+    )
+    parser.add_argument(
+        "--crag-lite",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable CRAG-Lite (lightweight corrective RAG: grades retrieved docs, "
+        "falls back to web search when confidence is low)",
+    )
+    parser.add_argument(
+        "--graph-rag-mode",
+        choices=["local", "global", "hybrid"],
+        help="GraphRAG traversal mode: local=neighbours only, global=community summaries, "
+        "hybrid=both (requires --graph-rag)",
+    )
+    parser.add_argument(
         "--no-dedup",
         action="store_true",
         help="Disable ingest deduplication (allow re-ingesting identical content)",
@@ -357,6 +382,14 @@ def main():
         config.code_graph = args.code_graph
     if args.code_graph_bridge is not None:
         config.code_graph_bridge = args.code_graph_bridge
+    if args.sentence_window is not None:
+        config.sentence_window = args.sentence_window
+    if args.sentence_window_size is not None:
+        config.sentence_window_size = args.sentence_window_size
+    if args.crag_lite is not None:
+        config.crag_lite = args.crag_lite
+    if args.graph_rag_mode is not None:
+        config.graph_rag_mode = args.graph_rag_mode
 
     if args.list_models:
         print("\n  Supported LLM providers and example models:\n")

@@ -372,7 +372,7 @@ def sample_docs_dir(tmp_path) -> Path:
 
 
 @pytest.fixture
-def live_api_server():
+def live_api_server():  # noqa: F811 - keep existing fixture name
     uvicorn = pytest.importorskip("uvicorn")
     servers: list[tuple[object, threading.Thread]] = []
 
@@ -417,3 +417,140 @@ def live_api_server():
     for server, thread in servers:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# VS Code extension e2e fixtures (WS5 — surface parity qualification)
+# ---------------------------------------------------------------------------
+
+
+def _load_vscode_helpers():
+    """Load vscode_helpers module from the same directory without relying on sys.path."""
+    import importlib.util
+
+    helpers_path = Path(__file__).parent / "vscode_helpers.py"
+    spec = importlib.util.spec_from_file_location("vscode_helpers", helpers_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="session")
+def extension_root_path():
+    """Path to the VS Code extension directory."""
+    root = Path(__file__).parent.parent.parent / "integrations" / "vscode-axon"
+    if not root.exists():
+        pytest.skip("VS Code extension directory not found at integrations/vscode-axon/")
+    return root
+
+
+@pytest.fixture(scope="session")
+def extension_js_path(extension_root_path):
+    """Path to the compiled extension JS. Skips if not built or Node.js absent."""
+    import shutil
+
+    if not shutil.which("node"):
+        pytest.skip("Node.js not available — install Node.js to run VS Code extension tests")
+    js = extension_root_path / "out" / "extension.js"
+    if not js.exists():
+        pytest.skip("Extension not built — run: cd integrations/vscode-axon && npm run compile")
+    return js
+
+
+@pytest.fixture(scope="session")
+def runner_js_path():
+    """Write the Node.js runner template to a temporary file for the session."""
+    import os
+    import tempfile
+
+    helpers = _load_vscode_helpers()
+    fd, path = tempfile.mkstemp(suffix="_axon_runner.js", prefix="pytest_")
+    try:
+        os.write(fd, helpers._RUNNER_JS.encode("utf-8"))
+    finally:
+        os.close(fd)
+    yield Path(path)
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+@pytest.fixture
+def run_tool(runner_js_path, extension_js_path, extension_root_path):
+    """Callable that runs a single VS Code LM tool via the Node.js runner."""
+    helpers = _load_vscode_helpers()
+
+    def _run(
+        base_url: str,
+        tool_name: str | None,
+        tool_input: dict | None = None,
+        extra_config: dict | None = None,
+    ) -> dict:
+        return helpers.run_extension_tool(
+            runner_js_path=runner_js_path,
+            extension_js=extension_js_path,
+            extension_root=extension_root_path,
+            api_base=base_url,
+            tool_name=tool_name or "",
+            tool_input=tool_input or {},
+            extra_config=extra_config,
+        )
+
+    return _run
+
+
+@pytest.fixture
+def live_recorder_server():
+    """Start a lightweight HTTP recording server that returns mock API responses.
+
+    Yields ``(base_url, recorded)`` where ``recorded`` accumulates request dicts
+    with keys ``method``, ``path``, and ``body``.
+    """
+    import json
+    import socket
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse
+
+    helpers = _load_vscode_helpers()
+    recorded: list[dict] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, _format, *_args):
+            pass  # suppress server log noise in test output
+
+        def do_GET(self):
+            self._handle("GET", {})
+
+        def do_POST(self):
+            length = int(self.headers.get("content-length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            self._handle("POST", body)
+
+        def _handle(self, method: str, body: dict):
+            parsed = urlparse(self.path)
+            path = parsed.path
+            headers = {k.lower(): v for k, v in self.headers.items()}
+            recorded.append({"method": method, "path": path, "body": body, "headers": headers})
+            resp = helpers.mock_api_response(path, method, body)
+            payload = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    _, port = sock.getsockname()
+    sock.close()
+
+    server = HTTPServer(("127.0.0.1", port), _Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+    base_url = f"http://127.0.0.1:{port}"
+    yield base_url, recorded
+
+    server.shutdown()
+    t.join(timeout=5)

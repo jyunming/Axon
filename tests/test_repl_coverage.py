@@ -335,27 +335,6 @@ class TestReplStoreSubcommands:
 
 
 # ---------------------------------------------------------------------------
-# /eval sub-command (lines 2413-2469)
-# ---------------------------------------------------------------------------
-
-
-class TestReplEvalSubcommand:
-    def test_eval_no_arg(self):
-        brain = _make_mock_brain()
-        output = _run_repl_with_commands(["/eval"], brain=brain)
-        assert isinstance(output, str)
-
-    def test_eval_with_query(self):
-        brain = _make_mock_brain()
-        brain.search.return_value = [
-            {"text": "result text", "score": 0.9, "metadata": {"source": "a.txt"}}
-        ]
-        brain.query.return_value = "eval answer"
-        output = _run_repl_with_commands(["/eval what is axon?"], brain=brain)
-        assert isinstance(output, str)
-
-
-# ---------------------------------------------------------------------------
 # /ingest REPL command (lines 1214-1263)
 # ---------------------------------------------------------------------------
 

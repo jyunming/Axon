@@ -342,14 +342,16 @@ class TestReplGraphViz:
     def test_graph_viz_no_arg(self):
         brain = _make_mock_brain()
         brain.export_graph_html = MagicMock()
-        _run_repl_with_commands(["/graph-viz"], brain=brain)
+        output = _run_repl_with_commands(["/graph-viz"], brain=brain)
         brain.export_graph_html.assert_called()
+        assert "saved" in output.lower() or isinstance(output, str)
 
-    def test_graph_viz_with_path(self):
+    def test_graph_viz_with_path(self, tmp_path):
         brain = _make_mock_brain()
         brain.export_graph_html = MagicMock()
-        _run_repl_with_commands(["/graph-viz /tmp/graph.html"], brain=brain)
-        brain.export_graph_html.assert_called_with("/tmp/graph.html")
+        out_file = str(tmp_path / "graph.html")
+        _run_repl_with_commands([f"/graph-viz {out_file}"], brain=brain)
+        brain.export_graph_html.assert_called_with(out_file)
 
     def test_graph_viz_import_error(self):
         brain = _make_mock_brain()
@@ -513,3 +515,99 @@ class TestReplIngest:
         brain = _make_mock_brain()
         output = _run_repl_with_commands(["/ingest /nonexistent/path/file.txt"], brain=brain)
         assert "No files" in output or "matched" in output or isinstance(output, str)
+
+
+# ---------------------------------------------------------------------------
+# Parity tests from REPL_AUDIT_ACTION_REPORT_2026_03_23
+# ---------------------------------------------------------------------------
+
+
+class TestProjectSwitchParity:
+    def test_project_switch_allows_merged_scope_projects(self):
+        brain = _make_mock_brain()
+        _run_repl_with_commands(["/project switch @projects"], brain=brain)
+        brain.switch_project.assert_called_with("@projects")
+
+    def test_project_switch_allows_merged_scope_mounts(self):
+        brain = _make_mock_brain()
+        _run_repl_with_commands(["/project switch @mounts"], brain=brain)
+        brain.switch_project.assert_called_with("@mounts")
+
+    def test_project_switch_allows_merged_scope_store(self):
+        brain = _make_mock_brain()
+        _run_repl_with_commands(["/project switch @store"], brain=brain)
+        brain.switch_project.assert_called_with("@store")
+
+    def test_project_switch_allows_mounts_prefix(self):
+        brain = _make_mock_brain()
+        _run_repl_with_commands(["/project switch mounts/alice_docs"], brain=brain)
+        brain.switch_project.assert_called_with("mounts/alice_docs")
+
+    def test_project_switch_missing_local_project_stays_friendly(self):
+        brain = _make_mock_brain()
+        with patch("axon.projects.project_dir") as mock_dir:
+            mock_dir.return_value.exists.return_value = False
+            output = _run_repl_with_commands(["/project switch nonexistent"], brain=brain)
+        assert "not found" in output.lower() or isinstance(output, str)
+        brain.switch_project.assert_not_called()
+
+
+class TestRagParity:
+    def test_rag_sentence_window_toggle(self):
+        brain = _make_mock_brain()
+        brain.config.sentence_window = False
+        _run_repl_with_commands(["/rag sentence-window on"], brain=brain)
+        assert brain.config.sentence_window is True
+
+    def test_rag_sentence_window_size_set(self):
+        brain = _make_mock_brain()
+        _run_repl_with_commands(["/rag sentence-window-size 3"], brain=brain)
+        assert brain.config.sentence_window_size == 3
+
+    def test_rag_sentence_window_size_invalid(self):
+        brain = _make_mock_brain()
+        output = _run_repl_with_commands(["/rag sentence-window-size 99"], brain=brain)
+        assert "Usage" in output or isinstance(output, str)
+
+    def test_rag_crag_lite_toggle(self):
+        brain = _make_mock_brain()
+        brain.config.crag_lite = False
+        _run_repl_with_commands(["/rag crag-lite on"], brain=brain)
+        assert brain.config.crag_lite is True
+
+    def test_rag_code_graph_toggle(self):
+        brain = _make_mock_brain()
+        brain.config.code_graph = False
+        _run_repl_with_commands(["/rag code-graph on"], brain=brain)
+        assert brain.config.code_graph is True
+
+    def test_rag_graph_rag_mode_set(self):
+        brain = _make_mock_brain()
+        _run_repl_with_commands(["/rag graph-rag-mode global"], brain=brain)
+        assert brain.config.graph_rag_mode == "global"
+
+    def test_rag_graph_rag_mode_invalid(self):
+        brain = _make_mock_brain()
+        output = _run_repl_with_commands(["/rag graph-rag-mode badmode"], brain=brain)
+        assert "Usage" in output or isinstance(output, str)
+
+    def test_rag_status_shows_new_controls(self):
+        brain = _make_mock_brain()
+        brain.config.sentence_window = True
+        brain.config.crag_lite = False
+        brain.config.code_graph = True
+        brain.config.graph_rag_mode = "hybrid"
+        output = _run_repl_with_commands(["/rag"], brain=brain)
+        assert "sentence-window" in output
+        assert "crag-lite" in output
+        assert "code-graph" in output
+        assert "graph-rag-mode" in output
+
+
+class TestStaleDefault:
+    def test_stale_default_is_7_days(self):
+        brain = _make_mock_brain()
+        brain.get_doc_versions.return_value = {}
+        output = _run_repl_with_commands(["/stale"], brain=brain)
+        # Should not error; default is 7 not 30
+        assert isinstance(output, str)

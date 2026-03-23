@@ -139,8 +139,8 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
 | `/llm [temp=N]` | Show or set LLM temperature |
-| `/refresh [path]` | Re-ingest updated local files |
-| `/stale [days=N]` | List docs not refreshed in N days (default 30) |
+| `/refresh` | Re-ingest all tracked files whose content has changed |
+| `/stale [N]` | List docs not refreshed in N days (default 7) |
 | `/share list` | List outgoing and incoming shares |
 | `/share generate <project> <grantee>` | Generate a read-only share key |
 | `/share redeem <key>` | Mount a shared project (read-only) |

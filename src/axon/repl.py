@@ -1428,30 +1428,34 @@ def _interactive_repl(
                         "  /keys set <provider>         interactively set an API key\n"
                         "  providers: gemini, openai, brave, ollama_cloud\n"
                         "  Keys are saved to ~/.axon/.env and loaded at startup.",
-                        "project": "  /project                          show active project + list all\n"
-                        "  /project list                      list all projects (tree view)\n"
-                        "  /project new <name>                create a new project and switch to it\n"
-                        "  /project new <name> <desc>         create with description\n"
-                        "  /project new <parent>/<child>      create a sub-project (up to 3 levels)\n"
-                        "  /project switch <name>             switch to an existing project\n"
-                        "  /project switch <parent>/<child>   switch to a sub-project\n"
-                        "  /project switch default            return to the global knowledge base\n"
-                        "  /project delete <name>             delete a leaf project and its data\n"
-                        "  /project folder                    open the active project folder\n"
+                        "project": "  /project                               show active project + list all\n"
+                        "  /project list                          list all projects and mounted shares\n"
+                        "  /project new <name>                    create a new project and switch to it\n"
+                        "  /project new <name> <desc>             create with description\n"
+                        "  /project new <parent>/<child>          create a sub-project (up to 5 levels)\n"
+                        "  /project switch <name>                 switch to an existing local project\n"
+                        "  /project switch <parent>/<child>       switch to a sub-project\n"
+                        "  /project switch default                return to the global knowledge base\n"
+                        "  /project switch @projects              merged view of all local projects\n"
+                        "  /project switch @mounts                merged view of all mounted shares\n"
+                        "  /project switch @store                 merged view of entire AxonStore\n"
+                        "  /project switch mounts/<name>          switch to a mounted share\n"
+                        "  /project delete <name>                 delete a leaf project and its data\n"
+                        "  /project folder                        open the active project folder\n"
                         "\n"
                         "  Projects are stored in ~/.axon/projects/<name>/\n"
-                        "  Sub-projects use nested subs/ directories (max depth: 3).\n"
+                        "  Sub-projects use nested subs/ directories (max depth: 5).\n"
                         "  Switching to a parent project shows merged data across all sub-projects.\n"
                         "  Use /ingest after switching to add documents to the current project.",
                         "share": "  /share list                              list all issued and received shares\n"
                         "  /share generate <project> <grantee>      generate a read-only share key\n"
-                        "  /share generate <project> <grantee> --write  generate a read-write share key [deprecated]\n"
-                        "  /share redeem <share_string>              mount a shared project (Linux only)\n"
+                        "  /share redeem <share_string>              mount a shared project\n"
                         "  /share revoke <key_id>                   revoke a previously issued share\n"
                         "\n"
                         "  Requires AxonStore mode — run /store init first.\n"
-                        "  Share strings are cryptographic HMAC tokens; send them out-of-band.\n"
-                        "  Mounted shares appear under mounts/ in your projects list.",
+                        "  Share strings are base64-encoded payloads; send them out-of-band.\n"
+                        "  Mounted shares appear under mounts/ in your project list and can be\n"
+                        "  switched to with /project switch mounts/<name>.",
                         "store": "  /store whoami                  show AxonStore identity and active project\n"
                         "  /store init <base_path>        initialise multi-user AxonStore at a path\n"
                         "\n"
@@ -1733,8 +1737,13 @@ def _interactive_repl(
 
                     _axon_home = _Path(_os.environ.get("AXON_HOME", str(_Path.home() / ".axon")))
                     _snap_dir = _axon_home / "cache" / "graphs" / f"{_ts}_{_qhash}"
-                    _snap_dir.mkdir(parents=True, exist_ok=True)
-                    _out_path = str(_snap_dir / "knowledge-graph.html")
+                    try:
+                        _snap_dir.mkdir(parents=True, exist_ok=True)
+                        _out_path = str(_snap_dir / "knowledge-graph.html")
+                    except OSError:
+                        import tempfile as _tf
+
+                        _out_path = str(_Path(_tf.gettempdir()) / f"axon_graph_{_ts}_{_qhash}.html")
                 try:
                     brain.export_graph_html(_out_path)
                     print(f"  Graph visualization saved → {_out_path}")
@@ -1771,20 +1780,25 @@ def _interactive_repl(
 
             elif cmd == "/rag":
                 if not arg:
+                    _grag_mode = getattr(brain.config, "graph_rag_mode", "local")
                     print(
-                        f"\n  top-k        · {brain.config.top_k}\n"
-                        f"  threshold    · {brain.config.similarity_threshold}\n"
-                        f"  hybrid       · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
-                        f"  rerank       · {'ON' if brain.config.rerank else 'OFF'}"
+                        f"\n  top-k           · {brain.config.top_k}\n"
+                        f"  threshold       · {brain.config.similarity_threshold}\n"
+                        f"  hybrid          · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
+                        f"  rerank          · {'ON' if brain.config.rerank else 'OFF'}"
                         + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "")
                         + "\n"
-                        f"  hyde         · {'ON' if brain.config.hyde else 'OFF'}\n"
-                        f"  multi-query  · {'ON' if brain.config.multi_query else 'OFF'}\n"
-                        f"  step-back    · {'ON' if brain.config.step_back else 'OFF'}\n"
-                        f"  decompose    · {'ON' if brain.config.query_decompose else 'OFF'}\n"
-                        f"  compress     · {'ON' if brain.config.compress_context else 'OFF'}\n"
-                        f"  raptor       · {'ON' if brain.config.raptor else 'OFF'}\n"
-                        f"  graph-rag    · {'ON' if brain.config.graph_rag else 'OFF'}\n"
+                        f"  hyde            · {'ON' if brain.config.hyde else 'OFF'}\n"
+                        f"  multi-query     · {'ON' if brain.config.multi_query else 'OFF'}\n"
+                        f"  step-back       · {'ON' if brain.config.step_back else 'OFF'}\n"
+                        f"  decompose       · {'ON' if brain.config.query_decompose else 'OFF'}\n"
+                        f"  compress        · {'ON' if brain.config.compress_context else 'OFF'}\n"
+                        f"  sentence-window · {'ON' if getattr(brain.config, 'sentence_window', False) else 'OFF'}\n"
+                        f"  crag-lite       · {'ON' if getattr(brain.config, 'crag_lite', False) else 'OFF'}\n"
+                        f"  code-graph      · {'ON' if getattr(brain.config, 'code_graph', False) else 'OFF'}\n"
+                        f"  raptor          · {'ON' if brain.config.raptor else 'OFF'}\n"
+                        f"  graph-rag       · {'ON' if brain.config.graph_rag else 'OFF'}\n"
+                        f"  graph-rag-mode  · {_grag_mode}\n"
                         f"\n  /help rag   for usage details\n"
                     )
                 else:
@@ -1845,6 +1859,60 @@ def _interactive_repl(
                         print(
                             f"  GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
                         )
+                    elif rag_opt in ("sentence-window", "sentence_window"):
+                        _on = (
+                            rag_val.lower() in ("on", "true", "1", "")
+                            if rag_val
+                            else not getattr(brain.config, "sentence_window", False)
+                        )
+                        if rag_val and rag_val.lower() not in (
+                            "on",
+                            "off",
+                            "true",
+                            "false",
+                            "1",
+                            "0",
+                        ):
+                            print("  Usage: /rag sentence-window on|off")
+                        else:
+                            _on = (
+                                rag_val.lower() in ("on", "true", "1")
+                                if rag_val
+                                else not getattr(brain.config, "sentence_window", False)
+                            )
+                            brain.config.sentence_window = _on
+                            print(f"  Sentence-window retrieval {'ON' if _on else 'OFF'}")
+                    elif rag_opt in ("sentence-window-size", "sentence_window_size"):
+                        try:
+                            _sz = int(rag_val)
+                            assert 1 <= _sz <= 10
+                            brain.config.sentence_window_size = _sz
+                            print(f"  Sentence-window size set to {_sz}")
+                        except Exception:
+                            print("  Usage: /rag sentence-window-size <integer 1–10>")
+                    elif rag_opt in ("crag-lite", "crag_lite"):
+                        _on = (
+                            rag_val.lower() in ("on", "true", "1")
+                            if rag_val
+                            else not getattr(brain.config, "crag_lite", False)
+                        )
+                        brain.config.crag_lite = _on
+                        print(f"  CRAG-lite corrective retrieval {'ON' if _on else 'OFF'}")
+                    elif rag_opt in ("code-graph", "code_graph"):
+                        _on = (
+                            rag_val.lower() in ("on", "true", "1")
+                            if rag_val
+                            else not getattr(brain.config, "code_graph", False)
+                        )
+                        brain.config.code_graph = _on
+                        print(f"  Code-graph retrieval {'ON' if _on else 'OFF'}")
+                    elif rag_opt in ("graph-rag-mode", "graph_rag_mode"):
+                        _valid_modes = ("local", "global", "hybrid", "auto")
+                        if rag_val.lower() not in _valid_modes:
+                            print("  Usage: /rag graph-rag-mode local|global|hybrid|auto")
+                        else:
+                            brain.config.graph_rag_mode = rag_val.lower()
+                            print(f"  GraphRAG mode set to '{rag_val.lower()}'")
                     elif rag_opt == "rerank-model":
                         if not rag_val:
                             print(f"  Current reranker: {brain.config.reranker_model}")
@@ -1866,7 +1934,9 @@ def _interactive_repl(
                                 print(f"  Failed to load reranker: {e}")
                     else:
                         print(
-                            f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag"
+                            f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, "
+                            f"hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag, "
+                            f"sentence-window, sentence-window-size, crag-lite, code-graph, graph-rag-mode"
                         )
 
             elif cmd == "/llm":
@@ -1918,11 +1988,28 @@ def _interactive_repl(
                     else:
                         print()
                         _print_project_tree(projects, active)
+
+                    # Show mounted shares if AxonStore mode is active
+                    try:
+                        from axon.projects import list_share_mounts as _list_mounts
+
+                        _user_dir = Path(brain.config.projects_root)
+                        _mounts = _list_mounts(_user_dir)
+                        if _mounts:
+                            print("\n  Mounted shares:")
+                            for _m in _mounts:
+                                _broken = "  [broken]" if _m.get("is_broken") else ""
+                                print(f"    mounts/{_m['name']}  (owner: {_m['owner']}){_broken}")
+                    except Exception:
+                        pass
+
                     print(f"\n  Active: {active}")
-                    print("  /project new <name>           create + switch")
-                    print("  /project new <parent>/<name>  create sub-project")
-                    print("  /project switch <name>        switch to existing")
-                    print("  /project folder               open active project folder\n")
+                    print("  /project new <name>                      create + switch")
+                    print("  /project new <parent>/<name>             create sub-project")
+                    print("  /project switch <name>                   switch to existing")
+                    print("  /project switch @projects|@mounts|@store switch to merged scope")
+                    print("  /project switch mounts/<name>            switch to mounted share")
+                    print("  /project folder                          open active project folder\n")
 
                 elif sub == "new":
                     if not sub_arg:
@@ -1946,7 +2033,14 @@ def _interactive_repl(
                         print("  Usage: /project switch <name>")
                     else:
                         proj_name = sub_arg.strip().lower()
-                        if proj_name == "default" or project_dir(proj_name).exists():
+                        # Allow merged scopes (@projects, @mounts, @store), mounted scopes
+                        # (mounts/<name>), and default — delegate directly to backend.
+                        _is_special = (
+                            proj_name == "default"
+                            or proj_name.startswith("@")
+                            or proj_name.startswith("mounts/")
+                        )
+                        if _is_special or project_dir(proj_name).exists():
                             try:
                                 brain.switch_project(proj_name)
                                 is_merged = isinstance(brain.vector_store, MultiVectorStore)
@@ -2155,7 +2249,11 @@ def _interactive_repl(
                         proj = parts[0]
                         grantee = parts[1]
                         user_dir = Path(brain.config.projects_root)
-                        proj_dir = user_dir / proj
+                        # Resolve nested projects via subs/ layout (e.g. research/papers → research/subs/papers)
+                        _segs = proj.split("/")
+                        proj_dir = user_dir / _segs[0]
+                        for _seg in _segs[1:]:
+                            proj_dir = proj_dir / "subs" / _seg
                         if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
                             print(
                                 f"  Project '{proj}' not found. Use /project list to see projects."
@@ -2414,22 +2512,38 @@ def _interactive_repl(
                         html = brain.export_graph_html(open_browser=False)
                         if out_path:
                             out = Path(out_path).expanduser()
+                            out.parent.mkdir(parents=True, exist_ok=True)
                         else:
                             _ts_g = _time_g.strftime("%Y%m%dT%H%M%S")
                             _qh_g = _hashlib_g.sha1(b"graph").hexdigest()[:8]
-                            _snap_g = (
-                                Path.home() / ".axon" / "cache" / "graphs" / f"{_ts_g}_{_qh_g}"
+                            _preferred = (
+                                Path(os.environ.get("AXON_HOME", str(Path.home() / ".axon")))
+                                / "cache"
+                                / "graphs"
+                                / f"{_ts_g}_{_qh_g}"
                             )
-                            _snap_g.mkdir(parents=True, exist_ok=True)
-                            out = _snap_g / "knowledge-graph.html"
+                            try:
+                                _preferred.mkdir(parents=True, exist_ok=True)
+                                out = _preferred / "knowledge-graph.html"
+                            except OSError:
+                                import tempfile as _tf_g
+
+                                out = Path(_tf_g.gettempdir()) / f"axon_graph_{_ts_g}_{_qh_g}.html"
                         out.write_text(html, encoding="utf-8")
                         print(f"  Graph saved to: {out}")
-                        import subprocess as _sp_g
+                        try:
+                            import subprocess as _sp_g
 
-                        if os.name == "nt":
-                            _sp_g.Popen(["start", str(out)], shell=True)
-                        elif sys.platform == "darwin":
-                            _sp_g.Popen(["open", str(out)])
+                            if os.name == "nt":
+                                _sp_g.Popen(["start", str(out)], shell=True)
+                            elif sys.platform == "darwin":
+                                _sp_g.Popen(["open", str(out)])
+                            else:
+                                _sp_g.Popen(["xdg-open", str(out)])
+                        except Exception:
+                            print(
+                                "  Open the file in your browser to explore the entity–relation graph."
+                            )
                     except Exception as e:
                         print(f"  Graph visualisation failed: {e}")
 
