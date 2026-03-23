@@ -647,6 +647,10 @@ class ImageLoader(BaseLoader):
             return []
 
 
+# Backward-compatible alias kept for existing code that imports BMPLoader directly.
+BMPLoader = ImageLoader
+
+
 class PDFLoader(BaseLoader):
     """Loader for PDF files. Extracts text page-by-page using PyMuPDF (fitz) with pypdf fallback."""
 

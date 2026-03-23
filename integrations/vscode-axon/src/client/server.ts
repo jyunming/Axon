@@ -160,12 +160,10 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
   // Port as string for uvicorn spawn argument
   let portStr = String(port);
 
-  // Allow ingesting any local path by setting RAG_INGEST_BASE to the filesystem root.
-  // Users can override this via axon.ingestBase in settings.
+  // Default ingest base to workspaceRoot for safety (prevents ingesting files outside the project).
+  // Users can broaden this to the filesystem root via axon.ingestBase in settings.
   const configuredBase = config.get<string>('ingestBase', '');
-  const fsRoot = configuredBase || (process.platform === 'win32'
-    ? path.parse(workspaceRoot).root  // e.g. "C:\"
-    : '/');
+  const fsRoot = configuredBase || workspaceRoot;
 
   const storeBase = config.get<string>('storeBase', '');
 

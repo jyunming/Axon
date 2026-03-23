@@ -125,7 +125,9 @@ class SearchRequest(BaseModel):
             "to change the active project before searching. Returns 409 on mismatch."
         ),
     )
-    top_k: int | None = Field(None, description="Number of documents to return")
+    top_k: int | None = Field(
+        None, ge=1, description="Number of documents to return (must be at least 1)"
+    )
     filters: dict[str, Any] | None = Field(None, description="Metadata filters")
     threshold: float | None = Field(
         None, ge=0.0, le=1.0, description="Override similarity threshold for this request"
