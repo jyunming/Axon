@@ -1762,7 +1762,11 @@ Your primary goal is to help the user by answering questions based on the provid
                 all_chunks.extend(child_chunks)
         return all_chunks
 
-    def ingest(self, documents: list[dict[str, Any]]) -> None:
+    def ingest(
+        self,
+        documents: list[dict[str, Any]],
+        progress_callback: Any | None = None,
+    ) -> None:
         """Chunk, deduplicate, embed, and store *documents* in the knowledge base.
 
         Each document must be a dict with keys ``id`` (str), ``text`` (str), and
@@ -1770,7 +1774,21 @@ Your primary goal is to help the user by answering questions based on the provid
         governed by the active :class:`AxonConfig`.  When ``raptor=True``,
         summary nodes are generated and indexed alongside leaf chunks.  When
         ``graph_rag=True``, entities are extracted and added to the entity graph.
+
+        Args:
+            documents: List of document dicts with 'id', 'text', optional 'metadata'.
+            progress_callback: Optional callable(phase: str, **kwargs) invoked at each
+                pipeline phase transition.  Phases: loading, chunking, raptor, graph_build,
+                embedding, code_graph, finalizing.
         """
+
+        def _progress(phase: str, **kwargs: Any) -> None:
+            if progress_callback is not None:
+                try:
+                    progress_callback(phase, **kwargs)
+                except Exception:
+                    pass
+
         if not documents:
             return
 
@@ -1795,6 +1813,7 @@ Your primary goal is to help the user by answering questions based on the provid
         from tqdm import tqdm
 
         logger.info(f"Ingesting {len(documents)} documents...")
+        _progress("chunking", files_total=len(documents))
         if self.splitter and self.config.parent_chunk_size > 0:
             documents = self._split_with_parents(documents)
         elif self.splitter:
@@ -1888,6 +1907,7 @@ Your primary goal is to help the user by answering questions based on the provid
             ]
 
         # RAPTOR: generate summarisation nodes for the deduplicated leaf chunks
+        _progress("raptor", chunks_total=len(documents))
         if self.config.raptor:
             # Source-size guard — skip RAPTOR for sources whose estimated text size exceeds threshold
             _raptor_max_mb = getattr(self.config, "raptor_max_source_size_mb", 0.0)
@@ -1934,6 +1954,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 documents = documents + raptor_docs
 
         # GraphRAG: extract entities from new chunks and update entity graph
+        _progress("graph_build", chunks_total=len(documents))
         if self.config.graph_rag:
             updated = False
             # Only extract entities from actual document chunks (optionally include RAPTOR level-1)
@@ -2344,11 +2365,17 @@ Your primary goal is to help the user by answering questions based on the provid
         metadatas = [d.get("metadata", {}) for d in documents]
 
         logger.info("   Generating embeddings...")
+        _progress("embedding", chunks_total=len(texts), chunks_embedded=0)
         batch_size = 32
         all_embeddings = []
         t_embed = time.time()
         for i in tqdm(range(0, len(texts), batch_size), desc="Embedding"):
             all_embeddings.extend(self.embedding.embed(texts[i : i + batch_size]))
+            _progress(
+                "embedding",
+                chunks_total=len(texts),
+                chunks_embedded=min(i + batch_size, len(texts)),
+            )
         embed_ms = (time.time() - t_embed) * 1000
 
         t_store = time.time()
@@ -2382,6 +2409,7 @@ Your primary goal is to help the user by answering questions based on the provid
             self._index_sentence_windows(documents)
 
         # ── Code graph (Phase 2 + Phase 3) ──────────────────────────────
+        _progress("code_graph")
         if getattr(self.config, "code_graph", False):
             _code_chunks = [
                 d for d in documents if d.get("metadata", {}).get("source_class") == "code"
@@ -2401,6 +2429,7 @@ Your primary goal is to help the user by answering questions based on the provid
             if not _defer_saves:
                 self._save_code_graph()
 
+        _progress("finalizing", chunks_total=n_chunks)
         logger.info(
             {
                 "event": "ingest_complete",

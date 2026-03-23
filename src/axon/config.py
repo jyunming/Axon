@@ -842,7 +842,20 @@ offline:
         if flat["llm_timeout"]:
             data["llm"]["timeout"] = flat["llm_timeout"]
 
-        os.makedirs(os.path.dirname(os.path.expanduser(target)), exist_ok=True)
-        with open(os.path.expanduser(target), "w", encoding="utf-8") as f:
+        import tempfile as _tempfile
+
+        _resolved_target = os.path.expanduser(target)
+        _tmp_root = os.path.realpath(_tempfile.gettempdir())
+        if os.path.commonpath([os.path.realpath(_resolved_target), _tmp_root]) == _tmp_root:
+            logger.warning(
+                "AxonConfig.save() blocked: target path '%s' is inside the system temp "
+                "directory. This usually means a test run is trying to overwrite your live "
+                "config. Set path explicitly to save outside the temp tree.",
+                _resolved_target,
+            )
+            return
+
+        os.makedirs(os.path.dirname(_resolved_target), exist_ok=True)
+        with open(_resolved_target, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
         logger.info(f"Configuration saved to {target}")

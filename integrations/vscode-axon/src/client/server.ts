@@ -104,16 +104,35 @@ export async function discoverPythonPath(): Promise<string> {
 }
 
 export async function ensureServerRunning(apiBase: string, context: vscode.ExtensionContext): Promise<void> {
+  const portMatch = apiBase.match(/:(\d+)/);
+  const port = portMatch ? parseInt(portMatch[1], 10) : 8000;
+
   if (await isAxonRunning(apiBase)) {
     state.outputChannel.appendLine('Axon API already running.');
     // Capture PID so we can stop it on deactivate even if we didn't spawn it
-    const portMatch = apiBase.match(/:(\d+)/);
-    const port = portMatch ? parseInt(portMatch[1], 10) : 8000;
     state.externalServerPid = await getPortPid(port);
     if (state.externalServerPid) {
       state.outputChannel.appendLine(`Tracking external server PID: ${state.externalServerPid}`);
     }
     return;
+  }
+
+  // Detect stale listener: something is bound to the port but not answering /health.
+  // Kill it before spawning so uvicorn does not fail with "address already in use".
+  const stalePid = await getPortPid(port);
+  if (stalePid) {
+    state.outputChannel.appendLine(
+      `Axon: stale process (PID ${stalePid}) detected on port ${port} — not answering /health. Terminating before starting a fresh server.`
+    );
+    vscode.window.showWarningMessage(
+      `Axon: stale process on port ${port} detected and terminated. Starting a fresh server.`
+    );
+    try {
+      process.kill(stalePid);
+      await sleep(800);  // Give the OS time to release the port
+    } catch {
+      state.outputChannel.appendLine(`Could not terminate stale process ${stalePid} — it may have already exited.`);
+    }
   }
 
   const config = vscode.workspace.getConfiguration('axon');
@@ -126,16 +145,8 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
   }
   const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
-  // Parse port from apiBase (e.g. http://localhost:8000 -> 8000)
-  let port = '8000';
-  try {
-    const url = new URL(apiBase);
-    if (url.port) {
-      port = url.port;
-    }
-  } catch (err) {
-    state.outputChannel.appendLine(`Warning: Could not parse port from apiBase "${apiBase}". Defaulting to 8000.`);
-  }
+  // Port as string for uvicorn spawn argument
+  let portStr = String(port);
 
   // Allow ingesting any local path by setting RAG_INGEST_BASE to the filesystem root.
   // Users can override this via axon.ingestBase in settings.
@@ -146,13 +157,13 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
 
   const storeBase = config.get<string>('storeBase', '');
 
-  state.outputChannel.appendLine(`Starting Axon API server with: ${pythonPath} -m uvicorn axon.api:app --host 127.0.0.1 --port ${port}`);
+  state.outputChannel.appendLine(`Starting Axon API server with: ${pythonPath} -m uvicorn axon.api:app --host 127.0.0.1 --port ${portStr}`);
   state.outputChannel.appendLine(`RAG_INGEST_BASE=${fsRoot} (any path under this root is ingestable)`);
   if (storeBase) {
     state.outputChannel.appendLine(`AXON_STORE_BASE=${storeBase}`);
   }
 
-  state.serverProcess = spawn(pythonPath, ['-m', 'uvicorn', 'axon.api:app', '--host', '127.0.0.1', '--port', port], {
+  state.serverProcess = spawn(pythonPath, ['-m', 'uvicorn', 'axon.api:app', '--host', '127.0.0.1', '--port', portStr], {
     cwd: workspaceRoot,
     shell: true, // Crucial for Windows path resolution
     env: {

@@ -92,6 +92,25 @@ parameter to include retrieval diagnostics.
 ```
 Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "processing"}`
 
+**`GET /ingest/status/{job_id}` response:**
+```json
+{
+  "job_id": "abc123",
+  "status": "processing",
+  "phase": "embedding",
+  "path": "/path/to/documents",
+  "started_at": "2026-03-23T10:00:00Z",
+  "completed_at": null,
+  "files_total": 42,
+  "chunks_total": 318,
+  "chunks_embedded": 128,
+  "documents_ingested": null,
+  "error": null,
+  "community_build_in_progress": false
+}
+```
+`phase` values: `loading` → `chunking` → `raptor` → `graph_build` → `embedding` → `code_graph` → `finalizing` → `completed` (or `failed`). Phases that are disabled by config are still reported as the job moves past them. `chunks_embedded` updates per 32-chunk batch during the `embedding` phase.
+
 **`POST /ingest_url` body:**
 ```json
 {"url": "https://example.com/page"}
@@ -183,11 +202,13 @@ add `"persist": true` to the request body.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/graph/status` | Community detection build status — returns `community_build_in_progress` (bool) and `community_summary_count` (int) |
+| `GET` | `/graph/status` | Graph readiness and community build status |
 | `POST` | `/graph/finalize` | Trigger explicit community rebuild |
 | `GET` | `/graph/data` | Full knowledge graph payload as JSON (nodes + links) |
 | `GET` | `/graph/visualize` | Render the knowledge graph as a self-contained HTML page |
 | `GET` | `/code-graph/data` | Code structure graph payload for the VS Code code-graph panel |
+
+`/graph/status` response: `{"community_build_in_progress": false, "community_summary_count": 12, "entity_count": 340, "code_node_count": 0, "graph_ready": true}`. `graph_ready` is `true` once the entity graph or code graph has nodes — use this to know whether graph queries will return data before the full ingest job completes.
 
 `/graph/visualize` returns `text/html` — open in a browser or embed in an iframe.
 `/graph/data` and `/code-graph/data` return `{"nodes": [...], "links": [...]}` JSON payloads

@@ -20,9 +20,15 @@ async def get_graph_status():
         raise HTTPException(status_code=503, detail="Brain not initialized")
     in_progress = getattr(brain, "_community_build_in_progress", False)
     summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+    entity_count = len(getattr(brain, "_entity_graph", {}) or {})
+    code_node_count = len((getattr(brain, "_code_graph", {}) or {}).get("nodes", {}))
+    graph_ready = entity_count > 0 or code_node_count > 0
     return {
         "community_build_in_progress": in_progress,
         "community_summary_count": summary_count,
+        "entity_count": entity_count,
+        "code_node_count": code_node_count,
+        "graph_ready": graph_ready,
     }
 
 

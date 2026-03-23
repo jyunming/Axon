@@ -5,7 +5,7 @@ Unit tests for the FastAPI endpoints in axon.api.
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1455,7 +1455,7 @@ class TestIngestPathSyncLoader:
         # The background task runs synchronously in test client
         # Verify that DirectoryLoader.load() was called (not asyncio.run)
         mock_instance.load.assert_called_once_with(str(test_dir.resolve()))
-        brain.ingest.assert_called_once_with(fake_docs)
+        brain.ingest.assert_called_once_with(fake_docs, progress_callback=ANY)
 
         # Cleanup job
         api_module._jobs.pop(job_id, None)
@@ -1486,7 +1486,7 @@ class TestIngestPathSyncLoader:
             data = resp.json()
             job_id = data["job_id"]
 
-        brain.ingest.assert_called_once_with(fake_docs)
+        brain.ingest.assert_called_once_with(fake_docs, progress_callback=ANY)
         api_module._jobs.pop(job_id, None)
 
 

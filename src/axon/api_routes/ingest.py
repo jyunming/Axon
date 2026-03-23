@@ -103,16 +103,32 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
     _api._jobs[job_id] = {
         "job_id": job_id,
         "status": "processing",
+        "phase": "loading",
         "path": str(requested_path),
         "started_at": now.isoformat(),
         "started_at_ts": now.timestamp(),
         "completed_at": None,
+        "files_total": None,
+        "chunks_total": None,
+        "chunks_embedded": None,
         "documents_ingested": None,
         "error": None,
     }
 
     rid = getattr(req.state, "request_id", job_id)
     surface = getattr(req.state, "surface", "api")
+
+    def _make_progress_callback(job: dict):
+        def _cb(phase: str, **kwargs) -> None:
+            job["phase"] = phase
+            if "files_total" in kwargs:
+                job["files_total"] = kwargs["files_total"]
+            if "chunks_total" in kwargs:
+                job["chunks_total"] = kwargs["chunks_total"]
+            if "chunks_embedded" in kwargs:
+                job["chunks_embedded"] = kwargs["chunks_embedded"]
+
+        return _cb
 
     def process_ingestion():
         from axon import governance as gov
@@ -130,6 +146,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
             request_id=rid,
         )
         try:
+            _api._jobs[job_id]["phase"] = "loading"
             loader_mgr = DirectoryLoader()
             if requested_path.is_dir():
                 docs = loader_mgr.load(str(requested_path))
@@ -140,9 +157,11 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
                 else:
                     logger.warning(f"Unsupported file type: {ext}")
                     docs = []
+            _api._jobs[job_id]["files_total"] = len(docs)
             if docs:
-                brain.ingest(docs)
+                brain.ingest(docs, progress_callback=_make_progress_callback(_api._jobs[job_id]))
             _api._jobs[job_id]["status"] = "completed"
+            _api._jobs[job_id]["phase"] = "completed"
             _api._jobs[job_id]["documents_ingested"] = len(docs)
             _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
             gov.emit(
@@ -157,6 +176,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
             _api._jobs[job_id]["status"] = "failed"
+            _api._jobs[job_id]["phase"] = "failed"
             _api._jobs[job_id]["error"] = str(e)
             _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
             gov.emit(
