@@ -2411,7 +2411,7 @@ def _interactive_repl(
                     sub_parts2 = arg.split(maxsplit=1)
                     out_path = sub_parts2[1] if len(sub_parts2) > 1 else ""
                     try:
-                        html = brain.build_graph_visualization()
+                        html = brain.export_graph_html(open_browser=False)
                         if out_path:
                             out = Path(out_path).expanduser()
                         else:
