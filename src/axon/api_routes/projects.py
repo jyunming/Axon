@@ -61,11 +61,11 @@ async def update_config(request: ConfigUpdateRequest):
             setattr(brain.config, k, v)
 
     if reinit_llm:
-        from axon.main import OpenLLM
+        from axon.llm import OpenLLM
 
         brain.llm = OpenLLM(brain.config)
     if reinit_embed:
-        from axon.main import OpenEmbedding
+        from axon.embeddings import OpenEmbedding
 
         brain.embedding = OpenEmbedding(brain.config)
     if reinit_rerank and brain.config.rerank:
@@ -148,7 +148,7 @@ async def create_project(request: ProjectCreateRequest):
             status_code=400,
             detail=(
                 "Invalid project name. Use 1-5 slash-separated segments of "
-                "1-64 alphanumeric characters, hyphens, or underscores "
+                "1-50 alphanumeric characters, hyphens, or underscores "
                 "(e.g. 'research/papers/2024')."
             ),
         )

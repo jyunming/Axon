@@ -104,8 +104,21 @@ export class AxonGovernancePanel {
     try {
       const res = await httpGet(`${this._apiBase}/governance/overview`, this._apiKey);
       if (res.status === 200) {
-        this._lastOverview = res.body as unknown as GovernanceOverview;
-        this._panel.webview.html = this._buildHtml(this._lastOverview);
+        try {
+          const parsed = JSON.parse(res.body) as GovernanceOverview;
+          this._lastOverview = parsed;
+          this._panel.webview.html = this._buildHtml(parsed);
+        } catch {
+          vscode.window.showErrorMessage(
+            'Axon: Failed to parse governance overview from server response.',
+          );
+          if (this._lastOverview) {
+            this._panel.webview.html = this._buildHtml(this._lastOverview);
+          } else {
+            this._panel.webview.html =
+              '<!DOCTYPE html><html><body style="font-family:var(--vscode-font-family);padding:24px;color:var(--vscode-editor-foreground);"><p>Failed to load Axon Governance Console overview. Please try again.</p></body></html>';
+          }
+        }
       }
     } catch {
       // Keep showing last known state on network error

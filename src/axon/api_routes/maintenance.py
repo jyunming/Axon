@@ -1,6 +1,7 @@
 """Maintenance state, Copilot bridge, and LLM task routes."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -45,7 +46,7 @@ async def copilot_agent_handler(request: Request, body: CopilotAgentRequest):
         try:
             if command == "/search":
                 yield f"data: {json.dumps({'type': 'text', 'content': f'🔍 Searching Axon for: {args}...'})}\n\n"
-                retrieval_data = brain._execute_retrieval(args)
+                retrieval_data = await asyncio.to_thread(brain._execute_retrieval, args)
                 results = retrieval_data["results"]
                 if not results:
                     content = "No relevant documents found."
@@ -63,7 +64,7 @@ async def copilot_agent_handler(request: Request, body: CopilotAgentRequest):
                 loader = URLLoader()
                 docs = loader.load(args)
                 if docs:
-                    brain.ingest(docs)
+                    await asyncio.to_thread(brain.ingest, docs)
                     yield f"data: {json.dumps({'type': 'text', 'content': f'✅ Successfully ingested: {args}'})}\n\n"
                 else:
                     yield f"data: {json.dumps({'type': 'text', 'content': f'❌ Failed to ingest: {args}'})}\n\n"

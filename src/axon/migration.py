@@ -86,11 +86,17 @@ def audit_legacy_chunk_ids(project_dir: Path) -> dict[str, Any]:
       - "legacy_id_count": number of docs with legacy IDs
       - "sample_legacy_ids": up to 5 example legacy IDs
     """
-    bm25_path = project_dir / "bm25_index" / "corpus.json"
-    if not bm25_path.exists():
+    bm25_dir = project_dir / "bm25_index"
+    canonical_path = bm25_dir / "bm25_corpus.json"
+    legacy_path = bm25_dir / "corpus.json"
+    if canonical_path.exists():
+        bm25_path = canonical_path
+    elif legacy_path.exists():
+        bm25_path = legacy_path
+    else:
         return {
             "project": project_dir.name,
-            "bm25_corpus_path": str(bm25_path),
+            "bm25_corpus_path": str(canonical_path),
             "total_docs": 0,
             "legacy_id_count": 0,
             "sample_legacy_ids": [],

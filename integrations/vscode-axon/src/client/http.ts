@@ -74,7 +74,7 @@ export function httpPost(url: string, payload: unknown, apiKey?: string, timeout
       headers['X-API-Key'] = apiKey;
     }
     const req = lib.request(
-      { method: 'POST', hostname: parsed.hostname, port: parsed.port, path: parsed.pathname, headers },
+      { method: 'POST', hostname: parsed.hostname, port: parsed.port, path: parsed.pathname + parsed.search, headers },
       (res) => {
         let resBody = '';
         res.on('data', (chunk: Buffer) => { resBody += chunk.toString(); });
