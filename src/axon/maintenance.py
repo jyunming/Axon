@@ -29,7 +29,10 @@ def apply_maintenance_state(name: str, state: str) -> dict:
 
     set_maintenance_state(name, state)
     reg = _get_registry()
-    if state == "draining":
+    if state in ("draining", "readonly", "offline"):
+        # Start draining so in-flight writes can complete before the
+        # project enters a restricted state.  readonly/offline inherit
+        # the same drain-coordination as explicit "draining".
         reg.start_drain(name)
     elif state == "normal":
         reg.stop_drain(name)

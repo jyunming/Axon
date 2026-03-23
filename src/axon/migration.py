@@ -38,7 +38,7 @@ def migrate_project_meta(project_dir: Path) -> dict[str, Any]:
             "project_namespace_id": None,
         }
 
-    meta = json.loads(meta_file.read_text())
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
     if "project_namespace_id" in meta:
         return {
             "project": project_dir.name,
@@ -48,7 +48,7 @@ def migrate_project_meta(project_dir: Path) -> dict[str, Any]:
 
     ns_id = build_namespace_id("proj")
     meta["project_namespace_id"] = ns_id
-    meta_file.write_text(json.dumps(meta, indent=2))
+    meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return {
         "project": project_dir.name,
         "action": "backfilled",
@@ -105,7 +105,7 @@ def audit_legacy_chunk_ids(project_dir: Path) -> dict[str, Any]:
             "sample_legacy_ids": [],
         }
 
-    corpus = json.loads(bm25_path.read_text())
+    corpus = json.loads(bm25_path.read_text(encoding="utf-8"))
     _STABLE_PREFIXES = (
         "file_",
         "json_",
@@ -150,7 +150,7 @@ def run_migration(projects_root: Path | str, verbose: bool = True) -> None:
         ns = r.get("project_namespace_id") or "N/A"
         logger.info("  [%16s] %s  ns=%s", action, r["project"], ns)
 
-    if verbose:
+    if verbose and root.exists():
         logger.info("Legacy ID audit:")
         for entry in sorted(root.iterdir()):
             if entry.is_dir() and (entry / "meta.json").exists():
