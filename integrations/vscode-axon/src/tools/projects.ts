@@ -204,6 +204,26 @@ export class AxonUpdateSettingsTool implements vscode.LanguageModelTool<any> {
   }
 }
 
+export class AxonGetSettingsTool implements vscode.LanguageModelTool<any> {
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+
+    try {
+      const result = await httpGet(`${apiBase}/config`, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Axon API Error (${result.status}): ${formatDetail(data, result.body)}`)]);
+      }
+      const summary = JSON.stringify(data, null, 2);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Current Axon settings:\n${summary}`)]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // VS Code command implementations
 // ---------------------------------------------------------------------------
@@ -212,23 +232,25 @@ export async function switchProject(apiBase: string): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
   const apiKey = config.get<string>('apiKey', '');
 
-  let projects: any[] = [];
+  let allNames: string[] = [];
   try {
     const result = await httpGet(`${apiBase}/projects`, apiKey);
     const data = JSON.parse(result.body);
-    projects = data.projects ?? [];
+    const local: string[] = (data.projects ?? []).map((p: any) => p.name);
+    const mounts: string[] = (data.shared_mounts ?? []).map((m: any) => m.name);
+    allNames = [...local, ...mounts];
   } catch (err) {
     vscode.window.showErrorMessage(`Axon: Failed to list projects. ${apiConnectionError(err)}`);
     return;
   }
 
-  if (projects.length === 0) {
+  if (allNames.length === 0) {
     vscode.window.showInformationMessage('Axon: No projects found.');
     return;
   }
 
-  const selected = await vscode.window.showQuickPick(projects.map(p => p.name), {
-    placeHolder: 'Select an Axon project',
+  const selected = await vscode.window.showQuickPick(allNames, {
+    placeHolder: 'Select an Axon project (including mounts)',
   });
   if (!selected) {
     return;

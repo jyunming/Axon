@@ -388,6 +388,18 @@ def mock_api_response(url_path: str, method: str, body: dict) -> dict:
             "total_chunks": 10,
             "files": [{"source": "overview.md", "chunks": 6}, {"source": "notes.md", "chunks": 4}],
         }
+    if p == "/config":
+        return {
+            "llm_provider": "ollama",
+            "llm_model": "gemma:2b",
+            "top_k": 10,
+            "rerank": False,
+            "hybrid_search": True,
+            "sentence_window": False,
+            "crag_lite": False,
+            "graph_rag_mode": "local",
+            "cite": True,
+        }
     if p == "/clear":
         return {"status": "ok", "message": "Collection cleared"}
     if p == "/config/update":

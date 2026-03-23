@@ -37,7 +37,8 @@
     "onLanguageModelTool:axon_listStaleDocs",
     "onLanguageModelTool:axon_clearKnowledgeBase",
     "onLanguageModelTool:axon_showGraphStatus",
-    "onLanguageModelTool:axon_showGraph"
+    "onLanguageModelTool:axon_showGraph",
+    "onLanguageModelTool:axon_getSettings"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -583,6 +584,17 @@
         "modelDescription": "Return the current GraphRAG community build status: community_build_in_progress (bool) and community_summary_count (int). Use to check whether community summaries are ready before running a global-mode query.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonShowGraphStatus",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "axon_getSettings",
+        "displayName": "Axon: Get Current Settings",
+        "modelDescription": "Read the current active Axon configuration: retrieval flags (top_k, rerank, hybrid, hyde, etc.), RAG mode settings (sentence_window, crag_lite, graph_rag_mode), and generation settings (llm_provider, llm_model, temperature). Use when the user asks what settings are active or wants to inspect before changing them.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonGetSettings",
         "inputSchema": {
           "type": "object",
           "properties": {}

@@ -29,7 +29,7 @@ import {
 import {
   AxonListProjectsTool, AxonSwitchProjectTool, AxonCreateProjectTool,
   AxonDeleteProjectTool, AxonDeleteDocumentsTool, AxonGetCollectionTool,
-  AxonClearCollectionTool, AxonUpdateSettingsTool,
+  AxonClearCollectionTool, AxonUpdateSettingsTool, AxonGetSettingsTool,
   switchProject, createNewProject,
 } from './tools/projects';
 import {
@@ -135,6 +135,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axon_clearKnowledgeBase', new AxonClearKnowledgeBaseTool()),
         (vscode as any).lm.registerTool('axon_showGraphStatus', new AxonShowGraphStatusTool()),
         (vscode as any).lm.registerTool('axon_showGraph', new AxonShowGraphTool(context)),
+        (vscode as any).lm.registerTool('axon_getSettings', new AxonGetSettingsTool()),
       );
       state.outputChannel.appendLine('Successfully registered all Axon tools.');
     } else {

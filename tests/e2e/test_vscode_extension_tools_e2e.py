@@ -39,6 +39,7 @@ def test_extension_manifest_contract(extension_root_path):
         "axon_clearKnowledgeBase",
         "axon_showGraphStatus",
         "axon_showGraph",
+        "axon_getSettings",
     }
 
     # Verify manifest has them
@@ -77,6 +78,7 @@ def test_extension_manifest_contract(extension_root_path):
         ("axon_listStaleDocs", {}, "/collection/stale"),
         ("axon_clearKnowledgeBase", {}, "/clear"),
         ("axon_showGraphStatus", {}, "/graph/status"),
+        ("axon_getSettings", {}, "/config"),
     ],
 )
 def test_tool_invocations(run_tool, live_recorder_server, tool_name, tool_input, expected_path):

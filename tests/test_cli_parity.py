@@ -501,3 +501,131 @@ class TestModernRagCliConfigWiring:
         defaults = AxonConfig()
         assert cfg.sentence_window == defaults.sentence_window
         assert cfg.crag_lite == defaults.crag_lite
+
+
+# ---------------------------------------------------------------------------
+# CLI operational flags: --refresh, --list-stale, --graph-* (SP-031, SP-032)
+# ---------------------------------------------------------------------------
+
+
+def _make_operational_parser():
+    """Parser mirroring the operational flags added to cli.main()."""
+    p = argparse.ArgumentParser()
+    p.add_argument("query", nargs="?")
+    p.add_argument("--refresh", action="store_true")
+    p.add_argument("--list-stale", action="store_true")
+    p.add_argument("--stale-days", type=int, default=7, metavar="N")
+    p.add_argument("--graph-status", action="store_true")
+    p.add_argument("--graph-finalize", action="store_true")
+    p.add_argument("--graph-export", action="store_true")
+    return p
+
+
+class TestRefreshCliFlag:
+    def test_refresh_sets_true(self):
+        args = _make_operational_parser().parse_args(["--refresh"])
+        assert args.refresh is True
+
+    def test_refresh_absent_is_false(self):
+        args = _make_operational_parser().parse_args([])
+        assert args.refresh is False
+
+
+class TestListStaleCliFlag:
+    def test_list_stale_sets_true(self):
+        args = _make_operational_parser().parse_args(["--list-stale"])
+        assert args.list_stale is True
+
+    def test_stale_days_default(self):
+        args = _make_operational_parser().parse_args(["--list-stale"])
+        assert args.stale_days == 7
+
+    def test_stale_days_custom(self):
+        args = _make_operational_parser().parse_args(["--list-stale", "--stale-days", "30"])
+        assert args.stale_days == 30
+
+
+class TestGraphCliFlags:
+    def test_graph_status_sets_true(self):
+        args = _make_operational_parser().parse_args(["--graph-status"])
+        assert args.graph_status is True
+
+    def test_graph_finalize_sets_true(self):
+        args = _make_operational_parser().parse_args(["--graph-finalize"])
+        assert args.graph_finalize is True
+
+    def test_graph_export_sets_true(self):
+        args = _make_operational_parser().parse_args(["--graph-export"])
+        assert args.graph_export is True
+
+    def test_all_absent_are_false(self):
+        args = _make_operational_parser().parse_args([])
+        assert args.graph_status is False
+        assert args.graph_finalize is False
+        assert args.graph_export is False
+
+
+# ---------------------------------------------------------------------------
+# Surface capability registry (SP-001, SP-002)
+# ---------------------------------------------------------------------------
+
+
+class TestSurfaceCapabilityRegistry:
+    def test_registry_importable(self):
+        from axon.surface_contract import REGISTRY
+
+        assert len(REGISTRY) > 0
+
+    def test_tier1_capabilities_exist(self):
+        from axon.surface_contract import Tier, tier1_capabilities
+
+        t1 = tier1_capabilities()
+        assert len(t1) > 0
+        assert all(c.tier == Tier.ONE for c in t1)
+
+    def test_core_tier1_ids_present(self):
+        from axon.surface_contract import tier1_capabilities
+
+        ids = {c.id for c in tier1_capabilities()}
+        expected = {
+            "query",
+            "search",
+            "ingest_text",
+            "ingest_url",
+            "ingest_path",
+            "ingest_refresh",
+            "ingest_stale",
+            "collection_inspect",
+            "collection_clear",
+            "project_list",
+            "project_switch",
+            "project_create",
+            "project_delete",
+            "config_update",
+            "graph_status",
+        }
+        missing = expected - ids
+        assert not missing, f"Missing Tier 1 capabilities: {missing}"
+
+    def test_surface_capabilities(self):
+        from axon.surface_contract import Surface, surface_capabilities
+
+        api_caps = surface_capabilities(Surface.API)
+        assert len(api_caps) > len(
+            surface_capabilities(Surface.CLI)
+        ), "API should have more capabilities than CLI"
+
+    def test_unsupported_exceptions_documented(self):
+        from axon.surface_contract import Surface, unsupported_on
+
+        cli_gaps = unsupported_on(Surface.CLI)
+        assert len(cli_gaps) > 0, "CLI should have documented gaps for some capabilities"
+        for cap, reason in cli_gaps:
+            assert reason, f"Capability {cap.id} has no documented reason for CLI exclusion"
+
+    def test_categories_by_category(self):
+        from axon.surface_contract import capabilities_by_category
+
+        groups = capabilities_by_category()
+        expected_categories = {"query", "ingest", "project", "config", "graph"}
+        assert expected_categories.issubset(groups.keys())

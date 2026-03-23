@@ -277,6 +277,38 @@ def main():
         "hybrid=both (requires --graph-rag)",
     )
     parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-ingest any tracked files whose content has changed since last ingest, then exit",
+    )
+    parser.add_argument(
+        "--list-stale",
+        action="store_true",
+        help="List documents not re-ingested within --stale-days days, then exit",
+    )
+    parser.add_argument(
+        "--stale-days",
+        type=int,
+        default=7,
+        metavar="N",
+        help="Age threshold in days for --list-stale (default: 7)",
+    )
+    parser.add_argument(
+        "--graph-status",
+        action="store_true",
+        help="Print knowledge graph status (entity count, code nodes, community state), then exit",
+    )
+    parser.add_argument(
+        "--graph-finalize",
+        action="store_true",
+        help="Rebuild community summaries and finalize the knowledge graph, then exit",
+    )
+    parser.add_argument(
+        "--graph-export",
+        action="store_true",
+        help="Export the entity graph as an HTML file and print its path, then exit",
+    )
+    parser.add_argument(
         "--no-dedup",
         action="store_true",
         help="Disable ingest deduplication (allow re-ingesting identical content)",
@@ -498,6 +530,11 @@ def main():
         and not args.list
         and not args.list_models
         and not getattr(args, "pull", None)
+        and not getattr(args, "refresh", False)
+        and not getattr(args, "list_stale", False)
+        and not getattr(args, "graph_status", False)
+        and not getattr(args, "graph_finalize", False)
+        and not getattr(args, "graph_export", False)
         and sys.stdin.isatty()
     )
     _init_display: _InitDisplay | None = None
@@ -610,6 +647,120 @@ def main():
             print(f"  {'-'*60} {'-'*6}")
             for d in docs:
                 print(f"  {d['source']:<60} {d['chunks']:>6}")
+        return
+
+    if getattr(args, "refresh", False):
+        import hashlib as _hashlib
+
+        from axon.loaders import DirectoryLoader
+
+        versions = brain.get_doc_versions()
+        if not versions:
+            print("  No tracked documents to refresh.")
+            return
+        loader_mgr = DirectoryLoader()
+        reingested, skipped, missing, errors = [], [], [], []
+        for source_id, record in versions.items():
+            if not os.path.exists(source_id):
+                missing.append(source_id)
+                continue
+            ext = os.path.splitext(source_id)[1].lower()
+            loader_instance = loader_mgr.loaders.get(ext)
+            if loader_instance is None:
+                errors.append(f"{source_id}: no loader for extension '{ext}'")
+                continue
+            try:
+                docs = loader_instance.load(source_id)
+                if not docs:
+                    errors.append(f"{source_id}: loader returned no documents")
+                    continue
+                combined = "".join(d.get("text", "") for d in docs)
+                current_hash = _hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
+                if current_hash == record.get("content_hash"):
+                    skipped.append(source_id)
+                    continue
+                brain.ingest(docs)
+                reingested.append(source_id)
+            except Exception as exc:
+                errors.append(f"{source_id}: {exc}")
+        print("\n  Refresh complete")
+        print(f"  Re-ingested : {len(reingested)}")
+        print(f"  Unchanged   : {len(skipped)}")
+        print(f"  Missing     : {len(missing)}")
+        if errors:
+            print(f"  Errors      : {len(errors)}")
+            for e in errors:
+                print(f"    • {e}")
+        return
+
+    if getattr(args, "list_stale", False):
+        from datetime import datetime, timezone
+
+        versions = brain.get_doc_versions()
+        days = getattr(args, "stale_days", 7)
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86_400
+        stale = []
+        for source_id, record in versions.items():
+            try:
+                ingested_ts = datetime.fromisoformat(
+                    record.get("ingested_at", "").replace("Z", "+00:00")
+                ).timestamp()
+            except (ValueError, AttributeError):
+                continue
+            if ingested_ts < cutoff:
+                age_days = round((datetime.now(timezone.utc).timestamp() - ingested_ts) / 86_400, 1)
+                stale.append((source_id, age_days))
+        if not stale:
+            print(f"  No documents older than {days} day(s).")
+        else:
+            print(f"\n  Stale documents (>{days} days):\n")
+            for src, age in sorted(stale, key=lambda x: -x[1]):
+                print(f"  {age:>6.1f}d  {src}")
+        return
+
+    if getattr(args, "graph_status", False):
+        entity_count = len(getattr(brain, "_entity_graph", {}) or {})
+        code_node_count = len((getattr(brain, "_code_graph", {}) or {}).get("nodes", {}))
+        summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+        in_progress = getattr(brain, "_community_build_in_progress", False)
+        graph_ready = entity_count > 0 or code_node_count > 0
+        print("\n  Graph Status")
+        print(f"  Ready              : {'yes' if graph_ready else 'no'}")
+        print(f"  Entities           : {entity_count}")
+        print(f"  Code nodes         : {code_node_count}")
+        print(f"  Community summaries: {summary_count}")
+        print(f"  Build in progress  : {'yes' if in_progress else 'no'}")
+        return
+
+    if getattr(args, "graph_finalize", False):
+        print("  Finalizing graph (community rebuild)...")
+        try:
+            brain.finalize_graph(True)
+            summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+            print(f"  Done. {summary_count} community summaries generated.")
+        except Exception as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
+        return
+
+    if getattr(args, "graph_export", False):
+        import tempfile
+
+        print("  Exporting graph...")
+        try:
+            cache_dir = os.path.join(os.path.expanduser("~"), ".axon", "cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            out_path = os.path.join(cache_dir, "graph.html")
+        except OSError:
+            out_path = os.path.join(tempfile.gettempdir(), "axon_graph.html")
+        try:
+            html = brain.export_graph_html(open_browser=False)
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(html)
+            print(f"  Graph exported to: {out_path}")
+        except Exception as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
         return
 
     if args.query:
