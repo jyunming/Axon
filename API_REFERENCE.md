@@ -143,10 +143,13 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 ```json
 {"doc_ids": ["chunk-abc123", "chunk-def456"]}
 ```
-Chunk IDs are returned by ingest endpoints: `doc_id` in `/add_text` and `/ingest_url` responses,
-`doc_ids` in `/add_texts` response. For stale files use `GET /collection/stale` (returns `doc_id`
-per stale entry). `GET /tracked-docs` returns version metadata (hashes and timestamps) — it does
-not include chunk IDs.
+**Important:** `/delete` accepts **internal chunk IDs**, not the source-level `doc_id` returned by
+`/add_text`, `/ingest_url`, or `/add_texts`. Those ingest responses return a source/document
+identifier, not chunk-level IDs. To find deleteable chunk IDs, use `GET /collection/stale` (returns
+`doc_id` per stale entry — these are chunk IDs usable with `/delete`). `GET /tracked-docs` returns
+version metadata (hashes and timestamps) and does not include chunk IDs. Currently there is no
+single endpoint that maps a source doc_id directly to its chunk IDs; delete by source is not yet a
+clean public contract.
 
 ---
 

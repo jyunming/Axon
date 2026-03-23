@@ -176,7 +176,8 @@ Revoked entries in `sharing` are shown with `"revoked": true`. Entries in `share
   (mounted read scopes point at the mounted project's own vector and BM25 paths via the descriptor).
 - **Key security.** Share strings contain a base64-encoded payload and HMAC signature. Do not
   share them over untrusted channels. Revocation is recorded in the owner's
-  `.share_manifest.json`; a revoked key's HMAC signature is rejected on access.
-- **Project isolation.** Each user's projects are stored under `{base_path}/{username}/`.
+  `.share_manifest.json`. Revocation is checked at switch time and on every retrieval; it is
+  descriptor/manifest-based, not HMAC-on-access. HMAC is only used during the initial redeem step.
+- **Project isolation.** Each user's projects are stored under `{base_path}/AxonStore/{username}/`.
   Users cannot read each other's data without an explicit share key.
 - **No expiry by default.** Share keys do not expire. Revoke explicitly when access should end.

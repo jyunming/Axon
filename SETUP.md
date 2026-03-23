@@ -432,8 +432,9 @@ rag:
 ```
 
 With `code_graph: true`, a query that retrieves a function chunk will
-automatically expand to include its containing file, its callers/callees, and
-files it imports — at zero extra LLM cost.
+automatically expand to include its containing file, imported files, and any files
+that mention the symbol (`CONTAINS`, `IMPORTS`, `MENTIONED_IN` edges) — at zero extra LLM cost.
+Note: call-graph (`CALLS`) edges are not currently built; caller/callee traversal is not supported.
 
 > **Note:** The `graph_rag` flag is intentionally disabled for code corpora
 > (`_SOURCE_POLICY["codebase"] = (False, False)`). Code-to-code links come
@@ -923,6 +924,7 @@ For a team where one person owns ingestion and others query:
 | `redeem_share` | Redeem a share key to mount a shared project |
 | `list_shares` | List outgoing shares (`sharing`) and incoming mounted shares (`shared`) |
 | `init_store` | Initialise AxonStore multi-user mode |
+| `get_active_leases` | List active read/write leases held via AxonStore |
 
 > **Recommended:** use `search_knowledge` (not `query_knowledge`) in agent mode.
 > Copilot's LLM synthesises the answer from raw chunks — no Ollama required,
@@ -1031,7 +1033,7 @@ Open VS Code Settings (Ctrl+,) and search for `axon`:
 | `axon.autoStart` | `true` | Auto-start `axon-api` on extension activate (Linux/macOS only) |
 | `axon.pythonPath` | *(auto-detect)* | Explicit Python path override — leave blank for auto-detection (see above) |
 | `axon.useCopilotLlm` | `false` | Switch the extension's active LLM provider to Copilot for all inference (query answering, RAPTOR summarization, etc.), not just a helper |
-| `axon.ingestBase` | *(empty)* | Restrict ingestion paths to a specific directory |
+| `axon.ingestBase` | *(empty)* | Restrict ingestion to a specific directory. Empty = filesystem root on macOS/Linux, current drive root on Windows auto-start. Cross-drive ingest on Windows requires setting this explicitly or starting `axon-api` manually with a broader `RAG_INGEST_BASE`. |
 | `axon.storeBase` | *(empty)* | Base path for AxonStore multi-user mode |
 
 Or edit `settings.json` directly:
@@ -1083,10 +1085,17 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_deleteDocuments` | Remove specific documents by ID |
 | `axon_getCollection` | List all ingested files with chunk counts |
 | `axon_clearCollection` | Wipe all data from the current project |
+| `axon_clearKnowledgeBase` | Alias for clearCollection — wipe all vectors and BM25 index |
 | `axon_updateSettings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
-| `axon_listShares` | List active project shares (AxonStore mode) |
+| `axon_shareProject` | Generate a share key for a project (AxonStore mode) |
+| `axon_redeemShare` | Mount a project shared by another user |
+| `axon_revokeShare` | Revoke an active share |
+| `axon_listShares` | List outgoing and incoming project shares |
 | `axon_initStore` | Initialise AxonStore multi-user mode |
 | `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+| `axon_refreshIngest` | Re-ingest files whose content has changed since last ingest |
+| `axon_listStaleDocs` | Find documents not re-ingested within N days |
+| `axon_showGraphStatus` | Show entity count, community summary count, and graph readiness |
 | `axon_showGraph` | Open the Axon Graph Panel for a query — shows answer, citations, and 3D entity/code graph side by side |
 
 ### Available VS Code commands

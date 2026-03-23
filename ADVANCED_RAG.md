@@ -231,8 +231,8 @@ reports) is prepended to the retrieved chunks before synthesis.
 | `graph_rag_relation_budget` | `30` | Max chunks per ingest batch for relation extraction; `0` = unlimited |
 | `graph_rag_entity_min_frequency` | `2` | Prune singleton entities; use `1` only for small corpora |
 | `graph_rag_budget` | `3` | Max graph-expanded chunks injected into synthesis context |
-| `graph_rag_community_defer` | `false` | Set `true` to build communities after ingest, not during |
-| `graph_rag_community_lazy` | `false` | Set `true` to generate summaries on first global query |
+| `graph_rag_community_defer` | `true` | Build communities after ingest, not during (default on to keep ingest fast) |
+| `graph_rag_community_lazy` | `true` | Generate summaries on first global query, not at community-build time (default on) |
 
 **Config options:**
 ```yaml
@@ -443,3 +443,20 @@ POST /query
   "top_k": 20
 }
 ```
+
+## Citation and Grounding Guarantees
+
+**Inline citations (`cite: true`)** are best-effort prompt behavior. The LLM is instructed to
+include `[source: <file>]` markers when answering from retrieved chunks, but this is not
+post-generation validated. Citations may be omitted, incomplete, or hallucinated in edge cases.
+
+**`discussion_fallback: true`** permits the LLM to answer from general knowledge when no
+relevant chunks are retrieved. These answers are prefixed with a disclaimer but are not grounded
+in the knowledge base. Use `discussion_fallback: false` (strict mode) to refuse instead.
+
+**`truth_grounding: true`** (web search escalation) means low-confidence retrievals fall back to
+Brave web snippet results. The ranking is based on snippet relevance scores, not full-document
+verification. This is a web-snippet escalation mechanism, not a verified citation guarantee.
+
+Summary: Axon's grounding is retrieval-based and best-effort. If you need validated citation
+accuracy, perform post-generation validation outside of Axon.
