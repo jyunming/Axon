@@ -24,7 +24,8 @@ When AxonStore mode is active (axon_store_base is set), each OS user gets a
 namespace under {axon_store_base}/AxonStore/{username}/ containing:
     store_meta.json  — store-level identity and version metadata
     default/         — the user's default project
-    projects/        — authoritative local projects
+    <project>/       — user-created local projects live at the namespace root
+    projects/        — compatibility directory reserved for store tooling
     mounts/          — read-only mount descriptors (canonical)
     .shares/         — share key manifests
 """
@@ -66,9 +67,9 @@ def set_projects_root(path: str | Path) -> None:
 
 _SEGMENT_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 _MAX_DEPTH: int = 5
-# _default is kept reserved so no one accidentally creates a project with that name.
-# The canonical default project is "default" (no underscore).
-_RESERVED_NAMES: set = {"sharemount", "_default", ".shares"}
+# Keep special AxonStore roots reserved so callers cannot create projects that
+# collide with mounted-share routing or legacy default names.
+_RESERVED_NAMES: set = {"mounts", "sharemount", "_default", ".shares"}
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +538,8 @@ def delete_project(name: str) -> None:
 def ensure_user_namespace(user_dir: Path) -> None:
     """Create the standard subdirectories under a user's AxonStore namespace.
 
-    Creates: default/, projects/, mounts/, .shares/, and store_meta.json.
+    Creates: default/, mounts/, .shares/, store_meta.json, and a compatibility
+    projects/ directory reserved for store tooling.
     Safe to call multiple times (idempotent).
     """
     user_dir.mkdir(parents=True, exist_ok=True)

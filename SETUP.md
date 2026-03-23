@@ -909,11 +909,11 @@ For a team where one person owns ingestion and others query:
 | `search_knowledge` | Raw chunk retrieval (Copilot synthesises) |
 | `query_knowledge` | Retrieval + answer via the configured backend LLM provider |
 | `list_knowledge` | List indexed sources with chunk counts |
-| `switch_project` | Change active project namespace |
+| `switch_project` | Change active project |
 | `delete_documents` | Remove documents by ID |
-| `list_projects` | List all project namespaces |
+| `list_projects` | List all projects |
 | `get_stale_docs` | Find docs not re-ingested within N days |
-| `create_project` | Create a new project namespace |
+| `create_project` | Create a new project |
 | `delete_project` | Delete a project and all its data |
 | `clear_knowledge` | Clear all vectors and BM25 index |
 | `get_current_settings` | Return current RAG configuration |
@@ -936,15 +936,17 @@ When AxonStore multi-user mode is initialised (via `init_store` or `Axon: Init S
 
 ```
 AxonStore/
-  store_meta.json          ← store identity (store_namespace_id, store_version, created_at)
-  default/                 ← canonical default project (was _default/ in earlier versions)
-    chroma_data/
-    bm25_index/
-    meta.json              ← includes project_namespace_id
-  projects/                ← authoritative local projects
-  mounts/                  ← read-only mount descriptors
-  .shares/                 ← share key manifests
-  ShareMount/              ← symlinks (legacy compat)
+  <username>/
+    store_meta.json        ← store identity (store_namespace_id, store_version, created_at)
+    default/               ← canonical default project (was _default/ in earlier versions)
+      chroma_data/
+      bm25_index/
+      meta.json            ← includes project_namespace_id
+    <project>/             ← user-created local projects live at the namespace root
+    projects/              ← compatibility directory reserved for store tooling
+    mounts/                ← read-only mount descriptors
+    .shares/               ← share key manifests
+    ShareMount/            ← symlinks (legacy compat)
 ```
 
 #### Migrating from an earlier version
@@ -1078,9 +1080,9 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_ingestUrl` | Fetch and ingest a web page |
 | `axon_ingestPath` | Ingest a local file or directory (async; returns `job_id`) |
 | `axon_getIngestStatus` | Poll an ingest job by `job_id` — call after `axon_ingestPath` before searching |
-| `axon_listProjects` | List available project namespaces |
+| `axon_listProjects` | List available projects |
 | `axon_switchProject` | Switch active project |
-| `axon_createProject` | Create a new project namespace |
+| `axon_createProject` | Create a new project |
 | `axon_deleteProject` | Delete a project and all its data |
 | `axon_deleteDocuments` | Remove specific documents by ID |
 | `axon_getCollection` | List all ingested files with chunk counts |
@@ -1106,7 +1108,7 @@ Access via Ctrl+Shift+P:
 
 | Command | Description |
 |---|---|
-| `Axon: Switch Project` | Change active project namespace |
+| `Axon: Switch Project` | Change active project |
 | `Axon: Create Project` | Create a new project |
 | `Axon: Ingest File` | Browse and ingest a single file |
 | `Axon: Ingest Workspace` | Ingest the entire VS Code workspace |

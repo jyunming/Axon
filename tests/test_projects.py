@@ -568,6 +568,13 @@ class TestIdBuilder:
 
 
 class TestReservedNames:
+    def test_mounts_is_reserved(self, tmp_projects):
+        """'mounts' cannot be used as a local project name."""
+        from axon.projects import ensure_project
+
+        with pytest.raises(ValueError, match="reserved"):
+            ensure_project("mounts")
+
     def test_sharemount_is_reserved(self, tmp_projects):
         """'sharemount' cannot be used as a project name."""
         from axon.projects import ensure_project

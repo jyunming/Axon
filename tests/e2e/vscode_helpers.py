@@ -42,6 +42,7 @@ const clipboardWrites = [];
 let   panelCount     = 0;
 let   lastPanelHtml  = '';
 let   inputResponseIndex = 0;
+const createdPanels  = [];
 
 // -- Minimal LanguageModel stubs -------------------------------------------
 class LanguageModelTextPart {
@@ -108,6 +109,7 @@ const vscode = {
           lastPanelHtml = value;
         },
       });
+      createdPanels.push(panel);
       return panel;
     },
     showInputBox:          async ()     => {
@@ -244,6 +246,38 @@ async function main() {
       } catch (err) {
         toolError = String(err);
       }
+    } else if (toolName.startsWith('chat:')) {
+      // Invoke a registered chat participant handler directly.
+      // Usage: tool_name = "chat:axon.chat", tool_input = { prompt: "..." }
+      const participantId = toolName.slice(5);
+      const participant = registeredParticipants.find(p => p.id === participantId);
+      if (!participant) {
+        toolError = 'Chat participant not registered: ' + participantId +
+                    '. Available: ' + registeredParticipants.map(p => p.id).join(', ');
+      } else {
+        const chatMarkdownParts = [];
+        const fakeResponse = {
+          markdown: (text) => { chatMarkdownParts.push(text); },
+          progress: () => {},
+          reference: () => {},
+          anchor: () => {},
+          button: () => {},
+          filetree: () => {},
+          push: () => {},
+        };
+        const fakeRequest = {
+          prompt: toolInput.prompt || '',
+          command: toolInput.command || undefined,
+          references: [],
+        };
+        const fakeToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
+        try {
+          await participant.handler(fakeRequest, {}, fakeResponse, fakeToken);
+          toolResult = chatMarkdownParts.join('');
+        } catch (err) {
+          toolError = String(err);
+        }
+      }
     } else {
       const tool = registeredTools[toolName];
       if (!tool) {
@@ -264,6 +298,16 @@ async function main() {
     }
   }
 
+  // Dispatch fake webview → extension messages if requested
+  if (Array.isArray(extra._panelMessages) && createdPanels.length > 0) {
+    const targetPanel = createdPanels[0];
+    for (const msg of extra._panelMessages) {
+      if (targetPanel._messageCb) {
+        await targetPanel._messageCb(msg);
+      }
+    }
+  }
+
   process.stdout.write(JSON.stringify({
     toolResult,
     toolError,
@@ -275,6 +319,7 @@ async function main() {
     clipboardWrites,
     panelCount,
     lastPanelHtml,
+    allPanelHtmls: createdPanels.map(p => p.webview.html || ''),
   }));
   process.exit(0);
 }
@@ -447,6 +492,24 @@ def mock_api_response(url_path: str, method: str, body: dict) -> dict:
         }
     if p == "/collection/stale":
         return {"stale_docs": [{"project": "default", "doc_id": "old-doc-001", "age_days": 14}]}
+    if p == "/graph/finalize":
+        return {"status": "ok", "community_summary_count": 7}
+    if p == "/governance/overview":
+        return {
+            "project": "default",
+            "maintenance": {"maintenance_state": "normal", "active_leases": 0},
+            "graph": {"entity_count": 12, "relation_count": 8, "community_count": 3},
+            "stale_doc_count": 2,
+            "active_ingest_jobs": 0,
+            "copilot_sessions_active": 1,
+            "project_count": 3,
+        }
+    if p == "/governance/graph/rebuild":
+        return {"status": "ok", "message": "Graph rebuild queued"}
+    if p == "/governance/project/maintenance":
+        return {"status": "ok", "maintenance_state": body.get("state", "maintenance")}
+    if p.startswith("/governance/copilot/session/") and p.endswith("/expire"):
+        return {"status": "ok", "expired": True}
     if p == "/search/raw":
         return {
             "results": [

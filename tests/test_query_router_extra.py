@@ -8,6 +8,27 @@ Covers missed lines: 112-113, 155, 177, 202-203, 215-228, 243-244, 424-429,
 from __future__ import annotations
 
 import os
+
+# Provide a simple synchronous executor mock
+class SyncExecutor:
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+        f = Future()
+        try:
+            result = fn(*args, **kwargs)
+            f.set_result(result)
+        except Exception as e:
+            f.set_exception(e)
+        return f
+    def map(self, fn, *iterables):
+        return map(fn, *iterables)
+    def shutdown(self, wait=True):
+        pass
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+
 import tempfile
 from collections import OrderedDict
 from threading import Lock
@@ -161,7 +182,7 @@ class RouterStub(QueryRouterMixin):
         # Executor for parallel transforms
         from concurrent.futures import ThreadPoolExecutor
 
-        self._executor = ThreadPoolExecutor(max_workers=4)
+        self._executor = SyncExecutor()
 
     # Stub out methods we do not want to call in most tests
     def _validate_embedding_meta(self, on_mismatch="warn"):

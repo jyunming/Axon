@@ -4,6 +4,32 @@ from unittest.mock import MagicMock, patch
 import yaml
 
 
+# Provide a simple synchronous executor mock to avoid thread leaks on Windows
+class SyncExecutor:
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+
+        f = Future()
+        try:
+            result = fn(*args, **kwargs)
+            f.set_result(result)
+        except Exception as e:
+            f.set_exception(e)
+        return f
+
+    def map(self, fn, *iterables):
+        return map(fn, *iterables)
+
+    def shutdown(self, wait=True):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
 class TestAxonConfig:
     def test_defaults(self):
         from axon.main import AxonConfig
@@ -2064,7 +2090,7 @@ class TestCompressContextGuard:
     def test_compress_context_empty_list_returns_empty(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """_compress_context([]) must not raise ValueError from ThreadPoolExecutor(max_workers=0)."""
+        """_compress_context([]) must not raise ValueError from SyncExecutor()."""
         from axon.main import AxonBrain, AxonConfig
 
         brain = AxonBrain(AxonConfig())
@@ -3572,7 +3598,7 @@ class TestGraphRAGCommunity:
         brain.llm.complete.return_value = (
             '{"title": "Tech", "summary": "Apple and Beats.", "findings": [], "rank": 5.0}'
         )
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         brain._generate_community_summaries()
 
@@ -3671,7 +3697,7 @@ class TestGraphRAGCommunity:
             '{"title": "Tech Products", "summary": "Apple and Beats.", '
             '"findings": [{"summary": "Acquisition", "explanation": "Apple bought Beats."}], "rank": 7.0}'
         )
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         brain._generate_community_summaries()
 
@@ -3693,7 +3719,7 @@ class TestGraphRAGCommunity:
         brain._relation_graph = {}
         brain._community_summaries = {}
         brain.llm.complete.return_value = "This is a plain text summary, not JSON."
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         brain._generate_community_summaries()
 
@@ -3720,7 +3746,7 @@ class TestGraphRAGCommunity:
             }
         }
         brain.llm.complete.return_value = '[{"point": "low relevance", "score": 5}]'
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         class _Cfg:
             graph_rag_global_min_score = 20
@@ -3751,7 +3777,7 @@ class TestGraphRAGCommunity:
             }
         }
         brain.llm.complete.return_value = '[{"point": "AI growth", "score": 80}]'
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         class _Cfg:
             graph_rag_global_min_score = 20
@@ -3883,7 +3909,7 @@ class TestGraphRAGCommunity:
         brain._entity_description_buffer = {"openai": ["AI company", "Research org", "GPT maker"]}
         brain.config.graph_rag_canonicalize_min_occurrences = 3
         brain.llm.complete.return_value = "Leading AI research organization"
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         brain._canonicalize_entity_descriptions()
 
@@ -3989,7 +4015,7 @@ class TestGraphRAGRealImplementation:
                 return "Comprehensive synthesized answer."
 
         brain.llm.complete.side_effect = _fake_complete
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         class _Cfg:
             graph_rag_global_min_score = 20
@@ -4024,7 +4050,7 @@ class TestGraphRAGRealImplementation:
             }
         }
         brain.llm.complete.return_value = '[{"point": "low relevance", "score": 5}]'
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
 
         class _Cfg:
             graph_rag_global_min_score = 20
@@ -4063,7 +4089,7 @@ class TestGraphRAGRealImplementation:
             return "Answer."
 
         brain.llm.complete.side_effect = _fake_complete
-        brain._executor = ThreadPoolExecutor(max_workers=2)
+        brain._executor = SyncExecutor()
 
         class _Cfg:
             graph_rag_global_min_score = 20
@@ -4256,7 +4282,7 @@ class TestGraphRAGRealImplementation:
 
         brain = self._make_brain()
         # Provide a real executor so _generate_community_summaries doesn't crash
-        brain._executor = ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
         results = []
 
         def _run_rebuild():
@@ -4562,7 +4588,7 @@ class TestGraphRAGAuditFixes:
             return '[{"point": "answer is 42", "score": 90}]'
 
         b.llm.complete = MagicMock(side_effect=fake_complete)
-        b._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        b._executor = SyncExecutor()
         from axon.main import (
             _GRAPHRAG_REDUCE_SYSTEM_PROMPT,  # noqa: F401
             AxonBrain,
@@ -4612,7 +4638,7 @@ class TestGraphRAGAuditFixes:
         )
         # Embedding match returns "beatles" (semantic neighbor)
         b._match_entities_by_embedding = MagicMock(return_value=["beatles"])
-        b._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        b._executor = SyncExecutor()
         b.vector_store = MagicMock()
         b.vector_store.get_by_ids = MagicMock(return_value=[])
         results, matched = AxonBrain._expand_with_entity_graph(b, "apple music", [], b.config)
@@ -4681,7 +4707,7 @@ class TestGraphRAGTask6Fixes:
         brain._save_community_hierarchy = MagicMock()
         import concurrent.futures
 
-        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
         llm = MagicMock()
         llm.complete = MagicMock(return_value="")
         brain.llm = llm
@@ -4976,7 +5002,7 @@ class TestGraphRAGTask6Fixes:
             return '[{"point": "fact", "score": 90}]'
 
         b.llm.complete = MagicMock(side_effect=fake_complete)
-        b._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        b._executor = SyncExecutor()
         AxonBrain._global_search_map_reduce(b, "query", b.config)
         map_calls = [c for c in calls if "Community Report" in c]
         # 1200 chars / 400 per chunk = 3 chunks → 3 map calls
@@ -5051,7 +5077,7 @@ class TestGraphRAGTask7Fixes:
         brain._save_community_hierarchy = MagicMock()
         import concurrent.futures
 
-        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
         llm = MagicMock()
         llm.complete = MagicMock(
             return_value='{"title":"T","summary":"s","findings":[],"rank":5.0}'
@@ -5152,7 +5178,7 @@ class TestGraphRAGTask7Fixes:
             observed_during.append(b._community_build_in_progress)
 
         b._rebuild_communities = MagicMock(side_effect=fake_rebuild)
-        b._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        b._executor = SyncExecutor()
 
         def _debounced_rebuild():
             b._community_build_in_progress = True
@@ -6604,7 +6630,7 @@ class TestRuntimeFixes:
             return_value='{"title":"T","summary":"s","findings":[],"rank":5.0}'
         )
         brain.llm = llm
-        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
         brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
             brain, AxonBrain
         )
@@ -6833,7 +6859,7 @@ class TestRuntimeFixes:
                 "findings": [],
             },
         }
-        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
         brain.llm = MagicMock()
         # Return empty array → map results are all empty → no reduce phase call
         brain.llm.complete = MagicMock(return_value="[]")
@@ -7487,7 +7513,7 @@ class TestMapReduceDedicatedPool:
         brain.config.max_workers = 4
         brain.llm = MagicMock()
         brain.llm.complete = MagicMock(return_value='[{"point":"p","score":50}]')
-        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
         brain._community_summaries = {
             "c0": {"full_content": "Community report text.", "summary": "s"}
         }
@@ -7650,7 +7676,7 @@ class TestLLMLinguaCompression:
         brain.config.max_workers = 2
         brain.llm = MagicMock()
         brain.llm.complete = MagicMock(return_value='[{"point":"p","score":60}]')
-        brain._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        brain._executor = SyncExecutor()
         brain._community_summaries = {
             "c0": {"full_content": "Long community report text for testing.", "summary": "s"}
         }

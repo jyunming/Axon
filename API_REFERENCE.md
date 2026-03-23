@@ -166,7 +166,7 @@ inspect ingested sources and chunk counts.
 
 Use `POST /project/switch` to change the active project before querying, searching, or ingesting.
 All routes that accept a `"project"` field validate it against the active project and return
-`409` if it does not match. The field is not a namespace-targeting mechanism — it is a safety
+`409` if it does not match. The field is not a cross-project targeting mechanism — it is a safety
 check to prevent accidental writes or reads to the wrong corpus.
 
 ---

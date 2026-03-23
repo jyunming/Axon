@@ -400,6 +400,17 @@ def test_add_text_propagates_error():
     assert resp.status_code == 500
 
 
+def test_add_text_permission_error_returns_403():
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot ingest: project 'alpha' is in 'readonly' maintenance state."
+    )
+    resp = client.post("/add_text", json={"text": "hello"})
+    assert resp.status_code == 403
+    assert "readonly" in resp.json()["detail"]
+    api_module.brain.ingest.assert_not_called()
+
+
 def test_add_text_empty_string_rejected():
     """B-05: Empty or whitespace-only text must return 400."""
     api_module.brain = _make_brain()
@@ -733,6 +744,17 @@ def test_add_texts_explicit_doc_id_preserved():
     assert resp.json()[0]["id"] == "my-stable-id"
 
 
+def test_add_texts_permission_error_returns_403():
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot ingest on mounted share 'mounts/alice_docs'."
+    )
+    resp = client.post("/add_texts", json={"docs": [{"text": "doc one"}]})
+    assert resp.status_code == 403
+    assert "mounted share" in resp.json()["detail"]
+    api_module.brain.ingest.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # /ingest_url  (P1-B)
 # ---------------------------------------------------------------------------
@@ -782,6 +804,21 @@ def test_ingest_url_blocked_returns_400():
 
     assert resp.status_code == 400
     assert "blocked" in resp.json()["detail"]
+
+
+def test_ingest_url_permission_error_returns_403():
+    """Mounted-share / maintenance write denial should return 403 before fetching the URL."""
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot ingest: project 'alpha' is in 'offline' maintenance state."
+    )
+
+    with patch("axon.loaders.URLLoader") as mock_cls:
+        resp = client.post("/ingest_url", json={"url": "https://example.com"})
+
+    assert resp.status_code == 403
+    assert "offline" in resp.json()["detail"]
+    mock_cls.assert_not_called()
 
 
 def test_ingest_url_extra_metadata_merged():
@@ -1641,6 +1678,17 @@ def test_refresh_mounted_share_returns_403(tmp_path):
     )
     resp = client.post("/ingest/refresh")
     assert resp.status_code == 403
+
+
+def test_refresh_write_guard_returns_403_before_scanning_docs():
+    """POST /ingest/refresh should fail fast when writes are not allowed."""
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot refresh: project 'alpha' is in 'readonly' maintenance state."
+    )
+    resp = client.post("/ingest/refresh")
+    assert resp.status_code == 403
+    api_module.brain.get_doc_versions.assert_not_called()
 
 
 def test_finalize_mounted_share_returns_403():
