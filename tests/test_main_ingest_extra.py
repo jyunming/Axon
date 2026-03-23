@@ -160,10 +160,25 @@ def _make_brain(tmp_path, **cfg_kwargs):
     # unless a test specifically sets it.
     brain.splitter = None
 
-    # Executor: run synchronously
-    from concurrent.futures import ThreadPoolExecutor
+    # Provide a simple synchronous executor mock to avoid thread leaks on Windows
+    class SyncExecutor:
+        def submit(self, fn, *args, **kwargs):
+            from concurrent.futures import Future
+            f = Future()
+            try:
+                result = fn(*args, **kwargs)
+                f.set_result(result)
+            except Exception as e:
+                f.set_exception(e)
+            return f
+        def map(self, fn, *iterables):
+            return map(fn, *iterables)
+        def shutdown(self, wait=True):
+            pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
 
-    brain._executor = ThreadPoolExecutor(max_workers=1)
+    brain._executor = SyncExecutor()
 
     return brain
 

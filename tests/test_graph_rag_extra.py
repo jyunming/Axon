@@ -20,7 +20,11 @@ from axon.graph_rag import GraphRagMixin
 
 
 def _make_config(**kwargs) -> AxonConfig:
-    tmp = tempfile.mkdtemp()
+    from pathlib import Path
+    import tempfile
+    
+    # Use a subdirectory of the system temp to be safer
+    tmp = tempfile.mkdtemp(prefix="axon_test_")
     d = {
         "bm25_path": os.path.join(tmp, "bm25"),
         "vector_store_path": os.path.join(tmp, "vs"),
@@ -57,10 +61,25 @@ def _make_brain(config=None, **extra_attrs):
     brain.vector_store = MagicMock()
     brain._own_vector_store = MagicMock()
 
-    # Provide a simple synchronous executor mock
-    from concurrent.futures import ThreadPoolExecutor
+    # Provide a simple synchronous executor mock to avoid thread leaks on Windows
+    class SyncExecutor:
+        def submit(self, fn, *args, **kwargs):
+            from concurrent.futures import Future
+            f = Future()
+            try:
+                result = fn(*args, **kwargs)
+                f.set_result(result)
+            except Exception as e:
+                f.set_exception(e)
+            return f
+        def map(self, fn, *iterables):
+            return map(fn, *iterables)
+        def shutdown(self, wait=True):
+            pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
 
-    brain._executor = ThreadPoolExecutor(max_workers=1)
+    brain._executor = SyncExecutor()
 
     for k, v in extra_attrs.items():
         setattr(brain, k, v)

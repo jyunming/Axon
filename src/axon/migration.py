@@ -13,8 +13,11 @@ Current migrations:
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def migrate_project_meta(project_dir: Path) -> dict[str, Any]:
@@ -139,25 +142,29 @@ def run_migration(projects_root: Path | str, verbose: bool = True) -> None:
         python -c "from axon.migration import run_migration; from pathlib import Path; run_migration(Path.home() / '.axon/projects')"
     """
     root = Path(projects_root)
-    print(f"Migration target: {root}")
+    logger.info("Migration target: %s", root)
 
     meta_results = migrate_projects_root(root)
     for r in meta_results:
         action = r["action"]
         ns = r.get("project_namespace_id") or "N/A"
-        print(f"  [{action:>16}] {r['project']}  ns={ns}")
+        logger.info("  [%16s] %s  ns=%s", action, r["project"], ns)
 
     if verbose:
-        print()
-        print("Legacy ID audit:")
+        logger.info("Legacy ID audit:")
         for entry in sorted(root.iterdir()):
             if entry.is_dir() and (entry / "meta.json").exists():
                 audit = audit_legacy_chunk_ids(entry)
                 if audit["legacy_id_count"] > 0:
-                    print(
-                        f"  WARN  {entry.name}: {audit['legacy_id_count']}/{audit['total_docs']} docs have legacy IDs"
+                    logger.warning(
+                        "  WARN  %s: %d/%d docs have legacy IDs",
+                        entry.name,
+                        audit["legacy_id_count"],
+                        audit["total_docs"],
                     )
                     for sid in audit["sample_legacy_ids"]:
-                        print(f"        example: {sid!r}")
+                        logger.warning("        example: %r", sid)
                 else:
-                    print(f"  OK    {entry.name}: {audit['total_docs']} docs, no legacy IDs")
+                    logger.info(
+                        "  OK    %s: %d docs, no legacy IDs", entry.name, audit["total_docs"]
+                    )

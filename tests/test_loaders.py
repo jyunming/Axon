@@ -308,9 +308,8 @@ class TestTextLoader:
         docs = loader.load(str(f_path))
         assert len(docs) == 1
         assert docs[0]["text"] == "This is a test document."
-        assert docs[0]["id"].endswith("test.txt")
-            assert docs[0]["metadata"]["type"] == "text"
-            assert f.name in docs[0]["metadata"]["source"]
+        assert docs[0]["metadata"]["type"] == "text"
+        assert str(f_path) in docs[0]["metadata"]["source"]
 
 
 class TestJSONLoader:

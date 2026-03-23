@@ -177,7 +177,7 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
 
   state.serverProcess = spawn(pythonPath, ['-m', 'uvicorn', 'axon.api:app', '--host', '127.0.0.1', '--port', portStr], {
     cwd: workspaceRoot,
-    shell: true, // Crucial for Windows path resolution
+    shell: process.platform === 'win32', // Required on Windows for Python path resolution
     env: {
       ...process.env,
       PYTHONPATH: path.join(workspaceRoot, 'src'),

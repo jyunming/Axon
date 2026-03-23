@@ -69,7 +69,10 @@ _TABLE_KEYWORDS = {
 
 
 def _make_config(**kwargs) -> AxonConfig:
-    tmp = tempfile.mkdtemp()
+    import tempfile
+    
+    # Use a subdirectory of the system temp to be safer
+    tmp = tempfile.mkdtemp(prefix="axon_query_test_")
     defaults = {
         "bm25_path": os.path.join(tmp, "bm25"),
         "vector_store_path": os.path.join(tmp, "vs"),

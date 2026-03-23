@@ -1,4 +1,4 @@
-﻿"""Pydantic request/response models and pure utility functions for the Axon API."""
+"""Pydantic request/response models and pure utility functions for the Axon API."""
 from __future__ import annotations
 
 import hashlib
@@ -92,7 +92,7 @@ class QueryRequest(BaseModel):
     )
     top_k: int | None = Field(None, ge=1, description="Override number of chunks to retrieve")
     threshold: float | None = Field(
-        None, ge=0.0, le=1.0, description="Override similarity threshold (0.0â€“1.0)"
+        None, ge=0.0, le=1.0, description="Override similarity threshold (0.0-1.0)"
     )
     hybrid: bool | None = Field(None, description="Override hybrid BM25+vector search toggle")
     rerank: bool | None = Field(None, description="Override cross-encoder re-ranking toggle")
@@ -103,7 +103,7 @@ class QueryRequest(BaseModel):
     compress: bool | None = Field(None, description="Override LLM context compression toggle")
     discuss: bool | None = Field(None, description="Override discussion fallback toggle")
     temperature: float | None = Field(
-        None, ge=0.0, le=2.0, description="Override LLM temperature for this request (0.0â€“2.0)"
+        None, ge=0.0, le=2.0, description="Override LLM temperature for this request (0.0-2.0)"
     )
     timeout: float | None = Field(None, gt=0, description="Query timeout in seconds (default 120)")
     include_diagnostics: bool = Field(
