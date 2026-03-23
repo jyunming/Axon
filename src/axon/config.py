@@ -1,4 +1,4 @@
-"""
+﻿"""
 src/axon/config.py
 
 AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
@@ -15,7 +15,7 @@ import yaml
 
 logger = logging.getLogger("Axon")
 
-# XDG-style user config dir — consistent across Linux / macOS / Windows
+# XDG-style user config dir â€” consistent across Linux / macOS / Windows
 _USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "config.yaml")
 
 
@@ -120,15 +120,22 @@ class AxonConfig:
         is_linux = sys.platform == "linux"
         home = os.path.join(os.path.expanduser("~"), ".axon")
 
+        default_vsp = os.path.join(home, "projects", "default", "chroma_data")
+        default_bmp = os.path.join(home, "projects", "default", "bm25_index")
+        if self.vector_store_path == default_vsp:
+            self.vector_store_path = os.path.join(self.projects_root, "default", "chroma_data")
+        if self.bm25_path == default_bmp:
+            self.bm25_path = os.path.join(self.projects_root, "default", "bm25_index")
+
         def _resolve_safe(path_str: str, sub: str) -> str:
             if not path_str:
-                return os.path.join(home, "projects", "default", sub)
+                return os.path.join(self.projects_root, "default", sub)
             # Expand ~
             p_str = os.path.expanduser(path_str)
-            # If it's the legacy relative default, force to home
+            # If it's the legacy relative default, force to projects_root
             legacy_defaults = ("./chroma_data", "chroma_data", "./bm25_index", "bm25_index")
             if path_str in legacy_defaults:
-                return os.path.join(home, "projects", "default", sub)
+                return os.path.join(self.projects_root, "default", sub)
 
             # Check for absolute paths
             if is_linux:
@@ -143,7 +150,7 @@ class AxonConfig:
                 # Only redirect if it looks like the user didn't explicitly set a custom Linux path
                 # (heuristic: if it contains 'studio_brain_open' or 'axon' in a Windows path)
                 if any(x in p_str.lower() for x in ("axon", "studio_brain")):
-                    safe_path = os.path.join(home, "projects", "default", sub)
+                    safe_path = os.path.join(self.projects_root, "default", sub)
                     return safe_path
 
             if is_linux:
@@ -194,24 +201,24 @@ class AxonConfig:
     # Cosine semantic chunking (only active when chunk_strategy="cosine_semantic")
     cosine_semantic_threshold: float = 0.7
     cosine_semantic_max_size: int = 500
-    # MMR deduplication — reorders and removes near-duplicate retrieved chunks
+    # MMR deduplication â€” reorders and removes near-duplicate retrieved chunks
     mmr: bool = False
     mmr_lambda: float = 0.5  # 1.0 = pure relevance, 0.0 = pure diversity
 
     # Sentence-Window Retrieval (Epic 1)
     # Indexes prose chunks at sentence granularity; retrieves by sentence but
-    # expands each hit to ±sentence_window_size surrounding sentences for LLM
+    # expands each hit to Â±sentence_window_size surrounding sentences for LLM
     # context.  Only non-code, non-RAPTOR-summary leaf chunks are eligible.
     # Disabled by default; enable via config.yaml (rag.sentence_window: true).
     sentence_window: bool = False
-    sentence_window_size: int = 3  # ±N sentences around each sentence hit
+    sentence_window_size: int = 3  # Â±N sentences around each sentence hit
 
     # CRAG-Lite Retrieval Correction (Epic 2)
     # Evaluates retrieval confidence before deciding whether to trust local
     # results or escalate to web fallback.  Operates without LLM calls.
     # Disabled by default; enable via config.yaml (rag.crag_lite: true).
     crag_lite: bool = False
-    crag_lite_confidence_threshold: float = 0.4  # below → low-confidence fallback
+    crag_lite_confidence_threshold: float = 0.4  # below â†’ low-confidence fallback
 
     # Re-ranking
     rerank: bool = False
@@ -234,12 +241,12 @@ class AxonConfig:
     query_decompose: bool = False
     discussion_fallback: bool = True
 
-    # Context Compression (Epic 3, Stories 3.1–3.3)
+    # Context Compression (Epic 3, Stories 3.1â€“3.3)
     # compress_context: master on/off switch (backward-compatible).
     # compression_strategy selects the algorithm when compress_context is True:
-    #   "sentence"   — LLM-based sentence extraction (default, existing behaviour)
-    #   "llmlingua"  — LLMLingua-2 token compression (pip install axon[llmlingua])
-    #   "none"       — disabled (same as compress_context=False)
+    #   "sentence"   â€” LLM-based sentence extraction (default, existing behaviour)
+    #   "llmlingua"  â€” LLMLingua-2 token compression (pip install axon[llmlingua])
+    #   "none"       â€” disabled (same as compress_context=False)
     # compression_token_budget: target output tokens for llmlingua (0 = use model default ratio).
     compress_context: bool = False
     compression_strategy: str = "sentence"  # "none" | "sentence" | "llmlingua"
@@ -296,7 +303,7 @@ class AxonConfig:
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
-    # stored in an entity→doc_id map.  At retrieval time, entities found in the
+    # stored in an entityâ†’doc_id map.  At retrieval time, entities found in the
     # query are used to expand the result set with graph-connected documents.
     graph_rag: bool = True
 
@@ -379,22 +386,22 @@ class AxonConfig:
     graph_rag_local_community_weight: float = 1.5
     graph_rag_local_text_unit_weight: float = 1.0
 
-    # Runtime cost reduction — community triage
-    graph_rag_community_min_size: int = 3  # communities smaller than this → template only
+    # Runtime cost reduction â€” community triage
+    graph_rag_community_min_size: int = 3  # communities smaller than this â†’ template only
     graph_rag_community_llm_top_n_per_level: int = 15  # max LLM-summarized per level (0=unlimited)
     graph_rag_community_llm_max_total: int = (
         30  # hard cap on LLM calls across all levels (0=unlimited)
     )
-    # Lazy community generation — skip summarization at finalize; generate on first global query
+    # Lazy community generation â€” skip summarization at finalize; generate on first global query
     graph_rag_community_lazy: bool = True
-    # Global search pre-filter — cap communities entering map-reduce (0=no cap)
+    # Global search pre-filter â€” cap communities entering map-reduce (0=no cap)
     graph_rag_global_top_communities: int = 0
-    # RAPTOR source-size guard — skip RAPTOR for sources larger than this MB (0=no limit)
+    # RAPTOR source-size guard â€” skip RAPTOR for sources larger than this MB (0=no limit)
     raptor_max_source_size_mb: float = 0.0
 
-    # Deferred batch saves — suppress per-call disk writes during batch ingest.
+    # Deferred batch saves â€” suppress per-call disk writes during batch ingest.
     # When True: BM25, entity graph, and relation graph saves deferred to finalize_ingest().
-    # Reduces O(N²) disk writes to O(1) per session.
+    # Reduces O(NÂ²) disk writes to O(1) per session.
     # Crash recovery: in-memory state only; re-ingest affected sources on restart.
     ingest_batch_mode: bool = False
 
@@ -433,15 +440,15 @@ class AxonConfig:
     graph_rag_relation_budget: int = 30
 
     # Community detection backend preference.
-    # "louvain"   = networkx Louvain only (default — safe on all environments, fast for <10k nodes)
+    # "louvain"   = networkx Louvain only (default â€” safe on all environments, fast for <10k nodes)
     # "leidenalg" = leidenalg/igraph multi-resolution Leiden (recommended when available)
-    # "auto"      = graspologic → leidenalg → louvain fallback chain (legacy; unsafe on Python 3.13
+    # "auto"      = graspologic â†’ leidenalg â†’ louvain fallback chain (legacy; unsafe on Python 3.13
     #               because graspologic's import can hang; use only when graspologic is verified safe)
     graph_rag_community_backend: str = "louvain"
 
     # Structural code graph.
     # Builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.
-    # code_graph_bridge: scans prose chunks for code symbol mentions → MENTIONED_IN edges.
+    # code_graph_bridge: scans prose chunks for code symbol mentions â†’ MENTIONED_IN edges.
     # Query time: traverses the code graph to expand retrieval results.
     code_graph: bool = False  # build + query structural code graph
     code_graph_bridge: bool = False  # link code symbols to prose chunks
@@ -451,7 +458,7 @@ class AxonConfig:
     code_top_k_multiplier: int = 2  # extra fetch_k factor when code query detected
     code_max_chunks_per_file: int = 3  # per-file cap in final top_k (diversity)
     # Code query mode tuning (active when code_lexical_boost=True and code query detected).
-    # code_bm25_weight only affects weighted fusion mode — silently ignored in RRF (default).
+    # code_bm25_weight only affects weighted fusion mode â€” silently ignored in RRF (default).
     code_bm25_weight: float = 0.7  # BM25 weight override for code queries (weighted mode only)
     code_top_k: int = 6  # top-K override when code mode active (0 = use top_k)
     # Retrieval dry-run: skip LLM, return ranked candidates + diagnostics only.
@@ -460,7 +467,7 @@ class AxonConfig:
     # Minimum entity appearance frequency to include in community detection graph.
     # Entities appearing in fewer than this many chunks are pruned before building the graph.
     # 1 = no pruning (include all entities). 2 = prune singletons (recommended for non-trivial
-    # corpora — reduces noisy one-off entities; qualification studies used 2 for papers corpus).
+    # corpora â€” reduces noisy one-off entities; qualification studies used 2 for papers corpus).
     graph_rag_entity_min_frequency: int = 2
 
     # Dedicated thread pool size for map-reduce phase (0 = use max_workers).
@@ -481,7 +488,7 @@ class AxonConfig:
     # Token-level compression of community reports before map-reduce LLM calls.
     # Uses LLMLingua-2. pip install axon[llmlingua]
     graph_rag_report_compress: bool = False
-    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0–1.0)
+    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0â€“1.0)
 
     # Auto-route queries based on complexity.
     # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
@@ -494,16 +501,16 @@ class AxonConfig:
     # "off": skip router, use graph_rag_auto_route legacy behaviour
     query_router: str = "heuristic"
 
-    # Contextual retrieval — prepend LLM-generated situating context to each chunk at ingest time.
+    # Contextual retrieval â€” prepend LLM-generated situating context to each chunk at ingest time.
     # Based on Anthropic's contextual retrieval technique.
     contextual_retrieval: bool = False
 
-    # Semantic entity alias resolution — merge near-duplicate entity names (e.g.
+    # Semantic entity alias resolution â€” merge near-duplicate entity names (e.g.
     # "Apple" / "Apple Inc." / "Apple Corporation") into a single canonical node before
     # community detection.  Uses cosine similarity on entity-name embeddings.
-    # pip install axon[graphrag]  (no extra deps — uses the already-loaded embedding model)
+    # pip install axon[graphrag]  (no extra deps â€” uses the already-loaded embedding model)
     graph_rag_entity_resolve: bool = False
-    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0–1)
+    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0â€“1)
     graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
 
     # Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
@@ -535,7 +542,7 @@ class AxonConfig:
     qdrant_url: str = ""
     qdrant_api_key: str = ""
 
-    # AxonStore — multi-user shared storage
+    # AxonStore â€” multi-user shared storage
     # When axon_store_base is set, projects_root is derived as:
     #   {axon_store_base}/AxonStore/{os_username}/
     # and the AxonStore namespace is initialised on first use.
@@ -554,7 +561,7 @@ class AxonConfig:
         not exist still produces a WARNING.
         """
         _DEFAULT_CONFIG_YAML = """\
-# Axon Configuration — edit to customise behaviour.
+# Axon Configuration â€” edit to customise behaviour.
 # Full option reference: axon --help or https://github.com/...
 
 embedding:
@@ -613,9 +620,9 @@ offline:
                     cfg_path = Path(path)
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     cfg_path.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
-                    logger.info("Created default config at %s — edit it to customise Axon.", path)
+                    logger.info("Created default config at %s â€” edit it to customise Axon.", path)
                     # Fall through so the newly-written file is parsed; do NOT return cls()
-                    # here — that would silently use the dataclass defaults (raptor=True etc.)
+                    # here â€” that would silently use the dataclass defaults (raptor=True etc.)
                     # instead of the file values (raptor=false etc.).
                 except (OSError, PermissionError) as exc:
                     logger.warning(
@@ -699,7 +706,7 @@ offline:
         if "ollama_base_url" not in config_dict and "llm_base_url" in config_dict:
             config_dict["ollama_base_url"] = config_dict["llm_base_url"]
 
-        # llm.models_dir → ollama_models_dir
+        # llm.models_dir â†’ ollama_models_dir
         if "llm_models_dir" in config_dict and "ollama_models_dir" not in config_dict:
             config_dict["ollama_models_dir"] = config_dict.pop("llm_models_dir")
 
@@ -737,7 +744,7 @@ offline:
         if "qdrant_api_key" in data:
             config_dict["qdrant_api_key"] = data["qdrant_api_key"]
 
-        # Environment Variable Overrides (High Priority — wins over config.yaml)
+        # Environment Variable Overrides (High Priority â€” wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
             config_dict["ollama_base_url"] = env_ollama_host

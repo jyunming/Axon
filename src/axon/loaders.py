@@ -18,7 +18,7 @@ _MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
 
 def _stable_file_id(path: str, kind: str = "file") -> str:
     """SHA-256 based stable ID from absolute path. Prevents basename collisions."""
-    abspath = os.path.normpath(os.path.abspath(path))
+    abspath = os.path.normcase(os.path.normpath(os.path.abspath(path)))
     return kind + "_" + hashlib.sha256(abspath.encode()).hexdigest()[:24]
 
 
@@ -196,7 +196,8 @@ class FlexibleTableLoader(BaseLoader):
 
         stable_base = (
             _stable_file_id(source, "table")
-            if os.path.isabs(source) or os.sep in source
+            if not source.startswith(("http://", "https://"))
+            and (os.path.isabs(source) or os.sep in source)
             else ("table_" + hashlib.sha256(source.encode()).hexdigest()[:24])
         )
         documents = []

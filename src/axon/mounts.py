@@ -42,6 +42,11 @@ def mounts_root(user_dir: Path) -> Path:
 
 def mount_descriptor_dir(user_dir: Path, mount_name: str) -> Path:
     """Return the per-mount subdirectory under ``mounts/``."""
+    # Guard against path traversal via adversarial mount names (e.g. "../../../etc")
+    candidate = (mounts_root(user_dir) / mount_name).resolve()
+    expected_root = mounts_root(user_dir).resolve()
+    if not str(candidate).startswith(str(expected_root)):
+        raise ValueError(f"Invalid mount_name — path traversal detected: {mount_name!r}")
     return mounts_root(user_dir) / mount_name
 
 

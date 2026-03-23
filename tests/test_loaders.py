@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_loaders.py
 
 Unit tests for all document loaders in axon.loaders.
@@ -49,7 +49,7 @@ def test_text_loader_basic(tmp_path):
     assert len(docs) == 1
     _assert_doc(docs[0])
     assert docs[0]["text"] == "Hello world"
-    # ID is now a stable hash (not basename) — just verify it's non-empty
+    # ID is now a stable hash (not basename) â€” just verify it's non-empty
     assert docs[0]["id"]
     assert docs[0]["id"] != "hello.txt"
 
@@ -299,17 +299,16 @@ def test_directory_loader_ignores_unknown(tmp_path):
 class TestTextLoader:
     """Test the TextLoader class."""
 
-    def test_load_text_file(self):
+    def test_load_text_file(self, tmp_path):
         """Test loading a text file."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write("This is a test document.")
-            f.flush()
+        f_path = tmp_path / "test.txt"
+        f_path.write_text("This is a test document.", encoding="utf-8")
 
-            loader = TextLoader()
-            docs = loader.load(f.name)
-
-            assert len(docs) == 1
-            assert docs[0]["text"] == "This is a test document."
+        loader = TextLoader()
+        docs = loader.load(str(f_path))
+        assert len(docs) == 1
+        assert docs[0]["text"] == "This is a test document."
+        assert docs[0]["id"].endswith("test.txt")
             assert docs[0]["metadata"]["type"] == "text"
             assert f.name in docs[0]["metadata"]["source"]
 
@@ -317,36 +316,36 @@ class TestTextLoader:
 class TestJSONLoader:
     """Test the JSONLoader class."""
 
-    def test_load_json_list(self):
+    def test_load_json_list(self, tmp_path):
         """Test loading JSON with a list of documents."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            data = [
-                {"text": "Document 1", "author": "Alice"},
-                {"text": "Document 2", "author": "Bob"},
-            ]
+        f_path = tmp_path / "test.json"
+        data = [
+            {"text": "Document 1", "author": "Alice"},
+            {"text": "Document 2", "author": "Bob"},
+        ]
+        with open(f_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
-            f.flush()
 
-            loader = JSONLoader()
-            docs = loader.load(f.name)
+        loader = JSONLoader()
+        docs = loader.load(str(f_path))
 
-            assert len(docs) == 2
-            assert docs[0]["text"] == "Document 1"
-            assert docs[0]["metadata"]["author"] == "Alice"
+        assert len(docs) == 2
+        assert docs[0]["text"] == "Document 1"
+        assert docs[0]["metadata"]["author"] == "Alice"
 
-    def test_load_json_object(self):
+    def test_load_json_object(self, tmp_path):
         """Test loading JSON with a single object."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            data = {"text": "Single document", "category": "test"}
+        f_path = tmp_path / "single.json"
+        data = {"text": "Single document", "category": "test"}
+        with open(f_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
-            f.flush()
 
-            loader = JSONLoader()
-            docs = loader.load(f.name)
+        loader = JSONLoader()
+        docs = loader.load(str(f_path))
 
-            assert len(docs) == 1
-            assert docs[0]["text"] == "Single document"
-            assert docs[0]["metadata"]["category"] == "test"
+        assert len(docs) == 1
+        assert docs[0]["text"] == "Single document"
+        assert docs[0]["metadata"]["category"] == "test"
 
 
 class TestImageLoader:
@@ -452,20 +451,20 @@ class TestImageLoader:
 class TestDirectoryLoader:
     """Test the DirectoryLoader class."""
 
-    def test_load_mixed_directory(self):
+    def test_load_mixed_directory(self, tmp_path):
         """Test loading a directory with mixed file types."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create test files
-            Path(tmpdir, "test1.txt").write_text("Text file content")
-            Path(tmpdir, "test2.json").write_text(json.dumps({"text": "JSON content"}))
+        tmpdir = str(tmp_path)
+        # Create test files
+        Path(tmpdir, "test1.txt").write_text("Text file content")
+        Path(tmpdir, "test2.json").write_text(json.dumps({"text": "JSON content"}))
 
-            loader = DirectoryLoader()
-            docs = loader.load(tmpdir)
+        loader = DirectoryLoader()
+        docs = loader.load(tmpdir)
 
-            assert len(docs) >= 2
-            texts = [doc["text"] for doc in docs]
-            assert any("Text file content" in t for t in texts)
-            assert any("JSON content" in t for t in texts)
+        assert len(docs) >= 2
+        texts = [doc["text"] for doc in docs]
+        assert any("Text file content" in t for t in texts)
+        assert any("JSON content" in t for t in texts)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +524,7 @@ class TestDirectoryLoaderAload:
 
 
 class TestURLLoader:
-    """Tests for URLLoader. All network calls are mocked — no real HTTP."""
+    """Tests for URLLoader. All network calls are mocked â€” no real HTTP."""
 
     def _make_response(
         self,
@@ -670,7 +669,7 @@ class TestURLLoader:
 
 
 # ---------------------------------------------------------------------------
-# Gap 5 — _rewrite_github_url
+# Gap 5 â€” _rewrite_github_url
 # ---------------------------------------------------------------------------
 
 
@@ -772,7 +771,7 @@ class TestSmartTextLoaderIdFix:
         assert docs[0]["id"] == "/data/myproject/file.txt"
 
     def test_windows_path_source_not_mangled(self):
-        """Windows-style paths must not be mangled — use mixed separators so the test
+        """Windows-style paths must not be mangled â€” use mixed separators so the test
         is meaningful on all platforms (os.path.basename of a backslash-only path is
         a no-op on POSIX, so we include a forward slash to force a detectable split)."""
         from axon.loaders import SmartTextLoader
@@ -817,7 +816,7 @@ def test_two_files_same_name_different_dirs_get_different_ids(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# SmartTextLoader — file-path load
+# SmartTextLoader â€” file-path load
 # ---------------------------------------------------------------------------
 
 

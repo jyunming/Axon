@@ -88,7 +88,7 @@ pip install -e ".[all]"
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
 > The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x — do not install it on Python 3.13.
-> The code default is `graph_rag_community_backend: auto` (graspologic → leidenalg → networkx Louvain). For Python 3.13 we recommend pinning to `leidenalg` explicitly:
+> The code default is `graph_rag_community_backend: louvain` (networkx Louvain, no extra install required). For Python 3.13 we recommend pinning to `leidenalg` explicitly for better performance:
 >
 > ```yaml
 > rag:

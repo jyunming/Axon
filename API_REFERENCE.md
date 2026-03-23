@@ -70,8 +70,9 @@ text chunk string. The stream closes when generation completes. Errors emit
 
 > **Project field:** same enforcement as `/query` — returns `409` on mismatch.
 
-**`POST /search/raw` body:** same as `/search`. Accepts optional `?include_trace=true` query
-parameter to include retrieval diagnostics.
+**`POST /search/raw` body:** same as `/search`. Always returns a `diagnostics` object.
+Accepts optional `?include_trace=true` query parameter to additionally include the full
+retrieval `trace` object (pipeline step timings and intermediate results).
 
 ---
 

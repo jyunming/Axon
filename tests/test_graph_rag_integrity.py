@@ -1,7 +1,4 @@
 import json
-import shutil
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -15,10 +12,8 @@ class MockConfig:
 
 class TestGraphRagIntegrity:
     @pytest.fixture
-    def temp_bm25_dir(self):
-        d = tempfile.mkdtemp()
-        yield Path(d)
-        shutil.rmtree(d, ignore_errors=True)
+    def temp_bm25_dir(self, tmp_path):
+        return tmp_path
 
     @pytest.fixture
     def brain_stub(self, temp_bm25_dir):

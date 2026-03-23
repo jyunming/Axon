@@ -1,4 +1,4 @@
-"""
+﻿"""
 tests/test_config_extra.py
 
 Comprehensive tests for src/axon/config.py covering missed lines:
@@ -30,7 +30,7 @@ def _write_yaml(path: Path, data: dict) -> None:
 
 
 # ===========================================================================
-# 1. save() method — lines 727-821
+# 1. save() method â€” lines 727-821
 # ===========================================================================
 
 
@@ -316,7 +316,7 @@ class TestSave:
 
 
 # ===========================================================================
-# 2. load() edge cases — lines 585-725
+# 2. load() edge cases â€” lines 585-725
 # ===========================================================================
 
 
@@ -365,7 +365,7 @@ class TestLoad:
         assert cfg.llm_max_tokens == 512
 
     def test_load_parses_vector_store_section(self, tmp_path):
-        """load() maps vector_store.provider → vector_store and vector_store.path → vector_store_path."""
+        """load() maps vector_store.provider â†’ vector_store and vector_store.path â†’ vector_store_path."""
         lance_path = str(tmp_path / "lance")
         data = {"vector_store": {"provider": "lancedb", "path": lance_path}}
         p = tmp_path / "c.yaml"
@@ -375,7 +375,7 @@ class TestLoad:
         assert cfg.vector_store_path == lance_path
 
     def test_load_parses_bm25_section(self, tmp_path):
-        """load() maps bm25.path → bm25_path."""
+        """load() maps bm25.path â†’ bm25_path."""
         bm25_path = str(tmp_path / "bm25_idx")
         data = {"bm25": {"path": bm25_path}}
         p = tmp_path / "c.yaml"
@@ -440,7 +440,7 @@ class TestLoad:
         assert cfg.discussion_fallback is False
 
     def test_load_parses_context_compression_section(self, tmp_path):
-        """load() maps context_compression.enabled → compress_context."""
+        """load() maps context_compression.enabled â†’ compress_context."""
         data = {"context_compression": {"enabled": True}}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
@@ -498,7 +498,7 @@ class TestLoad:
         assert cfg.tokenizer_cache_dir == "/tok/dir"
 
     def test_load_llm_base_url_mapped_to_ollama_base_url(self, tmp_path):
-        """load() maps llm.base_url → ollama_base_url when no explicit ollama_base_url given."""
+        """load() maps llm.base_url â†’ ollama_base_url when no explicit ollama_base_url given."""
         data = {"llm": {"base_url": "http://custom-ollama:11434"}}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
@@ -506,7 +506,7 @@ class TestLoad:
         assert cfg.ollama_base_url == "http://custom-ollama:11434"
 
     def test_load_llm_models_dir_mapped_to_ollama_models_dir(self, tmp_path):
-        """load() maps llm.models_dir → ollama_models_dir."""
+        """load() maps llm.models_dir â†’ ollama_models_dir."""
         data = {"llm": {"models_dir": "/ollama/models"}}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
@@ -514,7 +514,7 @@ class TestLoad:
         assert cfg.ollama_models_dir == "/ollama/models"
 
     def test_load_llm_api_key_mapped_to_api_key(self, tmp_path):
-        """load() maps llm.api_key → api_key when no top-level api_key given."""
+        """load() maps llm.api_key â†’ api_key when no top-level api_key given."""
         data = {"llm": {"api_key": "sk-from-llm-section"}}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
@@ -522,7 +522,7 @@ class TestLoad:
         assert cfg.api_key == "sk-from-llm-section"
 
     def test_load_llm_vllm_base_url_mapped(self, tmp_path):
-        """load() maps llm.vllm_base_url → vllm_base_url."""
+        """load() maps llm.vllm_base_url â†’ vllm_base_url."""
         data = {"llm": {"vllm_base_url": "http://vllm:9000/v1"}}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
@@ -538,7 +538,7 @@ class TestLoad:
         assert cfg.projects_root == "/custom/projects"
 
     def test_load_projects_base_alias(self, tmp_path):
-        """load() maps top-level projects_base → projects_root."""
+        """load() maps top-level projects_base â†’ projects_root."""
         data = {"projects_base": "/alias/projects"}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
@@ -578,7 +578,7 @@ class TestLoad:
         assert cfg.source_policy_enabled is True
 
     def test_load_store_section_sets_axon_store_base(self, tmp_path):
-        """load() reads store.base → axon_store_base."""
+        """load() reads store.base â†’ axon_store_base."""
         data = {"store": {"base": "/shared/axon"}}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
@@ -658,7 +658,7 @@ class TestLoad:
 
 
 # ===========================================================================
-# 3. __post_init__ env-var and WSL branches — lines 83-181
+# 3. __post_init__ env-var and WSL branches â€” lines 83-181
 # ===========================================================================
 
 
@@ -754,7 +754,7 @@ class TestPostInit:
         monkeypatch.delenv("AXON_PROJECTS_ROOT", raising=False)
         monkeypatch.delenv("AXON_STORE_BASE", raising=False)
         cfg = AxonConfig(vector_store_path="")
-        # Should not be empty — resolved to a default under ~/.axon
+        # Should not be empty â€” resolved to a default under ~/.axon
         assert cfg.vector_store_path != ""
         assert "chroma_data" in cfg.vector_store_path
 
@@ -803,7 +803,7 @@ class TestFirstRunConfigCreation:
         cfg = AxonConfig.load()
         assert cfg.raptor is False, (
             "First-run config must disable RAPTOR (starter YAML has raptor: false); "
-            "got True — load() is returning the dataclass default instead of the file value"
+            "got True â€” load() is returning the dataclass default instead of the file value"
         )
 
     def test_first_run_graph_rag_disabled(self, tmp_path, monkeypatch):
@@ -844,3 +844,31 @@ class TestFirstRunConfigCreation:
         reloaded = AxonConfig.load()
         assert reloaded.raptor is False
         assert reloaded.graph_rag is False
+
+
+class TestProjectsRootRelocation:
+    def test_projects_root_relocates_default_store_paths(self):
+        cfg = AxonConfig(projects_root="/custom/path")
+        assert cfg.vector_store_path == os.path.join(
+            os.path.abspath("/custom/path"), "default", "chroma_data"
+        )
+        assert cfg.bm25_path == os.path.join(
+            os.path.abspath("/custom/path"), "default", "bm25_index"
+        )
+
+    def test_axon_projects_root_env_relocates_default_paths(self, monkeypatch):
+        monkeypatch.setenv("AXON_PROJECTS_ROOT", "/env/path")
+        cfg = AxonConfig()
+        assert cfg.vector_store_path == os.path.join(
+            os.path.abspath("/env/path"), "default", "chroma_data"
+        )
+        assert cfg.bm25_path == os.path.join(os.path.abspath("/env/path"), "default", "bm25_index")
+
+    def test_explicit_store_paths_override_projects_root(self):
+        cfg = AxonConfig(
+            projects_root="/custom/path",
+            vector_store_path="/explicit/chroma",
+            bm25_path="/explicit/bm25",
+        )
+        assert cfg.vector_store_path == os.path.abspath("/explicit/chroma")
+        assert cfg.bm25_path == os.path.abspath("/explicit/bm25")
