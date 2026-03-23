@@ -37,8 +37,8 @@ mcp = FastMCP("axon")
 
 
 def _headers() -> dict[str, str]:
-    """Return request headers, including X-API-Key when configured."""
-    h: dict[str, str] = {"Content-Type": "application/json"}
+    """Return request headers, including X-API-Key and surface attribution."""
+    h: dict[str, str] = {"Content-Type": "application/json", "X-Axon-Surface": "mcp"}
     if API_KEY:
         h["X-API-Key"] = API_KEY
     return h
@@ -148,7 +148,12 @@ async def get_job_status(job_id: str) -> Any:
 
 
 @mcp.tool()
-async def search_knowledge(query: str, top_k: int = 5, filters: dict | None = None) -> Any:
+async def search_knowledge(
+    query: str,
+    top_k: int = 5,
+    filters: dict | None = None,
+    project: str | None = None,
+) -> Any:
     """Retrieve raw document chunks from the knowledge base.
 
     Best for multi-step reasoning where you want to inspect individual chunks
@@ -158,15 +163,25 @@ async def search_knowledge(query: str, top_k: int = 5, filters: dict | None = No
         query: The search query string.
         top_k: Number of chunks to return (default 5).
         filters: Optional metadata filters, e.g. {"source": "https://..."}.
+        project: Expected active project. Returns 409 if it does not match
+            the brain's current active project. Use switch_project to change
+            the active project before calling this tool.
     """
     body: dict = {"query": query, "top_k": top_k}
     if filters:
         body["filters"] = filters
+    if project:
+        body["project"] = project
     return await _post("/search", body)
 
 
 @mcp.tool()
-async def query_knowledge(query: str, top_k: int | None = None, filters: dict | None = None) -> Any:
+async def query_knowledge(
+    query: str,
+    top_k: int | None = None,
+    filters: dict | None = None,
+    project: str | None = None,
+) -> Any:
     """Ask a question and get a synthesised answer from the knowledge base.
 
     Performs retrieval + generation in one call. Use search_knowledge instead
@@ -176,12 +191,17 @@ async def query_knowledge(query: str, top_k: int | None = None, filters: dict | 
         query: The question to ask.
         top_k: Number of chunks to retrieve for context (overrides global setting).
         filters: Optional metadata filters for retrieval.
+        project: Expected active project. Returns 409 if it does not match
+            the brain's current active project. Use switch_project to change
+            the active project before calling this tool.
     """
     body: dict = {"query": query}
     if top_k is not None:
         body["top_k"] = top_k
     if filters:
         body["filters"] = filters
+    if project:
+        body["project"] = project
     return await _post("/query", body)
 
 
@@ -300,6 +320,14 @@ async def update_settings(
     compress_context: bool | None = None,
     graph_rag: bool | None = None,
     raptor: bool | None = None,
+    truth_grounding: bool | None = None,
+    discussion_fallback: bool | None = None,
+    sentence_window: bool | None = None,
+    sentence_window_size: int | None = None,
+    crag_lite: bool | None = None,
+    code_graph: bool | None = None,
+    graph_rag_mode: str | None = None,
+    cite: bool | None = None,
 ) -> Any:
     """Update global Axon RAG and retrieval settings for the current session.
 
@@ -315,6 +343,14 @@ async def update_settings(
         compress_context: Toggle LLM context compression before generation.
         raptor: Toggle RAPTOR hierarchical summaries.
         graph_rag: Toggle GraphRAG entity expansion.
+        truth_grounding: Toggle truth-grounding enforcement on retrieved chunks.
+        discussion_fallback: Allow general-knowledge fallback when no chunks found.
+        sentence_window: Toggle sentence-window retrieval (expands chunks with context sentences).
+        sentence_window_size: Number of surrounding sentences per side (1-10, default 2).
+        crag_lite: Toggle CRAG-lite corrective retrieval on low-confidence chunks.
+        code_graph: Toggle code-graph retrieval for code-related queries.
+        graph_rag_mode: GraphRAG query mode — "local", "global", or "hybrid".
+        cite: Include inline source citations in generated answers.
     """
     body = {k: v for k, v in locals().items() if v is not None and k != "body"}
     return await _post("/config/update", body)
@@ -340,31 +376,30 @@ async def get_session(session_id: str) -> Any:
 async def share_project(
     project: str,
     grantee: str,
-    write_access: bool = False,
 ) -> Any:
     """Generate a share key allowing another user to access one of your projects.
 
     Requires AxonStore mode to be active. The returned share_string should be
     transmitted to the grantee out-of-band (e.g. Slack, email). The grantee
-    then calls redeem_share to mount the project in their ShareMount/.
+    then calls redeem_share to mount the project.
+    All shares are read-only; write access is not supported.
 
     Args:
         project: Name of the project to share (must exist).
         grantee: OS username of the recipient.
-        write_access: If True, grantee may ingest into the shared project. Default: False.
     """
     return await _post(
         "/share/generate",
-        {"project": project, "grantee": grantee, "write_access": write_access},
+        {"project": project, "grantee": grantee},
     )
 
 
 @mcp.tool()
 async def redeem_share(share_string: str) -> Any:
-    """Redeem a share string, mounting the owner's project in your ShareMount/.
+    """Redeem a share string, creating a mount descriptor in your mounts/ directory.
 
     Requires AxonStore mode to be active. After redemption, the shared project
-    appears as ShareMount/{owner}_{project} and can be queried normally.
+    appears as mounts/{owner}_{project} and can be queried normally.
 
     Args:
         share_string: The base64 share string generated by share_project() on the owner's machine.
@@ -401,6 +436,18 @@ async def init_store(base_path: str) -> Any:
                    '/data/AxonStore/<username>/').
     """
     return await _post("/store/init", {"base_path": base_path})
+
+
+@mcp.tool()
+async def get_active_leases() -> Any:
+    """Return active write-lease counts for all projects currently tracked by the server.
+
+    Operator tool — shows which projects have in-flight write operations,
+    whether they are draining, and their epoch counter.  Use this to check
+    whether it is safe to put a project into 'readonly' or 'offline' maintenance
+    state (wait for active_leases to reach 0 first).
+    """
+    return await _get("/registry/leases")
 
 
 # ---------------------------------------------------------------------------

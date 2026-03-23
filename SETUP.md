@@ -88,8 +88,12 @@ pip install -e ".[all]"
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
 > The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x — do not install it on Python 3.13.
-> The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which skips `graspologic` entirely and uses the documented Python 3.13 path directly.
-> To restore the legacy preference order (graspologic → leidenalg → networkx Louvain) set `graph_rag_community_backend: auto`.
+> The code default is `graph_rag_community_backend: louvain` (networkx Louvain, no extra install required). For Python 3.13 we recommend pinning to `leidenalg` explicitly for better performance:
+>
+> ```yaml
+> rag:
+>   graph_rag_community_backend: leidenalg  # recommended for Python 3.13
+> ```
 
 Verify the install:
 
@@ -365,14 +369,34 @@ embedding:
 
 **Available FastEmbed models:**
 
-| Model | Dims | Context | Quality |
-|-------|------|---------|---------|
-| `BAAI/bge-small-en-v1.5` | 384 | 512 tokens | Good |
-| `BAAI/bge-base-en-v1.5` | 768 | 512 tokens | Better |
-| `BAAI/bge-large-en-v1.5` | 1024 | 512 tokens | Best |
-| `sentence-transformers/all-MiniLM-L6-v2` | 384 | 256 tokens | Good |
+| Model | Dims | Context | Quality | Notes |
+|-------|------|---------|---------|-------|
+| `BAAI/bge-small-en-v1.5` | 384 | 512 tokens | Good | Default; fastest |
+| `BAAI/bge-base-en-v1.5` | 768 | 512 tokens | Better | Balanced |
+| `BAAI/bge-large-en-v1.5` | 1024 | 512 tokens | Best (English) | Slower |
+| `BAAI/bge-m3` | 1024 | 8192 tokens | Best (multilingual) | Long-context; recommended for prose-heavy corpora |
+| `sentence-transformers/all-MiniLM-L6-v2` | 384 | 256 tokens | Good | Lightweight |
 
-**Verify:**
+**Using BGE-M3 (recommended for long documents and multilingual content):**
+```yaml
+embedding:
+  provider: fastembed
+  model: BAAI/bge-m3
+```
+
+> **Dimension note:** BGE-M3 produces 1024-dim vectors. If you switch to BGE-M3 after
+> ingesting data with a 384-dim model (e.g. `bge-small`), ChromaDB will raise a dimension
+> mismatch error. Start a fresh project or run `axon --reset` before switching.
+
+**Verify BGE-M3:**
+```python
+from fastembed import TextEmbedding
+model = TextEmbedding("BAAI/bge-m3")
+embeddings = list(model.embed(["test sentence"]))
+print(f"Embedding dimension: {len(embeddings[0])}")  # Should print 1024
+```
+
+**Verify bge-small (default):**
 ```python
 from fastembed import TextEmbedding
 model = TextEmbedding("BAAI/bge-small-en-v1.5")
@@ -408,8 +432,9 @@ rag:
 ```
 
 With `code_graph: true`, a query that retrieves a function chunk will
-automatically expand to include its containing file, its callers/callees, and
-files it imports — at zero extra LLM cost.
+automatically expand to include its containing file, imported files, and any files
+that mention the symbol (`CONTAINS`, `IMPORTS`, `MENTIONED_IN` edges) — at zero extra LLM cost.
+Note: call-graph (`CALLS`) edges are not currently built; caller/callee traversal is not supported.
 
 > **Note:** The `graph_rag` flag is intentionally disabled for code corpora
 > (`_SOURCE_POLICY["codebase"] = (False, False)`). Code-to-code links come
@@ -437,12 +462,12 @@ No additional config changes are needed — the system automatically uses `llava
 
 ## 7. Configure config.yaml
 
-Copy the template and customize it:
+Axon auto-creates `~/.config/axon/config.yaml` on first run with sensible defaults.
+Edit that file to customise behaviour, or pass `--config /path/to/your.yaml` to use a different file:
 
 ```bash
-# config.yaml already exists in the repo root — edit it directly
-# Or copy it as a personal override
-cp config.yaml config.local.yaml  # pass --config config.local.yaml to the CLI
+# Edit the auto-generated user config
+$EDITOR ~/.config/axon/config.yaml
 ```
 
 Here are complete configurations for each tier:
@@ -506,8 +531,8 @@ rag:
   similarity_threshold: 0.3
   hybrid_search: true
 
-  # Graph-augmented retrieval expansion (inspired by GraphRAG; not the full
-  # Microsoft GraphRAG method — no community detection or global search).
+  # Graph-augmented retrieval expansion based on GraphRAG principles.
+  # Supports local (entity neighbourhood), global (community summaries), and hybrid modes.
   # Extracts entities and optionally relation triples from each chunk at ingest
   # time; at query time, entity-matched and 1-hop-related chunks are injected as
   # extra context slots beyond the normal top_k.
@@ -705,11 +730,16 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ---
 
-## 10. MCP Setup (Copilot Agent Mode)
+## 10. MCP Setup (Advanced / External-Host Integration)
 
-The MCP (Model Context Protocol) server lets GitHub Copilot in **agent mode**
-call Axon tools directly — ingesting documents, searching knowledge, switching
-projects — all without leaving VS Code.
+> **Most VS Code users do not need this section.** The [VS Code extension](#11-vs-code-extension-github-copilot-integration) (Section 11) is the recommended integration. Use MCP when you need one of:
+> - Copilot **agent mode** with an explicit `.vscode/mcp.json` configuration
+> - A non-VS Code MCP host (Claude Code, Cursor, etc.)
+> - An advanced multi-tool workflow requiring direct MCP tool wiring
+
+The MCP (Model Context Protocol) server exposes Axon as a set of tools that any
+MCP-compatible host can call — ingesting documents, searching knowledge, switching
+projects — without the VS Code extension.
 
 ### How it works
 
@@ -867,7 +897,7 @@ For a team where one person owns ingestion and others query:
 3. Each user's VS Code spawns its own lightweight `axon-mcp` proxy; the shared
    API handles all retrieval. The owner ingests; everyone else queries.
 
-### Available MCP tools (23 total)
+### Available MCP tools (24 total)
 
 | Tool | Purpose |
 |---|---|
@@ -877,7 +907,7 @@ For a team where one person owns ingestion and others query:
 | `ingest_path` | Ingest a local file or directory (async) |
 | `get_job_status` | Poll an async ingest job |
 | `search_knowledge` | Raw chunk retrieval (Copilot synthesises) |
-| `query_knowledge` | Retrieval + answer via local Ollama LLM |
+| `query_knowledge` | Retrieval + answer via the configured backend LLM provider |
 | `list_knowledge` | List indexed sources with chunk counts |
 | `switch_project` | Change active project namespace |
 | `delete_documents` | Remove documents by ID |
@@ -892,12 +922,42 @@ For a team where one person owns ingestion and others query:
 | `get_session` | Retrieve a saved conversation session |
 | `share_project` | Generate a share key for a project |
 | `redeem_share` | Redeem a share key to mount a shared project |
-| `list_shares` | List active outbound shares |
+| `list_shares` | List outgoing shares (`sharing`) and incoming mounted shares (`shared`) |
 | `init_store` | Initialise AxonStore multi-user mode |
+| `get_active_leases` | List active read/write leases held via AxonStore |
 
 > **Recommended:** use `search_knowledge` (not `query_knowledge`) in agent mode.
 > Copilot's LLM synthesises the answer from raw chunks — no Ollama required,
 > no concurrency limit.
+
+### AxonStore on-disk layout
+
+When AxonStore multi-user mode is initialised (via `init_store` or `Axon: Init Store`), the store directory has the following structure:
+
+```
+AxonStore/
+  store_meta.json          ← store identity (store_namespace_id, store_version, created_at)
+  default/                 ← canonical default project (was _default/ in earlier versions)
+    chroma_data/
+    bm25_index/
+    meta.json              ← includes project_namespace_id
+  projects/                ← authoritative local projects
+  mounts/                  ← read-only mount descriptors
+  .shares/                 ← share key manifests
+  ShareMount/              ← symlinks (legacy compat)
+```
+
+#### Migrating from an earlier version
+
+If your store has a `_default/` directory, Axon automatically renames it to `default/` on first startup (a warning is logged). If both `_default/` and `default/` exist simultaneously, startup will fail — remove `_default/` manually before starting.
+
+To backfill `project_namespace_id` into existing projects in bulk:
+
+```bash
+python -c "from axon.migration import run_migration; from pathlib import Path; run_migration(Path.home() / '.axon/projects')"
+```
+
+The `axon.migration` module also provides `audit_legacy_chunk_ids(project_dir)` to report any chunks whose IDs were derived from the old basename scheme rather than the new SHA-256 scheme.
 
 ---
 
@@ -905,7 +965,9 @@ For a team where one person owns ingestion and others query:
 
 The Axon VS Code extension (`axon-copilot`) gives GitHub Copilot direct access to your knowledge base as **language model tools** — available in Copilot Chat, inline chat, and agent mode. It also provides VS Code commands for project management, ingestion, and sharing.
 
-> **Difference from MCP:** The VS Code extension runs entirely inside VS Code using the VS Code Language Model API. The MCP server (Section 10) uses the Model Context Protocol and works with any MCP-compatible host. Both require `axon-api` to be running. Choose based on your workflow — both can coexist.
+> **This is the recommended VS Code integration.** The VS Code extension runs entirely inside VS Code using the VS Code Language Model API. It is the primary interface for most VS Code users — tools appear automatically in Copilot without any extra configuration file.
+>
+> The MCP server (Section 10) is an alternative for Copilot agent mode with explicit `.vscode/mcp.json` wiring, or for non-VS Code MCP hosts. Both require `axon-api` to be running. Advanced users can run both; for most users the extension alone is sufficient.
 
 ### Prerequisites
 
@@ -917,7 +979,7 @@ The Axon VS Code extension (`axon-copilot`) gives GitHub Copilot direct access t
 
 **Option A — Install from release (recommended)**
 
-Download `axon-copilot-1.0.0.vsix` from the [GitHub Releases](https://github.com/jyunming/Axon/releases) page or find it in `integrations/vscode-axon/` in the repo.
+Download `axon-copilot-0.9.0.vsix` from the [GitHub Releases](https://github.com/jyunming/Axon/releases) page or find it in `integrations/vscode-axon/` in the repo.
 
 Open VS Code and install:
 
@@ -925,7 +987,7 @@ Open VS Code and install:
 1. Open the Extensions panel (Ctrl+Shift+X)
 2. Click the "..." (More Actions) button at the top-right of the panel
 3. Select "Install from VSIX..."
-4. Navigate to axon-copilot-1.0.0.vsix and click Install
+4. Navigate to axon-copilot-0.9.0.vsix and click Install
 5. Reload VS Code when prompted (Ctrl+Shift+P → "Reload Window")
 ```
 
@@ -934,7 +996,7 @@ Open VS Code and install:
 ```bash
 cd integrations/vscode-axon
 npm install
-npm run package   # produces axon-copilot-1.0.0.vsix
+npm run package   # produces axon-copilot-0.9.0.vsix
 ```
 
 Then install the generated `.vsix` as above.
@@ -970,8 +1032,8 @@ Open VS Code Settings (Ctrl+,) and search for `axon`:
 | `axon.topK` | `5` | Default number of chunks returned per query |
 | `axon.autoStart` | `true` | Auto-start `axon-api` on extension activate (Linux/macOS only) |
 | `axon.pythonPath` | *(auto-detect)* | Explicit Python path override — leave blank for auto-detection (see above) |
-| `axon.useCopilotLlm` | `false` | Use Copilot's LLM (GPT-4o / Claude) for RAPTOR/GraphRAG instead of Ollama |
-| `axon.ingestBase` | *(empty)* | Restrict ingestion paths to a specific directory |
+| `axon.useCopilotLlm` | `false` | Switch the extension's active LLM provider to Copilot for all inference (query answering, RAPTOR summarization, etc.), not just a helper |
+| `axon.ingestBase` | *(empty)* | Restrict ingestion to a specific directory. Empty = filesystem root on macOS/Linux, current drive root on Windows auto-start. Cross-drive ingest on Windows requires setting this explicitly or starting `axon-api` manually with a broader `RAG_INGEST_BASE`. |
 | `axon.storeBase` | *(empty)* | Base path for AxonStore multi-user mode |
 
 Or edit `settings.json` directly:
@@ -1006,12 +1068,12 @@ Copilot will automatically call `axon_getCollection` or `axon_listProjects` to a
 Search my Axon knowledge base for information about neural networks.
 ```
 
-### Available tools (18 total)
+### Available tools (27 total)
 
 | Tool | What it does |
 |---|---|
 | `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer |
-| `axon_queryKnowledge` | Retrieval + answer via local LLM (requires Ollama) |
+| `axon_queryKnowledge` | Retrieval + answer via the configured LLM provider |
 | `axon_ingestText` | Ingest a text snippet directly |
 | `axon_ingestUrl` | Fetch and ingest a web page |
 | `axon_ingestPath` | Ingest a local file or directory (async; returns `job_id`) |
@@ -1023,11 +1085,20 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_deleteDocuments` | Remove specific documents by ID |
 | `axon_getCollection` | List all ingested files with chunk counts |
 | `axon_clearCollection` | Wipe all data from the current project |
+| `axon_clearKnowledgeBase` | Alias for clearCollection — wipe all vectors and BM25 index |
 | `axon_updateSettings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
-| `axon_listShares` | List active project shares (AxonStore mode) |
+| `axon_getSettings` | Read the current active Axon configuration (retrieval flags, RAG mode, LLM provider) |
+| `axon_shareProject` | Generate a share key for a project (AxonStore mode) |
+| `axon_redeemShare` | Mount a project shared by another user |
+| `axon_revokeShare` | Revoke an active share |
+| `axon_listShares` | List outgoing and incoming project shares |
 | `axon_initStore` | Initialise AxonStore multi-user mode |
 | `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+| `axon_refreshIngest` | Re-ingest files whose content has changed since last ingest |
+| `axon_listStaleDocs` | Find documents not re-ingested within N days |
+| `axon_showGraphStatus` | Show entity count, community summary count, and graph readiness |
 | `axon_showGraph` | Open the Axon Graph Panel for a query — shows answer, citations, and 3D entity/code graph side by side |
+| `axon_finalizeGraph` | Rebuild community summaries and finalize the knowledge graph for global-mode queries |
 
 ### Available VS Code commands
 
@@ -1067,9 +1138,9 @@ The Graph Panel opens a **split webview** directly inside VS Code — no externa
 └──────────────────────┴──────────────────────────────────────┘
 ```
 
-**Knowledge Graph tab** — entity–relation graph extracted from **any document** (PDF, DOCX, Markdown, HTML, etc.) during ingest. Nodes are named entities (people, concepts, components); edges are extracted relations. Requires `graph_rag: true` in `config.yaml` — **enabled by default**, so you get this for free just by ingesting documents.
+**Knowledge Graph tab** — entity–relation graph extracted from **any document** (PDF, DOCX, Markdown, HTML, etc.) during ingest. Nodes are named entities (people, concepts, components); edges are extracted relations. Requires `graph_rag: true` in `config.yaml` (disabled in the shipped config by default — enable it once your corpus is ready).
 
-**Code Graph tab** — structural file/class/function graph. Nodes are files, classes, and functions; edges are `IMPORTS`, `CONTAINS`, and `CALLS` relationships. Requires `code_graph: true` in `config.yaml` (opt-in, off by default):
+**Code Graph tab** — structural file/class/function graph. Nodes are files, classes, and functions; edges are `IMPORTS`, `CONTAINS`, and `MENTIONED_IN` relationships (at query time, prose chunks mentioning code symbols are bridged via `MENTIONED_IN` edges). Requires `code_graph: true` in `config.yaml` (opt-in, off by default):
 
 ```yaml
 # config.yaml
@@ -1078,7 +1149,7 @@ rag:
   code_graph_bridge: true # also link prose chunks that mention code symbols
 ```
 
-> **No CLI flag for code graph.** `code_graph` is a config-only setting — enable it in `config.yaml`, then re-ingest. The `--graph-rag` CLI flag controls GraphRAG (knowledge graph) only.
+> **CLI flags also available:** `--code-graph` / `--no-code-graph` toggle `code_graph` at runtime. `--code-graph-bridge` / `--no-code-graph-bridge` toggles the bridge. `--graph-rag` / `--no-graph-rag` controls the knowledge graph. Config file and CLI flags are both supported.
 
 **Ingest before opening the panel:**
 
@@ -1117,6 +1188,16 @@ Tabs that have no data are automatically disabled with a tooltip explaining whic
 4. Copilot Chat: "What are the main topics in those docs?"
    → extension calls axon_searchKnowledge → Copilot synthesises answer
 ```
+
+### `@axon` — Conversational Shortcut
+
+The Axon extension also registers a `@axon` chat participant. It is a **conversational shortcut** over the same `axon_*` toolset — not a separate integration path.
+
+```
+@axon What are the main API changes in the last sprint?
+```
+
+`@axon` posts your prompt to `/query` on the backend, the same path as `axon_queryKnowledge`. The result is identical. Use it when you prefer a conversational style; use `axon_*` tools directly when you want explicit tool invocations (e.g. in agent mode or pipelines). There is no behavioral difference.
 
 ### Troubleshooting the extension
 

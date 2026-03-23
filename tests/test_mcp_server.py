@@ -35,6 +35,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "redeem_share",
     "list_shares",
     "init_store",
+    # Operator tooling (Phase 5)
+    "get_active_leases",
 }
 
 
@@ -189,7 +191,8 @@ class TestMcpHeaders:
 
         monkeypatch.setattr(ms, "API_KEY", None)
         h = ms._headers()
-        assert h == {"Content-Type": "application/json"}
+        assert h["Content-Type"] == "application/json"
+        assert h["X-Axon-Surface"] == "mcp"
         assert "X-API-Key" not in h
 
     def test_headers_with_api_key(self, monkeypatch):
@@ -198,6 +201,7 @@ class TestMcpHeaders:
         monkeypatch.setattr(ms, "API_KEY", "secret-key")
         h = ms._headers()
         assert h["Content-Type"] == "application/json"
+        assert h["X-Axon-Surface"] == "mcp"
         assert h["X-API-Key"] == "secret-key"
 
 
@@ -755,17 +759,18 @@ class TestMcpToolCoverage:
                 mock_post.return_value = _make_mock_resp(
                     {"share_string": "AXON.abcd", "key_id": "k1"}
                 )
-                result = await share_project(project="myproj", grantee="bob", write_access=False)
+                result = await share_project(project="myproj", grantee="bob")
                 args, kwargs = mock_post.call_args
                 assert args[0].endswith("/share/generate")
                 assert kwargs["json"]["project"] == "myproj"
                 assert kwargs["json"]["grantee"] == "bob"
-                assert kwargs["json"]["write_access"] is False
+                assert "write_access" not in kwargs["json"]
                 assert result["share_string"] == "AXON.abcd"
 
         asyncio.run(_run())
 
     def test_share_project_write_access(self):
+        """write_access is always False — the flag is fully removed from the tool."""
         import asyncio
         from unittest.mock import AsyncMock, patch
 
@@ -776,9 +781,9 @@ class TestMcpToolCoverage:
                 mock_post.return_value = _make_mock_resp(
                     {"share_string": "AXON.xyz", "key_id": "k2"}
                 )
-                await share_project(project="p", grantee="carol", write_access=True)
+                await share_project(project="p", grantee="carol")
                 _, kwargs = mock_post.call_args
-                assert kwargs["json"]["write_access"] is True
+                assert "write_access" not in kwargs["json"]
 
         asyncio.run(_run())
 
@@ -794,7 +799,7 @@ class TestMcpToolCoverage:
         async def _run():
             with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value = _make_mock_resp(
-                    {"status": "redeemed", "mount": "ShareMount/alice_myproj"}
+                    {"status": "redeemed", "mount_name": "alice_myproj"}
                 )
                 result = await redeem_share(share_string="AXON.efgh")
                 args, kwargs = mock_post.call_args

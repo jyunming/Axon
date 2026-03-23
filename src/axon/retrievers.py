@@ -10,17 +10,47 @@ logger = logging.getLogger("Axon.Retrievers")
 
 
 class BM25Retriever:
-    """
-    Keyword-based retriever using BM25 algorithm.
+    """Keyword-based retriever using BM25 algorithm.
+
     Complements vector search for specific term matching.
+
+    Sync hot-spot audit (Epic 6 Story 6.1)
+    ----------------------------------------
+    The following paths were audited for event-loop risk:
+
+    * ``add_documents()`` — previously rebuilt the full ``BM25Okapi`` index on
+      every call (O(N) per batch, O(N²) over a whole ingest run).  **Mitigated
+      in Story 6.2** via a lazy-rebuild flag: the index is now rebuilt exactly
+      once on the first ``search()`` call after the last write, not on every
+      add.  Disk writes remain synchronous but are already bounded by
+      ``save_deferred`` batching in the ingest path.
+
+    * ``search()`` — ``BM25Okapi.get_scores()`` is CPU-bound.  **Already
+      mitigated**: ``QueryRouterMixin._execute_retrieval()`` offloads BM25
+      searches to ``self._executor`` (a ``ThreadPoolExecutor``), preventing
+      event-loop blocking on the async API path.
+
+    * ``save()`` — synchronous atomic file write.  No change needed; writes are
+      short relative to the ingest batch, and the ``save_deferred`` flag already
+      lets callers defer them.
+
+    * ``delete_documents()`` — rebuilds index + saves synchronously.  Index
+      rebuild deferred to next ``search()`` via the lazy flag; save is still
+      immediate (delete is an explicit operator action, not a hot path).
+
+    * ``load()`` — called once at startup only.  No event-loop risk.
+
+    Residual risk: ``save()`` blocks the calling thread for large corpora
+    (10 k+ docs / several MB JSON).  Acceptable for the local-first deployment
+    model; address with async file I/O if a high-throughput multi-tenant API
+    becomes a requirement.
     """
 
     def __init__(self, storage_path: str = "./bm25_index"):
         self.storage_path = storage_path
         self.corpus_file = os.path.join(storage_path, "bm25_corpus.json")
-        # Kept for reference; the pickle path is also derived locally in load() during migration.
-        self.index_file = os.path.join(storage_path, "bm25_index.pkl")
         self.bm25 = None
+        self._dirty: bool = False  # True when corpus was modified but index not yet rebuilt
         self.corpus: list[
             dict[str, Any]
         ] = []  # List of dicts: {'id': id, 'text': text, 'metadata': meta}
@@ -40,30 +70,43 @@ class BM25Retriever:
         return text.lower().split()
 
     def add_documents(self, documents: list[dict[str, Any]], save_deferred: bool = False) -> None:
-        """Add documents to the BM25 index. No-op if documents is empty.
+        """Add documents to the BM25 index.  No-op if *documents* is empty.
+
+        The BM25Okapi index is **not rebuilt immediately**; it is rebuilt lazily
+        on the next :meth:`search` call.  This eliminates the O(N²) rebuild cost
+        that occurred during a full ingest run when this method was called for
+        each chunk batch (Epic 6, Story 6.2).
 
         Args:
             documents: List of document dicts with keys ``id``, ``text``, ``metadata``.
-            save_deferred: When ``True``, skip the disk write — corpus is updated in memory
-                only.  Call :meth:`flush` (or :meth:`save`) when the batch is complete.
+            save_deferred: When ``True``, skip the disk write — corpus is updated in
+                memory only.  Call :meth:`flush` (or :meth:`save`) when the batch
+                is complete.
         """
         if not documents:
             return
         self.corpus.extend(documents)
-        tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
-        self.bm25 = BM25Okapi(tokenized_corpus)
+        self._dirty = True  # index will be rebuilt lazily on next search()
         if not save_deferred:
             self.save()
 
-    # Explicit alias for callers that batch their writes; semantics are identical.
-    batch_add_documents = add_documents
+    def _rebuild_index(self) -> None:
+        """Rebuild BM25Okapi from the current corpus and clear the dirty flag."""
+        if self.corpus:
+            tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
+            self.bm25 = BM25Okapi(tokenized_corpus)
+        else:
+            self.bm25 = None
+        self._dirty = False
 
     def flush(self) -> None:
         """Explicitly save corpus — call after deferred batch ingest session."""
         self.save()
 
     def search(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
-        """Search the BM25 index."""
+        """Search the BM25 index, rebuilding it first if the corpus was modified."""
+        if self._dirty:
+            self._rebuild_index()
         if self.bm25 is None or not self.corpus:
             return []
 
@@ -83,15 +126,16 @@ class BM25Retriever:
         return results
 
     def delete_documents(self, doc_ids: list[str]) -> None:
-        """Remove documents by ID and rebuild index."""
+        """Remove documents by ID.
+
+        The index rebuild is deferred to the next :meth:`search` call via the
+        lazy-rebuild flag (Epic 6, Story 6.2).  The corpus is saved immediately
+        since delete is an explicit operator action, not a hot-path operation.
+        """
         original_count = len(self.corpus)
         self.corpus = [doc for doc in self.corpus if doc["id"] not in doc_ids]
         if len(self.corpus) < original_count:
-            if self.corpus:
-                tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
-                self.bm25 = BM25Okapi(tokenized_corpus)
-            else:
-                self.bm25 = None
+            self._dirty = True  # rebuild deferred to next search()
             self.save()
 
     def save(self):
@@ -119,23 +163,8 @@ class BM25Retriever:
         logger.info(f"💾 BM25 corpus saved to {self.corpus_file}")
 
     def load(self):
-        """Load corpus from JSON (or migrate from legacy pickle)."""
-        # Migrate legacy pickle if it exists
-        legacy_pkl = os.path.join(self.storage_path, "bm25_index.pkl")
-        if os.path.exists(legacy_pkl) and not os.path.exists(self.corpus_file):
-            try:
-                import pickle
-
-                with open(legacy_pkl, "rb") as f:
-                    corpus, _ = pickle.load(f)
-                self.corpus = corpus
-                self.save()  # save as JSON
-                os.remove(legacy_pkl)
-                logger.info("Migrated BM25 index from pickle to JSON")
-            except Exception as e:
-                logger.error(f"Failed to migrate BM25 pickle: {e}")
-                return
-        elif os.path.exists(self.corpus_file):
+        """Load corpus from JSON."""
+        if os.path.exists(self.corpus_file):
             try:
                 with open(self.corpus_file, encoding="utf-8") as f:
                     self.corpus = json.load(f)

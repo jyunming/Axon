@@ -351,3 +351,50 @@ class TestCodeAwareSplitter:
         names = [c["symbol_name"] for c in chunks]
         assert "add" in names
         assert "sub" in names
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: splitter chunk metadata enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_splitter_chunk_metadata_enriched():
+    """Splitter chunks carry source_id, subdoc_locator, chunk_index, chunk_kind."""
+    from axon.splitters import SemanticTextSplitter
+
+    doc = {"id": "test_doc", "text": "word " * 200, "metadata": {"source": "test.txt"}}
+    splitter = SemanticTextSplitter(chunk_size=50, chunk_overlap=0)
+    chunks = splitter.transform_documents([doc])
+    assert chunks
+    for i, chunk in enumerate(chunks):
+        meta = chunk.get("metadata", {})
+        assert "chunk_index" in meta
+        assert meta["chunk_index"] == i
+        assert "chunk_kind" in meta
+        assert meta["chunk_kind"] == "leaf"
+        assert "subdoc_locator" in meta
+        assert meta["subdoc_locator"] == "root"
+        assert "source_id" in meta
+        assert meta["source_id"] == "test_doc"
+
+
+def test_splitter_chunk_metadata_inherits_existing():
+    """Splitter does not override source_id/chunk_kind when already set in doc metadata."""
+    from axon.splitters import RecursiveCharacterTextSplitter
+
+    doc = {
+        "id": "test_doc",
+        "text": "word " * 200,
+        "metadata": {
+            "source": "test.txt",
+            "source_id": "custom_src_id",
+            "chunk_kind": "raptor_l1",
+        },
+    }
+    splitter = RecursiveCharacterTextSplitter(chunk_size=100, chunk_overlap=0)
+    chunks = splitter.transform_documents([doc])
+    assert chunks
+    for chunk in chunks:
+        meta = chunk.get("metadata", {})
+        assert meta["source_id"] == "custom_src_id"
+        assert meta["chunk_kind"] == "raptor_l1"

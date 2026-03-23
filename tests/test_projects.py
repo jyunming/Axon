@@ -366,15 +366,34 @@ class TestSetProjectsRoot:
 
 class TestEnsureUserNamespace:
     def test_creates_expected_directories(self, tmp_path):
-        """ensure_user_namespace creates _default, ShareMount, .shares."""
+        """ensure_user_namespace creates default/, projects/, mounts/, .shares/."""
         from axon.projects import ensure_user_namespace
 
         user_dir = tmp_path / "AxonStore" / "alice"
         ensure_user_namespace(user_dir)
 
-        assert (user_dir / "_default").is_dir()
-        assert (user_dir / "ShareMount").is_dir()
+        assert (user_dir / "default").is_dir()
+        assert (user_dir / "projects").is_dir()
+        assert (user_dir / "mounts").is_dir()
         assert (user_dir / ".shares").is_dir()
+        # Legacy _default and ShareMount/ must NOT be created
+        assert not (user_dir / "_default").exists()
+        assert not (user_dir / "ShareMount").exists()
+
+    def test_creates_store_meta_json(self, tmp_path):
+        """ensure_user_namespace creates store_meta.json with store_namespace_id."""
+        import json
+
+        from axon.projects import ensure_user_namespace
+
+        user_dir = tmp_path / "AxonStore" / "alice"
+        ensure_user_namespace(user_dir)
+
+        store_meta_path = user_dir / "store_meta.json"
+        assert store_meta_path.exists()
+        meta = json.loads(store_meta_path.read_text())
+        assert meta["store_version"] == 2
+        assert meta["store_namespace_id"].startswith("store_")
 
     def test_idempotent(self, tmp_path):
         """Calling ensure_user_namespace twice does not raise."""
@@ -385,7 +404,7 @@ class TestEnsureUserNamespace:
         ensure_user_namespace(user_dir)  # should not raise
 
     def test_creates_default_meta_json(self, tmp_path):
-        """ensure_user_namespace creates meta.json in _default."""
+        """ensure_user_namespace creates meta.json in default/ with project_namespace_id."""
         import json
 
         from axon.projects import ensure_user_namespace
@@ -393,10 +412,154 @@ class TestEnsureUserNamespace:
         user_dir = tmp_path / "AxonStore" / "alice"
         ensure_user_namespace(user_dir)
 
-        meta_path = user_dir / "_default" / "meta.json"
+        meta_path = user_dir / "default" / "meta.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
-        assert meta["name"] == "_default"
+        assert meta["name"] == "default"
+        assert meta["project_namespace_id"].startswith("proj_")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: namespace IDs
+# ---------------------------------------------------------------------------
+
+
+class TestNamespaceIds:
+    def test_ensure_project_adds_namespace_id(self, tmp_projects):
+        """ensure_project writes project_namespace_id to meta.json."""
+        import json
+
+        from axon.projects import ensure_project, project_dir
+
+        ensure_project("nstest")
+        meta = json.loads((project_dir("nstest") / "meta.json").read_text())
+        assert "project_namespace_id" in meta
+        assert meta["project_namespace_id"].startswith("proj_")
+
+    def test_namespace_id_stable_on_second_call(self, tmp_projects):
+        """ensure_project called twice keeps the same project_namespace_id."""
+        import json
+
+        from axon.projects import ensure_project, project_dir
+
+        ensure_project("stable-ns")
+        meta1 = json.loads((project_dir("stable-ns") / "meta.json").read_text())
+        ensure_project("stable-ns")
+        meta2 = json.loads((project_dir("stable-ns") / "meta.json").read_text())
+        assert meta1["project_namespace_id"] == meta2["project_namespace_id"]
+
+    def test_backfills_missing_namespace_id(self, tmp_projects):
+        """ensure_project backfills project_namespace_id when meta.json exists without it."""
+        import json
+
+        from axon.projects import ensure_project, project_dir
+
+        ensure_project("backfill-ns")
+        meta_path = project_dir("backfill-ns") / "meta.json"
+        # Remove the namespace ID to simulate an old project
+        meta = json.loads(meta_path.read_text())
+        del meta["project_namespace_id"]
+        meta_path.write_text(json.dumps(meta))
+
+        ensure_project("backfill-ns")  # should backfill
+        updated = json.loads(meta_path.read_text())
+        assert "project_namespace_id" in updated
+        assert updated["project_namespace_id"].startswith("proj_")
+
+    def test_get_project_namespace_id(self, tmp_projects):
+        """get_project_namespace_id returns the ID for an existing project."""
+        from axon.projects import ensure_project, get_project_namespace_id
+
+        ensure_project("getter-ns")
+        ns_id = get_project_namespace_id("getter-ns")
+        assert ns_id is not None
+        assert ns_id.startswith("proj_")
+
+    def test_get_project_namespace_id_missing_project(self, tmp_projects):
+        """get_project_namespace_id returns None for a non-existent project."""
+        from axon.projects import get_project_namespace_id
+
+        assert get_project_namespace_id("does-not-exist") is None
+
+    def test_get_store_namespace_id(self, tmp_path):
+        """get_store_namespace_id reads the ID from store_meta.json."""
+        from axon.projects import ensure_user_namespace, get_store_namespace_id
+
+        user_dir = tmp_path / "AxonStore" / "alice"
+        ensure_user_namespace(user_dir)
+        store_id = get_store_namespace_id(user_dir)
+        assert store_id is not None
+        assert store_id.startswith("store_")
+
+    def test_build_namespace_id_format(self):
+        """build_namespace_id returns a prefixed hex string."""
+        from axon.projects import build_namespace_id
+
+        ns = build_namespace_id("proj")
+        assert ns.startswith("proj_")
+        assert len(ns) == len("proj_") + 32  # 32 hex chars in uuid4.hex
+
+    def test_namespace_ids_are_unique(self):
+        """Two calls to build_namespace_id never return the same value."""
+        from axon.projects import build_namespace_id
+
+        assert build_namespace_id("proj") != build_namespace_id("proj")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: canonical ID builders
+# ---------------------------------------------------------------------------
+
+
+class TestIdBuilder:
+    def test_build_source_id_format(self):
+        from axon.projects import build_source_id
+
+        sid = build_source_id("proj_abc", "file", "/docs/overview.md")
+        assert sid.startswith("src_")
+        assert len(sid) == 28  # "src_" + 24 hex chars
+
+    def test_build_source_id_deterministic(self):
+        from axon.projects import build_source_id
+
+        sid1 = build_source_id("proj_abc", "file", "/docs/overview.md")
+        sid2 = build_source_id("proj_abc", "file", "/docs/overview.md")
+        assert sid1 == sid2
+
+    def test_build_source_id_different_namespaces(self):
+        from axon.projects import build_source_id
+
+        sid1 = build_source_id("proj_aaa", "file", "/docs/overview.md")
+        sid2 = build_source_id("proj_bbb", "file", "/docs/overview.md")
+        assert sid1 != sid2
+
+    def test_build_chunk_id_format(self):
+        from axon.projects import build_chunk_id
+
+        cid = build_chunk_id("proj_abc", "src_xyz", "root", 0)
+        assert cid.startswith("chk_")
+        assert len(cid) == 28
+
+    def test_build_chunk_id_deterministic(self):
+        from axon.projects import build_chunk_id
+
+        cid1 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "leaf")
+        cid2 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "leaf")
+        assert cid1 == cid2
+
+    def test_build_chunk_id_unique_per_index(self):
+        from axon.projects import build_chunk_id
+
+        cid1 = build_chunk_id("proj_abc", "src_xyz", "root", 0)
+        cid2 = build_chunk_id("proj_abc", "src_xyz", "root", 1)
+        assert cid1 != cid2
+
+    def test_build_chunk_id_unique_per_kind(self):
+        from axon.projects import build_chunk_id
+
+        cid1 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "leaf")
+        cid2 = build_chunk_id("proj_abc", "src_xyz", "root", 0, "raptor_l1")
+        assert cid1 != cid2
 
 
 # ---------------------------------------------------------------------------
@@ -434,32 +597,42 @@ class TestReservedNames:
 
 class TestListShareMounts:
     def test_empty_when_no_mounts(self, tmp_path):
-        """list_share_mounts returns [] when ShareMount dir is empty."""
+        """list_share_mounts returns [] when no mount descriptors exist."""
         from axon.projects import list_share_mounts
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        (user_dir / "ShareMount").mkdir(parents=True)
+        user_dir.mkdir(parents=True)
 
         result = list_share_mounts(user_dir)
         assert result == []
 
-    @pytest.mark.skipif(not hasattr(__import__("os"), "symlink"), reason="symlinks not supported")
-    def test_returns_mount_entries(self, tmp_path):
-        """list_share_mounts returns dicts for symlinks in ShareMount."""
-        import os
+    def test_returns_mount_entries_from_descriptors(self, tmp_path):
+        """list_share_mounts returns dicts from mounts/ descriptors."""
+        import json
 
+        from axon.mounts import mount_descriptor_path
         from axon.projects import list_share_mounts
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        share_mount = user_dir / "ShareMount"
-        share_mount.mkdir(parents=True)
-
         target = tmp_path / "AxonStore" / "bob" / "research"
         target.mkdir(parents=True)
-        try:
-            os.symlink(str(target), str(share_mount / "bob_research"))
-        except (OSError, NotImplementedError):
-            pytest.skip("symlink creation not available")
+
+        desc_path = mount_descriptor_path(user_dir, "bob_research")
+        desc_path.parent.mkdir(parents=True)
+        desc_path.write_text(
+            json.dumps(
+                {
+                    "mount_name": "bob_research",
+                    "owner": "bob",
+                    "project": "research",
+                    "target_project_dir": str(target),
+                    "state": "active",
+                    "revoked": False,
+                    "descriptor_version": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
 
         result = list_share_mounts(user_dir)
         names = [entry["name"] for entry in result]

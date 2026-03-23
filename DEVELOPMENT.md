@@ -4,12 +4,17 @@
 
 ### 1. Setup Environment
 
-See [SETUP.md](SETUP.md) for platform-specific installation steps. Quick start:
+See [SETUP.md](SETUP.md) for platform-specific installation steps. Quick start (installs all features, dev tools, and evaluation suites):
 
 ```bash
 git clone https://github.com/jyunming/Axon.git && cd Axon
-pip install -e ".[dev]"
+pip install -e ".[all,dev,eval]"
 ```
+
+**Note on Offline / Local Support:**
+All core and optional dependencies (including `networkx`, `igraph`, `leidenalg`, and `graspologic`) are **local-first**. They perform all computations (graph clustering, embeddings, matrix math) on your local hardware and do not require internet access at runtime. For a fully air-gapped environment, ensure you also use a local LLM provider like **Ollama**.
+
+---
 
 ### 2. Common Development Tasks
 
@@ -68,7 +73,6 @@ Axon/
 │   └── test_tools.py       # Agent tool definition tests
 ├── examples/               # Example scripts
 ├── .github/workflows/      # CI/CD pipelines
-├── config.yaml             # Configuration template
 ├── pyproject.toml         # Package metadata
 ├── Makefile               # Development commands
 └── README.md              # User documentation
@@ -236,9 +240,14 @@ make lint
 
 ### 10. Release Process
 
-1. Update version in `setup.py` and `pyproject.toml`
+1. Update version in **all** version files (must stay in sync):
+   - `pyproject.toml` (single source of truth)
+   - `setup.py`
+   - `src/__init__.py`
+   - `src/axon/__init__.py`
+   - `src/axon/api.py` (FastAPI `version=` field)
 2. Run all tests: `make ci`
-3. Create git tag: `git tag v2.0.0`
+3. Create git tag: `git tag v0.9.0`
 4. Push tag: `git push --tags`
 5. GitHub Actions will build and publish
 

@@ -145,6 +145,11 @@ docs/*.md
 
 # Test temp directories
 tests/.test_tmp/
+tests/e2e/.test_tmp/
+
+# Local AxonStore runtime data (user-specific, contains DB files)
+AxonStore/
 
 # Qualification artifacts
 Qualification/
+sample_docs

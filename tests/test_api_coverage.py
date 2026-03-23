@@ -79,7 +79,7 @@ def test_update_config_503_no_brain():
 
 def test_list_sessions_returns_list():
     api_module.brain = _make_brain()
-    with patch("axon.main._list_sessions", return_value=[{"id": "s1"}]):
+    with patch("axon.sessions._list_sessions", return_value=[{"id": "s1"}]):
         resp = client.get("/sessions")
     assert resp.status_code == 200
     assert "sessions" in resp.json()
@@ -87,14 +87,14 @@ def test_list_sessions_returns_list():
 
 def test_get_session_found():
     api_module.brain = _make_brain()
-    with patch("axon.main._load_session", return_value={"id": "abc"}):
+    with patch("axon.sessions._load_session", return_value={"id": "abc"}):
         resp = client.get("/session/abc")
     assert resp.status_code == 200
 
 
 def test_get_session_not_found():
     api_module.brain = _make_brain()
-    with patch("axon.main._load_session", return_value=None):
+    with patch("axon.sessions._load_session", return_value=None):
         resp = client.get("/session/missing")
     assert resp.status_code == 404
 
@@ -310,11 +310,10 @@ def test_switch_project_503_no_brain():
 # ---------------------------------------------------------------------------
 
 
-def test_delete_project_sharemount_blocked():
-    """ShareMount prefix is blocked — the name contains a slash so path-encode it."""
+def test_delete_project_mounts_blocked():
+    """mounts/ prefix is blocked — mounted share entries are read-only."""
     api_module.brain = _make_brain()
-    # URL-encode the slash so FastAPI routes it to /project/delete/{name}
-    resp = client.post("/project/delete/ShareMount")
+    resp = client.post("/project/delete/mounts")
     assert resp.status_code == 400
 
 

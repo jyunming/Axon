@@ -79,9 +79,8 @@ Axon/
 │       └── tools.py        # Agent tool definitions
 ├── tests/                  # Test suite
 ├── examples/               # Example scripts
-├── config.yaml             # Configuration template
-├── requirements.txt        # Dependencies
 ├── pyproject.toml         # Package metadata and tool config
+├── requirements.txt        # Dependencies
 └── setup.py               # Package setup (legacy)
 ```
 

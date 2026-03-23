@@ -19,7 +19,7 @@ ollama pull phi3:mini     # minimal  — 2.3 GB, ~4 GB RAM
 
 ## Install the VS Code Extension
 
-Install the bundled extension: open Extensions panel (`Ctrl+Shift+X`) → `···` → **Install from VSIX** → select `integrations/vscode-axon/axon-copilot-1.0.0.vsix` → reload VS Code.
+Install the bundled extension: open Extensions panel (`Ctrl+Shift+X`) → `···` → **Install from VSIX** → select `integrations/vscode-axon/axon-copilot-0.9.0.vsix` → reload VS Code.
 
 > Full setup guide including Python discovery, settings, and troubleshooting: [SETUP.md § 11](SETUP.md#11-vs-code-extension-github-copilot-integration)
 
@@ -252,28 +252,45 @@ curl -X POST http://localhost:8000/query \
   -d '{"query": "What are the main topics?", "project": "work"}'
 ```
 
+### Search across multiple projects
+
+Switch to a merged read-only scope to query across all your projects at once:
+
+```bash
+/project @store      # default + all local projects + mounts
+/project @projects   # all local projects only
+/project @mounts     # all mounted projects only
+/project myproject   # switch back to a writable project
+```
+
+Merged scopes are read-only. Use `/project <name>` to switch back before ingesting.
+
 ---
 
 ---
 
 ## RAPTOR + GraphRAG — Best-Known Method
 
-RAPTOR and GraphRAG are **on by default** as of v1.0.0. They make Axon much better at multi-hop
-and corpus-wide questions, but they add LLM calls during ingest. Here is how to get the most out
-of them without paying unnecessary cost.
+RAPTOR and GraphRAG are **disabled in the shipped `config.yaml`** to keep first-run ingest fast.
+Enable them once your corpus is ingested and you want richer multi-hop retrieval. The code
+dataclass defaults are `raptor=True` / `graph_rag=True`, but the shipped config overrides those.
+Here is how to get the most out of them without paying unnecessary cost.
 
 ### What each feature does
 
 | Feature | What it adds | Ingest cost |
 |---|---|---|
 | **RAPTOR** | Hierarchical summaries — groups ~5 leaf chunks per source into a summary node; summary nodes are retrieved alongside leaf chunks for multi-hop questions | ~1 LLM call per 5 chunks |
-| **GraphRAG (light — default)** | Entity graph via regex noun-phrase extraction; zero LLM calls; populates the VS Code Graph Panel KG tab; entity co-occurrence used to expand retrieval | **Zero LLM calls** |
+| **GraphRAG (light)** | Entity graph via regex noun-phrase extraction; zero LLM calls; populates the VS Code Graph Panel KG tab; entity co-occurrence used to expand retrieval | **Zero LLM calls** |
 | **GraphRAG (standard)** | Adds LLM entity descriptions + typed relation triples; richer graph, better retrieval expansion | ~1–3 LLM calls per chunk |
 | **RAPTOR + GraphRAG** | Auto-composition — large sources use RAPTOR summaries as GraphRAG extraction units, cutting costs by ~50–80% | Shared cost — not additive |
 
-### Default config: fast graph, no extra LLM calls
+### Recommended starting config: fast graph, no extra LLM calls
 
-The default `config.yaml` ships with **fast graph mode**:
+The dataclass default for `graph_rag` is `true` (best-tested profile). The shipped
+`config.yaml` overrides this to `false` for a fast first-run experience; edit it when you
+want the full graph. Light mode gives you the VS Code Graph Panel KG tab at zero extra LLM
+cost — ingest cost is the same as `graph_rag: false`:
 
 ```yaml
 rag:
@@ -282,8 +299,6 @@ rag:
   graph_rag_relations: false  # relation extraction (LLM-heavy) is off
   graph_rag_community: false  # community detection is off
 ```
-
-This gives you the VS Code Graph Panel KG tab for free, with no ingest slowdown. Ingest speed is the same as having `graph_rag: false`.
 
 ### Upgrading to a richer graph
 
@@ -348,7 +363,7 @@ Or from Copilot Chat:
 
 | Tab | What it shows | Requires |
 |---|---|---|
-| **Knowledge Graph** | Entity–relation graph extracted from **any document** (PDF, DOCX, Markdown…) | `graph_rag: true` — **on by default**, just ingest your docs |
+| **Knowledge Graph** | Entity–relation graph extracted from **any document** (PDF, DOCX, Markdown…) | `graph_rag: true` in `config.yaml` (dataclass default; shipped config sets `false` for fast first-run) |
 | **Code Graph** | File/class/function structure with import/call edges for source code | `code_graph: true` in `config.yaml` (opt-in) |
 
 Disabled tabs show a tooltip explaining which flag to enable. Both tabs can be present in the same panel.
@@ -372,6 +387,42 @@ curl http://localhost:8000/graph/visualize -o graph.html
 ```
 
 Requires `pyvis`: `pip install axon[graphrag]`
+
+---
+
+## Fully local model deployment
+
+To run with local HuggingFace checkpoints and keep RAPTOR + GraphRAG enabled, use `local_assets_only`:
+
+```yaml
+offline:
+  local_assets_only: true
+  embedding_models_dir: /path/to/embedding_models   # sentence-transformers root
+  hf_models_dir: /path/to/hf_models                 # GLiNER, REBEL, LLMLingua root
+  tokenizer_cache_dir: /path/to/tiktoken_cache       # tiktoken BPE cache
+```
+
+On startup, Axon audits each model and fails fast if any required model is missing locally. Look for the `Model asset audit:` block in the startup log to verify your configuration:
+
+```
+[local]         embedding    /path/to/embedding_models/all-MiniLM-L6-v2
+[n/a]           reranker     (disabled)
+[local]         gliner       /path/to/hf_models/gliner_medium-v2.1
+[remote]        rebel        Babelscape/rebel-large
+```
+
+Use `offline_mode: true` (under `offline: enabled: true`) instead if you also want to disable RAPTOR and GraphRAG (e.g. a pure embedding-only setup with no LLM calls at all).
+
+---
+
+## Interactive graph demos
+
+Standalone graph visualizations (no server required) are in `docs/demos/`:
+
+- `code-graph-demo.html` — 3D code structure graph
+- `knowledge-graph-demo.html` — 3D knowledge/semantic graph
+
+Open them directly in a browser.
 
 ---
 

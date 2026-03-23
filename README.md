@@ -65,7 +65,7 @@ The VSIX ships with the repo — no download needed:
 
 ```
 1. Extensions panel (Ctrl+Shift+X) → "..." → Install from VSIX...
-2. Select:  integrations/vscode-axon/axon-copilot-1.0.0.vsix
+2. Select:  integrations/vscode-axon/axon-copilot-0.9.0.vsix
 3. Reload VS Code  (Ctrl+Shift+P → "Reload Window")
 ```
 
@@ -99,7 +99,7 @@ Create `.vscode/settings.json`:
 
 Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (hammer icon).
 
-> See **[Getting Started](GETTING_STARTED.md)** for full setup details, workflow diagrams, and per-entry-point examples.
+> See **[Setup Guide](SETUP.md)** for full setup details, workflow diagrams, and per-entry-point examples.
 
 ---
 
@@ -113,7 +113,7 @@ Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (ha
 
 ## Graph Panel — Investigate Your Knowledge Base Visually
 
-After asking a question, the **Axon Graph Panel** opens a split view directly inside VS Code — no browser, no extra tools:
+Invoke the **Axon Graph Panel** via the graph command or tool to open a split view directly inside VS Code — no browser, no extra tools:
 
 ```
 ┌──────────────────────┬──────────────────────────────────────────┐
@@ -132,7 +132,7 @@ After asking a question, the **Axon Graph Panel** opens a split view directly in
 
 **Two graph views — same panel:**
 - **Knowledge Graph** — entity–relation graph built from **any document** (PDF, DOCX, Markdown…) during ingest. Requires `graph_rag: true` — **on by default**. Nodes are named entities (people, concepts, components); edges are extracted relations. Just ingest your documents and the graph is ready.
-- **Code Graph** — structural file/class/function graph for source code (requires `code_graph: true` in `config.yaml`). Nodes are files, classes, and functions; edges are `IMPORTS` / `CONTAINS` / `CALLS` relationships. Click a node to jump to that definition.
+- **Code Graph** — structural file/class/function graph for source code (requires `code_graph: true` in `config.yaml`). Nodes are files, classes, and functions; edges are `IMPORTS` / `CONTAINS` / `MENTIONED_IN` relationships. Click a node to jump to that definition.
 
 **How to open it:**
 
@@ -156,11 +156,11 @@ Copilot Chat:
 - **Multi-LLM** — Ollama (local), Gemini, OpenAI, vLLM; switch live from the REPL
 - **Multi-embedding** — sentence-transformers, Ollama, FastEmbed
 - **Vector stores** — ChromaDB (default), Qdrant, LanceDB
-- **14+ file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM with VLM auto-captioning)
+- **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)
 - **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
 - **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
-- **RAPTOR + GraphRAG (fast mode by default)** — RAPTOR hierarchical summaries + entity graph via zero-LLM regex extraction; both on by default with no ingest slowdown; interactive 3D graph panel in VS Code, or `/graph-viz` HTML export
+- **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph; disabled in the shipped config for fast first-run ingest; enable when your corpus is ready; interactive 3D graph panel in VS Code, or `/graph-viz` HTML export
 - **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS` edges for code corpora; visualise alongside the knowledge graph in the VS Code panel
 - **Reranking** — cross-encoder (BGE) reranking
 - **Agent-ready** — FastAPI REST API + MCP server for Copilot agent mode
@@ -171,7 +171,6 @@ Copilot Chat:
 
 | Guide | What it covers |
 |---|---|
-| **[Getting Started](GETTING_STARTED.md)** | Ingest/query workflow for every entry point — with diagrams |
 | **[Setup Guide](SETUP.md)** | Full install for all platforms, models, VS Code extension config, MCP |
 | **[Quick Reference](QUICKREF.md)** | All CLI flags, REPL commands, API endpoints |
 | **[Model Guide](MODEL_GUIDE.md)** | Choosing an LLM and embedding model |

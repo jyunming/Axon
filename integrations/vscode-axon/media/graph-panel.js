@@ -23,6 +23,22 @@
     vscode.postMessage({ command: 'openFile', path: fp, line: ln });
   }
 
+  function getThemeColor(name, fallback) {
+    var value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+  }
+
+  function getGraphTheme() {
+    var chartBlue = getThemeColor('--vscode-charts-blue', '');
+    return {
+      background: getThemeColor('--vscode-editor-background', '#1e1e1e'),
+      node: chartBlue || getThemeColor('--vscode-focusBorder', '#569cd6'),
+      linkImport: chartBlue || '#569cd6',
+      linkContains: getThemeColor('--vscode-descriptionForeground', '#555555'),
+      linkOther: getThemeColor('--vscode-charts-lines', '#3c4a5a')
+    };
+  }
+
   /* ── Left panel: query / answer / citations ───────────────────────── */
   document.getElementById('query-text').textContent = 'Q: ' + DATA.query;
 
@@ -115,6 +131,7 @@
   function mountGraph(el, graphData, graphType) {
     var nodes = graphData.nodes.map(function (n) { return Object.assign({}, n); });
     var links = graphData.links.map(function (l) { return Object.assign({}, l); });
+    var theme = getGraphTheme();
 
     var tooltip = document.createElement('div');
     tooltip.className = 'graph-tooltip';
@@ -122,16 +139,16 @@
 
     var graph = ForceGraph3D()(el)
       .graphData({ nodes: nodes, links: links })
-      .backgroundColor('#1e1e1e')
+      .backgroundColor(theme.background)
       .nodeLabel(function (n) { return n.tooltip || n.name || n.id || ''; })
-      .nodeColor(function (n) { return n.color || '#569cd6'; })
+      .nodeColor(function (n) { return n.color || theme.node; })
       .nodeVal(function (n) { return Math.max(1, n.val || 1); })
       .nodeOpacity(0.9)
       .linkLabel(function (l) { return l.label || l.edge_type || l.relation || ''; })
       .linkColor(function (l) {
-        return (l.edge_type === 'IMPORTS') ? '#569cd6'
-             : (l.edge_type === 'CONTAINS') ? '#555'
-             : '#3c4a5a';
+        return (l.edge_type === 'IMPORTS') ? theme.linkImport
+             : (l.edge_type === 'CONTAINS') ? theme.linkContains
+             : theme.linkOther;
       })
       .linkWidth(function (l) { return l.width || 1; })
       .linkOpacity(0.6)
@@ -153,7 +170,17 @@
       if (fp) { openFile(fp, ln); }
       return;
     }
-    /* Knowledge graph nodes reference sources via chunk_ids */
+
+    /* Knowledge graph — prefer node.evidence (populated by build_graph_payload),
+       fall back to citation-list lookup via chunk_ids for older payloads. */
+    var ev = Array.isArray(n.evidence) ? n.evidence : [];
+    if (ev.length > 0 && ev[0].source) {
+      openFile(ev[0].source, ev[0].start_line || 1);
+      showNodeDetail(n);
+      return;
+    }
+
+    /* Legacy fallback: scan sources by chunk_id */
     var chunkIds = n.chunk_ids || [];
     if (!chunkIds.length) { return; }
     var found = null;
@@ -164,6 +191,42 @@
     var fp2 = (found.metadata && found.metadata.source) ? found.metadata.source : '';
     var ln2 = (found.metadata && found.metadata.start_line) ? found.metadata.start_line : 1;
     if (fp2) { openFile(fp2, ln2); }
+  }
+
+  /* ── Node detail side panel ─────────────────────────────────────────── */
+  var detailPanel = null;
+  function showNodeDetail(n) {
+    if (!detailPanel) {
+      detailPanel = document.createElement('div');
+      detailPanel.style.cssText =
+        'position:fixed;right:0;top:0;bottom:0;width:280px;background:var(--vscode-sideBar-background,#252526);' +
+        'border-left:1px solid var(--vscode-panel-border,#333);overflow-y:auto;padding:12px;font-size:0.78em;' +
+        'color:var(--vscode-editor-foreground,#d4d4d4);z-index:20;';
+      document.body.appendChild(detailPanel);
+    }
+    var ev = Array.isArray(n.evidence) ? n.evidence : [];
+    var evHtml = ev.map(function (e, i) {
+      var src = escHtml(e.source || '');
+      var ln = e.start_line || 1;
+      var exc = escHtml((e.excerpt || '').slice(0, 160));
+      return '<div style="margin-bottom:8px;cursor:pointer;padding:4px;border:1px solid var(--vscode-panel-border,#333);border-radius:3px" ' +
+             'onclick="(function(){var m=window.__axonOpenFile;if(m){m(' + JSON.stringify(e.source) + ',' + ln + ');}})();">' +
+             '<div style="color:var(--vscode-textLink-foreground,#4ec9b0)">' + (src.split('/').pop() || src) + ':' + ln + '</div>' +
+             '<div style="color:var(--vscode-descriptionForeground,#888);margin-top:2px">' + exc + '</div>' +
+             '</div>';
+    }).join('');
+    detailPanel.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+        '<b style="color:var(--vscode-textPreformat-foreground,#9cdcfe)">' + escHtml(n.name || n.id || '') + '</b>' +
+        '<span style="cursor:pointer;color:var(--vscode-descriptionForeground,#888)" onclick="this.parentNode.parentNode.remove();window.__axonDetailPanel=null">✕</span>' +
+      '</div>' +
+      '<div style="color:var(--vscode-descriptionForeground,#888);margin-bottom:4px">Type: ' + escHtml(n.type || '') + '</div>' +
+      '<div style="color:var(--vscode-descriptionForeground,#888);margin-bottom:8px">' + escHtml((n.description || '').slice(0, 200)) + '</div>' +
+      (ev.length ? '<div style="color:var(--vscode-descriptionForeground,#888);text-transform:uppercase;font-size:0.9em;margin-bottom:4px">Evidence (' + ev.length + ')</div>' + evHtml
+                 : '<div style="color:var(--vscode-disabledForeground,#555);font-style:italic">No evidence available</div>');
+    /* Expose openFile so inline onclick can call back */
+    window.__axonOpenFile = openFile;
+    window.__axonDetailPanel = detailPanel;
   }
 
   /* ── Utilities ─────────────────────────────────────────────────────── */

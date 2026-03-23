@@ -1,7 +1,6 @@
-"""Tests for retriever modules."""
+﻿"""Tests for retriever modules."""
 
 import os
-import tempfile
 from unittest.mock import patch
 
 from axon.retrievers import BM25Retriever, weighted_score_fusion
@@ -23,36 +22,36 @@ class TestBM25Retriever:
         ids = [res["id"] for res in results]
         assert "doc1" in ids or "doc3" in ids
 
-    def test_add_and_search_with_tempdir(self):
+    def test_add_and_search_with_tempdir(self, tmp_path):
         """Test adding documents and searching (tempfile style)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            retriever = BM25Retriever(storage_path=tmpdir)
-            docs = [
-                {
-                    "id": "doc1",
-                    "text": "The quick brown fox jumps over the lazy dog",
-                    "metadata": {},
-                },
-                {"id": "doc2", "text": "Python is a great programming language", "metadata": {}},
-                {"id": "doc3", "text": "Machine learning with Python is powerful", "metadata": {}},
-            ]
-            retriever.add_documents(docs)
-            results = retriever.search("Python programming", top_k=2)
-            assert len(results) > 0
-            assert results[0]["id"] in ["doc2", "doc3"]
-            assert "score" in results[0]
+        tmpdir = str(tmp_path)
+        retriever = BM25Retriever(storage_path=tmpdir)
+        docs = [
+            {
+                "id": "doc1",
+                "text": "The quick brown fox jumps over the lazy dog",
+                "metadata": {},
+            },
+            {"id": "doc2", "text": "Python is a great programming language", "metadata": {}},
+            {"id": "doc3", "text": "Machine learning with Python is powerful", "metadata": {}},
+        ]
+        retriever.add_documents(docs)
+        results = retriever.search("Python programming", top_k=2)
+        assert len(results) > 0
+        assert results[0]["id"] in ["doc2", "doc3"]
+        assert "score" in results[0]
 
     def test_search_empty_returns_empty(self, tmp_path):
         r = BM25Retriever(storage_path=str(tmp_path))
         results = r.search("anything")
         assert results == []
 
-    def test_empty_search(self):
+    def test_empty_search(self, tmp_path):
         """Test searching with no documents (tempfile style)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            retriever = BM25Retriever(storage_path=tmpdir)
-            results = retriever.search("test query")
-            assert results == []
+        tmpdir = str(tmp_path)
+        retriever = BM25Retriever(storage_path=tmpdir)
+        results = retriever.search("test query")
+        assert results == []
 
     def test_persistence_roundtrip(self, tmp_path):
         r1 = BM25Retriever(storage_path=str(tmp_path))
@@ -63,22 +62,22 @@ class TestBM25Retriever:
         assert len(r2.corpus) == 1
         assert r2.corpus[0]["id"] == "doc1"
 
-    def test_persistence(self):
+    def test_persistence(self, tmp_path):
         """Test that index is saved and loaded correctly (tempfile style)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            retriever1 = BM25Retriever(storage_path=tmpdir)
-            docs = [{"id": "doc1", "text": "Test document", "metadata": {}}]
-            retriever1.add_documents(docs)
+        tmpdir = str(tmp_path)
+        retriever1 = BM25Retriever(storage_path=tmpdir)
+        docs = [{"id": "doc1", "text": "Test document", "metadata": {}}]
+        retriever1.add_documents(docs)
 
-            retriever2 = BM25Retriever(storage_path=tmpdir)
-            assert len(retriever2.corpus) == 1
-            assert retriever2.corpus[0]["id"] == "doc1"
+        retriever2 = BM25Retriever(storage_path=tmpdir)
+        assert len(retriever2.corpus) == 1
+        assert retriever2.corpus[0]["id"] == "doc1"
 
     def test_scores_above_zero_only(self, tmp_path):
         r = BM25Retriever(storage_path=str(tmp_path))
         docs = [{"id": "doc1", "text": "apple fruit", "metadata": {}}]
         r.add_documents(docs)
-        # Query totally unrelated — may return empty
+        # Query totally unrelated â€” may return empty
         results = r.search("zzzzquux")
         # All returned results should have score > 0
         for res in results:
@@ -92,11 +91,17 @@ class TestBM25Retriever:
         assert r.corpus == []
 
     def test_batch_add_rebuilds_once(self, tmp_path):
-        # Adding a batch of docs in one call correctly populates index
+        # Adding docs sets the dirty flag; index is rebuilt lazily on first search() (Story 6.2).
         r = BM25Retriever(storage_path=str(tmp_path))
         docs = [{"id": f"d{i}", "text": f"word{i}", "metadata": {}} for i in range(5)]
         r.add_documents(docs)
         assert len(r.corpus) == 5
+        # After add, index is NOT yet built â€” dirty flag is set instead (lazy rebuild)
+        assert r._dirty is True
+        assert r.bm25 is None
+        # First search triggers exactly one rebuild
+        r.search("word1")
+        assert r._dirty is False
         assert r.bm25 is not None
 
 
@@ -247,7 +252,7 @@ class TestBM25RetrieverSaveLoad:
 
     def test_loaded_retriever_can_search(self, tmp_path):
         # BM25Okapi IDF = log(N-df+0.5) - log(df+0.5).
-        # With only 2 docs and the term in 1, IDF = 0 → score = 0 → filtered out.
+        # With only 2 docs and the term in 1, IDF = 0 â†’ score = 0 â†’ filtered out.
         # Use 3 docs so the unique term gets positive IDF.
         r1 = BM25Retriever(storage_path=str(tmp_path))
         docs = [
@@ -414,7 +419,7 @@ class TestBM25BatchAdd:
     """Tests for BM25Retriever deferred-save batch mode (TASK 13A)."""
 
     def test_add_documents_save_deferred_true(self, tmp_path):
-        """save_deferred=True → save() NOT called; corpus extended."""
+        """save_deferred=True â†’ save() NOT called; corpus extended."""
         retriever = BM25Retriever(str(tmp_path / "bm25"))
         docs = [{"id": "d1", "text": "hello world", "metadata": {}}]
         with patch.object(retriever, "save") as mock_save:
@@ -423,7 +428,7 @@ class TestBM25BatchAdd:
         assert len(retriever.corpus) == 1
 
     def test_add_documents_save_deferred_false(self, tmp_path):
-        """save_deferred=False (default) → save() IS called."""
+        """save_deferred=False (default) â†’ save() IS called."""
         retriever = BM25Retriever(str(tmp_path / "bm25"))
         docs = [{"id": "d1", "text": "hello world", "metadata": {}}]
         with patch.object(retriever, "save") as mock_save:
@@ -431,7 +436,7 @@ class TestBM25BatchAdd:
             mock_save.assert_called_once()
 
     def test_flush_calls_save(self, tmp_path):
-        """flush() → save() called."""
+        """flush() â†’ save() called."""
         retriever = BM25Retriever(str(tmp_path / "bm25"))
         with patch.object(retriever, "save") as mock_save:
             retriever.flush()

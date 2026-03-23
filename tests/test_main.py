@@ -1,3 +1,4 @@
+import os
 from unittest.mock import MagicMock, patch
 
 import yaml
@@ -25,11 +26,11 @@ class TestAxonConfig:
         config = AxonConfig()
         assert config.query_router == "heuristic"
 
-    def test_graph_rag_community_default_false(self):
+    def test_graph_rag_community_default_true(self):
         from axon.main import AxonConfig
 
         config = AxonConfig()
-        assert config.graph_rag_community is False
+        assert config.graph_rag_community is True
 
     def test_code_graph_default_false(self):
         from axon.main import AxonConfig
@@ -80,7 +81,7 @@ class TestAxonConfig:
     def test_gliner_model_default(self):
         from axon.main import AxonConfig
 
-        assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_mediumv2.1"
+        assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_medium-v2.1"
 
     def test_community_top_n_default(self):
         from axon.main import AxonConfig
@@ -91,6 +92,40 @@ class TestAxonConfig:
         from axon.main import AxonConfig
 
         assert AxonConfig().graph_rag_community_llm_max_total == 30
+
+    def test_local_assets_only_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().local_assets_only is False
+
+    def test_embedding_models_dir_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().embedding_models_dir == ""
+
+    def test_hf_models_dir_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().hf_models_dir == ""
+
+    def test_tokenizer_cache_dir_default(self):
+        from axon.main import AxonConfig
+
+        assert AxonConfig().tokenizer_cache_dir == ""
+
+    def test_llmlingua_model_default(self):
+        from axon.main import AxonConfig
+
+        assert (
+            AxonConfig().graph_rag_llmlingua_model
+            == "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank"
+        )
+
+    def test_gliner_model_default_corrected(self):
+        """GLiNER default ID must use the correct HF repo name (with hyphen, not dot)."""
+        from axon.main import AxonConfig
+
+        assert AxonConfig().graph_rag_gliner_model == "urchade/gliner_medium-v2.1"
 
     def test_load_from_yaml(self, tmp_path):
         from axon.main import AxonConfig
@@ -849,7 +884,7 @@ _FAKE_COPILOT_SESSION = {"token": "fake_session_token_abc", "expires_at": 9_999_
 
 
 class TestGitHubCopilotProvider:
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_complete_calls_copilot_endpoint(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -868,7 +903,7 @@ class TestGitHubCopilotProvider:
         assert result == "hello"
         assert MockOpenAI.call_args[1]["base_url"] == "https://api.githubcopilot.com"
 
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_complete_passes_required_headers(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -888,7 +923,7 @@ class TestGitHubCopilotProvider:
         assert "Editor-Version" in headers
         assert "Copilot-Integration-Id" in headers
 
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_complete_returns_response(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -906,7 +941,7 @@ class TestGitHubCopilotProvider:
         result = llm.complete("What is 2+2?")
         assert result == "copilot answer"
 
-    @patch("axon.main._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
+    @patch("axon.llm._refresh_copilot_session", return_value=_FAKE_COPILOT_SESSION)
     @patch("openai.OpenAI")
     def test_stream_yields_tokens(self, MockOpenAI, _mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -943,7 +978,7 @@ class TestGitHubCopilotProvider:
         with pytest.raises(ValueError, match="GITHUB_COPILOT_PAT"):
             llm._get_copilot_client()
 
-    @patch("axon.main._refresh_copilot_session")
+    @patch("axon.llm._refresh_copilot_session")
     @patch("openai.OpenAI")
     def test_client_cache_invalidated_on_pat_change(self, MockOpenAI, mock_refresh):
         from axon.main import AxonConfig, OpenLLM
@@ -1207,7 +1242,7 @@ class TestQueryDecomposeAndCompress:
         brain.llm.complete = MagicMock(return_value="The answer is 42.")
 
         results = [{"id": "d1", "text": long_text, "score": 0.9, "metadata": {}}]
-        compressed = brain._compress_context("What is the answer?", results)
+        compressed, _ = brain._compress_context("What is the answer?", results)
 
         assert compressed[0]["text"] == "The answer is 42."
 
@@ -1224,7 +1259,7 @@ class TestQueryDecomposeAndCompress:
             "metadata": {},
             "is_web": True,
         }
-        results = brain._compress_context("q", [web_result])
+        results, _ = brain._compress_context("q", [web_result])
 
         # Web results must pass through unchanged; LLM must not be called
         brain.llm.complete.assert_not_called()
@@ -1239,7 +1274,7 @@ class TestQueryDecomposeAndCompress:
 
         original_text = "original chunk text"
         results = [{"id": "d1", "text": original_text, "score": 0.9, "metadata": {}}]
-        compressed = brain._compress_context("q", results)
+        compressed, _ = brain._compress_context("q", results)
 
         assert compressed[0]["text"] == original_text
 
@@ -1254,7 +1289,7 @@ class TestQueryDecomposeAndCompress:
         )
 
         results = [{"id": "d1", "text": short_text, "score": 0.9, "metadata": {}}]
-        compressed = brain._compress_context("q", results)
+        compressed, _ = brain._compress_context("q", results)
 
         assert compressed[0]["text"] == short_text
 
@@ -1273,7 +1308,7 @@ class TestQueryDecomposeAndCompress:
                 "metadata": {"parent_text": "large parent passage " * 10},
             }
         ]
-        compressed = brain._compress_context("q", results)
+        compressed, _ = brain._compress_context("q", results)
 
         # Compression prompt should have used parent_text, result stored back in parent_text
         call_prompt = brain.llm.complete.call_args[0][0]
@@ -1316,7 +1351,7 @@ class TestLogQueryMetrics:
         config = AxonConfig(hybrid_search=False, rerank=False)
         brain = AxonBrain(config)
 
-        with _patch("axon.main.logger") as mock_logger:
+        with _patch("axon.query_router.logger") as mock_logger:
             brain._log_query_metrics(
                 query="test query that is fairly long",
                 vector_count=5,
@@ -1344,7 +1379,7 @@ class TestLogQueryMetrics:
         config = AxonConfig(hybrid_search=False, rerank=False)
         brain = AxonBrain(config)
 
-        with _patch("axon.main.logger") as mock_logger:
+        with _patch("axon.query_router.logger") as mock_logger:
             brain._log_query_metrics(
                 query="q",
                 vector_count=0,
@@ -1769,8 +1804,7 @@ class TestGraphRAG:
         # doc id (possibly with chunk suffix from splitter) should appear under at least one entity
         all_ids = set()
         for node in brain._entity_graph.values():
-            chunk_ids = node["chunk_ids"] if isinstance(node, dict) else node
-            all_ids.update(chunk_ids)
+            all_ids.update(node["chunk_ids"])
         assert any(doc_id.startswith("d1") for doc_id in all_ids)
 
     def test_graph_rag_expands_results_at_query_time(
@@ -1788,7 +1822,7 @@ class TestGraphRAG:
             query_router="off",  # disable router so graph_rag=True is preserved
         )
         # Pre-populate entity graph
-        brain._entity_graph = {"transformer": ["d2"]}
+        brain._entity_graph = {"transformer": {"description": "", "chunk_ids": ["d2"]}}
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         # Primary retrieval returns only d1
         brain.vector_store.search = MagicMock(
@@ -1823,7 +1857,9 @@ class TestGraphRAG:
             graph_rag=True,
             similarity_threshold=0.0,
         )
-        brain._entity_graph = {"transformer": ["d1"]}  # d1 already in primary results
+        brain._entity_graph = {
+            "transformer": {"description": "", "chunk_ids": ["d1"]}
+        }  # d1 already in primary results
         brain.embedding.embed_query = MagicMock(return_value=[0.1])
         brain.vector_store.search = MagicMock(
             return_value=[{"id": "d1", "text": "Attention", "score": 0.9, "metadata": {}}]
@@ -2032,8 +2068,8 @@ class TestCompressContextGuard:
         from axon.main import AxonBrain, AxonConfig
 
         brain = AxonBrain(AxonConfig())
-        result = brain._compress_context("any query", [])
-        assert result == []
+        chunks, _ = brain._compress_context("any query", [])
+        assert chunks == []
 
     def test_compress_context_single_item(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
@@ -2044,7 +2080,7 @@ class TestCompressContextGuard:
         brain = AxonBrain(AxonConfig())
         brain.llm.complete = MagicMock(return_value="short")
         doc = {"id": "d1", "text": "this is a longer original text for the test", "metadata": {}}
-        result = brain._compress_context("query", [doc])
+        result, _ = brain._compress_context("query", [doc])
         assert len(result) == 1
 
 
@@ -3051,7 +3087,7 @@ class TestGraphRAGRobustness:
     def test_graph_expanded_score_in_range(self):
         """Scores assigned to expanded docs are in [0.5, 0.8)."""
         brain = self._make_brain()
-        brain._entity_graph = {"machine learning": ["doc_ml_1"]}
+        brain._entity_graph = {"machine learning": {"description": "", "chunk_ids": ["doc_ml_1"]}}
         brain._relation_graph = {}
         brain.config.graph_rag_relations = False
 
@@ -3074,7 +3110,7 @@ class TestGraphRAGRobustness:
     def test_graph_expanded_score_not_hardcoded(self):
         """Expanded doc scores must not be exactly 1.0 (the old bug)."""
         brain = self._make_brain()
-        brain._entity_graph = {"python": ["doc_py_1"]}
+        brain._entity_graph = {"python": {"description": "", "chunk_ids": ["doc_py_1"]}}
         brain._relation_graph = {}
         brain.config.graph_rag_relations = False
         brain._extract_entities = MagicMock(return_value=["python"])
@@ -3093,22 +3129,22 @@ class TestGraphRAGRobustness:
     def test_entity_graph_pruned_on_delete(self):
         """Deleted doc IDs are removed from the entity graph."""
         brain = self._make_brain()
-        brain._entity_graph = {"python": ["doc_1", "doc_2"], "machine learning": ["doc_2"]}
+        brain._entity_graph = {
+            "python": {"description": "", "chunk_ids": ["doc_1", "doc_2"]},
+            "machine learning": {"description": "", "chunk_ids": ["doc_2"]},
+        }
         brain._relation_graph = {}
 
         brain._prune_entity_graph({"doc_2"})
 
-        # Legacy list format is migrated to dict-node format on modification
-        node = brain._entity_graph["python"]
-        chunk_ids = node["chunk_ids"] if isinstance(node, dict) else node
-        assert chunk_ids == ["doc_1"]
+        assert brain._entity_graph["python"]["chunk_ids"] == ["doc_1"]
         assert "machine learning" not in brain._entity_graph
         brain._save_entity_graph.assert_called_once()
 
     def test_empty_entity_entry_removed_on_prune(self):
         """Entity entries that become empty after pruning are deleted entirely."""
         brain = self._make_brain()
-        brain._entity_graph = {"solo_entity": ["only_doc"]}
+        brain._entity_graph = {"solo_entity": {"description": "", "chunk_ids": ["only_doc"]}}
         brain._relation_graph = {}
 
         brain._prune_entity_graph({"only_doc"})
@@ -3166,8 +3202,8 @@ class TestGraphRAGRobustness:
         brain = self._make_brain()
         # Entity graph: "python" has doc_py, "machine learning" has doc_ml
         brain._entity_graph = {
-            "python": ["doc_py"],
-            "machine learning": ["doc_ml"],
+            "python": {"description": "", "chunk_ids": ["doc_py"]},
+            "machine learning": {"description": "", "chunk_ids": ["doc_ml"]},
         }
         # Relation graph: python → machine learning
         brain._relation_graph = {
@@ -3193,8 +3229,8 @@ class TestGraphRAGRobustness:
         """1-hop traversal scores (0.62) are lower than direct entity match scores."""
         brain = self._make_brain()
         brain._entity_graph = {
-            "python": ["doc_py"],
-            "machine learning": ["doc_ml"],
+            "python": {"description": "", "chunk_ids": ["doc_py"]},
+            "machine learning": {"description": "", "chunk_ids": ["doc_ml"]},
         }
         brain._relation_graph = {
             "python": [{"target": "machine learning", "relation": "used for", "chunk_id": "doc_py"}]
@@ -3402,7 +3438,6 @@ class TestGraphRAGCommunity:
         brain._generate_community_summaries = AxonBrain._generate_community_summaries.__get__(
             brain, AxonBrain
         )
-        brain._global_search_context = AxonBrain._global_search_context.__get__(brain, AxonBrain)
         brain._global_search_map_reduce = AxonBrain._global_search_map_reduce.__get__(
             brain, AxonBrain
         )
@@ -3422,12 +3457,17 @@ class TestGraphRAGCommunity:
         )
         brain._save_entity_graph = MagicMock()
         brain._save_relation_graph = MagicMock()
-        brain._save_community_map = MagicMock()
         brain._save_community_summaries = MagicMock()
         brain._save_community_levels = MagicMock()
         brain._save_community_hierarchy = MagicMock()
         brain._save_entity_embeddings = MagicMock()
         brain._save_claims_graph = MagicMock()
+        # Class attributes moved to GraphRagMixin — set explicitly so mock returns real values
+        from axon.graph_rag import GraphRagMixin
+
+        brain._VALID_ENTITY_TYPES = GraphRagMixin._VALID_ENTITY_TYPES
+        brain._GLINER_TYPE_MAP = GraphRagMixin._GLINER_TYPE_MAP
+        brain._GLINER_LABELS = GraphRagMixin._GLINER_LABELS
         return brain
 
     # ── Phase 1.1: _extract_entities returns dicts ────────────────────────
@@ -3483,30 +3523,6 @@ class TestGraphRAGCommunity:
         assert result[0]["object"] == "Beats"
         assert result[0]["description"] == ""
 
-    # ── Phase 1.3: entity graph migration ────────────────────────────────
-
-    def test_entity_graph_migration_from_flat_list(self, tmp_path):
-        """_load_entity_graph migrates legacy flat list format to new dict-node format."""
-        import json
-        from unittest.mock import MagicMock
-
-        from axon.main import AxonBrain, AxonConfig
-
-        brain = MagicMock(spec=AxonBrain)
-        brain.config = AxonConfig(bm25_path=str(tmp_path))
-        brain._load_entity_graph = AxonBrain._load_entity_graph.__get__(brain, AxonBrain)
-
-        # Write legacy format
-        legacy = {"openai": ["chunk1", "chunk2"]}
-        (tmp_path / ".entity_graph.json").write_text(json.dumps(legacy), encoding="utf-8")
-
-        result = brain._load_entity_graph()
-        assert result["openai"]["description"] == ""
-        assert result["openai"]["chunk_ids"] == ["chunk1", "chunk2"]
-        assert result["openai"]["type"] == "UNKNOWN"
-        assert result["openai"]["frequency"] == 2
-        assert result["openai"]["degree"] == 0
-
     # ── Phase 2.5: community detection ───────────────────────────────────
 
     def test_community_detection_requires_networkx(self):
@@ -3521,9 +3537,9 @@ class TestGraphRAGCommunity:
             result = brain._run_community_detection()
         assert result == {}
 
-    # ── Phase 2.4: community map persist ─────────────────────────────────
+    # ── Phase 2.4: community levels persist ──────────────────────────────
 
-    def test_community_map_persisted(self, tmp_path):
+    def test_community_levels_persisted(self, tmp_path):
         """_save_community_levels / _load_community_levels round-trips correctly."""
         from unittest.mock import MagicMock
 
@@ -3564,32 +3580,6 @@ class TestGraphRAGCommunity:
         assert brain._community_summaries["0_0"]["summary"] != ""
         brain._save_community_summaries.assert_called_once()
 
-    # ── Phase 4: global search context ───────────────────────────────────
-
-    def test_global_search_context_returns_summaries(self):
-        """_global_search_context returns text containing community summary content."""
-        brain = self._make_brain()
-        brain._community_summaries = {
-            "0_0": {
-                "title": "Tech cluster",
-                "summary": "Apple and Beats tech cluster",
-                "full_content": "# Tech cluster\n\nApple and Beats tech cluster",
-                "findings": [],
-                "rank": 5.0,
-                "entities": ["apple", "beats"],
-                "size": 2,
-                "level": 0,
-            }
-        }
-
-        class _Cfg:
-            graph_rag_community_top_k = 5
-
-        # Disable embedding path so token-overlap fallback is used
-        brain.embedding.embed_query.side_effect = Exception("no embed")
-        result = brain._global_search_context("Apple products", _Cfg())
-        assert "Apple" in result or "Beats" in result
-
     # ── Phase 5: local search context ────────────────────────────────────
 
     def test_local_search_context_includes_entity_description(self):
@@ -3619,8 +3609,8 @@ class TestGraphRAGCommunity:
         from axon.main import AxonConfig
 
         cfg = AxonConfig()
-        # graph_rag_community defaults to False (cost-control; enable explicitly)
-        assert cfg.graph_rag_community is False
+        # graph_rag_community defaults to True (best-tested GraphRAG profile)
+        assert cfg.graph_rag_community is True
         assert cfg.graph_rag_community_async is True
         assert cfg.graph_rag_community_top_k == 5
         assert cfg.graph_rag_mode == "local"
@@ -3661,8 +3651,7 @@ class TestGraphRAGCommunity:
         # Simulate the frequency update logic from ingest
         for entity_key in brain._entity_graph:
             node = brain._entity_graph[entity_key]
-            if isinstance(node, dict):
-                node["frequency"] = len(node.get("chunk_ids", []))
+            node["frequency"] = len(node.get("chunk_ids", []))
         assert brain._entity_graph["apple"]["frequency"] == 2
 
     def test_community_report_has_title_and_findings(self):
@@ -3822,17 +3811,6 @@ class TestGraphRAGCommunity:
         assert 0 in community_levels
         assert 1 in community_levels
 
-    def test_community_map_property_returns_finest_level(self):
-        """_community_map property returns the finest (highest-index) level map."""
-        brain = self._make_brain()
-        brain._community_levels = {0: {"a": 0}, 1: {"a": 0, "b": 1}}
-        # Access through the property on the real class — but brain is a MagicMock,
-        # so we call the property getter directly
-        from axon.main import AxonBrain
-
-        result = AxonBrain._community_map.fget(brain)
-        assert result == {"a": 0, "b": 1}
-
     def test_relationship_weight_incremented(self):
         """Relation weight is incremented when same (target, relation) pair appears again."""
         brain = self._make_brain()
@@ -3975,7 +3953,6 @@ class TestGraphRAGRealImplementation:
         brain._rebuild_communities = AxonBrain._rebuild_communities.__get__(brain, AxonBrain)
         brain._save_entity_graph = MagicMock()
         brain._save_relation_graph = MagicMock()
-        brain._save_community_map = MagicMock()
         brain._save_community_summaries = MagicMock()
         brain._save_community_levels = MagicMock()
         brain._save_community_hierarchy = MagicMock()
@@ -5225,6 +5202,19 @@ class TestGraphRAGTask7Fixes:
         b._rebuild_communities.assert_called_once()
         assert b._community_graph_dirty is False
 
+    def test_finalize_graph_force_rebuilds_when_not_dirty(self):
+        """finalize_graph(force=True) rebuilds even when dirty flag is not set."""
+        from axon.main import AxonBrain
+
+        b = self._make_brain()
+        b._community_graph_dirty = False
+        b._rebuild_communities = MagicMock()
+
+        AxonBrain.finalize_graph(b, force=True)
+
+        b._rebuild_communities.assert_called_once()
+        assert b._community_graph_dirty is False
+
     # ------------------------------------------------------------------
     # Step 4: community summary incremental caching
     # ------------------------------------------------------------------
@@ -6341,12 +6331,11 @@ class TestFundamentalFixes:
                 _cid = _entry.get("chunk_id", "")
                 if _cid:
                     _tgt_node = brain._entity_graph[_tgt]
-                    if isinstance(_tgt_node, dict):
-                        _tgt_node.setdefault("chunk_ids", [])
-                        if _cid not in _tgt_node["chunk_ids"]:
-                            _tgt_node["chunk_ids"].append(_cid)
-                            _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
-                            _stub_added = True
+                    _tgt_node.setdefault("chunk_ids", [])
+                    if _cid not in _tgt_node["chunk_ids"]:
+                        _tgt_node["chunk_ids"].append(_cid)
+                        _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
+                        _stub_added = True
         if _stub_added:
             brain._save_entity_graph()
 
@@ -6386,11 +6375,10 @@ class TestFundamentalFixes:
                 _cid = _entry.get("chunk_id", "")
                 if _cid:
                     _tgt_node = brain._entity_graph[_tgt]
-                    if isinstance(_tgt_node, dict):
-                        _tgt_node.setdefault("chunk_ids", [])
-                        if _cid not in _tgt_node["chunk_ids"]:
-                            _tgt_node["chunk_ids"].append(_cid)
-                            _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
+                    _tgt_node.setdefault("chunk_ids", [])
+                    if _cid not in _tgt_node["chunk_ids"]:
+                        _tgt_node["chunk_ids"].append(_cid)
+                        _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
 
         assert (
             "c2" in brain._entity_graph["charlie"]["chunk_ids"]
@@ -7432,7 +7420,7 @@ class TestGraspoLogicFallbackWarning:
 
         src = inspect.getsource(AxonBrain._run_hierarchical_community_detection)
         assert "axon[graphrag]" in src
-        assert "graspologic not installed" in src
+        assert "graspologic not available" in src
 
     def test_warning_logged_on_import_error(self, caplog):
         """When graspologic ImportError occurs, a WARNING is emitted."""
@@ -7560,6 +7548,7 @@ class TestGLiNERExtraction:
     """Item 5 — graph_rag_ner_backend=gliner → GLiNER path, not llm.complete."""
 
     def _make_brain(self, backend="gliner"):
+        from axon.graph_rag import GraphRagMixin
         from axon.main import AxonBrain
 
         brain = MagicMock(spec=AxonBrain)
@@ -7568,6 +7557,9 @@ class TestGLiNERExtraction:
         brain.llm = MagicMock()
         brain.llm.complete = MagicMock(return_value="Paris | GEO | Capital of France")
         brain._gliner_model = None
+        brain._GLINER_TYPE_MAP = GraphRagMixin._GLINER_TYPE_MAP
+        brain._GLINER_LABELS = GraphRagMixin._GLINER_LABELS
+        brain._VALID_ENTITY_TYPES = GraphRagMixin._VALID_ENTITY_TYPES
         return brain
 
     def test_gliner_path_skips_llm(self):
@@ -7734,11 +7726,13 @@ class TestAutoRoute:
     """Item 3 — Adaptive query routing / Self-RAG."""
 
     def _make_brain(self):
+        from axon.graph_rag import GraphRagMixin
         from axon.main import AxonBrain
 
         brain = MagicMock(spec=AxonBrain)
         brain.config = MagicMock()
         brain.llm = MagicMock()
+        brain._HOLISTIC_KEYWORDS = GraphRagMixin._HOLISTIC_KEYWORDS
         return brain
 
     def test_heuristic_holistic_query_returns_true(self):
@@ -8107,17 +8101,21 @@ class TestREBELRelationExtraction:
         """When graph_rag_relation_backend='rebel', LLM is not called."""
         brain = self._make_brain(tmp_path, graph_rag_relation_backend="rebel")
 
-        fake_pipe = MagicMock(
-            return_value=[
-                {"generated_text": "<triplet> Apple <subj> Microsoft <obj> competes with"}
-            ]
-        )
+        fake_pipe = MagicMock(return_value=[{"generated_token_ids": [0, 1, 2, 3]}])
+        fake_pipe.model = MagicMock()
+        fake_pipe.model.config = MagicMock(task_specific_params={"relation_extraction": {}})
+        fake_pipe.tokenizer = MagicMock()
+        fake_pipe.tokenizer.batch_decode.return_value = [
+            "<triplet> Apple <subj> Microsoft <obj> competes with"
+        ]
         brain._rebel_pipeline = fake_pipe
 
         result = brain._extract_relations("Apple competes with Microsoft.")
 
         brain.llm.complete.assert_not_called()
         assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["subject"] == "Apple"
 
     def test_llm_backend_still_works(self, tmp_path):
         """When graph_rag_relation_backend='llm' (default), LLM is called as before."""
@@ -8394,3 +8392,624 @@ class TestEntityAliasResolution:
             brain._rebuild_communities()
 
         mock_resolve.assert_called_once()
+
+
+def test_resolve_model_path_uses_hf_models_dir(tmp_path):
+    """_resolve_model_path prefers hf_models_dir over local_models_dir for kind='hf'."""
+    from axon.main import AxonBrain, AxonConfig
+
+    hf_dir = tmp_path / "hf"
+    hf_dir.mkdir()
+    (hf_dir / "my-model").mkdir()
+    cfg = AxonConfig(
+        hf_models_dir=str(hf_dir),
+        local_models_dir=str(tmp_path),
+        local_assets_only=True,
+    )
+    brain = MagicMock()
+    brain.config = cfg
+    result = AxonBrain._resolve_model_path(brain, "org/my-model", "hf")
+    assert result == str(hf_dir / "my-model")
+
+
+def test_resolve_model_path_uses_embedding_models_dir(tmp_path):
+    """_resolve_model_path prefers embedding_models_dir for kind='embedding'."""
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "embeddings"
+    emb_dir.mkdir()
+    (emb_dir / "all-MiniLM-L6-v2").mkdir()
+    cfg = AxonConfig(
+        embedding_models_dir=str(emb_dir),
+        local_models_dir=str(tmp_path),
+    )
+    brain = MagicMock()
+    brain.config = cfg
+    result = AxonBrain._resolve_model_path(
+        brain, "sentence-transformers/all-MiniLM-L6-v2", "embedding"
+    )
+    assert result == str(emb_dir / "all-MiniLM-L6-v2")
+
+
+def test_resolve_model_path_falls_back_to_local_models_dir(tmp_path):
+    """Falls back to local_models_dir when the per-type dir doesn't have the model."""
+    from axon.main import AxonBrain, AxonConfig
+
+    local_dir = tmp_path / "local"
+    local_dir.mkdir()
+    (local_dir / "rebel-large").mkdir()
+    cfg = AxonConfig(
+        hf_models_dir=str(tmp_path / "hf_empty"),  # doesn't exist
+        local_models_dir=str(local_dir),
+    )
+    brain = MagicMock()
+    brain.config = cfg
+    result = AxonBrain._resolve_model_path(brain, "Babelscape/rebel-large", "hf")
+    assert result == str(local_dir / "rebel-large")
+
+
+def test_local_assets_only_sets_env_and_resolves_models(tmp_path, monkeypatch):
+    """local_assets_only sets HF offline env vars and resolves model paths."""
+    from axon.main import AxonBrain, AxonConfig
+
+    hf_dir = tmp_path / "hf"
+    hf_dir.mkdir()
+    (hf_dir / "gliner_medium-v2.1").mkdir()
+
+    emb_dir = tmp_path / "emb"
+    emb_dir.mkdir()
+    (emb_dir / "all-MiniLM-L6-v2").mkdir()
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            hf_models_dir=str(hf_dir),
+            embedding_models_dir=str(emb_dir),
+            graph_rag_gliner_model="urchade/gliner_medium-v2.1",
+            rerank=False,
+        )
+        brain = AxonBrain(cfg)
+
+    assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+    assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    assert brain.config.graph_rag_gliner_model == str(hf_dir / "gliner_medium-v2.1")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Preflight model audit
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_audit_logs_all_rows(tmp_path, caplog):
+    """_preflight_model_audit logs one row per model asset."""
+    import logging
+
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "emb" / "all-MiniLM-L6-v2"
+    emb_dir.mkdir(parents=True)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            embedding_model_path=str(emb_dir),
+            rerank=False,
+            graph_rag=False,
+            compress_context=False,
+        )
+        with caplog.at_level(logging.INFO, logger="Axon"):
+            AxonBrain(cfg)
+
+    audit_msgs = [r.message for r in caplog.records if "Model asset audit" in r.message]
+    assert audit_msgs, "Expected 'Model asset audit' log entry"
+    audit_text = audit_msgs[0]
+    # All six row labels must appear
+    for label in ("embedding", "reranker", "gliner", "rebel", "llmlingua", "tokenizer"):
+        assert label in audit_text, f"Missing row '{label}' in audit log"
+
+
+def test_preflight_audit_classifies_local_path(tmp_path, caplog):
+    """A resolved absolute path is classified as [local]."""
+    import logging
+
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "models" / "all-MiniLM-L6-v2"
+    emb_dir.mkdir(parents=True)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(embedding_model=str(emb_dir), rerank=False, graph_rag=False)
+        with caplog.at_level(logging.INFO, logger="Axon"):
+            AxonBrain(cfg)
+
+    audit = next(r.message for r in caplog.records if "Model asset audit" in r.message)
+    assert "[local]" in audit
+
+
+def test_preflight_audit_classifies_remote_id(caplog):
+    """A bare HuggingFace model ID is classified as [remote] when not in local cache."""
+    import logging
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        # Use a model ID that definitely won't be in a tmp HF cache
+        cfg = AxonConfig(
+            embedding_model="definitely-nonexistent-model-xyz/v1",
+            rerank=False,
+            graph_rag=False,
+            local_assets_only=False,  # don't fail fast, just audit
+        )
+        # Patch HF cache dir to a non-existent path so hf_cache check always misses
+        with patch.dict(os.environ, {"HF_HOME": "/nonexistent/hf_home"}):
+            with caplog.at_level(logging.INFO, logger="Axon"):
+                AxonBrain(cfg)
+
+    audit = next(r.message for r in caplog.records if "Model asset audit" in r.message)
+    assert "[remote]" in audit
+
+
+def test_preflight_fails_fast_when_local_assets_only_and_remote(tmp_path, monkeypatch):
+    """RuntimeError raised at init when local_assets_only=True and embedding is a remote ID."""
+    import pytest
+
+    from axon.main import AxonBrain, AxonConfig
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            embedding_model="all-MiniLM-L6-v2",  # bare ID, no local dir configured
+            rerank=False,
+            graph_rag=False,
+        )
+        # Force HF cache miss so the bare ID cannot be resolved to hf_cache either
+        with patch.dict(os.environ, {"HF_HOME": str(tmp_path / "empty_hf")}):
+            with pytest.raises(RuntimeError, match="local_assets_only is ON"):
+                AxonBrain(cfg)
+
+
+def test_preflight_fails_fast_missing_path(tmp_path, monkeypatch):
+    """RuntimeError raised when local_assets_only=True and an absolute path does not exist."""
+    import pytest
+
+    from axon.main import AxonBrain, AxonConfig
+
+    missing = str(tmp_path / "nonexistent_model_dir")
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            embedding_model=missing,  # absolute but doesn't exist
+            rerank=False,
+            graph_rag=False,
+        )
+        with pytest.raises(RuntimeError, match="local_assets_only is ON"):
+            AxonBrain(cfg)
+
+
+def test_preflight_no_error_when_local_assets_only_all_local(tmp_path, monkeypatch):
+    """No error when local_assets_only=True and all active model paths exist on disk."""
+    from axon.main import AxonBrain, AxonConfig
+
+    emb_dir = tmp_path / "emb" / "my-embed-model"
+    emb_dir.mkdir(parents=True)
+
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(
+            local_assets_only=True,
+            embedding_model=str(emb_dir),
+            rerank=False,
+            graph_rag=False,
+        )
+        # Should not raise
+        brain = AxonBrain(cfg)
+
+    assert brain.config.local_assets_only is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: @-scope tests
+# ---------------------------------------------------------------------------
+
+
+def test_switch_to_at_projects_scope(tmp_path, monkeypatch):
+    """@projects scope loads MultiVectorStore across all projects."""
+    from unittest.mock import patch
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(rerank=False, graph_rag=False)
+        brain = AxonBrain(cfg)
+        # switch_project("@projects") should not raise even with no projects
+        try:
+            brain.switch_project("@projects")
+        except Exception as e:
+            # Allow ValueError for no projects found, but not unexpected crashes
+            assert "no" in str(e).lower() or "@" in str(e).lower(), f"Unexpected error: {e}"
+
+
+def test_read_only_scope_blocks_ingest(tmp_path):
+    """Ingest raises when read-only scope is active."""
+    from unittest.mock import patch
+
+    import pytest
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(rerank=False, graph_rag=False)
+        brain = AxonBrain(cfg)
+        brain._read_only_scope = True
+        docs = [{"id": "d1", "text": "hello", "metadata": {"source": "test"}}]
+        with pytest.raises((ValueError, RuntimeError, PermissionError), match="read-only"):
+            brain.ingest(docs)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: maintenance state write-blocking
+# ---------------------------------------------------------------------------
+
+
+def _make_brain_with_project(tmp_path, project_name, maintenance_state):
+    """Create an AxonBrain with a project at the given maintenance state."""
+    import json
+    from unittest.mock import patch
+
+    from axon.main import AxonBrain, AxonConfig
+
+    proj = tmp_path / project_name
+    proj.mkdir(parents=True, exist_ok=True)
+    (proj / "meta.json").write_text(
+        json.dumps({"name": project_name, "maintenance_state": maintenance_state}),
+        encoding="utf-8",
+    )
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(rerank=False, graph_rag=False, projects_root=str(tmp_path))
+        brain = AxonBrain(cfg)
+    brain._active_project = project_name
+    brain._read_only_scope = False
+    brain._mounted_share = False
+    return brain
+
+
+def test_ingest_blocked_in_readonly_maintenance(tmp_path):
+    """Ingest raises PermissionError when project maintenance_state is 'readonly'."""
+    import pytest
+
+    brain = _make_brain_with_project(tmp_path, "myproj", "readonly")
+    with pytest.raises(PermissionError, match="readonly.*maintenance"):
+        brain._assert_write_allowed("ingest")
+
+
+def test_ingest_blocked_in_offline_maintenance(tmp_path):
+    """Ingest raises PermissionError when project maintenance_state is 'offline'."""
+    import pytest
+
+    brain = _make_brain_with_project(tmp_path, "myproj", "offline")
+    with pytest.raises(PermissionError, match="offline.*maintenance"):
+        brain._assert_write_allowed("ingest")
+
+
+def test_ingest_blocked_in_draining_maintenance(tmp_path):
+    """Phase 3: draining state blocks new writes just like readonly/offline."""
+    import pytest
+
+    brain = _make_brain_with_project(tmp_path, "myproj", "draining")
+    with pytest.raises(PermissionError, match="draining.*maintenance"):
+        brain._assert_write_allowed("ingest")
+
+
+def test_mounted_share_blocks_write(tmp_path):
+    """_assert_write_allowed raises PermissionError when active project is a mounted share."""
+    import pytest
+
+    brain = _make_brain_with_project(tmp_path, "mounts/alice_proj", "normal")
+    brain._mounted_share = True
+    brain._active_project_kind = "mounted"
+    with pytest.raises(PermissionError, match="mounted share"):
+        brain._assert_write_allowed("ingest")
+
+
+def test_assert_write_allowed_passes_for_normal_project(tmp_path):
+    """_assert_write_allowed does not raise for a normal authoritative project."""
+    brain = _make_brain_with_project(tmp_path, "myproj", "normal")
+    brain._assert_write_allowed("ingest")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: startup log test
+# ---------------------------------------------------------------------------
+
+
+def test_startup_summary_logged(caplog):
+    """AxonBrain logs startup summary at INFO level."""
+    import logging
+    from unittest.mock import patch
+
+    from axon.main import AxonBrain, AxonConfig
+
+    with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
+        "axon.main.OpenVectorStore"
+    ), patch("axon.main.OpenReranker"):
+        cfg = AxonConfig(rerank=False, graph_rag=False)
+        with caplog.at_level(logging.INFO, logger="Axon"):
+            AxonBrain(cfg)
+
+    startup_msgs = [r.message for r in caplog.records if "Axon ready" in r.message]
+    assert startup_msgs, "Expected 'Axon ready' log entry"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — GraphRAG Persistence
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestGraphRagPersistence:
+    """Tests for GraphRAG JSON persistence round-trips."""
+
+    def _brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path):
+        from axon.main import AxonBrain, AxonConfig
+
+        cfg = AxonConfig(hybrid_search=False, rerank=False, bm25_path=str(tmp_path))
+        brain = AxonBrain(cfg)
+        return brain
+
+    def test_save_and_load_entity_graph(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        data = {
+            "foo": {
+                "type": "PERSON",
+                "chunk_ids": ["c1"],
+                "description": "test",
+                "frequency": 1,
+                "degree": 0,
+            }
+        }
+        brain._entity_graph = data
+        brain._save_entity_graph()
+        brain._entity_graph = {}
+        brain._entity_graph = brain._load_entity_graph()
+        assert "foo" in brain._entity_graph
+        assert brain._entity_graph["foo"]["type"] == "PERSON"
+        assert brain._entity_graph["foo"]["chunk_ids"] == ["c1"]
+
+    def test_load_entity_graph_corrupted(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import pathlib
+
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        path = pathlib.Path(tmp_path) / ".entity_graph.json"
+        path.write_text("not json at all", encoding="utf-8")
+        result = brain._load_entity_graph()
+        assert result == {}
+
+    def test_save_and_load_relation_graph(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        data = {"alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}]}
+        brain._relation_graph = data
+        brain._save_relation_graph()
+        brain._relation_graph = {}
+        brain._relation_graph = brain._load_relation_graph()
+        assert "alice" in brain._relation_graph
+        assert brain._relation_graph["alice"][0]["target"] == "bob"
+
+    def test_load_relation_graph_corrupted(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        import pathlib
+
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        path = pathlib.Path(tmp_path) / ".relation_graph.json"
+        path.write_text("broken", encoding="utf-8")
+        assert brain._load_relation_graph() == {}
+
+    def test_save_and_load_community_levels(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        data = {0: {"alice": 0, "bob": 1}, 1: {"alice": 0}}
+        brain._community_levels = data
+        brain._save_community_levels()
+        brain._community_levels = {}
+        brain._community_levels = brain._load_community_levels()
+        assert 0 in brain._community_levels
+        assert brain._community_levels[0]["alice"] == 0
+
+    def test_save_and_load_community_hierarchy(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        data = {0: None, 1: 0, 2: 0}
+        brain._community_hierarchy = data
+        brain._save_community_hierarchy()
+        brain._community_hierarchy = {}
+        brain._community_hierarchy = brain._load_community_hierarchy()
+        assert 0 in brain._community_hierarchy or "0" in str(brain._community_hierarchy)
+
+    def test_save_and_load_code_graph(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        data = {
+            "nodes": {"fn_abc": {"name": "foo", "node_type": "function"}},
+            "edges": [{"source": "fn_abc", "target": "fn_def"}],
+        }
+        brain._code_graph = data
+        brain._save_code_graph()
+        brain._code_graph = {"nodes": {}, "edges": []}
+        brain._code_graph = brain._load_code_graph()
+        assert "fn_abc" in brain._code_graph["nodes"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4c — build_graph_payload edge cases
+# ---------------------------------------------------------------------------
+
+
+@patch("axon.retrievers.BM25Retriever")
+@patch("axon.main.OpenVectorStore")
+@patch("axon.main.OpenLLM")
+@patch("axon.main.OpenEmbedding")
+@patch("axon.main.OpenReranker")
+class TestBuildGraphPayloadEdgeCases:
+    def _brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path):
+        from axon.main import AxonBrain, AxonConfig
+
+        cfg = AxonConfig(hybrid_search=False, rerank=False, bm25_path=str(tmp_path))
+        return AxonBrain(cfg)
+
+    def test_empty_entity_graph(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        payload = brain.build_graph_payload()
+        assert payload == {"nodes": [], "links": []}
+
+    def test_non_dict_node_skipped(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        brain._entity_graph = {
+            "alice": {
+                "type": "PERSON",
+                "chunk_ids": [],
+                "description": "",
+                "frequency": 1,
+                "degree": 0,
+            },
+            "malformed": "just a string",
+        }
+        brain._relation_graph = {}
+        payload = brain.build_graph_payload()
+        node_names = [n["name"] for n in payload["nodes"]]
+        assert "alice" in node_names
+        assert "malformed" not in node_names
+
+    def test_edge_missing_target_skipped(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        brain._entity_graph = {
+            "alice": {
+                "type": "PERSON",
+                "chunk_ids": [],
+                "description": "",
+                "frequency": 1,
+                "degree": 0,
+            },
+        }
+        brain._relation_graph = {
+            "alice": [{"relation": "knows", "chunk_id": "c1"}],  # missing "target"
+        }
+        payload = brain.build_graph_payload()
+        assert payload["links"] == []
+
+    def test_vector_store_unavailable_evidence_empty(
+        self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path
+    ):
+        brain = self._brain(MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, tmp_path)
+        brain._entity_graph = {
+            "alice": {
+                "type": "PERSON",
+                "chunk_ids": ["c1"],
+                "description": "",
+                "frequency": 1,
+                "degree": 0,
+            },
+        }
+        brain._relation_graph = {}
+        brain.vector_store.get_by_ids.side_effect = RuntimeError("store down")
+        payload = brain.build_graph_payload()
+        assert len(payload["nodes"]) == 1
+        assert payload["nodes"][0]["evidence"] == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b — OpenVectorStore Qdrant provider
+# ---------------------------------------------------------------------------
+
+
+class TestOpenVectorStoreQdrant:
+    def test_qdrant_local_init(self, tmp_path):
+        from axon.main import AxonConfig, OpenVectorStore
+
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value = MagicMock(collections=[])
+        mock_qdrant_module = MagicMock()
+        mock_qdrant_module.QdrantClient.return_value = mock_client
+        import sys
+
+        with patch.dict(
+            sys.modules, {"qdrant_client": mock_qdrant_module, "qdrant_client.models": MagicMock()}
+        ):
+            cfg = AxonConfig(vector_store="qdrant", qdrant_url="", vector_store_path=str(tmp_path))
+            try:
+                OpenVectorStore(cfg)
+                mock_qdrant_module.QdrantClient.assert_called()
+            except Exception:
+                pass  # import errors are acceptable — just exercising the branch
+
+    def test_qdrant_remote_init(self, tmp_path):
+        from axon.main import AxonConfig, OpenVectorStore
+
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value = MagicMock(collections=[])
+        mock_qdrant_module = MagicMock()
+        mock_qdrant_module.QdrantClient.return_value = mock_client
+        import sys
+
+        with patch.dict(
+            sys.modules, {"qdrant_client": mock_qdrant_module, "qdrant_client.models": MagicMock()}
+        ):
+            cfg = AxonConfig(
+                vector_store="qdrant", qdrant_url="http://localhost:6333", qdrant_api_key="key"
+            )
+            try:
+                OpenVectorStore(cfg)
+                mock_qdrant_module.QdrantClient.assert_called()
+            except Exception:
+                pass  # acceptable

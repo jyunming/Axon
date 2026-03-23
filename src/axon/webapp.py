@@ -17,6 +17,7 @@ from axon.projects import (  # noqa: E402
     delete_project,
     ensure_project,
     get_active_project,
+    get_maintenance_state,
     list_projects,
 )
 
@@ -388,6 +389,10 @@ messages = current_session["messages"]
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
+if "brain" not in st.session_state:
+    st.error("Axon Brain failed to initialize. Please check your configuration and restart.")
+    st.stop()
+
 with st.sidebar:
     config = st.session_state.brain.config
 
@@ -431,6 +436,29 @@ with st.sidebar:
             st.rerun()
         except Exception as e:
             st.error(f"Failed to switch project: {e}")
+
+    # Maintenance state banner
+    if active_proj != "default":
+        try:
+            _maint_state = get_maintenance_state(active_proj)
+        except Exception:
+            _maint_state = "normal"
+        if _maint_state == "draining":
+            st.warning(
+                "⏳ **Draining** — this project is draining for maintenance. "
+                "New writes are blocked; in-flight writes are completing.",
+                icon=None,
+            )
+        elif _maint_state == "readonly":
+            st.warning(
+                "🔒 **Read-only** — writes are disabled for maintenance.",
+                icon=None,
+            )
+        elif _maint_state == "offline":
+            st.error(
+                "🚫 **Offline** — this project is under maintenance. " "All operations are blocked.",
+                icon=None,
+            )
 
     # New / Delete project buttons
     ph_col1, ph_col2 = st.columns(2)
@@ -911,7 +939,9 @@ with st.sidebar:
 
     _ws_col, _ws_lbl = st.columns([1, 4])
     with _ws_col:
-        config.truth_grounding = st.checkbox("", config.truth_grounding, key="ws_toggle")
+        config.truth_grounding = st.checkbox(
+            "Truth grounding", config.truth_grounding, key="ws_toggle", label_visibility="collapsed"
+        )
     with _ws_lbl:
         st.caption("🌐 Web search")
     if config.truth_grounding:

@@ -5,7 +5,7 @@ with open("README.md", encoding="utf-8") as fh:
 
 setup(
     name="axon",
-    version="1.0.0",
+    version="0.9.0",
     author="Open Source Contributor",
     description="General-purpose open-source RAG and embedding interface",
     long_description=long_description,

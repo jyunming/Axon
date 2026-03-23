@@ -267,25 +267,61 @@ pip install -e ".[graphrag]"
 # installs: networkx, leidenalg, igraph
 ```
 
-The default `config.yaml` ships with `graph_rag_community_backend: leidenalg`, which uses the documented Python 3.13 path directly and bypasses `graspologic`.
+The default is now `graph_rag_community_backend: louvain` (safe on all platforms). To upgrade to Leiden resolution-sweeping:
 
-The community-detection backend can be configured explicitly:
 ```yaml
 rag:
-  graph_rag_community_backend: leidenalg  # recommended for Python 3.13 (default)
-  # graph_rag_community_backend: auto     # graspologic → leidenalg → networkx Louvain
-  # graph_rag_community_backend: louvain  # networkx only, no extra deps required
+  graph_rag_community_backend: louvain    # default — networkx only, no extra deps
+  # graph_rag_community_backend: leidenalg  # recommended when igraph/leidenalg are installed
+  # graph_rag_community_backend: auto       # graspologic → leidenalg → louvain fallback chain
+  #                                          # (unsafe on Python 3.13 — graspologic import hangs)
 ```
 
 If you have `graspologic` installed from a Python ≤ 3.12 / NumPy 1.x environment and want Axon to use it, set `graph_rag_community_backend: auto`.
 
 ---
 
-## `pip install graspologic` fails on Python 3.13
+## `pip install graspologic` fails on Python 3.13 / NumPy 2.x
 
-**Cause:** Same as above — `gensim` 3.8.x does not support Python 3.13 or NumPy 2.x.
+**Cause:** `graspologic` 0.3.x depends on `gensim` 3.8.x, which fails to build on Python 3.13 or with NumPy 2.x due to an `AttributeError` involving `__NUMPY_SETUP__`. Additionally, `graspologic` requires `networkx < 3.0`, which conflicts with other modern dependencies in the Axon stack.
 
-**Fix:** Skip `graspologic`. Install `leidenalg` instead via `pip install axon[graphrag]`. The Leiden algorithm quality is equivalent; only the parent-child hierarchy output differs slightly (synthetic instead of true hierarchical).
+**Fix (Manual Patching):**
+If you must use `graspologic` on Python 3.13:
+1. Install dependencies manually: `pip install graspologic-native umap-learn gensim>=4.0`.
+2. Install `graspologic` without dependencies: `pip install graspologic==0.3.1 --no-deps`.
+3. Force modern NetworkX: `pip install "networkx>=3.0"`.
+4. Patch the `graspologic` source to support NetworkX 3.x:
+   ```python
+   # Run this snippet to replace deprecated 'OrderedGraph' references
+   import pathlib
+   import site
+   sp = pathlib.Path(site.getsitepackages()[0]) / "graspologic"
+   for p in sp.rglob("*.py"):
+       content = p.read_text(encoding="utf-8")
+       new = content.replace("nx.OrderedGraph", "nx.Graph").replace("nx.OrderedDiGraph", "nx.DiGraph")
+       if new != content:
+           p.write_text(new, encoding="utf-8")
+   ```
+This resolves the `AttributeError: module 'networkx' has no attribute 'OrderedGraph'` error.
+
+---
+
+## `pre-commit install` fails with `core.hooksPath` error
+
+**Error:**
+```
+[ERROR] Cowardly refusing to install hooks with `core.hooksPath` set.
+hint: `git config --unset-all core.hooksPath`
+```
+
+**Cause:** Your Git configuration has an explicit `core.hooksPath` set (common in some managed environments or CI setups), which prevents `pre-commit` from installing its own hooks into `.git/hooks`.
+
+**Fix:**
+Unset the global or local hooks path, install, and then re-set if necessary:
+```bash
+git config --unset core.hooksPath
+pre-commit install
+```
 
 ---
 
@@ -293,7 +329,7 @@ If you have `graspologic` installed from a Python ≤ 3.12 / NumPy 1.x environme
 
 **Symptom:** Ingest of a 10–50 document corpus takes several minutes instead of seconds.
 
-**Cause:** RAPTOR and GraphRAG are on by default. RAPTOR makes ~1 LLM call per 5 chunks
+**Cause:** RAPTOR and GraphRAG are disabled in the shipped `config.yaml` but enabled in the code dataclass defaults — if you are hitting this, you have explicitly enabled them. RAPTOR makes ~1 LLM call per 5 chunks
 (summary generation). GraphRAG makes ~1–3 LLM calls per chunk (entity extraction, optionally
 relation extraction). For 100 chunks that is 100–300 LLM calls before any query can be answered.
 

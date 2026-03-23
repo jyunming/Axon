@@ -6,9 +6,20 @@ Covers _KNOWN_DIMS, dataset type detection, doc versions, hybrid_mode=rrf,
 and health endpoint behaviour.
 """
 
+import threading
+import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def _reset_graphrag_model_caches():
+    from axon.graph_rag import GraphRagMixin
+
+    GraphRagMixin._shared_gliner_models = {}
+    GraphRagMixin._shared_rebel_pipelines = {}
+
 
 # ---------------------------------------------------------------------------
 # _KNOWN_DIMS
@@ -861,7 +872,7 @@ class TestCodeRetrievalDiagnostics:
         from axon.main import CodeRetrievalDiagnostics
 
         d = CodeRetrievalDiagnostics()
-        assert d.diagnostics_version == "1.0"
+        assert d.diagnostics_version == "1.3"
         assert d.code_mode_triggered is False
         assert d.tokens_extracted == []
         assert d.channels_activated == []
@@ -874,7 +885,7 @@ class TestCodeRetrievalDiagnostics:
 
         d = CodeRetrievalDiagnostics(code_mode_triggered=True, result_count=5)
         out = d.to_dict()
-        assert out["diagnostics_version"] == "1.0"
+        assert out["diagnostics_version"] == "1.3"
         assert out["code_mode_triggered"] is True
         assert out["result_count"] == 5
         assert "channels_activated" in out
@@ -886,7 +897,7 @@ class TestCodeRetrievalDiagnostics:
 
         d = CodeRetrievalDiagnostics()
         parsed = json.loads(d.to_json())
-        assert parsed["diagnostics_version"] == "1.0"
+        assert parsed["diagnostics_version"] == "1.3"
 
     def test_independent_mutable_defaults(self):
         from axon.main import CodeRetrievalDiagnostics
@@ -1039,6 +1050,7 @@ class TestGLiNERConfigModel:
 
         from axon.main import AxonBrain
 
+        _reset_graphrag_model_caches()
         brain = MagicMock(spec=AxonBrain)
         brain.config = MagicMock()
         brain.config.graph_rag_gliner_model = "local/path"
@@ -1048,7 +1060,7 @@ class TestGLiNERConfigModel:
             mock_fp.return_value = MagicMock()
             AxonBrain._ensure_gliner(brain)
 
-        mock_fp.assert_called_once_with("local/path")
+        mock_fp.assert_called_once_with("local/path", local_files_only=False)
 
 
 class TestREBELZeroEdgeWarning:
@@ -1082,3 +1094,162 @@ class TestREBELZeroEdgeWarning:
         mock_logger.warning.assert_called_once()
         call_args = mock_logger.warning.call_args[0]
         assert "0 relation edges" in call_args[0]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2-4: local model routing — _ensure_gliner / _ensure_llmlingua
+# ---------------------------------------------------------------------------
+
+
+def test_gliner_local_files_only_when_local_path(tmp_path):
+    """_ensure_gliner passes local_files_only=True when model path is absolute."""
+    from axon.main import AxonBrain
+
+    _reset_graphrag_model_caches()
+    model_dir = tmp_path / "gliner_model"
+    model_dir.mkdir()
+    cfg = MagicMock()
+    cfg.graph_rag_gliner_model = str(model_dir)
+    brain = MagicMock()
+    brain.config = cfg
+    brain._gliner_model = None
+
+    with patch("gliner.GLiNER.from_pretrained") as mock_gliner:
+        mock_gliner.return_value = MagicMock()
+        AxonBrain._ensure_gliner(brain)
+        mock_gliner.assert_called_once_with(str(model_dir), local_files_only=True)
+
+
+def test_rebel_local_path_does_not_forward_local_files_only(tmp_path):
+    """_ensure_rebel should load local artifacts explicitly and not leak local_files_only into generate()."""
+    from axon.main import AxonBrain
+
+    _reset_graphrag_model_caches()
+    model_dir = tmp_path / "rebel_model"
+    model_dir.mkdir()
+    cfg = MagicMock()
+    cfg.graph_rag_rebel_model = str(model_dir)
+    brain = AxonBrain.__new__(AxonBrain)
+    brain.config = cfg
+    brain._rebel_pipeline = None
+
+    model_obj = MagicMock()
+    tokenizer_obj = MagicMock()
+    pipeline_obj = MagicMock()
+
+    with patch(
+        "transformers.AutoModelForSeq2SeqLM.from_pretrained", return_value=model_obj
+    ) as mock_model, patch(
+        "transformers.AutoTokenizer.from_pretrained", return_value=tokenizer_obj
+    ) as mock_tok, patch(
+        "transformers.pipelines.pipeline", return_value=pipeline_obj
+    ) as mock_pipe:
+        result = AxonBrain._ensure_rebel(brain)
+
+    assert result is pipeline_obj
+    mock_model.assert_called_once_with(str(model_dir), local_files_only=True)
+    mock_tok.assert_called_once_with(str(model_dir), local_files_only=True)
+    mock_pipe.assert_called_once()
+    assert mock_pipe.call_args.kwargs["model"] is model_obj
+    assert mock_pipe.call_args.kwargs["tokenizer"] is tokenizer_obj
+    assert "local_files_only" not in mock_pipe.call_args.kwargs
+
+
+def test_extract_relations_rebel_decodes_generated_token_ids_like_tensor(tmp_path):
+    """_extract_relations_rebel should handle pipeline outputs that expose generated_token_ids as tensors."""
+    from axon.main import AxonBrain, AxonConfig
+
+    class _FakeTensorIds:
+        def tolist(self):
+            return [0, 1, 2, 3]
+
+    cfg = AxonConfig(
+        bm25_path=str(tmp_path / "bm25"),
+        vector_store_path=str(tmp_path / "vec"),
+        graph_rag=True,
+        graph_rag_relation_backend="rebel",
+    )
+    brain = AxonBrain.__new__(AxonBrain)
+    brain.config = cfg
+    brain._rebel_pipeline = MagicMock(return_value=[{"generated_token_ids": _FakeTensorIds()}])
+    brain._rebel_pipeline.model = MagicMock()
+    brain._rebel_pipeline.model.config = SimpleNamespace(
+        task_specific_params={"relation_extraction": {}}
+    )
+    brain._rebel_pipeline.tokenizer = MagicMock()
+    brain._rebel_pipeline.tokenizer.batch_decode.return_value = [
+        "<triplet> Apple <subj> Microsoft <obj> competes with"
+    ]
+
+    rels = AxonBrain._extract_relations_rebel(brain, "Apple competes with Microsoft.")
+
+    assert len(rels) == 1
+    assert rels[0]["subject"] == "Apple"
+    assert rels[0]["object"] == "Microsoft"
+    assert rels[0]["relation"] == "competes with"
+
+
+def test_gliner_shared_cache_loads_once_across_threads():
+    """Concurrent _ensure_gliner calls should load a shared model only once."""
+    from axon.main import AxonBrain
+
+    _reset_graphrag_model_caches()
+
+    brains = []
+    for _ in range(8):
+        brain = AxonBrain.__new__(AxonBrain)
+        brain.config = SimpleNamespace(graph_rag_gliner_model="shared/model")
+        brain._gliner_model = None
+        brains.append(brain)
+
+    load_calls = 0
+    load_calls_lock = threading.Lock()
+    sentinel = object()
+    results = [None] * len(brains)
+
+    def _fake_load(*_args, **_kwargs):
+        nonlocal load_calls
+        time.sleep(0.05)
+        with load_calls_lock:
+            load_calls += 1
+        return sentinel
+
+    def _worker(idx, brain):
+        results[idx] = AxonBrain._ensure_gliner(brain)
+
+    with patch("gliner.GLiNER.from_pretrained", side_effect=_fake_load) as mock_gliner:
+        threads = [
+            threading.Thread(target=_worker, args=(idx, brain), daemon=True)
+            for idx, brain in enumerate(brains)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+    assert load_calls == 1
+    assert mock_gliner.call_count == 1
+    assert all(result is sentinel for result in results)
+
+
+def test_llmlingua_uses_config_model(tmp_path):
+    """_ensure_llmlingua reads graph_rag_llmlingua_model from config."""
+    from axon.main import AxonBrain
+
+    model_dir = tmp_path / "llmlingua"
+    model_dir.mkdir()
+    cfg = MagicMock()
+    cfg.graph_rag_llmlingua_model = str(model_dir)
+    brain = MagicMock()
+    brain.config = cfg
+    brain._llmlingua = None
+
+    with patch("llmlingua.PromptCompressor") as mock_compressor:
+        mock_compressor.return_value = MagicMock()
+        AxonBrain._ensure_llmlingua(brain)
+        mock_compressor.assert_called_once()
+        call_kwargs = mock_compressor.call_args
+        assert call_kwargs.kwargs.get("model_name") == str(model_dir) or call_kwargs.args[0] == str(
+            model_dir
+        )
+        assert call_kwargs.kwargs.get("local_files_only") is True

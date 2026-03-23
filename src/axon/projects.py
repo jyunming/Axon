@@ -22,17 +22,24 @@ AxonStore multi-user shared storage
 ------------------------------------
 When AxonStore mode is active (axon_store_base is set), each OS user gets a
 namespace under {axon_store_base}/AxonStore/{username}/ containing:
-    ShareMount/  — symlinks to other users' shared projects
-    .shares/     — share key manifests
-    _default/    — the user's default project
+    store_meta.json  — store-level identity and version metadata
+    default/         — the user's default project
+    projects/        — authoritative local projects
+    mounts/          — read-only mount descriptors (canonical)
+    .shares/         — share key manifests
 """
 
+import hashlib
 import json
+import logging
 import os
 import re
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_projects_root() -> Path:
@@ -59,7 +66,77 @@ def set_projects_root(path: str | Path) -> None:
 
 _SEGMENT_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 _MAX_DEPTH: int = 5
+# _default is kept reserved so no one accidentally creates a project with that name.
+# The canonical default project is "default" (no underscore).
 _RESERVED_NAMES: set = {"sharemount", "_default", ".shares"}
+
+
+# ---------------------------------------------------------------------------
+# Namespace ID helpers  (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def build_namespace_id(prefix: str = "ns") -> str:
+    """Generate a new random namespace ID.
+
+    Format: ``{prefix}_{uuid4_hex}``  — e.g. ``proj_3f2a...``
+
+    Args:
+        prefix: Short label for the kind of namespace (``"proj"``, ``"store"``).
+
+    Returns:
+        A 40-character string that is unique with overwhelming probability.
+    """
+    return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def build_source_id(
+    project_namespace_id: str, source_kind: str, canonical_source_locator: str
+) -> str:
+    """Derive a stable source ID from the project namespace + source kind + canonical locator.
+
+    Formula: sha256(project_namespace_id | source_kind | canonical_source_locator)[:24]
+    prefixed with "src_".
+
+    Args:
+        project_namespace_id: From meta.json, e.g. "proj_3f2a..."
+        source_kind: "file", "url", "code", "text", etc.
+        canonical_source_locator: Normalized relative path, canonical URL, or logical key.
+            - For files: use the absolute path (normalized with os.path.normpath)
+            - For URLs: use the URL as-is
+            - For text snippets: use a stable logical key (e.g. content hash)
+
+    Returns:
+        A 28-character string: "src_" + first 24 hex chars of sha256.
+    """
+    raw = f"{project_namespace_id}|{source_kind}|{canonical_source_locator}"
+    return "src_" + hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+def build_chunk_id(
+    project_namespace_id: str,
+    source_id: str,
+    subdoc_locator: str,
+    chunk_index: int,
+    chunk_kind: str = "leaf",
+) -> str:
+    """Derive a stable globally-unique chunk ID.
+
+    Formula: sha256(project_namespace_id | source_id | subdoc_locator | chunk_index | chunk_kind)[:24]
+    prefixed with "chk_".
+
+    Args:
+        project_namespace_id: Project namespace ID from meta.json.
+        source_id: Source ID from build_source_id().
+        subdoc_locator: Sub-document position, e.g. "page:3", "sheet:Orders", "root", "row:44".
+        chunk_index: Zero-based index of this chunk within the subdoc.
+        chunk_kind: "leaf", "parent", "raptor_l1", "raptor_l2", "code".
+
+    Returns:
+        A 28-character string: "chk_" + first 24 hex chars of sha256.
+    """
+    raw = f"{project_namespace_id}|{source_id}|{subdoc_locator}|{chunk_index}|{chunk_kind}"
+    return "chk_" + hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
 class ProjectHasChildrenError(ValueError):
@@ -159,7 +236,11 @@ def ensure_project(name: str, description: str = "") -> Path:
 
 
 def _ensure_single_project(name: str, description: str) -> Path:
-    """Create directories and meta.json for exactly one project node."""
+    """Create directories and meta.json for exactly one project node.
+
+    If ``meta.json`` already exists but is missing ``project_namespace_id``,
+    a new one is assigned and the file is updated in-place (migration path).
+    """
     root = project_dir(name)
     (root / "chroma_data").mkdir(parents=True, exist_ok=True)
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
@@ -172,11 +253,51 @@ def _ensure_single_project(name: str, description: str) -> Path:
                     "name": name,
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                    "project_namespace_id": build_namespace_id("proj"),
                 },
                 indent=2,
             )
         )
+    else:
+        # Backfill missing project_namespace_id for existing projects (Phase 1 migration)
+        meta = json.loads(meta_file.read_text())
+        if "project_namespace_id" not in meta:
+            meta["project_namespace_id"] = build_namespace_id("proj")
+            meta_file.write_text(json.dumps(meta, indent=2))
     return root
+
+
+def get_project_namespace_id(name: str) -> str | None:
+    """Return the ``project_namespace_id`` from a project's ``meta.json``.
+
+    Returns ``None`` if the project does not exist or has no namespace ID yet.
+    Call :func:`ensure_project` first to guarantee the field is present.
+    """
+    meta_file = project_dir(name) / "meta.json"
+    if not meta_file.exists():
+        return None
+    try:
+        meta = json.loads(meta_file.read_text())
+        val = meta.get("project_namespace_id")
+        return str(val) if val is not None else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def get_store_namespace_id(user_dir: Path) -> str | None:
+    """Return the ``store_namespace_id`` from ``store_meta.json``.
+
+    Returns ``None`` if the file does not exist or is unreadable.
+    """
+    store_meta = user_dir / "store_meta.json"
+    if not store_meta.exists():
+        return None
+    try:
+        meta = json.loads(store_meta.read_text())
+        val = meta.get("store_namespace_id")
+        return str(val) if val is not None else None
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def list_descendants(name: str, visited: set[str] | None = None) -> list[str]:
@@ -247,12 +368,14 @@ def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
         except Exception:
             meta = {}
         full_name = f"{parent_name}/{entry.name}"
+        state = meta.get("maintenance_state", "normal")
         result.append(
             {
                 "name": full_name,
                 "description": meta.get("description", ""),
                 "created_at": meta.get("created_at", ""),
                 "path": str(entry),
+                "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
                 "children": _list_sub_projects(entry, full_name),
             }
         )
@@ -260,10 +383,66 @@ def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
     return result
 
 
+_VALID_MAINTENANCE_STATES: frozenset[str] = frozenset({"normal", "draining", "readonly", "offline"})
+
+
+def get_maintenance_state(name: str) -> str:
+    """Return the maintenance state of a project (defaults to 'normal' if unset).
+
+    Args:
+        name: Project name (slash-separated for sub-projects).
+
+    Returns:
+        One of: 'normal', 'draining', 'readonly', 'offline'.
+    """
+    meta_path = project_dir(name) / "meta.json"
+    if not meta_path.exists():
+        return "normal"
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        state = data.get("maintenance_state", "normal")
+        return state if state in _VALID_MAINTENANCE_STATES else "normal"
+    except Exception:
+        return "normal"
+
+
+def set_maintenance_state(name: str, state: str) -> None:
+    """Persist a maintenance state to a project's meta.json.
+
+    Args:
+        name: Project name (slash-separated for sub-projects).
+        state: One of 'normal', 'draining', 'readonly', 'offline'.
+
+    Raises:
+        ValueError: If state is not valid or project does not exist.
+    """
+    if state not in _VALID_MAINTENANCE_STATES:
+        raise ValueError(
+            f"Invalid maintenance state '{state}'. "
+            f"Valid states: {sorted(_VALID_MAINTENANCE_STATES)}"
+        )
+    meta_path = project_dir(name) / "meta.json"
+    if not meta_path.exists():
+        raise ValueError(f"Project '{name}' does not exist.")
+    try:
+        data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Could not read meta.json for '{name}': {exc}") from exc
+    old_state = data.get("maintenance_state", "normal")
+    data["maintenance_state"] = state
+    meta_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    logger.info(
+        "audit: project '%s' maintenance_state %s → %s",
+        name,
+        old_state,
+        state,
+    )
+
+
 def list_projects() -> list[dict]:
     """Return all top-level projects sorted by creation time (newest first).
 
-    Each dict contains: name, description, created_at, path, children.
+    Each dict contains: name, description, created_at, path, maintenance_state, children.
     The 'children' list recursively contains sub-project dicts in the same format.
     """
     if not PROJECTS_ROOT.exists():
@@ -279,12 +458,14 @@ def list_projects() -> list[dict]:
             meta = json.loads(meta_file.read_text())
         except Exception:
             meta = {}
+        state = meta.get("maintenance_state", "normal")
         result.append(
             {
                 "name": entry.name,
                 "description": meta.get("description", ""),
                 "created_at": meta.get("created_at", ""),
                 "path": str(entry),
+                "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
                 "children": _list_sub_projects(entry, entry.name),
             }
         )
@@ -356,17 +537,41 @@ def delete_project(name: str) -> None:
 def ensure_user_namespace(user_dir: Path) -> None:
     """Create the standard subdirectories under a user's AxonStore namespace.
 
-    Creates: ShareMount/, .shares/, and _default project.
+    Creates: default/, projects/, mounts/, .shares/, and store_meta.json.
     Safe to call multiple times (idempotent).
     """
-    (user_dir / "ShareMount").mkdir(parents=True, exist_ok=True)
-    (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
-    # _default project
-    _ensure_single_project_at(user_dir / "_default", "_default", "Default project")
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Standard structure ────────────────────────────────────────────────────
+    (user_dir / "projects").mkdir(exist_ok=True)
+    (user_dir / "mounts").mkdir(exist_ok=True)
+    (user_dir / ".shares").mkdir(exist_ok=True)
+
+    # Default project
+    _ensure_single_project_at(user_dir / "default", "default", "Default project")
+
+    # ── Phase 1: store_meta.json ─────────────────────────────────────────────
+    store_meta = user_dir / "store_meta.json"
+    if not store_meta.exists():
+        store_meta.write_text(
+            json.dumps(
+                {
+                    "store_version": 2,
+                    "store_scope": "user_scoped",
+                    "store_namespace_id": build_namespace_id("store"),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            )
+        )
 
 
 def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
-    """Create directories and meta.json for a project at an explicit path."""
+    """Create directories and meta.json for a project at an explicit path.
+
+    If ``meta.json`` already exists but is missing ``project_namespace_id``,
+    a new one is assigned in-place (migration path).
+    """
     (root / "chroma_data").mkdir(parents=True, exist_ok=True)
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
     (root / "sessions").mkdir(parents=True, exist_ok=True)
@@ -378,32 +583,25 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
                     "name": name,
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                    "project_namespace_id": build_namespace_id("proj"),
                 },
                 indent=2,
             )
         )
+    else:
+        meta = json.loads(meta_file.read_text())
+        if "project_namespace_id" not in meta:
+            meta["project_namespace_id"] = build_namespace_id("proj")
+            meta_file.write_text(json.dumps(meta, indent=2))
     return root
 
 
-def _make_share_link(target: Path, link: Path) -> None:
-    """Create a symlink from link -> target (Linux only).
-
-    Raises:
-        OSError: If symlink creation fails.
-        NotImplementedError: If called on non-Linux platform.
-    """
-    import sys
-
-    if sys.platform != "linux":
-        raise NotImplementedError("AxonStore sharing is currently only supported on Linux.")
-    link.parent.mkdir(parents=True, exist_ok=True)
-    if link.exists() or link.is_symlink():
-        link.unlink()
-    os.symlink(target.resolve(), link)
-
-
 def _remove_share_link(link: Path) -> bool:
-    """Remove a symlink from ShareMount/. Returns True if removed, False if not found."""
+    """Remove a legacy ShareMount/ symlink if present.
+
+    Kept for the transitional cleanup pass in ``validate_received_shares()``.
+    Returns True if a symlink was removed, False otherwise.
+    """
     if link.is_symlink():
         link.unlink()
         return True
@@ -411,29 +609,24 @@ def _remove_share_link(link: Path) -> bool:
 
 
 def list_share_mounts(user_dir: Path) -> list[dict]:
-    """List all symlinks under user_dir/ShareMount/.
+    """List all active received share mounts for *user_dir*.
+
+    Reads from ``mounts/`` descriptor files (canonical source of truth).
 
     Returns list of dicts with: name, target, is_broken, owner, project.
     """
-    mount_dir = user_dir / "ShareMount"
-    if not mount_dir.exists():
-        return []
+    from axon.mounts import list_mount_descriptors, validate_mount_descriptor
+
     results = []
-    for entry in sorted(mount_dir.iterdir()):
-        if not entry.is_symlink():
-            continue
-        raw_target = os.readlink(str(entry))
-        is_broken = not Path(raw_target).exists()
-        parts = entry.name.split("_", 1)
-        owner = parts[0] if len(parts) == 2 else ""
-        project = parts[1] if len(parts) == 2 else entry.name
+    for desc in list_mount_descriptors(user_dir):
+        valid, _ = validate_mount_descriptor(desc)
         results.append(
             {
-                "name": entry.name,
-                "target": raw_target,
-                "is_broken": is_broken,
-                "owner": owner,
-                "project": project,
+                "name": desc["mount_name"],
+                "target": desc.get("target_project_dir", ""),
+                "is_broken": not valid,
+                "owner": desc.get("owner", ""),
+                "project": desc.get("project", ""),
             }
         )
     return results

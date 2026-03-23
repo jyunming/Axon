@@ -1,0 +1,125 @@
+# Axon Configuration Template — Best-Known-Method (BKM) Setup
+#
+# Copy this file to ~/.config/axon/config.yaml and edit to match your environment.
+# Axon will also create a minimal starter config automatically on first run.
+#
+# Full option reference: axon --help
+# Documentation: SETUP.md, ADVANCED_RAG.md
+
+# ---------------------------------------------------------------------------
+# Embedding
+# ---------------------------------------------------------------------------
+embedding:
+  provider: sentence_transformers     # options: sentence_transformers, openai, ollama
+  model: all-MiniLM-L6-v2             # fast, lightweight; upgrade to BAAI/bge-large for better recall
+  # provider: openai
+  # model: text-embedding-3-small
+  # api_key: sk-...                   # or set OPENAI_API_KEY env var
+
+# ---------------------------------------------------------------------------
+# LLM
+# ---------------------------------------------------------------------------
+llm:
+  provider: ollama                    # options: ollama, openai, gemini, anthropic, vllm, copilot
+  model: llama3.1                     # any model pulled via `ollama pull <model>`
+  temperature: 0.3                    # lower = more factual; 0.7 for conversational tone
+  max_tokens: 2048
+  # provider: openai
+  # model: gpt-4o-mini
+  # api_key: sk-...                   # or set OPENAI_API_KEY env var
+
+# ---------------------------------------------------------------------------
+# Vector store
+# ---------------------------------------------------------------------------
+vector_store:
+  provider: chroma                    # options: chroma, qdrant, lancedb
+  path: ~/.axon/projects/default/chroma_data
+  # For remote Qdrant:
+  # provider: qdrant
+  # url: http://localhost:6333
+  # api_key: your-qdrant-api-key
+
+# ---------------------------------------------------------------------------
+# BM25 (keyword / sparse retrieval)
+# ---------------------------------------------------------------------------
+bm25:
+  path: ~/.axon/projects/default/bm25_index
+
+# ---------------------------------------------------------------------------
+# RAG behaviour
+# ---------------------------------------------------------------------------
+rag:
+  top_k: 10                           # number of chunks returned before reranking
+  similarity_threshold: 0.3           # drop chunks below this cosine score
+  hybrid_search: true                 # combine BM25 + vector scores (recommended)
+  discussion_fallback: true           # fall back to LLM general knowledge on zero hits
+
+# ---------------------------------------------------------------------------
+# Chunking
+# ---------------------------------------------------------------------------
+chunk:
+  size: 1000                          # characters per chunk
+  overlap: 200                        # character overlap between adjacent chunks
+  # dataset_type: auto                # auto | code | prose | mixed
+
+# ---------------------------------------------------------------------------
+# Reranking (cross-encoder)
+# ---------------------------------------------------------------------------
+rerank:
+  enabled: false                      # enable for higher precision; adds ~100 ms/query
+  provider: cross-encoder             # options: cross-encoder, cohere
+  # model: cross-encoder/ms-marco-MiniLM-L-6-v2
+
+# ---------------------------------------------------------------------------
+# Query transformations
+# ---------------------------------------------------------------------------
+query_transformations:
+  multi_query: false                  # generate N query variants for richer recall
+  hyde: false                         # HyDE: generate a hypothetical answer for embedding
+  step_back: false                    # abstraction step-back prompting
+  discussion_fallback: true           # already declared above under rag; kept here for clarity
+
+# ---------------------------------------------------------------------------
+# Advanced RAG features — OFF by default for lighter first-run ingest
+#
+# RAPTOR and GraphRAG both require LLM calls during ingest and significantly
+# increase indexing time.  Enable them once your base corpus is loaded and
+# you have confirmed the simpler retrieval meets your latency budget.
+# ---------------------------------------------------------------------------
+advanced:
+  raptor: false                       # hierarchical summarisation (LLM per chunk group)
+  graph_rag: false                    # entity graph construction (LLM per document)
+  graph_rag_community: false          # Louvain community detection (runs after graph build)
+
+# ---------------------------------------------------------------------------
+# Sentence-window retrieval
+# ---------------------------------------------------------------------------
+# sentence_window: false              # expand each hit to ±N surrounding sentences
+# sentence_window_size: 3
+
+# ---------------------------------------------------------------------------
+# CRAG (Corrective RAG)
+# ---------------------------------------------------------------------------
+# crag_lite: false                    # low-confidence fallback to web search
+
+# ---------------------------------------------------------------------------
+# Web search (Brave)
+# ---------------------------------------------------------------------------
+web_search:
+  enabled: false
+  # brave_api_key: your-brave-key     # or set BRAVE_API_KEY env var
+
+# ---------------------------------------------------------------------------
+# Offline / air-gapped mode
+# ---------------------------------------------------------------------------
+offline:
+  enabled: false
+  local_assets_only: false
+  local_models_dir: ""
+
+# ---------------------------------------------------------------------------
+# AxonStore (multi-user sharing)
+# ---------------------------------------------------------------------------
+# store:
+#   base: /data/axon-store            # shared filesystem mount point
+#                                     # set AXON_STORE_BASE env var instead if preferred

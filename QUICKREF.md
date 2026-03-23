@@ -93,11 +93,13 @@ axon --pull gemma:2b
 axon --list-models
 
 # CLI — advanced RAG flags (can be combined)
-axon --cite "Summarise my documents"        # inline source citations
+axon --cite "Summarise my documents"        # inline [Document N] citations
+axon --no-cite "Your question"              # suppress citations for cleaner output
 axon --decompose "Complex multi-part query" # split into sub-questions
 axon --compress "Your question"             # compress retrieved context
 axon --raptor --ingest ./docs/              # hierarchical indexing on ingest
 axon --graph-rag "Your question"            # entity-graph retrieval expansion
+axon --code-graph --ingest ./src/           # build structural code-symbol graph
 
 # CLI — project management
 axon --project myproject "Your question"    # use a named project
@@ -128,14 +130,26 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/pull <name>` | Pull an Ollama model with progress indicator |
 | `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
-| `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match) |
-| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `cite`, `raptor`, `graph-rag` |
+| `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match; answers in fallback mode are prefixed with a note that no grounded documents were found) |
+| `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `sentence-window`, `crag-lite`, `cite`, `raptor`, `graph-rag` |
 | `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
 | `/keys [set provider]` | Show API key status for all providers; `/keys set <provider>` saves a key interactively |
 | `/compact` | Summarize entire chat history via LLM to free context window space |
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |
 | `/sessions` | List recent saved sessions (up to 20 most recent) |
 | `/resume <id>` | Load a previous session by its timestamp ID |
+| `/llm [temp=N]` | Show or set LLM temperature |
+| `/refresh` | Re-ingest all tracked files whose content has changed |
+| `/stale [N]` | List docs not refreshed in N days (default 7) |
+| `/share list` | List outgoing and incoming shares |
+| `/share generate <project> <grantee>` | Generate a read-only share key |
+| `/share redeem <key>` | Mount a shared project (read-only) |
+| `/share revoke <key_id>` | Revoke an outgoing share |
+| `/store whoami` | Show AxonStore identity and status |
+| `/store init <path>` | Initialise AxonStore at a base path |
+| `/graph status` | Show GraphRAG community build status |
+| `/graph finalize` | Trigger explicit community rebuild |
+| `/graph viz` | Open the interactive graph panel in VS Code |
 | `/graph-viz [path]` | Export entity–relation graph as interactive HTML (requires `pip install axon[graphrag]`); omit path to save to temp dir. For a live VS Code panel use `Axon: Show Graph for Query…` instead. |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
@@ -215,7 +229,8 @@ rag:
   top_k: 10
   hybrid_search: true
 
-  # Fast-graph mode (default): entity graph with zero LLM calls at ingest time.
+  # Fast-graph mode (recommended starting point): entity graph with zero LLM calls at ingest time.
+  # Shipped config.yaml has graph_rag: false; enable once your corpus is ingested.
   # graph_rag_depth: light        → regex noun-phrase extraction, no LLM
   # graph_rag_relations: false    → skip relation extraction (LLM-heavy)
   # → VS Code Graph Panel KG tab populated; ingest speed unchanged vs graph_rag: false
@@ -248,9 +263,9 @@ rag:
   #     run before communities are ready (graph_rag_community_async: false to block).
   #
   # Requires an LLM at ingest time. Adds per-chunk latency.
-  # ── RAPTOR + GraphRAG (both ON by default) ───────────────────────────────────
+  # ── RAPTOR + GraphRAG (disabled in shipped config; enable for richer retrieval) ─────
   # > ⚠ First ingest will be significantly slower (LLM calls per chunk).
-  # > To disable: set raptor: false and graph_rag: false
+  # > Shipped config.yaml has raptor: false and graph_rag: false for fast first-run.
   raptor: true
   raptor_max_levels: 1
   raptor_max_source_size_mb: 5.0
@@ -264,8 +279,8 @@ rag:
   graph_rag_relation_budget: 30              # cap relation extraction to top-30 chunks by entity density (0 = unlimited)
   graph_rag_entity_min_frequency: 2          # prune entities seen in < 2 chunks before community detection
   graph_rag_community: true
-  graph_rag_community_backend: leidenalg    # leidenalg = documented Python 3.13 path; "auto" tries graspologic first
-  graph_rag_auto_route: heuristic
+  graph_rag_community_backend: leidenalg    # recommended for Python 3.13; default code value is "louvain" (use "auto" for graspologic → leidenalg → louvain fallback chain)
+  query_router: heuristic                   # replaces graph_rag_auto_route; heuristic | llm | off
   graph_rag_mode: hybrid
   graph_rag_global_top_communities: 20       # lazy mode: generate LLM summaries for top-20 query-relevant communities only
 
@@ -292,6 +307,42 @@ Effects when enabled:
 - Web search permanently disabled (`/search` toggle is blocked)
 
 For Ollama models (gemma3, gpt-oss, etc.) copy `~/.ollama/models/` to the same path on the confined machine. See `scripts/README.md`.
+
+### Local / offline model deployment
+
+**`offline_mode`** (existing) — locks all HF network access; disables RAPTOR + GraphRAG (they need LLM calls):
+```yaml
+offline:
+  enabled: true
+  local_models_dir: C:/models
+```
+
+**`local_assets_only`** (new) — enforces local HF asset files **without** disabling RAPTOR or GraphRAG:
+```yaml
+offline:
+  local_assets_only: true
+  embedding_models_dir: C:/dev/embedding_models   # sentence-transformers root
+  hf_models_dir: C:/dev/HF_models                 # GLiNER, REBEL, LLMLingua root
+  tokenizer_cache_dir: C:/dev/tokenizer_cache      # tiktoken BPE cache
+  # local_models_dir: C:/models                    # legacy fallback for both kinds
+```
+
+On startup, Axon prints a model asset audit:
+```
+[local]         embedding    C:/dev/embedding_models/all-MiniLM-L6-v2
+[n/a]           reranker     (disabled)
+[local]         gliner       C:/dev/HF_models/gliner_medium-v2.1
+[remote]        rebel        Babelscape/rebel-large
+```
+If `local_assets_only: true` and any active model shows `[remote]` or `[MISSING]`, startup is aborted with a clear error.
+
+### Merged read-only scopes
+```bash
+/project @projects   # search across all local authoritative projects
+/project @mounts     # search across all mounted projects
+/project @store      # search across default + all projects + all mounts
+```
+Merged scopes are read-only — ingest is blocked until you switch to a specific project.
 
 ## API Endpoints
 
@@ -362,14 +413,56 @@ curl -X POST http://localhost:8000/ingest/refresh
 # List all projects
 curl http://localhost:8000/projects
 
-# Switch project (pass project param on any request)
+# On /query and /search: project field validates against the active project (409 on mismatch);
+# on /add_text, /add_texts, /ingest_url it also enforces active-project match;
+# /ingest (path-based) has no project field.
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What is RAG?", "project": "my-project"}'
 ```
 
+### Collection & Management
+```bash
+# Source and chunk counts for active project
+curl http://localhost:8000/collection
+
+# Documents not refreshed in N days
+curl "http://localhost:8000/collection/stale?days=30"
+
+# Batch ingest multiple text strings
+curl -X POST http://localhost:8000/add_texts \
+  -H "Content-Type: application/json" \
+  -d '{"docs": [{"text": "First text", "metadata": {"source": "a"}}, {"text": "Second text", "metadata": {"source": "b"}}]}'
+
+# Ingest content from a remote URL
+curl -X POST http://localhost:8000/ingest_url \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/page"}'
+
+# Remove documents by internal chunk ID list (chunk IDs are not returned by /collection/stale;
+# delete-by-source is not yet a public contract — use GET /collection to inspect sources)
+curl -X POST http://localhost:8000/delete \
+  -H "Content-Type: application/json" \
+  -d '{"doc_ids": ["chunk-abc123", "chunk-def456"]}'
+```
+
+### GraphRAG
+```bash
+# GraphRAG community build status
+curl http://localhost:8000/graph/status
+
+# Trigger community rebuild
+curl -X POST http://localhost:8000/graph/finalize
+
+# Knowledge graph payload (VS Code panel)
+curl http://localhost:8000/graph/data
+```
+
 ### AxonStore (Multi-User Sharing)
 ```bash
+# AxonStore identity / status check
+curl http://localhost:8000/store/whoami
+
 # Initialise store for a user
 curl -X POST http://localhost:8000/store/init \
   -H "Content-Type: application/json" \
@@ -378,12 +471,12 @@ curl -X POST http://localhost:8000/store/init \
 # Generate a share key
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
-  -d '{"project": "my-project", "grantee": "<os-username>", "write_access": false}'
+  -d '{"project": "my-project", "grantee": "<os-username>"}'
 
 # Redeem a share key
 curl -X POST http://localhost:8000/share/redeem \
   -H "Content-Type: application/json" \
-  -d '{"share_string": "axon-share-..."}'
+  -d '{"share_string": "eyJ..."}'
 
 # List active shares
 curl http://localhost:8000/share/list
@@ -575,4 +668,4 @@ MIT License - See [LICENSE](LICENSE) file.
 ---
 
 **Last Updated:** 2026-03-17
-**Version:** 1.0.0
+**Version:** 0.9.0

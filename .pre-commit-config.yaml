@@ -7,7 +7,7 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
-        exclude: '\.(gif|mp4|webm|png|jpg|jpeg|svg)$|integrations/vscode-axon/media/.*\.js$|integrations/vscode-axon/.*\.vsix$'
+        exclude: '\.(gif|mp4|webm|png|jpg|jpeg|svg)$|integrations/vscode-axon/media/.*\.js$|integrations/vscode-axon/.*\.vsix$|docs/demos/.*\.html$'
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict
@@ -35,7 +35,7 @@ repos:
 
       - id: pytest-check
         name: pytest
-        entry: python -m pytest tests/ -v --tb=short --no-cov
+        entry: python -m pytest tests/ -v --tb=short --no-cov -m "not extension"
         language: system
         pass_filenames: false
         always_run: true

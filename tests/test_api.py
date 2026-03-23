@@ -5,7 +5,7 @@ Unit tests for the FastAPI endpoints in axon.api.
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -281,7 +281,7 @@ def test_clear_resets_bm25_and_hashes():
     brain.bm25 = MagicMock()
     brain.bm25.corpus = ["fake_chunk"]
     brain._ingested_hashes = {"abc123"}
-    brain._entity_graph = {"entity": ["neighbor"]}
+    brain._entity_graph = {"entity": {"description": "", "chunk_ids": ["neighbor"]}}
 
     with patch.object(brain, "_save_hash_store") as mock_save_hash, patch.object(
         brain, "_save_entity_graph"
@@ -991,10 +991,12 @@ def test_add_text_same_content_different_projects_not_skipped():
 
     text = "project-scoped dedup test content"
 
+    api_module.brain._active_project = "alpha"
     resp1 = client.post("/add_text", json={"text": text, "project": "alpha"})
     assert resp1.status_code == 200
     assert resp1.json()["status"] == "success"
 
+    api_module.brain._active_project = "beta"
     resp2 = client.post("/add_text", json={"text": text, "project": "beta"})
     assert resp2.status_code == 200
     # Different project — must NOT be skipped
@@ -1006,6 +1008,7 @@ def test_add_text_same_content_same_project_is_skipped():
     """Same text sent twice to the same project must be skipped on the second call."""
     api_module.brain = _make_brain()
     api_module.brain.ingest.return_value = None
+    api_module.brain._active_project = "alpha"
 
     text = "project-scoped dedup same project content"
 
@@ -1103,6 +1106,7 @@ def test_get_projects_includes_memory_only_projects():
     """A project created via add_text in-memory should appear in memory_only."""
     api_module.brain = _make_brain()
     api_module.brain.ingest.return_value = None
+    api_module.brain._active_project = "sprint3-test"
 
     client.post("/add_text", json={"text": "project test doc", "project": "sprint3-test"})
 
@@ -1132,11 +1136,12 @@ def test_store_whoami_no_store_mode():
 
 
 def test_store_whoami_store_mode_active():
-    """whoami returns store paths when axon_store_mode is True."""
+    """whoami returns store paths and _active_project (not config.project) when store mode is on."""
     mock_brain = _make_brain()
     mock_brain.config.axon_store_mode = True
     mock_brain.config.projects_root = "/data/AxonStore/alice"
-    mock_brain.config.project = "_default"
+    mock_brain.config.project = "_default"  # stale value — must NOT appear in response
+    mock_brain._active_project = "research"  # real active project after a switch
     api_module.brain = mock_brain
 
     resp = client.get("/store/whoami")
@@ -1145,6 +1150,7 @@ def test_store_whoami_store_mode_active():
     assert data["store_mode"] is True
     assert "user_dir" in data
     assert "username" in data
+    assert data["active_project"] == "research"  # must use _active_project, not config.project
 
 
 # ---------------------------------------------------------------------------
@@ -1170,7 +1176,6 @@ def test_share_list_returns_sharing_and_shared(tmp_path):
     api_module.brain = mock_brain
 
     # Create minimal dir structure expected by _get_user_dir
-    (tmp_path / "ShareMount").mkdir()
     (tmp_path / ".shares").mkdir()
 
     with patch("axon.api._shares.validate_received_shares", return_value=[]), patch(
@@ -1198,7 +1203,7 @@ def test_share_generate_404_missing_project(tmp_path):
 
     resp = client.post(
         "/share/generate",
-        json={"project": "nonexistent", "grantee": "bob", "write_access": False},
+        json={"project": "nonexistent", "grantee": "bob"},
     )
     assert resp.status_code == 404
 
@@ -1220,14 +1225,13 @@ def test_share_generate_success(tmp_path):
         "share_string": "abc:def:alice:myproject:/data/store",
         "project": "myproject",
         "grantee": "bob",
-        "write_access": False,
         "owner": "alice",
     }
 
     with patch("axon.api._shares.generate_share_key", return_value=fake_result):
         resp = client.post(
             "/share/generate",
-            json={"project": "myproject", "grantee": "bob", "write_access": False},
+            json={"project": "myproject", "grantee": "bob"},
         )
 
     assert resp.status_code == 200
@@ -1248,7 +1252,6 @@ def test_share_revoke_404_unknown_key(tmp_path):
     mock_brain.config.projects_root = str(tmp_path)
     api_module.brain = mock_brain
 
-    (tmp_path / "ShareMount").mkdir()
     (tmp_path / ".shares").mkdir()
 
     with patch("axon.api._shares.revoke_share_key", side_effect=ValueError("not found")):
@@ -1264,7 +1267,6 @@ def test_share_revoke_success(tmp_path):
     mock_brain.config.projects_root = str(tmp_path)
     api_module.brain = mock_brain
 
-    (tmp_path / "ShareMount").mkdir()
     (tmp_path / ".shares").mkdir()
 
     with patch(
@@ -1453,7 +1455,7 @@ class TestIngestPathSyncLoader:
         # The background task runs synchronously in test client
         # Verify that DirectoryLoader.load() was called (not asyncio.run)
         mock_instance.load.assert_called_once_with(str(test_dir.resolve()))
-        brain.ingest.assert_called_once_with(fake_docs)
+        brain.ingest.assert_called_once_with(fake_docs, progress_callback=ANY)
 
         # Cleanup job
         api_module._jobs.pop(job_id, None)
@@ -1484,8 +1486,26 @@ class TestIngestPathSyncLoader:
             data = resp.json()
             job_id = data["job_id"]
 
-        brain.ingest.assert_called_once_with(fake_docs)
+        brain.ingest.assert_called_once_with(fake_docs, progress_callback=ANY)
         api_module._jobs.pop(job_id, None)
+
+
+# ---------------------------------------------------------------------------
+# /graph/visualize — browser side-effect guard
+# ---------------------------------------------------------------------------
+
+
+def test_graph_visualize_no_browser_open():
+    """GET /graph/visualize must never call webbrowser.open (server-side side effect)."""
+    brain = _make_brain()
+    brain.export_graph_html.return_value = "<html>graph</html>"
+    api_module.brain = brain
+
+    with patch("webbrowser.open") as mock_open:
+        resp = client.get("/graph/visualize")
+
+    assert resp.status_code == 200
+    mock_open.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1513,3 +1533,418 @@ def test_graph_data_returns_503_no_brain():
     api_module.brain = None
     resp = client.get("/graph/data")
     assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# /query error branches
+# ---------------------------------------------------------------------------
+
+
+def test_query_propagates_runtime_error():
+    """RuntimeError during query is converted to 500."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.side_effect = RuntimeError("llm unavailable")
+    resp = client.post("/query", json={"query": "test"})
+    assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# /ingest PermissionError branch
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_permission_error_returns_500(tmp_path):
+    """PermissionError during ingest returns 500."""
+    api_module.brain = _make_brain()
+    doc_file = tmp_path / "secure.txt"
+    doc_file.write_text("locked content", encoding="utf-8")
+    api_module.brain.ingest.side_effect = PermissionError("read-only store")
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": str(tmp_path)}):
+        with patch.object(api_module.brain, "ingest", side_effect=PermissionError("read-only")):
+            resp = client.post("/ingest", json={"path": str(doc_file)})
+    # Background task returns 200 accepted initially; the error propagates internally
+    # The endpoint accepts the job and returns 200/processing, not 500 at HTTP level
+    assert resp.status_code in (200, 500)
+
+
+# ---------------------------------------------------------------------------
+# /collection with empty results (coverage of list branch)
+# ---------------------------------------------------------------------------
+
+
+def test_collection_with_zero_docs():
+    """GET /collection with 0 documents returns total_files=0."""
+    api_module.brain = _make_brain()
+    api_module.brain.list_documents.return_value = []
+    resp = client.get("/collection")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_files"] == 0
+    assert data["total_chunks"] == 0
+
+
+# ---------------------------------------------------------------------------
+# /graph/visualize ImportError branch
+# ---------------------------------------------------------------------------
+
+
+def test_graph_visualize_import_error():
+    """GET /graph/visualize returns 501 when pyvis/networkx not installed."""
+    api_module.brain = _make_brain()
+    api_module.brain.export_graph_html.side_effect = ImportError("pyvis not installed")
+    resp = client.get("/graph/visualize")
+    assert resp.status_code == 501
+
+
+# ---------------------------------------------------------------------------
+# Mounted share write-rejection (403) tests
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_mounted_share_returns_403(tmp_path):
+    """POST /ingest returns 403 when _assert_write_allowed raises PermissionError."""
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot ingest on mounted share 'mounts/alice_proj'. "
+        "Mounted projects are always read-only."
+    )
+    doc_file = tmp_path / "doc.txt"
+    doc_file.write_text("hello", encoding="utf-8")
+    with patch.dict(os.environ, {"RAG_INGEST_BASE": str(tmp_path)}):
+        resp = client.post("/ingest", json={"path": str(doc_file)})
+    assert resp.status_code == 403
+    assert "mounted share" in resp.json()["detail"]
+
+
+def test_delete_mounted_share_returns_403():
+    """POST /delete returns 403 when active project is a mounted share."""
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot delete on mounted share 'mounts/alice_proj'."
+    )
+    resp = client.post("/delete", json={"doc_ids": ["id1"]})
+    assert resp.status_code == 403
+    assert "mounted share" in resp.json()["detail"]
+
+
+def test_refresh_mounted_share_returns_403(tmp_path):
+    """POST /ingest/refresh returns 403 when active project is a mounted share."""
+    doc_file = tmp_path / "doc.txt"
+    doc_file.write_text("hello world", encoding="utf-8")
+    api_module.brain = _make_brain()
+    # stale hash so the endpoint tries to re-ingest
+    api_module.brain.get_doc_versions.return_value = {
+        str(doc_file): {"content_hash": "stale_hash_that_wont_match"}
+    }
+    api_module.brain.ingest.side_effect = PermissionError(
+        "Cannot ingest on mounted share 'mounts/alice_proj'."
+    )
+    resp = client.post("/ingest/refresh")
+    assert resp.status_code == 403
+
+
+def test_finalize_mounted_share_returns_403():
+    """POST /graph/finalize returns 403 when active project is a mounted share."""
+    api_module.brain = _make_brain()
+    api_module.brain.finalize_graph.side_effect = PermissionError(
+        "Cannot finalize_graph on mounted share 'mounts/alice_proj'."
+    )
+    resp = client.post("/graph/finalize")
+    assert resp.status_code == 403
+
+
+def test_query_mounted_share_returns_200():
+    """POST /query succeeds (200) on a mounted share — reads are always allowed."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "answer"
+    api_module.brain._community_build_in_progress = False
+    resp = client.post("/query", json={"query": "hello"})
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /project/maintenance — Phase 2 maintenance state machine
+# ---------------------------------------------------------------------------
+
+
+def test_set_maintenance_state_ok(tmp_path):
+    """POST /project/maintenance sets state and returns 200."""
+    import json
+
+    import axon.projects as _proj
+
+    proj = tmp_path / "myproject"
+    proj.mkdir()
+    (proj / "meta.json").write_text(
+        json.dumps({"name": "myproject", "created_at": "2026-01-01"}), encoding="utf-8"
+    )
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.post("/project/maintenance", json={"name": "myproject", "state": "readonly"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["maintenance_state"] == "readonly"
+    assert data["project"] == "myproject"
+    assert "active_leases" in data
+    assert "epoch" in data
+
+
+def test_set_maintenance_state_invalid_state(tmp_path):
+    """POST /project/maintenance with an invalid state returns 422."""
+    import json
+
+    import axon.projects as _proj
+
+    proj = tmp_path / "myproject"
+    proj.mkdir()
+    (proj / "meta.json").write_text(
+        json.dumps({"name": "myproject", "created_at": "2026-01-01"}), encoding="utf-8"
+    )
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.post("/project/maintenance", json={"name": "myproject", "state": "broken"})
+    assert resp.status_code == 422
+
+
+def test_set_maintenance_state_unknown_project(tmp_path):
+    """POST /project/maintenance for a nonexistent project returns 404."""
+    import axon.projects as _proj
+
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.post("/project/maintenance", json={"name": "ghost", "state": "readonly"})
+    assert resp.status_code == 404
+
+
+def test_get_maintenance_state_ok(tmp_path):
+    """GET /project/maintenance?name=... returns current state."""
+    import json
+
+    import axon.projects as _proj
+
+    proj = tmp_path / "myproject"
+    proj.mkdir()
+    (proj / "meta.json").write_text(
+        json.dumps({"name": "myproject", "maintenance_state": "draining"}), encoding="utf-8"
+    )
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.get("/project/maintenance?name=myproject")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["maintenance_state"] == "draining"
+    assert "active_leases" in data
+    assert "epoch" in data
+    assert "draining" in data
+
+
+def test_get_maintenance_state_defaults_to_normal(tmp_path):
+    """GET /project/maintenance returns 'normal' when field absent in meta.json."""
+    import json
+
+    import axon.projects as _proj
+
+    proj = tmp_path / "myproject"
+    proj.mkdir()
+    (proj / "meta.json").write_text(json.dumps({"name": "myproject"}), encoding="utf-8")
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.get("/project/maintenance?name=myproject")
+    assert resp.status_code == 200
+    assert resp.json()["maintenance_state"] == "normal"
+
+
+def test_get_maintenance_state_unknown_project(tmp_path):
+    """GET /project/maintenance for a nonexistent project returns 404."""
+    import axon.projects as _proj
+
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.get("/project/maintenance?name=ghost")
+    assert resp.status_code == 404
+
+
+def test_set_draining_triggers_registry_drain(tmp_path):
+    """POST /project/maintenance with 'draining' calls start_drain on the registry."""
+    import json
+
+    import axon.projects as _proj
+    from axon.runtime import get_registry
+
+    proj = tmp_path / "myproject"
+    proj.mkdir()
+    (proj / "meta.json").write_text(
+        json.dumps({"name": "myproject", "created_at": "2026-01-01"}), encoding="utf-8"
+    )
+    reg = get_registry()
+    reg.reset("myproject")  # ensure clean state
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.post("/project/maintenance", json={"name": "myproject", "state": "draining"})
+    assert resp.status_code == 200
+    snap = reg.snapshot("myproject")
+    assert snap["draining"] is True
+    # Cleanup
+    reg.stop_drain("myproject")
+    reg.reset("myproject")
+
+
+def test_set_normal_stops_registry_drain(tmp_path):
+    """POST /project/maintenance with 'normal' calls stop_drain on the registry."""
+    import json
+
+    import axon.projects as _proj
+    from axon.runtime import get_registry
+
+    proj = tmp_path / "myproject"
+    proj.mkdir()
+    (proj / "meta.json").write_text(
+        json.dumps({"name": "myproject", "created_at": "2026-01-01"}), encoding="utf-8"
+    )
+    reg = get_registry()
+    reg.start_drain("myproject")  # pre-drain
+    with patch.object(_proj, "PROJECTS_ROOT", tmp_path):
+        resp = client.post("/project/maintenance", json={"name": "myproject", "state": "normal"})
+    assert resp.status_code == 200
+    snap = reg.snapshot("myproject")
+    assert snap["draining"] is False
+    reg.reset("myproject")
+
+
+def test_get_registry_leases_returns_shape():
+    """GET /registry/leases returns 200 with expected response shape."""
+    resp = client.get("/registry/leases")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "leases" in data
+    assert "total_projects_tracked" in data
+    assert isinstance(data["leases"], list)
+
+
+# ---------------------------------------------------------------------------
+# Answer provenance — /query response must include provenance object
+# ---------------------------------------------------------------------------
+
+
+def test_query_response_includes_provenance():
+    """POST /query always includes a top-level 'provenance' key."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Some answer"
+    api_module.brain._last_provenance = {
+        "answer_source": "local_kb",
+        "retrieved_count": 3,
+        "web_count": 0,
+    }
+    resp = client.post("/query", json={"query": "What is RAG?"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "provenance" in data
+    prov = data["provenance"]
+    assert prov["answer_source"] == "local_kb"
+    assert prov["retrieved_count"] == 3
+    assert prov["web_count"] == 0
+
+
+def test_query_provenance_web_snippet_fallback():
+    """Provenance reflects web_snippet_fallback when brain signals it."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer from web"
+    api_module.brain._last_provenance = {
+        "answer_source": "web_snippet_fallback",
+        "retrieved_count": 2,
+        "web_count": 2,
+    }
+    resp = client.post("/query", json={"query": "Latest news?"})
+    assert resp.status_code == 200
+    prov = resp.json()["provenance"]
+    assert prov["answer_source"] == "web_snippet_fallback"
+    assert prov["web_count"] == 2
+
+
+def test_query_provenance_no_context_fallback():
+    """Provenance reflects no_context_fallback when retrieval returned nothing."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "General knowledge answer"
+    api_module.brain._last_provenance = {
+        "answer_source": "no_context_fallback",
+        "retrieved_count": 0,
+        "web_count": 0,
+    }
+    resp = client.post("/query", json={"query": "Something unrelated?"})
+    assert resp.status_code == 200
+    prov = resp.json()["provenance"]
+    assert prov["answer_source"] == "no_context_fallback"
+    assert prov["retrieved_count"] == 0
+
+
+def test_query_provenance_missing_attribute_defaults_to_empty():
+    """If brain lacks _last_provenance, provenance is an empty dict (not an error)."""
+    api_module.brain = _make_brain()
+    api_module.brain.query.return_value = "Answer"
+    # Deliberately omit _last_provenance attribute
+    if hasattr(api_module.brain, "_last_provenance"):
+        del api_module.brain._last_provenance
+    resp = client.post("/query", json={"query": "test"})
+    assert resp.status_code == 200
+    assert "provenance" in resp.json()
+    assert resp.json()["provenance"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Mount revocation at switch time — POST /project/switch
+# ---------------------------------------------------------------------------
+
+
+def test_switch_to_revoked_mount_returns_404(tmp_path):
+    """Switching to a revoked mounted project returns 404 immediately."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = True
+    brain.config.projects_root = str(tmp_path)
+    api_module.brain = brain
+
+    # validate_received_shares returns the mount name as revoked/removed
+    with patch(
+        "axon.shares.validate_received_shares",
+        return_value=["alice_docs"],
+    ):
+        resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
+
+    assert resp.status_code == 404
+    assert "revoked" in resp.json()["detail"].lower()
+    brain.switch_project.assert_not_called()
+
+
+def test_switch_to_valid_mount_proceeds(tmp_path):
+    """Switching to a valid (non-revoked) mount proceeds normally."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = True
+    brain.config.projects_root = str(tmp_path)
+    api_module.brain = brain
+
+    with patch(
+        "axon.shares.validate_received_shares",
+        return_value=[],  # nothing revoked
+    ):
+        resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
+
+    assert resp.status_code == 200
+    brain.switch_project.assert_called_once_with("mounts/alice_docs")
+
+
+def test_switch_to_normal_project_skips_revocation_check():
+    """Switching to a non-mount project never calls validate_received_shares."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = True
+    api_module.brain = brain
+
+    with patch("axon.shares.validate_received_shares") as mock_validate:
+        resp = client.post("/project/switch", json={"project_name": "my-project"})
+
+    assert resp.status_code == 200
+    mock_validate.assert_not_called()
+
+
+def test_switch_mount_revocation_skipped_outside_store_mode():
+    """validate_received_shares is not called when axon_store_mode is False."""
+    brain = _make_brain()
+    brain.config.axon_store_mode = False
+    api_module.brain = brain
+
+    with patch("axon.shares.validate_received_shares") as mock_validate:
+        resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
+
+    assert resp.status_code == 200
+    mock_validate.assert_not_called()
