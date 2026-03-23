@@ -578,6 +578,9 @@ rag:
   top_k: 10
   similarity_threshold: 0.3
   hybrid_search: true
+  raptor: false
+  graph_rag: false
+  graph_rag_community: false
 
 chunk:
   size: 1000
@@ -591,11 +594,6 @@ query_transformations:
   multi_query: false
   hyde: false
   discussion_fallback: true
-
-advanced:
-  raptor: false
-  graph_rag: false
-  graph_rag_community: false
 
 web_search:
   enabled: false
@@ -646,6 +644,12 @@ offline:
                 config_dict["bm25_path"] = data["bm25"]["path"]
         if "rag" in data:
             config_dict.update(data["rag"])
+        # Legacy: starter configs written before 2026-03-23 put raptor/graph_rag/graph_rag_community
+        # under an "advanced:" section instead of "rag:". Parse it for backward compatibility.
+        if "advanced" in data:
+            for key in ("raptor", "graph_rag", "graph_rag_community"):
+                if key in data["advanced"]:
+                    config_dict[key] = data["advanced"][key]
         if "chunk" in data:
             config_dict.update({f"chunk_{k}": v for k, v in data["chunk"].items()})
         if "rerank" in data:
@@ -787,6 +791,7 @@ offline:
                 "raptor": flat["raptor"],
                 "raptor_chunk_group_size": flat["raptor_chunk_group_size"],
                 "graph_rag": flat["graph_rag"],
+                "graph_rag_community": flat["graph_rag_community"],
                 "dedup_on_ingest": flat["dedup_on_ingest"],
             },
             "chunk": {

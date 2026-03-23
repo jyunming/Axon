@@ -541,7 +541,7 @@ class QueryRouterMixin:
         import json as _json
         from pathlib import Path as _Path
 
-        manifest_path = _Path(owner_user_dir) / "shares" / ".share_manifest.json"
+        manifest_path = _Path(owner_user_dir) / ".shares" / ".share_manifest.json"
         try:
             manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:
