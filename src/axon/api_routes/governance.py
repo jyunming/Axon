@@ -29,7 +29,7 @@ def _build_overview(brain, jobs: dict) -> dict:
         registry = get_registry()
         leases = registry.snapshot_all()
     except Exception:
-        leases = []
+        leases = {}
 
     # Maintenance state
     try:

@@ -194,11 +194,14 @@ class FlexibleTableLoader(BaseLoader):
         splitter = TableSplitter(table_name=table_name)
         chunks = splitter.transform_rows(final_rows, headers)
 
+        # Include table_name in the hash so that multiple tables from the same source
+        # file (e.g. multiple sheets) get distinct IDs and do not collide.
+        source_key = f"{source}::{table_name}"
         stable_base = (
             _stable_file_id(source, "table")
             if not source.startswith(("http://", "https://"))
             and (os.path.isabs(source) or os.sep in source)
-            else ("table_" + hashlib.sha256(source.encode()).hexdigest()[:24])
+            else ("table_" + hashlib.sha256(source_key.encode()).hexdigest()[:24])
         )
         documents = []
         for i, text_chunk in enumerate(chunks):
