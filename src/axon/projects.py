@@ -69,7 +69,13 @@ _SEGMENT_RE: re.Pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
 _MAX_DEPTH: int = 5
 # Keep special AxonStore roots reserved so callers cannot create projects that
 # collide with mounted-share routing or legacy default names.
-_RESERVED_NAMES: set = {"mounts", "sharemount", "_default", ".shares"}
+_RESERVED_NAMES: set = {"projects", "mounts", "sharemount", "_default", ".shares"}
+
+
+def is_reserved_top_level_name(name: str) -> bool:
+    """Return True when *name* targets a reserved top-level AxonStore root."""
+    segments = [seg for seg in name.split("/") if seg]
+    return bool(segments) and segments[0] in _RESERVED_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +83,7 @@ _RESERVED_NAMES: set = {"mounts", "sharemount", "_default", ".shares"}
 # ---------------------------------------------------------------------------
 
 
-def build_namespace_id(prefix: str = "ns") -> str:
+def build_project_id(prefix: str = "ns") -> str:
     """Generate a new random namespace ID.
 
     Format: ``{prefix}_{uuid4_hex}``  — e.g. ``proj_3f2a...``
@@ -91,16 +97,14 @@ def build_namespace_id(prefix: str = "ns") -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
-def build_source_id(
-    project_namespace_id: str, source_kind: str, canonical_source_locator: str
-) -> str:
-    """Derive a stable source ID from the project namespace + source kind + canonical locator.
+def build_source_id(project_id: str, source_kind: str, canonical_source_locator: str) -> str:
+    """Derive a stable source ID from the project + source kind + canonical locator.
 
-    Formula: sha256(project_namespace_id | source_kind | canonical_source_locator)[:24]
+    Formula: sha256(project_id | source_kind | canonical_source_locator)[:24]
     prefixed with "src_".
 
     Args:
-        project_namespace_id: From meta.json, e.g. "proj_3f2a..."
+        project_id: From meta.json, e.g. "proj_3f2a..."
         source_kind: "file", "url", "code", "text", etc.
         canonical_source_locator: Normalized relative path, canonical URL, or logical key.
             - For files: use the absolute path (normalized with os.path.normpath)
@@ -110,12 +114,12 @@ def build_source_id(
     Returns:
         A 28-character string: "src_" + first 24 hex chars of sha256.
     """
-    raw = f"{project_namespace_id}|{source_kind}|{canonical_source_locator}"
+    raw = f"{project_id}|{source_kind}|{canonical_source_locator}"
     return "src_" + hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
 def build_chunk_id(
-    project_namespace_id: str,
+    project_id: str,
     source_id: str,
     subdoc_locator: str,
     chunk_index: int,
@@ -123,11 +127,11 @@ def build_chunk_id(
 ) -> str:
     """Derive a stable globally-unique chunk ID.
 
-    Formula: sha256(project_namespace_id | source_id | subdoc_locator | chunk_index | chunk_kind)[:24]
+    Formula: sha256(project_id | source_id | subdoc_locator | chunk_index | chunk_kind)[:24]
     prefixed with "chk_".
 
     Args:
-        project_namespace_id: Project namespace ID from meta.json.
+        project_id: Project ID from meta.json.
         source_id: Source ID from build_source_id().
         subdoc_locator: Sub-document position, e.g. "page:3", "sheet:Orders", "root", "row:44".
         chunk_index: Zero-based index of this chunk within the subdoc.
@@ -136,7 +140,7 @@ def build_chunk_id(
     Returns:
         A 28-character string: "chk_" + first 24 hex chars of sha256.
     """
-    raw = f"{project_namespace_id}|{source_id}|{subdoc_locator}|{chunk_index}|{chunk_kind}"
+    raw = f"{project_id}|{source_id}|{subdoc_locator}|{chunk_index}|{chunk_kind}"
     return "chk_" + hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
@@ -239,7 +243,7 @@ def ensure_project(name: str, description: str = "") -> Path:
 def _ensure_single_project(name: str, description: str) -> Path:
     """Create directories and meta.json for exactly one project node.
 
-    If ``meta.json`` already exists but is missing ``project_namespace_id``,
+    If ``meta.json`` already exists but is missing ``project_id``,
     a new one is assigned and the file is updated in-place (migration path).
     """
     root = project_dir(name)
@@ -257,19 +261,20 @@ def _ensure_single_project(name: str, description: str) -> Path:
                     "project_namespace_id": build_namespace_id("proj"),
                 },
                 indent=2,
-            )
+            ),
+            encoding="utf-8",
         )
     else:
         # Backfill missing project_namespace_id for existing projects (Phase 1 migration)
-        meta = json.loads(meta_file.read_text())
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
         if "project_namespace_id" not in meta:
             meta["project_namespace_id"] = build_namespace_id("proj")
-            meta_file.write_text(json.dumps(meta, indent=2))
+            meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return root
 
 
-def get_project_namespace_id(name: str) -> str | None:
-    """Return the ``project_namespace_id`` from a project's ``meta.json``.
+def get_project_id(name: str) -> str | None:
+    """Return the ``project_id`` from a project's ``meta.json``.
 
     Returns ``None`` if the project does not exist or has no namespace ID yet.
     Call :func:`ensure_project` first to guarantee the field is present.
@@ -278,15 +283,15 @@ def get_project_namespace_id(name: str) -> str | None:
     if not meta_file.exists():
         return None
     try:
-        meta = json.loads(meta_file.read_text())
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
         val = meta.get("project_namespace_id")
         return str(val) if val is not None else None
     except (json.JSONDecodeError, OSError):
         return None
 
 
-def get_store_namespace_id(user_dir: Path) -> str | None:
-    """Return the ``store_namespace_id`` from ``store_meta.json``.
+def get_store_id(user_dir: Path) -> str | None:
+    """Return the ``store_id`` from ``store_meta.json``.
 
     Returns ``None`` if the file does not exist or is unreadable.
     """
@@ -294,7 +299,7 @@ def get_store_namespace_id(user_dir: Path) -> str | None:
     if not store_meta.exists():
         return None
     try:
-        meta = json.loads(store_meta.read_text())
+        meta = json.loads(store_meta.read_text(encoding="utf-8"))
         val = meta.get("store_namespace_id")
         return str(val) if val is not None else None
     except (json.JSONDecodeError, OSError):
@@ -365,7 +370,7 @@ def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
         if not meta_file.exists():
             continue
         try:
-            meta = json.loads(meta_file.read_text())
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
         except Exception:
             meta = {}
         full_name = f"{parent_name}/{entry.name}"
@@ -452,11 +457,13 @@ def list_projects() -> list[dict]:
     for entry in sorted(PROJECTS_ROOT.iterdir()):
         if not entry.is_dir():
             continue
+        if entry.name in _RESERVED_NAMES:
+            continue
         meta_file = entry / "meta.json"
         if not meta_file.exists():
             continue
         try:
-            meta = json.loads(meta_file.read_text())
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
         except Exception:
             meta = {}
         state = meta.get("maintenance_state", "normal")
@@ -477,7 +484,7 @@ def list_projects() -> list[dict]:
 def get_active_project() -> str:
     """Return the name of the currently active project (defaults to 'default')."""
     if _ACTIVE_FILE.exists():
-        name = _ACTIVE_FILE.read_text().strip()
+        name = _ACTIVE_FILE.read_text(encoding="utf-8").strip()
         if name:
             return name
     return "default"
@@ -491,7 +498,7 @@ def set_active_project(name: str) -> None:
     """
     try:
         _ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _ACTIVE_FILE.write_text(name)
+        _ACTIVE_FILE.write_text(name, encoding="utf-8")
     except OSError:
         # Non-fatal: isolated/test environments may not have write access to
         # the home directory. The in-memory switch still takes effect.
@@ -535,7 +542,7 @@ def delete_project(name: str) -> None:
         set_active_project("default")
 
 
-def ensure_user_namespace(user_dir: Path) -> None:
+def ensure_user_project(user_dir: Path) -> None:
     """Create the standard subdirectories under a user's AxonStore namespace.
 
     Creates: default/, mounts/, .shares/, store_meta.json, and a compatibility
@@ -564,14 +571,15 @@ def ensure_user_namespace(user_dir: Path) -> None:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 },
                 indent=2,
-            )
+            ),
+            encoding="utf-8",
         )
 
 
 def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
     """Create directories and meta.json for a project at an explicit path.
 
-    If ``meta.json`` already exists but is missing ``project_namespace_id``,
+    If ``meta.json`` already exists but is missing ``project_id``,
     a new one is assigned in-place (migration path).
     """
     (root / "chroma_data").mkdir(parents=True, exist_ok=True)
@@ -588,14 +596,29 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
                     "project_namespace_id": build_namespace_id("proj"),
                 },
                 indent=2,
-            )
+            ),
+            encoding="utf-8",
         )
     else:
-        meta = json.loads(meta_file.read_text())
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
         if "project_namespace_id" not in meta:
             meta["project_namespace_id"] = build_namespace_id("proj")
-            meta_file.write_text(json.dumps(meta, indent=2))
+            meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return root
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases (functions renamed in codebase update)
+# ---------------------------------------------------------------------------
+
+#: Alias for :func:`build_project_id` — kept for external callers and tests.
+build_namespace_id = build_project_id
+#: Alias for :func:`get_project_id` — kept for external callers and tests.
+get_project_namespace_id = get_project_id
+#: Alias for :func:`get_store_id` — kept for external callers and tests.
+get_store_namespace_id = get_store_id
+#: Alias for :func:`ensure_user_project` — kept for external callers and tests.
+ensure_user_namespace = ensure_user_project
 
 
 def _remove_share_link(link: Path) -> bool:

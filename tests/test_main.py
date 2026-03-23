@@ -262,14 +262,16 @@ class TestMultiStoreReadOnly:
 def test_projects_root_precedence(tmp_path, monkeypatch):
     from axon.main import AxonConfig
 
+    yaml_root = str(tmp_path / "path" / "from" / "yaml")
+    env_root = str(tmp_path / "path" / "from" / "env")
     yaml_path = tmp_path / "config.yaml"
-    yaml_path.write_text("projects_root: /path/from/yaml", encoding="utf-8")
+    yaml_path.write_text(f"projects_root: {yaml_root}", encoding="utf-8")
 
     # Env var should win over YAML
-    monkeypatch.setenv("AXON_PROJECTS_ROOT", "/path/from/env")
+    monkeypatch.setenv("AXON_PROJECTS_ROOT", env_root)
 
     config = AxonConfig.load(str(yaml_path))
-    assert config.projects_root == "/path/from/env"
+    assert config.projects_root == env_root
 
 
 class TestMultiStoreWriteErrors:
@@ -2139,6 +2141,7 @@ class TestSwitchProjectState:
         # Create a real project dir so switch_project doesn't raise
         proj_path = tmp_path / ".axon" / "projects" / "myproject"
         proj_path.mkdir(parents=True, exist_ok=True)
+        (proj_path / "meta.json").write_text("{}", encoding="utf-8")
         with (
             patch("axon.projects.project_dir", return_value=proj_path),
             patch("axon.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")),
@@ -2167,6 +2170,7 @@ class TestSwitchProjectState:
         (new_bm25 / ".content_hashes").write_text("newhash1\nnewhash2\nnewhash3", encoding="utf-8")
         proj_path = tmp_path / ".axon" / "projects" / "proj2"
         proj_path.mkdir(parents=True, exist_ok=True)
+        (proj_path / "meta.json").write_text("{}", encoding="utf-8")
         with (
             patch("axon.projects.project_dir", return_value=proj_path),
             patch("axon.projects.project_vector_path", return_value=str(tmp_path / "proj_chroma")),
@@ -3585,7 +3589,6 @@ class TestGraphRAGCommunity:
 
     def test_community_summaries_generated(self):
         """_generate_community_summaries populates _community_summaries with LLM output."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         brain._community_levels = {0: {"apple": 0, "beats": 0}}
@@ -3682,7 +3685,6 @@ class TestGraphRAGCommunity:
 
     def test_community_report_has_title_and_findings(self):
         """_generate_community_summaries stores title, findings, and rank from JSON."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         brain._community_levels = {0: {"apple": 0, "beats": 0}}
@@ -3709,7 +3711,6 @@ class TestGraphRAGCommunity:
 
     def test_community_report_json_fallback(self):
         """_generate_community_summaries falls back gracefully when LLM returns plain text."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         brain._community_levels = {0: {"apple": 0}}
@@ -3730,7 +3731,6 @@ class TestGraphRAGCommunity:
 
     def test_global_map_reduce_filters_low_score(self):
         """_global_search_map_reduce filters out points with score below min_score."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         brain._community_summaries = {
@@ -3761,7 +3761,6 @@ class TestGraphRAGCommunity:
 
     def test_global_map_reduce_returns_top_points(self):
         """_global_search_map_reduce includes high-score points in output."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         brain._community_summaries = {
@@ -3894,7 +3893,6 @@ class TestGraphRAGCommunity:
 
     def test_canonicalize_entity_descriptions(self):
         """_canonicalize_entity_descriptions updates entity graph with synthesized description."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         brain._entity_graph = {
@@ -3988,7 +3986,6 @@ class TestGraphRAGRealImplementation:
 
     def test_global_search_reduce_calls_llm(self):
         """_global_search_map_reduce makes a second (reduce) LLM call with Analyst-formatted text."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         brain._community_summaries = {
@@ -4032,7 +4029,6 @@ class TestGraphRAGRealImplementation:
 
     def test_global_search_no_data_returns_no_data_answer(self):
         """When all map-phase scores are below min_score, return _GRAPHRAG_NO_DATA_ANSWER."""
-        from concurrent.futures import ThreadPoolExecutor
 
         from axon.main import _GRAPHRAG_NO_DATA_ANSWER
 
@@ -4063,7 +4059,6 @@ class TestGraphRAGRealImplementation:
 
     def test_global_search_token_budget_respected(self):
         """With a very small reduce_max_tokens, reduce prompt is truncated to few analysts."""
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         summaries = {}
@@ -4278,7 +4273,6 @@ class TestGraphRAGRealImplementation:
         """A thread calling _rebuild_communities blocks while the lock is already held."""
         import threading
         import time
-        from concurrent.futures import ThreadPoolExecutor
 
         brain = self._make_brain()
         # Provide a real executor so _generate_community_summaries doesn't crash
@@ -4560,7 +4554,6 @@ class TestGraphRAGAuditFixes:
 
     def test_global_search_map_uses_chunks_not_raw_report(self):
         """Global search map phase must chunk long reports so later content is not lost."""
-        import concurrent.futures
 
         b = self._make_brain()
         b.config.graph_rag_global_min_score = 0
@@ -4606,7 +4599,6 @@ class TestGraphRAGAuditFixes:
 
     def test_union_embedding_and_llm_entity_extraction(self):
         """_expand_with_entity_graph must union LLM-extracted and embedding-matched entities."""
-        import concurrent.futures
 
         from axon.main import AxonBrain
 
@@ -4705,7 +4697,6 @@ class TestGraphRAGTask6Fixes:
         brain._save_relation_graph = MagicMock()
         brain._save_community_summaries = MagicMock()
         brain._save_community_hierarchy = MagicMock()
-        import concurrent.futures
 
         brain._executor = SyncExecutor()
         llm = MagicMock()
@@ -4975,7 +4966,6 @@ class TestGraphRAGTask6Fixes:
 
     def test_global_search_map_length_config_respected(self):
         """graph_rag_global_map_max_length=100 must produce chunk size of ~400 chars."""
-        import concurrent.futures
 
         from axon.main import AxonBrain
 
@@ -5075,7 +5065,6 @@ class TestGraphRAGTask7Fixes:
         brain._save_relation_graph = MagicMock()
         brain._save_community_summaries = MagicMock()
         brain._save_community_hierarchy = MagicMock()
-        import concurrent.futures
 
         brain._executor = SyncExecutor()
         llm = MagicMock()
@@ -5166,7 +5155,6 @@ class TestGraphRAGTask7Fixes:
 
     def test_community_build_in_progress_flag_set_and_cleared(self):
         """Async rebuild sets _community_build_in_progress=True then clears to False."""
-        import concurrent.futures
         import time
 
         b = self._make_brain()
@@ -6596,7 +6584,6 @@ class TestRuntimeFixes:
 
     def _make_triage_brain(self):
         """MagicMock brain with _generate_community_summaries and _rebuild_communities bound real."""
-        import concurrent.futures
         import threading
 
         from axon.main import AxonBrain
@@ -6817,7 +6804,6 @@ class TestRuntimeFixes:
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
         """graph_rag_global_top_communities=2 limits map phase to 2 communities (≤2 LLM calls)."""
-        import concurrent.futures
 
         from axon.main import AxonBrain
 
@@ -7504,8 +7490,6 @@ class TestMapReduceDedicatedPool:
         return cfg
 
     def _make_brain(self):
-        import concurrent.futures
-
         from axon.main import AxonBrain
 
         brain = MagicMock(spec=AxonBrain)
@@ -7667,8 +7651,6 @@ class TestLLMLinguaCompression:
     """Item 2 — graph_rag_report_compress=True → chunks compressed via LLMLingua."""
 
     def _make_brain(self):
-        import concurrent.futures
-
         from axon.main import AxonBrain
 
         brain = MagicMock(spec=AxonBrain)

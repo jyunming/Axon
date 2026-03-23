@@ -20,9 +20,6 @@ from axon.graph_rag import GraphRagMixin
 
 
 def _make_config(**kwargs) -> AxonConfig:
-    from pathlib import Path
-    import tempfile
-    
     # Use a subdirectory of the system temp to be safer
     tmp = tempfile.mkdtemp(prefix="axon_test_")
     d = {
@@ -65,6 +62,7 @@ def _make_brain(config=None, **extra_attrs):
     class SyncExecutor:
         def submit(self, fn, *args, **kwargs):
             from concurrent.futures import Future
+
             f = Future()
             try:
                 result = fn(*args, **kwargs)
@@ -72,12 +70,18 @@ def _make_brain(config=None, **extra_attrs):
             except Exception as e:
                 f.set_exception(e)
             return f
+
         def map(self, fn, *iterables):
             return map(fn, *iterables)
+
         def shutdown(self, wait=True):
             pass
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
 
     brain._executor = SyncExecutor()
 

@@ -622,12 +622,13 @@ class TestLoad:
 
     def test_load_env_axon_projects_root_overrides(self, tmp_path, monkeypatch):
         """AXON_PROJECTS_ROOT env var overrides projects_root from yaml."""
-        data = {"projects_root": "/yaml/projects"}
+        env_root = str(tmp_path / "env" / "projects")
+        data = {"projects_root": str(tmp_path / "yaml" / "projects")}
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
-        monkeypatch.setenv("AXON_PROJECTS_ROOT", "/env/projects")
+        monkeypatch.setenv("AXON_PROJECTS_ROOT", env_root)
         cfg = AxonConfig.load(str(p))
-        assert cfg.projects_root == "/env/projects"
+        assert cfg.projects_root == env_root
 
     def test_load_env_ollama_models_overrides(self, tmp_path, monkeypatch):
         """OLLAMA_MODELS env var overrides ollama_models_dir."""
@@ -724,11 +725,12 @@ class TestPostInit:
         cfg = AxonConfig()
         assert cfg.bm25_path == bm25_path
 
-    def test_axon_projects_root_env_sets_projects_root(self, monkeypatch):
+    def test_axon_projects_root_env_sets_projects_root(self, monkeypatch, tmp_path):
         """AXON_PROJECTS_ROOT env var overrides projects_root."""
-        monkeypatch.setenv("AXON_PROJECTS_ROOT", "/env/axon/projects")
+        env_root = str(tmp_path / "env" / "axon" / "projects")
+        monkeypatch.setenv("AXON_PROJECTS_ROOT", env_root)
         cfg = AxonConfig()
-        assert cfg.projects_root == "/env/axon/projects"
+        assert cfg.projects_root == env_root
 
     def test_axon_store_base_env_sets_store_mode(self, monkeypatch, tmp_path):
         """AXON_STORE_BASE env var triggers AxonStore mode and derives projects_root."""

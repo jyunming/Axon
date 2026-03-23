@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import os
 
+
 # Provide a simple synchronous executor mock
 class SyncExecutor:
     def submit(self, fn, *args, **kwargs):
         from concurrent.futures import Future
+
         f = Future()
         try:
             result = fn(*args, **kwargs)
@@ -20,14 +22,19 @@ class SyncExecutor:
         except Exception as e:
             f.set_exception(e)
         return f
+
     def map(self, fn, *iterables):
         return map(fn, *iterables)
+
     def shutdown(self, wait=True):
         pass
+
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         pass
+
 
 import tempfile
 from collections import OrderedDict
@@ -90,8 +97,6 @@ _TABLE_KEYWORDS = {
 
 
 def _make_config(**kwargs) -> AxonConfig:
-    import tempfile
-    
     # Use a subdirectory of the system temp to be safer
     tmp = tempfile.mkdtemp(prefix="axon_query_test_")
     defaults = {
@@ -180,7 +185,6 @@ class RouterStub(QueryRouterMixin):
         self.config = config
         self._community_rebuild_lock = threading.Lock()
         # Executor for parallel transforms
-        from concurrent.futures import ThreadPoolExecutor
 
         self._executor = SyncExecutor()
 

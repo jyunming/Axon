@@ -45,8 +45,11 @@ These are tracked in ``SPARSE_RETRIEVAL_MILESTONE.md``.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # SparseVector wire format
@@ -204,8 +207,9 @@ def fuse_sparse(
     try:
         q_vec = retriever.encode_query(query)
         sparse_hits = retriever.search(q_vec, top_k=top_k, filter_dict=filter_dict)
-    except Exception:
+    except Exception as exc:
         # Sparse retrieval failure must never degrade the main path.
+        logger.warning("sparse retrieval failed, falling back to dense-only: %s", exc)
         return dense_results
 
     # Build unified score map from dense results

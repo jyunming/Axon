@@ -103,23 +103,33 @@ class AxonConfig:
             )
 
         # 2. Environment variable overrides for paths
+        def _normalize_env_path(value: str) -> str:
+            return os.path.abspath(os.path.expanduser(value))
+
         env_root = os.getenv("AXON_PROJECTS_ROOT")
         if env_root:
-            self.projects_root = env_root
+            self.projects_root = _normalize_env_path(env_root)
 
         env_vsp = os.getenv("CHROMA_DATA_PATH")
         if env_vsp:
-            self.vector_store_path = env_vsp
+            self.vector_store_path = _normalize_env_path(env_vsp)
 
         env_bm25 = os.getenv("BM25_INDEX_PATH")
         if env_bm25:
-            self.bm25_path = env_bm25
+            self.bm25_path = _normalize_env_path(env_bm25)
 
         # 3. Aggressive WSL/Linux path resolution to avoid "readonly database"
         # errors on Windows-mounted drives (drvfs).
-        is_linux = sys.platform == "linux"
         home = os.path.join(os.path.expanduser("~"), ".axon")
 
+        # 2.5 Redirect legacy relative paths to ~/.axon/projects/default/...
+        legacy_defaults = ("./chroma_data", "chroma_data", "./bm25_index", "bm25_index")
+        if self.vector_store_path in legacy_defaults:
+            self.vector_store_path = os.path.join(home, "projects", "default", "chroma_data")
+        if self.bm25_path in legacy_defaults:
+            self.bm25_path = os.path.join(home, "projects", "default", "bm25_index")
+
+        is_linux = sys.platform == "linux"
         default_vsp = os.path.join(home, "projects", "default", "chroma_data")
         default_bmp = os.path.join(home, "projects", "default", "bm25_index")
         if self.vector_store_path == default_vsp:
@@ -132,11 +142,11 @@ class AxonConfig:
                 return os.path.join(self.projects_root, "default", sub)
             # Expand ~
             p_str = os.path.expanduser(path_str)
-            # If it's the legacy relative default, force to projects_root
-            legacy_defaults = ("./chroma_data", "chroma_data", "./bm25_index", "bm25_index")
-            if path_str in legacy_defaults:
+            # Legacy defaults used relative paths ("./chroma_data", "./bm25_index")
+            # which should always resolve under projects_root/default.
+            legacy_rel = p_str.replace("\\", "/")
+            if legacy_rel in {sub, f"./{sub}"}:
                 return os.path.join(self.projects_root, "default", sub)
-
             # Check for absolute paths
             if is_linux:
                 import posixpath
@@ -148,8 +158,8 @@ class AxonConfig:
             # If absolute but on a Windows mount in Linux, it will likely fail
             if is_linux and is_abs and p_str.startswith("/mnt/"):
                 # Only redirect if it looks like the user didn't explicitly set a custom Linux path
-                # (heuristic: if it contains 'studio_brain_open' or 'axon' in a Windows path)
-                if any(x in p_str.lower() for x in ("axon", "studio_brain")):
+                # (heuristic: if it contains 'axon' in a Windows path)
+                if "axon" in p_str.lower():
                     safe_path = os.path.join(self.projects_root, "default", sub)
                     return safe_path
 
@@ -166,7 +176,7 @@ class AxonConfig:
                 and os.path.isabs(self.projects_root)
                 and self.projects_root.startswith("/mnt/")
             ):
-                if any(x in self.projects_root.lower() for x in ("axon", "studio_brain")):
+                if "axon" in self.projects_root.lower():
                     self.projects_root = os.path.join(home, "projects")
 
         self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma_data")
@@ -635,8 +645,12 @@ offline:
                 logger.warning("Config file %s not found. Using defaults.", path)
                 return cls()
 
-        with open(os.path.expanduser(path), encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+        try:
+            with open(os.path.expanduser(path), encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except yaml.YAMLError as exc:
+            logger.warning("Config file %s is malformed (%s). Using defaults.", path, exc)
+            return cls()
 
         # Flatten the YAML structure to match dataclass fields
         config_dict = {}

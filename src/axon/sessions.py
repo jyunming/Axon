@@ -37,11 +37,24 @@ def _session_path(session_id: str, project: str | None = None) -> str:
     return os.path.join(_sessions_dir(project), f"session_{session_id}.json")
 
 
+_MAX_SESSIONS = 50
+
+
 def _save_session(session: dict) -> None:
     try:
         project = session.get("project")
         with open(_session_path(session["id"], project), "w", encoding="utf-8") as f:
             _json.dump(session, f, ensure_ascii=False, indent=2)
+        # Evict oldest sessions once the directory exceeds the cap.
+        d = _sessions_dir(project)
+        files = sorted(
+            [f for f in os.listdir(d) if f.startswith("session_") and f.endswith(".json")]
+        )
+        for old in files[: max(0, len(files) - _MAX_SESSIONS)]:
+            try:
+                os.remove(os.path.join(d, old))
+            except Exception:
+                pass
     except Exception:
         pass
 

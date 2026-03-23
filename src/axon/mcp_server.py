@@ -74,7 +74,7 @@ async def ingest_text(text: str, metadata: dict | None = None, project: str | No
     Args:
         text: The text content to store.
         metadata: Optional dict, e.g. {"source": "https://...", "topic": "react"}.
-        project: Target project namespace. Omit to use the active project.
+        project: Target project. Omit to use the active project.
     """
     body: dict = {"text": text}
     if metadata:
@@ -93,7 +93,7 @@ async def ingest_texts(docs: list[dict], project: str | None = None) -> Any:
 
     Args:
         docs: List of dicts, each with "text" and optional "doc_id"/"metadata".
-        project: Target project namespace applied to all docs.
+        project: Target project applied to all docs.
     """
     body: dict = {"docs": docs}
     if project:
@@ -111,7 +111,7 @@ async def ingest_url(url: str, metadata: dict | None = None, project: str | None
     Args:
         url: The HTTP or HTTPS URL to fetch.
         metadata: Optional extra metadata merged with the page's source metadata.
-        project: Target project namespace.
+        project: Target project.
     """
     body: dict = {"url": url}
     if metadata:
@@ -167,6 +167,8 @@ async def search_knowledge(
             the brain's current active project. Use switch_project to change
             the active project before calling this tool.
     """
+    if top_k < 1:
+        return {"error": "top_k must be >= 1"}
     body: dict = {"query": query, "top_k": top_k}
     if filters:
         body["filters"] = filters
@@ -195,6 +197,8 @@ async def query_knowledge(
             the brain's current active project. Use switch_project to change
             the active project before calling this tool.
     """
+    if top_k is not None and top_k < 1:
+        return {"error": "top_k must be >= 1"}
     body: dict = {"query": query}
     if top_k is not None:
         body["top_k"] = top_k
@@ -217,7 +221,7 @@ async def list_knowledge() -> Any:
 
 @mcp.tool()
 async def switch_project(project_name: str) -> Any:
-    """Switch the knowledge base to a different project namespace.
+    """Switch the knowledge base to a different project.
 
     WARNING: This mutates global server state. Do not call from concurrent
     request handlers. Prefer passing 'project' directly to ingest tools instead.
@@ -267,7 +271,7 @@ async def get_stale_docs(days: int = 7) -> Any:
 
 @mcp.tool()
 async def create_project(name: str, description: str = "") -> Any:
-    """Create a new knowledge base project namespace.
+    """Create a new knowledge base project.
 
     Args:
         name: Name of the project to create.
