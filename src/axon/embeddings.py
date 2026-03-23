@@ -21,6 +21,10 @@ _KNOWN_DIMS: dict[str, int] = {
     "all-mpnet-base-v2": 768,
     "nomic-embed-text": 768,
     "mxbai-embed-large": 1024,
+    # OpenAI models
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
 }
 
 
@@ -103,7 +107,13 @@ class OpenEmbedding:
             ):
                 kwargs["base_url"] = self.config.ollama_base_url
             self.model = OpenAI(**kwargs)
-            self.dimension = 1536
+            if self.config.embedding_model not in _KNOWN_DIMS:
+                logger.warning(
+                    "OpenAI embedding model '%s' is not in the dimension registry; "
+                    "defaulting to 1536-dim. Add it to _KNOWN_DIMS if this is wrong.",
+                    self.config.embedding_model,
+                )
+            self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 1536)
 
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
@@ -132,6 +142,9 @@ class OpenEmbedding:
         elif self.provider == "openai":
             response = self.model.embeddings.create(input=texts, model=self.config.embedding_model)
             return [data.embedding for data in response.data]
+
+        else:
+            raise ValueError(f"Unknown embedding provider: {self.provider}")
 
     def embed_query(self, query: str) -> list[float]:
         return self.embed([query])[0]

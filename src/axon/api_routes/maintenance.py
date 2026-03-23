@@ -62,7 +62,7 @@ async def copilot_agent_handler(request: Request, body: CopilotAgentRequest):
                 from axon.loaders import URLLoader
 
                 loader = URLLoader()
-                docs = loader.load(args)
+                docs = await asyncio.to_thread(loader.load, args)
                 if docs:
                     await asyncio.to_thread(brain.ingest, docs)
                     yield f"data: {json.dumps({'type': 'text', 'content': f'✅ Successfully ingested: {args}'})}\n\n"

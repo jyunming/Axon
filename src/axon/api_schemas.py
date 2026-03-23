@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 _BLOCKED_PATH_PREFIXES: tuple[pathlib.Path, ...] = tuple(
-    pathlib.Path(p)
+    pathlib.Path(p).resolve()
     for p in [
         # Windows system roots
         "C:/Windows",

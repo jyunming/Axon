@@ -122,16 +122,28 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
   const stalePid = await getPortPid(port);
   if (stalePid) {
     state.outputChannel.appendLine(
-      `Axon: stale process (PID ${stalePid}) detected on port ${port} — not answering /health. Terminating before starting a fresh server.`
+      `Axon: process (PID ${stalePid}) detected on port ${port} that is not answering /health.`
     );
-    vscode.window.showWarningMessage(
-      `Axon: stale process on port ${port} detected and terminated. Starting a fresh server.`
+    const choice = await vscode.window.showWarningMessage(
+      `Axon detected a process (PID ${stalePid}) listening on port ${port} that is not responding to /health.\n\nDo you want to terminate this process so Axon can start on this port?`,
+      { modal: true },
+      'Terminate process',
+      'Cancel'
     );
-    try {
-      process.kill(stalePid);
-      await sleep(800);  // Give the OS time to release the port
-    } catch {
-      state.outputChannel.appendLine(`Could not terminate stale process ${stalePid} — it may have already exited.`);
+    if (choice === 'Terminate process') {
+      state.outputChannel.appendLine(
+        `User approved termination of process ${stalePid} on port ${port} before starting Axon.`
+      );
+      try {
+        process.kill(stalePid);
+        await sleep(800);  // Give the OS time to release the port
+      } catch {
+        state.outputChannel.appendLine(`Could not terminate process ${stalePid} — it may have already exited or access was denied.`);
+      }
+    } else {
+      state.outputChannel.appendLine(
+        `User declined to terminate process ${stalePid} on port ${port}; Axon server start may fail if the port remains in use.`
+      );
     }
   }
 
