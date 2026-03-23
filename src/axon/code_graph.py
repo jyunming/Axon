@@ -49,6 +49,9 @@ class CodeGraphMixin:
         existing_edges: set = {(e["source"], e["target"], e["edge_type"]) for e in edges_list}
 
         file_nodes_seen: set = set()
+        # Deferred IMPORTS: collected during pass 1, resolved in pass 2 after all
+        # file nodes exist so forward-referenced files are resolvable.
+        deferred_imports: list[tuple[str, str, str]] = []  # (file_node_id, stmt, chunk_id)
 
         for chunk in chunks:
             meta = chunk.get("metadata", {})
@@ -125,19 +128,23 @@ class CodeGraphMixin:
                 import_stmts = []
 
             for stmt in import_stmts:
-                target_file_id = self._resolve_import_to_file(stmt.strip())
-                if target_file_id and target_file_id != file_node_id:
-                    ek = (file_node_id, target_file_id, "IMPORTS")
-                    if ek not in existing_edges:
-                        edges_list.append(
-                            {
-                                "source": file_node_id,
-                                "target": target_file_id,
-                                "edge_type": "IMPORTS",
-                                "chunk_id": chunk_id,
-                            }
-                        )
-                        existing_edges.add(ek)
+                deferred_imports.append((file_node_id, stmt.strip(), chunk_id))
+
+        # Pass 2: resolve IMPORTS edges now that all file nodes are present.
+        for file_node_id, stmt, chunk_id in deferred_imports:
+            target_file_id = self._resolve_import_to_file(stmt)
+            if target_file_id and target_file_id != file_node_id:
+                ek = (file_node_id, target_file_id, "IMPORTS")
+                if ek not in existing_edges:
+                    edges_list.append(
+                        {
+                            "source": file_node_id,
+                            "target": target_file_id,
+                            "edge_type": "IMPORTS",
+                            "chunk_id": chunk_id,
+                        }
+                    )
+                    existing_edges.add(ek)
 
     def _resolve_import_to_file(self, stmt: str) -> str | None:
         """Resolve an import statement to a file node_id in the code graph, or None."""

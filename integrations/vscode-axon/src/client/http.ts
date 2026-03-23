@@ -114,12 +114,10 @@ export async function searchAxon(
   return Array.isArray(data) ? data : (data.results ?? []);
 }
 
-/** Produce a consistent connection-error message for tool catch blocks.
- *  Includes a platform-aware hint: auto-start works on Linux/macOS;
- *  Windows users typically need to start axon-api manually. */
+/** Produce a consistent connection-error message for tool catch blocks. */
 export function apiConnectionError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
-  return `Could not reach Axon API: ${msg}. Run \`axon-api\` in a terminal, or enable \`axon.autoStart\` (Linux/macOS only).`;
+  return `Could not reach Axon API: ${msg}. Run \`axon-api\` in a terminal, or enable the \`axon.autoStart\` setting in VS Code.`;
 }
 
 export function sleep(ms: number): Promise<void> {

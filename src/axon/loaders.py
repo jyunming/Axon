@@ -200,7 +200,7 @@ class FlexibleTableLoader(BaseLoader):
         stable_base = (
             _stable_file_id(source, "table")
             if not source.startswith(("http://", "https://"))
-            and (os.path.isabs(source) or os.sep in source)
+            and (os.path.isabs(source) or os.sep in source or bool(os.path.splitext(source)[1]))
             else ("table_" + hashlib.sha256(source_key.encode()).hexdigest()[:24])
         )
         documents = []

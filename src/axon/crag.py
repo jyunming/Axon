@@ -130,7 +130,9 @@ def assess_confidence(
         spread_signal = 0.0
 
     # --- Signal 4: source diversity ---
-    unique_sources = len({r.get("metadata", {}).get("source", r["id"]) for r in filtered_results})
+    unique_sources = len(
+        {(r.get("metadata") or {}).get("source") or r.get("id") for r in filtered_results}
+    )
     diversity_signal = min(1.0, unique_sources / _MIN_SOURCE_DIVERSITY)
 
     # --- Signal 5: threshold pass rate ---
