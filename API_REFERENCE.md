@@ -143,13 +143,14 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 ```json
 {"doc_ids": ["chunk-abc123", "chunk-def456"]}
 ```
-**Important:** `/delete` accepts **internal chunk IDs**, not the source-level `doc_id` returned by
-`/add_text`, `/ingest_url`, or `/add_texts`. Those ingest responses return a source/document
-identifier, not chunk-level IDs. To find deleteable chunk IDs, use `GET /collection/stale` (returns
-`doc_id` per stale entry — these are chunk IDs usable with `/delete`). `GET /tracked-docs` returns
-version metadata (hashes and timestamps) and does not include chunk IDs. Currently there is no
-single endpoint that maps a source doc_id directly to its chunk IDs; delete by source is not yet a
-clean public contract.
+**Important:** `/delete` accepts **internal chunk IDs** only — not the source-level `doc_id`
+returned by `/add_text`, `/ingest_url`, or `/add_texts`. Those ingest responses identify the
+source document, not individual vector chunks. `GET /collection/stale` returns source-dedup
+metadata (source path and ingest timestamp); its `doc_id` field is a source identifier, **not**
+a chunk ID usable with `/delete`. `GET /tracked-docs` returns content hashes and timestamps and
+also does not expose chunk IDs. Currently there is no public endpoint that maps a source document
+to its chunk IDs; delete by source is not yet a clean public contract. Use `GET /collection` to
+inspect ingested sources and chunk counts.
 
 ---
 

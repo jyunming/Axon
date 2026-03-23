@@ -1068,7 +1068,7 @@ Copilot will automatically call `axon_getCollection` or `axon_listProjects` to a
 Search my Axon knowledge base for information about neural networks.
 ```
 
-### Available tools (25 total)
+### Available tools (27 total)
 
 | Tool | What it does |
 |---|---|
@@ -1087,6 +1087,7 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_clearCollection` | Wipe all data from the current project |
 | `axon_clearKnowledgeBase` | Alias for clearCollection — wipe all vectors and BM25 index |
 | `axon_updateSettings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
+| `axon_getSettings` | Read the current active Axon configuration (retrieval flags, RAG mode, LLM provider) |
 | `axon_shareProject` | Generate a share key for a project (AxonStore mode) |
 | `axon_redeemShare` | Mount a project shared by another user |
 | `axon_revokeShare` | Revoke an active share |
@@ -1097,6 +1098,7 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_listStaleDocs` | Find documents not re-ingested within N days |
 | `axon_showGraphStatus` | Show entity count, community summary count, and graph readiness |
 | `axon_showGraph` | Open the Axon Graph Panel for a query — shows answer, citations, and 3D entity/code graph side by side |
+| `axon_finalizeGraph` | Rebuild community summaries and finalize the knowledge graph for global-mode queries |
 
 ### Available VS Code commands
 

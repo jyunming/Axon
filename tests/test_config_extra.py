@@ -766,3 +766,81 @@ class TestPostInit:
         cfg = AxonConfig(vector_store_path="chroma_data")
         home = os.path.join(os.path.expanduser("~"), ".axon")
         assert cfg.vector_store_path == os.path.join(home, "projects", "default", "chroma_data")
+
+
+# ---------------------------------------------------------------------------
+# First-run config creation: starter YAML values must be returned, not defaults
+# ---------------------------------------------------------------------------
+
+
+class TestFirstRunConfigCreation:
+    """P0-1: AxonConfig.load() must return starter file values on first run.
+
+    The starter YAML ships with raptor=false, graph_rag=false,
+    graph_rag_community=false.  The dataclass defaults are True.  Before the
+    bug fix, load() always called cls() after creating the file, which silently
+    ignored the file it just wrote and returned the (wrong) dataclass defaults.
+
+    First-run creation only triggers when path=None (uses _USER_CONFIG_PATH).
+    Tests redirect _USER_CONFIG_PATH to a tmp directory via monkeypatch.
+    """
+
+    def _patch_config_path(self, monkeypatch, tmp_path):
+        """Redirect _USER_CONFIG_PATH to tmp_path/config.yaml."""
+        import axon.config as _cfg_mod
+
+        config_path = str(tmp_path / "config.yaml")
+        monkeypatch.setattr(_cfg_mod, "_USER_CONFIG_PATH", config_path)
+        monkeypatch.delenv("AXON_PROJECTS_ROOT", raising=False)
+        monkeypatch.delenv("AXON_STORE_BASE", raising=False)
+        return config_path
+
+    def test_first_run_raptor_disabled(self, tmp_path, monkeypatch):
+        """First-run config: raptor must be False (file value), not True (dataclass default)."""
+        from axon.config import AxonConfig
+
+        self._patch_config_path(monkeypatch, tmp_path)
+        cfg = AxonConfig.load()
+        assert cfg.raptor is False, (
+            "First-run config must disable RAPTOR (starter YAML has raptor: false); "
+            "got True — load() is returning the dataclass default instead of the file value"
+        )
+
+    def test_first_run_graph_rag_disabled(self, tmp_path, monkeypatch):
+        """First-run config: graph_rag must be False (file value), not True (dataclass default)."""
+        from axon.config import AxonConfig
+
+        self._patch_config_path(monkeypatch, tmp_path)
+        cfg = AxonConfig.load()
+        assert (
+            cfg.graph_rag is False
+        ), "First-run config must disable GraphRAG (starter YAML has graph_rag: false)"
+
+    def test_first_run_graph_rag_community_disabled(self, tmp_path, monkeypatch):
+        """First-run config: graph_rag_community must be False."""
+        from axon.config import AxonConfig
+
+        self._patch_config_path(monkeypatch, tmp_path)
+        cfg = AxonConfig.load()
+        assert cfg.graph_rag_community is False
+
+    def test_first_run_creates_the_file(self, tmp_path, monkeypatch):
+        """load() creates the config file on first run."""
+        from axon.config import AxonConfig
+
+        config_path = self._patch_config_path(monkeypatch, tmp_path)
+        assert not os.path.exists(config_path)
+        AxonConfig.load()
+        assert os.path.exists(config_path)
+
+    def test_first_run_file_then_roundtrip(self, tmp_path, monkeypatch):
+        """save() + load() round-trip preserves disabled flags."""
+        from axon.config import AxonConfig
+
+        config_path = self._patch_config_path(monkeypatch, tmp_path)
+        cfg = AxonConfig.load()
+        assert cfg.raptor is False
+        cfg.save(config_path)
+        reloaded = AxonConfig.load()
+        assert reloaded.raptor is False
+        assert reloaded.graph_rag is False

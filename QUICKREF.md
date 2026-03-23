@@ -439,7 +439,8 @@ curl -X POST http://localhost:8000/ingest_url \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/page"}'
 
-# Remove documents by chunk ID list (get IDs from ingest responses or /collection/stale)
+# Remove documents by internal chunk ID list (chunk IDs are not returned by /collection/stale;
+# delete-by-source is not yet a public contract — use GET /collection to inspect sources)
 curl -X POST http://localhost:8000/delete \
   -H "Content-Type: application/json" \
   -d '{"doc_ids": ["chunk-abc123", "chunk-def456"]}'

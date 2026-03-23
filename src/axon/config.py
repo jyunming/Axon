@@ -614,15 +614,19 @@ offline:
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     cfg_path.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
                     logger.info("Created default config at %s — edit it to customise Axon.", path)
+                    # Fall through so the newly-written file is parsed; do NOT return cls()
+                    # here — that would silently use the dataclass defaults (raptor=True etc.)
+                    # instead of the file values (raptor=false etc.).
                 except (OSError, PermissionError) as exc:
                     logger.warning(
                         "Could not create default config at %s (%s). Using in-memory defaults.",
                         path,
                         exc,
                     )
+                    return cls()
             else:
                 logger.warning("Config file %s not found. Using defaults.", path)
-            return cls()
+                return cls()
 
         with open(os.path.expanduser(path), encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
