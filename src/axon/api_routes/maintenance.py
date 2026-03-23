@@ -77,7 +77,8 @@ async def copilot_agent_handler(request: Request, body: CopilotAgentRequest):
                 yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
 
             else:
-                answer = brain.query(
+                answer = await asyncio.to_thread(
+                    brain.query,
                     user_query,
                     chat_history=[
                         {"role": m.role, "content": m.content} for m in body.messages[:-1]

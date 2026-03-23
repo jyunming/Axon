@@ -69,7 +69,7 @@ async def update_config(request: ConfigUpdateRequest):
 
         brain.embedding = OpenEmbedding(brain.config)
     if reinit_rerank and brain.config.rerank:
-        from axon.main import OpenReranker
+        from axon.rerank import OpenReranker
 
         brain.reranker = OpenReranker(brain.config)
 
@@ -248,7 +248,7 @@ async def delete_project_endpoint(name: str):
 async def list_sessions():
     """List all saved chat sessions for the active project."""
     from axon import api as _api
-    from axon.main import _list_sessions
+    from axon.sessions import _list_sessions
 
     brain = _api.brain
     project = getattr(brain, "_active_project", None) if brain else None
@@ -259,7 +259,7 @@ async def list_sessions():
 async def get_session(session_id: str):
     """Retrieve a specific session by ID."""
     from axon import api as _api
-    from axon.main import _load_session
+    from axon.sessions import _load_session
 
     brain = _api.brain
     project = getattr(brain, "_active_project", None) if brain else None

@@ -79,7 +79,7 @@ def test_update_config_503_no_brain():
 
 def test_list_sessions_returns_list():
     api_module.brain = _make_brain()
-    with patch("axon.main._list_sessions", return_value=[{"id": "s1"}]):
+    with patch("axon.sessions._list_sessions", return_value=[{"id": "s1"}]):
         resp = client.get("/sessions")
     assert resp.status_code == 200
     assert "sessions" in resp.json()
@@ -87,14 +87,14 @@ def test_list_sessions_returns_list():
 
 def test_get_session_found():
     api_module.brain = _make_brain()
-    with patch("axon.main._load_session", return_value={"id": "abc"}):
+    with patch("axon.sessions._load_session", return_value={"id": "abc"}):
         resp = client.get("/session/abc")
     assert resp.status_code == 200
 
 
 def test_get_session_not_found():
     api_module.brain = _make_brain()
-    with patch("axon.main._load_session", return_value=None):
+    with patch("axon.sessions._load_session", return_value=None):
         resp = client.get("/session/missing")
     assert resp.status_code == 404
 
