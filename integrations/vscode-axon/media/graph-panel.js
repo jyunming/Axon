@@ -69,6 +69,52 @@
   var kg = DATA.knowledgeGraph || { nodes: [], links: [] };
   var cg = DATA.codeGraph      || { nodes: [], links: [] };
 
+  /* ── Cross-reference graph nodes with retrieved search results ─────── */
+  (function () {
+    function normSrc(p) { return (p || '').replace(/\\/g, '/'); }
+    var hitFilePaths = new Set();
+    var hitChunkIds  = new Set();
+    (DATA.sources || []).forEach(function (s) {
+      var src = normSrc((s.metadata && s.metadata.source) || s.source || '');
+      if (src) { hitFilePaths.add(src); }
+      if (s.id) { hitChunkIds.add(s.id); }
+    });
+    if (!hitFilePaths.size && !hitChunkIds.size) { return; }
+
+    function isCodeHit(n) {
+      var fp = normSrc(n.file_path || '');
+      if (!fp) { return false; }
+      if (hitFilePaths.has(fp)) { return true; }
+      // Suffix match: source may be relative while node carries absolute path
+      var hit = false;
+      hitFilePaths.forEach(function (src) {
+        if (!hit && (fp.endsWith('/' + src) || src.endsWith('/' + fp.split('/').pop()))) {
+          hit = true;
+        }
+      });
+      return hit;
+    }
+
+    function isKgHit(n) {
+      var chunkIds = n.chunk_ids || [];
+      if (chunkIds.some(function (id) { return hitChunkIds.has(id); })) { return true; }
+      var ev = Array.isArray(n.evidence) ? n.evidence : [];
+      return ev.some(function (e) {
+        var src = normSrc(e.source || '');
+        if (!src) { return false; }
+        if (hitFilePaths.has(src)) { return true; }
+        var found = false;
+        hitFilePaths.forEach(function (h) {
+          if (!found && src.endsWith('/' + h.split('/').pop())) { found = true; }
+        });
+        return found;
+      });
+    }
+
+    kg.nodes.forEach(function (n) { if (isKgHit(n))   { n._hit = true; } });
+    cg.nodes.forEach(function (n) { if (isCodeHit(n)) { n._hit = true; } });
+  })();
+
   var kgHasData = Array.isArray(kg.nodes) && kg.nodes.length > 0;
   var cgHasData = Array.isArray(cg.nodes) && cg.nodes.length > 0;
 
@@ -164,8 +210,8 @@
       .graphData({ nodes: nodes, links: links })
       .backgroundColor(theme.background)
       .nodeLabel(function (n) { return n.tooltip || n.name || n.id || ''; })
-      .nodeColor(function (n) { return n.color || theme.node; })
-      .nodeVal(function (n) { return Math.max(1, n.val || 1); })
+      .nodeColor(function (n) { return n._hit ? '#ffcc00' : (n.color || theme.node); })
+      .nodeVal(function (n) { return n._hit ? Math.max(4, (n.val || 1) * 3) : Math.max(1, n.val || 1); })
       .nodeOpacity(0.9)
       .linkLabel(function (l) { return l.label || l.edge_type || l.relation || ''; })
       .linkColor(function (l) {
