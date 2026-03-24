@@ -8,9 +8,8 @@ import pathlib
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from axon.api import get_brain, get_brain_optional
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import (
     BatchTextIngestRequest,
@@ -20,7 +19,6 @@ from axon.api_schemas import (
     URLIngestRequest,
     _validate_ingest_path,
 )
-from axon.main import AxonBrain
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
@@ -35,12 +33,17 @@ def _enforce_write_access(brain, operation: str) -> None:
 
 
 @router.post("/ingest/refresh")
-async def refresh_docs(brain: AxonBrain = Depends(get_brain)):
+async def refresh_docs():
     """Re-ingest any tracked files whose content has changed since last ingest."""
     import functools
     import hashlib as _hashlib
 
+    from axon import api as _api
     from axon.loaders import DirectoryLoader
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     _enforce_write_access(brain, "refresh")
 
@@ -87,9 +90,12 @@ async def ingest_data(
     request: IngestRequest,
     background_tasks: BackgroundTasks,
     req: Request,
-    brain: AxonBrain = Depends(get_brain),
 ):
     from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     validated_path = _validate_ingest_path(request.path)
 
@@ -205,9 +211,11 @@ async def ingest_data(
 
 
 @router.get("/ingest/status/{job_id}")
-async def get_ingest_status(job_id: str, brain: AxonBrain | None = Depends(get_brain_optional)):
+async def get_ingest_status(job_id: str):
     """Poll the status of an async ingest job started by POST /ingest."""
     from axon import api as _api
+
+    brain = _api.brain
 
     job = _api._jobs.get(job_id)
     if job is None:
@@ -223,13 +231,23 @@ async def get_ingest_status(job_id: str, brain: AxonBrain | None = Depends(get_b
 
 
 @router.get("/tracked-docs")
-async def list_tracked_docs(brain: AxonBrain = Depends(get_brain)):
+async def list_tracked_docs():
     """List all tracked document sources with metadata."""
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     return {"docs": brain.get_doc_versions()}
 
 
 @router.get("/collection")
-async def get_collection(brain: AxonBrain = Depends(get_brain)):
+async def get_collection():
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
         docs = brain.list_documents()
         return {
@@ -243,7 +261,7 @@ async def get_collection(brain: AxonBrain = Depends(get_brain)):
 
 
 @router.get("/collection/stale")
-async def get_stale_docs(days: int = 7, brain: AxonBrain | None = Depends(get_brain_optional)):
+async def get_stale_docs(days: int = 7):
     """Return documents that have not been re-ingested within *days* calendar days."""
     from axon import api as _api
 
@@ -273,8 +291,12 @@ async def get_stale_docs(days: int = 7, brain: AxonBrain | None = Depends(get_br
 
 
 @router.post("/add_text")
-async def add_text(request: TextIngestRequest, brain: AxonBrain = Depends(get_brain)):
+async def add_text(request: TextIngestRequest):
     from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
@@ -308,9 +330,13 @@ async def add_text(request: TextIngestRequest, brain: AxonBrain = Depends(get_br
 
 
 @router.post("/add_texts")
-async def add_texts(request: BatchTextIngestRequest, brain: AxonBrain = Depends(get_brain)):
+async def add_texts(request: BatchTextIngestRequest):
     """Ingest a list of documents in a single embedding batch."""
     from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     from axon.api_schemas import _compute_content_hash
     from axon.loaders import SmartTextLoader
 
@@ -358,9 +384,13 @@ async def add_texts(request: BatchTextIngestRequest, brain: AxonBrain = Depends(
 
 
 @router.post("/ingest_url")
-async def ingest_url(request: URLIngestRequest, brain: AxonBrain = Depends(get_brain)):
+async def ingest_url(request: URLIngestRequest):
     """Fetch an HTTP/HTTPS URL and ingest its text content."""
     from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     from axon.loaders import URLLoader
 
     _enforce_project(request.project, brain)
@@ -401,10 +431,13 @@ async def ingest_url(request: URLIngestRequest, brain: AxonBrain = Depends(get_b
 async def delete_documents(
     request: DeleteRequest,
     req: Request,
-    brain: AxonBrain = Depends(get_brain),
 ):
+    from axon import api as _api
     from axon import governance as gov
 
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")

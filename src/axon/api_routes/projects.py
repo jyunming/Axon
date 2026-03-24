@@ -4,39 +4,50 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from axon.api import get_brain, get_brain_optional
 from axon.api_schemas import (
     _VALID_PROJECT_NAME_RE,
     ConfigUpdateRequest,
     ProjectCreateRequest,
     ProjectSwitchRequest,
 )
-from axon.main import AxonBrain
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
 
 @router.get("/health")
-async def health_check(brain: AxonBrain | None = Depends(get_brain_optional)):
+async def health_check():
     """Return 200 with status 'ok' when the brain is ready; 503 when not yet available."""
+    from axon import api as _api
+
+    brain = _api.brain
     if brain is None:
         return JSONResponse({"status": "initializing"}, status_code=503)
     return {"status": "ok", "project": getattr(brain, "_active_project", "default")}
 
 
 @router.get("/config")
-async def get_config(brain: AxonBrain = Depends(get_brain)):
+async def get_config():
     """Return the current active configuration."""
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     return brain.config
 
 
 @router.post("/config/update")
-async def update_config(request: ConfigUpdateRequest, brain: AxonBrain = Depends(get_brain)):
+async def update_config(request: ConfigUpdateRequest):
     """Update global configuration settings."""
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     update_data = request.model_dump(exclude_unset=True)
     persist = update_data.pop("persist", False)
@@ -69,10 +80,12 @@ async def update_config(request: ConfigUpdateRequest, brain: AxonBrain = Depends
 
 
 @router.get("/projects")
-async def get_projects(brain: AxonBrain | None = Depends(get_brain_optional)):
+async def get_projects():
     """List all projects known to the Axon system."""
     from axon import api as _api
     from axon import shares as _shares
+
+    brain = _api.brain
     from axon.projects import is_reserved_top_level_name as _is_reserved_top_level_name
     from axon.projects import list_projects as _list_projects
 
@@ -151,8 +164,13 @@ async def create_project(request: ProjectCreateRequest):
 
 
 @router.post("/project/switch")
-async def switch_project(request: ProjectSwitchRequest, brain: AxonBrain = Depends(get_brain)):
+async def switch_project(request: ProjectSwitchRequest):
     """Switch the active project, reinitializing vector store and BM25."""
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
         project_name = request.final_name
 
@@ -195,10 +213,12 @@ async def switch_project(request: ProjectSwitchRequest, brain: AxonBrain = Depen
 
 
 @router.post("/project/delete/{name}")
-async def delete_project_endpoint(name: str, brain: AxonBrain | None = Depends(get_brain_optional)):
+async def delete_project_endpoint(name: str):
     """Delete a project and all its data."""
     from axon import api as _api
     from axon import shares as _shares
+
+    brain = _api.brain
     from axon.projects import ProjectHasChildrenError, delete_project
 
     if name.startswith("mounts/") or name == "mounts":
@@ -237,18 +257,28 @@ async def delete_project_endpoint(name: str, brain: AxonBrain | None = Depends(g
 
 
 @router.get("/sessions")
-async def list_sessions(brain: AxonBrain = Depends(get_brain)):
+async def list_sessions():
     """List all saved chat sessions for the active project."""
+    from axon import api as _api
     from axon.sessions import _list_sessions
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     project = getattr(brain, "_active_project", None)
     return {"sessions": _list_sessions(project=project)}
 
 
 @router.get("/session/{session_id}")
-async def get_session(session_id: str, brain: AxonBrain = Depends(get_brain)):
+async def get_session(session_id: str):
     """Retrieve a specific session by ID."""
+    from axon import api as _api
     from axon.sessions import _load_session
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     project = getattr(brain, "_active_project", None)
     session = _load_session(session_id, project=project)
