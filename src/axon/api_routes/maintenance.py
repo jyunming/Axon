@@ -7,7 +7,7 @@ import logging
 import os
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from axon.api_schemas import (
     _VALID_PROJECT_NAME_RE,
@@ -21,7 +21,10 @@ router = APIRouter()
 
 
 @router.post("/copilot/agent")
-async def copilot_agent_handler(request: Request, body: CopilotAgentRequest):
+async def copilot_agent_handler(
+    request: Request,
+    body: CopilotAgentRequest,
+):
     """Handle chat requests from GitHub Copilot."""
     from axon import api as _api
     from axon.projects import list_projects as _list_projects
@@ -32,9 +35,7 @@ async def copilot_agent_handler(request: Request, body: CopilotAgentRequest):
 
     user_query = body.messages[-1].content if body.messages else ""
     if not user_query:
-        return __import__("fastapi").responses.JSONResponse(
-            {"error": "Empty query"}, status_code=400
-        )
+        return JSONResponse({"error": "Empty query"}, status_code=400)
 
     parts = user_query.strip().split(maxsplit=1)
     command = parts[0].lower() if parts[0].startswith("/") else None

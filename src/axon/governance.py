@@ -340,16 +340,26 @@ class CopilotSessionStore:
         self._max_recent = max_recent
 
     def _evict(self) -> None:
-        """Evict oldest closed sessions when over capacity."""
-        if len(self._sessions) <= self._max_recent:
+        """Evict oldest sessions when over capacity (closed first, then active)."""
+        excess = len(self._sessions) - self._max_recent
+        if excess <= 0:
             return
+        # First pass: remove oldest closed sessions
         closed = sorted(
             (s for s in self._sessions.values() if s.closed_at is not None),
             key=lambda s: s.closed_at or "",
         )
-        to_remove = len(self._sessions) - self._max_recent
-        for s in closed[:to_remove]:
+        for s in closed[:excess]:
             self._sessions.pop(s.session_id, None)
+        # Second pass: if still over cap, remove oldest active sessions too
+        excess = len(self._sessions) - self._max_recent
+        if excess > 0:
+            active = sorted(
+                (s for s in self._sessions.values() if s.closed_at is None),
+                key=lambda s: s.opened_at,
+            )
+            for s in active[:excess]:
+                self._sessions.pop(s.session_id, None)
 
     def open(self, session_id: str, request_id: str, project: str) -> None:
         """Register a new Copilot session."""
@@ -369,6 +379,7 @@ class CopilotSessionStore:
             if sess and sess.closed_at is None:
                 sess.closed_at = datetime.now(timezone.utc).isoformat()
                 sess.error = error
+            self._evict()
 
     def expire(self, session_id: str) -> bool:
         """Force-close a stuck session. Returns True if found and active."""
@@ -408,9 +419,9 @@ def get_store() -> AuditStore:
         with _store_lock:
             if _store is None:
                 try:
-                    from axon.projects import _resolve_projects_root
+                    from axon.projects import PROJECTS_ROOT
 
-                    root = Path(_resolve_projects_root())
+                    root = Path(PROJECTS_ROOT)
                 except Exception:
                     import os
 
