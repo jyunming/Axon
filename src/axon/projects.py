@@ -92,7 +92,8 @@ def build_project_id(prefix: str = "ns") -> str:
         prefix: Short label for the kind of namespace (``"proj"``, ``"store"``).
 
     Returns:
-        A 40-character string that is unique with overwhelming probability.
+        A string of the form ``{prefix}_{uuid4_hex}`` (len = len(prefix) + 33)
+        that is unique with overwhelming probability.
     """
     return f"{prefix}_{uuid.uuid4().hex}"
 

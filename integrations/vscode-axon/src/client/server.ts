@@ -127,14 +127,17 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
       const { execSync } = require('child_process');
       let cmdLine = '';
       if (process.platform === 'win32') {
+        // Get the full command line (not just exe path) so we can match axon.api signals
         cmdLine = execSync(
-          `powershell -Command "Get-Process -Id ${stalePid} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path"`,
+          `powershell -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${stalePid}').CommandLine"`,
           { encoding: 'utf8' }
         ).trim().toLowerCase();
       } else {
         cmdLine = execSync(`ps -p ${stalePid} -o command=`, { encoding: 'utf8' }).trim().toLowerCase();
       }
-      isAxonProcess = cmdLine.includes('axon') || cmdLine.includes('uvicorn') || cmdLine.includes('python');
+      // Only match Axon/uvicorn-specific signals — avoid the generic "python" substring
+      const axonSignals = ['axon.api', 'uvicorn axon.api:app', 'python -m axon.api', 'axon-api'];
+      isAxonProcess = axonSignals.some(signal => cmdLine.includes(signal));
     } catch {
       // If we can't inspect the process, don't kill it
     }
@@ -144,12 +147,23 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
         `Axon: stale process (PID ${stalePid}) found on port ${port} — terminating and restarting.`
       );
       try {
+        // Attempt graceful shutdown first; escalate to force-kill only if needed
         if (process.platform === 'win32') {
-          require('child_process').execSync('taskkill /F /PID ' + stalePid);
+          require('child_process').execSync('taskkill /PID ' + stalePid);
         } else {
-          process.kill(stalePid, 'SIGKILL');
+          process.kill(stalePid, 'SIGTERM');
         }
-        await sleep(800);  // Give the OS time to release the port
+        await sleep(1500);
+        // Verify it's gone; force-kill if still running
+        const stillRunning = await getPortPid(port);
+        if (stillRunning === stalePid) {
+          if (process.platform === 'win32') {
+            require('child_process').execSync('taskkill /F /PID ' + stalePid);
+          } else {
+            process.kill(stalePid, 'SIGKILL');
+          }
+          await sleep(500);
+        }
       } catch {
         state.outputChannel.appendLine(
           `Could not terminate stale process ${stalePid} — it may have already exited or access was denied.`

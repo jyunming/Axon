@@ -631,7 +631,7 @@ class QueryRouterMixin:
                 "filtered_count": 0,
                 "graph_expanded_count": 0,
                 "matched_entities": [],
-                "transforms": [],
+                "transforms": {},
                 "diagnostics": diagnostics,
                 "trace": trace,
             }
