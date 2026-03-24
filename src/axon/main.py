@@ -760,8 +760,16 @@ Your primary goal is to help the user by answering questions based on the provid
             self.config.vector_store_path = project_vector_path(name)
             self.config.bm25_path = project_bm25_path(name)
 
-        # Close existing stores before replacing them
+        # Close existing stores before replacing them; force GC to release Windows
+        # file handles on ChromaDB's SQLite database before opening the new path.
         self.close()
+        self.vector_store = None  # type: ignore[assignment]
+        self._own_vector_store = None  # type: ignore[assignment]
+        self.bm25 = None
+        self._own_bm25 = None
+        import gc as _gc
+
+        _gc.collect()
 
         # Recreate the executor — close() shuts it down and it cannot be reused
         from concurrent.futures import ThreadPoolExecutor

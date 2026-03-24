@@ -136,7 +136,7 @@ export class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
   }
 
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, token: vscode.CancellationToken) {
-    const { imagePath, project } = options.input as { imagePath: string; project?: string };
+    const { imagePath, project, alt_text } = options.input as { imagePath: string; project?: string; alt_text?: string };
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
@@ -152,52 +152,60 @@ export class AxonIngestImageTool implements vscode.LanguageModelTool<any> {
     }
 
     try {
-      // Read the image file as Uint8Array (LanguageModelDataPart requires Uint8Array, not Buffer)
-      const fs = await import('fs');
-      const rawBuffer = fs.readFileSync(imagePath);
-      const imageBuffer = new Uint8Array(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength);
-      const mimeType = getImageMimeType(imagePath);
+      let description: string;
 
-      // Select a Copilot model with vision capability
-      const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-      if (models.length === 0) {
-        return new (vscode as any).LanguageModelToolResult([
-          new (vscode as any).LanguageModelTextPart('No Copilot language model available. Ensure GitHub Copilot is installed and signed in.')
-        ]);
-      }
+      if (alt_text && alt_text.trim()) {
+        // Use the provided alt_text directly — enables headless/offline use
+        description = alt_text.trim();
+      } else {
+        // Read the image file as Uint8Array (LanguageModelDataPart requires Uint8Array, not Buffer)
+        const fs = await import('fs');
+        const rawBuffer = fs.readFileSync(imagePath);
+        const imageBuffer = new Uint8Array(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength);
+        const mimeType = getImageMimeType(imagePath);
 
-      // Prefer a model that supports image input; fall back to first available
-      const model = models.find((m: any) => m.capabilities?.supportsImageToText) ?? models[0];
+        // Select a Copilot model with vision capability
+        const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+        if (models.length === 0) {
+          return new (vscode as any).LanguageModelToolResult([
+            new (vscode as any).LanguageModelTextPart('No Copilot language model available. Ensure GitHub Copilot is installed and signed in.')
+          ]);
+        }
 
-      // Build the multimodal prompt
-      const prompt = [
-        vscode.LanguageModelChatMessage.User([
-          new (vscode as any).LanguageModelDataPart(imageBuffer, mimeType),
-          new vscode.LanguageModelTextPart(
-            'Describe this image in detail for a searchable knowledge base. ' +
-            'Include all visible text, diagram structure, key concepts, labels, ' +
-            'relationships, and any quantitative data shown. Be thorough and precise.'
-          )
-        ])
-      ];
+        // Prefer a model that supports image input; fall back to first available
+        const model = models.find((m: any) => m.capabilities?.supportsImageToText) ?? models[0];
 
-      // Stream the description
-      const response = await model.sendRequest(prompt, {}, token);
-      let description = '';
-      for await (const chunk of response.text) {
-        description += chunk;
-      }
+        // Build the multimodal prompt
+        const prompt = [
+          vscode.LanguageModelChatMessage.User([
+            new (vscode as any).LanguageModelDataPart(imageBuffer, mimeType),
+            new vscode.LanguageModelTextPart(
+              'Describe this image in detail for a searchable knowledge base. ' +
+              'Include all visible text, diagram structure, key concepts, labels, ' +
+              'relationships, and any quantitative data shown. Be thorough and precise.'
+            )
+          ])
+        ];
 
-      if (!description.trim()) {
-        return new (vscode as any).LanguageModelToolResult([
-          new (vscode as any).LanguageModelTextPart('Copilot returned an empty description for the image.')
-        ]);
+        // Stream the description
+        const response = await model.sendRequest(prompt, {}, token);
+        description = '';
+        for await (const chunk of response.text) {
+          description += chunk;
+        }
+
+        if (!description.trim()) {
+          return new (vscode as any).LanguageModelToolResult([
+            new (vscode as any).LanguageModelTextPart('Copilot returned an empty description for the image.')
+          ]);
+        }
       }
 
       // Ingest the description as text
+      const ingestedVia = alt_text ? 'alt_text' : 'copilot_vision';
       const body: Record<string, any> = {
         text: description,
-        metadata: { type: 'image', original_path: imagePath, ingested_via: 'copilot_vision' }
+        metadata: { type: 'image', original_path: imagePath, ingested_via: ingestedVia }
       };
       if (project) {
         body['project'] = project;

@@ -91,8 +91,13 @@
     return;
   }
 
-  /* Default: show knowledge graph first if available, else code graph */
-  var initialTab = kgHasData ? 'kg' : 'cg';
+  /* Default: prefer code graph when query looks code-related, otherwise KG.
+     Falls back gracefully if the preferred graph has no data. */
+  var CODE_KEYWORDS = /\b(code|file|function|class|method|module|import|def|src|api|endpoint|variable|const|interface|type|struct|object|library|package)\b/i;
+  var queryLooksCode = CODE_KEYWORDS.test(DATA.query || '');
+  var initialTab = (queryLooksCode && cgHasData) ? 'cg'
+                 : kgHasData                     ? 'kg'
+                 :                                 'cg';
   showTab(initialTab);
 
   tabKg.addEventListener('click', function () { if (kgHasData) { showTab('kg'); } });
@@ -112,6 +117,13 @@
     kgContainer.style.display = tab === 'kg' ? 'block' : 'none';
     cgContainer.style.display = tab === 'cg' ? 'block' : 'none';
 
+    // Dismiss any open KG node-detail panel — it does not belong on the CG tab
+    // and would appear as an opaque dark overlay on the right side of the graph.
+    if (detailPanel) {
+      detailPanel.remove();
+      detailPanel = null;
+    }
+
     if (tab === 'kg' && !kgContainer._graphMounted && kgHasData) {
       kgContainer._graphMounted = true;
       activeGraphInstance = mountGraph(kgContainer, kg, 'knowledge');
@@ -125,6 +137,17 @@
     } else if (tab === 'cg' && cgContainer._graphMounted) {
       activeGraphInstance = cgContainer._instance;
     }
+
+    // Resize the canvas on the next paint frame.
+    // When display flips none→block the browser hasn't reflowed yet; reading
+    // clientWidth synchronously can return a stale value so the WebGL viewport
+    // only covers part of the container, leaving the rest black.
+    var inst = activeGraphInstance;
+    requestAnimationFrame(function () {
+      if (inst && inst._graph && inst._el) {
+        inst._graph.width(inst._el.clientWidth).height(inst._el.clientHeight);
+      }
+    });
   }
 
   /* ── Mount a ForceGraph3D into a container element ─────────────────── */

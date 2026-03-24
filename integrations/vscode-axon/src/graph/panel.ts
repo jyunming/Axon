@@ -229,13 +229,17 @@ export async function showGraphForQuery(
   const config = vscode.workspace.getConfiguration('axon');
   const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
   const apiKey = config.get<string>('apiKey', '');
+  const graphSynthesis = config.get<boolean>('graphSynthesis', true);
 
   const panel = AxonGraphPanel.createOrReveal(context);
   panel.showLoading(query);
 
   try {
+    const queryPromise = graphSynthesis
+      ? httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey, GRAPH_ANSWER_TIMEOUT_MS)
+      : Promise.resolve({ status: 0, body: '{}' });
     const [querySettled, searchSettled, kgSettled, cgSettled] = await Promise.allSettled([
-      httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey, GRAPH_ANSWER_TIMEOUT_MS),
+      queryPromise,
       httpPost(`${apiBase}/search/raw`, { query }, apiKey, GRAPH_ANSWER_TIMEOUT_MS),
       httpGet(`${apiBase}/graph/data`, apiKey),
       httpGet(`${apiBase}/code-graph/data`, apiKey),
@@ -251,7 +255,9 @@ export async function showGraphForQuery(
     let kgStatus = 0;
     let cgStatus = 0;
 
-    if (querySettled.status === 'fulfilled') {
+    if (!graphSynthesis) {
+      answerText = '';
+    } else if (querySettled.status === 'fulfilled') {
       queryStatus = querySettled.value.status;
       const answer = parseJsonSafe(querySettled.value.body);
       if (querySettled.value.status === 200) {

@@ -32,6 +32,20 @@ async def store_init(request: StoreInitRequest):
     store_root = base / "AxonStore"
     user_dir = store_root / username
 
+    # Enumerate projects that will become unreachable after the path change
+    unreachable: list[str] = []
+    if brain:
+        try:
+            from axon.projects import list_projects as _list_projects
+
+            old_projects = _list_projects()
+            new_root = str(user_dir)
+            unreachable = [
+                p["name"] for p in old_projects if not p.get("path", "").startswith(new_root)
+            ]
+        except Exception:
+            pass
+
     ensure_user_project(user_dir)
 
     config = brain.config if brain else AxonConfig()
@@ -52,12 +66,19 @@ async def store_init(request: StoreInitRequest):
     _api._source_hashes.clear()
     _api._jobs.clear()
 
-    return {
+    result: dict = {
         "status": "ok",
         "store_path": str(store_root),
         "user_dir": str(user_dir),
         "username": username,
     }
+    if unreachable:
+        result["warning"] = (
+            f"{len(unreachable)} project(s) will be unreachable until the previous "
+            f"store path is restored: {', '.join(unreachable)}"
+        )
+        result["unreachable_projects"] = unreachable
+    return result
 
 
 @router.get("/store/whoami")

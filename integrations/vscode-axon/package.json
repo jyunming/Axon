@@ -712,6 +712,11 @@
           "default": true,
           "description": "Automatically start the Axon API server when VS Code opens (Linux/macOS)."
         },
+        "axon.graphSynthesis": {
+          "type": "boolean",
+          "default": true,
+          "description": "When showing the knowledge graph, also call POST /query to synthesise an answer. Disable this if your LLM is slow or unavailable — the graph still renders without it."
+        },
         "axon.pythonPath": {
           "type": "string",
           "default": "",

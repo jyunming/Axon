@@ -20,7 +20,18 @@ export class AxonSearchTool implements vscode.LanguageModelTool<any> {
     const { query, topK = 5, threshold, filters, project } = options.input;
 
     try {
-      const chunks = await searchAxon(apiBase, apiKey, query, topK, threshold, filters, project);
+      let chunks = await searchAxon(apiBase, apiKey, query, topK, threshold, filters, project);
+      // When a threshold filtered out all results, fall back to top-N without the threshold
+      // so the caller gets candidates rather than an empty response.
+      if (chunks.length === 0 && threshold != null) {
+        const fallback = await searchAxon(apiBase, apiKey, query, Math.min(topK, 3), undefined, filters, project);
+        if (fallback.length > 0) {
+          const scores = fallback.map(c => `score ${(c as any).score?.toFixed(3) ?? '?'}`).join(', ');
+          const note = `*No results met the threshold (${threshold}). Showing top candidates (${scores}):*\n\n`;
+          const content = note + fallback.map(c => `[ID: ${c.id}] Source: ${c.metadata?.source}\n${c.text}`).join('\n\n---\n\n');
+          return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(content)]);
+        }
+      }
       const content = chunks.map(c => `[ID: ${c.id}] Source: ${c.metadata?.source}\n${c.text}`).join('\n\n---\n\n');
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(content || 'No results found.')]);
     } catch (err) {

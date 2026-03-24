@@ -29,15 +29,36 @@ async def health_check():
     return {"status": "ok", "project": getattr(brain, "_active_project", "default")}
 
 
+_SENSITIVE_FIELDS = frozenset(
+    {
+        "api_key",
+        "gemini_api_key",
+        "ollama_cloud_key",
+        "copilot_pat",
+        "brave_api_key",
+        "qdrant_api_key",
+    }
+)
+
+
 @router.get("/config")
 async def get_config():
-    """Return the current active configuration."""
+    """Return the current active configuration with sensitive fields masked."""
+    from dataclasses import asdict
+
     from axon import api as _api
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    return brain.config
+    try:
+        data = asdict(brain.config)
+    except TypeError:
+        return brain.config
+    for field in _SENSITIVE_FIELDS:
+        if field in data and data[field]:
+            data[field] = "***"
+    return data
 
 
 @router.post("/config/update")

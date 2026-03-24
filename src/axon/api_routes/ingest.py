@@ -321,7 +321,7 @@ async def add_text(request: TextIngestRequest):
             doc["metadata"].update(request.metadata)
 
     try:
-        brain.ingest(documents)
+        await asyncio.to_thread(brain.ingest, documents)
         _api._record_dedup(request.text, doc_id, project_key)
         return {"status": "success", "doc_id": doc_id, "chunks": len(documents)}
     except Exception as e:
@@ -373,7 +373,7 @@ async def add_texts(request: BatchTextIngestRequest):
 
     if docs_to_ingest:
         try:
-            brain.ingest(docs_to_ingest)
+            await asyncio.to_thread(brain.ingest, docs_to_ingest)
             for doc_id, text in pending_records:
                 _api._record_dedup(text, doc_id, project_key)
         except Exception as e:
@@ -418,7 +418,7 @@ async def ingest_url(request: URLIngestRequest):
         return {**skip, "doc_id": skip["doc_id"], "url": request.url}
 
     try:
-        brain.ingest([doc])
+        await asyncio.to_thread(brain.ingest, [doc])
         _api._record_dedup(doc["text"], doc["id"], project_key)
     except Exception as exc:
         logger.error(f"Error ingesting URL content: {exc}")

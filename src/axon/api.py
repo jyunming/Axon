@@ -240,7 +240,7 @@ def main():
     """Main entry point for axon-api command."""
     host = os.getenv("AXON_HOST", "0.0.0.0")
     port = int(os.getenv("AXON_PORT", "8000"))
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run("axon.api:app", host=host, port=port)
 
 
 if __name__ == "__main__":
