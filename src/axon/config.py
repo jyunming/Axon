@@ -604,8 +604,10 @@ offline:
         try:
             with open(os.path.expanduser(path), encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-        except yaml.YAMLError as exc:
-            logger.warning("Config file %s is malformed (%s). Using defaults.", path, exc)
+        except (yaml.YAMLError, OSError) as exc:
+            logger.warning(
+                "Config file %s is unreadable or malformed (%s). Using defaults.", path, exc
+            )
             return cls()
 
         # Flatten the YAML structure to match dataclass fields

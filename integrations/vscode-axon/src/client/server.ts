@@ -118,23 +118,53 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
   }
 
   // Detect stale listener: something is bound to the port but not answering /health.
-  // Kill it automatically before spawning so uvicorn does not fail with "address already in use".
+  // Only auto-kill if the process can be positively identified as an Axon/uvicorn process
+  // to avoid terminating unrelated user services bound to the same port.
   const stalePid = await getPortPid(port);
   if (stalePid) {
-    state.outputChannel.appendLine(
-      `Axon: stale process (PID ${stalePid}) found on port ${port} — terminating and restarting.`
-    );
+    let isAxonProcess = false;
     try {
+      const { execSync } = require('child_process');
+      let cmdLine = '';
       if (process.platform === 'win32') {
-        require('child_process').execSync('taskkill /F /PID ' + stalePid);
+        cmdLine = execSync(
+          `powershell -Command "Get-Process -Id ${stalePid} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path"`,
+          { encoding: 'utf8' }
+        ).trim().toLowerCase();
       } else {
-        process.kill(stalePid, 'SIGKILL');
+        cmdLine = execSync(`ps -p ${stalePid} -o command=`, { encoding: 'utf8' }).trim().toLowerCase();
       }
-      await sleep(800);  // Give the OS time to release the port
+      isAxonProcess = cmdLine.includes('axon') || cmdLine.includes('uvicorn') || cmdLine.includes('python');
     } catch {
+      // If we can't inspect the process, don't kill it
+    }
+
+    if (isAxonProcess) {
       state.outputChannel.appendLine(
-        `Could not terminate stale process ${stalePid} — it may have already exited or access was denied.`
+        `Axon: stale process (PID ${stalePid}) found on port ${port} — terminating and restarting.`
       );
+      try {
+        if (process.platform === 'win32') {
+          require('child_process').execSync('taskkill /F /PID ' + stalePid);
+        } else {
+          process.kill(stalePid, 'SIGKILL');
+        }
+        await sleep(800);  // Give the OS time to release the port
+      } catch {
+        state.outputChannel.appendLine(
+          `Could not terminate stale process ${stalePid} — it may have already exited or access was denied.`
+        );
+      }
+    } else {
+      state.outputChannel.appendLine(
+        `Axon: port ${port} is in use by a non-Axon process (PID ${stalePid}). ` +
+        `Cannot auto-start — free the port or change axon.apiBase to a different port.`
+      );
+      vscode.window.showWarningMessage(
+        `Axon: port ${port} is already in use by another process (PID ${stalePid}). ` +
+        `Free the port or update the axon.apiBase setting.`
+      );
+      return;
     }
   }
 
