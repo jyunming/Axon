@@ -154,6 +154,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
 | `/quit`, `/exit` | Exit the REPL |
+| `! <command>` | Execute a shell command directly from the REPL (e.g. `! ls docs/`). Behaviour is controlled by the `repl.shell_passthrough` config field: `always` — allow all commands; `local_only` (default) — block commands that reference remote hosts or sensitive paths; `off` — disable entirely. Change via `config.yaml` or the `RAG_SHELL_PASSTHROUGH` env var. |
 
 ### Docker
 ```bash

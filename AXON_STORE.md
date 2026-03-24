@@ -46,6 +46,15 @@ Run the command `Axon: Initialise Store` from the Command Palette (`Ctrl+Shift+P
 
 The `base_path` is persisted in the active `config.yaml` via `config.save()` and is restored on the next `axon-api` startup.
 
+> **Note:** If projects exist under a different store path, the response includes a `warning` field and an `unreachable_projects` list so you know which projects will be inaccessible until the previous path is restored:
+> ```json
+> {
+>   "status": "ok",
+>   "warning": "2 project(s) will be unreachable until the previous store path is restored: old-project, legacy-proj",
+>   "unreachable_projects": ["old-project", "legacy-proj"]
+> }
+> ```
+
 ---
 
 ## 3. Identity

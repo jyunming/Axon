@@ -175,7 +175,7 @@ check to prevent accidental writes or reads to the wrong corpus.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config` | Return active RAG flags, model config, and runtime settings |
+| `GET` | `/config` | Return active RAG flags, model config, and runtime settings (sensitive fields masked as `"***"`: `api_key`, `gemini_api_key`, `ollama_cloud_key`, `copilot_pat`, `brave_api_key`, `qdrant_api_key`) |
 | `POST` | `/config/update` | Update LLM/embedding provider or RAG flags without restart |
 
 **`POST /config/update` body (all fields optional):**

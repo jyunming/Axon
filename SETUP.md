@@ -1025,6 +1025,7 @@ Open VS Code Settings (Ctrl+,) and search for `axon`:
 | `axon.useCopilotLlm` | `false` | Switch the extension's active LLM provider to Copilot for all inference (query answering, RAPTOR summarization, etc.), not just a helper |
 | `axon.ingestBase` | *(empty)* | Restrict ingestion to a specific directory. Empty = filesystem root on macOS/Linux, current drive root on Windows auto-start. Cross-drive ingest on Windows requires setting this explicitly or starting `axon-api` manually with a broader `RAG_INGEST_BASE`. |
 | `axon.storeBase` | *(empty)* | Base path for AxonStore multi-user mode |
+| `axon.graphSynthesis` | `true` | When showing the knowledge/code graph, also call `POST /query` to synthesise a text answer. Disable if your LLM is slow or unavailable — the graph still renders without it. |
 
 Or edit `settings.json` directly:
 
@@ -1062,7 +1063,7 @@ Search my Axon knowledge base for information about neural networks.
 
 | Tool | What it does |
 |---|---|
-| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer |
+| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer. If `threshold` filters out all results, automatically falls back to top-N candidates with a note. |
 | `axon_queryKnowledge` | Retrieval + answer via the configured LLM provider |
 | `axon_ingestText` | Ingest a text snippet directly |
 | `axon_ingestUrl` | Fetch and ingest a web page |
@@ -1083,7 +1084,7 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_revokeShare` | Revoke an active share |
 | `axon_listShares` | List outgoing and incoming project shares |
 | `axon_initStore` | Initialise AxonStore multi-user mode |
-| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description. Accepts optional `alt_text` param to provide a description directly (enables headless/offline use without Copilot vision). |
 | `axon_refreshIngest` | Re-ingest files whose content has changed since last ingest |
 | `axon_listStaleDocs` | Find documents not re-ingested within N days |
 | `axon_showGraphStatus` | Show entity count, community summary count, and graph readiness |
