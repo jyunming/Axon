@@ -996,12 +996,17 @@ Your primary goal is to help the user by answering questions based on the provid
             from axon.mounts import load_mount_descriptor as _lmd
 
             self._active_mount_descriptor = _lmd(Path(self.config.projects_root), mount_name)
+            # Mounts can be revoked; persist "default" so startup never reopens a broken mount
+            set_active_project("default")
         elif name == "default":
             self._active_project_kind = "default"
             self._active_mount_descriptor = None
+            set_active_project("default")
         elif name.startswith("@"):
             self._active_project_kind = "scope"
             self._active_mount_descriptor = None
+            # Scopes are transient; revert on-disk pointer to "default"
+            set_active_project("default")
         else:
             self._active_project_kind = "local"
             self._active_mount_descriptor = None
