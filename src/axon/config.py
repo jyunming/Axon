@@ -6,7 +6,6 @@ AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
 
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -67,18 +66,14 @@ class AxonConfig:
     # Root directory for all named projects. Defaults to ~/.axon/projects.
     # Override via config.yaml (projects_root: /path/to/dir) or the
     # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
-    projects_root: str = os.path.join(os.path.expanduser("~"), ".axon", "projects")
+    projects_root: str = ""
 
     # Vector Store
     vector_store: Literal["chroma", "qdrant", "lancedb"] = "chroma"
-    vector_store_path: str = os.path.join(
-        os.path.expanduser("~"), ".axon", "projects", "default", "chroma_data"
-    )
+    vector_store_path: str = ""
 
     # BM25 Settings
-    bm25_path: str = os.path.join(
-        os.path.expanduser("~"), ".axon", "projects", "default", "bm25_index"
-    )
+    bm25_path: str = ""
 
     def __post_init__(self) -> None:
         """Populate fields from environment variables and resolve storage paths."""
@@ -118,69 +113,22 @@ class AxonConfig:
         if env_bm25:
             self.bm25_path = _normalize_env_path(env_bm25)
 
-        # 3. Aggressive WSL/Linux path resolution to avoid "readonly database"
-        # errors on Windows-mounted drives (drvfs).
-        home = os.path.join(os.path.expanduser("~"), ".axon")
+        # 3. Path resolution
+        if not self.projects_root:
+            self.projects_root = os.path.join(os.path.expanduser("~"), ".axon", "projects")
+        self.projects_root = os.path.abspath(os.path.expanduser(self.projects_root))
 
-        # 2.5 Redirect legacy relative paths to ~/.axon/projects/default/...
-        legacy_defaults = ("./chroma_data", "chroma_data", "./bm25_index", "bm25_index")
-        if self.vector_store_path in legacy_defaults:
-            self.vector_store_path = os.path.join(home, "projects", "default", "chroma_data")
-        if self.bm25_path in legacy_defaults:
-            self.bm25_path = os.path.join(home, "projects", "default", "bm25_index")
-
-        is_linux = sys.platform == "linux"
-        default_vsp = os.path.join(home, "projects", "default", "chroma_data")
-        default_bmp = os.path.join(home, "projects", "default", "bm25_index")
-        if self.vector_store_path == default_vsp:
-            self.vector_store_path = os.path.join(self.projects_root, "default", "chroma_data")
-        if self.bm25_path == default_bmp:
-            self.bm25_path = os.path.join(self.projects_root, "default", "bm25_index")
-
-        def _resolve_safe(path_str: str, sub: str) -> str:
+        def _resolve_project_path(path_str: str, default_sub: str) -> str:
             if not path_str:
-                return os.path.join(self.projects_root, "default", sub)
-            # Expand ~
-            p_str = os.path.expanduser(path_str)
-            # Legacy defaults used relative paths ("./chroma_data", "./bm25_index")
-            # which should always resolve under projects_root/default.
-            legacy_rel = p_str.replace("\\", "/")
-            if legacy_rel in {sub, f"./{sub}"}:
-                return os.path.join(self.projects_root, "default", sub)
-            # Check for absolute paths
-            if is_linux:
-                import posixpath
+                return os.path.join(self.projects_root, "default", default_sub)
+            p = os.path.expanduser(path_str)
+            if not os.path.isabs(p):
+                # If relative, always resolve under projects_root/default
+                return os.path.join(self.projects_root, "default", default_sub)
+            return os.path.abspath(p)
 
-                is_abs = posixpath.isabs(p_str)
-            else:
-                is_abs = os.path.isabs(p_str)
-
-            # If absolute but on a Windows mount in Linux, it will likely fail
-            if is_linux and is_abs and p_str.startswith("/mnt/"):
-                # Only redirect if it looks like the user didn't explicitly set a custom Linux path
-                # (heuristic: if it contains 'axon' in a Windows path)
-                if "axon" in p_str.lower():
-                    safe_path = os.path.join(self.projects_root, "default", sub)
-                    return safe_path
-
-            if is_linux:
-                # On Windows host testing linux, abspath adds C:\
-                return p_str
-            return os.path.abspath(p_str)
-
-        # Projects root special case (no sub-path)
-        if not os.getenv("AXON_PROJECTS_ROOT"):
-            self.projects_root = os.path.expanduser(self.projects_root)
-            if (
-                is_linux
-                and os.path.isabs(self.projects_root)
-                and self.projects_root.startswith("/mnt/")
-            ):
-                if "axon" in self.projects_root.lower():
-                    self.projects_root = os.path.join(home, "projects")
-
-        self.vector_store_path = _resolve_safe(self.vector_store_path, "chroma_data")
-        self.bm25_path = _resolve_safe(self.bm25_path, "bm25_index")
+        self.vector_store_path = _resolve_project_path(self.vector_store_path, "chroma_data")
+        self.bm25_path = _resolve_project_path(self.bm25_path, "bm25_index")
 
         # AxonStore mode: derive projects_root from store base
         env_store_base = os.getenv("AXON_STORE_BASE", "")
@@ -536,6 +484,11 @@ class AxonConfig:
 
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
+    # REPL shell passthrough policy for `!command`.
+    # - local_only: allow only in local/default project modes (default)
+    # - always: allow in all modes
+    # - off: disable entirely
+    repl_shell_passthrough: Literal["local_only", "always", "off"] = "local_only"
 
     # Maximum parallel worker threads for background ingestion and query tasks
     max_workers: int = 8
@@ -611,6 +564,9 @@ query_transformations:
   multi_query: false
   hyde: false
   discussion_fallback: true
+
+repl:
+  shell_passthrough: local_only
 
 web_search:
   enabled: false
@@ -695,6 +651,9 @@ offline:
             ):
                 if key in data["query_transformations"]:
                     config_dict[key] = data["query_transformations"][key]
+        if "repl" in data and isinstance(data["repl"], dict):
+            if "shell_passthrough" in data["repl"]:
+                config_dict["repl_shell_passthrough"] = data["repl"]["shell_passthrough"]
         if "context_compression" in data:
             config_dict["compress_context"] = data["context_compression"].get("enabled", False)
         if "web_search" in data:
@@ -757,6 +716,8 @@ offline:
             config_dict["qdrant_url"] = data["qdrant_url"]
         if "qdrant_api_key" in data:
             config_dict["qdrant_api_key"] = data["qdrant_api_key"]
+        if "repl_shell_passthrough" in data:
+            config_dict["repl_shell_passthrough"] = data["repl_shell_passthrough"]
 
         # Environment Variable Overrides (High Priority â€” wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
@@ -835,6 +796,9 @@ offline:
                 "step_back": flat["step_back"],
                 "query_decompose": flat["query_decompose"],
                 "discussion_fallback": flat["discussion_fallback"],
+            },
+            "repl": {
+                "shell_passthrough": flat["repl_shell_passthrough"],
             },
             "context_compression": {
                 "enabled": flat["compress_context"],

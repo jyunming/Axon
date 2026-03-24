@@ -125,7 +125,11 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
       `Axon: stale process (PID ${stalePid}) found on port ${port} — terminating and restarting.`
     );
     try {
-      process.kill(stalePid);
+      if (process.platform === 'win32') {
+        require('child_process').execSync('taskkill /F /PID ' + stalePid);
+      } else {
+        process.kill(stalePid, 'SIGKILL');
+      }
       await sleep(800);  // Give the OS time to release the port
     } catch {
       state.outputChannel.appendLine(
@@ -171,6 +175,10 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
     },
   });
 
+  state.serverProcess.on('error', (err) => {
+    state.outputChannel.appendLine(`Axon server spawn error: ${err.message}`);
+    state.serverProcess = undefined;
+  });
   state.serverProcess.stdout?.on('data', (data: Buffer) => {
     state.outputChannel.append(`[server] ${data.toString()}`);
   });
@@ -223,6 +231,10 @@ export async function waitForHealth(apiBase: string, timeoutMs: number): Promise
   while (Date.now() - start < timeoutMs) {
     if (await isAxonRunning(apiBase)) {
       return true;
+    }
+    // Fail fast if the process we spawned has crashed
+    if (state.serverProcess === undefined) {
+      break;
     }
     await sleep(500);
   }

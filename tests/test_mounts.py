@@ -19,7 +19,7 @@ def _make_project_dir(user_dir: Path, project: str) -> Path:
     proj = user_dir / project
     proj.mkdir(parents=True, exist_ok=True)
     (proj / "meta.json").write_text(
-        json.dumps({"name": project, "project_namespace_id": f"ns_{project}"}),
+        json.dumps({"name": project, "project_id": f"ns_{project}"}),
         encoding="utf-8",
     )
     return proj
@@ -109,13 +109,13 @@ class TestCreateMountDescriptor:
         assert desc["target_project_dir"] == str(target)
         assert desc["owner_user_dir"] == str(owner)
 
-    def test_reads_project_namespace_id_from_meta(self, tmp_path):
+    def test_reads_project_id_from_meta(self, tmp_path):
         from axon.mounts import create_mount_descriptor
 
         grantee = _make_user_dir(tmp_path, "bob")
         owner = _make_user_dir(tmp_path, "alice")
         target = _make_project_dir(owner, "research")
-        # meta.json already has project_namespace_id from _make_project_dir
+        # meta.json already has project_id from _make_project_dir
 
         desc = create_mount_descriptor(
             grantee_user_dir=grantee,
@@ -126,16 +126,16 @@ class TestCreateMountDescriptor:
             target_project_dir=target,
             share_key_id="sk_abc123",
         )
-        assert desc["project_namespace_id"] == "ns_research"
+        assert desc["project_id"] == "ns_research"
 
-    def test_reads_store_namespace_id_from_store_meta(self, tmp_path):
+    def test_reads_store_id_from_store_meta(self, tmp_path):
         from axon.mounts import create_mount_descriptor
 
         grantee = _make_user_dir(tmp_path, "bob")
         owner = _make_user_dir(tmp_path, "alice")
         target = _make_project_dir(owner, "research")
         (owner / "store_meta.json").write_text(
-            json.dumps({"store_namespace_id": "store_ns_alice"}), encoding="utf-8"
+            json.dumps({"store_id": "store_ns_alice"}), encoding="utf-8"
         )
 
         desc = create_mount_descriptor(
@@ -147,7 +147,7 @@ class TestCreateMountDescriptor:
             target_project_dir=target,
             share_key_id="sk_abc123",
         )
-        assert desc["store_namespace_id"] == "store_ns_alice"
+        assert desc["store_id"] == "store_ns_alice"
 
     def test_graceful_when_meta_missing(self, tmp_path):
         from axon.mounts import create_mount_descriptor
@@ -167,8 +167,8 @@ class TestCreateMountDescriptor:
             target_project_dir=target,
             share_key_id="sk_abc123",
         )
-        assert desc["project_namespace_id"] == ""
-        assert desc["store_namespace_id"] == ""
+        assert desc["project_id"] == ""
+        assert desc["store_id"] == ""
 
     def test_returns_same_as_written(self, tmp_path):
         from axon.mounts import create_mount_descriptor, mount_descriptor_path
@@ -470,7 +470,7 @@ class TestRedeemShareKeyDescriptor:
         (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
         (user_dir / "myproject" / "chroma_data").mkdir(parents=True, exist_ok=True)
         (user_dir / "myproject" / "meta.json").write_text(
-            json.dumps({"name": "myproject", "project_namespace_id": "ns_myproject"}),
+            json.dumps({"name": "myproject", "project_id": "ns_myproject"}),
             encoding="utf-8",
         )
         return user_dir
@@ -507,7 +507,7 @@ class TestRedeemShareKeyDescriptor:
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
         result = shares.redeem_share_key(grantee_dir, gen["share_string"])
 
-        assert result["descriptor"]["project_namespace_id"] == "ns_myproject"
+        assert result["descriptor"]["project_id"] == "ns_myproject"
 
     def test_redeem_twice_overwrites_descriptor(self, tmp_path):
         from axon import shares

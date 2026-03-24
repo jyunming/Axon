@@ -71,8 +71,8 @@ def create_mount_descriptor(
 ) -> dict[str, Any]:
     """Write a ``mount.json`` descriptor and return it.
 
-    Reads ``project_namespace_id`` from the owner's ``meta.json`` and
-    ``store_namespace_id`` from the owner's ``store_meta.json`` if available.
+    Reads ``project_id`` from the owner's ``meta.json`` and
+    ``store_id`` from the owner's ``store_meta.json`` if available.
 
     Args:
         grantee_user_dir: Grantee's AxonStore user directory.
@@ -86,16 +86,16 @@ def create_mount_descriptor(
     Returns:
         The descriptor dict that was written to disk.
     """
-    project_namespace_id = ""
-    store_namespace_id = ""
+    project_id = ""
+    store_id = ""
     try:
         meta = json.loads((target_project_dir / "meta.json").read_text(encoding="utf-8"))
-        project_namespace_id = meta.get("project_namespace_id", "")
+        project_id = meta.get("project_id", "")
     except Exception:
         pass
     try:
         store_meta = json.loads((owner_user_dir / "store_meta.json").read_text(encoding="utf-8"))
-        store_namespace_id = store_meta.get("store_namespace_id", "")
+        store_id = store_meta.get("store_id", "")
     except Exception:
         pass
 
@@ -106,8 +106,8 @@ def create_mount_descriptor(
         "project": project,
         "owner_user_dir": str(owner_user_dir),
         "target_project_dir": str(target_project_dir),
-        "project_namespace_id": project_namespace_id,
-        "store_namespace_id": store_namespace_id,
+        "project_id": project_id,
+        "store_id": store_id,
         "share_key_id": share_key_id,
         "redeemed_at": now,
         "state": "active",

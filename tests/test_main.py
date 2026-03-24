@@ -775,54 +775,54 @@ class TestOpenLLM:
         call_kwargs = mock_client.chat.call_args[1]
         assert call_kwargs["options"]["num_ctx"] == 8192
 
-    @patch("google.generativeai.GenerativeModel")
-    @patch("google.generativeai.configure")
-    def test_gemini_gemma_handling(self, MockGenaiConfigure, MockGenerativeModel):
+    def test_gemini_gemma_handling(self):
         from axon.main import AxonConfig, OpenLLM
 
         # Test Gemma
         config = AxonConfig(llm_provider="gemini", llm_model="gemma-3-27b-it")
-        llm = OpenLLM(config)
+        with patch("google.genai.Client") as MockClient, patch(
+            "google.genai.types.GenerateContentConfig"
+        ) as MockGenConfig:
+            llm = OpenLLM(config)
+            mock_client = MockClient.return_value
+            mock_client.models.generate_content.return_value = MagicMock(text="gemma answer")
 
-        mock_model = MockGenerativeModel.return_value
-        mock_model.generate_content.return_value = MagicMock(text="gemma answer")
+            llm.complete("hello", system_prompt="be helpful")
 
-        llm.complete("hello", system_prompt="be helpful")
+            cfg_kwargs = MockGenConfig.call_args[1]
+            assert "system_instruction" not in cfg_kwargs
+            gen_args = mock_client.models.generate_content.call_args[1]["contents"]
+            assert "be helpful\n\nhello" in gen_args[-1]["parts"][0]
 
-        # Verify system_instruction was NOT passed to constructor
-        MockGenerativeModel.assert_called_with(model_name="gemma-3-27b-it")
-
-        # Verify prompt was prepended
-        gen_args = mock_model.generate_content.call_args[0][0]
-        assert "be helpful\n\nhello" in gen_args[-1]["parts"][0]
-
-    @patch("google.generativeai.GenerativeModel")
-    @patch("google.generativeai.configure")
-    def test_gemini_pro_handling(self, MockGenaiConfigure, MockGenerativeModel):
+    def test_gemini_pro_handling(self):
         from axon.main import AxonConfig, OpenLLM
 
         # Test Pro (supports system instructions)
         config = AxonConfig(llm_provider="gemini", llm_model="gemini-1.5-pro")
-        llm = OpenLLM(config)
+        with patch("google.genai.Client") as MockClient, patch(
+            "google.genai.types.GenerateContentConfig"
+        ) as MockGenConfig:
+            llm = OpenLLM(config)
+            mock_client = MockClient.return_value
+            mock_client.models.generate_content.return_value = MagicMock(text="pro answer")
 
-        llm.complete("hello", system_prompt="be helpful")
-        MockGenerativeModel.assert_called_with(
-            model_name="gemini-1.5-pro", system_instruction="be helpful"
-        )
+            llm.complete("hello", system_prompt="be helpful")
+            assert MockGenConfig.call_args[1]["system_instruction"] == "be helpful"
 
-    @patch("google.generativeai.GenerativeModel")
-    @patch("google.generativeai.configure")
-    def test_gemini_flash_handling(self, MockGenaiConfigure, MockGenerativeModel):
+    def test_gemini_flash_handling(self):
         from axon.main import AxonConfig, OpenLLM
 
         # Test Flash (also supports system instructions)
         config = AxonConfig(llm_provider="gemini", llm_model="gemini-1.5-flash")
-        llm = OpenLLM(config)
+        with patch("google.genai.Client") as MockClient, patch(
+            "google.genai.types.GenerateContentConfig"
+        ) as MockGenConfig:
+            llm = OpenLLM(config)
+            mock_client = MockClient.return_value
+            mock_client.models.generate_content.return_value = MagicMock(text="flash answer")
 
-        llm.complete("hello", system_prompt="be helpful")
-        MockGenerativeModel.assert_called_with(
-            model_name="gemini-1.5-flash", system_instruction="be helpful"
-        )
+            llm.complete("hello", system_prompt="be helpful")
+            assert MockGenConfig.call_args[1]["system_instruction"] == "be helpful"
 
     @patch("httpx.Client")
     def test_ollama_cloud_handling(self, MockHttpxClient):

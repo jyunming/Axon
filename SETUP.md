@@ -937,29 +937,17 @@ When AxonStore multi-user mode is initialised (via `init_store` or `Axon: Init S
 ```
 AxonStore/
   <username>/
-    store_meta.json        ← store identity (store_namespace_id, store_version, created_at)
+    store_meta.json        ← store identity (store_id, store_version, created_at)
     default/               ← canonical default project (was _default/ in earlier versions)
       chroma_data/
       bm25_index/
-      meta.json            ← includes project_namespace_id
+      meta.json            ← includes project_id
     <project>/             ← user-created local projects live at the namespace root
     projects/              ← compatibility directory reserved for store tooling
     mounts/                ← read-only mount descriptors
     .shares/               ← share key manifests
     ShareMount/            ← symlinks (legacy compat)
 ```
-
-#### Migrating from an earlier version
-
-If your store has a `_default/` directory, Axon automatically renames it to `default/` on first startup (a warning is logged). If both `_default/` and `default/` exist simultaneously, startup will fail — remove `_default/` manually before starting.
-
-To backfill `project_namespace_id` into existing projects in bulk:
-
-```bash
-python -c "from axon.migration import run_migration; from pathlib import Path; run_migration(Path.home() / '.axon/projects')"
-```
-
-The `axon.migration` module also provides `audit_legacy_chunk_ids(project_dir)` to report any chunks whose IDs were derived from the old basename scheme rather than the new SHA-256 scheme.
 
 ---
 

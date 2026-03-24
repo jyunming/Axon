@@ -131,7 +131,7 @@ Invoke the **Axon Graph Panel** via the graph command or tool to open a split vi
 ```
 
 **Two graph views — same panel:**
-- **Knowledge Graph** — entity–relation graph built from **any document** (PDF, DOCX, Markdown…) during ingest. Requires `graph_rag: true` — **on by default**. Nodes are named entities (people, concepts, components); edges are extracted relations. Just ingest your documents and the graph is ready.
+- **Knowledge Graph** — entity–relation graph built from **any document** (PDF, DOCX, Markdown…) during ingest. Requires `graph_rag: true` (disabled in the shipped `config.yaml` by default; enable when your corpus is ready). Nodes are named entities (people, concepts, components); edges are extracted relations.
 - **Code Graph** — structural file/class/function graph for source code (requires `code_graph: true` in `config.yaml`). Nodes are files, classes, and functions; edges are `IMPORTS` / `CONTAINS` / `MENTIONED_IN` relationships. Click a node to jump to that definition.
 
 **How to open it:**

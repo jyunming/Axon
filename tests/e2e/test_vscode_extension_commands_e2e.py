@@ -30,7 +30,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.extension]
 def test_command_invocations(run_tool, live_recorder_server, command, extra, expected_path):
     base_url, recorded = live_recorder_server
 
-    res = run_tool(base_url, f"cmd:{command}", {}, extra)
+    res = run_tool("http://127.0.0.1:49999", f"cmd:{command}", {}, extra)
 
     assert not res.get("toolError"), f"Command {command} failed: {res.get('toolError')}"
     paths = [r["path"] for r in recorded]
@@ -42,11 +42,19 @@ def test_command_invocations(run_tool, live_recorder_server, command, extra, exp
 def test_show_graph_commands(run_tool, live_recorder_server):
     base_url, recorded = live_recorder_server
 
-    res1 = run_tool(base_url, "cmd:axon.showGraphForQuery", {}, {"_inputResponse": "how it works"})
+    res1 = run_tool(
+        "http://127.0.0.1:49999",
+        "cmd:axon.showGraphForQuery",
+        {},
+        {"_inputResponse": "how it works"},
+    )
     assert res1["panelCount"] == 1
 
     res2 = run_tool(
-        base_url, "cmd:axon.showGraphForSelection", {}, {"_selectedText": "selected topic"}
+        "http://127.0.0.1:49999",
+        "cmd:axon.showGraphForSelection",
+        {},
+        {"_selectedText": "selected topic"},
     )
     assert res2["panelCount"] == 1
 
@@ -63,7 +71,7 @@ def test_start_server_command_probes_health(run_tool, live_recorder_server):
 
     # The recorder replies 200 to /health, so ensureServerRunning sees a live server.
     res = run_tool(
-        base_url,
+        "http://127.0.0.1:49999",
         "cmd:axon.startServer",
         {},
         {"autoStart": False, "_postActivateWaitMs": 0},
@@ -82,17 +90,17 @@ def test_start_server_command_no_workspace(run_tool, live_recorder_server):
     # Provide no workspace folders — forces the early-exit branch in ensureServerRunning.
     # The recorder health endpoint will NOT be hit because the early exit fires first.
     res = run_tool(
-        base_url,
+        "http://127.0.0.1:49999",
         "cmd:axon.startServer",
         {},
-        {"_workspaceFolders": [], "autoStart": False},
+        {"apiBase": "http://127.0.0.1:49999", "_workspaceFolders": [], "autoStart": False},
     )
 
     assert not res.get("toolError"), f"startServer (no-workspace) raised: {res.get('toolError')}"
     output = "\n".join(res.get("outputLines", []))
-    assert "workspace" in output.lower() or "no workspace" in output.lower(), (
-        f"Expected workspace warning in output lines; got: {output!r}"
-    )
+    assert (
+        "workspace" in output.lower() or "no workspace" in output.lower()
+    ), f"Expected workspace warning in output lines; got: {output!r}"
 
 
 def test_stop_server_command_clears_managed_process(run_tool, live_recorder_server):
@@ -100,7 +108,7 @@ def test_stop_server_command_clears_managed_process(run_tool, live_recorder_serv
     process in the test harness the function returns without error."""
     base_url, recorded = live_recorder_server
 
-    res = run_tool(base_url, "cmd:axon.stopServer", {}, {})
+    res = run_tool("http://127.0.0.1:49999", "cmd:axon.stopServer", {}, {})
 
     assert not res.get("toolError"), f"stopServer raised: {res.get('toolError')}"
 
@@ -111,7 +119,7 @@ def test_show_graph_command_cancelled(run_tool, live_recorder_server):
     base_url, recorded = live_recorder_server
 
     res = run_tool(
-        base_url,
+        "http://127.0.0.1:49999",
         "cmd:axon.showGraphForQuery",
         {},
         # _inputResponse not set → showInputBox returns null → command cancels

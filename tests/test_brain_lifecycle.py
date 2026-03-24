@@ -13,7 +13,7 @@ class TestBrainLifecycle:
         ), patch("axon.main.OpenLLM"), patch("axon.main.OpenReranker"), patch(
             "axon.projects.ensure_project"
         ), patch(
-            "axon.projects.ensure_user_namespace"
+            "axon.projects.ensure_user_project"
         ):
             yield
 

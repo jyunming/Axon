@@ -29,16 +29,15 @@ def _make_config(**kwargs) -> AxonConfig:
     return AxonConfig(**defaults)
 
 
-def _make_google_modules(mock_genai: MagicMock) -> dict:
-    """Return a sys.modules patch dict for google + google.generativeai.
-
-    ``google`` is a namespace package already present in sys.modules, so we
-    must replace both the parent entry *and* the sub-module entry to ensure
-    ``import google.generativeai as genai`` inside llm.py resolves to our mock.
-    """
+def _make_google_genai_modules(mock_genai_sdk: MagicMock, mock_genai_types: MagicMock) -> dict:
+    """Return a sys.modules patch dict for google + google.genai + types."""
     mock_google = MagicMock()
-    mock_google.generativeai = mock_genai
-    return {"google": mock_google, "google.generativeai": mock_genai}
+    mock_google.genai = mock_genai_sdk
+    return {
+        "google": mock_google,
+        "google.genai": mock_genai_sdk,
+        "google.genai.types": mock_genai_types,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -254,23 +253,26 @@ class TestOllamaProviderStream:
 
 
 class TestGeminiProviderComplete:
-    def _make_genai_mock(self, text_response: str) -> MagicMock:
+    def _make_genai_mock(self, text_response: str) -> tuple[MagicMock, MagicMock, MagicMock]:
         mock_response = MagicMock()
         mock_response.text = text_response
-        mock_model_inst = MagicMock()
-        mock_model_inst.generate_content.return_value = mock_response
-        mock_genai = MagicMock()
-        mock_genai.GenerativeModel.return_value = mock_model_inst
-        mock_genai.types.GenerationConfig = MagicMock()
-        return mock_genai, mock_model_inst
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+        mock_genai_sdk = MagicMock()
+        mock_genai_sdk.Client.return_value = mock_client
+        mock_genai_types = MagicMock()
+        mock_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kwargs: kwargs)
+        return mock_genai_sdk, mock_genai_types, mock_client
 
     def test_complete_basic(self):
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="key123")
-        mock_genai, mock_model_inst = self._make_genai_mock("gemini answer")
+        mock_genai_sdk, mock_genai_types, _ = self._make_genai_mock("gemini answer")
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             result = llm.complete("Tell me something")
 
@@ -280,64 +282,74 @@ class TestGeminiProviderComplete:
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="secret")
-        mock_genai, _ = self._make_genai_mock("ok")
+        mock_genai_sdk, mock_genai_types, _ = self._make_genai_mock("ok")
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             llm.complete("test")
 
-        mock_genai.configure.assert_called_once_with(api_key="secret")
+        mock_genai_sdk.Client.assert_called_once_with(api_key="secret")
 
     def test_complete_configure_called_only_once(self):
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="k")
-        mock_genai, _ = self._make_genai_mock("ok")
+        mock_genai_sdk, mock_genai_types, _ = self._make_genai_mock("ok")
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             llm.complete("first call")
             llm.complete("second call")
 
-        assert mock_genai.configure.call_count == 1
+        assert mock_genai_sdk.Client.call_count == 1
 
     def test_complete_with_system_prompt_non_gemma(self):
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="k")
-        mock_genai, _ = self._make_genai_mock("ok")
+        mock_genai_sdk, mock_genai_types, _ = self._make_genai_mock("ok")
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             llm.complete("prompt", system_prompt="be helpful")
 
-        call_kwargs = mock_genai.GenerativeModel.call_args[1]
+        call_kwargs = mock_genai_types.GenerateContentConfig.call_args[1]
         assert call_kwargs["system_instruction"] == "be helpful"
 
     def test_complete_gemma_model_no_system_instruction(self):
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemma-2b", gemini_api_key="k")
-        mock_genai, _ = self._make_genai_mock("ok")
+        mock_genai_sdk, mock_genai_types, _ = self._make_genai_mock("ok")
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             llm.complete("prompt", system_prompt="sys")
 
-        call_kwargs = mock_genai.GenerativeModel.call_args[1]
+        call_kwargs = mock_genai_types.GenerateContentConfig.call_args[1]
         assert "system_instruction" not in call_kwargs
 
     def test_complete_gemma_prepends_system_prompt(self):
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemma-2b", gemini_api_key="k")
-        mock_genai, mock_model_inst = self._make_genai_mock("ok")
+        mock_genai_sdk, mock_genai_types, mock_client = self._make_genai_mock("ok")
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             llm.complete("my prompt", system_prompt="sys_text")
 
-        contents_arg = mock_model_inst.generate_content.call_args[0][0]
+        contents_arg = mock_client.models.generate_content.call_args[1]["contents"]
         last_part = contents_arg[-1]["parts"][0]
         assert "sys_text" in last_part
         assert "my prompt" in last_part
@@ -346,28 +358,32 @@ class TestGeminiProviderComplete:
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="k")
-        mock_genai, mock_model_inst = self._make_genai_mock("ok")
+        mock_genai_sdk, mock_genai_types, mock_client = self._make_genai_mock("ok")
         history = [{"role": "assistant", "content": "prev response"}]
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             llm.complete("follow up", chat_history=history)
 
-        contents_arg = mock_model_inst.generate_content.call_args[0][0]
+        contents_arg = mock_client.models.generate_content.call_args[1]["contents"]
         assert contents_arg[0]["role"] == "model"
 
     def test_complete_maps_user_history_role(self):
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="k")
-        mock_genai, mock_model_inst = self._make_genai_mock("ok")
+        mock_genai_sdk, mock_genai_types, mock_client = self._make_genai_mock("ok")
         history = [{"role": "user", "content": "question"}]
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             llm.complete("follow up", chat_history=history)
 
-        contents_arg = mock_model_inst.generate_content.call_args[0][0]
+        contents_arg = mock_client.models.generate_content.call_args[1]["contents"]
         assert contents_arg[0]["role"] == "user"
 
 
@@ -380,13 +396,16 @@ class TestGeminiProviderStream:
         c1, c2 = MagicMock(), MagicMock()
         c1.text = "chunk1"
         c2.text = "chunk2"
-        mock_model_inst = MagicMock()
-        mock_model_inst.generate_content.return_value = iter([c1, c2])
-        mock_genai = MagicMock()
-        mock_genai.GenerativeModel.return_value = mock_model_inst
-        mock_genai.types.GenerationConfig = MagicMock()
+        mock_client = MagicMock()
+        mock_client.models.generate_content_stream.return_value = iter([c1, c2])
+        mock_genai_sdk = MagicMock()
+        mock_genai_sdk.Client.return_value = mock_client
+        mock_genai_types = MagicMock()
+        mock_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kwargs: kwargs)
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             result = list(llm.stream("prompt"))
 
@@ -396,18 +415,20 @@ class TestGeminiProviderStream:
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="k")
-        mock_model_inst = MagicMock()
-        mock_model_inst.generate_content.return_value = iter([])
-        mock_genai = MagicMock()
-        mock_genai.GenerativeModel.return_value = mock_model_inst
-        mock_genai.types.GenerationConfig = MagicMock()
+        mock_client = MagicMock()
+        mock_client.models.generate_content_stream.return_value = iter([])
+        mock_genai_sdk = MagicMock()
+        mock_genai_sdk.Client.return_value = mock_client
+        mock_genai_types = MagicMock()
+        mock_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kwargs: kwargs)
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             list(llm.stream("prompt"))
 
-        call_kw = mock_model_inst.generate_content.call_args[1]
-        assert call_kw.get("stream") is True
+        assert mock_client.models.generate_content_stream.called
 
     def test_stream_gemma_system_prompt_prepended(self):
         from axon.llm import OpenLLM
@@ -415,17 +436,20 @@ class TestGeminiProviderStream:
         cfg = _make_config(llm_provider="gemini", llm_model="gemma-2b", gemini_api_key="k")
         c = MagicMock()
         c.text = "out"
-        mock_model_inst = MagicMock()
-        mock_model_inst.generate_content.return_value = iter([c])
-        mock_genai = MagicMock()
-        mock_genai.GenerativeModel.return_value = mock_model_inst
-        mock_genai.types.GenerationConfig = MagicMock()
+        mock_client = MagicMock()
+        mock_client.models.generate_content_stream.return_value = iter([c])
+        mock_genai_sdk = MagicMock()
+        mock_genai_sdk.Client.return_value = mock_client
+        mock_genai_types = MagicMock()
+        mock_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kwargs: kwargs)
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             list(llm.stream("user q", system_prompt="sys"))
 
-        contents_arg = mock_model_inst.generate_content.call_args[0][0]
+        contents_arg = mock_client.models.generate_content_stream.call_args[1]["contents"]
         last_text = contents_arg[-1]["parts"][0]
         assert "sys" in last_text
         assert "user q" in last_text
@@ -434,18 +458,21 @@ class TestGeminiProviderStream:
         from axon.llm import OpenLLM
 
         cfg = _make_config(llm_provider="gemini", llm_model="gemini-pro", gemini_api_key="k")
-        mock_model_inst = MagicMock()
-        mock_model_inst.generate_content.return_value = iter([])
-        mock_genai = MagicMock()
-        mock_genai.GenerativeModel.return_value = mock_model_inst
-        mock_genai.types.GenerationConfig = MagicMock()
+        mock_client = MagicMock()
+        mock_client.models.generate_content_stream.return_value = iter([])
+        mock_genai_sdk = MagicMock()
+        mock_genai_sdk.Client.return_value = mock_client
+        mock_genai_types = MagicMock()
+        mock_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kwargs: kwargs)
         history = [{"role": "assistant", "content": "prev"}]
 
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             llm = OpenLLM(cfg)
             list(llm.stream("q", chat_history=history))
 
-        contents_arg = mock_model_inst.generate_content.call_args[0][0]
+        contents_arg = mock_client.models.generate_content_stream.call_args[1]["contents"]
         assert contents_arg[0]["role"] == "model"
 
 
@@ -1833,12 +1860,15 @@ def test_complete_returns_string_for_provider(provider, extra_kwargs):
     elif provider == "gemini":
         mock_response = MagicMock()
         mock_response.text = "gemini"
-        mock_model = MagicMock()
-        mock_model.generate_content.return_value = mock_response
-        mock_genai = MagicMock()
-        mock_genai.GenerativeModel.return_value = mock_model
-        mock_genai.types.GenerationConfig = MagicMock()
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+        mock_genai_sdk = MagicMock()
+        mock_genai_sdk.Client.return_value = mock_client
+        mock_genai_types = MagicMock()
+        mock_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kwargs: kwargs)
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             result = llm.complete("test")
     elif provider == "ollama_cloud":
         mock_resp = MagicMock()
@@ -1890,12 +1920,15 @@ def test_stream_yields_strings_for_provider(provider, extra_kwargs):
     elif provider == "gemini":
         c = MagicMock()
         c.text = "gemini_tok"
-        mock_model = MagicMock()
-        mock_model.generate_content.return_value = iter([c])
-        mock_genai = MagicMock()
-        mock_genai.GenerativeModel.return_value = mock_model
-        mock_genai.types.GenerationConfig = MagicMock()
-        with patch.dict("sys.modules", _make_google_modules(mock_genai)):
+        mock_client = MagicMock()
+        mock_client.models.generate_content_stream.return_value = iter([c])
+        mock_genai_sdk = MagicMock()
+        mock_genai_sdk.Client.return_value = mock_client
+        mock_genai_types = MagicMock()
+        mock_genai_types.GenerateContentConfig = MagicMock(side_effect=lambda **kwargs: kwargs)
+        with patch.dict(
+            "sys.modules", _make_google_genai_modules(mock_genai_sdk, mock_genai_types)
+        ):
             result = list(llm.stream("test"))
     elif provider in ("openai", "vllm"):
         chunks = [_openai_chunk("t1"), _openai_chunk("t2")]

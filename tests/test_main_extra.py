@@ -1308,6 +1308,27 @@ class TestSwitchProject:
             with pytest.raises(ValueError, match="does not exist"):
                 brain.switch_project("nonexistent_project")
 
+    def test_switch_to_reserved_compat_dir_raises(self, brain):
+        brain.close = MagicMock()
+        with pytest.raises(ValueError, match="reserved"):
+            brain.switch_project("projects")
+
+    def test_switch_to_directory_without_meta_raises(self, brain):
+        from pathlib import Path
+
+        brain.close = MagicMock()
+        with patch("axon.projects.project_dir") as mock_dir, patch(
+            "axon.projects.set_active_project"
+        ), patch("axon.projects.project_vector_path"), patch("axon.projects.project_bm25_path"):
+            root = MagicMock(spec=Path)
+            root.exists.return_value = True
+            meta = MagicMock(spec=Path)
+            meta.exists.return_value = False
+            root.__truediv__.return_value = meta
+            mock_dir.return_value = root
+            with pytest.raises(ValueError, match="does not exist"):
+                brain.switch_project("dangling_dir")
+
     def test_switch_to_scope_at_projects(self, brain):
         """Switching to @projects calls _switch_to_scope."""
         brain._switch_to_scope = MagicMock()
@@ -1373,6 +1394,26 @@ class TestSwitchToScope:
         fake_root.exists.return_value = False
 
         with patch.object(proj_mod, "PROJECTS_ROOT", fake_root), patch(
+            "axon.main.OpenVectorStore"
+        ), patch("axon.retrievers.BM25Retriever"):
+            with pytest.raises(ValueError, match="No authoritative projects"):
+                brain._switch_to_scope("@projects")
+
+    def test_projects_compat_dir_is_excluded_from_scope(self, brain, tmp_path):
+        """_switch_to_scope(@projects) must ignore the reserved compatibility directory."""
+        import json
+
+        import axon.projects as proj_mod
+
+        brain.close = MagicMock()
+        reserved = tmp_path / "projects"
+        reserved.mkdir()
+        (reserved / "meta.json").write_text(
+            json.dumps({"name": "projects", "created_at": "2026-01-01"}),
+            encoding="utf-8",
+        )
+
+        with patch.object(proj_mod, "PROJECTS_ROOT", tmp_path), patch(
             "axon.main.OpenVectorStore"
         ), patch("axon.retrievers.BM25Retriever"):
             with pytest.raises(ValueError, match="No authoritative projects"):
@@ -1815,15 +1856,15 @@ class TestLogStartupSummary:
         bm25_dir.mkdir(parents=True, exist_ok=True)
         project_dir = bm25_dir.parent
         meta_file = project_dir / "meta.json"
-        meta_file.write_text(json.dumps({"project_namespace_id": "ns-test-123"}))
+        meta_file.write_text(json.dumps({"project_id": "ns-test-123"}))
         brain.config.bm25_path = str(bm25_dir)
 
-        with patch("axon.projects.get_project_namespace_id", return_value=None):
+        with patch("axon.projects.get_project_id", return_value=None):
             # Should not raise
             brain._log_startup_summary()
 
     def test_startup_summary_handles_no_meta_file(self, tmp_path):
         brain = _make_brain(tmp_path)
-        with patch("axon.projects.get_project_namespace_id", return_value=None):
+        with patch("axon.projects.get_project_id", return_value=None):
             # Should not raise even without meta.json
             brain._log_startup_summary()

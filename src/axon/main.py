@@ -311,9 +311,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # In AxonStore mode, ensure the user namespace directories exist
         if self.config.axon_store_mode:
-            from axon.projects import ensure_user_namespace
+            from axon.projects import ensure_user_project
 
-            ensure_user_namespace(Path(self.config.projects_root))
+            ensure_user_project(Path(self.config.projects_root))
 
         # Ensure the 'default' project directory exists
         from axon.projects import ensure_project

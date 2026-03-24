@@ -753,6 +753,22 @@ class TestSwitchProject:
         resp = client.post("/project/switch", json={"name": "nonexistent"})
         assert resp.status_code == 404
 
+    def test_missing_name_returns_400(self):
+        """Missing project_name/name should return 400 instead of 404."""
+        api_module.brain = _make_brain()
+        resp = client.post("/project/switch", json={})
+        assert resp.status_code == 400
+        assert "must be provided" in resp.json()["detail"].lower()
+
+    def test_reserved_name_returns_400(self):
+        brain = _make_brain()
+        brain.switch_project.side_effect = ValueError(
+            "Project 'projects' is reserved and cannot be activated as a local project."
+        )
+        api_module.brain = brain
+        resp = client.post("/project/switch", json={"name": "projects"})
+        assert resp.status_code == 400
+
     def test_generic_error_returns_500(self):
         """projects.py lines 179-181 — generic error → 500."""
         brain = _make_brain()
@@ -774,6 +790,20 @@ class TestDeleteProject:
         """projects.py lines 193-197 — 'mounts' literal → 400."""
         resp = client.post("/project/delete/mounts")
         assert resp.status_code == 400
+
+    def test_delete_clears_dedup_cache(self):
+        """Deleting a project must drop its dedup bucket."""
+        brain = _make_brain()
+        brain._active_project = "other"
+        api_module.brain = brain
+        api_module._source_hashes["todelete"] = {"abc": {"doc_id": "doc"}}
+
+        with patch("axon.projects.delete_project", return_value=None):
+            with patch("axon.shares.list_shares", return_value={"sharing": []}):
+                resp = client.post("/project/delete/todelete")
+
+        assert resp.status_code == 200
+        assert "todelete" not in api_module._source_hashes
 
     def test_active_project_auto_switches(self):
         """projects.py lines 213-214 — active project → switch to default first."""
@@ -827,6 +857,23 @@ class TestDeleteProject:
                 resp = client.post("/project/delete/ghost-project")
 
         assert resp.status_code == 404
+
+
+class TestDeleteDocuments:
+    def test_delete_clears_dedup_cache(self):
+        """DELETE /delete should drop dedup entries for deleted docs."""
+        brain = _make_brain()
+        brain._active_project = "research"
+        brain.vector_store.get_by_ids.return_value = [{"id": "doc1"}]
+        api_module.brain = brain
+        api_module._source_hashes["research"] = {"hash1": {"doc_id": "doc1"}}
+        api_module._source_hashes["_global"] = {"hash1": {"doc_id": "doc1"}}
+
+        resp = client.post("/delete", json={"doc_ids": ["doc1"]})
+
+        assert resp.status_code == 200
+        assert "research" not in api_module._source_hashes
+        assert "_global" not in api_module._source_hashes
 
 
 # ===========================================================================
@@ -962,6 +1009,17 @@ class TestClearBrain:
         resp = client.post("/clear")
         assert resp.status_code == 503
 
+    def test_permission_error_returns_403(self):
+        brain = _make_brain()
+        brain._assert_write_allowed.side_effect = PermissionError(
+            "Cannot clear: project 'alpha' is in 'readonly' maintenance state."
+        )
+        api_module.brain = brain
+
+        resp = client.post("/clear")
+        assert resp.status_code == 403
+        brain.vector_store.client.delete_collection.assert_not_called()
+
     def test_qdrant_provider_cleared(self):
         """query.py lines 228-229 — qdrant provider path."""
         brain = _make_brain(provider="qdrant")
@@ -1073,12 +1131,26 @@ class TestShareRedeem:
     def test_success(self):
         with patch("axon.api._get_user_dir") as mock_user_dir:
             mock_user_dir.return_value = MagicMock()
-            with patch("axon.shares.redeem_share_key", return_value={"status": "mounted"}):
+            with patch(
+                "axon.shares.redeem_share_key",
+                return_value={
+                    "key_id": "sk_abc123",
+                    "mount_name": "alice_sharedproj",
+                    "owner": "alice",
+                    "project": "sharedproj",
+                    "descriptor": {"mount_name": "alice_sharedproj"},
+                },
+            ), patch("axon.governance.emit") as mock_emit:
                 resp = client.post(
                     "/share/redeem",
                     json={"share_string": "axon://valid"},
                 )
         assert resp.status_code == 200
+        assert resp.json()["key_id"] == "sk_abc123"
+        args, kwargs = mock_emit.call_args
+        assert args == ("share_redeemed", "share", "sk_abc123")
+        assert kwargs["project"] == "sharedproj"
+        assert kwargs["details"] == {"owner": "alice"}
 
 
 class TestShareList:

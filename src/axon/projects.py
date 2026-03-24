@@ -258,17 +258,17 @@ def _ensure_single_project(name: str, description: str) -> Path:
                     "name": name,
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                    "project_namespace_id": build_namespace_id("proj"),
+                    "project_id": build_project_id("proj"),
                 },
                 indent=2,
             ),
             encoding="utf-8",
         )
     else:
-        # Backfill missing project_namespace_id for existing projects (Phase 1 migration)
+        # Backfill missing project_id for existing projects (Phase 1 migration)
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        if "project_namespace_id" not in meta:
-            meta["project_namespace_id"] = build_namespace_id("proj")
+        if "project_id" not in meta:
+            meta["project_id"] = build_project_id("proj")
             meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return root
 
@@ -284,7 +284,7 @@ def get_project_id(name: str) -> str | None:
         return None
     try:
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        val = meta.get("project_namespace_id")
+        val = meta.get("project_id")
         return str(val) if val is not None else None
     except (json.JSONDecodeError, OSError):
         return None
@@ -300,7 +300,7 @@ def get_store_id(user_dir: Path) -> str | None:
         return None
     try:
         meta = json.loads(store_meta.read_text(encoding="utf-8"))
-        val = meta.get("store_namespace_id")
+        val = meta.get("store_id")
         return str(val) if val is not None else None
     except (json.JSONDecodeError, OSError):
         return None
@@ -567,7 +567,7 @@ def ensure_user_project(user_dir: Path) -> None:
                 {
                     "store_version": 2,
                     "store_scope": "user_scoped",
-                    "store_namespace_id": build_namespace_id("store"),
+                    "store_id": build_project_id("store"),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 },
                 indent=2,
@@ -593,7 +593,7 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
                     "name": name,
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                    "project_namespace_id": build_namespace_id("proj"),
+                    "project_id": build_project_id("proj"),
                 },
                 indent=2,
             ),
@@ -601,24 +601,15 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
         )
     else:
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        if "project_namespace_id" not in meta:
-            meta["project_namespace_id"] = build_namespace_id("proj")
+        if "project_id" not in meta:
+            meta["project_id"] = build_project_id("proj")
             meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return root
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible aliases (functions renamed in codebase update)
+# Cleanup
 # ---------------------------------------------------------------------------
-
-#: Alias for :func:`build_project_id` — kept for external callers and tests.
-build_namespace_id = build_project_id
-#: Alias for :func:`get_project_id` — kept for external callers and tests.
-get_project_namespace_id = get_project_id
-#: Alias for :func:`get_store_id` — kept for external callers and tests.
-get_store_namespace_id = get_store_id
-#: Alias for :func:`ensure_user_project` — kept for external callers and tests.
-ensure_user_namespace = ensure_user_project
 
 
 def _remove_share_link(link: Path) -> bool:

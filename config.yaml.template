@@ -80,6 +80,12 @@ query_transformations:
   discussion_fallback: true           # already declared above under rag; kept here for clarity
 
 # ---------------------------------------------------------------------------
+# REPL shell passthrough policy for `!command`
+# ---------------------------------------------------------------------------
+repl:
+  shell_passthrough: local_only       # local_only | always | off
+
+# ---------------------------------------------------------------------------
 # Advanced RAG features — OFF by default for lighter first-run ingest
 #
 # RAPTOR and GraphRAG both require LLM calls during ingest and significantly

@@ -72,6 +72,7 @@ def test_repl_transcript_project_and_runtime_controls(make_brain, monkeypatch, t
             "/rag hybrid",
             "/llm temperature 0.2",
             "/clear",
+            "y",
             "/quit",
         ],
     )
@@ -85,4 +86,4 @@ def test_repl_transcript_project_and_runtime_controls(make_brain, monkeypatch, t
     assert "top-k set to 3" in output
     assert "Hybrid search OFF" in output
     assert "Temperature set to 0.2" in output
-    assert "Chat history cleared." in output
+    assert "Knowledge base cleared" in output

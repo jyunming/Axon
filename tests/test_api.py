@@ -317,6 +317,64 @@ def test_clear_deletes_embedding_meta(tmp_path):
     assert not meta_file.exists(), "embedding meta file must be deleted on /clear"
 
 
+def test_clear_resets_graph_state_and_api_dedup_cache():
+    """/clear must reset graph/doc-version state and clear the active project's dedup cache."""
+    brain = _make_brain()
+    api_module.brain = brain
+    brain.vector_store.provider = "chroma"
+    brain.vector_store.client = MagicMock()
+    brain.vector_store.client.create_collection.return_value = MagicMock()
+    brain._active_project = "default"
+    brain._doc_versions = {"doc.txt": {"hash": "abc123"}}
+    brain._relation_graph = {"entity:a": {"entity:b": {"weight": 1.0}}}
+    brain._community_levels = {"entity:a": 1}
+    brain._community_summaries = {"community:1": "summary"}
+    brain._community_hierarchy = {"community:1": ["entity:a"]}
+    brain._community_children = {"community:1": ["entity:a"]}
+    brain._community_graph_dirty = True
+    brain._community_build_in_progress = True
+    brain._claims_graph = {"claim:1": {"source": "doc.txt"}}
+    brain._entity_embeddings = {"entity:a": [0.1, 0.2]}
+    brain._entity_description_buffer = {"entity:a": "desc"}
+    brain._relation_description_buffer = {"rel:1": "desc"}
+    brain._text_unit_entity_map = {"chunk:1": ["entity:a"]}
+    brain._text_unit_relation_map = {"chunk:1": ["rel:1"]}
+    brain._raptor_summary_cache = {"doc.txt": "summary"}
+    brain._code_graph = {"nodes": {"file.py": {}}, "edges": [{"from": "a", "to": "b"}]}
+    api_module._source_hashes["default"] = {"abc123": {"source": "doc.txt"}}
+    api_module._source_hashes["_global"] = {"legacy": {"source": "doc.txt"}}
+
+    resp = client.post("/clear")
+
+    assert resp.status_code == 200
+    assert brain._doc_versions == {}
+    assert brain._relation_graph == {}
+    assert brain._community_levels == {}
+    assert brain._community_summaries == {}
+    assert brain._community_hierarchy == {}
+    assert brain._community_children == {}
+    assert brain._community_graph_dirty is False
+    assert brain._community_build_in_progress is False
+    assert brain._claims_graph == {}
+    assert brain._entity_embeddings == {}
+    assert brain._entity_description_buffer == {}
+    assert brain._relation_description_buffer == {}
+    assert brain._text_unit_entity_map == {}
+    assert brain._text_unit_relation_map == {}
+    assert brain._raptor_summary_cache == {}
+    assert brain._code_graph == {"nodes": {}, "edges": []}
+    assert "default" not in api_module._source_hashes
+    assert "_global" not in api_module._source_hashes
+    brain._save_doc_versions.assert_called_once()
+    brain._save_relation_graph.assert_called_once()
+    brain._save_community_levels.assert_called_once()
+    brain._save_community_summaries.assert_called_once()
+    brain._save_community_hierarchy.assert_called_once()
+    brain._save_claims_graph.assert_called_once()
+    brain._save_entity_embeddings.assert_called_once()
+    brain._save_code_graph.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # /query/stream
 # ---------------------------------------------------------------------------
@@ -1154,6 +1212,23 @@ def test_get_projects_includes_memory_only_projects():
     assert "sprint3-test" in memory_names
 
 
+def test_get_projects_excludes_reserved_memory_only_entries():
+    """Reserved roots must not leak into memory_only project listings."""
+    api_module.brain = _make_brain()
+    api_module._source_hashes["projects"] = {}
+    api_module._source_hashes["mounts/alice_shared"] = {}
+    api_module._source_hashes["real-proj"] = {}
+
+    resp = client.get("/projects")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    memory_names = [p["name"] for p in data["memory_only"]]
+    assert "real-proj" in memory_names
+    assert "projects" not in memory_names
+    assert "mounts/alice_shared" not in memory_names
+
+
 # ---------------------------------------------------------------------------
 # /store/whoami
 # ---------------------------------------------------------------------------
@@ -1187,6 +1262,7 @@ def test_store_whoami_store_mode_active():
     assert data["store_mode"] is True
     assert "user_dir" in data
     assert "username" in data
+    assert data["store_path"].replace("\\", "/") == "/data/AxonStore"
     assert data["active_project"] == "research"  # must use _active_project, not config.project
 
 
@@ -1699,6 +1775,19 @@ def test_finalize_mounted_share_returns_403():
     )
     resp = client.post("/graph/finalize")
     assert resp.status_code == 403
+
+
+def test_clear_mounted_share_returns_403():
+    """POST /clear returns 403 when active project is a mounted share."""
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot clear on mounted share 'mounts/alice_proj'."
+    )
+    api_module.brain.vector_store.client = MagicMock()
+    resp = client.post("/clear")
+    assert resp.status_code == 403
+    assert "mounted share" in resp.json()["detail"]
+    api_module.brain.vector_store.client.delete_collection.assert_not_called()
 
 
 def test_query_mounted_share_returns_200():

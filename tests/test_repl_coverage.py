@@ -322,7 +322,7 @@ class TestReplStoreSubcommands:
     def test_store_init(self):
         brain = _make_mock_brain()
         brain.config.axon_store_mode = False
-        with patch("axon.projects.ensure_user_namespace"):
+        with patch("axon.projects.ensure_user_project"):
             output = _run_repl_with_commands(["/store init /tmp/axonstore"], brain=brain)
         assert isinstance(output, str)
 

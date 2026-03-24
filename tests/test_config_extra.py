@@ -173,6 +173,15 @@ class TestSave:
         assert qt["step_back"] is True
         assert qt["query_decompose"] is True
 
+    def test_save_writes_repl_section(self, tmp_path):
+        """save() writes repl.shell_passthrough."""
+        cfg = AxonConfig(repl_shell_passthrough="always")
+        target = tmp_path / "c.yaml"
+        cfg.save(str(target))
+        with open(target, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        assert data["repl"]["shell_passthrough"] == "always"
+
     def test_save_writes_context_compression_section(self, tmp_path):
         """save() writes context_compression block."""
         cfg = AxonConfig(compress_context=True)
@@ -439,6 +448,14 @@ class TestLoad:
         assert cfg.query_decompose is True
         assert cfg.discussion_fallback is False
 
+    def test_load_parses_repl_shell_passthrough(self, tmp_path):
+        """load() maps repl.shell_passthrough -> repl_shell_passthrough."""
+        data = {"repl": {"shell_passthrough": "off"}}
+        p = tmp_path / "c.yaml"
+        _write_yaml(p, data)
+        cfg = AxonConfig.load(str(p))
+        assert cfg.repl_shell_passthrough == "off"
+
     def test_load_parses_context_compression_section(self, tmp_path):
         """load() maps context_compression.enabled â†’ compress_context."""
         data = {"context_compression": {"enabled": True}}
@@ -535,7 +552,7 @@ class TestLoad:
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
         cfg = AxonConfig.load(str(p))
-        assert cfg.projects_root == "/custom/projects"
+        assert cfg.projects_root == os.path.abspath("/custom/projects")
 
     def test_load_projects_base_alias(self, tmp_path):
         """load() maps top-level projects_base â†’ projects_root."""
@@ -543,7 +560,7 @@ class TestLoad:
         p = tmp_path / "c.yaml"
         _write_yaml(p, data)
         cfg = AxonConfig.load(str(p))
-        assert cfg.projects_root == "/alias/projects"
+        assert cfg.projects_root == os.path.abspath("/alias/projects")
 
     def test_load_max_workers_top_level(self, tmp_path):
         """load() reads top-level max_workers."""
@@ -760,15 +777,6 @@ class TestPostInit:
         assert cfg.vector_store_path != ""
         assert "chroma_data" in cfg.vector_store_path
 
-    def test_resolve_safe_legacy_relative_path_redirected(self, monkeypatch):
-        """Legacy relative paths like 'chroma_data' are redirected to ~/.axon/..."""
-        monkeypatch.delenv("CHROMA_DATA_PATH", raising=False)
-        monkeypatch.delenv("AXON_PROJECTS_ROOT", raising=False)
-        monkeypatch.delenv("AXON_STORE_BASE", raising=False)
-        cfg = AxonConfig(vector_store_path="chroma_data")
-        home = os.path.join(os.path.expanduser("~"), ".axon")
-        assert cfg.vector_store_path == os.path.join(home, "projects", "default", "chroma_data")
-
 
 # ---------------------------------------------------------------------------
 # First-run config creation: starter YAML values must be returned, not defaults
@@ -868,9 +876,9 @@ class TestProjectsRootRelocation:
 
     def test_explicit_store_paths_override_projects_root(self):
         cfg = AxonConfig(
-            projects_root="/custom/path",
-            vector_store_path="/explicit/chroma",
-            bm25_path="/explicit/bm25",
+            projects_root=os.path.abspath("/custom/path"),
+            vector_store_path=os.path.abspath("/explicit/chroma"),
+            bm25_path=os.path.abspath("/explicit/bm25"),
         )
         assert cfg.vector_store_path == os.path.abspath("/explicit/chroma")
         assert cfg.bm25_path == os.path.abspath("/explicit/bm25")

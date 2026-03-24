@@ -8,8 +8,9 @@ import pathlib
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
+from axon.api import get_brain, get_brain_optional
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import (
     BatchTextIngestRequest,
@@ -19,6 +20,7 @@ from axon.api_schemas import (
     URLIngestRequest,
     _validate_ingest_path,
 )
+from axon.main import AxonBrain
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
@@ -33,17 +35,13 @@ def _enforce_write_access(brain, operation: str) -> None:
 
 
 @router.post("/ingest/refresh")
-async def refresh_docs():
+async def refresh_docs(brain: AxonBrain = Depends(get_brain)):
     """Re-ingest any tracked files whose content has changed since last ingest."""
     import functools
     import hashlib as _hashlib
 
-    from axon import api as _api
     from axon.loaders import DirectoryLoader
 
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_write_access(brain, "refresh")
 
     versions = brain.get_doc_versions()
@@ -85,12 +83,13 @@ async def refresh_docs():
 
 
 @router.post("/ingest")
-async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks, req: Request):
+async def ingest_data(
+    request: IngestRequest,
+    background_tasks: BackgroundTasks,
+    req: Request,
+    brain: AxonBrain = Depends(get_brain),
+):
     from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     validated_path = _validate_ingest_path(request.path)
 
@@ -197,6 +196,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
             )
 
     background_tasks.add_task(process_ingestion)
+
     return {
         "message": f"Ingestion started for {validated_path}",
         "status": "processing",
@@ -205,11 +205,10 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
 
 
 @router.get("/ingest/status/{job_id}")
-async def get_ingest_status(job_id: str):
+async def get_ingest_status(job_id: str, brain: AxonBrain | None = Depends(get_brain_optional)):
     """Poll the status of an async ingest job started by POST /ingest."""
     from axon import api as _api
 
-    brain = _api.brain
     job = _api._jobs.get(job_id)
     if job is None:
         raise HTTPException(
@@ -218,29 +217,19 @@ async def get_ingest_status(job_id: str):
         )
     result = {k: v for k, v in job.items() if k != "started_at_ts"}
     result["community_build_in_progress"] = bool(
-        brain and getattr(brain, "_community_build_in_progress", False)
+        getattr(brain, "_community_build_in_progress", False)
     )
     return result
 
 
 @router.get("/tracked-docs")
-async def list_tracked_docs():
+async def list_tracked_docs(brain: AxonBrain = Depends(get_brain)):
     """List all tracked document sources with metadata."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     return {"docs": brain.get_doc_versions()}
 
 
 @router.get("/collection")
-async def get_collection():
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
+async def get_collection(brain: AxonBrain = Depends(get_brain)):
     try:
         docs = brain.list_documents()
         return {
@@ -254,7 +243,7 @@ async def get_collection():
 
 
 @router.get("/collection/stale")
-async def get_stale_docs(days: int = 7):
+async def get_stale_docs(days: int = 7, brain: AxonBrain | None = Depends(get_brain_optional)):
     """Return documents that have not been re-ingested within *days* calendar days."""
     from axon import api as _api
 
@@ -284,12 +273,9 @@ async def get_stale_docs(days: int = 7):
 
 
 @router.post("/add_text")
-async def add_text(request: TextIngestRequest):
+async def add_text(request: TextIngestRequest, brain: AxonBrain = Depends(get_brain)):
     from axon import api as _api
 
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
 
@@ -322,15 +308,12 @@ async def add_text(request: TextIngestRequest):
 
 
 @router.post("/add_texts")
-async def add_texts(request: BatchTextIngestRequest):
+async def add_texts(request: BatchTextIngestRequest, brain: AxonBrain = Depends(get_brain)):
     """Ingest a list of documents in a single embedding batch."""
     from axon import api as _api
     from axon.api_schemas import _compute_content_hash
     from axon.loaders import SmartTextLoader
 
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
 
@@ -375,14 +358,11 @@ async def add_texts(request: BatchTextIngestRequest):
 
 
 @router.post("/ingest_url")
-async def ingest_url(request: URLIngestRequest):
+async def ingest_url(request: URLIngestRequest, brain: AxonBrain = Depends(get_brain)):
     """Fetch an HTTP/HTTPS URL and ingest its text content."""
     from axon import api as _api
     from axon.loaders import URLLoader
 
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
 
@@ -418,13 +398,13 @@ async def ingest_url(request: URLIngestRequest):
 
 
 @router.post("/delete")
-async def delete_documents(request: DeleteRequest, req: Request):
-    from axon import api as _api
+async def delete_documents(
+    request: DeleteRequest,
+    req: Request,
+    brain: AxonBrain = Depends(get_brain),
+):
     from axon import governance as gov
 
-    brain = _api.brain
-    if brain is None:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
@@ -440,6 +420,10 @@ async def delete_documents(request: DeleteRequest, req: Request):
                 brain.bm25.delete_documents(existing_ids)
             if brain._entity_graph:
                 brain._prune_entity_graph(set(existing_ids))
+
+            from axon import api as _api
+
+            _api._purge_dedup(existing_ids, project)
         gov.emit(
             "delete",
             "document",

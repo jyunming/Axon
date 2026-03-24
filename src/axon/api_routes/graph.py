@@ -3,21 +3,20 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
+
+from axon.api import get_brain
+from axon.api_routes.ingest import _enforce_write_access
+from axon.main import AxonBrain
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
 
 @router.get("/graph/status")
-async def get_graph_status():
+async def get_graph_status(brain: AxonBrain = Depends(get_brain)):
     """Return current GraphRAG community build status."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     in_progress = getattr(brain, "_community_build_in_progress", False)
     summary_count = len(getattr(brain, "_community_summaries", {}) or {})
     entity_count = len(getattr(brain, "_entity_graph", {}) or {})
@@ -33,16 +32,13 @@ async def get_graph_status():
 
 
 @router.post("/graph/finalize")
-async def finalize_graph(request: Request):
+async def finalize_graph(request: Request, brain: AxonBrain = Depends(get_brain)):
     """Trigger an explicit community rebuild."""
     import asyncio
 
-    from axon import api as _api
     from axon import governance as gov
 
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_write_access(brain, "finalize_graph")
     rid = getattr(request.state, "request_id", "")
     surface = getattr(request.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
@@ -67,13 +63,8 @@ async def finalize_graph(request: Request):
 
 
 @router.get("/graph/visualize", tags=["graph"])
-async def get_graph_visualization():
+async def get_graph_visualization(brain: AxonBrain = Depends(get_brain)):
     """Return the entity–relation graph as an interactive HTML page."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
         html = brain.export_graph_html(open_browser=False)
         return HTMLResponse(content=html)
@@ -84,13 +75,8 @@ async def get_graph_visualization():
 
 
 @router.get("/graph/data", tags=["graph"])
-async def graph_data():
+async def graph_data(brain: AxonBrain = Depends(get_brain)):
     """Return the entity/relation knowledge-graph payload for VS Code webview consumption."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     payload = brain.build_graph_payload()
     if isinstance(payload, dict):
         return payload
@@ -98,11 +84,6 @@ async def graph_data():
 
 
 @router.get("/code-graph/data", tags=["graph"])
-async def code_graph_data():
+async def code_graph_data(brain: AxonBrain = Depends(get_brain)):
     """Return the code structure graph as JSON for VS Code webview."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     return brain.build_code_graph_payload()

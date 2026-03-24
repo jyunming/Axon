@@ -27,7 +27,7 @@ class TestStressNew:
         ), patch(
             "axon.projects.ensure_project"
         ), patch(
-            "axon.projects.ensure_user_namespace"
+            "axon.projects.ensure_user_project"
         ):
             mock_embed.return_value.embed.return_value = [[0.1] * 1536]
             mock_embed.return_value.embed_query.return_value = [0.1] * 1536

@@ -4,50 +4,39 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
+from axon.api import get_brain, get_brain_optional
 from axon.api_schemas import (
     _VALID_PROJECT_NAME_RE,
     ConfigUpdateRequest,
     ProjectCreateRequest,
     ProjectSwitchRequest,
 )
+from axon.main import AxonBrain
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
 
 @router.get("/health")
-async def health_check():
+async def health_check(brain: AxonBrain | None = Depends(get_brain_optional)):
     """Return 200 with status 'ok' when the brain is ready; 503 when not yet available."""
-    from axon import api as _api
-
-    brain = _api.brain
     if brain is None:
         return JSONResponse({"status": "initializing"}, status_code=503)
     return {"status": "ok", "project": getattr(brain, "_active_project", "default")}
 
 
 @router.get("/config")
-async def get_config():
+async def get_config(brain: AxonBrain = Depends(get_brain)):
     """Return the current active configuration."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     return brain.config
 
 
 @router.post("/config/update")
-async def update_config(request: ConfigUpdateRequest):
+async def update_config(request: ConfigUpdateRequest, brain: AxonBrain = Depends(get_brain)):
     """Update global configuration settings."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
 
     update_data = request.model_dump(exclude_unset=True)
     persist = update_data.pop("persist", False)
@@ -80,13 +69,12 @@ async def update_config(request: ConfigUpdateRequest):
 
 
 @router.get("/projects")
-async def get_projects():
+async def get_projects(brain: AxonBrain | None = Depends(get_brain_optional)):
     """List all projects known to the Axon system."""
     from axon import api as _api
     from axon import shares as _shares
+    from axon.projects import is_reserved_top_level_name as _is_reserved_top_level_name
     from axon.projects import list_projects as _list_projects
-
-    brain = _api.brain
 
     if brain and brain.config.axon_store_mode:
         try:
@@ -106,7 +94,7 @@ async def get_projects():
     memory_only = [
         {"name": n, "source": "memory_only"}
         for n in in_memory
-        if n not in on_disk_names and n != "_global"
+        if n not in on_disk_names and n != "_global" and not _is_reserved_top_level_name(n)
     ]
 
     shared_mounts = []
@@ -163,13 +151,8 @@ async def create_project(request: ProjectCreateRequest):
 
 
 @router.post("/project/switch")
-async def switch_project(request: ProjectSwitchRequest):
+async def switch_project(request: ProjectSwitchRequest, brain: AxonBrain = Depends(get_brain)):
     """Switch the active project, reinitializing vector store and BM25."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if not brain:
-        raise HTTPException(status_code=503, detail="Brain not initialized")
     try:
         project_name = request.final_name
 
@@ -197,20 +180,26 @@ async def switch_project(request: ProjectSwitchRequest):
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        detail = str(e)
+        lowered = detail.lower()
+        if "must be provided" in lowered:
+            status = 400
+        elif "reserved" in lowered:
+            status = 400
+        else:
+            status = 404
+        raise HTTPException(status_code=status, detail=detail)
     except Exception as e:
         logger.error(f"Project switch failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/project/delete/{name}")
-async def delete_project_endpoint(name: str):
+async def delete_project_endpoint(name: str, brain: AxonBrain | None = Depends(get_brain_optional)):
     """Delete a project and all its data."""
     from axon import api as _api
     from axon import shares as _shares
     from axon.projects import ProjectHasChildrenError, delete_project
-
-    brain = _api.brain
 
     if name.startswith("mounts/") or name == "mounts":
         raise HTTPException(
@@ -237,6 +226,9 @@ async def delete_project_endpoint(name: str):
 
     try:
         delete_project(name)
+        to_remove = [k for k in _api._source_hashes if k == name or k.startswith(f"{name}/")]
+        for key in to_remove:
+            _api._source_hashes.pop(key, None)
         return {"status": "success", "message": f"Project '{name}' deleted."}
     except ProjectHasChildrenError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -245,24 +237,20 @@ async def delete_project_endpoint(name: str):
 
 
 @router.get("/sessions")
-async def list_sessions():
+async def list_sessions(brain: AxonBrain = Depends(get_brain)):
     """List all saved chat sessions for the active project."""
-    from axon import api as _api
     from axon.sessions import _list_sessions
 
-    brain = _api.brain
-    project = getattr(brain, "_active_project", None) if brain else None
+    project = getattr(brain, "_active_project", None)
     return {"sessions": _list_sessions(project=project)}
 
 
 @router.get("/session/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, brain: AxonBrain = Depends(get_brain)):
     """Retrieve a specific session by ID."""
-    from axon import api as _api
     from axon.sessions import _load_session
 
-    brain = _api.brain
-    project = getattr(brain, "_active_project", None) if brain else None
+    project = getattr(brain, "_active_project", None)
     session = _load_session(session_id, project=project)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

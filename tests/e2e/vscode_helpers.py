@@ -298,6 +298,11 @@ async function main() {
     }
   }
 
+  const postCommandWaitMs = extra._postCommandWaitMs || 0;
+  if (postCommandWaitMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, postCommandWaitMs));
+  }
+
   // Dispatch fake webview → extension messages if requested
   if (Array.isArray(extra._panelMessages) && createdPanels.length > 0) {
     const targetPanel = createdPanels[0];
