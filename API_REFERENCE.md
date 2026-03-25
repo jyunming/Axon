@@ -181,7 +181,7 @@ check to prevent accidental writes or reads to the wrong corpus.
 **`POST /config/update` body (all fields optional):**
 ```json
 {
-  "llm_model": "gemma3:27b",
+  "llm_model": "llama3.1:8b",
   "llm_provider": "ollama",
   "embedding_provider": "fastembed",
   "hyde": true,

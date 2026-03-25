@@ -328,7 +328,6 @@ ollama pull mxbai-embed-large
 embedding:
   provider: ollama
   model: nomic-embed-text
-  base_url: http://localhost:11434
 ```
 
 **Available Ollama embedding models:**
@@ -1208,6 +1207,31 @@ The Axon extension also registers a `@axon` chat participant. It is a **conversa
 **Image ingest fails with "model does not support images"**
 - Switch your Copilot model to one with vision capability (GPT-4o or Claude 3.x Sonnet/Opus)
 - In Copilot Chat, click the model selector and choose a multimodal model
+
+---
+
+## 11b. REPL Security — Shell Passthrough
+
+The REPL supports running shell commands directly with the `!` prefix (e.g. `! ls docs/`). Access is controlled by the `repl.shell_passthrough` config field:
+
+| Policy | Behaviour |
+|--------|-----------|
+| `local_only` | **(default)** Commands are blocked when the active project is a read-only mount or a remote scope; allowed for local and default projects. |
+| `always` | Shell passthrough is always permitted regardless of project scope. |
+| `off` | Shell passthrough is disabled entirely. |
+
+**Set via `config.yaml`:**
+```yaml
+repl:
+  shell_passthrough: local_only   # local_only | always | off
+```
+
+**Set via environment variable:**
+```
+RAG_SHELL_PASSTHROUGH=off
+```
+
+> **Security note:** `always` permits unrestricted shell access. Use `off` in shared or multi-tenant deployments. The default `local_only` blocks shell commands when the active project is a read-only share mount.
 
 ---
 

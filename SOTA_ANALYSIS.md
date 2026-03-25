@@ -62,15 +62,20 @@ Current defaults (`all-MiniLM-L6-v2` / `BAAI/bge-small-en-v1.5`) are good but no
 
 ## 4. Evaluation Frameworks
 
-Axon Eval smoke tests and the benchmark runner (`scripts/benchmark_runner.py`) cover P@k, R@k, RTL, IHO, TCR, CTI. The following richer frameworks are not yet integrated:
+Axon Eval smoke tests and the benchmark runner (`scripts/benchmark_runner.py`) cover P@k, R@k, RTL, IHO, TCR, CTI.
+
+**Shipped:**
+
+| Framework | What It Adds | Status |
+|-----------|-------------|--------|
+| **DeepEval** | Pytest-style CI integration; 25+ metrics (faithfulness, contextual precision/recall, hallucination, MMLU) | **Shipped** — integrated in `tests/` eval suite |
+
+**Not yet integrated:**
 
 | Framework | What It Adds | Effort |
 |-----------|-------------|--------|
-| **DeepEval** | Pytest-style CI integration; 25+ metrics (faithfulness, contextual precision/recall, hallucination, MMLU) | Medium |
 | **ARES** | Fine-tuned LLM judges; statistically confident scores; confidence intervals | High |
 | **TruLens** | OpenTelemetry tracing; RAG Triad (answer relevance, context relevance, groundedness) | Medium |
-
-**DeepEval** is the highest-priority target — it plugs into the existing pytest suite and gives faithfulness + hallucination scores without a separate server.
 
 ---
 
