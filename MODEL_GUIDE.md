@@ -120,7 +120,7 @@ embedding:
 
 ## Large Language Models (LLMs)
 
-> **Default model:** `llama3.1:8b` (via Ollama). Change with `llm.model` in `config.yaml` or live from the UI sidebar.
+> **Default model:** `gemma` (via Ollama). Change with `llm.model` in `config.yaml` or live from the UI sidebar.
 
 ### Cloud LLM Providers
 
