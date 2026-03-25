@@ -10,7 +10,6 @@ repos:
         exclude: '\.(gif|mp4|webm|png|jpg|jpeg|svg)$|integrations/vscode-axon/media/.*\.js$|integrations/vscode-axon/.*\.vsix$|docs/demos/.*\.html$'
       - id: check-json
       - id: check-toml
-      - id: check-merge-conflict
       - id: detect-private-key
 
   - repo: https://github.com/psf/black
@@ -26,6 +25,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: check-merge-conflict
+        name: check for merge conflicts
+        entry: python scripts/check_merge_conflict.py
+        language: system
+        types: [text]
+        pass_filenames: true
+
       - id: py-compile
         name: py_compile
         entry: python -m py_compile
