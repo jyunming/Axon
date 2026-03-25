@@ -246,6 +246,13 @@ export class AxonRefreshIngestTool implements vscode.LanguageModelTool<any> {
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Refresh error: ${formatDetail(data, result.body)}`)]);
       }
+      // Async response: server returns job_id immediately; poll for completion.
+      if (data.job_id) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+          `Refresh started (job_id: ${data.job_id}). Use axon_getIngestStatus with job_id="${data.job_id}" to poll until status is "completed".`
+        )]);
+      }
+      // Sync fallback (small corpora may still return full results).
       const r = (data.reingested || []).length;
       const s = (data.skipped || []).length;
       const m = (data.missing || []).length;

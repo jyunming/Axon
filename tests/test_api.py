@@ -1740,12 +1740,17 @@ def test_delete_mounted_share_returns_403():
     assert "mounted share" in resp.json()["detail"]
 
 
-def test_refresh_mounted_share_returns_403(tmp_path):
-    """POST /ingest/refresh returns 403 when active project is a mounted share."""
+def test_refresh_mounted_share_ingest_error_recorded_in_job(tmp_path):
+    """POST /ingest/refresh: PermissionError during ingest is recorded in job errors.
+
+    Refresh is now async — the 403 guard fires from _assert_write_allowed (see
+    test_refresh_write_guard_returns_403_before_scanning_docs). A PermissionError
+    raised from brain.ingest() inside the background task is caught and stored in
+    the job's errors list rather than propagated as HTTP 403.
+    """
     doc_file = tmp_path / "doc.txt"
     doc_file.write_text("hello world", encoding="utf-8")
     api_module.brain = _make_brain()
-    # stale hash so the endpoint tries to re-ingest
     api_module.brain.get_doc_versions.return_value = {
         str(doc_file): {"content_hash": "stale_hash_that_wont_match"}
     }
@@ -1753,7 +1758,11 @@ def test_refresh_mounted_share_returns_403(tmp_path):
         "Cannot ingest on mounted share 'mounts/alice_proj'."
     )
     resp = client.post("/ingest/refresh")
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    status_resp = client.get(f"/ingest/status/{job_id}")
+    job = status_resp.json()
+    assert len(job["errors"]) >= 1
 
 
 def test_refresh_write_guard_returns_403_before_scanning_docs():

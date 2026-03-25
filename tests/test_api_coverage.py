@@ -193,6 +193,17 @@ def test_tracked_docs_503_no_brain():
     assert resp.status_code == 503
 
 
+def _refresh_and_poll():
+    """POST /ingest/refresh then poll /ingest/status/{job_id}; return final job dict."""
+    resp = client.post("/ingest/refresh")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "job_id" in data
+    status_resp = client.get(f"/ingest/status/{data['job_id']}")
+    assert status_resp.status_code == 200
+    return status_resp.json()
+
+
 def test_ingest_refresh_skipped(tmp_path):
     brain = _make_brain()
     api_module.brain = brain
@@ -200,9 +211,8 @@ def test_ingest_refresh_skipped(tmp_path):
     real_file.write_bytes(b"hello")
     content_hash = hashlib.md5(b"hello").hexdigest()
     brain.get_doc_versions.return_value = {str(real_file): {"content_hash": content_hash}}
-    resp = client.post("/ingest/refresh")
-    assert resp.status_code == 200
-    assert str(real_file) in resp.json()["skipped"]
+    data = _refresh_and_poll()
+    assert str(real_file) in data["skipped"]
 
 
 def test_ingest_refresh_reingest_needed(tmp_path):
@@ -217,9 +227,7 @@ def test_ingest_refresh_reingest_needed(tmp_path):
     mock_loader_instance.load.return_value = fake_doc
     with patch("axon.loaders.DirectoryLoader") as mock_loader_cls:
         mock_loader_cls.return_value.loaders = {".txt": mock_loader_instance}
-        resp = client.post("/ingest/refresh")
-    assert resp.status_code == 200
-    data = resp.json()
+        data = _refresh_and_poll()
     assert str(real_file) in data["reingested"]
 
 
@@ -227,9 +235,8 @@ def test_ingest_refresh_missing_file():
     brain = _make_brain()
     api_module.brain = brain
     brain.get_doc_versions.return_value = {"/nonexistent/path.txt": {"content_hash": "x"}}
-    resp = client.post("/ingest/refresh")
-    assert resp.status_code == 200
-    assert "/nonexistent/path.txt" in resp.json()["missing"]
+    data = _refresh_and_poll()
+    assert "/nonexistent/path.txt" in data["missing"]
 
 
 def test_ingest_refresh_503_no_brain():

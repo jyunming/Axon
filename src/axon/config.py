@@ -823,6 +823,9 @@ offline:
         if flat.get("axon_store_base"):
             data["store"] = {"base": flat["axon_store_base"]}
             data.pop("projects_root", None)
+            # Derived paths are recomputed in __post_init__ — don't persist stale values
+            data["vector_store"].pop("path", None)
+            data["bm25"].pop("path", None)
 
         # Add provider-specific extras
         if flat["api_key"]:

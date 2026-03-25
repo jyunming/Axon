@@ -292,7 +292,9 @@ class TestSave:
         assert data["llm"]["timeout"] == 120
 
     def test_save_axon_store_base_adds_store_section(self, tmp_path):
-        """When axon_store_base is set, save() writes store.base and removes projects_root."""
+        """When axon_store_base is set, save() writes store.base, removes projects_root,
+        and omits vector_store.path / bm25.path so stale hardcoded paths are never
+        persisted to config.yaml (they are always derived fresh from axon_store_base)."""
         cfg = AxonConfig()
         cfg.axon_store_base = str(tmp_path / "shared")
         target = tmp_path / "c.yaml"
@@ -302,6 +304,8 @@ class TestSave:
         assert "store" in data
         assert data["store"]["base"] == str(tmp_path / "shared")
         assert "projects_root" not in data
+        assert "path" not in data.get("vector_store", {})
+        assert "path" not in data.get("bm25", {})
 
     def test_save_no_store_section_when_axon_store_base_empty(self, tmp_path):
         """When axon_store_base is empty, save() writes projects_root and no store section."""

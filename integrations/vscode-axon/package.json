@@ -282,7 +282,7 @@
       {
         "name": "axon_deleteDocuments",
         "displayName": "Axon: Delete Documents",
-        "modelDescription": "Remove specific document(s) from the active project using their IDs.",
+        "modelDescription": "Remove specific document(s) from the active project using their IDs. Accepts both chunk IDs and source doc IDs (e.g. the doc_id returned by axon_ingestText) — source IDs are automatically expanded to all their chunks before deletion.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonDeleteDocs",
         "inputSchema": {
@@ -483,7 +483,7 @@
       {
         "name": "axon_initStore",
         "displayName": "Axon: Initialize AxonStore",
-        "modelDescription": "Initialise AxonStore multi-user mode at a given base directory. Must be called once before share-related tools (axon_listShares) will work. Safe to call repeatedly. After calling this, AxonStore is active and sharing tools become available.",
+        "modelDescription": "Initialise AxonStore multi-user mode at a given base directory. Must be called once before share-related tools (axon_listShares) will work. WARNING: this permanently rewrites config.yaml to point vector_store and BM25 paths at the new store location — only call when you intend to switch to AxonStore mode. Calling with a different path than the current store will make existing projects unreachable until the original path is restored.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonInitStore",
         "inputSchema": {
@@ -544,7 +544,7 @@
       {
         "name": "axon_refreshIngest",
         "displayName": "Axon: Refresh Ingest",
-        "modelDescription": "Re-ingest tracked files whose content has changed since the last ingest. Returns counts of re-ingested, unchanged, missing, and errored files. Use after editing source files to keep the knowledge base current without re-ingesting everything.",
+        "modelDescription": "Re-ingest tracked files whose content has changed since the last ingest. Returns a job_id immediately — poll with axon_getIngestStatus until status is 'completed', then check reingested/skipped/missing/errors counts. Use after editing source files to keep the knowledge base current without re-ingesting everything.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonRefreshIngest",
         "inputSchema": {

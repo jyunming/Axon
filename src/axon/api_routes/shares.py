@@ -51,6 +51,10 @@ async def store_init(request: StoreInitRequest):
     config = brain.config if brain else AxonConfig()
     config.axon_store_base = str(base)
     config.axon_store_mode = True
+    # Explicitly update in-memory derived paths; __post_init__ only runs at
+    # construction time so we must keep these assignments here.
+    # config.save() will NOT write these to config.yaml (axon_store_base branch
+    # strips vector_store/bm25 paths so they cannot become stale after a store move).
     config.projects_root = str(user_dir)
     config.vector_store_path = str(user_dir / "default" / "chroma_data")
     config.bm25_path = str(user_dir / "default" / "bm25_index")

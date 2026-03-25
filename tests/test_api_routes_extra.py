@@ -205,23 +205,48 @@ class TestCodeGraphData:
 # ===========================================================================
 
 
+def _refresh_and_poll(client, api_module):
+    """POST /ingest/refresh (async) → GET /ingest/status/{job_id} → job dict.
+
+    TestClient runs BackgroundTasks synchronously, so the job is always
+    complete by the time the POST returns.
+    """
+    resp = client.post("/ingest/refresh")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "job_id" in data, f"expected job_id in response, got: {data}"
+    job_id = data["job_id"]
+    status_resp = client.get(f"/ingest/status/{job_id}")
+    assert status_resp.status_code == 200
+    return status_resp.json()
+
+
 class TestIngestRefresh:
     def test_503_when_no_brain(self):
         resp = client.post("/ingest/refresh")
         assert resp.status_code == 503
 
-    def test_missing_source_reported(self):
-        """ingest.py line 43 — source path does not exist → 'missing' bucket."""
+    def test_returns_job_id_immediately(self):
+        """POST /ingest/refresh returns {job_id, status} immediately (async)."""
         brain = _make_brain()
-        brain.get_doc_versions.return_value = {"/nonexistent/path.txt": {"content_hash": "abc123"}}
+        brain.get_doc_versions.return_value = {}
         api_module.brain = brain
         resp = client.post("/ingest/refresh")
         assert resp.status_code == 200
         data = resp.json()
-        assert "/nonexistent/path.txt" in data["missing"]
+        assert "job_id" in data
+        assert data["status"] == "processing"
+
+    def test_missing_source_reported(self):
+        """Background refresh: source path does not exist → 'missing' bucket."""
+        brain = _make_brain()
+        brain.get_doc_versions.return_value = {"/nonexistent/path.txt": {"content_hash": "abc123"}}
+        api_module.brain = brain
+        job = _refresh_and_poll(client, api_module)
+        assert "/nonexistent/path.txt" in job["missing"]
 
     def test_no_loader_for_extension_reported_as_error(self, tmp_path):
-        """ingest.py lines 51-54 — no loader for extension → 'errors' bucket."""
+        """Background refresh: no loader for extension → 'errors' bucket."""
         brain = _make_brain()
         exotic = tmp_path / "file.exotic123"
         exotic.write_text("content", encoding="utf-8")
@@ -232,15 +257,13 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {}  # no loader for .exotic123
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            resp = client.post("/ingest/refresh")
+            job = _refresh_and_poll(client, api_module)
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["errors"]) == 1
-        assert "no loader" in data["errors"][0]["error"]
+        assert len(job["errors"]) == 1
+        assert "no loader" in job["errors"][0]["error"]
 
     def test_loader_returns_no_docs_reported_as_error(self, tmp_path):
-        """ingest.py lines 59-62 — loader returns empty list → 'errors' bucket."""
+        """Background refresh: loader returns empty list → 'errors' bucket."""
         brain = _make_brain()
         txt_file = tmp_path / "file.txt"
         txt_file.write_text("content", encoding="utf-8")
@@ -253,15 +276,13 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            resp = client.post("/ingest/refresh")
+            job = _refresh_and_poll(client, api_module)
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["errors"]) == 1
-        assert "no documents" in data["errors"][0]["error"]
+        assert len(job["errors"]) == 1
+        assert "no documents" in job["errors"][0]["error"]
 
     def test_unchanged_hash_skipped(self, tmp_path):
-        """ingest.py lines 65-67 — same hash → skipped bucket."""
+        """Background refresh: same hash → skipped bucket."""
         import hashlib
 
         content = "same content"
@@ -278,14 +299,12 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            resp = client.post("/ingest/refresh")
+            job = _refresh_and_poll(client, api_module)
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert str(txt_file) in data["skipped"]
+        assert str(txt_file) in job["skipped"]
 
     def test_changed_hash_reingested(self, tmp_path):
-        """ingest.py line 69 — changed hash → reingested bucket."""
+        """Background refresh: changed hash → reingested bucket."""
         brain = _make_brain()
         txt_file = tmp_path / "changed.txt"
         txt_file.write_text("new content", encoding="utf-8")
@@ -300,14 +319,12 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            resp = client.post("/ingest/refresh")
+            job = _refresh_and_poll(client, api_module)
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert str(txt_file) in data["reingested"]
+        assert str(txt_file) in job["reingested"]
 
     def test_exception_during_loader_reported_as_error(self, tmp_path):
-        """ingest.py lines 72-73 — generic exception → errors bucket."""
+        """Background refresh: generic exception → errors bucket."""
         brain = _make_brain()
         txt_file = tmp_path / "error.txt"
         txt_file.write_text("content", encoding="utf-8")
@@ -320,11 +337,9 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            resp = client.post("/ingest/refresh")
+            job = _refresh_and_poll(client, api_module)
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["errors"]) == 1
+        assert len(job["errors"]) == 1
 
 
 class TestIngestPath:
