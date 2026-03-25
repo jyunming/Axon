@@ -1226,10 +1226,7 @@ repl:
   shell_passthrough: local_only   # local_only | always | off
 ```
 
-**Set via environment variable:**
-```
-RAG_SHELL_PASSTHROUGH=off
-```
+This option is currently configurable only via `config.yaml`; environment variable overrides are not supported.
 
 > **Security note:** `always` permits unrestricted shell access. Use `off` in shared or multi-tenant deployments. The default `local_only` blocks shell commands when the active project is a read-only share mount.
 
