@@ -10,9 +10,29 @@
   <a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black"></a>
 </p>
 
-**A local-first RAG platform for humans and AI agents.**
+**A privacy-first, local AI knowledge engine featuring GraphRAG, RAPTOR, and Code-Aware structural search.**
 
 Point Axon at your documents. Ask questions. Get answers — using a local LLM with no cloud, no API keys required.
+Share knowledge bases across your team with HMAC-secured read-only project mounts. Monitor every query with the built-in Governance Console.
+
+---
+
+## Key capabilities
+
+- **Hybrid search** — dense vector + BM25 keyword, fused for better precision than either alone
+- **Multi-LLM** — Ollama (local), Gemini, OpenAI, vLLM, GitHub Copilot; switch live from the REPL
+- **Multi-embedding** — sentence-transformers, Ollama, FastEmbed (BGE-M3 for multilingual/long-doc)
+- **Vector stores** — ChromaDB (default), Qdrant, LanceDB
+- **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)
+- **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
+- **Projects** — isolated knowledge bases per named project; nested projects search children automatically
+- **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression, CRAG-Lite
+- **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph; interactive 3D graph panel in VS Code or `/graph-viz` HTML export
+- **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS`/`MENTIONED_IN` edges; visualise alongside the knowledge graph in VS Code
+- **Reranking** — cross-encoder (BGE) reranking; CRAG-Lite corrective retrieval on low-confidence chunks
+- **AxonStore sharing** — HMAC-secured read-only project mounts across OS users; lazy revocation via manifest tombstones
+- **Governance Console** — operator dashboard with SQLite WAL audit trail; per-query event log, session tracking, write-lease monitoring
+- **Agent-ready** — FastAPI REST API + MCP server (27 tools) for Copilot agent mode; OpenAI-compatible tool schema
 
 ---
 
@@ -37,7 +57,7 @@ pipx install git+https://github.com/jyunming/Axon.git
 Pull a local model (or bring your own API key for Gemini / OpenAI):
 
 ```bash
-ollama pull llama3.1:8b   # recommended — 4.7 GB, ~8 GB RAM
+ollama pull llama3.1:8b   # default — 4.7 GB, ~8 GB RAM
 ollama pull phi3:mini     # minimal — 2.3 GB, ~4 GB RAM
 ```
 
@@ -74,6 +94,7 @@ Start `axon-api`, then ask Copilot in chat:
 ```
 Search my knowledge base for information about the authentication module.
 Ingest my project docs at /path/to/docs
+Show me the graph for how the retrieval pipeline works
 ```
 
 ### Option B — MCP Server (Copilot agent mode)
@@ -97,7 +118,7 @@ Create `.vscode/settings.json`:
 { "chat.mcp.access": "all" }
 ```
 
-Start `axon-api`, reload VS Code — Axon tools appear in Copilot agent mode (hammer icon).
+Start `axon-api`, reload VS Code — Axon's 27 tools appear in Copilot agent mode (hammer icon).
 
 > See **[Setup Guide](SETUP.md)** for full setup details, workflow diagrams, and per-entry-point examples.
 
@@ -150,20 +171,53 @@ Copilot Chat:
 
 ---
 
-## Key capabilities
+## AxonStore — Multi-User Knowledge Sharing
 
-- **Hybrid search** — dense vector + BM25 keyword, fused for better precision than either alone
-- **Multi-LLM** — Ollama (local), Gemini, OpenAI, vLLM; switch live from the REPL
-- **Multi-embedding** — sentence-transformers, Ollama, FastEmbed
-- **Vector stores** — ChromaDB (default), Qdrant, LanceDB
-- **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)
-- **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
-- **Projects** — isolated knowledge bases per named project; nested projects search children automatically
-- **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
-- **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph; disabled in the shipped config for fast first-run ingest; enable when your corpus is ready; interactive 3D graph panel in VS Code, or `/graph-viz` HTML export
-- **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS` edges for code corpora; visualise alongside the knowledge graph in the VS Code panel
-- **Reranking** — cross-encoder (BGE) reranking
-- **Agent-ready** — FastAPI REST API + MCP server for Copilot agent mode
+AxonStore lets you share a project's knowledge base with other OS users as a **read-only mount** — they can query it without being able to ingest or delete.
+
+```
+# Owner: initialise AxonStore and share a project
+axon> /store-init /data
+axon> /share my-project alice
+→ share_string: eyJrZXlfaWQiOiAic2tfYTFiMmMzZDQiLCAidG9rZW4...
+
+# Alice: redeem the share string on her machine
+axon> /redeem eyJrZXlfaWQiOiAic2tfYTFiMmMzZDQiLCAidG9rZW4...
+→ Mounted as: mounts/bob_my-project
+
+# Alice can now query bob's project:
+axon> /project mounts/bob_my-project
+axon> What are the key themes in this knowledge base?
+```
+
+Share keys use HMAC-SHA256 to bind the token to `(key_id, project, grantee)` — a leaked token cannot be repurposed for a different project or user. Revocation is lazy: the owner revokes, and stale mounts are cleaned on Alice's next access.
+
+```bash
+# Revoke access at any time:
+axon> /revoke sk_a1b2c3d4
+→ Key revoked. Alice's mount will be removed on her next project access.
+```
+
+---
+
+## Governance Console — Audit Every Query
+
+The Governance Console gives operators a real-time view of all knowledge base activity:
+
+```bash
+# Start the API and open the governance dashboard:
+GET /governance/overview      # active projects, session count, lease count
+GET /governance/audit?limit=50  # per-query event log (project, surface, query, latency)
+GET /governance/sessions      # active Copilot agent sessions (opened_at, last_query)
+GET /registry/leases          # write-lease counts per project (safe to check before maintenance)
+```
+
+Every query emits a structured audit event — project, surface (API/MCP/VS Code/REPL), query text, and latency. Events are stored in a **SQLite WAL** database under the project directory, surviving server restarts.
+
+**When to use it:**
+- Verify which projects are being queried and by which surfaces
+- Check active write leases before taking a project offline for maintenance
+- Audit user activity in a shared AxonStore deployment
 
 ---
 

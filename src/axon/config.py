@@ -47,7 +47,7 @@ class AxonConfig:
     llm_provider: Literal[
         "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot", "github_copilot"
     ] = "ollama"
-    llm_model: str = "gemma"
+    llm_model: str = "llama3.1:8b"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
     api_key: str = ""
@@ -533,7 +533,7 @@ embedding:
 
 llm:
   provider: ollama
-  model: gemma
+  model: llama3.1:8b
   temperature: 0.7
   max_tokens: 2048
 
