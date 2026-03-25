@@ -1,6 +1,7 @@
 """Tests for configuration management."""
 
 import yaml
+
 from axon.main import AxonConfig
 
 
@@ -49,7 +50,7 @@ class TestAxonConfig:
         config_path = tmp_path / "config.yaml"
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump({"query_transformations": {"step_back": True, "hyde": True}}, f)
-        
+
         config = AxonConfig.load(str(config_path))
         assert config.step_back is True
         assert config.hyde is True
@@ -59,7 +60,7 @@ class TestAxonConfig:
         config_path = tmp_path / "config.yaml"
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump({"rag": {"parent_chunk_size": 2000, "top_k": 5}}, f)
-            
+
         config = AxonConfig.load(str(config_path))
         assert config.parent_chunk_size == 2000
         assert config.top_k == 5
@@ -71,7 +72,7 @@ class TestAxonConfig:
             yaml.dump(
                 {"rag": {"query_cache": True, "query_cache_size": 64, "dedup_on_ingest": False}}, f
             )
-        
+
         config = AxonConfig.load(str(config_path))
         assert config.query_cache is True
         assert config.query_cache_size == 64
@@ -88,7 +89,7 @@ class TestAxonConfig:
                 },
                 f,
             )
-            
+
         config = AxonConfig.load(str(config_path))
         assert config.query_decompose is True
         assert config.compress_context is True
@@ -98,7 +99,7 @@ class TestAxonConfig:
         config_path = tmp_path / "config.yaml"
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump({"rerank": {"enabled": True, "model": "BAAI/bge-reranker-v2-m3"}}, f)
-            
+
         config = AxonConfig.load(str(config_path))
         assert config.rerank is True
         assert config.reranker_model == "BAAI/bge-reranker-v2-m3"

@@ -12,9 +12,18 @@ from fastapi.responses import StreamingResponse
 
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import QueryRequest, SearchRequest, SearchResult
+from axon.collection_ops import clear_active_project
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
+
+
+def _enforce_write_access(brain, operation: str) -> None:
+    """Translate AxonBrain write-access denials into HTTP 403 responses."""
+    try:
+        brain._assert_write_allowed(operation)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.post("/query")
@@ -170,7 +179,7 @@ async def search_brain(request: SearchRequest):
             lambda: brain._execute_retrieval(request.query, filters=request.filters, cfg=cfg),
         )
         results = retrieval_data["results"]
-        top_k = request.top_k or brain.config.top_k
+        top_k = request.top_k if request.top_k is not None else brain.config.top_k
         return results[:top_k]
     except Exception as e:
         logger.error(f"Error during search: {e}")
@@ -217,50 +226,18 @@ async def search_raw_endpoint(request: SearchRequest, include_trace: bool = Fals
 @router.post("/clear")
 async def clear_brain():
     """Clear the active project's vector store, BM25 index, hash store, and entity graph."""
-    import pathlib
-
     from axon import api as _api
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_write_access(brain, "clear")
     try:
-        vs = brain.vector_store
-        provider = vs.provider
-        if provider == "chroma" and vs.client is not None:
-            vs.client.delete_collection("axon")
-            vs.collection = vs.client.create_collection(
-                name="axon", metadata={"hnsw:space": "cosine"}
-            )
-        elif provider == "qdrant" and vs.client is not None:
-            try:
-                vs.client.delete_collection("axon")
-            except Exception:
-                pass
-            vs._init_store()
-        elif provider == "lancedb" and vs.client is not None:
-            try:
-                vs.client.drop_table("axon")
-            except Exception:
-                pass
-            vs.collection = None
-
-        if brain.bm25 is not None:
-            brain.bm25.corpus.clear()
-            brain.bm25.bm25 = None
-            brain.bm25.save()
-
-        brain._ingested_hashes = set()
-        brain._save_hash_store()
-        brain._entity_graph = {}
-        brain._save_entity_graph()
-
-        _meta_path = pathlib.Path(brain._embedding_meta_path)
-        if _meta_path.exists():
-            try:
-                _meta_path.unlink()
-            except OSError:
-                pass
+        clear_active_project(brain)
+        project_key = getattr(brain, "_active_project", "default")
+        _api._source_hashes.pop(project_key, None)
+        if project_key == "default":
+            _api._source_hashes.pop("_global", None)
 
         return {"status": "success", "message": "Collection cleared"}
     except Exception as e:

@@ -36,53 +36,51 @@ class TestProjectSessionsPath:
 
 
 # ---------------------------------------------------------------------------
-# get_project_namespace_id (lines 283-284)
+# get_project_id (lines 283-284)
 # ---------------------------------------------------------------------------
 
 
 class TestGetProjectNamespaceId:
     def test_exception_in_read_returns_none(self, tmp_path):
         """json.JSONDecodeError or OSError in meta.json returns None (lines 283-284)."""
-        from axon.projects import get_project_namespace_id
+        from axon.projects import get_project_id
 
         with patch("axon.projects.PROJECTS_ROOT", tmp_path):
             # Create a project dir with malformed meta.json
             proj_dir = tmp_path / "testproj"
             proj_dir.mkdir()
             (proj_dir / "meta.json").write_text("NOT_VALID_JSON")
-            result = get_project_namespace_id("testproj")
+            result = get_project_id("testproj")
         assert result is None
 
 
 # ---------------------------------------------------------------------------
-# get_store_namespace_id (lines 294, 299-300)
+# get_store_id (lines 294, 299-300)
 # ---------------------------------------------------------------------------
 
 
 class TestGetStoreNamespaceId:
     def test_returns_none_if_no_file(self, tmp_path):
         """Returns None when store_meta.json does not exist (line 294)."""
-        from axon.projects import get_store_namespace_id
+        from axon.projects import get_store_id
 
-        result = get_store_namespace_id(tmp_path)
+        result = get_store_id(tmp_path)
         assert result is None
 
     def test_returns_none_on_json_error(self, tmp_path):
         """Returns None when store_meta.json has malformed JSON (lines 299-300)."""
-        from axon.projects import get_store_namespace_id
+        from axon.projects import get_store_id
 
         (tmp_path / "store_meta.json").write_text("INVALID_JSON_DATA")
-        result = get_store_namespace_id(tmp_path)
+        result = get_store_id(tmp_path)
         assert result is None
 
     def test_returns_id_when_present(self, tmp_path):
-        """Returns the store_namespace_id when valid."""
-        from axon.projects import get_store_namespace_id
+        """Returns the store_id when valid."""
+        from axon.projects import get_store_id
 
-        (tmp_path / "store_meta.json").write_text(
-            json.dumps({"store_namespace_id": "store_abc123"})
-        )
-        result = get_store_namespace_id(tmp_path)
+        (tmp_path / "store_meta.json").write_text(json.dumps({"store_id": "store_abc123"}))
+        result = get_store_id(tmp_path)
         assert result == "store_abc123"
 
 
@@ -304,7 +302,7 @@ class TestListProjects:
 
 class TestEnsureSingleProjectAt:
     def test_backfills_missing_namespace_id(self, tmp_path):
-        """If meta.json exists without project_namespace_id, it's added (lines 594-595)."""
+        """If meta.json exists without project_id, it's added (lines 594-595)."""
         from axon.projects import _ensure_single_project_at
 
         proj_root = tmp_path / "myproj"
@@ -319,7 +317,7 @@ class TestEnsureSingleProjectAt:
         _ensure_single_project_at(proj_root, "myproj", "test")
 
         updated = json.loads(meta_file.read_text())
-        assert "project_namespace_id" in updated
+        assert "project_id" in updated
 
 
 # ---------------------------------------------------------------------------

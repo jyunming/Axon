@@ -907,8 +907,10 @@ class TestReplCompactCommand:
 class TestReplClearCommand:
     def test_clear(self):
         brain = _make_mock_brain()
-        brain.clear = MagicMock()
-        output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        with patch("axon.repl.clear_active_project") as mock_clear:
+            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        mock_clear.assert_called_once_with(brain)
+        assert "knowledge base cleared" in output.lower()
         assert isinstance(output, str)
 
 

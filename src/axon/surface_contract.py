@@ -66,7 +66,6 @@ REGISTRY: list[Capability] = [
         test_targets=(
             "tests/test_api.py",
             "tests/test_repl_commands.py",
-            "tests/test_cli_parity.py",
         ),
     ),
     Capability(
@@ -201,7 +200,7 @@ REGISTRY: list[Capability] = [
         name="Create project",
         category="project",
         tier=Tier.ONE,
-        description="Create a new project namespace.",
+        description="Create a new project.",
         supported_surfaces=ALL_SURFACES,
         api_route="/project/new",
     ),

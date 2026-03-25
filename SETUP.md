@@ -328,7 +328,6 @@ ollama pull mxbai-embed-large
 embedding:
   provider: ollama
   model: nomic-embed-text
-  base_url: http://localhost:11434
 ```
 
 **Available Ollama embedding models:**
@@ -909,11 +908,11 @@ For a team where one person owns ingestion and others query:
 | `search_knowledge` | Raw chunk retrieval (Copilot synthesises) |
 | `query_knowledge` | Retrieval + answer via the configured backend LLM provider |
 | `list_knowledge` | List indexed sources with chunk counts |
-| `switch_project` | Change active project namespace |
+| `switch_project` | Change active project |
 | `delete_documents` | Remove documents by ID |
-| `list_projects` | List all project namespaces |
+| `list_projects` | List all projects |
 | `get_stale_docs` | Find docs not re-ingested within N days |
-| `create_project` | Create a new project namespace |
+| `create_project` | Create a new project |
 | `delete_project` | Delete a project and all its data |
 | `clear_knowledge` | Clear all vectors and BM25 index |
 | `get_current_settings` | Return current RAG configuration |
@@ -936,28 +935,18 @@ When AxonStore multi-user mode is initialised (via `init_store` or `Axon: Init S
 
 ```
 AxonStore/
-  store_meta.json          ← store identity (store_namespace_id, store_version, created_at)
-  default/                 ← canonical default project (was _default/ in earlier versions)
-    chroma_data/
-    bm25_index/
-    meta.json              ← includes project_namespace_id
-  projects/                ← authoritative local projects
-  mounts/                  ← read-only mount descriptors
-  .shares/                 ← share key manifests
-  ShareMount/              ← symlinks (legacy compat)
+  <username>/
+    store_meta.json        ← store identity (store_id, store_version, created_at)
+    default/               ← canonical default project (was _default/ in earlier versions)
+      chroma_data/
+      bm25_index/
+      meta.json            ← includes project_id
+    <project>/             ← user-created local projects live at the namespace root
+    projects/              ← compatibility directory reserved for store tooling
+    mounts/                ← read-only mount descriptors
+    .shares/               ← share key manifests
+    ShareMount/            ← symlinks (legacy compat)
 ```
-
-#### Migrating from an earlier version
-
-If your store has a `_default/` directory, Axon automatically renames it to `default/` on first startup (a warning is logged). If both `_default/` and `default/` exist simultaneously, startup will fail — remove `_default/` manually before starting.
-
-To backfill `project_namespace_id` into existing projects in bulk:
-
-```bash
-python -c "from axon.migration import run_migration; from pathlib import Path; run_migration(Path.home() / '.axon/projects')"
-```
-
-The `axon.migration` module also provides `audit_legacy_chunk_ids(project_dir)` to report any chunks whose IDs were derived from the old basename scheme rather than the new SHA-256 scheme.
 
 ---
 
@@ -1035,6 +1024,7 @@ Open VS Code Settings (Ctrl+,) and search for `axon`:
 | `axon.useCopilotLlm` | `false` | Switch the extension's active LLM provider to Copilot for all inference (query answering, RAPTOR summarization, etc.), not just a helper |
 | `axon.ingestBase` | *(empty)* | Restrict ingestion to a specific directory. Empty = filesystem root on macOS/Linux, current drive root on Windows auto-start. Cross-drive ingest on Windows requires setting this explicitly or starting `axon-api` manually with a broader `RAG_INGEST_BASE`. |
 | `axon.storeBase` | *(empty)* | Base path for AxonStore multi-user mode |
+| `axon.graphSynthesis` | `true` | When showing the knowledge/code graph, also call `POST /query` to synthesise a text answer. Disable if your LLM is slow or unavailable — the graph still renders without it. |
 
 Or edit `settings.json` directly:
 
@@ -1072,15 +1062,15 @@ Search my Axon knowledge base for information about neural networks.
 
 | Tool | What it does |
 |---|---|
-| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer |
+| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer. If `threshold` filters out all results, automatically falls back to top-N candidates with a note. |
 | `axon_queryKnowledge` | Retrieval + answer via the configured LLM provider |
 | `axon_ingestText` | Ingest a text snippet directly |
 | `axon_ingestUrl` | Fetch and ingest a web page |
 | `axon_ingestPath` | Ingest a local file or directory (async; returns `job_id`) |
 | `axon_getIngestStatus` | Poll an ingest job by `job_id` — call after `axon_ingestPath` before searching |
-| `axon_listProjects` | List available project namespaces |
+| `axon_listProjects` | List available projects |
 | `axon_switchProject` | Switch active project |
-| `axon_createProject` | Create a new project namespace |
+| `axon_createProject` | Create a new project |
 | `axon_deleteProject` | Delete a project and all its data |
 | `axon_deleteDocuments` | Remove specific documents by ID |
 | `axon_getCollection` | List all ingested files with chunk counts |
@@ -1093,7 +1083,7 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_revokeShare` | Revoke an active share |
 | `axon_listShares` | List outgoing and incoming project shares |
 | `axon_initStore` | Initialise AxonStore multi-user mode |
-| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description. Accepts optional `alt_text` param to provide a description directly (enables headless/offline use without Copilot vision). |
 | `axon_refreshIngest` | Re-ingest files whose content has changed since last ingest |
 | `axon_listStaleDocs` | Find documents not re-ingested within N days |
 | `axon_showGraphStatus` | Show entity count, community summary count, and graph readiness |
@@ -1106,7 +1096,7 @@ Access via Ctrl+Shift+P:
 
 | Command | Description |
 |---|---|
-| `Axon: Switch Project` | Change active project namespace |
+| `Axon: Switch Project` | Change active project |
 | `Axon: Create Project` | Create a new project |
 | `Axon: Ingest File` | Browse and ingest a single file |
 | `Axon: Ingest Workspace` | Ingest the entire VS Code workspace |
@@ -1217,6 +1207,28 @@ The Axon extension also registers a `@axon` chat participant. It is a **conversa
 **Image ingest fails with "model does not support images"**
 - Switch your Copilot model to one with vision capability (GPT-4o or Claude 3.x Sonnet/Opus)
 - In Copilot Chat, click the model selector and choose a multimodal model
+
+---
+
+## 11b. REPL Security — Shell Passthrough
+
+The REPL supports running shell commands directly with the `!` prefix (e.g. `! ls docs/`). Access is controlled by the `repl.shell_passthrough` config field:
+
+| Policy | Behaviour |
+|--------|-----------|
+| `local_only` | **(default)** Commands are blocked when the active project is a read-only mount or a remote scope; allowed for local and default projects. |
+| `always` | Shell passthrough is always permitted regardless of project scope. |
+| `off` | Shell passthrough is disabled entirely. |
+
+**Set via `config.yaml`:**
+```yaml
+repl:
+  shell_passthrough: local_only   # local_only | always | off
+```
+
+This option is currently configurable only via `config.yaml`; environment variable overrides are not supported.
+
+> **Security note:** `always` permits unrestricted shell access. Use `off` in shared or multi-tenant deployments. The default `local_only` blocks shell commands when the active project is a read-only share mount.
 
 ---
 

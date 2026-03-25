@@ -8,6 +8,7 @@ Axon refactor.
 import logging
 import threading
 import uuid
+from importlib import import_module
 
 from axon.config import AxonConfig
 
@@ -184,6 +185,45 @@ class OpenLLM:
         self.config = config
         self._openai_clients: dict = {}
 
+    def _get_gemini_sdk(self) -> tuple[object, object]:
+        """Resolve and cache the Gemini SDK modules (google.genai)."""
+        cached = self._openai_clients.get("_gemini_sdk")
+        if cached:
+            return cached
+        genai_sdk = import_module("google.genai")
+        genai_types = import_module("google.genai.types")
+        sdk = (genai_sdk, genai_types)
+        self._openai_clients["_gemini_sdk"] = sdk
+        return sdk
+
+    def _get_gemini_client(self, genai_sdk) -> object:
+        """Return a cached ``google.genai.Client`` keyed by API key."""
+        key = self.config.gemini_api_key or ""
+        cache_key = "_gemini_client"
+        if self._openai_clients.get("_gemini_client_api_key") != key:
+            self._openai_clients[cache_key] = genai_sdk.Client(api_key=key)
+            self._openai_clients["_gemini_client_api_key"] = key
+        return self._openai_clients[cache_key]
+
+    @staticmethod
+    def _build_gemini_contents(
+        prompt: str, system_prompt: str | None, history: list[dict[str, str]], is_gemma: bool
+    ) -> list[dict]:
+        """Build Gemini conversation payload from history + prompt."""
+        contents: list[dict] = []
+        for msg in history:
+            role = msg.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            mapped = "model" if role == "assistant" else "user"
+            contents.append({"role": mapped, "parts": [msg.get("content", "")]})
+
+        user_text = prompt
+        if system_prompt and is_gemma:
+            user_text = f"{system_prompt}\n\n{prompt}"
+        contents.append({"role": "user", "parts": [user_text]})
+        return contents
+
     def _get_openai_client(self, base_url: str = None):
         """Return a cached OpenAI client. Pass base_url for vLLM or custom endpoints."""
         cache_key = base_url or "default"
@@ -249,38 +289,22 @@ class OpenLLM:
             return response["message"]["content"]
 
         elif provider == "gemini":
-            import warnings
-
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=FutureWarning)
-                import google.generativeai as genai
-            if not getattr(self, "_gemini_configured", False):
-                genai.configure(api_key=self.config.gemini_api_key)
-                self._gemini_configured = True
-            model_kwargs = {"model_name": self.config.llm_model}
+            genai, genai_types = self._get_gemini_sdk()
             is_gemma = "gemma" in self.config.llm_model.lower()
+            contents = self._build_gemini_contents(prompt, system_prompt, history, is_gemma)
+            client = self._get_gemini_client(genai)
+            cfg_kwargs = {
+                "temperature": self.config.llm_temperature,
+                "max_output_tokens": self.config.llm_max_tokens,
+            }
             if system_prompt and not is_gemma:
-                model_kwargs["system_instruction"] = system_prompt
-            model = genai.GenerativeModel(**model_kwargs)
-
-            contents = []
-            for msg in history:
-                role = "model" if msg["role"] == "assistant" else "user"
-                contents.append({"role": role, "parts": [msg["content"]]})
-
-            user_text = prompt
-            if system_prompt and is_gemma:
-                user_text = f"{system_prompt}\n\n{prompt}"
-            contents.append({"role": "user", "parts": [user_text]})
-
-            response = model.generate_content(
-                contents,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=self.config.llm_temperature,
-                    max_output_tokens=self.config.llm_max_tokens,
-                ),
+                cfg_kwargs["system_instruction"] = system_prompt
+            response = client.models.generate_content(
+                model=self.config.llm_model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(**cfg_kwargs),
             )
-            return response.text
+            return getattr(response, "text", "") or ""
 
         elif provider == "ollama_cloud":
             import httpx
@@ -441,40 +465,25 @@ class OpenLLM:
                 yield chunk["message"]["content"]
 
         elif provider == "gemini":
-            import warnings
-
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=FutureWarning)
-                import google.generativeai as genai
-            if not getattr(self, "_gemini_configured", False):
-                genai.configure(api_key=self.config.gemini_api_key)
-                self._gemini_configured = True
-            model_kwargs = {"model_name": self.config.llm_model}
+            genai, genai_types = self._get_gemini_sdk()
             is_gemma = "gemma" in self.config.llm_model.lower()
+            contents = self._build_gemini_contents(prompt, system_prompt, history, is_gemma)
+            client = self._get_gemini_client(genai)
+            cfg_kwargs = {
+                "temperature": self.config.llm_temperature,
+                "max_output_tokens": self.config.llm_max_tokens,
+            }
             if system_prompt and not is_gemma:
-                model_kwargs["system_instruction"] = system_prompt
-            model = genai.GenerativeModel(**model_kwargs)
-
-            contents = []
-            for msg in history:
-                role = "model" if msg["role"] == "assistant" else "user"
-                contents.append({"role": role, "parts": [msg["content"]]})
-
-            user_text = prompt
-            if system_prompt and is_gemma:
-                user_text = f"{system_prompt}\n\n{prompt}"
-            contents.append({"role": "user", "parts": [user_text]})
-
-            response = model.generate_content(
-                contents,
-                stream=True,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=self.config.llm_temperature,
-                    max_output_tokens=self.config.llm_max_tokens,
-                ),
+                cfg_kwargs["system_instruction"] = system_prompt
+            response = client.models.generate_content_stream(
+                model=self.config.llm_model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(**cfg_kwargs),
             )
             for chunk in response:
-                yield chunk.text
+                text = getattr(chunk, "text", None)
+                if text:
+                    yield text
 
         elif provider == "ollama_cloud":
             import json

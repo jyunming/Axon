@@ -58,7 +58,7 @@ Axon/
 │   ├── retrievers.py       # Search implementations
 │   ├── splitters.py        # Text chunking
 │   ├── tools.py            # Agent tool definitions
-│   ├── projects.py         # Multi-user project namespace management
+│   ├── projects.py         # Multi-user project management
 │   ├── shares.py           # HMAC share key generation and redemption
 │   └── mcp_server.py       # MCP stdio server for Copilot agent mode
 ├── tests/                  # Test suite

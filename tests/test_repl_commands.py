@@ -32,6 +32,7 @@ def _make_mock_brain(**kwargs):
     brain.config.llm_temperature = 0.7
     brain.config.vllm_base_url = "http://localhost:8000/v1"
     brain.config.cite = False
+    brain.config.repl_shell_passthrough = "local_only"
     brain.list_documents.return_value = [{"source": "test.txt", "chunks": 3}]
     brain.search.return_value = [
         {"text": "result", "vector_score": 0.9, "metadata": {"source": "test.txt"}}
@@ -113,6 +114,30 @@ class TestReplHelp:
         assert isinstance(output, str)
 
 
+class TestShellPassthrough:
+    def test_shell_passthrough_runs_in_local_mode(self):
+        brain = _make_mock_brain(repl_shell_passthrough="local_only")
+        brain._active_project_kind = "local"
+        with patch("subprocess.run") as mock_run:
+            _run_repl_with_commands(["!echo hello"], brain=brain)
+        mock_run.assert_called_once_with("echo hello", shell=True)
+
+    def test_shell_passthrough_blocked_in_scope_mode(self):
+        brain = _make_mock_brain(repl_shell_passthrough="local_only")
+        brain._active_project_kind = "scope"
+        with patch("subprocess.run") as mock_run:
+            output = _run_repl_with_commands(["!echo hello"], brain=brain)
+        mock_run.assert_not_called()
+        assert "shell passthrough blocked by policy" in output.lower()
+
+    def test_shell_passthrough_always_overrides_scope(self):
+        brain = _make_mock_brain(repl_shell_passthrough="always")
+        brain._active_project_kind = "scope"
+        with patch("subprocess.run") as mock_run:
+            _run_repl_with_commands(["!echo hello"], brain=brain)
+        mock_run.assert_called_once_with("echo hello", shell=True)
+
+
 class TestReplList:
     def test_list_shows_documents(self):
         brain = _make_mock_brain()
@@ -128,10 +153,43 @@ class TestReplList:
 
 
 class TestReplClear:
-    def test_clear_empties_history(self):
+    def test_clear_clears_knowledge_base(self):
         brain = _make_mock_brain()
-        output = _run_repl_with_commands(["/clear"], brain=brain)
-        assert "cleared" in output.lower() or isinstance(output, str)
+        with patch("axon.repl.clear_active_project") as mock_clear:
+            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        mock_clear.assert_called_once_with(brain)
+        assert "knowledge base cleared" in output.lower()
+
+    def test_clear_cancelled(self):
+        brain = _make_mock_brain()
+        with patch("axon.repl.clear_active_project") as mock_clear:
+            output = _run_repl_with_commands(["/clear", "n"], brain=brain)
+        mock_clear.assert_not_called()
+        assert "clear cancelled" in output.lower()
+
+    def test_clear_readonly_project_reports_error(self):
+        brain = _make_mock_brain()
+        brain._assert_write_allowed.side_effect = PermissionError(
+            "Cannot clear on mounted share 'mounts/alice_proj'."
+        )
+        with patch("axon.repl.clear_active_project") as mock_clear:
+            output = _run_repl_with_commands(["/clear", "y"], brain=brain)
+        mock_clear.assert_not_called()
+        assert "cannot clear on mounted share" in output.lower()
+
+    def test_clear_updates_api_dedup_cache(self):
+        import axon.api as api_module
+
+        brain = _make_mock_brain()
+        api_module._source_hashes["default"] = {"abc": {}}
+        api_module._source_hashes["_global"] = {"legacy": {}}
+
+        with patch("axon.repl.clear_active_project") as mock_clear:
+            _run_repl_with_commands(["/clear", "y"], brain=brain)
+        mock_clear.assert_called_once_with(brain)
+        assert "default" not in api_module._source_hashes
+        assert "_global" not in api_module._source_hashes
+        api_module._source_hashes.clear()
 
 
 class TestReplDiscuss:
@@ -431,10 +489,14 @@ class TestReplRefresh:
 
 class TestReplStore:
     def test_store_whoami(self):
-        brain = _make_mock_brain()
-        brain.store_whoami = MagicMock(return_value={"username": "alice", "store_path": "/store"})
-        output = _run_repl_with_commands(["/store whoami"], brain=brain)
-        assert isinstance(output, str)
+        brain = _make_mock_brain(axon_store_mode=True, projects_root="/data/AxonStore/alice")
+        brain._active_project = "research"
+        with patch("getpass.getuser", return_value="alice"):
+            output = _run_repl_with_commands(["/store whoami"], brain=brain)
+        normalized = output.replace("\\", "/")
+        assert "User dir:   /data/AxonStore/alice" in normalized
+        assert "Store path: /data/AxonStore" in normalized
+        assert "Project:    research" in normalized
 
     def test_store_init(self):
         brain = _make_mock_brain()

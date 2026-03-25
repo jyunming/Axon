@@ -328,6 +328,36 @@ class TestCopilotSessionStore:
         # After eviction, at most max_recent sessions remain
         assert len(ss._sessions) <= 5
 
+    def test_evict_triggered_on_close(self):
+        # Eviction fires on close(), not only on open()
+        # Open 3 active sessions (at cap=3, no eviction yet)
+        ss = CopilotSessionStore(max_recent=3)
+        for i in range(3):
+            ss.open(f"s{i}", f"r{i}", "p1")
+        assert len(ss._sessions) == 3
+        # Close them all — _evict() is now called on each close()
+        for i in range(3):
+            ss.close(f"s{i}")
+        # All 3 are closed; count should still be <= max_recent
+        assert len(ss._sessions) <= 3
+
+    def test_evict_removes_active_when_cap_exceeded_all_active(self):
+        # When all excess sessions are active (no closed_at), cap must still be enforced
+        ss = CopilotSessionStore(max_recent=3)
+        for i in range(6):
+            ss.open(f"s{i}", f"r{i}", "p1")
+        # 6 active sessions, cap=3 — second pass should evict oldest active ones
+        assert len(ss._sessions) <= 3
+
+    def test_cap_enforced_mixed_open_close(self):
+        # Interleaved open/close should never exceed cap
+        ss = CopilotSessionStore(max_recent=4)
+        for i in range(10):
+            ss.open(f"s{i}", f"r{i}", "p1")
+            if i % 2 == 0:
+                ss.close(f"s{i}")
+        assert len(ss._sessions) <= 4
+
     def test_multiple_active_sessions(self):
         ss = CopilotSessionStore()
         ss.open("s1", "r1", "p1")
@@ -404,28 +434,51 @@ class TestGetStore:
     def test_returns_audit_store_instance(self, tmp_path):
         """get_store() returns a real AuditStore (lazily init'd)."""
         import axon.governance as gov
+        import axon.projects as proj
 
         old_store = gov._store
+        old_root = proj.PROJECTS_ROOT
         try:
             gov._store = None
-            with patch("axon.projects._resolve_projects_root", return_value=str(tmp_path)):
-                store = gov.get_store()
+            proj.PROJECTS_ROOT = tmp_path
+            store = gov.get_store()
             assert isinstance(store, AuditStore)
+            assert store._db_path == tmp_path / ".governance.db"
         finally:
             gov._store = old_store
+            proj.PROJECTS_ROOT = old_root
 
     def test_singleton_returns_same_instance(self, tmp_path):
         import axon.governance as gov
+        import axon.projects as proj
 
         old_store = gov._store
+        old_root = proj.PROJECTS_ROOT
         try:
             gov._store = None
-            with patch("axon.projects._resolve_projects_root", return_value=str(tmp_path)):
-                s1 = gov.get_store()
-                s2 = gov.get_store()
+            proj.PROJECTS_ROOT = tmp_path
+            s1 = gov.get_store()
+            s2 = gov.get_store()
             assert s1 is s2
         finally:
             gov._store = old_store
+            proj.PROJECTS_ROOT = old_root
+
+    def test_honors_runtime_projects_root_override(self, tmp_path):
+        import axon.governance as gov
+        import axon.projects as proj
+
+        old_store = gov._store
+        old_root = proj.PROJECTS_ROOT
+        try:
+            gov._store = None
+            custom_root = tmp_path / "custom-projects-root"
+            proj.set_projects_root(custom_root)
+            store = gov.get_store()
+            assert store._db_path == custom_root / ".governance.db"
+        finally:
+            gov._store = old_store
+            proj.PROJECTS_ROOT = old_root
 
     def test_get_session_store_returns_singleton(self):
         s1 = get_session_store()

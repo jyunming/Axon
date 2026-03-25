@@ -6,6 +6,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from axon.api_routes.ingest import _enforce_write_access
+
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
@@ -43,6 +45,7 @@ async def finalize_graph(request: Request):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_write_access(brain, "finalize_graph")
     rid = getattr(request.state, "request_id", "")
     surface = getattr(request.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")

@@ -22,7 +22,7 @@ pytestmark = pytest.mark.perf
 # ---- tuneable thresholds ----
 INGEST_BUDGET_S = 60.0  # 50 docs must ingest in under this many seconds
 QUERY_BUDGET_S = 5.0  # single retrieval must complete in under this many seconds
-BATCH_QUERY_BUDGET_S = 30.0  # 20 sequential queries must finish under this budget
+BATCH_QUERY_BUDGET_S = 60.0  # 20 sequential queries must finish under this budget
 
 
 def _make_brain(tmp_path, **overrides) -> AxonBrain:

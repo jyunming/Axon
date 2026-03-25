@@ -29,7 +29,7 @@ def _build_overview(brain, jobs: dict) -> dict:
         registry = get_registry()
         leases = registry.snapshot_all()
     except Exception:
-        leases = {}
+        leases = []
 
     # Maintenance state
     try:
@@ -95,8 +95,6 @@ async def governance_overview():
     from axon import api as _api
 
     brain = _api.brain
-    if not brain:
-        return _build_overview(None, _api._jobs)
     return _build_overview(brain, _api._jobs)
 
 
@@ -178,6 +176,7 @@ async def governance_projects():
     from axon.projects import list_projects
 
     brain = _api.brain
+
     try:
         projects = list_projects()
     except Exception as exc:
@@ -211,10 +210,12 @@ async def governance_graph_rebuild(req: Request):
     """Audited operator wrapper: trigger graph community rebuild."""
     from axon import api as _api
     from axon import governance as gov
+    from axon.api_routes.ingest import _enforce_write_access
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_write_access(brain, "finalize_graph")
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")

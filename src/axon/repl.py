@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from axon.main import AxonBrain
 
 from axon.cli import _print_project_tree  # noqa: E402
+from axon.collection_ops import clear_active_project  # noqa: E402
 from axon.embeddings import OpenEmbedding  # noqa: E402
 from axon.llm import OpenLLM, _copilot_device_flow, _fetch_copilot_models  # noqa: E402
 from axon.rerank import OpenReranker  # noqa: E402
@@ -1030,7 +1031,7 @@ def _interactive_repl(
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
       /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
     - @file/folder context: type @path/file.txt or @path/folder/ to inline contents into your query (read-only)
-    - Shell passthrough: !command runs a shell command without leaving the REPL
+    - Shell passthrough: !command runs a shell command (local-only by default)
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
 
     Args:
@@ -1332,6 +1333,21 @@ def _interactive_repl(
             return _pt_session.prompt(_p)
         return input(prompt if prompt else "\033[1;32mYou\033[0m: ")
 
+    def _shell_passthrough_allowed() -> tuple[bool, str]:
+        policy = str(getattr(brain.config, "repl_shell_passthrough", "local_only")).lower().strip()
+        if policy == "always":
+            return True, policy
+        if policy == "off":
+            return False, policy
+        kind = getattr(brain, "_active_project_kind", "default")
+        if not isinstance(kind, str):
+            kind = "default"
+        read_only_scope = getattr(brain, "_read_only_scope", False)
+        if not isinstance(read_only_scope, bool):
+            read_only_scope = False
+        is_local_mode = kind in {"default", "local"} and not read_only_scope
+        return is_local_mode, policy
+
     # REPL is conversational — always let the LLM answer even with no RAG hits
     brain.config.discussion_fallback = True
 
@@ -1367,6 +1383,13 @@ def _interactive_repl(
         if user_input.startswith("!"):
             shell_cmd = user_input[1:].strip()
             if shell_cmd:
+                allowed, policy = _shell_passthrough_allowed()
+                if not allowed:
+                    print(
+                        "  Shell passthrough blocked by policy "
+                        f"(repl.shell_passthrough={policy})."
+                    )
+                    continue
                 import subprocess
 
                 subprocess.run(shell_cmd, shell=True)
@@ -1512,7 +1535,7 @@ def _interactive_repl(
                         "  /stale [days]   list documents not refreshed in N days (default: 7)\n"
                         "  /store [sub]    AxonStore multi-user mode (init, whoami)\n"
                         "\n"
-                        "  Shell:   !<cmd>  run a shell command\n"
+                        "  Shell:   !<cmd>  run a shell command (local-only default)\n"
                         "  Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
                         "\n"
                         "  /help <cmd>  for details  ·  e.g.  /help rag   /help share   /help project\n"
@@ -1754,8 +1777,28 @@ def _interactive_repl(
                     print(f"  Failed to export graph: {_e}")
 
             elif cmd == "/clear":
-                chat_history.clear()
-                print("  Chat history cleared.")
+                _confirm = (
+                    _read_input("  Clear knowledge base for the current project? [y/N]: ")
+                    .strip()
+                    .lower()
+                )
+                if _confirm not in ("y", "yes"):
+                    print("  Clear cancelled.")
+                    continue
+                try:
+                    brain._assert_write_allowed("clear")
+                    clear_active_project(brain)
+                    from axon import api as _api
+
+                    project_key = getattr(brain, "_active_project", "default")
+                    _api._source_hashes.pop(project_key, None)
+                    if project_key == "default":
+                        _api._source_hashes.pop("_global", None)
+                    print(f"  Knowledge base cleared for project '{brain._active_project}'.")
+                except PermissionError as _e:
+                    print(f"  {_e}")
+                except Exception as _e:
+                    print(f"  Clear failed: {_e}")
 
             elif cmd == "/search":
                 if brain.config.offline_mode:
@@ -2333,9 +2376,9 @@ def _interactive_repl(
                     if brain.config.axon_store_mode:
                         print("\n  AxonStore  active")
                         print(f"  User:       {username}")
-                        print(f"  Store dir:  {brain.config.projects_root}")
-                        store_path = str(Path(brain.config.projects_root).parent.parent)
-                        print(f"  Base path:  {store_path}")
+                        print(f"  User dir:   {brain.config.projects_root}")
+                        store_path = str(Path(brain.config.projects_root).parent)
+                        print(f"  Store path: {store_path}")
                         print(f"  Project:    {brain._active_project}\n")
                     else:
                         print("\n  AxonStore  not active")
@@ -2349,14 +2392,14 @@ def _interactive_repl(
                     else:
                         import getpass as _gp
 
-                        from axon.projects import ensure_user_namespace
+                        from axon.projects import ensure_user_project
 
                         base = Path(sub_arg.strip()).expanduser().resolve()
                         username = _gp.getuser()
                         store_root = base / "AxonStore"
                         user_dir = store_root / username
                         try:
-                            ensure_user_namespace(user_dir)
+                            ensure_user_project(user_dir)
                             brain.config.axon_store_base = str(base)
                             brain.config.axon_store_mode = True
                             brain.config.projects_root = str(user_dir)

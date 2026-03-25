@@ -139,7 +139,9 @@ class QueryRouterMixin:
         if not query_entities:
             return results, []
 
-        active_top_k = (cfg.top_k if cfg is not None else None) or self.config.top_k
+        active_top_k = (
+            cfg.top_k if (cfg is not None and cfg.top_k is not None) else self.config.top_k
+        )
         active_cfg = cfg if cfg is not None else self.config
 
         existing_ids = {r["id"] for r in results}
@@ -620,6 +622,19 @@ class QueryRouterMixin:
             diagnostics.tokens_extracted = sorted(_code_query_tokens)
             if getattr(cfg, "code_top_k", 0) > 0:
                 _effective_top_k = cfg.code_top_k
+
+        if _effective_top_k <= 0:
+            return {
+                "results": [],
+                "vector_count": 0,
+                "bm25_count": 0,
+                "filtered_count": 0,
+                "graph_expanded_count": 0,
+                "matched_entities": [],
+                "transforms": transforms,
+                "diagnostics": diagnostics,
+                "trace": trace,
+            }
 
         # --- Phase 2: Retrieval ---
         fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k

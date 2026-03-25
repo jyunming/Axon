@@ -26,6 +26,19 @@ logger = logging.getLogger("AxonAPI")
 # Global Brain Instance
 brain: AxonBrain | None = None
 
+
+def get_brain() -> AxonBrain:
+    """FastAPI dependency that ensures the brain is initialized."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    return brain
+
+
+def get_brain_optional() -> AxonBrain | None:
+    """FastAPI dependency that returns the brain if available, else None."""
+    return brain
+
+
 # Source-level dedup store: project → content_hash → {doc_id, last_ingested_at}
 _source_hashes: dict[str, dict[str, dict]] = {}
 
@@ -76,6 +89,25 @@ def _record_dedup(text: str, doc_id: str, project: str = "_global") -> None:
         "doc_id": doc_id,
         "last_ingested_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _purge_dedup(doc_ids: list[str], project: str | None = None) -> None:
+    """Remove dedup entries that reference *doc_ids*."""
+    targets = []
+    if project:
+        targets.append(project)
+    if "_global" not in targets:
+        targets.append("_global")
+
+    for target in targets:
+        bucket = _source_hashes.get(target)
+        if not bucket:
+            continue
+        for content_hash, meta in list(bucket.items()):
+            if meta.get("doc_id") in doc_ids:
+                bucket.pop(content_hash, None)
+        if not bucket:
+            _source_hashes.pop(target, None)
 
 
 def _get_user_dir() -> Path:
@@ -208,7 +240,7 @@ def main():
     """Main entry point for axon-api command."""
     host = os.getenv("AXON_HOST", "0.0.0.0")
     port = int(os.getenv("AXON_PORT", "8000"))
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run("axon.api:app", host=host, port=port)
 
 
 if __name__ == "__main__":

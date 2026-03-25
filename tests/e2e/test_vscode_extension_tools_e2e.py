@@ -39,6 +39,7 @@ def test_extension_manifest_contract(extension_root_path):
         "axon_clearKnowledgeBase",
         "axon_showGraphStatus",
         "axon_showGraph",
+        "axon_finalizeGraph",
         "axon_getSettings",
     }
 
@@ -78,6 +79,7 @@ def test_extension_manifest_contract(extension_root_path):
         ("axon_listStaleDocs", {}, "/collection/stale"),
         ("axon_clearKnowledgeBase", {}, "/clear"),
         ("axon_showGraphStatus", {}, "/graph/status"),
+        ("axon_finalizeGraph", {}, "/graph/finalize"),
         ("axon_getSettings", {}, "/config"),
     ],
 )

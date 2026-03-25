@@ -29,7 +29,7 @@ See [SETUP.md](SETUP.md) for connection instructions.
 
 | Tool | Description |
 |------|-------------|
-| `search_knowledge` | Semantic / hybrid search — returns raw document chunks with scores |
+| `search_knowledge` | Semantic / hybrid search — returns raw document chunks with scores. If `threshold` filters out all results, falls back to top-N candidates with a note. |
 | `query_knowledge` | Full RAG query — returns a synthesised answer with optional citations |
 
 ---

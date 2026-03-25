@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 from axon.api_schemas import (
+    _VALID_PROJECT_NAME_RE,
     ShareGenerateRequest,
     ShareRedeemRequest,
     ShareRevokeRequest,
@@ -23,7 +24,7 @@ async def store_init(request: StoreInitRequest):
     """Initialise AxonStore at the given base path and update config.yaml."""
     from axon import api as _api
     from axon.main import AxonBrain, AxonConfig
-    from axon.projects import ensure_user_namespace
+    from axon.projects import ensure_user_project
 
     brain = _api.brain
     base = Path(request.base_path).expanduser().resolve()
@@ -31,7 +32,21 @@ async def store_init(request: StoreInitRequest):
     store_root = base / "AxonStore"
     user_dir = store_root / username
 
-    ensure_user_namespace(user_dir)
+    # Enumerate projects that will become unreachable after the path change
+    unreachable: list[str] = []
+    if brain:
+        try:
+            from axon.projects import list_projects as _list_projects
+
+            old_projects = _list_projects()
+            new_root = str(user_dir)
+            unreachable = [
+                p["name"] for p in old_projects if not p.get("path", "").startswith(new_root)
+            ]
+        except Exception:
+            pass
+
+    ensure_user_project(user_dir)
 
     config = brain.config if brain else AxonConfig()
     config.axon_store_base = str(base)
@@ -48,13 +63,22 @@ async def store_init(request: StoreInitRequest):
     if brain:
         brain.close()
     _api.brain = AxonBrain(config)
+    _api._source_hashes.clear()
+    _api._jobs.clear()
 
-    return {
+    result: dict = {
         "status": "ok",
         "store_path": str(store_root),
         "user_dir": str(user_dir),
         "username": username,
     }
+    if unreachable:
+        result["warning"] = (
+            f"{len(unreachable)} project(s) will be unreachable until the previous "
+            f"store path is restored: {', '.join(unreachable)}"
+        )
+        result["unreachable_projects"] = unreachable
+    return result
 
 
 @router.get("/store/whoami")
@@ -67,7 +91,7 @@ async def store_whoami():
     if brain and brain.config.axon_store_mode:
         return {
             "username": username,
-            "store_path": str(Path(brain.config.projects_root).parent.parent),
+            "store_path": str(Path(brain.config.projects_root).parent),
             "user_dir": brain.config.projects_root,
             "active_project": getattr(brain, "_active_project", "default"),
             "store_mode": True,
@@ -81,6 +105,12 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
     from axon import api as _api
     from axon import governance as gov
     from axon import shares as _shares
+
+    if not _VALID_PROJECT_NAME_RE.match(request.project):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid project name: '{request.project}'",
+        )
 
     user_dir = _api._get_user_dir()
     # Resolve nested projects via subs/ layout (e.g. research/papers → research/subs/papers)

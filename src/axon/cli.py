@@ -847,14 +847,14 @@ def main():
     if getattr(args, "store_init", None):
         import getpass as _gp
 
-        from axon.projects import ensure_user_namespace
+        from axon.projects import ensure_user_project
 
         base = Path(args.store_init).expanduser().resolve()
         username = _gp.getuser()
         store_root = base / "AxonStore"
         user_dir = store_root / username
         try:
-            ensure_user_namespace(user_dir)
+            ensure_user_project(user_dir)
             brain.config.axon_store_base = str(base)
             brain.config.axon_store_mode = True
             brain.config.projects_root = str(user_dir)

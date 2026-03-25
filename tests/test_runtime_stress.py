@@ -33,7 +33,9 @@ def test_concurrent_switch_and_ingest_fencing(tmp_path):
 
     # Setup projects
     (tmp_path / "projects" / "proj_a").mkdir(parents=True)
+    (tmp_path / "projects" / "proj_a" / "meta.json").write_text("{}", encoding="utf-8")
     (tmp_path / "projects" / "proj_b").mkdir(parents=True)
+    (tmp_path / "projects" / "proj_b" / "meta.json").write_text("{}", encoding="utf-8")
 
     # 1. Start on proj_a
     with patch("axon.projects.project_dir", return_value=tmp_path / "projects" / "proj_a"), patch(

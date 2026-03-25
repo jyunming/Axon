@@ -24,6 +24,14 @@ logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
 
+def _enforce_write_access(brain, operation: str) -> None:
+    """Translate AxonBrain write-access denials into HTTP 403 responses."""
+    try:
+        brain._assert_write_allowed(operation)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
 @router.post("/ingest/refresh")
 async def refresh_docs():
     """Re-ingest any tracked files whose content has changed since last ingest."""
@@ -36,6 +44,8 @@ async def refresh_docs():
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    _enforce_write_access(brain, "refresh")
 
     versions = brain.get_doc_versions()
     results: dict[str, list] = {"skipped": [], "reingested": [], "missing": [], "errors": []}
@@ -76,7 +86,11 @@ async def refresh_docs():
 
 
 @router.post("/ingest")
-async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks, req: Request):
+async def ingest_data(
+    request: IngestRequest,
+    background_tasks: BackgroundTasks,
+    req: Request,
+):
     from axon import api as _api
 
     brain = _api.brain
@@ -92,10 +106,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
     except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
 
-    try:
-        brain._assert_write_allowed("ingest")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+    _enforce_write_access(brain, "ingest")
 
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc)
@@ -191,6 +202,7 @@ async def ingest_data(request: IngestRequest, background_tasks: BackgroundTasks,
             )
 
     background_tasks.add_task(process_ingestion)
+
     return {
         "message": f"Ingestion started for {validated_path}",
         "status": "processing",
@@ -204,6 +216,7 @@ async def get_ingest_status(job_id: str):
     from axon import api as _api
 
     brain = _api.brain
+
     job = _api._jobs.get(job_id)
     if job is None:
         raise HTTPException(
@@ -212,7 +225,7 @@ async def get_ingest_status(job_id: str):
         )
     result = {k: v for k, v in job.items() if k != "started_at_ts"}
     result["community_build_in_progress"] = bool(
-        brain and getattr(brain, "_community_build_in_progress", False)
+        getattr(brain, "_community_build_in_progress", False)
     )
     return result
 
@@ -284,7 +297,9 @@ async def add_text(request: TextIngestRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+
     _enforce_project(request.project, brain)
+    _enforce_write_access(brain, "ingest")
 
     if not request.text or not request.text.strip():
         raise HTTPException(status_code=400, detail="Text must not be empty.")
@@ -306,7 +321,7 @@ async def add_text(request: TextIngestRequest):
             doc["metadata"].update(request.metadata)
 
     try:
-        brain.ingest(documents)
+        await asyncio.to_thread(brain.ingest, documents)
         _api._record_dedup(request.text, doc_id, project_key)
         return {"status": "success", "doc_id": doc_id, "chunks": len(documents)}
     except Exception as e:
@@ -318,13 +333,15 @@ async def add_text(request: TextIngestRequest):
 async def add_texts(request: BatchTextIngestRequest):
     """Ingest a list of documents in a single embedding batch."""
     from axon import api as _api
-    from axon.api_schemas import _compute_content_hash
-    from axon.loaders import SmartTextLoader
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    from axon.api_schemas import _compute_content_hash
+    from axon.loaders import SmartTextLoader
+
     _enforce_project(request.project, brain)
+    _enforce_write_access(brain, "ingest")
 
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
@@ -356,7 +373,7 @@ async def add_texts(request: BatchTextIngestRequest):
 
     if docs_to_ingest:
         try:
-            brain.ingest(docs_to_ingest)
+            await asyncio.to_thread(brain.ingest, docs_to_ingest)
             for doc_id, text in pending_records:
                 _api._record_dedup(text, doc_id, project_key)
         except Exception as e:
@@ -370,12 +387,14 @@ async def add_texts(request: BatchTextIngestRequest):
 async def ingest_url(request: URLIngestRequest):
     """Fetch an HTTP/HTTPS URL and ingest its text content."""
     from axon import api as _api
-    from axon.loaders import URLLoader
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    from axon.loaders import URLLoader
+
     _enforce_project(request.project, brain)
+    _enforce_write_access(brain, "ingest")
 
     loader = URLLoader()
     project_key = request.project or brain._active_project
@@ -399,7 +418,7 @@ async def ingest_url(request: URLIngestRequest):
         return {**skip, "doc_id": skip["doc_id"], "url": request.url}
 
     try:
-        brain.ingest([doc])
+        await asyncio.to_thread(brain.ingest, [doc])
         _api._record_dedup(doc["text"], doc["id"], project_key)
     except Exception as exc:
         logger.error(f"Error ingesting URL content: {exc}")
@@ -409,18 +428,21 @@ async def ingest_url(request: URLIngestRequest):
 
 
 @router.post("/delete")
-async def delete_documents(request: DeleteRequest, req: Request):
+async def delete_documents(
+    request: DeleteRequest,
+    req: Request,
+):
     from axon import api as _api
     from axon import governance as gov
 
     brain = _api.brain
-    if brain is None:
+    if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
     try:
-        brain._assert_write_allowed("delete")
+        _enforce_write_access(brain, "delete")
         existing = brain.vector_store.get_by_ids(request.doc_ids)
         existing_ids_set = {doc["id"] for doc in existing}
         existing_ids = [i for i in request.doc_ids if i in existing_ids_set]
@@ -431,6 +453,10 @@ async def delete_documents(request: DeleteRequest, req: Request):
                 brain.bm25.delete_documents(existing_ids)
             if brain._entity_graph:
                 brain._prune_entity_graph(set(existing_ids))
+
+            from axon import api as _api
+
+            _api._purge_dedup(existing_ids, project)
         gov.emit(
             "delete",
             "document",
@@ -446,8 +472,8 @@ async def delete_documents(request: DeleteRequest, req: Request):
             "doc_ids": existing_ids,
             "not_found": not_found,
         }
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Delete failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

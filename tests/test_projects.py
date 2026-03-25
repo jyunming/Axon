@@ -133,6 +133,17 @@ class TestListProjects:
         assert match["description"] == "hello"
         assert match["created_at"] != ""
 
+    def test_ignores_reserved_projects_dir_even_with_meta(self, tmp_projects):
+        from axon.projects import list_projects
+
+        reserved = tmp_projects / "projects"
+        reserved.mkdir()
+        (reserved / "meta.json").write_text(
+            json.dumps({"name": "projects", "created_at": "2026-01-01"}),
+            encoding="utf-8",
+        )
+        assert list_projects() == []
+
 
 class TestDeleteProject:
     def test_deletes_directory(self, tmp_projects):
@@ -360,17 +371,17 @@ class TestSetProjectsRoot:
 
 
 # ---------------------------------------------------------------------------
-# AxonStore: ensure_user_namespace
+# AxonStore: ensure_user_project
 # ---------------------------------------------------------------------------
 
 
 class TestEnsureUserNamespace:
     def test_creates_expected_directories(self, tmp_path):
-        """ensure_user_namespace creates default/, projects/, mounts/, .shares/."""
-        from axon.projects import ensure_user_namespace
+        """ensure_user_project creates default/, projects/, mounts/, .shares/."""
+        from axon.projects import ensure_user_project
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        ensure_user_namespace(user_dir)
+        ensure_user_project(user_dir)
 
         assert (user_dir / "default").is_dir()
         assert (user_dir / "projects").is_dir()
@@ -381,42 +392,42 @@ class TestEnsureUserNamespace:
         assert not (user_dir / "ShareMount").exists()
 
     def test_creates_store_meta_json(self, tmp_path):
-        """ensure_user_namespace creates store_meta.json with store_namespace_id."""
+        """ensure_user_project creates store_meta.json with store_id."""
         import json
 
-        from axon.projects import ensure_user_namespace
+        from axon.projects import ensure_user_project
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        ensure_user_namespace(user_dir)
+        ensure_user_project(user_dir)
 
         store_meta_path = user_dir / "store_meta.json"
         assert store_meta_path.exists()
         meta = json.loads(store_meta_path.read_text())
         assert meta["store_version"] == 2
-        assert meta["store_namespace_id"].startswith("store_")
+        assert meta["store_id"].startswith("store_")
 
     def test_idempotent(self, tmp_path):
-        """Calling ensure_user_namespace twice does not raise."""
-        from axon.projects import ensure_user_namespace
+        """Calling ensure_user_project twice does not raise."""
+        from axon.projects import ensure_user_project
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        ensure_user_namespace(user_dir)
-        ensure_user_namespace(user_dir)  # should not raise
+        ensure_user_project(user_dir)
+        ensure_user_project(user_dir)  # should not raise
 
     def test_creates_default_meta_json(self, tmp_path):
-        """ensure_user_namespace creates meta.json in default/ with project_namespace_id."""
+        """ensure_user_project creates meta.json in default/ with project_id."""
         import json
 
-        from axon.projects import ensure_user_namespace
+        from axon.projects import ensure_user_project
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        ensure_user_namespace(user_dir)
+        ensure_user_project(user_dir)
 
         meta_path = user_dir / "default" / "meta.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
         assert meta["name"] == "default"
-        assert meta["project_namespace_id"].startswith("proj_")
+        assert meta["project_id"].startswith("proj_")
 
 
 # ---------------------------------------------------------------------------
@@ -426,18 +437,18 @@ class TestEnsureUserNamespace:
 
 class TestNamespaceIds:
     def test_ensure_project_adds_namespace_id(self, tmp_projects):
-        """ensure_project writes project_namespace_id to meta.json."""
+        """ensure_project writes project_id to meta.json."""
         import json
 
         from axon.projects import ensure_project, project_dir
 
         ensure_project("nstest")
         meta = json.loads((project_dir("nstest") / "meta.json").read_text())
-        assert "project_namespace_id" in meta
-        assert meta["project_namespace_id"].startswith("proj_")
+        assert "project_id" in meta
+        assert meta["project_id"].startswith("proj_")
 
     def test_namespace_id_stable_on_second_call(self, tmp_projects):
-        """ensure_project called twice keeps the same project_namespace_id."""
+        """ensure_project called twice keeps the same project_id."""
         import json
 
         from axon.projects import ensure_project, project_dir
@@ -446,10 +457,10 @@ class TestNamespaceIds:
         meta1 = json.loads((project_dir("stable-ns") / "meta.json").read_text())
         ensure_project("stable-ns")
         meta2 = json.loads((project_dir("stable-ns") / "meta.json").read_text())
-        assert meta1["project_namespace_id"] == meta2["project_namespace_id"]
+        assert meta1["project_id"] == meta2["project_id"]
 
     def test_backfills_missing_namespace_id(self, tmp_projects):
-        """ensure_project backfills project_namespace_id when meta.json exists without it."""
+        """ensure_project backfills project_id when meta.json exists without it."""
         import json
 
         from axon.projects import ensure_project, project_dir
@@ -458,52 +469,52 @@ class TestNamespaceIds:
         meta_path = project_dir("backfill-ns") / "meta.json"
         # Remove the namespace ID to simulate an old project
         meta = json.loads(meta_path.read_text())
-        del meta["project_namespace_id"]
+        del meta["project_id"]
         meta_path.write_text(json.dumps(meta))
 
         ensure_project("backfill-ns")  # should backfill
         updated = json.loads(meta_path.read_text())
-        assert "project_namespace_id" in updated
-        assert updated["project_namespace_id"].startswith("proj_")
+        assert "project_id" in updated
+        assert updated["project_id"].startswith("proj_")
 
-    def test_get_project_namespace_id(self, tmp_projects):
-        """get_project_namespace_id returns the ID for an existing project."""
-        from axon.projects import ensure_project, get_project_namespace_id
+    def test_get_project_id(self, tmp_projects):
+        """get_project_id returns the ID for an existing project."""
+        from axon.projects import ensure_project, get_project_id
 
         ensure_project("getter-ns")
-        ns_id = get_project_namespace_id("getter-ns")
+        ns_id = get_project_id("getter-ns")
         assert ns_id is not None
         assert ns_id.startswith("proj_")
 
-    def test_get_project_namespace_id_missing_project(self, tmp_projects):
-        """get_project_namespace_id returns None for a non-existent project."""
-        from axon.projects import get_project_namespace_id
+    def test_get_project_id_missing_project(self, tmp_projects):
+        """get_project_id returns None for a non-existent project."""
+        from axon.projects import get_project_id
 
-        assert get_project_namespace_id("does-not-exist") is None
+        assert get_project_id("does-not-exist") is None
 
-    def test_get_store_namespace_id(self, tmp_path):
-        """get_store_namespace_id reads the ID from store_meta.json."""
-        from axon.projects import ensure_user_namespace, get_store_namespace_id
+    def test_get_store_id(self, tmp_path):
+        """get_store_id reads the ID from store_meta.json."""
+        from axon.projects import ensure_user_project, get_store_id
 
         user_dir = tmp_path / "AxonStore" / "alice"
-        ensure_user_namespace(user_dir)
-        store_id = get_store_namespace_id(user_dir)
+        ensure_user_project(user_dir)
+        store_id = get_store_id(user_dir)
         assert store_id is not None
         assert store_id.startswith("store_")
 
-    def test_build_namespace_id_format(self):
-        """build_namespace_id returns a prefixed hex string."""
-        from axon.projects import build_namespace_id
+    def test_build_project_id_format(self):
+        """build_project_id returns a prefixed hex string."""
+        from axon.projects import build_project_id
 
-        ns = build_namespace_id("proj")
+        ns = build_project_id("proj")
         assert ns.startswith("proj_")
         assert len(ns) == len("proj_") + 32  # 32 hex chars in uuid4.hex
 
     def test_namespace_ids_are_unique(self):
-        """Two calls to build_namespace_id never return the same value."""
-        from axon.projects import build_namespace_id
+        """Two calls to build_project_id never return the same value."""
+        from axon.projects import build_project_id
 
-        assert build_namespace_id("proj") != build_namespace_id("proj")
+        assert build_project_id("proj") != build_project_id("proj")
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +579,20 @@ class TestIdBuilder:
 
 
 class TestReservedNames:
+    def test_projects_dir_is_reserved(self, tmp_projects):
+        """'projects' is reserved for AxonStore compatibility layout."""
+        from axon.projects import ensure_project
+
+        with pytest.raises(ValueError, match="reserved"):
+            ensure_project("projects")
+
+    def test_mounts_is_reserved(self, tmp_projects):
+        """'mounts' cannot be used as a local project name."""
+        from axon.projects import ensure_project
+
+        with pytest.raises(ValueError, match="reserved"):
+            ensure_project("mounts")
+
     def test_sharemount_is_reserved(self, tmp_projects):
         """'sharemount' cannot be used as a project name."""
         from axon.projects import ensure_project

@@ -5,9 +5,45 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as crypto from 'crypto';
 
 import { state, GRAPH_ANSWER_TIMEOUT_MS } from '../shared';
 import { httpGet, httpPost, parseJsonSafe, formatDetail, normalizeGraphPayload } from '../client/http';
+
+/**
+ * Synthesize an answer from raw search chunks using the Copilot LM API.
+ * Called as a fallback when the Axon /query (Ollama) endpoint is unavailable.
+ */
+async function synthesizeWithCopilot(query: string, chunks: any[]): Promise<string> {
+  try {
+    const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
+    const model = models[0];
+    if (!model) { return ''; }
+
+    const contextText = chunks.slice(0, 10).map((c: any, i: number) => {
+      const src = (c.metadata?.source || c.source || '').split(/[\\/]/).pop() || '';
+      const text = (c.text || c.content || '').slice(0, 600);
+      return `[${i + 1}] ${src}\n${text}`;
+    }).join('\n\n');
+
+    const messages = [
+      vscode.LanguageModelChatMessage.User(
+        `You are a helpful assistant. Answer the following question using ONLY the provided context chunks. ` +
+        `Format your answer with markdown (use **bold**, \`code\`, headings, bullet lists where appropriate).\n\n` +
+        `Question: ${query}\n\nContext:\n${contextText}`
+      )
+    ];
+
+    const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+    let answer = '';
+    for await (const part of response.text) {
+      answer += part;
+    }
+    return answer;
+  } catch (err) {
+    return '';
+  }
+}
 
 export interface GraphViewPayload {
   query: string;
@@ -93,16 +129,18 @@ export class AxonGraphPanel {
     // to script-src CSP. This eliminates the need for 'unsafe-inline'.
     const dataJson = JSON.stringify(data).replace(/<\/script>/gi, '<\\/script>');
 
+    // Read graph-panel.js from disk at render time — bypasses all WebView script caching.
+    const nonce = crypto.randomBytes(16).toString('base64');
+    const panelJsPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'graph-panel.js').fsPath;
+    const panelJs = fs.readFileSync(panelJsPath, 'utf8').replace(/<\/script>/gi, '<\\/script>');
+
     const forceGraphUri = this._panel.webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'media', '3d-force-graph.min.js')
     );
-    const panelJsUri = this._panel.webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'media', 'graph-panel.js')
-    );
 
-    // No inline scripts → no 'unsafe-inline' needed.  Just cspSource covers both external files.
+    // cspSrc covers the external force-graph lib; nonce covers the inlined panel script.
     const cspSrc = this._panel.webview.cspSource;
-    const csp = `default-src 'none'; script-src ${cspSrc}; style-src 'unsafe-inline';`;
+    const csp = `default-src 'none'; script-src ${cspSrc} 'nonce-${nonce}'; style-src 'unsafe-inline';`;
 
     return `<!DOCTYPE html>
 <html>
@@ -179,9 +217,9 @@ export class AxonGraphPanel {
 </div>
 <!-- Data passed as non-executable JSON — exempt from script-src CSP -->
 <script type="application/json" id="app-data">${dataJson}</script>
-<!-- Two external scripts only — no inline JS, satisfies strict script-src CSP -->
+<!-- force-graph loaded as external URI; panel script inlined with nonce (no disk cache) -->
 <script src="${forceGraphUri}"></script>
-<script src="${panelJsUri}"></script>
+<script nonce="${nonce}">${panelJs}</script>
 </body>
 </html>`;
   }
@@ -229,13 +267,17 @@ export async function showGraphForQuery(
   const config = vscode.workspace.getConfiguration('axon');
   const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
   const apiKey = config.get<string>('apiKey', '');
+  const graphSynthesis = config.get<boolean>('graphSynthesis', true);
 
   const panel = AxonGraphPanel.createOrReveal(context);
   panel.showLoading(query);
 
   try {
+    const queryPromise = graphSynthesis
+      ? httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey, GRAPH_ANSWER_TIMEOUT_MS)
+      : Promise.resolve({ status: 0, body: '{}' });
     const [querySettled, searchSettled, kgSettled, cgSettled] = await Promise.allSettled([
-      httpPost(`${apiBase}/query`, { query, discuss: false }, apiKey, GRAPH_ANSWER_TIMEOUT_MS),
+      queryPromise,
       httpPost(`${apiBase}/search/raw`, { query }, apiKey, GRAPH_ANSWER_TIMEOUT_MS),
       httpGet(`${apiBase}/graph/data`, apiKey),
       httpGet(`${apiBase}/code-graph/data`, apiKey),
@@ -251,18 +293,20 @@ export async function showGraphForQuery(
     let kgStatus = 0;
     let cgStatus = 0;
 
-    if (querySettled.status === 'fulfilled') {
+    if (!graphSynthesis) {
+      answerText = '';
+    } else if (querySettled.status === 'fulfilled') {
       queryStatus = querySettled.value.status;
       const answer = parseJsonSafe(querySettled.value.body);
       if (querySettled.value.status === 200) {
         answerText = answer.response || '';
       } else {
         queryFailed = true;
-        answerText = `(Query unavailable: ${formatDetail(answer, querySettled.value.body)})`;
+        answerText = '';  // will be filled by Copilot fallback below
       }
     } else {
       queryFailed = true;
-      answerText = `(Query unavailable: ${String(querySettled.reason)})`;
+      answerText = '';  // will be filled by Copilot fallback below
     }
 
     if (searchSettled.status === 'fulfilled') {
@@ -271,6 +315,18 @@ export async function showGraphForQuery(
       if (searchSettled.value.status === 200) {
         sources = Array.isArray(search.results) ? search.results : [];
       }
+    }
+
+    // Copilot fallback: if Axon /query failed but we have search results, synthesize via Copilot LM
+    if (queryFailed && sources.length > 0) {
+      state.outputChannel.appendLine(`[axon.showGraph] /query unavailable — falling back to Copilot synthesis from ${sources.length} chunks`);
+      answerText = await synthesizeWithCopilot(query, sources);
+      if (!answerText) {
+        answerText = '_Query unavailable and Copilot synthesis failed. Showing search results only._';
+      }
+      queryFailed = false;  // we recovered, don't mark as failed in return value
+    } else if (queryFailed) {
+      answerText = '_Query unavailable — no search results to synthesize from._';
     }
 
     if (kgSettled.status === 'fulfilled') {

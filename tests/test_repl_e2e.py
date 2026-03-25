@@ -25,7 +25,7 @@ class TestReplE2E:
         ), patch("axon.main.OpenLLM") as mock_llm_cls, patch("axon.main.OpenReranker"), patch(
             "axon.projects.ensure_project"
         ), patch(
-            "axon.projects.ensure_user_namespace"
+            "axon.projects.ensure_user_project"
         ), patch(
             "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
         ), patch(

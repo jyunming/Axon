@@ -164,6 +164,7 @@ def _make_brain(tmp_path, **cfg_kwargs):
     class SyncExecutor:
         def submit(self, fn, *args, **kwargs):
             from concurrent.futures import Future
+
             f = Future()
             try:
                 result = fn(*args, **kwargs)
@@ -171,12 +172,18 @@ def _make_brain(tmp_path, **cfg_kwargs):
             except Exception as e:
                 f.set_exception(e)
             return f
+
         def map(self, fn, *iterables):
             return map(fn, *iterables)
+
         def shutdown(self, wait=True):
             pass
-        def __enter__(self): return self
-        def __exit__(self, *args): pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
 
     brain._executor = SyncExecutor()
 

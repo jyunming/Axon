@@ -25,7 +25,7 @@ class TestMixinIntegration:
         ), patch(
             "axon.projects.ensure_project"
         ), patch(
-            "axon.projects.ensure_user_namespace"
+            "axon.projects.ensure_user_project"
         ):
             # Mock vector store search to return something
             mock_vs.return_value.search.return_value = [

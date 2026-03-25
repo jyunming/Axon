@@ -45,18 +45,17 @@ class TestOpenLLMStream:
         assert result == ["Hello", " world", "!"]
         assert all(isinstance(c, str) for c in result)
 
-    @patch("google.generativeai.GenerativeModel")
-    @patch("google.generativeai.configure")
-    def test_gemini_stream_yields_strings(self, _cfg, MockModel):
+    def test_gemini_stream_yields_strings(self):
         from axon.main import AxonConfig, OpenLLM
 
         config = AxonConfig(llm_provider="gemini", llm_model="gemini-2.0-flash")
-        llm = OpenLLM(config)
-
-        chunk_mocks = [MagicMock(text=t) for t in ["The", " answer", " is", " 42"]]
-        MockModel.return_value.generate_content.return_value = iter(chunk_mocks)
-
-        result = list(llm.stream("question"))
+        with patch("google.genai.Client") as MockClient, patch(
+            "google.genai.types.GenerateContentConfig"
+        ):
+            llm = OpenLLM(config)
+            chunk_mocks = [MagicMock(text=t) for t in ["The", " answer", " is", " 42"]]
+            MockClient.return_value.models.generate_content_stream.return_value = iter(chunk_mocks)
+            result = list(llm.stream("question"))
         assert result == ["The", " answer", " is", " 42"]
         assert all(isinstance(c, str) for c in result)
 

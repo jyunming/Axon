@@ -29,15 +29,36 @@ async def health_check():
     return {"status": "ok", "project": getattr(brain, "_active_project", "default")}
 
 
+_SENSITIVE_FIELDS = frozenset(
+    {
+        "api_key",
+        "gemini_api_key",
+        "ollama_cloud_key",
+        "copilot_pat",
+        "brave_api_key",
+        "qdrant_api_key",
+    }
+)
+
+
 @router.get("/config")
 async def get_config():
-    """Return the current active configuration."""
+    """Return the current active configuration with sensitive fields masked."""
+    from dataclasses import asdict
+
     from axon import api as _api
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    return brain.config
+    try:
+        data = asdict(brain.config)
+    except TypeError:
+        return brain.config
+    for field in _SENSITIVE_FIELDS:
+        if field in data and data[field]:
+            data[field] = "***"
+    return data
 
 
 @router.post("/config/update")
@@ -84,9 +105,10 @@ async def get_projects():
     """List all projects known to the Axon system."""
     from axon import api as _api
     from axon import shares as _shares
-    from axon.projects import list_projects as _list_projects
 
     brain = _api.brain
+    from axon.projects import is_reserved_top_level_name as _is_reserved_top_level_name
+    from axon.projects import list_projects as _list_projects
 
     if brain and brain.config.axon_store_mode:
         try:
@@ -106,7 +128,7 @@ async def get_projects():
     memory_only = [
         {"name": n, "source": "memory_only"}
         for n in in_memory
-        if n not in on_disk_names and n != "_global"
+        if n not in on_disk_names and n != "_global" and not _is_reserved_top_level_name(n)
     ]
 
     shared_mounts = []
@@ -197,7 +219,15 @@ async def switch_project(request: ProjectSwitchRequest):
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        detail = str(e)
+        lowered = detail.lower()
+        if "must be provided" in lowered:
+            status = 400
+        elif "reserved" in lowered:
+            status = 400
+        else:
+            status = 404
+        raise HTTPException(status_code=status, detail=detail)
     except Exception as e:
         logger.error(f"Project switch failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -208,9 +238,9 @@ async def delete_project_endpoint(name: str):
     """Delete a project and all its data."""
     from axon import api as _api
     from axon import shares as _shares
-    from axon.projects import ProjectHasChildrenError, delete_project
 
     brain = _api.brain
+    from axon.projects import ProjectHasChildrenError, delete_project
 
     if name.startswith("mounts/") or name == "mounts":
         raise HTTPException(
@@ -237,6 +267,9 @@ async def delete_project_endpoint(name: str):
 
     try:
         delete_project(name)
+        to_remove = [k for k in _api._source_hashes if k == name or k.startswith(f"{name}/")]
+        for key in to_remove:
+            _api._source_hashes.pop(key, None)
         return {"status": "success", "message": f"Project '{name}' deleted."}
     except ProjectHasChildrenError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -251,7 +284,10 @@ async def list_sessions():
     from axon.sessions import _list_sessions
 
     brain = _api.brain
-    project = getattr(brain, "_active_project", None) if brain else None
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    project = getattr(brain, "_active_project", None)
     return {"sessions": _list_sessions(project=project)}
 
 
@@ -262,7 +298,10 @@ async def get_session(session_id: str):
     from axon.sessions import _load_session
 
     brain = _api.brain
-    project = getattr(brain, "_active_project", None) if brain else None
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    project = getattr(brain, "_active_project", None)
     session = _load_session(session_id, project=project)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

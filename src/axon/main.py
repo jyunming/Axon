@@ -311,9 +311,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # In AxonStore mode, ensure the user namespace directories exist
         if self.config.axon_store_mode:
-            from axon.projects import ensure_user_namespace
+            from axon.projects import ensure_user_project
 
-            ensure_user_namespace(Path(self.config.projects_root))
+            ensure_user_project(Path(self.config.projects_root))
 
         # Ensure the 'default' project directory exists
         from axon.projects import ensure_project
@@ -331,7 +331,6 @@ Your primary goal is to help the user by answering questions based on the provid
         self._base_bm25_path: str = os.path.abspath(self.config.bm25_path)
         self._active_project: str = "default"
         self._read_only_scope: bool = False
-        self._mounted_share: bool = False  # legacy alias — use _active_project_kind
         self._active_project_kind: str = "default"  # "default" | "local" | "mounted" | "scope"
         self._active_mount_descriptor: dict | None = None
 
@@ -494,10 +493,10 @@ Your primary goal is to help the user by answering questions based on the provid
 
     def _log_startup_summary(self) -> None:
         """Log a one-line startup summary: active project, namespace ID, scope type."""
-        from axon.projects import get_project_namespace_id
+        from axon.projects import get_project_id
 
         scope = "read-only merged" if getattr(self, "_read_only_scope", False) else "authoritative"
-        ns_id = get_project_namespace_id(self._active_project)
+        ns_id = get_project_id(self._active_project)
         if ns_id is None:
             # Try reading from the actual project dir (for default which maps to config path)
             try:
@@ -506,8 +505,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 if meta_file.exists():
                     import json as _json
 
-                    meta = _json.loads(meta_file.read_text())
-                    ns_id = meta.get("project_namespace_id", "none")
+                    meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+                    ns_id = meta.get("project_id", "none")
             except Exception:
                 ns_id = "none"
         logger.info(
@@ -536,7 +535,9 @@ Your primary goal is to help the user by answering questions based on the provid
             return False
 
     # Reserved directory names excluded from @projects / @store scope merges
-    _SCOPE_RESERVED_DIRS: frozenset = frozenset({"default", "mounts", ".shares"})
+    _SCOPE_RESERVED_DIRS: frozenset = frozenset(
+        {"default", "projects", "mounts", "sharemount", "_default", ".shares"}
+    )
 
     def _switch_to_scope(self, scope: str) -> None:
         """Switch to a merged read-only scope (@projects, @mounts, or @store).
@@ -670,7 +671,6 @@ Your primary goal is to help the user by answering questions based on the provid
         self._read_only_scope = True
         self._active_project_kind = "scope"
         self._active_mount_descriptor = None
-        self._mounted_share = False
         logger.info(
             "Switched to %s scope  |  %d store(s) merged  |  read-only",
             scope,
@@ -678,15 +678,12 @@ Your primary goal is to help the user by answering questions based on the provid
         )
 
     def _is_mounted_share(self) -> bool:
-        """Return True if the active project is a received share mount (always read-only).
-
-        Uses descriptor-based kind state when available; falls back to legacy
-        ``_mounted_share`` flag set by older code paths.
-        """
+        """Return True if the active project is a received share mount (always read-only)."""
         kind = getattr(self, "_active_project_kind", None)
         if kind is not None:
             return kind == "mounted"
-        return getattr(self, "_mounted_share", False)
+        # Backward compatibility for older instances/tests that only set _mounted_share.
+        return bool(getattr(self, "_mounted_share", False))
 
     def _assert_write_allowed(self, operation: str = "write") -> None:
         """Raise PermissionError if current project is read-only (scope, mounted share, or maintenance state)."""
@@ -720,6 +717,7 @@ Your primary goal is to help the user by answering questions based on the provid
         _prev_project = self._active_project  # stash for epoch bump below
 
         from axon.projects import (
+            is_reserved_top_level_name,
             list_descendants,
             project_bm25_path,
             project_dir,
@@ -750,16 +748,28 @@ Your primary goal is to help the user by answering questions based on the provid
             self.config.vector_store_path = self._base_vector_store_path
             self.config.bm25_path = self._base_bm25_path
         else:
+            if is_reserved_top_level_name(name):
+                raise ValueError(
+                    f"Project '{name}' is reserved and cannot be activated as a local project."
+                )
             root = project_dir(name)
-            if not root.exists():
+            if not root.exists() or not (root / "meta.json").exists():
                 raise ValueError(
                     f"Project '{name}' does not exist. Create it first with /project new {name}"
                 )
             self.config.vector_store_path = project_vector_path(name)
             self.config.bm25_path = project_bm25_path(name)
 
-        # Close existing stores before replacing them
+        # Close existing stores before replacing them; force GC to release Windows
+        # file handles on ChromaDB's SQLite database before opening the new path.
         self.close()
+        self.vector_store = None  # type: ignore[assignment]
+        self._own_vector_store = None  # type: ignore[assignment]
+        self.bm25 = None
+        self._own_bm25 = None
+        import gc as _gc
+
+        _gc.collect()
 
         # Recreate the executor — close() shuts it down and it cannot be reused
         from concurrent.futures import ThreadPoolExecutor
@@ -986,17 +996,21 @@ Your primary goal is to help the user by answering questions based on the provid
             from axon.mounts import load_mount_descriptor as _lmd
 
             self._active_mount_descriptor = _lmd(Path(self.config.projects_root), mount_name)
+            # Mounts can be revoked; persist "default" so startup never reopens a broken mount
+            set_active_project("default")
         elif name == "default":
             self._active_project_kind = "default"
             self._active_mount_descriptor = None
+            set_active_project("default")
         elif name.startswith("@"):
             self._active_project_kind = "scope"
             self._active_mount_descriptor = None
+            # Scopes are transient; revert on-disk pointer to "default"
+            set_active_project("default")
         else:
             self._active_project_kind = "local"
             self._active_mount_descriptor = None
-        self._mounted_share = self._active_project_kind == "mounted"
-        set_active_project(name)
+            set_active_project(name)
         logger.info(f"Switched to project '{name}'")
 
         # Bump epoch on the old project to fence any stale in-flight writers.
@@ -1863,9 +1877,9 @@ Your primary goal is to help the user by answering questions based on the provid
         # MultiVectorStore / MultiBM25Retriever dedup. The default project is left
         # unchanged so existing single-project deployments are unaffected.
         if self._active_project and self._active_project != "default":
-            from axon.projects import get_project_namespace_id
+            from axon.projects import get_project_id
 
-            _ns = get_project_namespace_id(self._active_project) or self._active_project
+            _ns = get_project_id(self._active_project) or self._active_project
             _ns_prefix = f"{_ns}::"
             for _doc in documents:
                 if not _doc["id"].startswith(_ns_prefix):

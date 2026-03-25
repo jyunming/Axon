@@ -131,7 +131,7 @@ Invoke the **Axon Graph Panel** via the graph command or tool to open a split vi
 ```
 
 **Two graph views — same panel:**
-- **Knowledge Graph** — entity–relation graph built from **any document** (PDF, DOCX, Markdown…) during ingest. Requires `graph_rag: true` — **on by default**. Nodes are named entities (people, concepts, components); edges are extracted relations. Just ingest your documents and the graph is ready.
+- **Knowledge Graph** — entity–relation graph built from **any document** (PDF, DOCX, Markdown…) during ingest. Requires `graph_rag: true` (disabled in the shipped `config.yaml` by default; enable when your corpus is ready). Nodes are named entities (people, concepts, components); edges are extracted relations.
 - **Code Graph** — structural file/class/function graph for source code (requires `code_graph: true` in `config.yaml`). Nodes are files, classes, and functions; edges are `IMPORTS` / `CONTAINS` / `MENTIONED_IN` relationships. Click a node to jump to that definition.
 
 **How to open it:**
@@ -158,7 +158,7 @@ Copilot Chat:
 - **Vector stores** — ChromaDB (default), Qdrant, LanceDB
 - **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)
 - **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
-- **Project namespaces** — isolated knowledge bases per named project; nested projects search children automatically
+- **Projects** — isolated knowledge bases per named project; nested projects search children automatically
 - **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression
 - **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph; disabled in the shipped config for fast first-run ingest; enable when your corpus is ready; interactive 3D graph panel in VS Code, or `/graph-viz` HTML export
 - **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS` edges for code corpora; visualise alongside the knowledge graph in the VS Code panel

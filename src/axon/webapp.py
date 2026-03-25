@@ -5,6 +5,7 @@ import sys
 import time
 import uuid
 from datetime import datetime
+from importlib import import_module
 from pathlib import Path
 
 import streamlit as st
@@ -228,18 +229,18 @@ _FALLBACK_GEMINI_MODELS = [
 
 @st.cache_data(ttl=3600)
 def _list_gemini_models(api_key: str) -> list:
-    """Fetch available Gemini/Gemma models via google.generativeai. Cached 1 h."""
+    """Fetch available Gemini/Gemma models via google.genai. Cached 1 h."""
     if not api_key:
         return _FALLBACK_GEMINI_MODELS
     try:
-        import google.generativeai as genai
-
-        genai.configure(api_key=api_key)
-        models = [
-            m.name.replace("models/", "")
-            for m in genai.list_models()
-            if "generateContent" in m.supported_generation_methods
-        ]
+        genai_sdk = import_module("google.genai")
+        client = genai_sdk.Client(api_key=api_key)
+        models = []
+        for m in client.models.list():
+            name = (getattr(m, "name", "") or "").replace("models/", "")
+            actions = set(getattr(m, "supported_actions", []) or [])
+            if name and ("generateContent" in actions or "generate_content" in actions):
+                models.append(name)
         return sorted(models) if models else _FALLBACK_GEMINI_MODELS
     except Exception:
         return _FALLBACK_GEMINI_MODELS

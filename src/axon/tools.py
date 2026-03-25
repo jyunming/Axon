@@ -66,7 +66,7 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                         },
                         "project": {
                             "type": "string",
-                            "description": "Optional project namespace. Defaults to the active project.",
+                            "description": "Optional project. Defaults to the active project.",
                         },
                     },
                     "required": ["text"],
@@ -180,7 +180,7 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                         },
                         "project": {
                             "type": "string",
-                            "description": "Optional project namespace applied to all docs in this batch.",
+                            "description": "Optional project applied to all docs in this batch.",
                         },
                     },
                     "required": ["docs"],
@@ -205,7 +205,7 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                         },
                         "project": {
                             "type": "string",
-                            "description": "Optional project namespace. Defaults to the active project.",
+                            "description": "Optional project. Defaults to the active project.",
                         },
                     },
                     "required": ["url"],

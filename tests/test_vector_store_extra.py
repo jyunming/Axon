@@ -11,6 +11,7 @@ Target missed coverage lines: 46-63, 93-94, 97-101, 127-128, 152, 168-186,
 381, 383-385, 391, 433-442, 445-449, 481-483.
 """
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +24,10 @@ from axon.config import AxonConfig
 
 
 def _make_config(**kwargs):
-    defaults = {"bm25_path": "/tmp/bm25", "vector_store_path": "/tmp/vs"}
+    defaults = {
+        "bm25_path": os.path.abspath("/tmp/bm25"),
+        "vector_store_path": os.path.abspath("/tmp/vs"),
+    }
     defaults.update(kwargs)
     return AxonConfig(**defaults)
 

@@ -166,7 +166,7 @@ inspect ingested sources and chunk counts.
 
 Use `POST /project/switch` to change the active project before querying, searching, or ingesting.
 All routes that accept a `"project"` field validate it against the active project and return
-`409` if it does not match. The field is not a namespace-targeting mechanism — it is a safety
+`409` if it does not match. The field is not a cross-project targeting mechanism — it is a safety
 check to prevent accidental writes or reads to the wrong corpus.
 
 ---
@@ -175,13 +175,13 @@ check to prevent accidental writes or reads to the wrong corpus.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config` | Return active RAG flags, model config, and runtime settings |
+| `GET` | `/config` | Return active RAG flags, model config, and runtime settings (sensitive fields masked as `"***"`: `api_key`, `gemini_api_key`, `ollama_cloud_key`, `copilot_pat`, `brave_api_key`, `qdrant_api_key`) |
 | `POST` | `/config/update` | Update LLM/embedding provider or RAG flags without restart |
 
 **`POST /config/update` body (all fields optional):**
 ```json
 {
-  "llm_model": "gemma3:27b",
+  "llm_model": "llama3.1:8b",
   "llm_provider": "ollama",
   "embedding_provider": "fastembed",
   "hyde": true,

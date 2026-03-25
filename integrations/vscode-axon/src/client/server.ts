@@ -118,32 +118,67 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
   }
 
   // Detect stale listener: something is bound to the port but not answering /health.
-  // Kill it before spawning so uvicorn does not fail with "address already in use".
+  // Only auto-kill if the process can be positively identified as an Axon/uvicorn process
+  // to avoid terminating unrelated user services bound to the same port.
   const stalePid = await getPortPid(port);
   if (stalePid) {
-    state.outputChannel.appendLine(
-      `Axon: process (PID ${stalePid}) detected on port ${port} that is not answering /health.`
-    );
-    const choice = await vscode.window.showWarningMessage(
-      `Axon detected a process (PID ${stalePid}) listening on port ${port} that is not responding to /health.\n\nDo you want to terminate this process so Axon can start on this port?`,
-      { modal: true },
-      'Terminate process',
-      'Cancel'
-    );
-    if (choice === 'Terminate process') {
+    let isAxonProcess = false;
+    try {
+      const { execSync } = require('child_process');
+      let cmdLine = '';
+      if (process.platform === 'win32') {
+        // Get the full command line (not just exe path) so we can match axon.api signals
+        cmdLine = execSync(
+          `powershell -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${stalePid}').CommandLine"`,
+          { encoding: 'utf8' }
+        ).trim().toLowerCase();
+      } else {
+        cmdLine = execSync(`ps -p ${stalePid} -o command=`, { encoding: 'utf8' }).trim().toLowerCase();
+      }
+      // Only match Axon/uvicorn-specific signals — avoid the generic "python" substring
+      const axonSignals = ['axon.api', 'uvicorn axon.api:app', 'python -m axon.api', 'axon-api'];
+      isAxonProcess = axonSignals.some(signal => cmdLine.includes(signal));
+    } catch {
+      // If we can't inspect the process, don't kill it
+    }
+
+    if (isAxonProcess) {
       state.outputChannel.appendLine(
-        `User approved termination of process ${stalePid} on port ${port} before starting Axon.`
+        `Axon: stale process (PID ${stalePid}) found on port ${port} — terminating and restarting.`
       );
       try {
-        process.kill(stalePid);
-        await sleep(800);  // Give the OS time to release the port
+        // Attempt graceful shutdown first; escalate to force-kill only if needed
+        if (process.platform === 'win32') {
+          require('child_process').execSync('taskkill /PID ' + stalePid);
+        } else {
+          process.kill(stalePid, 'SIGTERM');
+        }
+        await sleep(1500);
+        // Verify it's gone; force-kill if still running
+        const stillRunning = await getPortPid(port);
+        if (stillRunning === stalePid) {
+          if (process.platform === 'win32') {
+            require('child_process').execSync('taskkill /F /PID ' + stalePid);
+          } else {
+            process.kill(stalePid, 'SIGKILL');
+          }
+          await sleep(500);
+        }
       } catch {
-        state.outputChannel.appendLine(`Could not terminate process ${stalePid} — it may have already exited or access was denied.`);
+        state.outputChannel.appendLine(
+          `Could not terminate stale process ${stalePid} — it may have already exited or access was denied.`
+        );
       }
     } else {
       state.outputChannel.appendLine(
-        `User declined to terminate process ${stalePid} on port ${port}; Axon server start may fail if the port remains in use.`
+        `Axon: port ${port} is in use by a non-Axon process (PID ${stalePid}). ` +
+        `Cannot auto-start — free the port or change axon.apiBase to a different port.`
       );
+      vscode.window.showWarningMessage(
+        `Axon: port ${port} is already in use by another process (PID ${stalePid}). ` +
+        `Free the port or update the axon.apiBase setting.`
+      );
+      return;
     }
   }
 
@@ -184,6 +219,10 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
     },
   });
 
+  state.serverProcess.on('error', (err) => {
+    state.outputChannel.appendLine(`Axon server spawn error: ${err.message}`);
+    state.serverProcess = undefined;
+  });
   state.serverProcess.stdout?.on('data', (data: Buffer) => {
     state.outputChannel.append(`[server] ${data.toString()}`);
   });
@@ -236,6 +275,10 @@ export async function waitForHealth(apiBase: string, timeoutMs: number): Promise
   while (Date.now() - start < timeoutMs) {
     if (await isAxonRunning(apiBase)) {
       return true;
+    }
+    // Fail fast if the process we spawned has crashed
+    if (state.serverProcess === undefined) {
+      break;
     }
     await sleep(500);
   }

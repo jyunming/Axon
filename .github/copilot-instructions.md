@@ -258,10 +258,10 @@ aborted with a `RuntimeError` if any active model is `[remote]` or `[MISSING]`.
 ## Store Identity and Migration
 
 Each AxonStore has a `store_meta.json` at its root containing `store_version`,
-`store_namespace_id`, and `created_at`. Each project's `meta.json` contains a
-`project_namespace_id` used as the namespace for all chunk and source IDs.
+`store_id`, and `created_at`. Each project's `meta.json` contains a
+`project_id` used as the namespace for all chunk and source IDs.
 
-To migrate existing projects (backfill `project_namespace_id` and rename `_default` →
+To migrate existing projects (backfill `project_id` and rename `_default` →
 `default`), use the `axon.migration` module:
 
 ```python
