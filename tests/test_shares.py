@@ -397,6 +397,53 @@ class TestValidateReceivedShares:
         removed = shares.validate_received_shares(grantee_dir)
         assert removed == []
 
+    def test_malformed_received_record_missing_key_id_is_skipped(self, tmp_path):
+        """validate_received_shares must not crash when a received record has no key_id."""
+        import json as _json
+
+        from axon import shares
+
+        grantee_dir = _make_user_dir(tmp_path, "bob")
+        keys_path = grantee_dir / ".shares" / ".share_keys.json"
+        # Inject a malformed record (missing key_id)
+        keys_path.write_text(
+            _json.dumps({"received": [{"owner_manifest_path": "/nonexistent/manifest.json"}]}),
+            encoding="utf-8",
+        )
+        # Should not raise KeyError
+        removed = shares.validate_received_shares(grantee_dir)
+        assert removed == []
+
+
+class TestRevokeShareKeyManifestOutOfSync:
+    """revoke_share_key must still mark the key revoked when manifest is out of sync."""
+
+    def test_tombstone_added_when_key_absent_from_manifest(self, tmp_path):
+        """If the manifest is missing the key_id record, a tombstone is written so
+        redeem_share_key() will correctly reject the key."""
+        import json as _json
+
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+        key_id = gen["key_id"]
+
+        # Artificially empty the manifest's issued list to simulate out-of-sync state
+        manifest_path = owner_dir / ".shares" / ".share_manifest.json"
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["issued"] = []
+        manifest_path.write_text(_json.dumps(manifest), encoding="utf-8")
+
+        # Revocation must not raise, and must add a tombstone to the manifest
+        result = shares.revoke_share_key(owner_dir, key_id)
+        assert result["key_id"] == key_id
+
+        updated = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        tombstone = next((r for r in updated.get("issued", []) if r["key_id"] == key_id), None)
+        assert tombstone is not None
+        assert tombstone["revoked"] is True
+
 
 # ---------------------------------------------------------------------------
 # Phase 1: write-enforcement tests

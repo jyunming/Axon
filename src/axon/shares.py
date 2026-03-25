@@ -276,12 +276,30 @@ def revoke_share_key(owner_user_dir: Path, key_id: str) -> dict[str, Any]:
         record["revoked_at"] = now
         _write_json(_keys_path(owner_user_dir), keys)
 
-        # Update public manifest
+        # Update public manifest — upsert so grantees always see the revocation
         manifest = _read_json(_manifest_path(owner_user_dir))
-        for r in manifest.get("issued", []):
-            if r["key_id"] == key_id:
-                r["revoked"] = True
-                r["revoked_at"] = now
+        issued = manifest.setdefault("issued", [])
+        manifest_record = next((r for r in issued if r["key_id"] == key_id), None)
+        if manifest_record is not None:
+            manifest_record["revoked"] = True
+            manifest_record["revoked_at"] = now
+        else:
+            # Manifest was out of sync; add a minimal revocation tombstone so
+            # redeem_share_key() will correctly reject the key on the next attempt.
+            issued.append(
+                {
+                    "key_id": key_id,
+                    "project": record.get("project", ""),
+                    "grantee": record.get("grantee", ""),
+                    "revoked": True,
+                    "revoked_at": now,
+                }
+            )
+            import logging as _logging
+
+            _logging.getLogger("AxonShares").warning(
+                "revoke_share_key: key %s absent from manifest; tombstone added", key_id
+            )
         _write_json(_manifest_path(owner_user_dir), manifest)
 
     return {
@@ -355,7 +373,9 @@ def validate_received_shares(user_dir: Path) -> list[str]:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        key_id = record["key_id"]
+        key_id = record.get("key_id")
+        if not key_id:
+            continue  # skip malformed received record
         manifest_record = next(
             (r for r in manifest.get("issued", []) if r["key_id"] == key_id), None
         )

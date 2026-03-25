@@ -80,14 +80,14 @@ axon --ingest ./documents/
 axon --list
 
 # CLI — switch model at runtime (auto-pulls Ollama model if missing)
-axon --model gemma:2b "Your question"
+axon --model llama3.1:8b "Your question"
 
 # CLI — use a cloud provider
 axon --provider gemini --model gemini-1.5-flash "Your question"
 axon --provider openai --model gpt-4o "Your question"
 
 # CLI — pull a model explicitly
-axon --pull gemma:2b
+axon --pull llama3.1:8b
 
 # CLI — see all providers and locally available models
 axon --list-models
@@ -208,7 +208,7 @@ nano .env
 **Key Variables:**
 ```bash
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=gemma
+OLLAMA_MODEL=llama3.1:8b
 AXON_HOST=127.0.0.1
 AXON_PORT=8000
 LOG_LEVEL=INFO
@@ -223,7 +223,7 @@ embedding:
 
 llm:
   provider: ollama
-  model: gemma
+  model: llama3.1:8b
   temperature: 0.7
 
 rag:
@@ -307,7 +307,7 @@ Effects when enabled:
 - `TRANSFORMERS_OFFLINE=1`, `HF_HUB_OFFLINE=1` set before any model loads
 - Web search permanently disabled (`/search` toggle is blocked)
 
-For Ollama models (gemma3, gpt-oss, etc.) copy `~/.ollama/models/` to the same path on the confined machine. See `scripts/README.md`.
+For Ollama models (llama3.1:8b, phi3:mini, etc.) copy `~/.ollama/models/` to the same path on the confined machine. See `scripts/README.md`.
 
 ### Local / offline model deployment
 
