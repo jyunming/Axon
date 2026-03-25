@@ -144,7 +144,9 @@ export async function initStore(apiBase: string): Promise<void> {
   }
   if (!basePath) { return; }
   try {
-    const result = await httpPost(`${apiBase}/store/init`, { base_path: basePath }, apiKey);
+    // Pass persist:true because this is an explicit user-initiated command — the user
+    // wants AxonStore to survive server restarts (written to config.yaml).
+    const result = await httpPost(`${apiBase}/store/init`, { base_path: basePath, persist: true }, apiKey);
     const data = JSON.parse(result.body);
     if (result.status !== 200) {
       vscode.window.showErrorMessage(`Axon: Store init failed — ${formatDetail(data, result.body)}`);

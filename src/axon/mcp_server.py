@@ -426,7 +426,7 @@ async def list_shares() -> Any:
 
 
 @mcp.tool()
-async def init_store(base_path: str) -> Any:
+async def init_store(base_path: str, persist: bool = False) -> Any:
     """Initialise AxonStore multi-user mode at the given base directory.
 
     Must be called once before any share-related tools (list_shares,
@@ -438,8 +438,13 @@ async def init_store(base_path: str) -> Any:
         base_path: Absolute path to the directory where the AxonStore/
                    folder will be created (e.g. '/data' creates
                    '/data/AxonStore/<username>/').
+        persist: Write the new store path to config.yaml so it survives
+                 server restarts. Defaults to False so that test or
+                 temporary calls do not permanently alter the user config.
+                 Pass True only when you intend to switch to AxonStore
+                 mode permanently.
     """
-    return await _post("/store/init", {"base_path": base_path})
+    return await _post("/store/init", {"base_path": base_path, "persist": persist})
 
 
 @mcp.tool()

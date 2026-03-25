@@ -223,6 +223,14 @@ class StoreInitRequest(BaseModel):
     base_path: str = Field(
         ..., description="Base directory under which AxonStore/ will be created."
     )
+    persist: bool = Field(
+        False,
+        description=(
+            "Write the new store.base to config.yaml so the setting survives server restarts. "
+            "Defaults to False so that test/scan calls do not permanently alter the user config. "
+            "Pass True only when the user explicitly intends to switch to AxonStore mode permanently."
+        ),
+    )
 
 
 class ShareGenerateRequest(BaseModel):

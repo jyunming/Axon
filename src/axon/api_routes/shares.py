@@ -59,10 +59,13 @@ async def store_init(request: StoreInitRequest):
     config.vector_store_path = str(user_dir / "default" / "chroma_data")
     config.bm25_path = str(user_dir / "default" / "bm25_index")
 
-    try:
-        config.save()
-    except Exception as e:
-        logger.warning(f"Could not save config after store init: {e}")
+    if request.persist:
+        try:
+            config.save()
+        except Exception as e:
+            logger.warning(f"Could not save config after store init: {e}")
+    else:
+        logger.info("store_init: persist=False — in-memory only, config.yaml not modified")
 
     if brain:
         brain.close()
