@@ -7,7 +7,7 @@ Research report on embedding models and LLMs suitable for local deployment witho
 For a lightweight local RAG system, we recommend:
 
 **Embeddings:** `all-MiniLM-L6-v2` (22M params, 384-dim) or `BAAI/bge-small-en-v1.5` (FastEmbed)
-**LLM:** `Gemma 2B` (default; smallest performant model) or `Llama 3.1 8B Instruct` or `Qwen2.5-7B-Instruct` for better quality
+**LLM:** `Llama 3.1 8B Instruct` (default; best balance of quality and speed) or `Phi-3 Mini` (minimal footprint)
 
 Total memory footprint: 2–8 GB RAM/VRAM depending on model selection.
 

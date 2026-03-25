@@ -448,6 +448,42 @@ async def init_store(base_path: str, persist: bool = False) -> Any:
 
 
 @mcp.tool()
+async def graph_status() -> Any:
+    """Return current GraphRAG knowledge-graph status.
+
+    Reports entity count, edge count, community summary count, whether a
+    community rebuild is in progress, and whether the graph is ready for
+    graph-augmented retrieval.  Use before running graph_finalize() to check
+    whether a rebuild is actually needed.
+    """
+    return await _get("/graph/status")
+
+
+@mcp.tool()
+async def graph_finalize() -> Any:
+    """Trigger an explicit GraphRAG community detection rebuild.
+
+    Rebuilds community summaries from the current entity graph.  Call this
+    after a large ingest batch when you want graph-augmented answers to
+    reflect the latest knowledge without waiting for the automatic rebuild.
+    Returns the number of community summaries produced.
+    """
+    return await _post("/graph/finalize", {})
+
+
+@mcp.tool()
+async def graph_data() -> Any:
+    """Return the full entity/relation knowledge-graph payload as JSON.
+
+    Returns a dict with 'nodes' and 'links' arrays describing every entity
+    and relation currently in the graph.  Useful for inspection, export, or
+    building custom visualisations.  Returns empty arrays when no graph has
+    been built yet.
+    """
+    return await _get("/graph/data")
+
+
+@mcp.tool()
 async def get_active_leases() -> Any:
     """Return active write-lease counts for all projects currently tracked by the server.
 

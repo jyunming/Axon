@@ -257,7 +257,7 @@ Use `axon_showGraph` when the user asks to "show the graph", "visualise", or "se
 
 ---
 
-## MCP Tool Names (24 total — agent mode)
+## MCP Tool Names (27 total — agent mode)
 
 When using Copilot in **agent mode** with the Axon MCP server, use these
 tool names (they differ deliberately from the OpenAI-format `tools.py` names):
@@ -311,6 +311,14 @@ tool names (they differ deliberately from the OpenAI-format `tools.py` names):
 |---|---|
 | `list_sessions` | List saved conversation sessions (up to 20 most recent) |
 | `get_session` | Retrieve a full session transcript by timestamp ID |
+
+### GraphRAG
+
+| MCP tool | Does |
+|---|---|
+| `graph_status` | Return entity count, edge count, community count, and rebuild state |
+| `graph_finalize` | Trigger community detection rebuild for global-mode GraphRAG |
+| `graph_data` | Return the full entity/relation graph as a JSON nodes+links payload |
 
 ### AxonStore & Sharing
 

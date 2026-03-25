@@ -37,6 +37,10 @@ EXPECTED_MCP_TOOL_NAMES = {
     "init_store",
     # Operator tooling (Phase 5)
     "get_active_leases",
+    # GraphRAG tools
+    "graph_status",
+    "graph_finalize",
+    "graph_data",
 }
 
 

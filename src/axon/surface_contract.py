@@ -298,6 +298,19 @@ REGISTRY: list[Capability] = [
         api_route="/graph/finalize",
     ),
     Capability(
+        id="graph_data",
+        name="Graph data export",
+        category="graph",
+        tier=Tier.TWO,
+        description="Return the full entity/relation knowledge-graph as a JSON nodes+links payload.",
+        supported_surfaces=frozenset({Surface.API, Surface.VSCODE}),
+        intentional_exceptions={
+            Surface.REPL: "Raw JSON payload not useful in interactive REPL; use graph_viz instead",
+            Surface.CLI: "Raw JSON payload not useful in CLI; use graph_viz instead",
+        },
+        api_route="/graph/data",
+    ),
+    Capability(
         id="graph_viz",
         name="Graph visualization",
         category="graph",
