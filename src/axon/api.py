@@ -53,14 +53,30 @@ _JOB_TTL_SECONDS = 3600  # 60 minutes
 
 
 def _evict_old_jobs() -> None:
-    """Remove completed jobs older than _JOB_TTL_SECONDS and cap at _MAX_JOBS."""
+    """Remove completed/failed jobs older than _JOB_TTL_SECONDS and cap at _MAX_JOBS.
+
+    Processing jobs are never TTL-evicted so long-running ingests remain queryable.
+    """
     cutoff = datetime.now(timezone.utc).timestamp() - _JOB_TTL_SECONDS
-    expired = [jid for jid, job in list(_jobs.items()) if job.get("started_at_ts", 0) < cutoff]
+    expired = [
+        jid
+        for jid, job in list(_jobs.items())
+        if job.get("started_at_ts", 0) < cutoff and job.get("status") != "processing"
+    ]
     for jid in expired:
         _jobs.pop(jid, None)
     if len(_jobs) > _MAX_JOBS:
-        oldest = sorted(_jobs, key=lambda j: _jobs[j].get("started_at_ts", 0))
-        for jid in oldest[: len(_jobs) - _MAX_JOBS]:
+        # Prefer evicting finished jobs; only remove active ones as last resort.
+        finished = sorted(
+            (j for j in _jobs if _jobs[j].get("status") != "processing"),
+            key=lambda j: _jobs[j].get("started_at_ts", 0),
+        )
+        active = sorted(
+            (j for j in _jobs if _jobs[j].get("status") == "processing"),
+            key=lambda j: _jobs[j].get("started_at_ts", 0),
+        )
+        to_remove = finished + active
+        for jid in to_remove[: len(_jobs) - _MAX_JOBS]:
             _jobs.pop(jid, None)
 
 

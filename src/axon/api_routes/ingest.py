@@ -109,9 +109,8 @@ async def refresh_docs(background_tasks: BackgroundTasks):
             job["phase"] = "done"
             job["completed_at"] = completed.isoformat()
         except Exception as exc:
-            if job is not None:
-                job["status"] = "failed"
-                job["error"] = str(exc)
+            job["status"] = "failed"
+            job["error"] = str(exc)
 
     background_tasks.add_task(_run_refresh)
     return {"job_id": job_id, "status": "processing"}
@@ -177,6 +176,12 @@ async def ingest_data(
         from axon import governance as gov
         from axon.loaders import DirectoryLoader
 
+        # Capture reference once so repeated dict lookups can't KeyError if the
+        # job is ever evicted from _api._jobs while the background task is running.
+        job = _api._jobs.get(job_id)
+        if job is None:
+            return
+
         project = getattr(brain, "_active_project", "default")
         gov.emit(
             "ingest_started",
@@ -189,7 +194,7 @@ async def ingest_data(
             request_id=rid,
         )
         try:
-            _api._jobs[job_id]["phase"] = "loading"
+            job["phase"] = "loading"
             loader_mgr = DirectoryLoader()
             if requested_path.is_dir():
                 docs = loader_mgr.load(str(requested_path))
@@ -200,13 +205,13 @@ async def ingest_data(
                 else:
                     logger.warning(f"Unsupported file type: {ext}")
                     docs = []
-            _api._jobs[job_id]["files_total"] = len(docs)
+            job["files_total"] = len(docs)
             if docs:
-                brain.ingest(docs, progress_callback=_make_progress_callback(_api._jobs[job_id]))
-            _api._jobs[job_id]["status"] = "completed"
-            _api._jobs[job_id]["phase"] = "completed"
-            _api._jobs[job_id]["documents_ingested"] = len(docs)
-            _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+                brain.ingest(docs, progress_callback=_make_progress_callback(job))
+            job["status"] = "completed"
+            job["phase"] = "completed"
+            job["documents_ingested"] = len(docs)
+            job["completed_at"] = datetime.now(timezone.utc).isoformat()
             gov.emit(
                 "ingest_completed",
                 "file",
@@ -218,10 +223,10 @@ async def ingest_data(
             )
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
-            _api._jobs[job_id]["status"] = "failed"
-            _api._jobs[job_id]["phase"] = "failed"
-            _api._jobs[job_id]["error"] = str(e)
-            _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            job["status"] = "failed"
+            job["phase"] = "failed"
+            job["error"] = str(e)
+            job["completed_at"] = datetime.now(timezone.utc).isoformat()
             gov.emit(
                 "ingest_failed",
                 "file",

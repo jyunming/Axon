@@ -1525,6 +1525,60 @@ class TestIngestStatusEndpoint:
         del api_module._jobs[job_id]
 
 
+class TestEvictOldJobs:
+    """Tests for _evict_old_jobs() — processing jobs must not be TTL-evicted."""
+
+    def setup_method(self):
+        api_module._jobs.clear()
+
+    def teardown_method(self):
+        api_module._jobs.clear()
+
+    def test_processing_job_not_evicted_by_ttl(self):
+        """A still-processing job must survive TTL eviction even if started long ago."""
+        api_module._jobs["old_active"] = {
+            "job_id": "old_active",
+            "status": "processing",
+            "started_at_ts": 0.0,  # epoch — well past 1-hour TTL
+        }
+        api_module._evict_old_jobs()
+        assert "old_active" in api_module._jobs
+
+    def test_completed_job_evicted_by_ttl(self):
+        """A completed job started more than 1 hour ago must be evicted."""
+        api_module._jobs["old_done"] = {
+            "job_id": "old_done",
+            "status": "completed",
+            "started_at_ts": 0.0,
+        }
+        api_module._evict_old_jobs()
+        assert "old_done" not in api_module._jobs
+
+    def test_processing_job_survives_cap_eviction(self):
+        """With >_MAX_JOBS entries, processing jobs are the last to be removed."""
+        import axon.api as _api_mod
+
+        cap = _api_mod._MAX_JOBS
+        # Fill with completed old jobs up to cap+1
+        for i in range(cap + 1):
+            jid = f"done_{i}"
+            api_module._jobs[jid] = {
+                "job_id": jid,
+                "status": "completed",
+                "started_at_ts": float(i),
+            }
+        active_id = "active_new"
+        api_module._jobs[active_id] = {
+            "job_id": active_id,
+            "status": "processing",
+            "started_at_ts": 0.0,  # oldest timestamp — would be first to evict without fix
+        }
+        api_module._evict_old_jobs()
+        # The active job must still be present; a completed job was evicted instead
+        assert active_id in api_module._jobs
+        assert len(api_module._jobs) <= cap
+
+
 # ---------------------------------------------------------------------------
 # Bug regression: directory ingest uses sync loader (no asyncio.run in thread)
 # ---------------------------------------------------------------------------
