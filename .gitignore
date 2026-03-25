@@ -139,13 +139,23 @@ integrations/vscode-axon/node_modules/
 integrations/vscode-axon/out/
 integrations/vscode-axon/package-lock.json
 # Note: *.vsix is tracked so users can install directly from the repo
+integrations/vscode-axon/media/*.html
 
 # Intermediate docs (internal planning/sprint artifacts)
 docs/*.md
+/DOC_AUDIT_REPORT*.md
+/GEMINI.md
+/SOTA_analysis_*.md
+/*_Solidification_Report*.md
+/*_REPORT*.md
+/v0.*.md
 
 # Test temp directories
 tests/.test_tmp/
 tests/e2e/.test_tmp/
+.test_home_pytest/
+.test_tmp*/
+.deepeval/
 
 # Local AxonStore runtime data (user-specific, contains DB files)
 AxonStore/
@@ -153,3 +163,16 @@ AxonStore/
 # Qualification artifacts
 Qualification/
 sample_docs
+
+# Root-level Axon project data directories (chroma/bm25 leaked outside ~/.axon)
+/default/
+/black/
+/v/
+/v2/
+
+# Developer debug/utility scripts (not part of the main project)
+scripts/gen_debug_graph.py
+scripts/memory_audit.py
+
+# Attended test notes (markdown, not runnable test files)
+tests/e2e/*.md

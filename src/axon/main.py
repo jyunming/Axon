@@ -829,6 +829,7 @@ Your primary goal is to help the user by answering questions based on the provid
         with self._cache_lock:
             self._query_cache = OrderedDict()
         self._ingested_hashes = self._load_hash_store()
+        self._code_graph = self._load_code_graph()
         self._entity_graph = self._load_entity_graph()
         self._relation_graph = self._load_relation_graph()
         self._community_levels = self._load_community_levels()
