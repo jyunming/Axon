@@ -19,20 +19,24 @@ Share knowledge bases across your team with HMAC-secured read-only project mount
 
 ## Key capabilities
 
-- **Hybrid search** — dense vector + BM25 keyword, fused for better precision than either alone
-- **Multi-LLM** — Ollama (local), Gemini, OpenAI, vLLM, GitHub Copilot; switch live from the REPL
+- **Hybrid search** — dense vector + BM25 keyword, fused for better precision than either alone; sentence-window retrieval for better context around matched chunks
+- **Multi-LLM** — Ollama (local), Anthropic Claude, Gemini, OpenAI, vLLM, GitHub Copilot; switch live from the REPL; streaming responses supported
 - **Multi-embedding** — sentence-transformers, Ollama, FastEmbed (BGE-M3 for multilingual/long-doc)
-- **Vector stores** — ChromaDB (default), Qdrant, LanceDB
+- **Vector stores** — ChromaDB (default), Qdrant (local + cloud), LanceDB
 - **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)
+- **URL ingestion** — ingest any public web page directly (`/ingest https://...`) alongside local files
+- **Smart re-ingest** — SHA-256 hash deduplication skips unchanged files; stale-document detection flags chunks whose source has been modified
 - **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
-- **Projects** — isolated knowledge bases per named project; nested projects search children automatically
-- **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression, CRAG-Lite
-- **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph; interactive 3D graph panel in VS Code or `/graph-viz` HTML export
+- **Projects** — isolated knowledge bases per named project; nested projects search children automatically; cross-project scopes (`@projects`, `@mounts`, `@store`) for federated search
+- **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression, CRAG-Lite; intelligent query routing selects the best strategy per query
+- **Multi-turn sessions** — persistent conversation history with configurable session memory; discuss mode for iterative exploration
+- **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph with local/global/hybrid modes and light/standard/deep depth control; interactive 3D graph panel in VS Code or `/graph-viz` HTML export
 - **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS`/`MENTIONED_IN` edges; visualise alongside the knowledge graph in VS Code
 - **Reranking** — cross-encoder (BGE) reranking; CRAG-Lite corrective retrieval on low-confidence chunks
+- **Strict offline mode** — lock to local-only assets; zero outbound network calls even for embedding or LLM
 - **AxonStore sharing** — HMAC-secured read-only project mounts across OS users; lazy revocation via manifest tombstones
-- **Governance Console** — operator dashboard with SQLite WAL audit trail; per-query event log, session tracking, write-lease monitoring
-- **Agent-ready** — FastAPI REST API + MCP server (27 tools) for Copilot agent mode; OpenAI-compatible tool schema
+- **Governance Console** — operator dashboard with SQLite WAL audit trail; per-query event log, session tracking, write-lease monitoring; graceful maintenance states for zero-downtime draining
+- **Agent-ready** — FastAPI REST API + MCP server (27 tools) for Copilot agent mode; OpenAI-compatible tool schema; `@axon` VS Code chat participant; interactive OpenAPI docs at `/docs`
 
 ---
 
