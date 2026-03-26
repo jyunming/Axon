@@ -19,14 +19,58 @@ embedding:
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
+# Uncomment exactly ONE provider block below.
+# ---------------------------------------------------------------------------
+
+# Option 1 — Ollama (local, fully offline, default)
 llm:
-  provider: ollama                    # options: ollama, openai, gemini, anthropic, vllm, copilot
-  model: llama3.1                     # any model pulled via `ollama pull <model>`
+  provider: ollama
+  model: llama3.1:8b                  # any model pulled via `ollama pull <model>`
   temperature: 0.3                    # lower = more factual; 0.7 for conversational tone
   max_tokens: 2048
-  # provider: openai
-  # model: gpt-4o-mini
-  # api_key: sk-...                   # or set OPENAI_API_KEY env var
+
+# Option 2 — OpenAI
+# llm:
+#   provider: openai
+#   model: gpt-4o                     # or gpt-4.1, o3-mini, gpt-3.5-turbo
+#   openai_api_key: sk-...            # or set OPENAI_API_KEY env var
+#   temperature: 0.3
+#   max_tokens: 2048
+
+# Option 3 — xAI Grok
+# llm:
+#   provider: grok
+#   model: grok-3                     # or grok-3-fast, grok-2
+#   grok_api_key: xai-...             # or set XAI_API_KEY env var
+#   temperature: 0.3
+#   max_tokens: 2048
+
+# Option 4 — Google Gemini
+# llm:
+#   provider: gemini
+#   model: gemini-2.0-flash           # or gemini-1.5-pro
+#   gemini_api_key: AIza...           # or set GEMINI_API_KEY env var
+#   temperature: 0.3
+#   max_tokens: 2048
+
+# Option 5 — vLLM (self-hosted OpenAI-compatible)
+# llm:
+#   provider: vllm
+#   model: mistral-7b-instruct        # model ID as served by your vLLM instance
+#   vllm_base_url: http://localhost:8000/v1
+#   temperature: 0.3
+#   max_tokens: 2048
+
+# Option 6 — GitHub Copilot (VS Code extension bridge)
+# llm:
+#   provider: copilot                 # routes through the Axon VS Code extension
+#   model: gpt-4o                     # or claude-3.5-sonnet, o1, etc.
+
+# Option 7 — GitHub Copilot API (PAT-based, no VS Code required)
+# llm:
+#   provider: github_copilot
+#   model: gpt-4o
+#   # Set GITHUB_COPILOT_PAT env var (OAuth token from device flow, NOT a classic PAT)
 
 # ---------------------------------------------------------------------------
 # Vector store

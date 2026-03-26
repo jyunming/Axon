@@ -136,14 +136,74 @@ The system supports cloud providers in addition to local Ollama models. Set `llm
 | **vLLM** | `vllm` | Any vLLM-served model | Self-hosted OpenAI-compatible endpoint; set `vllm_base_url` in `config.yaml` |
 | **GitHub Copilot** | `copilot` | Any active Copilot model | VS Code only — routes LLM calls through the Copilot extension bridge; no Ollama required. Enable via `axon.useCopilotLlm: true` in VS Code settings or `provider: copilot` in `config.yaml`. |
 
-Example `config.yaml` for Gemini:
+### Per-provider config.yaml examples
+
+**Ollama (local, default — no API key needed):**
+```yaml
+llm:
+  provider: ollama
+  model: llama3.1:8b
+```
+
+**OpenAI:**
+```yaml
+llm:
+  provider: openai
+  model: gpt-4o          # or gpt-4.1, o3-mini, gpt-3.5-turbo
+  openai_api_key: sk-... # or export OPENAI_API_KEY=sk-...
+```
+
+**xAI Grok:**
+```yaml
+llm:
+  provider: grok
+  model: grok-3          # or grok-3-fast, grok-2
+  grok_api_key: xai-...  # or export XAI_API_KEY=xai-...
+```
+
+**Google Gemini:**
 ```yaml
 llm:
   provider: gemini
-  model: gemini-2.0-flash
+  model: gemini-2.0-flash  # or gemini-1.5-pro
+  gemini_api_key: AIza...  # or export GEMINI_API_KEY=AIza...
+```
+
+**vLLM (self-hosted):**
+```yaml
+llm:
+  provider: vllm
+  model: mistral-7b-instruct
+  vllm_base_url: http://localhost:8000/v1
+```
+
+**GitHub Copilot (VS Code bridge):**
+```yaml
+llm:
+  provider: copilot
+  model: gpt-4o   # any model available in your Copilot subscription
+```
+
+**GitHub Copilot API (PAT-based, no VS Code required):**
+```yaml
+llm:
+  provider: github_copilot
+  model: gpt-4o
+  # export GITHUB_COPILOT_PAT=<oauth-token>  (use device flow: axon /keys set github_copilot)
 ```
 
 > **Note:** Gemma models (Google) do not support `system_instruction` in the Gemini SDK. The system automatically prepends the system prompt to the user message for Gemma model names.
+
+### Environment variables quick reference
+
+| Provider | Environment variable | Notes |
+|---|---|---|
+| OpenAI | `OPENAI_API_KEY` | Preferred over `API_KEY` (legacy) |
+| xAI Grok | `XAI_API_KEY` | Also accepted: `GROK_API_KEY` |
+| Google Gemini | `GEMINI_API_KEY` | — |
+| GitHub Copilot | `GITHUB_COPILOT_PAT` | OAuth token; also accepted: `GITHUB_TOKEN` |
+| Ollama Cloud | `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` | — |
+| Brave Search | `BRAVE_API_KEY` | For `web_search.enabled: true` |
 
 ---
 

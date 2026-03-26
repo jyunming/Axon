@@ -1013,6 +1013,208 @@ class TestVllmProviderStream:
 
 
 # ===========================================================================
+# TestGrokProvider
+# ===========================================================================
+
+
+class TestGrokProviderComplete:
+    def _make_grok_mock(self, content: str) -> tuple[MagicMock, MagicMock]:
+        mock_response = _openai_response(content)
+        mock_client_inst = MagicMock()
+        mock_client_inst.chat.completions.create.return_value = mock_response
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = mock_client_inst
+        return mock_openai, mock_client_inst
+
+    def test_complete_basic(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        mock_openai, mock_client_inst = self._make_grok_mock("grok answer")
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            result = llm.complete("Hello")
+
+        assert result == "grok answer"
+
+    def test_complete_uses_xai_base_url(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        mock_openai, _ = self._make_grok_mock("ok")
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            llm.complete("q")
+
+        openai_call_kw = mock_openai.OpenAI.call_args[1]
+        assert openai_call_kw["base_url"] == "https://api.x.ai/v1"
+        assert openai_call_kw["api_key"] == "xai-test"
+
+    def test_complete_with_system_prompt(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        mock_openai, mock_client_inst = self._make_grok_mock("ok")
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            llm.complete("q", system_prompt="be brief")
+
+        msgs = mock_client_inst.chat.completions.create.call_args[1]["messages"]
+        assert msgs[0] == {"role": "system", "content": "be brief"}
+
+    def test_complete_with_history(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        mock_openai, mock_client_inst = self._make_grok_mock("ok")
+        history = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            llm.complete("follow up", chat_history=history)
+
+        msgs = mock_client_inst.chat.completions.create.call_args[1]["messages"]
+        assert msgs[0] == {"role": "user", "content": "hi"}
+        assert msgs[1] == {"role": "assistant", "content": "hello"}
+        assert msgs[-1] == {"role": "user", "content": "follow up"}
+
+    def test_complete_raises_when_no_key(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3")
+        cfg.grok_api_key = ""
+        mock_openai = MagicMock()
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            with pytest.raises(ValueError, match="Grok API key not set"):
+                llm.complete("Hello")
+
+
+class TestGrokProviderStream:
+    def test_stream_yields_delta_content(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        chunks = [_openai_chunk("tok1"), _openai_chunk("tok2"), _openai_chunk(None)]
+        mock_client_inst = MagicMock()
+        mock_client_inst.chat.completions.create.return_value = iter(chunks)
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = mock_client_inst
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            result = list(llm.stream("Hello"))
+
+        assert result == ["tok1", "tok2"]
+
+    def test_stream_passes_stream_true(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        mock_client_inst = MagicMock()
+        mock_client_inst.chat.completions.create.return_value = iter([])
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = mock_client_inst
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            list(llm.stream("q"))
+
+        call_kw = mock_client_inst.chat.completions.create.call_args[1]
+        assert call_kw["stream"] is True
+
+    def test_stream_with_system_prompt(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        mock_client_inst = MagicMock()
+        mock_client_inst.chat.completions.create.return_value = iter([])
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = mock_client_inst
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            list(llm.stream("q", system_prompt="be concise"))
+
+        msgs = mock_client_inst.chat.completions.create.call_args[1]["messages"]
+        assert msgs[0] == {"role": "system", "content": "be concise"}
+
+
+# ===========================================================================
+# TestOpenAIKeyResolution
+# ===========================================================================
+
+
+class TestOpenAIKeyResolution:
+    """openai_api_key field takes precedence over legacy api_key field."""
+
+    def test_openai_api_key_field_used_when_set(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="openai", llm_model="gpt-4o")
+        cfg.api_key = "sk-legacy"
+        cfg.openai_api_key = "sk-dedicated"
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = MagicMock()
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            llm._get_openai_client()
+
+        assert mock_openai.OpenAI.call_args[1]["api_key"] == "sk-dedicated"
+
+    def test_legacy_api_key_fallback_when_openai_key_empty(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="openai", llm_model="gpt-4o")
+        cfg.api_key = "sk-legacy"
+        cfg.openai_api_key = ""
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = MagicMock()
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            llm._get_openai_client()
+
+        assert mock_openai.OpenAI.call_args[1]["api_key"] == "sk-legacy"
+
+    def test_grok_key_separate_from_openai_key(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3")
+        cfg.openai_api_key = "sk-openai"
+        cfg.grok_api_key = "xai-grok"
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = MagicMock()
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            llm._get_grok_client()
+
+        assert mock_openai.OpenAI.call_args[1]["api_key"] == "xai-grok"
+        assert mock_openai.OpenAI.call_args[1]["base_url"] == "https://api.x.ai/v1"
+
+    def test_grok_client_cached(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-3", grok_api_key="xai-test")
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = MagicMock()
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            c1 = llm._get_grok_client()
+            c2 = llm._get_grok_client()
+
+        assert c1 is c2
+        assert mock_openai.OpenAI.call_count == 1
+
+
+# ===========================================================================
 # TestGithubCopilotProvider
 # ===========================================================================
 
