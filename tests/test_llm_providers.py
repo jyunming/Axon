@@ -1758,6 +1758,7 @@ class TestGetOpenAIClient:
         ):
             llm = OpenLLM(cfg)
             llm.config.api_key = ""  # force empty
+            llm.config.openai_api_key = ""  # force empty (new dedicated field)
             llm._get_openai_client()
 
         call_kw = mock_openai.OpenAI.call_args[1]

@@ -130,7 +130,8 @@ The system supports cloud providers in addition to local Ollama models. Set `llm
 |---|---|---|---|
 | **Ollama (local)** | `ollama` | `gemma`, `llama3.1:8b`, `phi3:mini` | Default; fully offline |
 | **Google Gemini** | `gemini` | `gemini-2.0-flash`, `gemini-1.5-pro` | Requires `GEMINI_API_KEY` |
-| **OpenAI** | `openai` | `gpt-4o`, `gpt-3.5-turbo` | Requires `OPENAI_API_KEY` |
+| **OpenAI** | `openai` | `gpt-4o`, `gpt-4.1`, `o3-mini` | Requires `OPENAI_API_KEY` |
+| **xAI Grok** | `grok` | `grok-3`, `grok-3-fast`, `grok-2` | Requires `XAI_API_KEY`; OpenAI-compatible endpoint (`api.x.ai/v1`) |
 | **Ollama Cloud** | `ollama_cloud` | Any Ollama-hosted model | Requires `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` |
 | **vLLM** | `vllm` | Any vLLM-served model | Self-hosted OpenAI-compatible endpoint; set `vllm_base_url` in `config.yaml` |
 | **GitHub Copilot** | `copilot` | Any active Copilot model | VS Code only — routes LLM calls through the Copilot extension bridge; no Ollama required. Enable via `axon.useCopilotLlm: true` in VS Code settings or `provider: copilot` in `config.yaml`. |

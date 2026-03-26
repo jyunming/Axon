@@ -45,12 +45,14 @@ class AxonConfig:
 
     # LLM
     llm_provider: Literal[
-        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot", "github_copilot"
+        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot", "github_copilot", "grok"
     ] = "ollama"
     llm_model: str = "llama3.1:8b"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
-    api_key: str = ""
+    api_key: str = ""  # legacy alias — prefer openai_api_key
+    openai_api_key: str = ""
+    grok_api_key: str = ""
     gemini_api_key: str = ""
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
@@ -80,6 +82,10 @@ class AxonConfig:
         # 1. API Keys and URLs
         if not self.api_key:
             self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
+        if not self.openai_api_key:
+            self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        if not self.grok_api_key:
+            self.grok_api_key = os.getenv("XAI_API_KEY", os.getenv("GROK_API_KEY", ""))
         if not self.gemini_api_key:
             self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         if not self.ollama_cloud_key:
@@ -687,6 +693,12 @@ offline:
 
         if "api_key" not in config_dict and "llm_api_key" in config_dict:
             config_dict["api_key"] = config_dict["llm_api_key"]
+        # llm.openai_api_key in YAML → openai_api_key field
+        if "llm_openai_api_key" in config_dict:
+            config_dict["openai_api_key"] = config_dict.pop("llm_openai_api_key")
+        # llm.grok_api_key in YAML → grok_api_key field
+        if "llm_grok_api_key" in config_dict:
+            config_dict["grok_api_key"] = config_dict.pop("llm_grok_api_key")
 
         if "llm_vllm_base_url" in config_dict:
             config_dict["vllm_base_url"] = config_dict["llm_vllm_base_url"]
@@ -828,8 +840,12 @@ offline:
             data["bm25"].pop("path", None)
 
         # Add provider-specific extras
-        if flat["api_key"]:
-            data["llm"]["api_key"] = flat["api_key"]
+        # Write under legacy "api_key" name for backwards compat; prefer openai_api_key if set
+        _openai_key = flat["openai_api_key"] or flat["api_key"]
+        if _openai_key:
+            data["llm"]["api_key"] = _openai_key
+        if flat["grok_api_key"]:
+            data["llm"]["grok_api_key"] = flat["grok_api_key"]
         if flat["gemini_api_key"]:
             data["llm"]["gemini_api_key"] = flat["gemini_api_key"]
         if flat["ollama_cloud_key"]:

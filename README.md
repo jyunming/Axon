@@ -20,7 +20,7 @@ Share knowledge bases across your team with HMAC-secured read-only project mount
 ## Key capabilities
 
 - **Hybrid search** — dense vector + BM25 keyword, fused for better precision than either alone; sentence-window retrieval for better context around matched chunks
-- **Multi-LLM** — Ollama (local), Anthropic Claude, Gemini, OpenAI, vLLM, GitHub Copilot; switch live from the REPL; streaming responses supported
+- **Multi-LLM** — Ollama (local), Gemini, OpenAI, xAI Grok, vLLM, GitHub Copilot (incl. Claude models via Copilot); switch live from the REPL; streaming responses supported
 - **Multi-embedding** — sentence-transformers, Ollama, FastEmbed (BGE-M3 for multilingual/long-doc)
 - **Vector stores** — ChromaDB (default), Qdrant (local + cloud), LanceDB
 - **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)

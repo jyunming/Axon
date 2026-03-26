@@ -174,7 +174,7 @@ def _fetch_copilot_models(llm: "OpenLLM") -> list[str]:
 
 
 class OpenLLM:
-    """Unified LLM client supporting ollama, gemini, ollama_cloud, openai, vllm, and copilot.
+    """Unified LLM client supporting ollama, gemini, ollama_cloud, openai, grok, vllm, and copilot.
 
     The ``copilot`` provider routes completions through the VS Code extension
     bridge (poll ``GET /llm/copilot/tasks``, submit results via
@@ -224,17 +224,36 @@ class OpenLLM:
         contents.append({"role": "user", "parts": [user_text]})
         return contents
 
-    def _get_openai_client(self, base_url: str = None):
+    def _get_openai_client(self, base_url: str = None, api_key: str = None):
         """Return a cached OpenAI client. Pass base_url for vLLM or custom endpoints."""
         cache_key = base_url or "default"
         if cache_key not in self._openai_clients:
             from openai import OpenAI
 
-            api_key = self.config.api_key if self.config.api_key else "sk-dummy"
-            kwargs = {"api_key": api_key}
+            resolved_key = (
+                api_key or self.config.openai_api_key or self.config.api_key or "sk-dummy"
+            )
+            kwargs = {"api_key": resolved_key}
             if base_url:
                 kwargs["base_url"] = base_url
             self._openai_clients[cache_key] = OpenAI(**kwargs)
+        return self._openai_clients[cache_key]
+
+    def _get_grok_client(self):
+        """Return a cached OpenAI-compatible client for xAI Grok."""
+        cache_key = "_grok"
+        if cache_key not in self._openai_clients:
+            from openai import OpenAI
+
+            if not self.config.grok_api_key:
+                raise ValueError(
+                    "Grok API key not set. "
+                    "Export XAI_API_KEY=<key> or set llm.grok_api_key in config.yaml."
+                )
+            self._openai_clients[cache_key] = OpenAI(
+                api_key=self.config.grok_api_key,
+                base_url="https://api.x.ai/v1",
+            )
         return self._openai_clients[cache_key]
 
     def _get_copilot_client(self):
@@ -391,6 +410,23 @@ class OpenLLM:
                     messages.append({"role": msg["role"], "content": msg["content"]})
             messages.append({"role": "user", "content": prompt})
             response = self._get_copilot_client().chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                timeout=self.config.llm_timeout,
+            )
+            return response.choices[0].message.content
+
+        elif provider == "grok":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+            response = self._get_grok_client().chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -585,6 +621,26 @@ class OpenLLM:
                     messages.append({"role": msg["role"], "content": msg["content"]})
             messages.append({"role": "user", "content": prompt})
             stream = self._get_copilot_client().chat.completions.create(
+                model=self.config.llm_model,
+                messages=messages,
+                temperature=self.config.llm_temperature,
+                max_tokens=self.config.llm_max_tokens,
+                stream=True,
+                timeout=self.config.llm_timeout,
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+
+        elif provider == "grok":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in history:
+                if msg["role"] in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": prompt})
+            stream = self._get_grok_client().chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,

@@ -226,6 +226,9 @@ class TestSave:
     def test_save_includes_api_key_when_set(self, tmp_path):
         """save() includes llm.api_key only when non-empty."""
         cfg = AxonConfig(api_key="sk-test")
+        # Force both fields so env vars don't pollute
+        cfg.api_key = "sk-test"
+        cfg.openai_api_key = "sk-test"
         target = tmp_path / "c.yaml"
         cfg.save(str(target))
         with open(target, encoding="utf-8") as f:
@@ -235,8 +238,9 @@ class TestSave:
     def test_save_omits_api_key_when_empty(self, tmp_path):
         """save() does NOT include llm.api_key when it is empty string."""
         cfg = AxonConfig(api_key="")
-        # Force field so env doesn't pollute
+        # Force both fields so env vars don't pollute
         cfg.api_key = ""
+        cfg.openai_api_key = ""
         target = tmp_path / "c.yaml"
         cfg.save(str(target))
         with open(target, encoding="utf-8") as f:
