@@ -20,10 +20,13 @@ All core and optional dependencies (including `networkx`, `igraph`, `leidenalg`,
 
 **Run Tests:**
 ```bash
-make test          # Run all tests
-make test-cov      # Run with coverage report
-pytest -k test_name  # Run specific test
+python -m pytest tests/ -v --no-cov          # standard run (no coverage file)
+python -m pytest tests/ --cov=axon --cov-report=html  # with HTML coverage report
+python -m pytest tests/test_main.py -v --no-cov       # single file
+python -m pytest -k test_name --no-cov                # match by name
 ```
+
+> VS Code extension e2e tests (`tests/e2e/test_vscode_extension_*.py`) require a live VS Code instance. Exclude them with `-m "not extension"` if running headlessly. The pre-commit hook does this automatically.
 
 **Code Quality:**
 ```bash
@@ -72,11 +75,14 @@ Axon/
 │   ├── test_streaming.py   # Streaming response tests
 │   └── test_tools.py       # Agent tool definition tests
 ├── examples/               # Example scripts
+├── docs/                   # All guides and references (SETUP, API_REFERENCE, etc.)
 ├── .github/workflows/      # CI/CD pipelines
-├── pyproject.toml         # Package metadata
+├── pyproject.toml         # Package metadata (single source of truth for version)
 ├── Makefile               # Development commands
-└── README.md              # User documentation
+└── README.md              # Root overview + links to docs/
 ```
+
+> **Version sync:** `pyproject.toml` is the version source of truth. When bumping the version also update `integrations/vscode-axon/package.json` (for the VSIX) and `src/axon/__init__.py`.
 
 ### 4. Development Workflow
 

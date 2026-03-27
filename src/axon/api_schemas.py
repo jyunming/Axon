@@ -228,7 +228,7 @@ class StoreInitRequest(BaseModel):
         description=(
             "Write the new store.base to config.yaml so the setting survives server restarts. "
             "Defaults to False so that test/scan calls do not permanently alter the user config. "
-            "Pass True only when the user explicitly intends to switch to AxonStore mode permanently."
+            "Pass True to persist the change across restarts."
         ),
     )
 

@@ -410,7 +410,7 @@
       {
         "name": "axon_shareProject",
         "displayName": "Axon: Share Project",
-        "modelDescription": "Generate an HMAC share key that lets another user access one of your projects. Returns a share_string to send to the grantee out-of-band (email, Slack, etc.) and a key_id for future revocation. Requires AxonStore mode \u00e2\u20ac\u201d call axon_initStore first.",
+        "modelDescription": "Generate an HMAC share key that lets another user access one of your projects. Returns a share_string to send to the grantee out-of-band (email, Slack, etc.) and a key_id for future revocation.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonShareProject",
         "inputSchema": {
@@ -472,7 +472,7 @@
       {
         "name": "axon_listShares",
         "displayName": "Axon: List Active Shares",
-        "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects. Requires AxonStore mode \u00e2\u20ac\u201d call axon_initStore first if not yet initialised.",
+        "modelDescription": "List all active shares for the current user. Returns 'sharing' (projects this user has shared with others, with revocation status) and 'shared' (projects others have shared with this user, with mount names). Use to audit access or troubleshoot missing shared projects.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonListShares",
         "inputSchema": {
@@ -483,7 +483,7 @@
       {
         "name": "axon_initStore",
         "displayName": "Axon: Initialize AxonStore",
-        "modelDescription": "Initialise AxonStore multi-user mode at a given base directory. Must be called once before share-related tools (axon_listShares) will work. By default (persist=false) the store is activated for the current server session only and config.yaml is NOT modified, so the setting does not survive a server restart. Pass persist=true only when the user explicitly wants to switch to AxonStore mode permanently — this rewrites config.yaml so every subsequent server start uses this store path.",
+        "modelDescription": "Change the store base path (e.g. to move data to a shared drive). By default (persist=false) the change is in-memory only and config.yaml is NOT modified. Pass persist=true to write the new path to config.yaml so it survives restarts.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonInitStore",
         "inputSchema": {

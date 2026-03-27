@@ -50,7 +50,6 @@ async def store_init(request: StoreInitRequest):
 
     config = brain.config if brain else AxonConfig()
     config.axon_store_base = str(base)
-    config.axon_store_mode = True
     # Explicitly update in-memory derived paths; __post_init__ only runs at
     # construction time so we must keep these assignments here.
     # config.save() will NOT write these to config.yaml (axon_store_base branch
@@ -95,15 +94,14 @@ async def store_whoami():
 
     brain = _api.brain
     username = getpass.getuser()
-    if brain and brain.config.axon_store_mode:
+    if brain:
         return {
             "username": username,
             "store_path": str(Path(brain.config.projects_root).parent),
             "user_dir": brain.config.projects_root,
             "active_project": getattr(brain, "_active_project", "default"),
-            "store_mode": True,
         }
-    return {"username": username, "store_mode": False}
+    return {"username": username}
 
 
 @router.post("/share/generate")

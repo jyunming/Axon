@@ -1,4 +1,4 @@
-﻿"""
+"""
 src/axon/config.py
 
 AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
@@ -14,7 +14,7 @@ import yaml
 
 logger = logging.getLogger("Axon")
 
-# XDG-style user config dir â€” consistent across Linux / macOS / Windows
+# XDG-style user config dir --' consistent across Linux / macOS / Windows
 _USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "config.yaml")
 
 
@@ -50,7 +50,7 @@ class AxonConfig:
     llm_model: str = "llama3.1:8b"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
-    api_key: str = ""  # legacy alias — prefer openai_api_key
+    api_key: str = ""  # legacy alias -- prefer openai_api_key
     openai_api_key: str = ""
     grok_api_key: str = ""
     gemini_api_key: str = ""
@@ -65,9 +65,9 @@ class AxonConfig:
     copilot_pat: str = ""
 
     # Projects
-    # Root directory for all named projects. Defaults to ~/.axon/projects.
-    # Override via config.yaml (projects_root: /path/to/dir) or the
-    # AXON_PROJECTS_ROOT environment variable (env var wins over config.yaml).
+    # Root directory for all named projects.
+    # Always derived from axon_store_base as {base}/AxonStore/{username}/.
+    # Do not set directly; override axon_store_base instead.
     projects_root: str = ""
 
     # Vector Store
@@ -103,53 +103,25 @@ class AxonConfig:
                 "GITHUB_TOKEN", ""
             )
 
-        # 2. Environment variable overrides for paths
-        def _normalize_env_path(value: str) -> str:
-            return os.path.abspath(os.path.expanduser(value))
-
-        env_root = os.getenv("AXON_PROJECTS_ROOT")
-        if env_root:
-            self.projects_root = _normalize_env_path(env_root)
-
-        env_vsp = os.getenv("CHROMA_DATA_PATH")
-        if env_vsp:
-            self.vector_store_path = _normalize_env_path(env_vsp)
-
-        env_bm25 = os.getenv("BM25_INDEX_PATH")
-        if env_bm25:
-            self.bm25_path = _normalize_env_path(env_bm25)
-
-        # 3. Path resolution
-        if not self.projects_root:
-            self.projects_root = os.path.join(os.path.expanduser("~"), ".axon", "projects")
-        self.projects_root = os.path.abspath(os.path.expanduser(self.projects_root))
-
-        def _resolve_project_path(path_str: str, default_sub: str) -> str:
-            if not path_str:
-                return os.path.join(self.projects_root, "default", default_sub)
-            p = os.path.expanduser(path_str)
-            if not os.path.isabs(p):
-                # If relative, always resolve under projects_root/default
-                return os.path.join(self.projects_root, "default", default_sub)
-            return os.path.abspath(p)
-
-        self.vector_store_path = _resolve_project_path(self.vector_store_path, "chroma_data")
-        self.bm25_path = _resolve_project_path(self.bm25_path, "bm25_index")
-
-        # AxonStore mode: derive projects_root from store base
+        # 2. Storage paths -- always derived from AxonStore layout.
+        # Base defaults to ~/.axon; override via AXON_STORE_BASE env var or config.yaml store.base.
         env_store_base = os.getenv("AXON_STORE_BASE", "")
         if env_store_base and not self.axon_store_base:
             self.axon_store_base = env_store_base
-        if self.axon_store_base:
-            import getpass
+        if not self.axon_store_base:
+            self.axon_store_base = os.path.join(os.path.expanduser("~"), ".axon")
 
-            username = getpass.getuser()
-            store_root = Path(self.axon_store_base).expanduser().resolve() / "AxonStore"
-            user_dir = store_root / username
-            self.projects_root = str(user_dir)
+        import getpass
+
+        username = getpass.getuser()
+        store_root = Path(self.axon_store_base).expanduser().resolve() / "AxonStore"
+        user_dir = store_root / username
+        self.projects_root = str(user_dir)
+        # Respect explicitly-provided absolute paths (e.g. in tests) — only set defaults.
+        if not self.vector_store_path or not os.path.isabs(self.vector_store_path):
             self.vector_store_path = str(user_dir / "default" / "chroma_data")
+        if not self.bm25_path or not os.path.isabs(self.bm25_path):
             self.bm25_path = str(user_dir / "default" / "bm25_index")
-            self.axon_store_mode = True
 
     # RAG Settings
     top_k: int = 10
@@ -165,24 +137,24 @@ class AxonConfig:
     # Cosine semantic chunking (only active when chunk_strategy="cosine_semantic")
     cosine_semantic_threshold: float = 0.7
     cosine_semantic_max_size: int = 500
-    # MMR deduplication â€” reorders and removes near-duplicate retrieved chunks
+    # MMR deduplication --' reorders and removes near-duplicate retrieved chunks
     mmr: bool = False
     mmr_lambda: float = 0.5  # 1.0 = pure relevance, 0.0 = pure diversity
 
     # Sentence-Window Retrieval (Epic 1)
     # Indexes prose chunks at sentence granularity; retrieves by sentence but
-    # expands each hit to Â±sentence_window_size surrounding sentences for LLM
+    # expands each hit to Â+/-sentence_window_size surrounding sentences for LLM
     # context.  Only non-code, non-RAPTOR-summary leaf chunks are eligible.
     # Disabled by default; enable via config.yaml (rag.sentence_window: true).
     sentence_window: bool = False
-    sentence_window_size: int = 3  # Â±N sentences around each sentence hit
+    sentence_window_size: int = 3  # Â+/-N sentences around each sentence hit
 
     # CRAG-Lite Retrieval Correction (Epic 2)
     # Evaluates retrieval confidence before deciding whether to trust local
     # results or escalate to web fallback.  Operates without LLM calls.
     # Disabled by default; enable via config.yaml (rag.crag_lite: true).
     crag_lite: bool = False
-    crag_lite_confidence_threshold: float = 0.4  # below â†’ low-confidence fallback
+    crag_lite_confidence_threshold: float = 0.4  # below â†' low-confidence fallback
 
     # Re-ranking
     rerank: bool = False
@@ -205,12 +177,12 @@ class AxonConfig:
     query_decompose: bool = False
     discussion_fallback: bool = True
 
-    # Context Compression (Epic 3, Stories 3.1â€“3.3)
+    # Context Compression (Epic 3, Stories 3.1--'3.3)
     # compress_context: master on/off switch (backward-compatible).
     # compression_strategy selects the algorithm when compress_context is True:
-    #   "sentence"   â€” LLM-based sentence extraction (default, existing behaviour)
-    #   "llmlingua"  â€” LLMLingua-2 token compression (pip install axon[llmlingua])
-    #   "none"       â€” disabled (same as compress_context=False)
+    #   "sentence"   --' LLM-based sentence extraction (default, existing behaviour)
+    #   "llmlingua"  --' LLMLingua-2 token compression (pip install axon[llmlingua])
+    #   "none"       --' disabled (same as compress_context=False)
     # compression_token_budget: target output tokens for llmlingua (0 = use model default ratio).
     compress_context: bool = False
     compression_strategy: str = "sentence"  # "none" | "sentence" | "llmlingua"
@@ -267,7 +239,7 @@ class AxonConfig:
 
     # GraphRAG Entity-Centric Retrieval
     # During ingest, named entities are extracted from each chunk via the LLM and
-    # stored in an entityâ†’doc_id map.  At retrieval time, entities found in the
+    # stored in an entityâ†'doc_id map.  At retrieval time, entities found in the
     # query are used to expand the result set with graph-connected documents.
     graph_rag: bool = True
 
@@ -350,20 +322,20 @@ class AxonConfig:
     graph_rag_local_community_weight: float = 1.5
     graph_rag_local_text_unit_weight: float = 1.0
 
-    # Runtime cost reduction â€” community triage
-    graph_rag_community_min_size: int = 3  # communities smaller than this â†’ template only
+    # Runtime cost reduction --' community triage
+    graph_rag_community_min_size: int = 3  # communities smaller than this â†' template only
     graph_rag_community_llm_top_n_per_level: int = 15  # max LLM-summarized per level (0=unlimited)
     graph_rag_community_llm_max_total: int = (
         30  # hard cap on LLM calls across all levels (0=unlimited)
     )
-    # Lazy community generation â€” skip summarization at finalize; generate on first global query
+    # Lazy community generation --' skip summarization at finalize; generate on first global query
     graph_rag_community_lazy: bool = True
-    # Global search pre-filter â€” cap communities entering map-reduce (0=no cap)
+    # Global search pre-filter --' cap communities entering map-reduce (0=no cap)
     graph_rag_global_top_communities: int = 0
-    # RAPTOR source-size guard â€” skip RAPTOR for sources larger than this MB (0=no limit)
+    # RAPTOR source-size guard --' skip RAPTOR for sources larger than this MB (0=no limit)
     raptor_max_source_size_mb: float = 0.0
 
-    # Deferred batch saves â€” suppress per-call disk writes during batch ingest.
+    # Deferred batch saves --' suppress per-call disk writes during batch ingest.
     # When True: BM25, entity graph, and relation graph saves deferred to finalize_ingest().
     # Reduces O(NÂ²) disk writes to O(1) per session.
     # Crash recovery: in-memory state only; re-ingest affected sources on restart.
@@ -404,15 +376,15 @@ class AxonConfig:
     graph_rag_relation_budget: int = 30
 
     # Community detection backend preference.
-    # "louvain"   = networkx Louvain only (default â€” safe on all environments, fast for <10k nodes)
+    # "louvain"   = networkx Louvain only (default --' safe on all environments, fast for <10k nodes)
     # "leidenalg" = leidenalg/igraph multi-resolution Leiden (recommended when available)
-    # "auto"      = graspologic â†’ leidenalg â†’ louvain fallback chain (legacy; unsafe on Python 3.13
+    # "auto"      = graspologic â†' leidenalg â†' louvain fallback chain (legacy; unsafe on Python 3.13
     #               because graspologic's import can hang; use only when graspologic is verified safe)
     graph_rag_community_backend: str = "louvain"
 
     # Structural code graph.
     # Builds File/Symbol nodes and CONTAINS/IMPORTS edges from codebase chunk metadata.
-    # code_graph_bridge: scans prose chunks for code symbol mentions â†’ MENTIONED_IN edges.
+    # code_graph_bridge: scans prose chunks for code symbol mentions â†' MENTIONED_IN edges.
     # Query time: traverses the code graph to expand retrieval results.
     code_graph: bool = False  # build + query structural code graph
     code_graph_bridge: bool = False  # link code symbols to prose chunks
@@ -422,7 +394,7 @@ class AxonConfig:
     code_top_k_multiplier: int = 2  # extra fetch_k factor when code query detected
     code_max_chunks_per_file: int = 3  # per-file cap in final top_k (diversity)
     # Code query mode tuning (active when code_lexical_boost=True and code query detected).
-    # code_bm25_weight only affects weighted fusion mode â€” silently ignored in RRF (default).
+    # code_bm25_weight only affects weighted fusion mode --' silently ignored in RRF (default).
     code_bm25_weight: float = 0.7  # BM25 weight override for code queries (weighted mode only)
     code_top_k: int = 6  # top-K override when code mode active (0 = use top_k)
     # Retrieval dry-run: skip LLM, return ranked candidates + diagnostics only.
@@ -431,7 +403,7 @@ class AxonConfig:
     # Minimum entity appearance frequency to include in community detection graph.
     # Entities appearing in fewer than this many chunks are pruned before building the graph.
     # 1 = no pruning (include all entities). 2 = prune singletons (recommended for non-trivial
-    # corpora â€” reduces noisy one-off entities; qualification studies used 2 for papers corpus).
+    # corpora --' reduces noisy one-off entities; qualification studies used 2 for papers corpus).
     graph_rag_entity_min_frequency: int = 2
 
     # Dedicated thread pool size for map-reduce phase (0 = use max_workers).
@@ -452,7 +424,7 @@ class AxonConfig:
     # Token-level compression of community reports before map-reduce LLM calls.
     # Uses LLMLingua-2. pip install axon[llmlingua]
     graph_rag_report_compress: bool = False
-    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0â€“1.0)
+    graph_rag_report_compress_ratio: float = 0.5  # target compression (0.0--'1.0)
 
     # Auto-route queries based on complexity.
     # "heuristic": keyword-based, zero latency. "llm": one classifier LLM call.
@@ -465,16 +437,16 @@ class AxonConfig:
     # "off": skip router, use graph_rag_auto_route legacy behaviour
     query_router: str = "heuristic"
 
-    # Contextual retrieval â€” prepend LLM-generated situating context to each chunk at ingest time.
+    # Contextual retrieval --' prepend LLM-generated situating context to each chunk at ingest time.
     # Based on Anthropic's contextual retrieval technique.
     contextual_retrieval: bool = False
 
-    # Semantic entity alias resolution â€” merge near-duplicate entity names (e.g.
+    # Semantic entity alias resolution --' merge near-duplicate entity names (e.g.
     # "Apple" / "Apple Inc." / "Apple Corporation") into a single canonical node before
     # community detection.  Uses cosine similarity on entity-name embeddings.
-    # pip install axon[graphrag]  (no extra deps â€” uses the already-loaded embedding model)
+    # pip install axon[graphrag]  (no extra deps --' uses the already-loaded embedding model)
     graph_rag_entity_resolve: bool = False
-    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0â€“1)
+    graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0--'1)
     graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
 
     # Alternative relation extraction backend using REBEL (Babelscape/rebel-large).
@@ -511,14 +483,11 @@ class AxonConfig:
     qdrant_url: str = ""
     qdrant_api_key: str = ""
 
-    # AxonStore â€” multi-user shared storage
-    # When axon_store_base is set, projects_root is derived as:
-    #   {axon_store_base}/AxonStore/{os_username}/
-    # and the AxonStore namespace is initialised on first use.
-    # Set via config.yaml store.base or AXON_STORE_BASE env var.
+    # AxonStore -- the only storage layout Axon uses.
+    # projects_root is always {axon_store_base}/AxonStore/{os_username}/.
+    # Default base: ~/.axon. Override via AXON_STORE_BASE env var or config.yaml store.base.
+    # Call /store/init (or axon --store-init <path>) only when moving data to a shared drive.
     axon_store_base: str = ""
-    # Internal flag set by __post_init__ when store mode is active. Do not set directly.
-    axon_store_mode: bool = False
 
     @classmethod
     def load(cls, path: str | None = None) -> "AxonConfig":
@@ -530,7 +499,7 @@ class AxonConfig:
         not exist still produces a WARNING.
         """
         _DEFAULT_CONFIG_YAML = """\
-# Axon Configuration â€” edit to customise behaviour.
+# Axon Configuration --' edit to customise behaviour.
 # Full option reference: axon --help or https://github.com/...
 
 embedding:
@@ -592,9 +561,9 @@ offline:
                     cfg_path = Path(path)
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     cfg_path.write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
-                    logger.info("Created default config at %s â€” edit it to customise Axon.", path)
+                    logger.info("Created default config at %s --' edit it to customise Axon.", path)
                     # Fall through so the newly-written file is parsed; do NOT return cls()
-                    # here â€” that would silently use the dataclass defaults (raptor=True etc.)
+                    # here --' that would silently use the dataclass defaults (raptor=True etc.)
                     # instead of the file values (raptor=false etc.).
                 except (OSError, PermissionError) as exc:
                     logger.warning(
@@ -687,16 +656,16 @@ offline:
         if "ollama_base_url" not in config_dict and "llm_base_url" in config_dict:
             config_dict["ollama_base_url"] = config_dict["llm_base_url"]
 
-        # llm.models_dir â†’ ollama_models_dir
+        # llm.models_dir â†' ollama_models_dir
         if "llm_models_dir" in config_dict and "ollama_models_dir" not in config_dict:
             config_dict["ollama_models_dir"] = config_dict.pop("llm_models_dir")
 
         if "api_key" not in config_dict and "llm_api_key" in config_dict:
             config_dict["api_key"] = config_dict["llm_api_key"]
-        # llm.openai_api_key in YAML → openai_api_key field
+        # llm.openai_api_key in YAML -> openai_api_key field
         if "llm_openai_api_key" in config_dict:
             config_dict["openai_api_key"] = config_dict.pop("llm_openai_api_key")
-        # llm.grok_api_key in YAML → grok_api_key field
+        # llm.grok_api_key in YAML -> grok_api_key field
         if "llm_grok_api_key" in config_dict:
             config_dict["grok_api_key"] = config_dict.pop("llm_grok_api_key")
 
@@ -733,7 +702,7 @@ offline:
         if "repl_shell_passthrough" in data:
             config_dict["repl_shell_passthrough"] = data["repl_shell_passthrough"]
 
-        # Environment Variable Overrides (High Priority â€” wins over config.yaml)
+        # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
             config_dict["ollama_base_url"] = env_ollama_host
@@ -835,7 +804,7 @@ offline:
         if flat.get("axon_store_base"):
             data["store"] = {"base": flat["axon_store_base"]}
             data.pop("projects_root", None)
-            # Derived paths are recomputed in __post_init__ — don't persist stale values
+            # Derived paths are recomputed in __post_init__ -- don't persist stale values
             data["vector_store"].pop("path", None)
             data["bm25"].pop("path", None)
 

@@ -856,7 +856,6 @@ def main():
         try:
             ensure_user_project(user_dir)
             brain.config.axon_store_base = str(base)
-            brain.config.axon_store_mode = True
             brain.config.projects_root = str(user_dir)
             brain.config.vector_store_path = str(user_dir / "default" / "chroma_data")
             brain.config.bm25_path = str(user_dir / "default" / "bm25_index")
@@ -873,9 +872,6 @@ def main():
         return
 
     if getattr(args, "share_list", False):
-        if not brain.config.axon_store_mode:
-            print("  AxonStore mode is not active. Run --store-init <path> first.")
-            sys.exit(1)
         from axon import shares as _shares_mod
 
         user_dir = Path(brain.config.projects_root)
@@ -900,9 +896,6 @@ def main():
         return
 
     if getattr(args, "share_generate", None):
-        if not brain.config.axon_store_mode:
-            print("  AxonStore mode is not active. Run --store-init <path> first.")
-            sys.exit(1)
         from axon import shares as _shares_mod
 
         proj, grantee = args.share_generate
@@ -929,9 +922,6 @@ def main():
         return
 
     if getattr(args, "share_redeem", None):
-        if not brain.config.axon_store_mode:
-            print("  AxonStore mode is not active. Run --store-init <path> first.")
-            sys.exit(1)
         from axon import shares as _shares_mod
 
         user_dir = Path(brain.config.projects_root)
@@ -950,9 +940,6 @@ def main():
         return
 
     if getattr(args, "share_revoke", None):
-        if not brain.config.axon_store_mode:
-            print("  AxonStore mode is not active. Run --store-init <path> first.")
-            sys.exit(1)
         from axon import shares as _shares_mod
 
         user_dir = Path(brain.config.projects_root)

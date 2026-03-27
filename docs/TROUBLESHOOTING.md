@@ -4,6 +4,21 @@ Common issues and fixes for Axon.
 
 ---
 
+## Ollama: Not Running When You Query
+
+**Symptom:** You run `axon` and the prompt appears, but the first query hangs or returns an error like `httpx.ConnectError` or `Connection refused`.
+
+**Cause:** Ollama is not running. Axon starts successfully without Ollama, but fails the moment it tries to call the LLM (on the first query, not at startup).
+
+**Fix:**
+1. Open the Ollama app from your Applications / Start menu, **or** run `ollama serve` in a separate terminal.
+2. Verify it is up: `curl http://localhost:11434` — you should see `Ollama is running`.
+3. Confirm your model is pulled: `ollama list` — the model in your `config.yaml` must appear here.
+
+**Tip:** If you want Ollama to start automatically on login, enable it in your system settings (macOS: System Settings → General → Login Items; Windows: Task Manager → Startup tab).
+
+---
+
 ## ChromaDB: `InvalidDimensionException`
 
 **Error:**
@@ -13,13 +28,24 @@ chromadb.errors.InvalidDimensionException: Embedding dimension 384 does not matc
 
 **Cause:** You switched the embedding model (e.g., from `nomic-embed-text` at 768d to `all-MiniLM-L6-v2` at 384d) but the existing ChromaDB collection was created with the old dimension.
 
-**Fix:** Stop all containers and delete the vector store:
+**Fix:**
+
+> ⚠️ **Data loss warning:** The steps below delete all indexed documents. Back up `~/.axon/` (or wherever `AXON_STORE_BASE` points) before proceeding if you want to preserve your data.
+
 ```bash
+# Non-Docker install — delete the local data directories
+rm -rf ~/.axon/AxonStore/$(whoami)/default/chroma_data ~/.axon/AxonStore/$(whoami)/default/bm25_index
+# Then restart axon — it will re-create empty indexes
+
+# Docker install
 docker compose stop
 rm -rf ./chroma_data ./bm25_index
 docker compose up -d
 ```
-> ⚠️ This deletes all indexed documents. Re-ingest your files after restarting.
+
+Re-ingest your files after restarting.
+
+**Prevention:** Before switching embedding models, always back up your data directory. After switching, you must re-ingest everything — there is no migration path between different embedding dimensions.
 
 ---
 
@@ -439,3 +465,72 @@ once per community — this can be 50–200+ calls on large corpora.
 
 4. **Use the `/finalize` command** (REPL) or `POST /graph/finalize` (API) after batch ingest
    to trigger community detection and summary generation before the first query.
+
+---
+
+## vLLM: `Connection refused` or `404 Not Found`
+
+**Error:**
+```
+httpx.ConnectError: [Errno 111] Connection refused
+```
+or
+```
+openai.NotFoundError: 404 The model `mistral-7b-instruct` was not found
+```
+
+**Cause:** Either vLLM is not running, or the model name in `config.yaml` doesn't match what vLLM is serving.
+
+**Fix:**
+
+1. Confirm your vLLM server is running and healthy:
+   ```bash
+   curl http://localhost:8000/v1/models
+   ```
+   The response lists all served models.
+
+2. Set `vllm_base_url` to match your vLLM server address and copy the exact model name from the `/v1/models` response:
+   ```yaml
+   llm:
+     provider: vllm
+     model: mistral-7b-instruct-v0.2   # must match exactly
+     vllm_base_url: http://localhost:8000/v1
+   ```
+
+3. Change the URL at runtime from the REPL:
+   ```
+   axon> /vllm-url http://your-server:8000/v1
+   ```
+
+---
+
+## Gemini: `API key not valid` or `RESOURCE_EXHAUSTED`
+
+**Error:**
+```
+google.api_core.exceptions.PermissionDenied: 403 API key not valid.
+```
+or
+```
+google.api_core.exceptions.ResourceExhausted: 429 Quota exceeded
+```
+
+**Cause 1 — Invalid key:** The key is wrong, expired, or the Gemini API is not enabled for the project.
+
+**Fix:**
+```bash
+export GEMINI_API_KEY=AIza...
+# or in config.yaml:
+# llm:
+#   gemini_api_key: AIza...
+```
+Enable the Generative Language API in Google Cloud Console for the project that owns the key.
+
+**Cause 2 — Quota exhausted:** You hit the free-tier rate limit (typically 15 requests/minute on the free plan).
+
+**Fix:** Wait 60 seconds and retry, or upgrade to a paid Gemini API plan. Alternatively switch to a local model temporarily:
+```
+axon> /model llama3.1:8b
+```
+
+**Cause 3 — Gemma model + system prompt:** Gemma models (e.g. `gemma-3-27b-it`) don't support `system_instruction` in the Gemini SDK. Axon automatically falls back to prepending the system prompt to the first user message — no action needed, but if you see unexpected output check the model name is recognised as a Gemma variant.

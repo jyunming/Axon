@@ -180,9 +180,13 @@ llm:
 **GitHub Copilot (VS Code bridge):**
 ```yaml
 llm:
-  provider: copilot
-  model: gpt-4o   # any model available in your Copilot subscription
+  provider: copilot        # alias: "github_copilot" also accepted
+  model: gpt-4o            # any model available in your Copilot subscription
 ```
+
+> **`copilot` vs `github_copilot`:** These are two distinct providers.
+> - `copilot` — routes LLM calls through the Axon VS Code extension bridge. Requires VS Code running with the extension active. No API key needed.
+> - `github_copilot` — calls the Copilot API directly via a PAT/OAuth token. Works from CLI, API server, or MCP without VS Code.
 
 **GitHub Copilot API (PAT-based, no VS Code required):**
 ```yaml
@@ -191,6 +195,19 @@ llm:
   model: gpt-4o
   # export GITHUB_COPILOT_PAT=<oauth-token>  (use device flow: axon /keys set github_copilot)
 ```
+
+**Ollama Cloud (remote Ollama-compatible endpoint):**
+```yaml
+llm:
+  provider: ollama_cloud
+  model: llama3.1:8b          # any model available on your hosted endpoint
+  # export OLLAMA_CLOUD_URL=https://your-ollama-host
+  # export OLLAMA_CLOUD_KEY=your-api-key
+```
+
+Use `ollama_cloud` when your Ollama instance is running on a remote server rather than localhost.
+The provider is identical to `ollama` except it reads `OLLAMA_CLOUD_URL` and `OLLAMA_CLOUD_KEY`
+instead of the default `OLLAMA_HOST`. Both env vars are required when using this provider.
 
 > **Note:** Gemma models (Google) do not support `system_instruction` in the Gemini SDK. The system automatically prepends the system prompt to the user message for Gemma model names.
 
@@ -422,42 +439,6 @@ vector_store:
 
 **Total Memory:** ~10-12 GB
 **Best For:** Production with GPU, maximum accuracy
-
----
-
-## Migration Guide
-
-### From Legacy RAG Systems
-
-1. **Export existing documents:**
-```bash
-python migrate.py export --output rag_export.json
-```
-
-2. **Setup Axon with lightweight models:**
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Pull models
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text  # Optional, for better quality
-```
-
-3. **Import and test:**
-```python
-from axon.main import AxonBrain, AxonConfig
-
-config = AxonConfig(
-    embedding_provider="sentence_transformers",
-    embedding_model="all-MiniLM-L6-v2",
-    llm_provider="ollama",
-    llm_model="llama3.1:8b"
-)
-
-brain = AxonBrain(config)
-response = brain.query("What are the key themes in my documents?")
-```
 
 ---
 

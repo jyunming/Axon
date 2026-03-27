@@ -1,249 +1,216 @@
-# Axon
+<div align="center">
+  <img src="docs/assets/axon-mark.png" alt="Axon" width="280" />
 
-<p align="center">
-  <img src="docs/assets/axon-mark.png" alt="Axon" width="350" />
-</p>
+  <h3>Your documents, answerable. On your hardware.</h3>
 
-<p align="center">
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-  <a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg" alt="Code style: black"></a>
-</p>
+  <p>
+    Drop in PDFs, code, spreadsheets, or URLs — ask anything, get cited answers from a local LLM.<br/>
+    Nothing leaves your machine.
+  </p>
 
-**A privacy-first, local AI knowledge engine featuring GraphRAG, RAPTOR, and Code-Aware structural search.**
+  [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+  [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+  [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-Point Axon at your documents. Ask questions. Get answers — using a local LLM with no cloud, no API keys required.
-Share knowledge bases across your team with HMAC-secured read-only project mounts. Monitor every query with the built-in Governance Console.
-
----
-
-## Key capabilities
-
-- **Hybrid search** — dense vector + BM25 keyword, fused for better precision than either alone; sentence-window retrieval for better context around matched chunks
-- **Multi-LLM** — Ollama (local), Gemini, OpenAI, xAI Grok, vLLM, GitHub Copilot (incl. Claude models via Copilot); switch live from the REPL; streaming responses supported
-- **Multi-embedding** — sentence-transformers, Ollama, FastEmbed (BGE-M3 for multilingual/long-doc)
-- **Vector stores** — ChromaDB (default), Qdrant (local + cloud), LanceDB
-- **54 file formats** — PDF, DOCX, XLSX, PPTX, EPUB, EML, MSG, LaTeX, Jupyter (.ipynb), Parquet, SQL, XML, RTF, JSONL, CSV, Markdown, HTML, plain text, images (BMP/PNG/TIF/PGM/JPEG with VLM auto-captioning), and 30+ source-code formats (.py, .ts, .js, .go, .rs, .java, .kt, .swift, .cpp, .c, .rb, .php, .sh and more)
-- **URL ingestion** — ingest any public web page directly (`/ingest https://...`) alongside local files
-- **Smart re-ingest** — SHA-256 hash deduplication skips unchanged files; stale-document detection flags chunks whose source has been modified
-- **Adaptive chunking** — recursive, semantic, Markdown-aware, and cosine-semantic strategies
-- **Projects** — isolated knowledge bases per named project; nested projects search children automatically; cross-project scopes (`@projects`, `@mounts`, `@store`) for federated search
-- **Query transformations** — HyDE, multi-query, step-back, decomposition, contextual compression, CRAG-Lite; intelligent query routing selects the best strategy per query
-- **Multi-turn sessions** — persistent conversation history with configurable session memory; discuss mode for iterative exploration
-- **RAPTOR + GraphRAG** — RAPTOR hierarchical summaries + entity/relation/community graph with local/global/hybrid modes and light/standard/deep depth control; interactive 3D graph panel in VS Code or `/graph-viz` HTML export
-- **Code graph** — structural file/class/function graph with `IMPORTS`/`CONTAINS`/`MENTIONED_IN` edges; visualise alongside the knowledge graph in VS Code
-- **Reranking** — cross-encoder (BGE) reranking; CRAG-Lite corrective retrieval on low-confidence chunks
-- **Strict offline mode** — lock to local-only assets; zero outbound network calls even for embedding or LLM
-- **AxonStore sharing** — HMAC-secured read-only project mounts across OS users; lazy revocation via manifest tombstones
-- **Governance Console** — operator dashboard with SQLite WAL audit trail; per-query event log, session tracking, write-lease monitoring; graceful maintenance states for zero-downtime draining
-- **Agent-ready** — FastAPI REST API + MCP server (27 tools) for Copilot agent mode; OpenAI-compatible tool schema; `@axon` VS Code chat participant; interactive OpenAPI docs at `/docs`
+</div>
 
 ---
 
-## How it works
-
-![Axon architecture](docs/assets/diagrams/arch-overview.png)
+<div align="center">
+  <img src="docs/assets/repl-demo.gif" alt="Axon REPL demo" width="820" />
+</div>
 
 ---
 
-## Install
+## 🤔 Why Axon?
+
+Most RAG tools make you choose between **cloud power** and **data privacy**. Axon runs entirely on your hardware — full capability, zero egress.
+
+- 🔒 **Private by default** — all inference runs locally via Ollama or vLLM. No API key, no upload, no telemetry.
+- 📄 **Ingest anything** — 54 file formats (PDF, DOCX, Jupyter, code, images, URLs) in one command. SHA-256 dedup skips unchanged files.
+- 🤖 **Works in your tools** — `@axon` in Copilot Chat, MCP for Claude Code / Codex / Gemini CLI / Cursor, Graph panel in VS Code or your browser.
+- 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Per-user permissions, full audit trail, no extra infrastructure.
+- 🕸️ **See your knowledge as a graph** — interactive 3D entity-relationship graph. Embedded webview in VS Code; opens in your browser everywhere else. Click any node to jump to the exact source line.
+- 🔬 **Production-grade retrieval** — hybrid search, reranking, HyDE, multi-query expansion, and automatic web fallback. Zero manual tuning.
+
+---
+
+## ✨ Capabilities
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🔍 Retrieval
+- Hybrid semantic + keyword search
+- HyDE, multi-query, step-back, query decomposition
+- Sentence-window context retrieval
+- BGE reranker for second-pass precision
+- Web fallback via Brave Search (CRAG-Lite)
+- Smart per-question query routing
+
+</td>
+<td width="50%" valign="top">
+
+### 🧠 Graph Intelligence
+- **RAPTOR** — hierarchical corpus summaries
+- **GraphRAG** — entity/relation/community graph (local / global / hybrid)
+- **Code Graph** — file/class/function graph with import edges
+- Interactive 3D graph — embedded webview in VS Code, browser elsewhere
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 📥 Ingest Everything
+- **54 file formats** — PDF, DOCX, XLSX, PPTX, Jupyter, images, 30+ code formats
+- URL ingestion — any public web page
+- SHA-256 dedup skips unchanged files
+- Stale detection for modified sources
+- 5 content-aware chunking strategies
+
+</td>
+<td width="50%" valign="top">
+
+### 🔧 LLMs & Embeddings
+- **Local:** Ollama, vLLM
+- **Cloud:** OpenAI, Gemini, xAI Grok, GitHub Copilot (API)
+- Hot-swap provider and model — no restart needed
+- Streaming on all providers
+- 4 embedding providers; BGE-M3 for multilingual
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🏗️ Projects & Privacy
+- Isolated knowledge base per project, with nesting
+- Federated search across projects (`@projects`, `@mounts`, `@store`)
+- **Strict offline / air-gapped mode** — zero outbound calls
+- **AxonStore** — signed read-only sharing across OS users
+
+</td>
+<td width="50%" valign="top">
+
+### 🛡️ Governance & Agents
+- **Governance Console** — full audit trail of every query
+- Graceful maintenance states: `online → draining → readonly → offline`
+- **REST API** — 48 endpoints with Swagger docs at `/docs`
+- **MCP server** — 27 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- **`@axon`** VS Code chat participant with Graph and Governance panels
+
+</td>
+</tr>
+</table>
+
+---
+
+## ⚡ Quick Start
 
 ```bash
-# From source (recommended for development)
+# 1. Clone and install
 git clone https://github.com/jyunming/Axon.git
 cd Axon
 pip install -e .
 
-# Or install as a standalone CLI tool via pipx (no venv management needed)
-pipx install git+https://github.com/jyunming/Axon.git
+# 2. Install Ollama (https://ollama.com) then pull a model
+#    (or configure a cloud provider — see docs/MODEL_GUIDE.md)
+ollama pull llama3.1:8b
+
+# 3. Start the REPL
+axon
 ```
 
-Pull a local model (or bring your own API key for Gemini / OpenAI):
+```
+axon> /ingest ./my-docs/
+Ingested 142 chunks from 18 files.
 
-```bash
-ollama pull llama3.1:8b   # default — 4.7 GB, ~8 GB RAM
-ollama pull phi3:mini     # minimal — 2.3 GB, ~4 GB RAM
+axon> /ingest https://docs.example.com/api
+Fetched and ingested 23 chunks.
+
+axon> How does the authentication flow work?
+The system uses JWT tokens issued at /auth/login...  [source: api-overview.md §3]
 ```
 
-> **Windows:** Use [Windows Terminal](https://aka.ms/terminal) and set `$env:PYTHONUTF8=1` in your PowerShell profile.
+> **Windows:** Use [Windows Terminal](https://aka.ms/terminal) and set `$env:PYTHONUTF8=1` before running — this tells Python to read files as UTF-8, which prevents encoding errors on documents with non-ASCII characters.
+> **Full setup (extensions, MCP, cloud providers):** [docs/SETUP.md](docs/SETUP.md)
 
 ---
 
-## Launch
+## 🚀 Entry Points
 
-| Command | Entry Point | Best For |
-|---|---|---|
-| `axon` | Interactive REPL | Day-to-day exploration |
-| `axon-api` | FastAPI REST API | Agents, scripts, Copilot |
-| `axon-mcp` | MCP Server | GitHub Copilot agent mode |
-
----
-
-## GitHub Copilot Integration
-
-There are two ways to connect Axon to GitHub Copilot — pick one or use both:
-
-### Option A — VS Code Extension (Copilot Chat tools)
-
-The VSIX ships with the repo — no download needed:
-
-```
-1. Extensions panel (Ctrl+Shift+X) → "..." → Install from VSIX...
-2. Select:  integrations/vscode-axon/axon-copilot-0.9.0.vsix
-3. Reload VS Code  (Ctrl+Shift+P → "Reload Window")
-```
-
-Start `axon-api`, then ask Copilot in chat:
-
-```
-Search my knowledge base for information about the authentication module.
-Ingest my project docs at /path/to/docs
-Show me the graph for how the retrieval pipeline works
-```
-
-### Option B — MCP Server (Copilot agent mode)
-
-Create `.vscode/mcp.json` in your workspace:
-
-```json
-{
-  "servers": {
-    "axon": {
-      "type": "stdio",
-      "command": "axon-mcp",
-      "env": { "RAG_API_BASE": "http://localhost:8000" }
-    }
-  }
-}
-```
-
-Create `.vscode/settings.json`:
-```json
-{ "chat.mcp.access": "all" }
-```
-
-Start `axon-api`, reload VS Code — Axon's 27 tools appear in Copilot agent mode (hammer icon).
-
-> See **[Setup Guide](SETUP.md)** for full setup details, workflow diagrams, and per-entry-point examples.
+| Command | Starts | Default Port | Best For |
+|---------|--------|-------------|---------|
+| `axon` | Interactive REPL | — | Day-to-day exploration, power users |
+| `axon-api` | FastAPI REST server | `8000` | Agents, scripts, CI pipelines |
+| `axon-mcp` | MCP stdio server | — | Any MCP-compatible agent (Claude Code, Codex, Gemini CLI, Cursor, Copilot…) |
+| `axon-ui` | Streamlit UI | `8501` | Browser-based exploration |
 
 ---
 
-## Interactive REPL
+## 🔌 VS Code + GitHub Copilot
 
-![Axon REPL](docs/assets/repl-demo.png)
+<div align="center">
+  <img src="docs/assets/AxonCopilot.gif" alt="Axon Copilot integration" width="800" />
+</div>
 
-![Axon REPL demo](docs/assets/repl-demo.gif)
+<br/>
+
+Install the bundled VSIX to unlock the **`@axon` chat participant**, **Knowledge Graph panel**, **Code Graph panel**, and **Governance dashboard** — directly inside VS Code alongside Copilot.
+
+```
+Extensions panel  →  "..."  →  Install from VSIX...
+→  integrations/vscode-axon/axon-copilot-0.9.0.vsix
+```
+
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 27 tools appear in the agent hammer menu automatically.
+
+**[Full setup guide →](docs/SETUP.md)**
 
 ---
 
-## Graph Panel — Investigate Your Knowledge Base Visually
+## 📚 Documentation
 
-Invoke the **Axon Graph Panel** via the graph command or tool to open a split view directly inside VS Code — no browser, no extra tools:
+**Getting started**
 
-```
-┌──────────────────────┬──────────────────────────────────────────┐
-│  Question            │  [ Knowledge Graph ]  [ Code Graph ]     │
-│  ────────────────    │  ────────────────────────────────────── │
-│  LLM-synthesised     │                                          │
-│  answer with         │   ●─────────────◆                       │
-│  inline citations    │   │   3D force-   │                      │
-│  ────────────────    │   ▼   graph      ▼                       │
-│  [1] main.py:142 ▸   │   ●              ●                       │
-│  [2] api.py:55   ▸   │                                          │
-│  [3] config.py   ▸   │  ← click any node or citation           │
-│                      │     to jump to the source file           │
-└──────────────────────┴──────────────────────────────────────────┘
-```
+| | Guide | What it covers |
+|-|-------|---------------|
+| 🚀 | **[Getting Started](docs/GETTING_STARTED.md)** | First-time walkthrough — ingest, query, settings |
+| ⚙️ | **[Setup Guide](docs/SETUP.md)** | Install, models, VS Code extension, MCP connection |
+| 🔧 | **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Common errors and platform-specific fixes |
 
-**Two graph views — same panel:**
-- **Knowledge Graph** — entity–relation graph built from **any document** (PDF, DOCX, Markdown…) during ingest. Requires `graph_rag: true` (disabled in the shipped `config.yaml` by default; enable when your corpus is ready). Nodes are named entities (people, concepts, components); edges are extracted relations.
-- **Code Graph** — structural file/class/function graph for source code (requires `code_graph: true` in `config.yaml`). Nodes are files, classes, and functions; edges are `IMPORTS` / `CONTAINS` / `MENTIONED_IN` relationships. Click a node to jump to that definition.
+**Reference**
 
-**How to open it:**
+| | Guide | What it covers |
+|-|-------|---------------|
+| 🔑 | **[Admin Reference](docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
+| ⚡ | **[Quick Reference](docs/QUICKREF.md)** | Commands and flags at a glance |
+| 📡 | **[API Reference](docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
+| 🔌 | **[MCP Tools](docs/MCP_TOOLS.md)** | All 27 MCP tool signatures with parameter defaults |
 
-```
-Command Palette (Ctrl+Shift+P)
-  → Axon: Show Graph for Query…   ← type a question
-  → Axon: Show Graph for Selection ← select code, then run
+**Deep dives**
 
-Copilot Chat:
-  @workspace show me the graph for how authentication works
-  @workspace visualise the retrieval pipeline
-```
-
-![Axon Copilot demo](docs/assets/AxonCopilot.gif)
+| | Guide | What it covers |
+|-|-------|---------------|
+| 🤖 | **[Model Guide](docs/MODEL_GUIDE.md)** | Choosing LLM and embeddings; per-provider config examples |
+| 🔬 | **[Advanced RAG](docs/ADVANCED_RAG.md)** | HyDE, RAPTOR, GraphRAG, CRAG-Lite — how each technique works |
+| 🌐 | **[Web Search](docs/WEB_SEARCH.md)** | Brave Search integration, CRAG-Lite fallback setup |
+| 🏝️ | **[Offline / Air-gap Guide](docs/OFFLINE_GUIDE.md)** | Full air-gap setup, model pre-download, local-assets-only mode |
+| 💻 | **[Code RAG Guide](docs/CODE_RAG_GUIDE.md)** | Code graph retrieval and structural search |
+| 🤝 | **[AxonStore](docs/AXON_STORE.md)** | Multi-user sharing, revocation, and the lease lifecycle |
+| 📊 | **[Governance Console](docs/GOVERNANCE_CONSOLE.md)** | Audit trail, maintenance runbook, session management |
+| 📈 | **[Evaluation Guide](docs/EVALUATION.md)** | RAGAS metrics, running evals, building testsets |
+| 🛠️ | **[Development Guide](docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks |
 
 ---
 
-## AxonStore — Multi-User Knowledge Sharing
+## 🔒 Security
 
-AxonStore lets you share a project's knowledge base with other OS users as a **read-only mount** — they can query it without being able to ingest or delete.
+Ingestion is sandboxed to a configurable base directory (`RAG_INGEST_BASE`). Requests outside it are rejected with `403`. See [SECURITY.md](SECURITY.md).
 
-```
-# Owner: initialise AxonStore and share a project
-axon> /store-init /data
-axon> /share my-project alice
-→ share_string: eyJrZXlfaWQiOiAic2tfYTFiMmMzZDQiLCAidG9rZW4...
-
-# Alice: redeem the share string on her machine
-axon> /redeem eyJrZXlfaWQiOiAic2tfYTFiMmMzZDQiLCAidG9rZW4...
-→ Mounted as: mounts/bob_my-project
-
-# Alice can now query bob's project:
-axon> /project mounts/bob_my-project
-axon> What are the key themes in this knowledge base?
-```
-
-Share keys use HMAC-SHA256 to bind the token to `(key_id, project, grantee)` — a leaked token cannot be repurposed for a different project or user. Revocation is lazy: the owner revokes, and stale mounts are cleaned on Alice's next access.
-
-```bash
-# Revoke access at any time:
-axon> /revoke sk_a1b2c3d4
-→ Key revoked. Alice's mount will be removed on her next project access.
-```
-
----
-
-## Governance Console — Audit Every Query
-
-The Governance Console gives operators a real-time view of all knowledge base activity:
-
-```bash
-# Start the API and open the governance dashboard:
-GET /governance/overview      # active projects, session count, lease count
-GET /governance/audit?limit=50  # per-query event log (project, surface, query, latency)
-GET /governance/sessions      # active Copilot agent sessions (opened_at, last_query)
-GET /registry/leases          # write-lease counts per project (safe to check before maintenance)
-```
-
-Every query emits a structured audit event — project, surface (API/MCP/VS Code/REPL), query text, and latency. Events are stored in a **SQLite WAL** database under the project directory, surviving server restarts.
-
-**When to use it:**
-- Verify which projects are being queried and by which surfaces
-- Check active write leases before taking a project offline for maintenance
-- Audit user activity in a shared AxonStore deployment
-
----
-
-## Guides
-
-| Guide | What it covers |
-|---|---|
-| **[Setup Guide](SETUP.md)** | Full install for all platforms, models, VS Code extension config, MCP |
-| **[Quick Reference](QUICKREF.md)** | All CLI flags, REPL commands, API endpoints |
-| **[Model Guide](MODEL_GUIDE.md)** | Choosing an LLM and embedding model |
-| **[Troubleshooting](TROUBLESHOOTING.md)** | Common errors and fixes |
-| **[Development Guide](DEVELOPMENT.md)** | Running tests, contributing |
-| **[SOTA Gaps](SOTA_ANALYSIS.md)** | What's not yet implemented and why |
-
----
-
-## Security
-
-File ingestion is restricted to a configurable base directory (`RAG_INGEST_BASE`, defaults to the current working directory). Requests outside this directory are rejected with 403. See [SECURITY.md](SECURITY.md) for details.
-
----
-
-## License
+## 📄 License
 
 MIT — see [LICENSE](LICENSE).

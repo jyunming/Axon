@@ -141,8 +141,7 @@ integrations/vscode-axon/package-lock.json
 # Note: *.vsix is tracked so users can install directly from the repo
 integrations/vscode-axon/media/*.html
 
-# Intermediate docs (internal planning/sprint artifacts)
-docs/*.md
+# Intermediate docs (internal planning/sprint artifacts — root-level only)
 /DOC_AUDIT_REPORT*.md
 /GEMINI.md
 /SOTA_analysis_*.md

@@ -1475,15 +1475,14 @@ def _interactive_repl(
                         "  /share redeem <share_string>              mount a shared project\n"
                         "  /share revoke <key_id>                   revoke a previously issued share\n"
                         "\n"
-                        "  Requires AxonStore mode — run /store init first.\n"
                         "  Share strings are base64-encoded payloads; send them out-of-band.\n"
                         "  Mounted shares appear under mounts/ in your project list and can be\n"
                         "  switched to with /project switch mounts/<name>.",
-                        "store": "  /store whoami                  show AxonStore identity and active project\n"
-                        "  /store init <base_path>        initialise multi-user AxonStore at a path\n"
+                        "store": "  /store whoami                  show store identity and active project\n"
+                        "  /store init <base_path>        change the store base path (e.g. to a shared drive)\n"
                         "\n"
                         "  Example: /store init ~/axon_data\n"
-                        "  Creates: <base_path>/AxonStore/<username>/{default,projects,mounts,.shares}/\n"
+                        "  Moves data to: <base_path>/AxonStore/<username>/\n"
                         "  Config is updated and persisted to ~/.config/axon/config.yaml.",
                         "graph": "  /graph status                  show entity count, edges, community summaries\n"
                         "  /graph finalize                trigger community detection rebuild\n"
@@ -2032,7 +2031,6 @@ def _interactive_repl(
                         print()
                         _print_project_tree(projects, active)
 
-                    # Show mounted shares if AxonStore mode is active
                     try:
                         from axon.projects import list_share_mounts as _list_mounts
 
@@ -2260,9 +2258,7 @@ def _interactive_repl(
                 sub = sub_parts[0].lower() if sub_parts else ""
                 sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
 
-                if not brain.config.axon_store_mode:
-                    print("  AxonStore mode is not active. Run /store init <path> first.")
-                elif not sub or sub == "list":
+                if not sub or sub == "list":
                     user_dir = Path(brain.config.projects_root)
                     _shares_mod.validate_received_shares(user_dir)
                     data = _shares_mod.list_shares(user_dir)
@@ -2373,17 +2369,11 @@ def _interactive_repl(
                     import getpass as _gp
 
                     username = _gp.getuser()
-                    if brain.config.axon_store_mode:
-                        print("\n  AxonStore  active")
-                        print(f"  User:       {username}")
-                        print(f"  User dir:   {brain.config.projects_root}")
-                        store_path = str(Path(brain.config.projects_root).parent)
-                        print(f"  Store path: {store_path}")
-                        print(f"  Project:    {brain._active_project}\n")
-                    else:
-                        print("\n  AxonStore  not active")
-                        print(f"  User:       {username}")
-                        print("  Run /store init <path> to enable multi-user mode.\n")
+                    print(f"\n  User:       {username}")
+                    print(f"  User dir:   {brain.config.projects_root}")
+                    store_path = str(Path(brain.config.projects_root).parent)
+                    print(f"  Store path: {store_path}")
+                    print(f"  Project:    {brain._active_project}\n")
 
                 elif sub == "init":
                     if not sub_arg:
@@ -2401,7 +2391,6 @@ def _interactive_repl(
                         try:
                             ensure_user_project(user_dir)
                             brain.config.axon_store_base = str(base)
-                            brain.config.axon_store_mode = True
                             brain.config.projects_root = str(user_dir)
                             brain.config.vector_store_path = str(
                                 user_dir / "default" / "chroma_data"

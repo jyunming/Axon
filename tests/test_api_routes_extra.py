@@ -37,7 +37,6 @@ def _make_brain(provider="chroma"):
     brain.config.step_back = False
     brain.config.query_decompose = False
     brain.config.compress_context = False
-    brain.config.axon_store_mode = False
     brain.config.projects_root = "/tmp/axon_projects"
     brain._apply_overrides.return_value = brain.config
     brain._community_build_in_progress = False
@@ -690,10 +689,9 @@ class TestGetProjects:
         data = resp.json()
         assert data["projects"] == []
 
-    def test_axon_store_mode_validates_shares(self):
-        """projects.py lines 91-96 — axon_store_mode validates received shares."""
+    def test_validates_shares_on_project_list(self):
+        """projects.py — received shares are validated on project list."""
         brain = _make_brain()
-        brain.config.axon_store_mode = True
         api_module.brain = brain
 
         with patch("axon.projects.list_projects", return_value=[]):
@@ -704,9 +702,8 @@ class TestGetProjects:
         mock_validate.assert_called_once()
 
     def test_share_validation_exception_handled(self):
-        """projects.py lines 95-96 — share validation exception does not crash."""
+        """projects.py — share validation exception does not crash project list."""
         brain = _make_brain()
-        brain.config.axon_store_mode = True
         api_module.brain = brain
 
         with patch("axon.projects.list_projects", return_value=[]):
@@ -847,9 +844,8 @@ class TestDeleteProject:
         assert "deleted" in resp.json()["message"]
 
     def test_project_has_active_shares_blocks_delete(self):
-        """projects.py lines 200-211 — active shares → 409."""
+        """projects.py — active shares → 409."""
         brain = _make_brain()
-        brain.config.axon_store_mode = True
         brain._active_project = "other"
         api_module.brain = brain
 

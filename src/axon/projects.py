@@ -18,10 +18,9 @@ Maximum hierarchy depth is 5 levels.
 
 The special name "default" is a sentinel that uses the paths from config.yaml.
 
-AxonStore multi-user shared storage
-------------------------------------
-When AxonStore mode is active (axon_store_base is set), each OS user gets a
-namespace under {axon_store_base}/AxonStore/{username}/ containing:
+AxonStore — the only storage layout used by Axon
+-------------------------------------------------
+Each OS user gets a namespace under {axon_store_base}/AxonStore/{username}/ containing:
     store_meta.json  — store-level identity and version metadata
     default/         — the user's default project
     <project>/       — user-created local projects live at the namespace root

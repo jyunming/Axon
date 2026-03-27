@@ -11,13 +11,15 @@ This guide walks through setting up the application from scratch, including deta
 3. [Install and Start Ollama](#3-install-and-start-ollama)
 4. [LLM Setup](#4-llm-setup)
 5. [Embedding Model Setup](#5-embedding-model-setup)
-6. [Vision / Multimodal Setup (Optional)](#6-vision--multimodal-setup-optional)
+6. [Optional Features (Code Corpus & Vision)](#6-optional-features-code-corpus--vision)
 7. [Configure config.yaml](#7-configure-configyaml)
 8. [Configure .env](#8-configure-env)
 9. [Verify the Full Setup](#9-verify-the-full-setup)
-10. [MCP Setup (Copilot Agent Mode)](#10-mcp-setup-copilot-agent-mode)
+10. [MCP Server Setup](#10-mcp-server-setup)
 11. [VS Code Extension (GitHub Copilot Integration)](#11-vs-code-extension-github-copilot-integration)
-12. [Troubleshooting](#12-troubleshooting)
+    - [11b. REPL Security — Shell Passthrough](#11b-repl-security--shell-passthrough)
+12. [Upgrading Axon](#12-upgrading-axon)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -34,6 +36,12 @@ Before starting, ensure you have:
 | **RAM** | 16 GB minimum | 32 GB recommended |
 
 > **GPU (optional):** A CUDA-compatible GPU significantly speeds up inference. Ollama automatically uses the GPU if available. CPU-only works but is slower.
+
+> **Windows:** Use [Windows Terminal](https://aka.ms/terminal) for best results. Add `$env:PYTHONUTF8=1` to your PowerShell profile (or run it before starting Axon) to avoid encoding errors when reading documents that contain non-ASCII characters:
+> ```powershell
+> # Add to $PROFILE to make permanent
+> $env:PYTHONUTF8 = "1"
+> ```
 
 Clone the repository if you haven't already:
 
@@ -405,68 +413,52 @@ print(f"Embedding dimension: {len(embeddings[0])}")  # Should print 384
 
 ---
 
-## 6. Code Corpus Setup (Optional)
+## 6. Optional Features (Code Corpus & Vision)
 
-Only needed if you want to ingest source code repositories and enable
-syntax-aware chunking and code graph traversal.
+Both features are opt-in — skip this section on your first setup.
 
-**Supported code extensions:** `.py`, `.go`, `.rs`, `.ts`, `.js`, `.tsx`,
-`.jsx`, `.java`, `.cpp`, `.c`, `.cs`, `.rb`, `.sh`, `.bash`, `.zsh`, `.pl`,
-`.pm`, `.jl`, `.h`, `.hpp`, `.swift`, `.kt`, `.php`
+### 6.1 Code Corpus (Ingesting Source Code)
 
-The `ingest_path` tool (or `POST /ingest`) handles code directories the same
-way it handles document directories — no extra setup needed. The system
-auto-detects code files and routes them through `CodeAwareSplitter`, which
-uses Python AST for `.py` files and regex boundary detection for all other
-languages. No path prefix is injected into code file content (it lives in
-metadata only), so Python AST parsing is not disrupted.
+No extra install needed. Point `/ingest` at a code directory and Axon auto-detects code files, splitting them with syntax-aware chunking (Python AST for `.py`, regex boundaries for everything else).
 
-**Enable structural code graph for cross-file awareness:**
+**Supported languages:** Python, Go, Rust, TypeScript, JavaScript, Java, C/C++, C#, Ruby, Swift, Kotlin, PHP, and more.
+
+To also build a structural graph (file → function/class edges, import links):
 
 ```yaml
 # config.yaml
 rag:
-  code_graph: true        # build File + Symbol nodes with CONTAINS/IMPORTS edges
+  code_graph: true        # build File/Symbol nodes with CONTAINS and IMPORTS edges
   code_graph_bridge: true # also link prose chunks that mention code symbols
 ```
 
-With `code_graph: true`, a query that retrieves a function chunk will
-automatically expand to include its containing file, imported files, and any files
-that mention the symbol (`CONTAINS`, `IMPORTS`, `MENTIONED_IN` edges) — at zero extra LLM cost.
-Note: call-graph (`CALLS`) edges are not currently built; caller/callee traversal is not supported.
+> Note: `graph_rag` is automatically disabled for code corpora — use `code_graph` instead.
 
-> **Note:** The `graph_rag` flag is intentionally disabled for code corpora
-> (`_SOURCE_POLICY["codebase"] = (False, False)`). Code-to-code links come
-> from the code graph; `graph_rag` is reserved for prose document corpora.
+### 6.2 Vision / Images
 
----
-
-## 6b. Vision / Multimodal Setup (Optional)
-
-Only needed if you want to ingest image files. The system uses a Vision-Language Model (VLM) to auto-caption images before indexing. See §6 for code corpus setup.
-
-**Supported image formats:** `.bmp`, `.png`, `.tif`, `.tiff`, `.pgm`
-
-All image formats are normalised to PNG via Pillow before being sent to the VLM.
+To ingest image files, pull the LLaVA vision model first (requires ~5 GB disk and ~8 GB RAM/VRAM):
 
 ```bash
 ollama pull llava
 ```
 
-> Note: LLaVA requires ~5 GB disk and ~8 GB RAM/VRAM.
-
-No additional config changes are needed — the system automatically uses `llava` for image captioning when it encounters any supported image file during ingestion.
+No config change needed. When Axon encounters a supported image file (`.png`, `.bmp`, `.tif`, `.tiff`, `.pgm`) during ingest, it sends it to LLaVA for a text caption and indexes that caption.
 
 ---
 
 ## 7. Configure config.yaml
 
 Axon auto-creates `~/.config/axon/config.yaml` on first run with sensible defaults.
-Edit that file to customise behaviour, or pass `--config /path/to/your.yaml` to use a different file:
+Edit that file to customise behaviour, or pass `--config /path/to/your.yaml` to use a different file.
+
+> **Data storage:** Your knowledge base always uses the AxonStore structure at `~/.axon/AxonStore/<username>/` by default. To move it to a shared drive or different disk, set `store.base` in `config.yaml` or the `AXON_STORE_BASE` env var — see [AXON_STORE.md](AXON_STORE.md).
 
 ```bash
-# Edit the auto-generated user config
+# Linux / macOS
 $EDITOR ~/.config/axon/config.yaml
+
+# Windows (PowerShell)
+notepad $env:USERPROFILE\.config\axon\config.yaml
 ```
 
 Here are complete configurations for each tier:
@@ -485,11 +477,7 @@ llm:
   max_tokens: 2048
 
 vector_store:
-  provider: chroma
-  path: ./chroma_data
-
-bm25:
-  path: ./bm25_index
+  provider: chroma   # path derived automatically from store.base
 
 rag:
   top_k: 10
@@ -519,47 +507,12 @@ llm:
   max_tokens: 2048
 
 vector_store:
-  provider: chroma
-  path: ./chroma_data
-
-bm25:
-  path: ./bm25_index
+  provider: chroma   # path derived automatically from store.base
 
 rag:
   top_k: 10
   similarity_threshold: 0.3
   hybrid_search: true
-
-  # Graph-augmented retrieval expansion based on GraphRAG principles.
-  # Supports local (entity neighbourhood), global (community summaries), and hybrid modes.
-  # Extracts entities and optionally relation triples from each chunk at ingest
-  # time; at query time, entity-matched and 1-hop-related chunks are injected as
-  # extra context slots beyond the normal top_k.
-  # Requires a capable LLM at ingest; adds per-chunk latency.
-  # Limits: shallow graph, heuristic scoring, no entity canonicalisation.
-  # graph_rag: false
-  # graph_rag_budget: 3       # extra slots beyond top_k (0 = no guarantee)
-  # graph_rag_relations: true # enable 1-hop relation traversal
-  # graph_rag_community: false  # community detection (expensive; off by default)
-
-  # Query router — selects the cheapest retrieval strategy per query automatically.
-  # "heuristic": keyword + length signals, zero LLM calls (default)
-  # "llm":       single LLM classification call per query, more accurate
-  # "off":       legacy behaviour; falls back to graph_rag_auto_route flag
-  # query_router: heuristic
-
-  # Contextual retrieval — prepend a 1-sentence LLM-generated situating context
-  # to each prose chunk before embedding (Anthropic method).
-  # Only applies to dataset_type: doc / paper / discussion. Adds N LLM calls
-  # per ingest (one per chunk). Use with a fast local model.
-  # contextual_retrieval: false
-
-  # Code graph — build a structural symbol graph from code corpora at ingest time.
-  # CONTAINS edges link File nodes to their functions/classes; IMPORTS edges link
-  # files by import statement. At query time, 1-hop neighbours of matched code
-  # chunks are retrieved for free (independent of graph_rag flag).
-  # code_graph: false
-  # code_graph_bridge: false  # also build MENTIONED_IN edges from prose chunks
 
 chunk:
   size: 1000
@@ -569,6 +522,8 @@ rerank:
   enabled: false
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
 ```
+
+> For all available `rag:` flags (GraphRAG, RAPTOR, contextual retrieval, query router, etc.) see [ADMIN_REFERENCE.md § 6](ADMIN_REFERENCE.md).
 
 ### Quality Setup (GPU recommended)
 ```yaml
@@ -586,11 +541,7 @@ llm:
   max_tokens: 2048
 
 vector_store:
-  provider: qdrant
-  path: ./qdrant_data
-
-bm25:
-  path: ./bm25_index
+  provider: qdrant   # path derived automatically from store.base
 
 rag:
   top_k: 10
@@ -690,15 +641,20 @@ Expected:
 ### Step 3: Ingest a test document
 
 Create a test file:
+
 ```bash
-echo "The capital of France is Paris. Paris is known for the Eiffel Tower." > /tmp/test_doc.txt
+# Linux / macOS
+echo "The capital of France is Paris. Paris is known for the Eiffel Tower." > ./test_doc.txt
+
+# Windows (PowerShell)
+"The capital of France is Paris. Paris is known for the Eiffel Tower." | Out-File -FilePath .\test_doc.txt -Encoding utf8
 ```
 
-Ingest it:
+Ingest it (replace the path with the absolute path to the file you just created):
 ```bash
 curl -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
-  -d '{"path": "/tmp/test_doc.txt"}'
+  -d '{"path": "/absolute/path/to/test_doc.txt"}'
 ```
 
 Expected:
@@ -729,35 +685,35 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ---
 
-## 10. MCP Setup (Advanced / External-Host Integration)
+## 10. MCP Server Setup
 
-> **Most VS Code users do not need this section.** The [VS Code extension](#11-vs-code-extension-github-copilot-integration) (Section 11) is the recommended integration. Use MCP when you need one of:
-> - Copilot **agent mode** with an explicit `.vscode/mcp.json` configuration
-> - A non-VS Code MCP host (Claude Code, Cursor, etc.)
-> - An advanced multi-tool workflow requiring direct MCP tool wiring
+`axon-mcp` is a standard MCP stdio server. It works with **any MCP-compatible AI tool** — not just VS Code. `axon-api` must be running before any MCP client connects.
 
-The MCP (Model Context Protocol) server exposes Axon as a set of tools that any
-MCP-compatible host can call — ingesting documents, searching knowledge, switching
-projects — without the VS Code extension.
+### Supported clients
 
-### How it works
+| Tool | Config file | Notes |
+|---|---|---|
+| **VS Code** (Copilot agent mode) | `.vscode/mcp.json` | Also needs `.vscode/settings.json` |
+| **Claude Code** | `~/.claude/settings.json` or `.claude/settings.json` | Or use `claude mcp add` CLI command |
+| **OpenAI Codex CLI** | `~/.codex/config.toml` | TOML format — differs from the JSON-based clients |
+| **Google Gemini CLI** | `~/.gemini/settings.json` | Same `mcpServers` JSON shape as Claude Code |
+| **Cursor** | `.cursor/mcp.json` | Same `mcpServers` JSON shape as Claude Code |
+| **Any other MCP stdio host** | varies | Use `command: axon-mcp` |
 
-```
-VS Code (Copilot agent mode)
-  → spawns axon-mcp process (stdio, one per VS Code instance)
-  → axon-mcp proxies calls to the Axon REST API (http://localhost:8000)
-  → Axon handles retrieval; Copilot's LLM synthesises answers
-```
+The two env vars are the same for every client:
 
-The `axon-mcp` entry point is installed automatically when you
-`pip install -e .`. The REST API (`axon-api`) must be running before Copilot
-can use any MCP tools.
+| Variable | Default | Purpose |
+|---|---|---|
+| `RAG_API_BASE` | `http://localhost:8000` | Where `axon-api` is running |
+| `RAG_API_KEY` | *(empty)* | API key — leave blank unless you enabled auth |
 
-### 1. Create `.vscode/mcp.json` in your workspace
+---
 
-This file is gitignored — create it locally:
+### VS Code (Copilot agent mode)
 
-```jsonc
+**1.** Create `.vscode/mcp.json` in your workspace:
+
+```json
 {
   "servers": {
     "axon": {
@@ -773,180 +729,139 @@ This file is gitignored — create it locally:
 }
 ```
 
-> **Windows users:** if `axon-mcp` is not found, use the full path to the
-> entry point script installed in your Python environment's `Scripts/` folder,
-> e.g. `C:\Users\<you>\AppData\Local\Programs\Python\Python313\Scripts\axon-mcp.exe`.
+**2.** Create `.vscode/settings.json`:
 
-> **WSL users:** VS Code WSL Remote spawns the process inside WSL. Use the
-> WSL-style path to the Windows Python executable, e.g.
-> `/mnt/c/Users/<you>/AppData/Local/Programs/Python/Python313/python.exe`,
-> with `args: ["-m", "axon.mcp_server"]`, instead of `axon-mcp`.
+```json
+{ "chat.mcp.access": "all" }
+```
 
-> **Linux (venv) users:** VS Code spawns `axon-mcp` without activating your
-> virtualenv, so `"command": "axon-mcp"` will not be found. Use the full path
-> to the binary inside your venv instead:
->
-> **Option A — Private venv (per user)**
-> Each user has their own venv. Use the absolute path to that venv's binary:
-> ```jsonc
-> {
->   "servers": {
->     "axon": {
->       "type": "stdio",
->       "command": "/home/<you>/Axon/venv/bin/axon-mcp",
->       "args": [],
->       "env": {
->         "RAG_API_BASE": "http://localhost:8000",
->         "RAG_API_KEY": ""
->       }
->     }
->   }
-> }
-> ```
-> Replace `/home/<you>/Axon/venv` with the actual path to your venv.
-> Alternatively use Python directly:
-> `"command": "/home/<you>/Axon/venv/bin/python", "args": ["-m", "axon.mcp_server"]`
->
-> **Option B — Shared venv (multi-user, one install)**
-> An admin creates a venv in a shared location and sets read+execute permissions
-> for all users. Each user's `.vscode/mcp.json` then points to the same binary.
->
-> Admin sets it up once:
-> ```bash
-> python -m venv /opt/axon/venv
-> /opt/axon/venv/bin/pip install -e /path/to/Axon
-> chmod -R 755 /opt/axon/venv   # owner writes; everyone else reads + executes
-> ```
->
-> Each user's `.vscode/mcp.json`:
-> ```jsonc
-> {
->   "servers": {
->     "axon": {
->       "type": "stdio",
->       "command": "/opt/axon/venv/bin/axon-mcp",
->       "args": [],
->       "env": {
->         "RAG_API_BASE": "http://localhost:8000",
->         "RAG_API_KEY": ""
->       }
->     }
->   }
-> }
-> ```
-> Each user still spawns their own lightweight `axon-mcp` proxy process;
-> only the binary is shared. Only the admin should run `pip install` to update.
+**3.** Start `axon-api`, then reload VS Code (`Ctrl+Shift+P` → "Reload Window"). Axon tools appear in the agent mode hammer menu.
 
-### 2. Enable MCP in VS Code workspace settings
+**Platform notes — if `axon-mcp` is not found:**
 
-Create `.vscode/settings.json` (also gitignored):
+| Platform | Use this command value |
+|---|---|
+| Windows (no PATH) | `C:\Users\<you>\AppData\Local\Programs\Python\Python313\Scripts\axon-mcp.exe` |
+| Linux / macOS (venv) | `/home/<you>/Axon/venv/bin/axon-mcp` |
+| WSL | Use `"command": "/home/<you>/Axon/venv/bin/python"` with `"args": ["-m", "axon.mcp_server"]` |
+
+**Shared team setup:** run `axon-api` on a shared server, then set `RAG_API_BASE` to `http://<server-ip>:8000` in each user's config. The owner ingests; everyone else queries.
+
+---
+
+### Claude Code
+
+```bash
+# One-liner (adds axon to your global Claude Code MCP config)
+claude mcp add axon axon-mcp --env RAG_API_BASE=http://localhost:8000
+```
+
+Or edit `~/.claude/settings.json` directly:
 
 ```json
 {
-  "chat.mcp.access": "all"
+  "mcpServers": {
+    "axon": {
+      "command": "axon-mcp",
+      "env": { "RAG_API_BASE": "http://localhost:8000" }
+    }
+  }
 }
 ```
 
-### 3. Start the Axon API
+For project-scoped config, add the same block to `.claude/settings.json` in your project root.
 
-```bash
-axon-api
-# or: make run-api
-```
+**Verify:** `claude mcp list` — `axon` should appear.
 
-### 4. Reload VS Code
+---
 
-Ctrl+Shift+P → **"Reload Window"**. The Axon server will appear in the
-Copilot agent tools list (hammer icon in the chat input).
+### Cursor
 
-### Verify the MCP server starts
+Create `.cursor/mcp.json` in your project root:
 
-```bash
-printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}\n' \
-  | axon-mcp
-```
-
-Expected response:
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{...},"serverInfo":{"name":"axon","version":"..."}}}
+{
+  "mcpServers": {
+    "axon": {
+      "command": "axon-mcp",
+      "env": { "RAG_API_BASE": "http://localhost:8000" }
+    }
+  }
+}
 ```
 
-### Shared team knowledge base
+Reload Cursor. Axon tools appear in the agent/composer panel.
 
-For a team where one person owns ingestion and others query:
+---
 
-1. Run `axon-api` on a machine everyone can reach (e.g. Docker, internal server).
-2. Each user creates their own `.vscode/mcp.json` pointing `RAG_API_BASE` at
-   the shared server:
-   ```jsonc
-   {
-     "servers": {
-       "axon": {
-         "type": "stdio",
-         "command": "axon-mcp",
-         "args": [],
-         "env": {
-           "RAG_API_BASE": "http://<server-ip>:8000",
-           "RAG_API_KEY": ""
-         }
-       }
-     }
-   }
-   ```
-3. Each user's VS Code spawns its own lightweight `axon-mcp` proxy; the shared
-   API handles all retrieval. The owner ingests; everyone else queries.
+### OpenAI Codex CLI
 
-### Available MCP tools (24 total)
+Codex uses TOML format. Add a block to `~/.codex/config.toml`:
 
-| Tool | Purpose |
-|---|---|
-| `ingest_text` | Ingest a single document |
-| `ingest_texts` | Batch ingest (preferred) |
-| `ingest_url` | Fetch a URL and ingest its content |
-| `ingest_path` | Ingest a local file or directory (async) |
-| `get_job_status` | Poll an async ingest job |
-| `search_knowledge` | Raw chunk retrieval (Copilot synthesises) |
-| `query_knowledge` | Retrieval + answer via the configured backend LLM provider |
-| `list_knowledge` | List indexed sources with chunk counts |
-| `switch_project` | Change active project |
-| `delete_documents` | Remove documents by ID |
-| `list_projects` | List all projects |
-| `get_stale_docs` | Find docs not re-ingested within N days |
-| `create_project` | Create a new project |
-| `delete_project` | Delete a project and all its data |
-| `clear_knowledge` | Clear all vectors and BM25 index |
-| `get_current_settings` | Return current RAG configuration |
-| `update_settings` | Update RAG flags (top_k, rerank, hyde, etc.) |
-| `list_sessions` | List saved conversation sessions |
-| `get_session` | Retrieve a saved conversation session |
-| `share_project` | Generate a share key for a project |
-| `redeem_share` | Redeem a share key to mount a shared project |
-| `list_shares` | List outgoing shares (`sharing`) and incoming mounted shares (`shared`) |
-| `init_store` | Initialise AxonStore multi-user mode |
-| `get_active_leases` | List active read/write leases held via AxonStore |
+```toml
+[mcp_servers.axon]
+command = "axon-mcp"
+args = []
 
-> **Recommended:** use `search_knowledge` (not `query_knowledge`) in agent mode.
-> Copilot's LLM synthesises the answer from raw chunks — no Ollama required,
-> no concurrency limit.
+[mcp_servers.axon.env]
+RAG_API_BASE = "http://localhost:8000"
+```
 
-### AxonStore on-disk layout
+Codex launches the server automatically when a session starts. If `axon-mcp` is not on PATH, replace `"axon-mcp"` with the full binary path (see platform notes under VS Code above).
 
-When AxonStore multi-user mode is initialised (via `init_store` or `Axon: Init Store`), the store directory has the following structure:
+**Verify:** in Codex, type `/tools` — `axon_*` tools should appear in the list.
+
+---
+
+### Google Gemini CLI
+
+Add an `mcpServers` block to `~/.gemini/settings.json` (create the file if it does not exist):
+
+```json
+{
+  "mcpServers": {
+    "axon": {
+      "command": "axon-mcp",
+      "env": {
+        "RAG_API_BASE": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+Start `axon-api`, then start Gemini CLI. Axon tools are available immediately in the session.
+
+**Verify:** ask Gemini CLI to "list available tools" — `axon_*` entries should appear.
+
+---
+
+### Any other MCP stdio host
+
+Any tool that accepts `command` + `env` works with the same pattern. If `axon-mcp` is not on PATH, use the full path to the binary (see platform notes above) or fall back to:
 
 ```
-AxonStore/
-  <username>/
-    store_meta.json        ← store identity (store_id, store_version, created_at)
-    default/               ← canonical default project (was _default/ in earlier versions)
-      chroma_data/
-      bm25_index/
-      meta.json            ← includes project_id
-    <project>/             ← user-created local projects live at the namespace root
-    projects/              ← compatibility directory reserved for store tooling
-    mounts/                ← read-only mount descriptors
-    .shares/               ← share key manifests
-    ShareMount/            ← symlinks (legacy compat)
+command: python
+args: ["-m", "axon.mcp_server"]
 ```
+
+---
+
+### Verify the server starts
+
+```bash
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}\n' | axon-mcp
+```
+
+Expected: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}}`
+
+---
+
+### Available MCP tools
+
+For the full list of all 27 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
+
+> **Tip:** use `search_knowledge` (not `query_knowledge`) in agent mode — the agent's own LLM synthesises the answer from raw chunks, so no Ollama is required.
 
 ---
 
@@ -1046,16 +961,16 @@ axon-api
 
 ### 5. Verify in Copilot Chat
 
-Open Copilot Chat (Ctrl+Shift+I or the chat icon in the Activity Bar). Type a message:
+Open Copilot Chat (Ctrl+Shift+I or the chat icon in the Activity Bar). Type:
 
 ```
-@workspace What does my knowledge base contain?
+@axon what files have I ingested?
 ```
 
-Copilot will automatically call `axon_getCollection` or `axon_listProjects` to answer. You can also use tools explicitly:
+Copilot will call `axon_getCollection` or `axon_listProjects` automatically. You can also ask in plain language:
 
 ```
-Search my Axon knowledge base for information about neural networks.
+@axon search for information about neural networks
 ```
 
 ### Available tools (27 total)
@@ -1078,11 +993,11 @@ Search my Axon knowledge base for information about neural networks.
 | `axon_clearKnowledgeBase` | Alias for clearCollection — wipe all vectors and BM25 index |
 | `axon_updateSettings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
 | `axon_getSettings` | Read the current active Axon configuration (retrieval flags, RAG mode, LLM provider) |
-| `axon_shareProject` | Generate a share key for a project (AxonStore mode) |
+| `axon_shareProject` | Generate a share key for a project |
 | `axon_redeemShare` | Mount a project shared by another user |
 | `axon_revokeShare` | Revoke an active share |
 | `axon_listShares` | List outgoing and incoming project shares |
-| `axon_initStore` | Initialise AxonStore multi-user mode |
+| `axon_initStore` | Change the store base path (e.g. to a shared drive) |
 | `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description. Accepts optional `alt_text` param to provide a description directly (enables headless/offline use without Copilot vision). |
 | `axon_refreshIngest` | Re-ingest files whose content has changed since last ingest |
 | `axon_listStaleDocs` | Find documents not re-ingested within N days |
@@ -1103,7 +1018,7 @@ Access via Ctrl+Shift+P:
 | `Axon: Ingest Folder` | Browse and ingest a folder |
 | `Axon: Start Server` | Start `axon-api` manually |
 | `Axon: Stop Server` | Stop the managed `axon-api` process |
-| `Axon: Init Store` | Initialise AxonStore multi-user mode |
+| `Axon: Init Store` | Change the store base path (e.g. to a shared drive) |
 | `Axon: Share Project` | Generate a share key for a project |
 | `Axon: Redeem Share` | Join a project shared by another user |
 | `Axon: Revoke Share` | Revoke an active share |
@@ -1161,8 +1076,8 @@ Ctrl+Shift+P → Axon: Show Graph for Query…
 Ctrl+Shift+P → Axon: Show Graph for Selection   (select text first)
 
 Copilot Chat:
-  @workspace show me the graph for how retrieval works
-  @workspace visualise the authentication module
+  @axon show me the graph for how retrieval works
+  @axon visualise the authentication module
 ```
 
 Tabs that have no data are automatically disabled with a tooltip explaining which flag to enable. Clicking any citation or graph node opens the source file at the exact line.
@@ -1232,7 +1147,28 @@ This option is currently configurable only via `config.yaml`; environment variab
 
 ---
 
-## 12. Troubleshooting
+## 12. Upgrading Axon
+
+**From an editable install (`pip install -e .`):**
+
+```bash
+cd Axon          # the folder you cloned into
+git pull         # fetch the latest code
+pip install -e . # re-install to pick up any new dependencies
+```
+
+> `git pull` updates the source files. `pip install -e .` is needed if `pyproject.toml` changed (new or removed dependencies). It is safe to run both every time.
+
+**Check for breaking changes:** read `CHANGELOG.md` (if present) or the GitHub release notes before upgrading. In particular, if the embedding model default changed you will need to delete your vector store and re-ingest (see [TROUBLESHOOTING.md — ChromaDB InvalidDimensionException](TROUBLESHOOTING.md)).
+
+**Verify the upgrade:**
+```bash
+axon --version
+```
+
+---
+
+## 13. Troubleshooting
 
 For common errors and step-by-step fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
@@ -1256,4 +1192,3 @@ For common errors and step-by-step fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTI
 ---
 
 *For model comparisons and hardware recommendations, see [MODEL_GUIDE.md](MODEL_GUIDE.md).*
-*For SOTA gap analysis and roadmap, see [SOTA_ANALYSIS.md](SOTA_ANALYSIS.md).*

@@ -77,7 +77,7 @@ llm:
 # ---------------------------------------------------------------------------
 vector_store:
   provider: chroma                    # options: chroma, qdrant, lancedb
-  path: ~/.axon/projects/default/chroma_data
+  # path is derived automatically from store.base — no need to set it here
   # For remote Qdrant:
   # provider: qdrant
   # url: http://localhost:6333
@@ -87,7 +87,7 @@ vector_store:
 # BM25 (keyword / sparse retrieval)
 # ---------------------------------------------------------------------------
 bm25:
-  path: ~/.axon/projects/default/bm25_index
+  # path is derived automatically from store.base — no need to set it here
 
 # ---------------------------------------------------------------------------
 # RAG behaviour
@@ -170,6 +170,10 @@ offline:
 # ---------------------------------------------------------------------------
 # AxonStore (multi-user sharing)
 # ---------------------------------------------------------------------------
+# AxonStore is always active. By default your data lives at:
+#   ~/.axon/AxonStore/<username>/
+#
+# Override to a shared network drive to enable cross-user sharing:
 # store:
 #   base: /data/axon-store            # shared filesystem mount point
 #                                     # set AXON_STORE_BASE env var instead if preferred

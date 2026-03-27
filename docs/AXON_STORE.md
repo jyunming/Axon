@@ -8,16 +8,16 @@ share keys. All shares are read-only; the sharer retains exclusive write access.
 
 ## 1. Overview
 
-AxonStore requires a **shared filesystem path** that both the sharer and grantee can read. This
-can be a network share, a mounted volume, or a local path on a multi-user machine.
+AxonStore is always active. By default your data lives at `~/.axon/AxonStore/<username>/`. For cross-user sharing, point `store.base` at a **shared filesystem path** that all participants can read — a network share, mounted volume, or local path on a multi-user machine.
 
 ```
-┌─────────────────────────────────────────────┐
-│  Shared filesystem  (/data/axon-store)       │
-│                                              │
-│  alice/project-a/   ← Alice's project data  │
-│  bob/project-b/     ← Bob's project data    │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  Shared filesystem  (/data/axon-store)                │
+│                                                       │
+│  AxonStore/                                           │
+│    alice/project-a/   ← Alice's project data         │
+│    bob/project-b/     ← Bob's project data           │
+└──────────────────────────────────────────────────────┘
 
 Alice generates a share key → sends it to Bob out-of-band (e.g. Slack, email)
 Bob redeems the key → mounts alice/project-a as read-only in his Axon instance
@@ -25,28 +25,32 @@ Bob redeems the key → mounts alice/project-a as read-only in his Axon instance
 
 ---
 
-## 2. Initialisation
+## 2. Changing the Store Base Path
 
-AxonStore must be initialised once per user before sharing can be used.
+By default Axon uses `~/.axon` as the store base. To move your data to a shared drive, call `/store/init` with the new path. This changes the base for the current session and optionally persists it to `config.yaml`.
 
-**REST API:**
+**REST API** (session-only — does not persist to config.yaml by default):
 ```bash
 curl -X POST http://localhost:8000/store/init \
   -H "Content-Type: application/json" \
-  -d '{"base_path": "/data/axon-store"}'
+  -d '{"base_path": "/data/axon-store", "persist": true}'
 ```
 
-**REPL:**
+**REPL** (persists automatically):
 ```
 /store init /data/axon-store
 ```
 
 **VS Code:**
-Run the command `Axon: Initialise Store` from the Command Palette (`Ctrl+Shift+P`).
+Run `Axon: Initialise Store` from the Command Palette (`Ctrl+Shift+P`). Persists automatically.
 
-The `base_path` is persisted in the active `config.yaml` via `config.save()` and is restored on the next `axon-api` startup.
+**Permanent via config.yaml** (recommended for shared deployments):
+```yaml
+store:
+  base: /data/axon-store   # or set AXON_STORE_BASE env var
+```
 
-> **Note:** If projects exist under a different store path, the response includes a `warning` field and an `unreachable_projects` list so you know which projects will be inaccessible until the previous path is restored:
+> **Note:** Changing the base path makes any projects at the previous path temporarily unreachable. The response includes a `warning` and `unreachable_projects` list if this applies:
 > ```json
 > {
 >   "status": "ok",
@@ -59,12 +63,12 @@ The `base_path` is persisted in the active `config.yaml` via `config.save()` and
 
 ## 3. Identity
 
-Once initialised, Axon reports the current user's store identity.
+Check your current store identity and which path is active.
 
 **REST API:**
 ```bash
 curl http://localhost:8000/store/whoami
-# Response: {"username": "alice", "store_path": "/data/axon-store", "status": "ready"}
+# Response: {"username": "alice", "store_path": "/data/axon-store/AxonStore", "user_dir": "/data/axon-store/AxonStore/alice"}
 ```
 
 **REPL:**
@@ -72,7 +76,7 @@ curl http://localhost:8000/store/whoami
 /store whoami
 ```
 
-The `username` is derived from the OS username (`os.getlogin()`).
+The `username` is your OS username. `store_path` is the `AxonStore/` directory inside your base. `user_dir` is your personal namespace within it.
 
 ---
 

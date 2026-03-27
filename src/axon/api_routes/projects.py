@@ -110,7 +110,7 @@ async def get_projects():
     from axon.projects import is_reserved_top_level_name as _is_reserved_top_level_name
     from axon.projects import list_projects as _list_projects
 
-    if brain and brain.config.axon_store_mode:
+    if brain:
         try:
             user_dir = Path(brain.config.projects_root)
             _shares.validate_received_shares(user_dir)
@@ -132,7 +132,7 @@ async def get_projects():
     ]
 
     shared_mounts = []
-    if brain and brain.config.axon_store_mode:
+    if brain:
         try:
             from axon.projects import list_share_mounts
 
@@ -197,7 +197,7 @@ async def switch_project(request: ProjectSwitchRequest):
 
         # For mounted projects, validate revocation before switching so a revoked
         # share is caught at switch time, not only at project-list time.
-        if project_name.startswith("mounts/") and brain.config.axon_store_mode:
+        if project_name.startswith("mounts/"):
             from axon import shares as _shares
 
             user_dir = Path(brain.config.projects_root)
@@ -248,7 +248,7 @@ async def delete_project_endpoint(name: str):
             detail="Mounted share entries are read-only and cannot be deleted via this endpoint.",
         )
 
-    if brain and brain.config.axon_store_mode:
+    if brain:
         user_dir = Path(brain.config.projects_root)
         shares_info = _shares.list_shares(user_dir)
         active_grantees = [

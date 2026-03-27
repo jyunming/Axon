@@ -91,7 +91,6 @@ def test_store_init_whoami_and_share_lifecycle(api_client, make_brain, tmp_path)
     whoami = api_client.get("/store/whoami")
     assert whoami.status_code == 200
     whoami_payload = whoami.json()
-    assert whoami_payload["store_mode"] is True
     assert whoami_payload["username"] == getpass.getuser()
     assert whoami_payload["active_project"] == "default"
 

@@ -127,12 +127,9 @@ def _purge_dedup(doc_ids: list[str], project: str | None = None) -> None:
 
 
 def _get_user_dir() -> Path:
-    """Return the current user's AxonStore directory, or raise 503 if not in store mode."""
-    if not brain or not brain.config.axon_store_mode:
-        raise HTTPException(
-            status_code=503,
-            detail="AxonStore mode is not active. Run POST /store/init first.",
-        )
+    """Return the current user's AxonStore directory, or raise 503 if brain is unavailable."""
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized.")
     return Path(brain.config.projects_root)
 
 

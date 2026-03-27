@@ -1234,23 +1234,20 @@ def test_get_projects_excludes_reserved_memory_only_entries():
 # ---------------------------------------------------------------------------
 
 
-def test_store_whoami_no_store_mode():
-    """whoami returns store_mode=False when brain is not in store mode."""
-    mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = False
-    api_module.brain = mock_brain
+def test_store_whoami_no_brain():
+    """whoami returns just username when brain is not initialized."""
+    api_module.brain = None
 
     resp = client.get("/store/whoami")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["store_mode"] is False
     assert "username" in data
+    assert "user_dir" not in data
 
 
-def test_store_whoami_store_mode_active():
-    """whoami returns store paths and _active_project (not config.project) when store mode is on."""
+def test_store_whoami_returns_store_paths():
+    """whoami returns store paths and active_project when brain is initialized."""
     mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = True
     mock_brain.config.projects_root = "/data/AxonStore/alice"
     mock_brain.config.project = "_default"  # stale value — must NOT appear in response
     mock_brain._active_project = "research"  # real active project after a switch
@@ -1259,9 +1256,9 @@ def test_store_whoami_store_mode_active():
     resp = client.get("/store/whoami")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["store_mode"] is True
     assert "user_dir" in data
     assert "username" in data
+    assert data.get("active_project") == "research"
     assert data["store_path"].replace("\\", "/") == "/data/AxonStore"
     assert data["active_project"] == "research"  # must use _active_project, not config.project
 
@@ -1271,11 +1268,9 @@ def test_store_whoami_store_mode_active():
 # ---------------------------------------------------------------------------
 
 
-def test_share_list_503_no_store_mode():
-    """/share/list returns 503 when axon_store_mode is off."""
-    mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = False
-    api_module.brain = mock_brain
+def test_share_list_503_no_brain():
+    """/share/list returns 503 when brain is not initialized."""
+    api_module.brain = None
 
     resp = client.get("/share/list")
     assert resp.status_code == 503
@@ -1284,7 +1279,6 @@ def test_share_list_503_no_store_mode():
 def test_share_list_returns_sharing_and_shared(tmp_path):
     """/share/list returns both sharing and shared keys."""
     mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = True
     mock_brain.config.projects_root = str(tmp_path)
     api_module.brain = mock_brain
 
@@ -2091,7 +2085,6 @@ def test_query_provenance_missing_attribute_defaults_to_empty():
 def test_switch_to_revoked_mount_returns_404(tmp_path):
     """Switching to a revoked mounted project returns 404 immediately."""
     brain = _make_brain()
-    brain.config.axon_store_mode = True
     brain.config.projects_root = str(tmp_path)
     api_module.brain = brain
 
@@ -2110,7 +2103,6 @@ def test_switch_to_revoked_mount_returns_404(tmp_path):
 def test_switch_to_valid_mount_proceeds(tmp_path):
     """Switching to a valid (non-revoked) mount proceeds normally."""
     brain = _make_brain()
-    brain.config.axon_store_mode = True
     brain.config.projects_root = str(tmp_path)
     api_module.brain = brain
 
@@ -2127,7 +2119,6 @@ def test_switch_to_valid_mount_proceeds(tmp_path):
 def test_switch_to_normal_project_skips_revocation_check():
     """Switching to a non-mount project never calls validate_received_shares."""
     brain = _make_brain()
-    brain.config.axon_store_mode = True
     api_module.brain = brain
 
     with patch("axon.shares.validate_received_shares") as mock_validate:
@@ -2137,14 +2128,13 @@ def test_switch_to_normal_project_skips_revocation_check():
     mock_validate.assert_not_called()
 
 
-def test_switch_mount_revocation_skipped_outside_store_mode():
-    """validate_received_shares is not called when axon_store_mode is False."""
+def test_switch_mount_revocation_check_runs_for_mounts():
+    """validate_received_shares is always called when switching to a mounts/ project."""
     brain = _make_brain()
-    brain.config.axon_store_mode = False
     api_module.brain = brain
 
-    with patch("axon.shares.validate_received_shares") as mock_validate:
+    with patch("axon.shares.validate_received_shares", return_value=[]) as mock_validate:
         resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
 
     assert resp.status_code == 200
-    mock_validate.assert_not_called()
+    mock_validate.assert_called_once()

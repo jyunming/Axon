@@ -187,38 +187,35 @@ class TestAxonConfig:
         assert config.truth_grounding is True
         assert config.brave_api_key == "test_key"
 
-    def test_load_projects_root_from_yaml(self, tmp_path):
+    def test_load_store_base_from_yaml(self, tmp_path):
         from axon.main import AxonConfig
 
-        cfg = {"projects_root": str(tmp_path / "myprojects")}
+        store_base = str(tmp_path / "mystore")
+        cfg = {"store": {"base": store_base}}
         cfg_path = tmp_path / "config.yaml"
         with open(cfg_path, "w") as f:
             yaml.dump(cfg, f)
 
         config = AxonConfig.load(str(cfg_path))
-        assert config.projects_root == str(tmp_path / "myprojects")
+        assert config.axon_store_base == store_base
+        assert "AxonStore" in config.projects_root
 
-    def test_env_var_overrides_yaml_projects_root(self, tmp_path, monkeypatch):
+    def test_env_var_overrides_store_base(self, tmp_path, monkeypatch):
         from axon.main import AxonConfig
 
-        cfg = {"projects_root": str(tmp_path / "yaml_root")}
-        cfg_path = tmp_path / "config.yaml"
-        with open(cfg_path, "w") as f:
-            yaml.dump(cfg, f)
+        env_base = str(tmp_path / "env_store")
+        monkeypatch.setenv("AXON_STORE_BASE", env_base)
+        config = AxonConfig()
+        assert config.axon_store_base == env_base
+        assert "AxonStore" in config.projects_root
 
-        env_root = str(tmp_path / "env_root")
-        monkeypatch.setenv("AXON_PROJECTS_ROOT", env_root)
-        config = AxonConfig.load(str(cfg_path))
-        assert config.projects_root == env_root
-
-    def test_projects_root_defaults_to_home(self):
-        from pathlib import Path
-
+    def test_projects_root_defaults_to_axon_store(self):
         from axon.main import AxonConfig
 
         config = AxonConfig()
-        expected = str(Path.home() / ".axon" / "projects")
-        assert config.projects_root == expected
+        # projects_root is always AxonStore-derived
+        assert "AxonStore" in config.projects_root
+        assert ".axon" in config.axon_store_base or "axon" in config.axon_store_base.lower()
 
 
 class TestVectorStoreClose:
@@ -259,19 +256,17 @@ class TestMultiStoreReadOnly:
             mr.delete_documents(["id1"])
 
 
-def test_projects_root_precedence(tmp_path, monkeypatch):
+def test_store_base_precedence(tmp_path, monkeypatch):
     from axon.main import AxonConfig
 
-    yaml_root = str(tmp_path / "path" / "from" / "yaml")
-    env_root = str(tmp_path / "path" / "from" / "env")
-    yaml_path = tmp_path / "config.yaml"
-    yaml_path.write_text(f"projects_root: {yaml_root}", encoding="utf-8")
+    env_base = str(tmp_path / "env_store")
 
-    # Env var should win over YAML
-    monkeypatch.setenv("AXON_PROJECTS_ROOT", env_root)
+    # AXON_STORE_BASE env var should set the store base
+    monkeypatch.setenv("AXON_STORE_BASE", env_base)
 
-    config = AxonConfig.load(str(yaml_path))
-    assert config.projects_root == env_root
+    config = AxonConfig()
+    assert config.axon_store_base == env_base
+    assert "AxonStore" in config.projects_root
 
 
 class TestMultiStoreWriteErrors:
@@ -8704,7 +8699,8 @@ def _make_brain_with_project(tmp_path, project_name, maintenance_state):
     with patch("axon.main.OpenEmbedding"), patch("axon.main.OpenLLM"), patch(
         "axon.main.OpenVectorStore"
     ), patch("axon.main.OpenReranker"):
-        cfg = AxonConfig(rerank=False, graph_rag=False, projects_root=str(tmp_path))
+        cfg = AxonConfig(rerank=False, graph_rag=False)
+        cfg.projects_root = str(tmp_path)
         brain = AxonBrain(cfg)
     brain._active_project = project_name
     brain._read_only_scope = False

@@ -146,11 +146,11 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/share redeem <key>` | Mount a shared project (read-only) |
 | `/share revoke <key_id>` | Revoke an outgoing share |
 | `/store whoami` | Show AxonStore identity and status |
-| `/store init <path>` | Initialise AxonStore at a base path |
+| `/store init <path>` | Change the store base path (e.g. to a shared drive) |
 | `/graph status` | Show GraphRAG community build status |
 | `/graph finalize` | Trigger explicit community rebuild |
-| `/graph viz` | Open the interactive graph panel in VS Code |
-| `/graph-viz [path]` | Export entity–relation graph as interactive HTML (requires `pip install axon[graphrag]`); omit path to save to temp dir. For a live VS Code panel use `Axon: Show Graph for Query…` instead. |
+| `/graph viz` | Open the interactive 3D graph — embedded webview in VS Code, default browser elsewhere |
+| `/graph-viz [path]` | Export entity–relation graph as HTML; omit path to open in browser immediately (requires `pip install axon[graphrag]`) |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |
 | `/clear` | Clear current chat history (does not delete saved session) |
 | `/quit`, `/exit` | Exit the REPL |
@@ -464,7 +464,7 @@ curl http://localhost:8000/graph/data
 # AxonStore identity / status check
 curl http://localhost:8000/store/whoami
 
-# Initialise store for a user
+# Change the store base path (e.g. to a shared drive)
 curl -X POST http://localhost:8000/store/init \
   -H "Content-Type: application/json" \
   -d '{"base_path": "/data/axon-store"}'

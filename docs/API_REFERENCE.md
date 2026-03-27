@@ -1,9 +1,11 @@
 # Axon REST API Reference
 
-Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 8000).
+Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 8000). **48 endpoints** total.
 
 For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 `http://localhost:8000/redoc` after starting the server.
+
+> **Operators:** for governance runbooks, maintenance state workflows, and the complete CLI/REPL/MCP reference, see [ADMIN_REFERENCE.md](ADMIN_REFERENCE.md).
 
 ---
 
@@ -27,13 +29,32 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 **`POST /query` body:**
 ```json
 {
-  "query": "What is the ingestion pipeline?",
-  "project": "my-project",
-  "hyde": true,
-  "rerank": true,
-  "top_k": 20
+  "query": "What is the ingestion pipeline?",   // required
+  "project": null,           // optional — must match active project if set; omit to use active
+  "stream": false,           // stream tokens via SSE instead of single response
+  "top_k": null,             // chunks to retrieve — null inherits global config (default 10)
+  "threshold": null,         // minimum similarity score — null inherits global config (default 0.3)
+  "hyde": null,              // HyDE query expansion — null inherits global config
+  "rerank": null,            // cross-encoder reranking — null inherits global config
+  "multi_query": null,       // 3-paraphrase expansion — null inherits global config
+  "step_back": null,         // step-back abstraction — null inherits global config
+  "decompose": null,         // sub-question decomposition — null inherits global config
+  "compress": null,          // context compression — null inherits global config
+  "cite": null,              // inline citations — null inherits global config (default true)
+  "discuss": null,           // general-knowledge fallback — null inherits global config (default true)
+  "graph_rag": null,         // entity-graph retrieval — null inherits global config
+  "raptor": null,            // RAPTOR hierarchical retrieval — null inherits global config
+  "crag_lite": null,         // corrective retrieval — null inherits global config
+  "temperature": null,       // LLM temperature override — null inherits global config
+  "timeout": null,           // request timeout in seconds — null inherits global config
+  "include_diagnostics": false,  // include confidence scores in response
+  "dry_run": false,          // skip LLM synthesis; return retrieved chunks only
+  "chat_history": []         // prior turns for multi-turn conversation context
 }
 ```
+
+> **`null` vs explicit value:** All RAG flag fields default to `null`, meaning they inherit the
+> server's current global config. Pass an explicit `true`/`false` to override for this request only.
 
 > **Project field:** `project` must match the brain's currently active project. If it
 > differs, the server returns `409 Conflict`. Use `POST /project/switch` first to change
@@ -62,9 +83,12 @@ text chunk string. The stream closes when generation completes. Errors emit
 **`POST /search` body:**
 ```json
 {
-  "query": "AxonBrain",
-  "top_k": 5,
-  "project": "my-project"
+  "query": "AxonBrain",        // required
+  "top_k": null,               // chunks to return — null inherits global config (default 10)
+  "threshold": null,           // minimum similarity — null inherits global config (default 0.3)
+  "project": null,             // optional — must match active project if set
+  "filters": null,             // optional metadata key/value filters
+  "hybrid": null               // BM25+vector hybrid mode — null inherits global config
 }
 ```
 
@@ -89,7 +113,12 @@ retrieval `trace` object (pipeline step timings and intermediate results).
 
 **`POST /ingest` body:**
 ```json
-{"path": "/path/to/documents"}
+{
+  "path": "/path/to/documents",  // required — absolute path to file or directory
+  "project": null,                // optional — must match active project if set
+  "raptor": null,                 // enable RAPTOR during ingest — null inherits global config
+  "graph_rag": null               // enable entity extraction during ingest — null inherits global config
+}
 ```
 Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "processing"}`
 
@@ -114,7 +143,21 @@ Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "proce
 
 **`POST /ingest_url` body:**
 ```json
-{"url": "https://example.com/page"}
+{
+  "url": "https://example.com/page",  // required
+  "metadata": {},                      // optional key/value metadata attached to all chunks
+  "project": null                      // optional — must match active project if set
+}
+```
+
+**`POST /add_text` body:**
+```json
+{
+  "text": "The content to ingest",  // required
+  "metadata": {},                    // optional key/value metadata (default: empty dict)
+  "doc_id": null,                    // optional stable ID; auto-generated as agent_doc_<hex> if omitted
+  "project": null                    // optional — must match active project if set
+}
 ```
 
 **`POST /add_texts` body:**
@@ -181,16 +224,19 @@ check to prevent accidental writes or reads to the wrong corpus.
 **`POST /config/update` body (all fields optional):**
 ```json
 {
-  "llm_model": "llama3.1:8b",
-  "llm_provider": "ollama",
-  "embedding_provider": "fastembed",
-  "hyde": true,
-  "rerank": true
+  "llm_model": null,           // LLM model name (default: null — no change)
+  "llm_provider": null,        // LLM provider: ollama | openai | gemini | grok | vllm | copilot | github_copilot | ollama_cloud (default: null — no change)
+  "embedding_provider": null,  // Embedding provider (default: null — no change)
+  "hyde": null,                // Override HyDE flag (default: null — no change)
+  "rerank": null,              // Override rerank flag (default: null — no change)
+  "multi_query": null,         // Override multi-query flag (default: null — no change)
+  "top_k": null,               // Override retrieved chunk count (default: null — no change)
+  "persist": false             // Write changes to config.yaml (default: false — session-scoped only)
 }
 ```
 
-Changes are scoped to the current server session by default. To write them to `config.yaml`,
-add `"persist": true` to the request body.
+Changes are scoped to the current server session by default (`persist: false`). Set
+`"persist": true` to write the changes to `config.yaml` for durability across restarts.
 
 ---
 
@@ -295,11 +341,42 @@ each poll. VS Code calls this to receive tasks queued while the user was offline
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/store/whoami` | AxonStore identity — returns `username` and `store_path` |
-| `POST` | `/store/init` | Initialise AxonStore at a shared filesystem base path |
+| `POST` | `/store/init` | Change the store base path (e.g. to a shared drive) |
 | `POST` | `/share/generate` | Generate a read-only share key for a project and grantee |
 | `POST` | `/share/redeem` | Mount a shared project using a share string |
 | `POST` | `/share/revoke` | Revoke a share by `key_id` |
 | `GET` | `/share/list` | List outgoing and incoming shares |
+
+**`POST /store/init` body:**
+```json
+{
+  "base_path": "/shared/axon-store",  // required — absolute path to shared filesystem location
+  "persist": false                     // write store path to config.yaml (default: false — session-scoped)
+}
+```
+
+**`POST /share/generate` body:**
+```json
+{
+  "project": "my-project",             // required — project to share
+  "grantee": "alice",                  // required — identifier of the recipient
+  "expires_at": null                   // optional ISO 8601 expiry timestamp (default: null — no expiry)
+}
+```
+
+**`POST /share/redeem` body:**
+```json
+{
+  "share_string": "axon-share:v1:..."  // required — full share string from /share/generate
+}
+```
+
+**`POST /share/revoke` body:**
+```json
+{
+  "key_id": "abc123"  // required — key_id from /share/list
+}
+```
 
 See [AXON_STORE.md](AXON_STORE.md) for the full sharing lifecycle guide.
 
