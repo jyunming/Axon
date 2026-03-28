@@ -840,7 +840,7 @@ Start `axon-api`, then start Gemini CLI. Axon tools are available immediately in
 
 ### Claude Desktop
 
-Edit (or create)  on macOS, or  on Windows:
+Edit (or create) `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, or `%APPDATA%\Claude\claude_desktop_config.json` on Windows:
 
 ```json
 {
@@ -863,8 +863,8 @@ Restart Claude Desktop. Axon tools appear in the tool picker automatically.
 
 Open Codex Desktop → Settings → MCP Servers → Add new → choose **stdio** transport:
 
-- **Command:** 
-- **Environment:** 
+- **Command:** `axon-mcp`
+- **Environment:** `RAG_API_BASE=http://localhost:8000` (add `RAG_API_KEY=<your-key>` if you set one in config.yaml)
 
 Save and restart. All Axon tools will be listed in the agent tool picker.
 

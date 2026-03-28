@@ -783,6 +783,9 @@ rag:
 
 
   discussion_fallback: true           # fall back to LLM general knowledge on zero hits
+  code_graph: false                   # build File+Symbol nodes with CONTAINS/IMPORTS edges during code ingest
+  code_graph_bridge: false            # add MENTIONED_IN edges linking prose docs to code symbols
+  query_router: heuristic             # heuristic | llm | off — auto-select retrieval strategy per query
 
 
 
@@ -983,9 +986,6 @@ query_transformations:
 
 
   discussion_fallback: true           # already declared above under rag; kept here for clarity
-  code_graph: false                   # build File+Symbol nodes with CONTAINS/IMPORTS edges during code ingest
-  code_graph_bridge: false            # add MENTIONED_IN edges linking prose docs to code symbols
-  query_router: heuristic             # heuristic | llm | off — auto-select retrieval strategy per query
 
 
 
