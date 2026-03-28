@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/axon-mark.png" alt="Axon" width="280" />
+  <img src="docs/assets/repl-animation.gif" alt="Axon" width="400" />
 
   <h3>Your documents, answerable. On your hardware.</h3>
 
@@ -18,7 +18,7 @@
 ---
 
 <div align="center">
-  <img src="docs/assets/repl-animation.gif" alt="Axon REPL startup" width="820" />
+  <img src="docs/assets/repl-demo.png" alt="Axon REPL startup" width="820" />
 </div>
 
 ---
@@ -111,32 +111,11 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 ## ⚡ Quick Start
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/jyunming/Axon.git
-cd Axon
-pip install -e .
-
-# 2. Install Ollama (https://ollama.com) then pull a model
-#    (or configure a cloud provider — see docs/MODEL_GUIDE.md)
-ollama pull llama3.1:8b
-
-# 3. Start the REPL
-axon
+pip install -e .   # requires Python 3.10+ and Ollama
+axon               # launches the interactive REPL
 ```
 
-```
-axon> /ingest ./my-docs/
-Ingested 142 chunks from 18 files.
-
-axon> /ingest https://docs.example.com/api
-Fetched and ingested 23 chunks.
-
-axon> How does the authentication flow work?
-The system uses JWT tokens issued at /auth/login...  [source: api-overview.md §3]
-```
-
-> **Windows:** Use [Windows Terminal](https://aka.ms/terminal) and set `$env:PYTHONUTF8=1` before running — this tells Python to read files as UTF-8, which prevents encoding errors on documents with non-ASCII characters.
-> **Full setup (extensions, MCP, cloud providers):** [docs/SETUP.md](docs/SETUP.md)
+**[→ Full installation guide with VS Code, MCP, and cloud provider setup](docs/GETTING_STARTED.md)**
 
 ---
 
