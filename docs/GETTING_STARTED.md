@@ -178,6 +178,8 @@ When you ask a question, Axon:
 
 The REPL is a chat interface that runs in your terminal. Type a question and press Enter.
 
+![Axon REPL startup — LLM, embedding, and retrieval settings at a glance](assets/repl-startup.png)
+
 
 
 **Launch:**
@@ -317,6 +319,8 @@ After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shif
 
 
 ![VS Code extension workflow](assets/diagrams/vscode-workflow.png)
+
+![Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph](assets/vscode-graph-panel.png)
 
 
 

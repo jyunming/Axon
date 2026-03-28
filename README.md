@@ -21,6 +21,10 @@
   <img src="docs/assets/repl-demo.gif" alt="Axon REPL demo" width="820" />
 </div>
 
+<div align="center">
+  <img src="docs/assets/repl-startup.png" alt="Axon REPL — startup splash showing LLM, embedding, and retrieval config" width="820" />
+</div>
+
 ---
 
 ## 🤔 Why Axon?
@@ -155,6 +159,10 @@ The system uses JWT tokens issued at /auth/login...  [source: api-overview.md §
 
 <div align="center">
   <img src="docs/assets/AxonCopilot.gif" alt="Axon Copilot integration" width="800" />
+</div>
+
+<div align="center">
+  <img src="docs/assets/vscode-graph-panel.png" alt="Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph" width="820" />
 </div>
 
 <br/>
