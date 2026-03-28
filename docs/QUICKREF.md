@@ -6,10 +6,8 @@
 ```bash
 # Basic installation
 pip install -e .
-
 # With development tools
 pip install -e ".[dev]"
-
 # With optional features
 pip install -e ".[qdrant,fastembed]"
 pip install -e ".[all]"
@@ -20,15 +18,12 @@ pip install -e ".[all]"
 # Format code
 make format
 black src/ tests/
-
 # Lint code
 make lint
 ruff check src/ tests/
-
 # Type check
 make type-check
 mypy src/axon/
-
 # Run all checks
 make all
 ```
@@ -38,17 +33,13 @@ make all
 # Run all tests
 make test
 pytest
-
 # With coverage
 make test-cov
 pytest --cov=axon --cov-report=html
-
 # Specific test file
 pytest tests/test_loaders.py
-
 # Specific test
 pytest tests/test_loaders.py::TestTextLoader::test_load_text_file
-
 # With markers
 pytest -m "not slow"
 pytest -v -s  # Verbose with output
@@ -59,39 +50,28 @@ pytest -v -s  # Verbose with output
 # API Server
 make run-api
 axon-api
-
 # Streamlit UI
 make run-ui
 axon-ui
-
 # CLI — interactive REPL (default when no args)
 axon
-
 # CLI — single-shot query
 axon "What is RAG?"
-
 # CLI — stream response token-by-token
 axon --stream "Summarise my documents"
-
 # CLI — ingest a directory
 axon --ingest ./documents/
-
 # CLI — list all ingested documents
 axon --list
-
 # CLI — switch model at runtime (auto-pulls Ollama model if missing)
 axon --model llama3.1:8b "Your question"
-
 # CLI — use a cloud provider
 axon --provider gemini --model gemini-1.5-flash "Your question"
 axon --provider openai --model gpt-4o "Your question"
-
 # CLI — pull a model explicitly
 axon --pull llama3.1:8b
-
 # CLI — see all providers and locally available models
 axon --list-models
-
 # CLI — advanced RAG flags (can be combined)
 axon --cite "Summarise my documents"        # inline [Document N] citations
 axon --no-cite "Your question"              # suppress citations for cleaner output
@@ -100,7 +80,6 @@ axon --compress "Your question"             # compress retrieved context
 axon --raptor --ingest ./docs/              # hierarchical indexing on ingest
 axon --graph-rag "Your question"            # entity-graph retrieval expansion
 axon --code-graph --ingest ./src/           # build structural code-symbol graph
-
 # CLI — project management
 axon --project myproject "Your question"    # use a named project
 axon --project-new myproject                # create project + ingest
@@ -161,15 +140,12 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 # Build image
 make docker-build
 docker build -t axon:latest .
-
 # Run with docker-compose
 make docker-run
 docker-compose up -d
-
 # View logs
 make docker-logs
 docker-compose logs -f
-
 # Stop services
 make docker-down
 docker-compose down
@@ -179,16 +155,12 @@ docker-compose down
 ```bash
 # Create feature branch
 git checkout -b feature/new-feature
-
 # Stage changes
 git add .
-
 # Commit (pre-commit hooks run automatically)
 git commit -m "feat: add new feature"
-
 # Push
 git push origin feature/new-feature
-
 # Update from main
 git fetch origin
 git rebase origin/main
@@ -200,7 +172,6 @@ git rebase origin/main
 ```bash
 # Copy template
 cp .env.example .env
-
 # Edit configuration
 nano .env
 ```
@@ -220,16 +191,13 @@ Edit `config.yaml`:
 embedding:
   provider: sentence_transformers  # or ollama, fastembed
   model: all-MiniLM-L6-v2
-
 llm:
   provider: ollama
   model: llama3.1:8b
   temperature: 0.7
-
 rag:
   top_k: 10
   hybrid_search: true
-
   # Fast-graph mode (recommended starting point): entity graph with zero LLM calls at ingest time.
   # Shipped config.yaml has graph_rag: false; enable once your corpus is ingested.
   # graph_rag_depth: light        → regex noun-phrase extraction, no LLM
@@ -270,7 +238,6 @@ rag:
   raptor: true
   raptor_max_levels: 1
   raptor_max_source_size_mb: 5.0
-
   graph_rag: true
   graph_rag_budget: 3
   graph_rag_relations: true
@@ -284,7 +251,6 @@ rag:
   query_router: heuristic                   # replaces graph_rag_auto_route; heuristic | llm | off
   graph_rag_mode: hybrid
   graph_rag_global_top_communities: 20       # lazy mode: generate LLM summaries for top-20 query-relevant communities only
-
   # Extraction depth — light/standard/deep:
   # graph_rag_depth: standard   # light (no LLM, fast) | standard (default) | deep (+ claims)
 ```
@@ -413,7 +379,6 @@ curl -X POST http://localhost:8000/ingest/refresh
 ```bash
 # List all projects
 curl http://localhost:8000/projects
-
 # On /query and /search: project field validates against the active project (409 on mismatch);
 # on /add_text, /add_texts, /ingest_url it also enforces active-project match;
 # /ingest (path-based) has no project field.
@@ -426,20 +391,16 @@ curl -X POST http://localhost:8000/query \
 ```bash
 # Source and chunk counts for active project
 curl http://localhost:8000/collection
-
 # Documents not refreshed in N days
 curl "http://localhost:8000/collection/stale?days=30"
-
 # Batch ingest multiple text strings
 curl -X POST http://localhost:8000/add_texts \
   -H "Content-Type: application/json" \
   -d '{"docs": [{"text": "First text", "metadata": {"source": "a"}}, {"text": "Second text", "metadata": {"source": "b"}}]}'
-
 # Ingest content from a remote URL
 curl -X POST http://localhost:8000/ingest_url \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/page"}'
-
 # Remove documents by internal chunk ID list (chunk IDs are not returned by /collection/stale;
 # delete-by-source is not yet a public contract — use GET /collection to inspect sources)
 curl -X POST http://localhost:8000/delete \
@@ -451,10 +412,8 @@ curl -X POST http://localhost:8000/delete \
 ```bash
 # GraphRAG community build status
 curl http://localhost:8000/graph/status
-
 # Trigger community rebuild
 curl -X POST http://localhost:8000/graph/finalize
-
 # Knowledge graph payload (VS Code panel)
 curl http://localhost:8000/graph/data
 ```
@@ -463,25 +422,20 @@ curl http://localhost:8000/graph/data
 ```bash
 # AxonStore identity / status check
 curl http://localhost:8000/store/whoami
-
 # Change the store base path (e.g. to a shared drive)
 curl -X POST http://localhost:8000/store/init \
   -H "Content-Type: application/json" \
   -d '{"base_path": "/data/axon-store"}'
-
 # Generate a share key
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "grantee": "<os-username>"}'
-
 # Redeem a share key
 curl -X POST http://localhost:8000/share/redeem \
   -H "Content-Type: application/json" \
   -d '{"share_string": "eyJ..."}'
-
 # List active shares
 curl http://localhost:8000/share/list
-
 # Revoke a share
 curl -X POST http://localhost:8000/share/revoke \
   -H "Content-Type: application/json" \
@@ -503,7 +457,6 @@ For common errors and fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 ### Basic RAG Query
 ```python
 from axon.main import AxonBrain
-
 brain = AxonBrain()
 response = brain.query("What is the main topic?")
 print(response)
@@ -512,7 +465,6 @@ print(response)
 ### Custom Configuration
 ```python
 from axon.main import AxonBrain, AxonConfig
-
 config = AxonConfig(
     embedding_provider="ollama",
     llm_model="llama3.1:70b",
@@ -526,13 +478,10 @@ brain = AxonBrain(config)
 ```python
 import asyncio
 from axon.main import AxonBrain, AxonConfig
-
 config = AxonConfig(vector_store_path="./chroma", bm25_path="./bm25")
 brain = AxonBrain(config)
-
 # Ingest a directory (async)
 asyncio.run(brain.load_directory("./my_documents"))
-
 # Or ingest a list of document dicts directly (sync)
 brain.ingest([
     {"id": "doc1", "text": "Your document text here.", "metadata": {"source": "example.txt"}}
@@ -542,7 +491,6 @@ brain.ingest([
 ### Direct API Usage
 ```python
 import httpx
-
 response = httpx.post(
     "http://localhost:8000/query",
     json={"query": "What is RAG?"}
@@ -558,10 +506,8 @@ def test_feature():
     """Test description."""
     # Arrange
     input_data = setup_data()
-
     # Act
     result = function(input_data)
-
     # Assert
     assert result == expected
 ```
@@ -573,7 +519,6 @@ def test_api_endpoint():
     """Test API endpoint."""
     from fastapi.testclient import TestClient
     from axon.api import app
-
     client = TestClient(app)
     response = client.post("/query", json={"query": "test"})
     assert response.status_code == 200
@@ -595,7 +540,6 @@ async def test_async_function():
 # Instead of one-by-one
 for doc in documents:
     brain.ingest([doc])  # Slow
-
 # Use batch
 brain.ingest(documents)  # Fast
 ```
@@ -603,7 +547,6 @@ brain.ingest(documents)  # Fast
 ### Caching
 ```python
 from functools import lru_cache
-
 @lru_cache(maxsize=128)
 def expensive_function(query: str):
     # Cached for repeated queries
@@ -616,7 +559,6 @@ def expensive_function(query: str):
 rag:
   top_k: 5           # Fewer results = faster
   hybrid_search: false  # Vector only = faster
-
 chunk:
   size: 500          # Smaller chunks = more granular
   overlap: 50        # Less overlap = fewer chunks

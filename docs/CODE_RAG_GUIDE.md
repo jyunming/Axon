@@ -137,7 +137,6 @@ rag:
   code_graph: true        # enable structural graph + lexical boost
   graph_rag: false        # optional; enable for architecture-level questions
   top_k: 20               # wider candidate pool for the lexical booster to work with
-
 chunk:
   strategy: code          # AST-aware splitting for Python; recursive fallback for others
 ```

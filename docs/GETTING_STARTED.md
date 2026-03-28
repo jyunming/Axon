@@ -16,11 +16,8 @@ Axon has five different ways to use it — terminal chat, VS Code extension, RES
 # 1. Download the code
 git clone https://github.com/jyunming/Axon.git
 cd Axon
-
-
 # 2. Install Axon  (-e means "editable" — you can update the code without reinstalling)
 pip install -e .
-
 ```
 
 > You should see `Successfully installed axon-...` at the end. If you see errors, check that your Python version is 3.10+ with `python --version`.
@@ -33,15 +30,12 @@ pip install -e .
 #    Then pull a model (pick one):
 ollama pull llama3.1:8b   # recommended — good quality, needs ~8 GB RAM
 ollama pull phi3:mini     # lighter option — needs ~4 GB RAM
-
 ```
 
 > **Verify Ollama is running** before continuing. Open a new terminal and run:
-
 > ```bash
 > curl http://localhost:11434
 > ```
-
 > You should see `Ollama is running`. If you get "connection refused", Ollama hasn't started yet — open the Ollama app from your Applications/Start menu, or run `ollama serve` in a terminal and leave it running.
 
 ---
@@ -120,7 +114,6 @@ You should see the `axon>` prompt. That means Axon is ready. If you get an error
 axon> /ingest ./my-documents/       ← ingest everything in a folder
 axon> /ingest ./report.pdf          ← ingest a single file
 axon> /ingest https://example.com   ← ingest a web page
-
 ```
 
 You'll see a confirmation like `Ingested 142 chunks from 18 files.`
@@ -131,7 +124,6 @@ You'll see a confirmation like `Ingested 142 chunks from 18 files.`
 axon> What are the main topics in these documents?
 axon> Summarise the Q3 report
 axon> Explain this code @./src/main.py
-
 ```
 
 > **`@./src/main.py`** — putting `@` before a file path attaches that file's contents to your question inline. You can also use `@./folder/` to attach a whole folder.
@@ -188,7 +180,6 @@ After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shif
 ```
 @axon ingest my documents at /path/to/docs
 @axon add this URL to my knowledge base: https://docs.example.com
-
 ```
 
 **Ask questions:**
@@ -196,7 +187,6 @@ After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shif
 ```
 @axon search for information about the login flow
 @axon what does the authentication module do?
-
 ```
 
 **Manage projects:**
@@ -205,14 +195,12 @@ After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shif
 @axon list all my projects
 @axon switch to the "work" project
 @axon what files have I ingested?
-
 ```
 
 **Ingest an image** (requires a vision-capable model like GPT-4o, Claude, or LLaVA):
 
 ```
 @axon describe and ingest this diagram: /path/to/architecture.png
-
 ```
 
 **Open the Graph panel:**
@@ -220,7 +208,6 @@ After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shif
 ```
 Command Palette (Ctrl+Shift+P) → Axon: Show Graph for Query…
 Command Palette → Axon: Show Graph for Selection   ← with text selected in the editor
-
 ```
 
 > Full setup guide including Python discovery, settings, and troubleshooting: [SETUP.md § 11](SETUP.md#11-vs-code-extension-github-copilot-integration)
@@ -235,7 +222,6 @@ The API lets your own programs, scripts, and automation tools talk to Axon over 
 
 ```bash
 axon-api   # starts at http://localhost:8000
-
 ```
 
 You should see `Uvicorn running on http://0.0.0.0:8000`. Leave this terminal open — closing it stops the API.
@@ -253,12 +239,9 @@ curl -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
   -d '{"path": "/path/to/docs"}'
 # ← returns a job_id straight away; ingest runs in the background
-
-
 # Check if it finished (replace abc123 with your job_id)
 curl http://localhost:8000/ingest/status/abc123
 # ← keeps returning {"status": "processing"} until done, then {"status": "completed"}
-
 ```
 
 **Ingest a single piece of text:**
@@ -267,7 +250,6 @@ curl http://localhost:8000/ingest/status/abc123
 curl -X POST http://localhost:8000/add_text \
   -H "Content-Type: application/json" \
   -d '{"text": "Important note to remember.", "metadata": {"source": "notes"}}'
-
 ```
 
 **Ask a question (returns a full synthesised answer):**
@@ -276,7 +258,6 @@ curl -X POST http://localhost:8000/add_text \
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the main topics?"}'
-
 ```
 
 **Search without an LLM answer (returns raw matching chunks):**
@@ -285,7 +266,6 @@ curl -X POST http://localhost:8000/query \
 curl -X POST http://localhost:8000/search \
   -H "Content-Type: application/json" \
   -d '{"query": "authentication flow", "top_k": 5}'
-
 ```
 
 ---
@@ -298,7 +278,6 @@ A visual chat interface. No terminal commands needed after launch.
 
 ```bash
 axon-ui   # opens automatically at http://localhost:8501
-
 ```
 
 Open `http://localhost:8501` in your browser if it doesn't open automatically.
@@ -346,7 +325,6 @@ The JSON config is the same for Claude Code, Gemini CLI, VS Code, and Cursor —
     }
   }
 }
-
 ```
 
 > `RAG_API_BASE` tells the MCP server where `axon-api` is running.
@@ -355,7 +333,6 @@ The JSON config is the same for Claude Code, Gemini CLI, VS Code, and Cursor —
 
 ```json
 { "chat.mcp.access": "all" }
-
 ```
 
 **To activate:** start `axon-api`, then reload your editor. Axon's tools appear in the agent panel automatically.
@@ -376,18 +353,13 @@ Each project has its own separate, isolated knowledge base. This lets you keep w
 /project new research/papers       # create a nested project (research → papers)
 /project switch work               # switch to "work"
 /project list                      # show all projects
-
-
 # CLI — single query against a specific project
 axon --project work "Summarise the Q3 report"
 axon --project research "What papers discuss attention mechanisms?"
-
-
 # API
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the main topics?", "project": "work"}'
-
 ```
 
 ### Search across all projects at once
@@ -408,9 +380,7 @@ These special scope names let you query multiple projects in one go. They are re
 Both features are **off by default** to keep your first ingest fast. Enable them once your documents are indexed and you want richer answers to complex questions.
 
 > **What are RAPTOR and GraphRAG?**
-
 > - **RAPTOR** — after ingesting, it generates summary notes that group related chunks together. Helps with big-picture questions that no single paragraph can answer on its own.
-
 > - **GraphRAG** — extracts named entities (people, places, concepts) and the relationships between them from your documents, then builds a graph. When you ask a question it can follow the connections to find related information you might otherwise miss.
 
 > **What is an "LLM call"?** One request sent to the language model (Ollama, OpenAI, etc.). More calls means longer ingest time but usually better answer quality.
@@ -435,13 +405,9 @@ Both features are **off by default** to keep your first ingest fast. Enable them
 ### Start with: free graph (no extra LLM calls)
 
 > **Prerequisite:** Graph features require extra libraries. Install them once:
-
 > ```bash
-
 > pip install "axon[graphrag]"
-
 > ```
-
 > The quotes are required on most terminals.
 
 Edit `~/.config/axon/config.yaml` (Linux/macOS) or `C:\Users\<you>\.config\axon\config.yaml` (Windows):
@@ -452,7 +418,6 @@ rag:
   graph_rag_depth: light      # uses text patterns only — no LLM calls
   graph_rag_relations: false  # turn off relationship extraction (LLM-heavy)
   graph_rag_community: false  # turn off community detection
-
 ```
 
 ### Upgrade to a richer graph
@@ -461,7 +426,6 @@ rag:
 rag:
   graph_rag_depth: standard   # LLM writes a description for each extracted entity
   graph_rag_relations: true   # also extracts relationships between entities
-
 ```
 
 ### Reduce ingest time
@@ -471,7 +435,6 @@ rag:
 ```yaml
 rag:
   raptor_max_source_size_mb: 2.0   # skip RAPTOR for any source file larger than 2 MB
-
 ```
 
 **Turn both off during a big initial ingest, then turn on for daily use:**
@@ -480,7 +443,6 @@ rag:
 rag:
   raptor: false
   graph_rag: false
-
 ```
 
 ---
@@ -498,7 +460,6 @@ The interactive 3D graph works everywhere — how it opens depends on which tool
 
 ```
 Command Palette (Ctrl+Shift+P) → Axon: Show Graph for Query…
-
 ```
 
 Or select text in the editor, then `Axon: Show Graph for Selection`. The panel opens as a split-view alongside your answer:
@@ -514,7 +475,6 @@ Or select text in the editor, then `Axon: Show Graph for Selection`. The panel o
 │  [1] retrievers.py ▸ │                                      │
 │  [2] main.py:142  ▸  │   click any node → jump to source   │
 └──────────────────────┴──────────────────────────────────────┘
-
 ```
 
 Clicking any citation or graph node opens the source file at the exact line in the editor.
@@ -525,20 +485,16 @@ Clicking any citation or graph node opens the source file at the exact line in t
 /graph viz              # opens the live graph in your default browser
 /graph-viz              # export to a temp HTML file and print the path
 /graph-viz /out.html    # export to a specific file
-
 ```
 
 **API — opens in browser or save to file:**
 
 ```bash
 curl http://localhost:8000/graph/visualize -o graph.html
-
-
 # Then open it:
 open graph.html        # macOS
 xdg-open graph.html   # Linux
 start graph.html       # Windows
-
 ```
 
 | Tab | What it shows | How to enable |

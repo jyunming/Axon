@@ -18,7 +18,6 @@ Axon ships with two evaluation layers:
 ```bash
 # Run eval smoke tests only
 python -m pytest -m eval tests/test_eval_smoke.py -v --no-cov
-
 # Run as part of the full test suite
 python -m pytest tests/ -v --no-cov
 ```
@@ -140,7 +139,6 @@ For RAGAS scoring in CI (requires Ollama available on the runner):
       --testset examples/eval_testset.jsonl \
       --output eval_report.md
   continue-on-error: true   # non-blocking — report is an artifact
-
 - name: Upload eval report
   uses: actions/upload-artifact@v4
   with:
@@ -158,7 +156,6 @@ The existing CI workflow runs smoke tests automatically on every push via the `e
 # RAG Evaluation Report
 **Generated:** 2026-03-26 14:30
 **Samples:** 10
-
 ## Scores
 | Metric              | Score  |
 |---------------------|--------|

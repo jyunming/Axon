@@ -36,7 +36,6 @@ Before starting, ensure you have:
 | **RAM** | 16 GB minimum | 32 GB recommended |
 
 > **GPU (optional):** A CUDA-compatible GPU significantly speeds up inference. Ollama automatically uses the GPU if available. CPU-only works but is slower.
-
 > **Windows:** Use [Windows Terminal](https://aka.ms/terminal) for best results. Add `$env:PYTHONUTF8=1` to your PowerShell profile (or run it before starting Axon) to avoid encoding errors when reading documents that contain non-ASCII characters:
 > ```powershell
 > # Add to $PROFILE to make permanent
@@ -58,10 +57,8 @@ Create and activate a Python virtual environment:
 
 ```bash
 python -m venv venv
-
 # Linux / macOS
 source venv/bin/activate
-
 # Windows
 venv\Scripts\activate
 ```
@@ -71,16 +68,12 @@ Install the package. Choose the option that matches your needs:
 ```bash
 # Minimal install (sentence-transformers + ChromaDB + Ollama LLM)
 pip install -e .
-
 # With development tools (tests, linting, type checking)
 pip install -e ".[dev]"
-
 # With FastEmbed embedding support
 pip install -e ".[fastembed]"
-
 # With Qdrant vector store
 pip install -e ".[qdrant]"
-
 # Everything (all optional features + dev tools)
 pip install -e ".[all]"
 ```
@@ -326,7 +319,6 @@ Uses Ollama to serve embedding models locally. Better quality than `all-MiniLM-L
 ```bash
 # Recommended: nomic-embed-text (137M params, 768-dim, 8192 token context)
 ollama pull nomic-embed-text
-
 # Alternative: larger, stronger (335M params, 1024-dim)
 ollama pull mxbai-embed-large
 ```
@@ -456,7 +448,6 @@ Edit that file to customise behaviour, or pass `--config /path/to/your.yaml` to 
 ```bash
 # Linux / macOS
 $EDITOR ~/.config/axon/config.yaml
-
 # Windows (PowerShell)
 notepad $env:USERPROFILE\.config\axon\config.yaml
 ```
@@ -468,26 +459,21 @@ Here are complete configurations for each tier:
 embedding:
   provider: sentence_transformers
   model: all-MiniLM-L6-v2
-
 llm:
   provider: ollama
   model: phi3:mini
   base_url: http://localhost:11434
   temperature: 0.7
   max_tokens: 2048
-
 vector_store:
   provider: chroma   # path derived automatically from store.base
-
 rag:
   top_k: 10
   similarity_threshold: 0.3
   hybrid_search: true
-
 chunk:
   size: 1000
   overlap: 200
-
 rerank:
   enabled: false
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
@@ -498,26 +484,21 @@ rerank:
 embedding:
   provider: sentence_transformers
   model: all-MiniLM-L6-v2
-
 llm:
   provider: ollama
   model: llama3.1:8b
   base_url: http://localhost:11434
   temperature: 0.7
   max_tokens: 2048
-
 vector_store:
   provider: chroma   # path derived automatically from store.base
-
 rag:
   top_k: 10
   similarity_threshold: 0.3
   hybrid_search: true
-
 chunk:
   size: 1000
   overlap: 200
-
 rerank:
   enabled: false
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
@@ -532,26 +513,21 @@ embedding:
   model: nomic-embed-text
   # Ollama endpoint is shared with the LLM — set base_url under llm: below,
   # or set the OLLAMA_HOST env var to override globally.
-
 llm:
   provider: ollama
   model: qwen2.5:7b
   base_url: http://localhost:11434
   temperature: 0.7
   max_tokens: 2048
-
 vector_store:
   provider: qdrant   # path derived automatically from store.base
-
 rag:
   top_k: 10
   similarity_threshold: 0.4
   hybrid_search: true
-
 chunk:
   size: 1000
   overlap: 200
-
 rerank:
   enabled: true
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
@@ -572,34 +548,25 @@ Edit `.env`:
 ```bash
 # Ollama server location (default: localhost)
 OLLAMA_HOST=http://localhost:11434
-
 # Default LLM model name (must match what you pulled)
 OLLAMA_MODEL=llama3.1
-
 # Default embedding model for Ollama provider (if using ollama embeddings)
 OLLAMA_EMBED_MODEL=nomic-embed-text
-
 # API server settings
 # Bind to localhost by default for local setups. For Docker/Compose deployments, set AXON_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
 AXON_HOST=127.0.0.1
 AXON_PORT=8000
-
 # Where ChromaDB stores its data
 CHROMA_DATA_PATH=./chroma_data
-
 # Where BM25 index is stored
 BM25_INDEX_PATH=./bm25_index
-
 # Custom root directory for named projects (optional)
 # Defaults to ~/.axon/projects — useful for shared drives or multiple workspaces
 # AXON_PROJECTS_ROOT=/mnt/nas/axon-projects
-
 # Log verbosity: DEBUG, INFO, WARNING, ERROR
 LOG_LEVEL=INFO
-
 # Security: restrict file ingestion to this directory
 # RAG_INGEST_BASE=/home/user/documents
-
 # Streamlit UI port
 STREAMLIT_SERVER_PORT=8501
 STREAMLIT_SERVER_ADDRESS=0.0.0.0
@@ -645,7 +612,6 @@ Create a test file:
 ```bash
 # Linux / macOS
 echo "The capital of France is Paris. Paris is known for the Eiffel Tower." > ./test_doc.txt
-
 # Windows (PowerShell)
 "The capital of France is Paris. Paris is known for the Eiffel Tower." | Out-File -FilePath .\test_doc.txt -Encoding utf8
 ```
@@ -804,7 +770,6 @@ Codex uses TOML format. Add a block to `~/.codex/config.toml`:
 [mcp_servers.axon]
 command = "axon-mcp"
 args = []
-
 [mcp_servers.axon.env]
 RAG_API_BASE = "http://localhost:8000"
 ```
@@ -1100,10 +1065,8 @@ rag:
 ```bash
 # Knowledge graph (prose documents)
 axon --ingest ./docs/ --graph-rag
-
 # Code graph (source code) — set code_graph: true in config.yaml first
 axon --ingest ./src/
-
 # Both at once — set code_graph: true in config.yaml, then:
 axon --ingest ./project/ --graph-rag
 ```
@@ -1113,7 +1076,6 @@ axon --ingest ./project/ --graph-rag
 ```
 Ctrl+Shift+P → Axon: Show Graph for Query…
 Ctrl+Shift+P → Axon: Show Graph for Selection   (select text first)
-
 Copilot Chat:
   @axon show me the graph for how retrieval works
   @axon visualise the authentication module

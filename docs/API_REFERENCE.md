@@ -55,7 +55,6 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 
 > **`null` vs explicit value:** All RAG flag fields default to `null`, meaning they inherit the
 > server's current global config. Pass an explicit `true`/`false` to override for this request only.
-
 > **Project field:** `project` must match the brain's currently active project. If it
 > differs, the server returns `409 Conflict`. Use `POST /project/switch` first to change
 > the active project. Omit `project` to query whichever project is currently active.

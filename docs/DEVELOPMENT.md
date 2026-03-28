@@ -129,10 +129,8 @@ def test_feature_name():
     """Test description."""
     # Arrange
     input_data = setup_test_data()
-
     # Act
     result = function_under_test(input_data)
-
     # Assert
     assert result == expected_output
 ```
@@ -157,22 +155,18 @@ pytest --cov=axon --cov-report=html  # With coverage
 **Example:**
 ```python
 from typing import List, Dict, Any
-
 def search_documents(
     query: str,
     top_k: int = 10,
     filters: Dict[str, Any] = None
 ) -> List[Dict[str, Any]]:
     """Search for documents matching the query.
-
     Args:
         query: Search query string.
         top_k: Maximum number of results to return.
         filters: Optional metadata filters.
-
     Returns:
         List of documents with scores and metadata.
-
     Example:
         >>> results = search_documents("Python tutorial", top_k=5)
         >>> len(results)
@@ -209,7 +203,6 @@ curl -X POST http://localhost:8000/query \
 ```python
 import cProfile
 import pstats
-
 profiler = cProfile.Profile()
 profiler.enable()
 # Code to profile

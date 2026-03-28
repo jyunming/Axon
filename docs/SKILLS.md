@@ -282,47 +282,37 @@ Return active write-lease counts for all projects tracked by the server.
 ```
 User wants an answer to a question
   └─ query_knowledge / query_knowledge
-
 User wants to see raw matching passages
   └─ search_knowledge / search_knowledge
-
 User wants to visualise the knowledge graph
   ├─ show_graph (VS Code webview)
   │   └─ "Open in browser" button → /query/visualize (standalone HTML)
   ├─ graph_data / graph_data  (raw JSON export)
   └─ graph_status / graph_status  (status check)
-
 User wants to add content
   ├─ one text  → ingest_text / ingest_text
   ├─ many texts → ingest_texts / ingest_texts
   ├─ URL   → ingest_url / ingest_url
   ├─ file  → ingest_path / ingest_path (async → poll get_job_status / get_job_status)
   └─ image → ingest_image
-
 User asks what's in the knowledge base
   └─ list_knowledge / list_knowledge
-
 User wants to refresh stale content
   ├─ refresh_ingest / refresh_ingest  (re-ingest changed files)
   └─ get_stale_docs / get_stale_docs   (list outdated docs)
-
 User wants to change project
   └─ switch_project / switch_project
-
 User wants to change model or RAG settings
   ├─ update_settings / update_settings
   └─ get_current_settings / get_current_settings  (inspect before changing)
-
 User wants graph status / rebuild
   ├─ graph_status / graph_status
   └─ graph_finalize / graph_finalize
-
 User wants to share / revoke project access
   ├─ share_project / share_project
   ├─ redeem_share / redeem_share
   ├─ revoke_share
   └─ list_shares / list_shares
-
 Operator: check if project can be taken offline
   └─ get_active_leases / get_active_leases
 ```

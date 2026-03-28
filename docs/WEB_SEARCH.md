@@ -101,7 +101,6 @@ web_search:
 web_search:
   enabled: true
   brave_api_key: your-key-here
-
 rag:
   crag_lite: true                         # enable smart confidence scoring
   crag_lite_confidence_threshold: 0.4     # trigger web search when confidence < 0.4

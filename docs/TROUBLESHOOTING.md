@@ -36,7 +36,6 @@ chromadb.errors.InvalidDimensionException: Embedding dimension 384 does not matc
 # Non-Docker install — delete the local data directories
 rm -rf ~/.axon/AxonStore/$(whoami)/default/chroma_data ~/.axon/AxonStore/$(whoami)/default/bm25_index
 # Then restart axon — it will re-create empty indexes
-
 # Docker install
 docker compose stop
 rm -rf ./chroma_data ./bm25_index

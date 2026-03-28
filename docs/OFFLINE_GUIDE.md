@@ -34,15 +34,12 @@ Axon supports two modes for restricted-network and air-gapped environments:
 llm:
   provider: ollama
   model: llama3.1:8b
-
 embedding:
   provider: sentence_transformers
   model: /mnt/aimodels/all-MiniLM-L6-v2   # absolute path to pre-downloaded model
-
 offline:
   enabled: true
   local_models_dir: /mnt/aimodels          # root for HF model directories
-
 vector_store:
   provider: chroma                          # chroma or lancedb (both local)
 ```
@@ -74,14 +71,11 @@ vector_store:
 llm:
   provider: ollama
   model: llama3.1:8b
-
 embedding:
   provider: sentence_transformers
   model: BAAI/bge-m3                        # resolved via embedding_models_dir below
-
 offline:
   local_assets_only: true
-
 local_dirs:
   embedding_models_dir: /mnt/aimodels/embedding   # sentence-transformers / fastembed models
   hf_models_dir: /mnt/aimodels/hf                 # reranker, GLiNER, REBEL, LLMLingua
@@ -159,7 +153,6 @@ Run these commands on a machine with internet access, then copy the output direc
 
 ```python
 from sentence_transformers import SentenceTransformer
-
 # Downloads the model from HuggingFace and saves it to a local folder
 model = SentenceTransformer("BAAI/bge-m3")
 model.save("/mnt/aimodels/embedding/BAAI--bge-m3")        # Linux / macOS
@@ -172,7 +165,6 @@ The reranker re-scores retrieved chunks to improve relevance — it is only need
 
 ```python
 from sentence_transformers import CrossEncoder
-
 model = CrossEncoder("BAAI/bge-reranker-base")
 model.save("/mnt/aimodels/hf/BAAI--bge-reranker-base")    # Linux / macOS
 # model.save("C:\\aimodels\\hf\\BAAI--bge-reranker-base") # Windows
@@ -182,7 +174,6 @@ model.save("/mnt/aimodels/hf/BAAI--bge-reranker-base")    # Linux / macOS
 
 ```python
 from fastembed import TextEmbedding
-
 # cache_dir is where FastEmbed saves the model files
 model = TextEmbedding("BAAI/bge-small-en-v1.5", cache_dir="/mnt/aimodels/fastembed")
 # Windows: cache_dir="C:\\aimodels\\fastembed"
@@ -196,10 +187,8 @@ Ollama does not have an export command. The simplest method is to copy the Ollam
 ```bash
 # On online machine — pull the model first
 ollama pull llama3.1:8b
-
 # Then copy the entire Ollama models directory to a USB drive or network share
 cp -r ~/.ollama/models /media/usb/ollama-models
-
 # On air-gapped machine — restore to the same location
 cp -r /media/usb/ollama-models/* ~/.ollama/models/
 # Restart Ollama, then verify
@@ -210,10 +199,8 @@ ollama list
 ```powershell
 # On online machine
 ollama pull llama3.1:8b
-
 # Copy the models folder (usually located here)
 Copy-Item -Recurse "$env:USERPROFILE\.ollama\models" "D:\usb\ollama-models"
-
 # On air-gapped machine
 Copy-Item -Recurse "D:\usb\ollama-models\*" "$env:USERPROFILE\.ollama\models"
 # Restart Ollama, then verify
@@ -226,10 +213,8 @@ ollama list
 
 ```python
 import tiktoken, shutil, os
-
 # Download the tokenizer file from the internet (run this on the online machine)
 enc = tiktoken.get_encoding("cl100k_base")
-
 # Find where tiktoken saved it and copy to your transfer location
 cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "tiktoken")
 shutil.copytree(cache_dir, "/mnt/aimodels/tiktoken", dirs_exist_ok=True)
@@ -249,11 +234,9 @@ llm:
   provider: ollama
   model: llama3.1:8b
   base_url: http://localhost:11434     # local Ollama daemon — no internet needed
-
 embedding:
   provider: sentence_transformers
   model: BAAI/bge-m3                  # Axon resolves this name to a local folder automatically
-
 rag:
   top_k: 10
   hybrid_search: true
@@ -263,14 +246,11 @@ rag:
   discuss: false                        # disable: no internet to fall back to for general knowledge
   raptor: false                         # disable in offline_mode (needs LLM calls during ingest)
   graph_rag: false                      # same
-
 vector_store:
   provider: chroma                      # fully local; lancedb also works
-
 offline:
   enabled: true
   local_models_dir: /mnt/aimodels      # fallback root if per-type dirs below are not set
-
 local_dirs:
   embedding_models_dir: /mnt/aimodels/embedding
   hf_models_dir: /mnt/aimodels/hf
@@ -285,11 +265,9 @@ llm:
   provider: ollama
   model: llama3.1:8b
   base_url: http://localhost:11434
-
 embedding:
   provider: sentence_transformers
   model: BAAI/bge-m3
-
 rag:
   top_k: 10
   hybrid_search: true
@@ -299,14 +277,11 @@ rag:
   discuss: false
   raptor: false
   graph_rag: false
-
 vector_store:
   provider: chroma
-
 offline:
   enabled: true
   local_models_dir: C:/aimodels
-
 local_dirs:
   embedding_models_dir: C:/aimodels/embedding
   hf_models_dir: C:/aimodels/hf
