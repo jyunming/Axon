@@ -983,6 +983,9 @@ query_transformations:
 
 
   discussion_fallback: true           # already declared above under rag; kept here for clarity
+  code_graph: false                   # build File+Symbol nodes with CONTAINS/IMPORTS edges during code ingest
+  code_graph_bridge: false            # add MENTIONED_IN edges linking prose docs to code symbols
+  query_router: heuristic             # heuristic | llm | off — auto-select retrieval strategy per query
 
 
 
@@ -1478,7 +1481,10 @@ offline:
 
 
 
-  local_models_dir: ""
+  local_models_dir: ""               # legacy fallback root for both embedding and HF models
+  embedding_models_dir: ""            # root for sentence-transformers / fastembed model files
+  hf_models_dir: ""                   # root for GLiNER, REBEL, LLMLingua, cross-encoder reranker
+  tokenizer_cache_dir: ""             # override TIKTOKEN_CACHE_DIR for offline tiktoken BPE encoding
 
 
 

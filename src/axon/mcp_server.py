@@ -330,7 +330,7 @@ async def search_knowledge(
     """
 
     if top_k < 1:
-        return {"error": "top_k must be >= 1"}
+        raise ValueError("top_k must be >= 1")
 
     body: dict = {"query": query, "top_k": top_k}
 
@@ -383,7 +383,7 @@ async def query_knowledge(
     """
 
     if top_k is not None and top_k < 1:
-        return {"error": "top_k must be >= 1"}
+        raise ValueError("top_k must be >= 1")
 
     body: dict = {"query": query}
 

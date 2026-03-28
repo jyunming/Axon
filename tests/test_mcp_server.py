@@ -240,3 +240,302 @@ def test_mcp_tool_invocation_proxies_to_api():
             assert kwargs["json"]["project"] == "test-p"
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Tool-level invocation tests (happy path via httpx mock)
+# ---------------------------------------------------------------------------
+
+
+def _mock_get(return_value: dict):
+    """Return an AsyncMock that pretends to be httpx.AsyncClient.get."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = return_value
+    mock_resp.raise_for_status = MagicMock()
+    m = AsyncMock(return_value=mock_resp)
+    return m
+
+
+def _mock_post(return_value: dict):
+    """Return an AsyncMock that pretends to be httpx.AsyncClient.post."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = return_value
+    mock_resp.raise_for_status = MagicMock()
+    m = AsyncMock(return_value=mock_resp)
+    return m
+
+
+def test_ingest_texts_proxies_batch():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import ingest_texts
+
+    async def _run():
+        rv = {"added": 2, "skipped": 0}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await ingest_texts(docs=[{"text": "A"}, {"text": "B"}], project="proj")
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_ingest_url_proxies_post():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import ingest_url
+
+    async def _run():
+        rv = {"status": "created", "doc_id": "u1"}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await ingest_url(url="http://example.com/page")
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_list_knowledge_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import list_knowledge
+
+    async def _run():
+        rv = {"sources": [], "total_chunks": 0}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await list_knowledge()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_delete_documents_proxies_post():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import delete_documents
+
+    async def _run():
+        rv = {"deleted": 1}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await delete_documents(doc_ids=["abc"])
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_get_stale_docs_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import get_stale_docs
+
+    async def _run():
+        rv = {"stale_docs": []}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await get_stale_docs(days=7)
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_list_projects_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import list_projects
+
+    async def _run():
+        rv = {"projects": ["default"]}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await list_projects()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_create_project_proxies_post():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import create_project
+
+    async def _run():
+        rv = {"status": "created", "project": "myproj"}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await create_project(name="myproj")
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_delete_project_proxies_post():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import delete_project
+
+    async def _run():
+        rv = {"status": "deleted"}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await delete_project(name="myproj")
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_get_current_settings_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import get_current_settings
+
+    async def _run():
+        rv = {"top_k": 10, "hybrid_search": True}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await get_current_settings()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_update_settings_proxies_post():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import update_settings
+
+    async def _run():
+        rv = {"status": "updated"}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await update_settings(hyde=True)
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_graph_status_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import graph_status
+
+    async def _run():
+        rv = {"entity_count": 5, "community_summary_count": 2}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await graph_status()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_graph_finalize_proxies_post():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import graph_finalize
+
+    async def _run():
+        rv = {"community_summary_count": 3}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await graph_finalize()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_graph_data_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import graph_data
+
+    async def _run():
+        rv = {"nodes": [], "links": []}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await graph_data()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_get_active_leases_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import get_active_leases
+
+    async def _run():
+        rv = {"leases": {}}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await get_active_leases()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_list_sessions_proxies_get():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import list_sessions
+
+    async def _run():
+        rv = {"sessions": []}
+        with patch("httpx.AsyncClient.get", _mock_get(rv)):
+            result = await list_sessions()
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_share_project_proxies_post():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import share_project
+
+    async def _run():
+        rv = {"share_string": "axon-share-v1:..."}
+        with patch("httpx.AsyncClient.post", _mock_post(rv)):
+            result = await share_project(project="default", grantee="alice")
+        assert result == rv
+
+    asyncio.run(_run())
+
+
+def test_search_knowledge_top_k_zero_raises():
+    """search_knowledge with top_k < 1 must raise ValueError (not return dict)."""
+    import asyncio
+
+    from axon.mcp_server import search_knowledge
+
+    async def _run():
+        try:
+            await search_knowledge(query="test", top_k=0)
+            raise AssertionError("Expected ValueError")
+        except ValueError as exc:
+            assert "top_k" in str(exc)
+
+    asyncio.run(_run())
+
+
+def test_query_knowledge_top_k_zero_raises():
+    """query_knowledge with top_k < 1 must raise ValueError (not return dict)."""
+    import asyncio
+
+    from axon.mcp_server import query_knowledge
+
+    async def _run():
+        try:
+            await query_knowledge(query="test", top_k=0)
+            raise AssertionError("Expected ValueError")
+        except ValueError as exc:
+            assert "top_k" in str(exc)
+
+    asyncio.run(_run())

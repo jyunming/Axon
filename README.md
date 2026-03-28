@@ -99,7 +99,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 - **Governance Console** — full audit trail of every query
 - Graceful maintenance states: `online → draining → readonly → offline`
 - **REST API** — 48 endpoints with Swagger docs at `/docs`
-- **MCP server** — 27 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- **MCP server** — 30 tools for Claude Code, Codex, Gemini, Cursor, Copilot
 - **`@axon`** VS Code chat participant with Graph and Governance panels
 
 </td>
@@ -149,7 +149,7 @@ Extensions panel  →  "..."  →  Install from VSIX...
 →  integrations/vscode-axon/axon-copilot-0.9.0.vsix
 ```
 
-Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 27 tools appear in the agent hammer menu automatically.
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 30 tools appear in the agent hammer menu automatically.
 
 **[Full setup guide →](docs/SETUP.md)**
 
@@ -172,7 +172,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 🔑 | **[Admin Reference](docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
 | ⚡ | **[Quick Reference](docs/QUICKREF.md)** | Commands and flags at a glance |
 | 📡 | **[API Reference](docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
-| 🔌 | **[MCP Tools](docs/MCP_TOOLS.md)** | All 27 MCP tool signatures with parameter defaults |
+| 🔌 | **[MCP Tools](docs/MCP_TOOLS.md)** | All 30 MCP tool signatures with parameter defaults |
 
 **Deep dives**
 

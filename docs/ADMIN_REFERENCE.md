@@ -4351,6 +4351,8 @@ All flags are `false` in the shipped `config.yaml`. All can be set in config, as
 
 
 | `query_router` | str | `heuristic` | `heuristic \| llm \| off` |
+| `code_graph` | bool | false | Build File+Symbol nodes with CONTAINS/IMPORTS edges during code ingest |
+| `code_graph_bridge` | bool | false | Add MENTIONED\_IN edges linking prose docs to code symbols |
 
 
 

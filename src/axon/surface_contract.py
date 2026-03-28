@@ -522,7 +522,7 @@ REGISTRY: list[Capability] = [
             Surface.CLI: "Governance operator tool — not meaningful in single-session interactive use",
             Surface.WEBAPP: "Operator tool not exposed in Streamlit UI",
         },
-        api_route="/leases",
+        api_route="/registry/leases",
     ),
     # ── Maintenance ───────────────────────────────────────────────────────────
     Capability(

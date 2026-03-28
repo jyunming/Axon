@@ -14,7 +14,7 @@
 
 
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **27 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **30 tools**.
 
 
 
