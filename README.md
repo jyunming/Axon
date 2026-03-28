@@ -18,11 +18,7 @@
 ---
 
 <div align="center">
-  <img src="docs/assets/repl-demo.gif" alt="Axon REPL demo" width="820" />
-</div>
-
-<div align="center">
-  <img src="docs/assets/repl-startup.png" alt="Axon REPL — startup splash showing LLM, embedding, and retrieval config" width="820" />
+  <img src="docs/assets/repl-animation.gif" alt="Axon REPL startup" width="820" />
 </div>
 
 ---

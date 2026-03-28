@@ -178,7 +178,9 @@ When you ask a question, Axon:
 
 The REPL is a chat interface that runs in your terminal. Type a question and press Enter.
 
-![Axon REPL startup — LLM, embedding, and retrieval settings at a glance](assets/repl-startup.png)
+![Axon REPL startup](assets/repl-animation.gif)
+
+![Axon REPL session demo](assets/repl-demo.gif)
 
 
 
