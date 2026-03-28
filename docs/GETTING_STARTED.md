@@ -33,9 +33,11 @@ ollama pull phi3:mini     # lighter option — needs ~4 GB RAM
 ```
 
 > **Verify Ollama is running** before continuing. Open a new terminal and run:
+
 > ```bash
 > curl http://localhost:11434
 > ```
+
 > You should see `Ollama is running`. If you get "connection refused", Ollama hasn't started yet — open the Ollama app from your Applications/Start menu, or run `ollama serve` in a terminal and leave it running.
 
 ---
@@ -98,7 +100,7 @@ The REPL is a chat interface that runs in your terminal. Type a question and pre
 
 ![Axon REPL startup](assets/repl-animation.gif)
 
-![Axon REPL session demo](assets/repl-demo.gif)
+![Axon REPL session demo](assets/repl-demo.png)
 
 **Launch:**
 
@@ -170,10 +172,6 @@ Open VS Code → Extensions panel (`Ctrl+Shift+X`) → click `···` (top-right
 | Custom path | Set `axon.pythonPath` in VS Code Settings (`Ctrl+,`, search "axon") |
 
 After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shift+I`) and use natural language:
-
-![VS Code extension workflow](assets/diagrams/vscode-workflow.png)
-
-![Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph](assets/vscode-graph-panel.png)
 
 **Ingest documents:**
 
@@ -380,7 +378,9 @@ These special scope names let you query multiple projects in one go. They are re
 Both features are **off by default** to keep your first ingest fast. Enable them once your documents are indexed and you want richer answers to complex questions.
 
 > **What are RAPTOR and GraphRAG?**
+
 > - **RAPTOR** — after ingesting, it generates summary notes that group related chunks together. Helps with big-picture questions that no single paragraph can answer on its own.
+
 > - **GraphRAG** — extracts named entities (people, places, concepts) and the relationships between them from your documents, then builds a graph. When you ask a question it can follow the connections to find related information you might otherwise miss.
 
 > **What is an "LLM call"?** One request sent to the language model (Ollama, OpenAI, etc.). More calls means longer ingest time but usually better answer quality.
@@ -405,9 +405,11 @@ Both features are **off by default** to keep your first ingest fast. Enable them
 ### Start with: free graph (no extra LLM calls)
 
 > **Prerequisite:** Graph features require extra libraries. Install them once:
+
 > ```bash
 > pip install "axon[graphrag]"
 > ```
+
 > The quotes are required on most terminals.
 
 Edit `~/.config/axon/config.yaml` (Linux/macOS) or `C:\Users\<you>\.config\axon\config.yaml` (Windows):
@@ -464,18 +466,7 @@ Command Palette (Ctrl+Shift+P) → Axon: Show Graph for Query…
 
 Or select text in the editor, then `Axon: Show Graph for Selection`. The panel opens as a split-view alongside your answer:
 
-```
-┌──────────────────────┬──────────────────────────────────────┐
-│  Q: How does         │  [ Knowledge Graph ]  [ Code Graph ] │
-│     retrieval work?  │                                      │
-│  ────────────────    │   ●─────────────◆                    │
-│  LLM answer with     │      3D force-graph                  │
-│  inline citations    │   ▼              ▼                   │
-│  ────────────────    │   ●              ●                   │
-│  [1] retrievers.py ▸ │                                      │
-│  [2] main.py:142  ▸  │   click any node → jump to source   │
-└──────────────────────┴──────────────────────────────────────┘
-```
+![Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph](assets/vscode-graph-panel.png)
 
 Clicking any citation or graph node opens the source file at the exact line in the editor.
 
