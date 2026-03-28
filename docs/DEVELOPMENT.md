@@ -77,12 +77,15 @@ Axon/
 ├── examples/               # Example scripts
 ├── docs/                   # All guides and references (SETUP, API_REFERENCE, etc.)
 ├── .github/workflows/      # CI/CD pipelines
-├── pyproject.toml         # Package metadata (single source of truth for version)
+├── pyproject.toml         # Package metadata (primary source of truth for version; also update package.json + __init__.py on bumps)
 ├── Makefile               # Development commands
 └── README.md              # Root overview + links to docs/
 ```
 
-> **Version sync:** `pyproject.toml` is the version source of truth. When bumping the version also update `integrations/vscode-axon/package.json` (for the VSIX) and `src/axon/__init__.py`.
+> **Version sync:** `pyproject.toml` is the primary source of truth for the Python package version. A version bump requires updating all three locations in sync:
+> - `pyproject.toml` → `version = "X.Y.Z"`
+> - `integrations/vscode-axon/package.json` → `"version": "X.Y.Z"` (VSIX artefact)
+> - `src/axon/__init__.py` → `__version__ = "X.Y.Z"`
 
 ### 4. Development Workflow
 
@@ -247,7 +250,7 @@ make lint
 ### 10. Release Process
 
 1. Update version in **all** version files (must stay in sync):
-   - `pyproject.toml` (single source of truth)
+   - `pyproject.toml` (primary source of truth — also update `integrations/vscode-axon/package.json` and `src/axon/__init__.py`)
    - `setup.py`
    - `src/__init__.py`
    - `src/axon/__init__.py`

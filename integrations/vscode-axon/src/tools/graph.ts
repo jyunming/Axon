@@ -742,7 +742,17 @@ export class AxonGraphDataTool implements vscode.LanguageModelTool<any> {
 
 
 
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph: ${nodeCount} nodes, ${linkCount} edges.\n${JSON.stringify(data, null, 2).slice(0, 4000)}`)]);
+      const MAX_NODES = 500;
+      const MAX_LINKS = 1000;
+      const originalNodes = Array.isArray(data.nodes) ? data.nodes : [];
+      const originalLinks = Array.isArray(data.links) ? data.links : [];
+      const truncatedNodes = originalNodes.slice(0, MAX_NODES);
+      const truncatedLinks = originalLinks.slice(0, MAX_LINKS);
+      const truncated =
+        truncatedNodes.length < originalNodes.length ||
+        truncatedLinks.length < originalLinks.length;
+      const responsePayload = { ...data, nodes: truncatedNodes, links: truncatedLinks, truncated };
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph: ${nodeCount} nodes, ${linkCount} edges.\n${JSON.stringify(responsePayload, null, 2)}`)]);
 
 
 
