@@ -1,6 +1,6 @@
 # Axon REST API Reference
 
-Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 8000). **48 endpoints** total.
+Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 8000).
 
 For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 `http://localhost:8000/redoc` after starting the server.
