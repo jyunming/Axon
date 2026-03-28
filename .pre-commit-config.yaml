@@ -2,8 +2,6 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
     hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
@@ -25,20 +23,25 @@ repos:
 
   - repo: local
     hooks:
+      - id: trim-trailing-whitespace
+        name: trim trailing whitespace
+        entry: python scripts/trim_trailing_whitespace.py
+        language: system
+        types: [text]
+        pass_filenames: true
+        exclude: '\.(gif|png|jpg|jpeg|svg|mp4|webm|vsix|woff|woff2|ttf|eot|ico|bin|pyc)$|integrations/vscode-axon/media/.*\.js$'
       - id: check-merge-conflict
         name: check for merge conflicts
         entry: python scripts/check_merge_conflict.py
         language: system
         types: [text]
         pass_filenames: true
-
       - id: py-compile
         name: py_compile
         entry: python -m py_compile
         language: system
         files: ^src/axon/.*\.py$
         pass_filenames: true
-
       - id: pytest-check
         name: pytest
         entry: python -m pytest tests/ -v --tb=short --no-cov -m "not extension"
@@ -46,7 +49,6 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-
       - id: eval-smoke
         name: evaluation-smoke
         entry: python -m pytest tests/test_eval_smoke.py -m eval -v --tb=short --no-header
