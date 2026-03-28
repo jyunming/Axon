@@ -33,8 +33,12 @@ def _enforce_write_access(brain, operation: str) -> None:
 
 
 @router.post("/ingest/refresh")
-async def refresh_docs():
-    """Re-ingest any tracked files whose content has changed since last ingest."""
+async def refresh_docs(background_tasks: BackgroundTasks):
+    """Re-ingest tracked files whose content has changed.
+
+    Returns a job_id immediately; the refresh runs in the background.
+    Poll ``GET /ingest/status/{job_id}`` until ``status == "completed"``.
+    """
     import functools
     import hashlib as _hashlib
 
@@ -47,42 +51,69 @@ async def refresh_docs():
 
     _enforce_write_access(brain, "refresh")
 
-    versions = brain.get_doc_versions()
-    results: dict[str, list] = {"skipped": [], "reingested": [], "missing": [], "errors": []}
-    for source_id, record in versions.items():
-        if not os.path.exists(source_id):
-            results["missing"].append(source_id)
-            continue
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now(timezone.utc)
+    _api._evict_old_jobs()
+    _api._jobs[job_id] = {
+        "job_id": job_id,
+        "status": "processing",
+        "phase": "scanning",
+        "started_at": now.isoformat(),
+        "started_at_ts": now.timestamp(),
+        "completed_at": None,
+        "reingested": [],
+        "skipped": [],
+        "missing": [],
+        "errors": [],
+        "error": None,
+    }
+
+    def _run_refresh() -> None:
+        job = _api._jobs.get(job_id)
+        if job is None:
+            return
         try:
-            loop = asyncio.get_running_loop()
+            versions = brain.get_doc_versions()
             loader = DirectoryLoader()
-            suffix = os.path.splitext(source_id)[1].lower()
-            loader_instance = loader.loaders.get(suffix)
-            if loader_instance is None:
-                results["errors"].append(
-                    {"source": source_id, "error": f"no loader for extension '{suffix}'"}
-                )
-                continue
-            docs = await loop.run_in_executor(
-                None, functools.partial(loader_instance.load, source_id)
-            )
-            if not docs:
-                results["errors"].append(
-                    {"source": source_id, "error": "loader returned no documents"}
-                )
-                continue
-            combined = "".join(d.get("text", "") for d in docs)
-            current_hash = _hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
-            if current_hash == record.get("content_hash"):
-                results["skipped"].append(source_id)
-                continue
-            await loop.run_in_executor(None, functools.partial(brain.ingest, docs))
-            results["reingested"].append(source_id)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc))
+            for source_id, record in versions.items():
+                if not os.path.exists(source_id):
+                    job["missing"].append(source_id)
+                    continue
+                try:
+                    suffix = os.path.splitext(source_id)[1].lower()
+                    loader_instance = loader.loaders.get(suffix)
+                    if loader_instance is None:
+                        job["errors"].append(
+                            {"source": source_id, "error": f"no loader for extension '{suffix}'"}
+                        )
+                        continue
+                    docs = functools.partial(loader_instance.load, source_id)()
+                    if not docs:
+                        job["errors"].append(
+                            {"source": source_id, "error": "loader returned no documents"}
+                        )
+                        continue
+                    combined = "".join(d.get("text", "") for d in docs)
+                    current_hash = _hashlib.md5(
+                        combined.encode("utf-8", errors="replace")
+                    ).hexdigest()
+                    if current_hash == record.get("content_hash"):
+                        job["skipped"].append(source_id)
+                        continue
+                    brain.ingest(docs)
+                    job["reingested"].append(source_id)
+                except Exception as exc:
+                    job["errors"].append({"source": source_id, "error": str(exc)})
+            completed = datetime.now(timezone.utc)
+            job["status"] = "completed"
+            job["phase"] = "done"
+            job["completed_at"] = completed.isoformat()
         except Exception as exc:
-            results["errors"].append({"source": source_id, "error": str(exc)})
-    return results
+            job["status"] = "failed"
+            job["error"] = str(exc)
+
+    background_tasks.add_task(_run_refresh)
+    return {"job_id": job_id, "status": "processing"}
 
 
 @router.post("/ingest")
@@ -145,6 +176,12 @@ async def ingest_data(
         from axon import governance as gov
         from axon.loaders import DirectoryLoader
 
+        # Capture reference once so repeated dict lookups can't KeyError if the
+        # job is ever evicted from _api._jobs while the background task is running.
+        job = _api._jobs.get(job_id)
+        if job is None:
+            return
+
         project = getattr(brain, "_active_project", "default")
         gov.emit(
             "ingest_started",
@@ -157,7 +194,7 @@ async def ingest_data(
             request_id=rid,
         )
         try:
-            _api._jobs[job_id]["phase"] = "loading"
+            job["phase"] = "loading"
             loader_mgr = DirectoryLoader()
             if requested_path.is_dir():
                 docs = loader_mgr.load(str(requested_path))
@@ -168,13 +205,13 @@ async def ingest_data(
                 else:
                     logger.warning(f"Unsupported file type: {ext}")
                     docs = []
-            _api._jobs[job_id]["files_total"] = len(docs)
+            job["files_total"] = len(docs)
             if docs:
-                brain.ingest(docs, progress_callback=_make_progress_callback(_api._jobs[job_id]))
-            _api._jobs[job_id]["status"] = "completed"
-            _api._jobs[job_id]["phase"] = "completed"
-            _api._jobs[job_id]["documents_ingested"] = len(docs)
-            _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+                brain.ingest(docs, progress_callback=_make_progress_callback(job))
+            job["status"] = "completed"
+            job["phase"] = "completed"
+            job["documents_ingested"] = len(docs)
+            job["completed_at"] = datetime.now(timezone.utc).isoformat()
             gov.emit(
                 "ingest_completed",
                 "file",
@@ -186,10 +223,10 @@ async def ingest_data(
             )
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
-            _api._jobs[job_id]["status"] = "failed"
-            _api._jobs[job_id]["phase"] = "failed"
-            _api._jobs[job_id]["error"] = str(e)
-            _api._jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            job["status"] = "failed"
+            job["phase"] = "failed"
+            job["error"] = str(e)
+            job["completed_at"] = datetime.now(timezone.utc).isoformat()
             gov.emit(
                 "ingest_failed",
                 "file",
@@ -447,10 +484,35 @@ async def delete_documents(
         existing_ids_set = {doc["id"] for doc in existing}
         existing_ids = [i for i in request.doc_ids if i in existing_ids_set]
         not_found = [i for i in request.doc_ids if i not in existing_ids_set]
+
+        # Expand any not-found IDs that are source doc IDs (e.g. returned by
+        # ingest_text) to their actual chunk IDs via the BM25 corpus, then
+        # delete those expanded chunk IDs from both stores.
+        if not_found and brain.bm25 is not None:
+            not_found_set = set(not_found)
+            expanded: list[str] = []
+            resolved_sources: set[str] = set()
+            for chunk in brain.bm25.corpus:
+                src = chunk.get("metadata", {}).get("source", "")
+                if src in not_found_set:
+                    expanded.append(chunk["id"])
+                    resolved_sources.add(src)
+            if expanded:
+                vs_source_docs = brain.vector_store.get_by_ids(expanded)
+                vs_source_ids = [d["id"] for d in vs_source_docs]
+                if vs_source_ids:
+                    brain.vector_store.delete_by_ids(vs_source_ids)
+                brain.bm25.delete_documents(expanded)
+                existing_ids.extend(expanded)
+                not_found = [i for i in not_found if i not in resolved_sources]
+
         if existing_ids:
-            brain.vector_store.delete_by_ids(existing_ids)
-            if brain.bm25 is not None:
-                brain.bm25.delete_documents(existing_ids)
+            # Delete chunk IDs that were found directly (not from source expansion)
+            direct_ids = [i for i in existing_ids if i in existing_ids_set]
+            if direct_ids:
+                brain.vector_store.delete_by_ids(direct_ids)
+                if brain.bm25 is not None:
+                    brain.bm25.delete_documents(direct_ids)
             if brain._entity_graph:
                 brain._prune_entity_graph(set(existing_ids))
 

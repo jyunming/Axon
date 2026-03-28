@@ -146,7 +146,10 @@ def test_path_ingest_and_refresh_detects_changes(api_client, make_brain, sample_
 
     refresh = api_client.post("/ingest/refresh")
     assert refresh.status_code == 200
-    refresh_payload = refresh.json()
+    job_id = refresh.json()["job_id"]
+    refresh_status = api_client.get(f"/ingest/status/{job_id}")
+    assert refresh_status.status_code == 200
+    refresh_payload = refresh_status.json()
     assert str(updated_path) in refresh_payload["reingested"]
 
     query = api_client.post("/query", json={"query": "What does Axon use to retrieve context?"})

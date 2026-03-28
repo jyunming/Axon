@@ -8,7 +8,10 @@ def _make_brain(tmp_path):
     """Return a minimal object with CodeGraphMixin capabilities."""
     from axon.code_graph import CodeGraphMixin
 
-    cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+    cfg = AxonConfig()
+    # Override derived paths so the brain reads/writes in tmp_path, not the real store
+    cfg.bm25_path = str(tmp_path)
+    cfg.vector_store_path = str(tmp_path)
 
     class FakeBrain(CodeGraphMixin):
         def __init__(self):

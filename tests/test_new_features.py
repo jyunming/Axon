@@ -393,7 +393,11 @@ def test_ingest_refresh_returns_results_when_brain_set(tmp_path):
 
     resp = _client.post("/ingest/refresh")
     assert resp.status_code == 200
-    data = resp.json()
+    post_data = resp.json()
+    assert "job_id" in post_data
+    status_resp = _client.get(f"/ingest/status/{post_data['job_id']}")
+    assert status_resp.status_code == 200
+    data = status_resp.json()
     assert "skipped" in data
     assert "reingested" in data
     assert "missing" in data

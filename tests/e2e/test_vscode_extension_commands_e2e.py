@@ -1,5 +1,8 @@
 """Deterministic qualification of public commands and UI flows (Lane C)."""
+
+
 import pytest
+
 
 pytestmark = [pytest.mark.e2e, pytest.mark.extension]
 
@@ -30,10 +33,12 @@ pytestmark = [pytest.mark.e2e, pytest.mark.extension]
 def test_command_invocations(run_tool, live_recorder_server, command, extra, expected_path):
     base_url, recorded = live_recorder_server
 
-    res = run_tool("http://127.0.0.1:49999", f"cmd:{command}", {}, extra)
+    res = run_tool(base_url, f"cmd:{command}", {}, extra)
 
     assert not res.get("toolError"), f"Command {command} failed: {res.get('toolError')}"
+
     paths = [r["path"] for r in recorded]
+
     assert any(
         p == expected_path or p == expected_path.rstrip("/") for p in paths
     ), f"Command {command} did not hit {expected_path}, hit: {paths}"
@@ -48,6 +53,7 @@ def test_show_graph_commands(run_tool, live_recorder_server):
         {},
         {"_inputResponse": "how it works"},
     )
+
     assert res1["panelCount"] == 1
 
     res2 = run_tool(
@@ -56,39 +62,55 @@ def test_show_graph_commands(run_tool, live_recorder_server):
         {},
         {"_selectedText": "selected topic"},
     )
+
     assert res2["panelCount"] == 1
 
 
 # ---------------------------------------------------------------------------
+
+
 # VSC-CMD-START / VSC-CMD-STOP: server lifecycle commands
+
+
 # ---------------------------------------------------------------------------
 
 
 def test_start_server_command_probes_health(run_tool, live_recorder_server):
     """axon.startServer: when the API is already reachable, extension marks it
+
+
     as running and logs to the output channel without spawning a subprocess."""
+
     base_url, recorded = live_recorder_server
 
     # The recorder replies 200 to /health, so ensureServerRunning sees a live server.
+
     res = run_tool(
-        "http://127.0.0.1:49999",
+        base_url,
         "cmd:axon.startServer",
         {},
         {"autoStart": False, "_postActivateWaitMs": 0},
     )
 
     assert not res.get("toolError"), f"startServer failed: {res.get('toolError')}"
+
     paths = [r["path"] for r in recorded]
+
     assert "/health" in paths, f"startServer did not probe /health; hit: {paths}"
 
 
 def test_start_server_command_no_workspace(run_tool, live_recorder_server):
     """axon.startServer: when workspaceFolders is empty the command exits
+
+
     cleanly and logs the 'no workspace folder' message — no crash."""
+
     base_url, recorded = live_recorder_server
 
     # Provide no workspace folders — forces the early-exit branch in ensureServerRunning.
+
     # The recorder health endpoint will NOT be hit because the early exit fires first.
+
     res = run_tool(
         "http://127.0.0.1:49999",
         "cmd:axon.startServer",
@@ -97,7 +119,9 @@ def test_start_server_command_no_workspace(run_tool, live_recorder_server):
     )
 
     assert not res.get("toolError"), f"startServer (no-workspace) raised: {res.get('toolError')}"
+
     output = "\n".join(res.get("outputLines", []))
+
     assert (
         "workspace" in output.lower() or "no workspace" in output.lower()
     ), f"Expected workspace warning in output lines; got: {output!r}"
@@ -105,7 +129,10 @@ def test_start_server_command_no_workspace(run_tool, live_recorder_server):
 
 def test_stop_server_command_clears_managed_process(run_tool, live_recorder_server):
     """axon.stopServer: command executes cleanly.  With no spawned server
+
+
     process in the test harness the function returns without error."""
+
     base_url, recorded = live_recorder_server
 
     res = run_tool("http://127.0.0.1:49999", "cmd:axon.stopServer", {}, {})
@@ -115,7 +142,10 @@ def test_stop_server_command_clears_managed_process(run_tool, live_recorder_serv
 
 def test_show_graph_command_cancelled(run_tool, live_recorder_server):
     """axon.showGraphForQuery: when the input box is cancelled (returns null)
+
+
     no panel is created and no error is raised."""
+
     base_url, recorded = live_recorder_server
 
     res = run_tool(
@@ -127,4 +157,5 @@ def test_show_graph_command_cancelled(run_tool, live_recorder_server):
     )
 
     assert not res.get("toolError"), f"showGraphForQuery (cancelled) raised: {res.get('toolError')}"
+
     assert res["panelCount"] == 0, "Panel must NOT open when input is cancelled"

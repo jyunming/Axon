@@ -342,6 +342,9 @@ def make_brain(monkeypatch, tmp_path):
         }
         config_kwargs.update(overrides)
         config = AxonConfig(**config_kwargs)
+        # AxonConfig.__post_init__ always derives projects_root from AxonStore layout;
+        # override it here so the brain uses the isolated tmp_path directory.
+        config.projects_root = str(projects_root)
         brain = AxonBrain(config)
         created.append(brain)
         api_module.brain = brain

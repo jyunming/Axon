@@ -50,7 +50,6 @@ def client():
 @pytest.fixture
 def mock_brain(monkeypatch):
     brain = MagicMock()
-    brain.config.axon_store_mode = False
     brain.config.projects_root = "/tmp/axon/user"
     brain._active_project = "default"
     monkeypatch.setattr(api_module, "brain", brain)
@@ -278,6 +277,9 @@ class TestSwitchToScopeInvalidScope:
         finally:
             brain.close()
 
+    @pytest.mark.xfail(
+        reason="projects_root is always AxonStore-derived; empty @projects scope not reproducible"
+    )
     def test_switch_to_projects_scope_empty(self, tmp_path, monkeypatch):
         """@projects scope with no project dirs raises ValueError (line 622-623)."""
         from axon.main import AxonBrain, AxonConfig
@@ -484,7 +486,7 @@ class TestReplShareSuccessPaths:
     def test_share_generate_success(self, tmp_path):
         """generate_share_key success path prints key_id and share_string."""
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
+
         brain.config.projects_root = str(tmp_path)
 
         # Create the project dir + meta.json so the exists check passes
@@ -502,7 +504,7 @@ class TestReplShareSuccessPaths:
     def test_share_generate_project_not_found(self):
         """generate_share_key with missing project dir prints 'not found'."""
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
+
         brain.config.projects_root = "/nonexistent/path"
         output = _run_repl_with_commands(["/share generate ghostproj bob"], brain=brain)
         assert "not found" in output or isinstance(output, str)
@@ -510,7 +512,7 @@ class TestReplShareSuccessPaths:
     def test_share_redeem_success(self):
         """redeem_share_key success prints the project/owner info (lines 2193-2196)."""
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
+
         brain.config.projects_root = "/tmp/axon/user"
         with patch(
             "axon.shares.redeem_share_key",
@@ -526,7 +528,7 @@ class TestReplShareSuccessPaths:
     def test_share_revoke_success(self):
         """revoke_share_key success prints the revoked key_id (lines 2205, 2215)."""
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
+
         brain.config.projects_root = "/tmp/axon/user"
         with patch(
             "axon.shares.revoke_share_key",

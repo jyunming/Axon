@@ -1234,23 +1234,20 @@ def test_get_projects_excludes_reserved_memory_only_entries():
 # ---------------------------------------------------------------------------
 
 
-def test_store_whoami_no_store_mode():
-    """whoami returns store_mode=False when brain is not in store mode."""
-    mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = False
-    api_module.brain = mock_brain
+def test_store_whoami_no_brain():
+    """whoami returns just username when brain is not initialized."""
+    api_module.brain = None
 
     resp = client.get("/store/whoami")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["store_mode"] is False
     assert "username" in data
+    assert "user_dir" not in data
 
 
-def test_store_whoami_store_mode_active():
-    """whoami returns store paths and _active_project (not config.project) when store mode is on."""
+def test_store_whoami_returns_store_paths():
+    """whoami returns store paths and active_project when brain is initialized."""
     mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = True
     mock_brain.config.projects_root = "/data/AxonStore/alice"
     mock_brain.config.project = "_default"  # stale value — must NOT appear in response
     mock_brain._active_project = "research"  # real active project after a switch
@@ -1259,9 +1256,9 @@ def test_store_whoami_store_mode_active():
     resp = client.get("/store/whoami")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["store_mode"] is True
     assert "user_dir" in data
     assert "username" in data
+    assert data.get("active_project") == "research"
     assert data["store_path"].replace("\\", "/") == "/data/AxonStore"
     assert data["active_project"] == "research"  # must use _active_project, not config.project
 
@@ -1271,11 +1268,9 @@ def test_store_whoami_store_mode_active():
 # ---------------------------------------------------------------------------
 
 
-def test_share_list_503_no_store_mode():
-    """/share/list returns 503 when axon_store_mode is off."""
-    mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = False
-    api_module.brain = mock_brain
+def test_share_list_503_no_brain():
+    """/share/list returns 503 when brain is not initialized."""
+    api_module.brain = None
 
     resp = client.get("/share/list")
     assert resp.status_code == 503
@@ -1284,7 +1279,6 @@ def test_share_list_503_no_store_mode():
 def test_share_list_returns_sharing_and_shared(tmp_path):
     """/share/list returns both sharing and shared keys."""
     mock_brain = _make_brain()
-    mock_brain.config.axon_store_mode = True
     mock_brain.config.projects_root = str(tmp_path)
     api_module.brain = mock_brain
 
@@ -1525,6 +1519,60 @@ class TestIngestStatusEndpoint:
         del api_module._jobs[job_id]
 
 
+class TestEvictOldJobs:
+    """Tests for _evict_old_jobs() — processing jobs must not be TTL-evicted."""
+
+    def setup_method(self):
+        api_module._jobs.clear()
+
+    def teardown_method(self):
+        api_module._jobs.clear()
+
+    def test_processing_job_not_evicted_by_ttl(self):
+        """A still-processing job must survive TTL eviction even if started long ago."""
+        api_module._jobs["old_active"] = {
+            "job_id": "old_active",
+            "status": "processing",
+            "started_at_ts": 0.0,  # epoch — well past 1-hour TTL
+        }
+        api_module._evict_old_jobs()
+        assert "old_active" in api_module._jobs
+
+    def test_completed_job_evicted_by_ttl(self):
+        """A completed job started more than 1 hour ago must be evicted."""
+        api_module._jobs["old_done"] = {
+            "job_id": "old_done",
+            "status": "completed",
+            "started_at_ts": 0.0,
+        }
+        api_module._evict_old_jobs()
+        assert "old_done" not in api_module._jobs
+
+    def test_processing_job_survives_cap_eviction(self):
+        """With >_MAX_JOBS entries, processing jobs are the last to be removed."""
+        import axon.api as _api_mod
+
+        cap = _api_mod._MAX_JOBS
+        # Fill with completed old jobs up to cap+1
+        for i in range(cap + 1):
+            jid = f"done_{i}"
+            api_module._jobs[jid] = {
+                "job_id": jid,
+                "status": "completed",
+                "started_at_ts": float(i),
+            }
+        active_id = "active_new"
+        api_module._jobs[active_id] = {
+            "job_id": active_id,
+            "status": "processing",
+            "started_at_ts": 0.0,  # oldest timestamp — would be first to evict without fix
+        }
+        api_module._evict_old_jobs()
+        # The active job must still be present; a completed job was evicted instead
+        assert active_id in api_module._jobs
+        assert len(api_module._jobs) <= cap
+
+
 # ---------------------------------------------------------------------------
 # Bug regression: directory ingest uses sync loader (no asyncio.run in thread)
 # ---------------------------------------------------------------------------
@@ -1740,12 +1788,17 @@ def test_delete_mounted_share_returns_403():
     assert "mounted share" in resp.json()["detail"]
 
 
-def test_refresh_mounted_share_returns_403(tmp_path):
-    """POST /ingest/refresh returns 403 when active project is a mounted share."""
+def test_refresh_mounted_share_ingest_error_recorded_in_job(tmp_path):
+    """POST /ingest/refresh: PermissionError during ingest is recorded in job errors.
+
+    Refresh is now async — the 403 guard fires from _assert_write_allowed (see
+    test_refresh_write_guard_returns_403_before_scanning_docs). A PermissionError
+    raised from brain.ingest() inside the background task is caught and stored in
+    the job's errors list rather than propagated as HTTP 403.
+    """
     doc_file = tmp_path / "doc.txt"
     doc_file.write_text("hello world", encoding="utf-8")
     api_module.brain = _make_brain()
-    # stale hash so the endpoint tries to re-ingest
     api_module.brain.get_doc_versions.return_value = {
         str(doc_file): {"content_hash": "stale_hash_that_wont_match"}
     }
@@ -1753,7 +1806,11 @@ def test_refresh_mounted_share_returns_403(tmp_path):
         "Cannot ingest on mounted share 'mounts/alice_proj'."
     )
     resp = client.post("/ingest/refresh")
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    status_resp = client.get(f"/ingest/status/{job_id}")
+    job = status_resp.json()
+    assert len(job["errors"]) >= 1
 
 
 def test_refresh_write_guard_returns_403_before_scanning_docs():
@@ -2028,7 +2085,6 @@ def test_query_provenance_missing_attribute_defaults_to_empty():
 def test_switch_to_revoked_mount_returns_404(tmp_path):
     """Switching to a revoked mounted project returns 404 immediately."""
     brain = _make_brain()
-    brain.config.axon_store_mode = True
     brain.config.projects_root = str(tmp_path)
     api_module.brain = brain
 
@@ -2047,7 +2103,6 @@ def test_switch_to_revoked_mount_returns_404(tmp_path):
 def test_switch_to_valid_mount_proceeds(tmp_path):
     """Switching to a valid (non-revoked) mount proceeds normally."""
     brain = _make_brain()
-    brain.config.axon_store_mode = True
     brain.config.projects_root = str(tmp_path)
     api_module.brain = brain
 
@@ -2064,7 +2119,6 @@ def test_switch_to_valid_mount_proceeds(tmp_path):
 def test_switch_to_normal_project_skips_revocation_check():
     """Switching to a non-mount project never calls validate_received_shares."""
     brain = _make_brain()
-    brain.config.axon_store_mode = True
     api_module.brain = brain
 
     with patch("axon.shares.validate_received_shares") as mock_validate:
@@ -2074,14 +2128,13 @@ def test_switch_to_normal_project_skips_revocation_check():
     mock_validate.assert_not_called()
 
 
-def test_switch_mount_revocation_skipped_outside_store_mode():
-    """validate_received_shares is not called when axon_store_mode is False."""
+def test_switch_mount_revocation_check_runs_for_mounts():
+    """validate_received_shares is always called when switching to a mounts/ project."""
     brain = _make_brain()
-    brain.config.axon_store_mode = False
     api_module.brain = brain
 
-    with patch("axon.shares.validate_received_shares") as mock_validate:
+    with patch("axon.shares.validate_received_shares", return_value=[]) as mock_validate:
         resp = client.post("/project/switch", json={"project_name": "mounts/alice_docs"})
 
     assert resp.status_code == 200
-    mock_validate.assert_not_called()
+    mock_validate.assert_called_once()

@@ -178,15 +178,8 @@ class TestReplKeysSubcommands:
 
 
 class TestReplShareSubcommands:
-    def test_share_no_store_mode(self):
+    def test_share_list(self):
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = False
-        output = _run_repl_with_commands(["/share"], brain=brain)
-        assert "AxonStore" in output
-
-    def test_share_list_in_store_mode(self):
-        brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
         brain.config.projects_root = "/tmp/axon/user"
         with patch("axon.shares.list_shares", return_value={"issued": [], "received": []}):
             with patch("axon.shares.validate_received_shares", return_value=[]):
@@ -195,7 +188,6 @@ class TestReplShareSubcommands:
 
     def test_share_generate(self):
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
         brain.config.projects_root = "/tmp/axon/user"
         with patch(
             "axon.shares.generate_share_key",
@@ -206,7 +198,6 @@ class TestReplShareSubcommands:
 
     def test_share_redeem(self):
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
         brain.config.projects_root = "/tmp/axon/user"
         with patch("axon.shares.redeem_share_key", return_value={"mount": "ok"}):
             output = _run_repl_with_commands(["/share redeem axon://testtoken"], brain=brain)
@@ -214,7 +205,6 @@ class TestReplShareSubcommands:
 
     def test_share_revoke(self):
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
         brain.config.projects_root = "/tmp/axon/user"
         with patch("axon.shares.revoke_share_key", return_value={"revoked": True}):
             output = _run_repl_with_commands(["/share revoke keyid123"], brain=brain)
@@ -313,24 +303,16 @@ class TestReplLlmSubcommands:
 
 
 class TestReplStoreSubcommands:
-    def test_store_not_configured(self):
+    def test_store_whoami(self):
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = False
+        brain.config.projects_root = "/tmp/axon/user"
         output = _run_repl_with_commands(["/store"], brain=brain)
         assert isinstance(output, str)
 
     def test_store_init(self):
         brain = _make_mock_brain()
-        brain.config.axon_store_mode = False
         with patch("axon.projects.ensure_user_project"):
             output = _run_repl_with_commands(["/store init /tmp/axonstore"], brain=brain)
-        assert isinstance(output, str)
-
-    def test_store_status_active(self):
-        brain = _make_mock_brain()
-        brain.config.axon_store_mode = True
-        brain.config.projects_root = "/tmp/axon/user"
-        output = _run_repl_with_commands(["/store"], brain=brain)
         assert isinstance(output, str)
 
 

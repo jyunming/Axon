@@ -11,7 +11,7 @@ Thank you for your interest in contributing to Axon! This document provides guid
 
 ### Setting Up Your Development Environment
 
-See [SETUP.md](SETUP.md) for platform-specific installation steps. Quick start:
+See [docs/SETUP.md](docs/SETUP.md) for platform-specific installation steps. Quick start:
 
 ```bash
 git clone https://github.com/jyunming/Axon.git && cd Axon
@@ -24,19 +24,21 @@ pip install -e ".[dev]"
 
 Run the full test suite:
 ```bash
-pytest
+python -m pytest tests/ -v --no-cov
 ```
 
 Run with coverage:
 ```bash
-pytest --cov=axon --cov-report=html
+python -m pytest tests/ --cov=axon --cov-report=html
 ```
 
 Run specific tests:
 ```bash
-pytest tests/test_splitters.py
-pytest -k test_basic_split
+python -m pytest tests/test_splitters.py -v --no-cov
+python -m pytest -k test_basic_split --no-cov
 ```
+
+> **Note:** VS Code extension e2e tests (`tests/e2e/test_vscode_extension_*.py`) require a live VS Code instance and are excluded from the standard run via `-m "not extension"`. The pre-commit hook runs the full non-extension suite automatically on every commit (black + ruff + pytest).
 
 ### Code Quality
 

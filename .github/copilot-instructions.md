@@ -197,44 +197,147 @@ to avoid burning the context window.
 
 ---
 
-## VS Code Extension LM Tool Names
+## VS Code Extension LM Tool Names (32 total)
 
 When using the Axon VS Code extension in Copilot Chat (`@workspace` or inline), these LM tools are available:
 
+### Search & Query
+
 | Tool | Does |
 |---|---|
-| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, Copilot synthesises the answer |
-| `axon_queryKnowledge` | Retrieval + answer via local LLM (requires Ollama) |
-| `axon_showGraph` | Open Graph Panel — shows answer, citations, and 3D entity/code graph in VS Code |
-| `axon_ingestPath` | Ingest a local file or directory (async, returns `job_id`) |
-| `axon_getIngestStatus` | Poll ingest job status |
-| `axon_listProjects` | List project namespaces |
-| `axon_switchProject` | Switch active project |
-| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+| `search_knowledge` | Raw chunk retrieval — best for discovery; Copilot synthesises the answer |
+| `query_knowledge` | Retrieval + answer via local LLM (requires Ollama) |
+| `show_graph` | Open Graph Panel — shows answer, citations, and 3D entity/code graph in VS Code |
+| `graph_status` | Return GraphRAG community build status (in-progress flag + summary count) |
+| `get_current_settings` | Read current active configuration (top_k, rerank, hyde, model, etc.) |
+| `update_settings` | Toggle RAG flags for the current session (hyde, rerank, graph_rag, etc.) |
+| `graph_data` | Return raw graph payload (nodes + links) for the active project |
+| `graph_finalize` | Trigger community rebuild on the knowledge graph for global-mode GraphRAG |
 
-Use `axon_showGraph` when the user asks to "show the graph", "visualise", or "see connections" for a topic. The tool opens the split panel inside VS Code — **no browser is opened**.
+### Ingestion
+
+| Tool | Does |
+|---|---|
+| `ingest_text` | Ingest a raw text snippet |
+| `ingest_texts` | Ingest multiple text snippets in one call |
+| `ingest_url` | Fetch a web page and ingest it |
+| `ingest_path` | Ingest a local file or directory (async, returns `job_id`) |
+| `get_job_status` | Poll ingest job status until `completed` |
+| `refresh_ingest` | Re-ingest tracked files whose content changed since last ingest |
+| `ingest_image` | Describe an image via Copilot vision model and ingest the description |
+
+### Knowledge Base Management
+
+| Tool | Does |
+|---|---|
+| `list_knowledge` | List indexed sources and chunk counts for the active project |
+| `delete_documents` | Remove specific documents by ID |
+| `clear_knowledge` | Wipe all data from the active project (irreversible) |
+| `get_stale_docs` | Return docs not re-ingested within N days (default 7) |
+
+### Project Management
+
+| Tool | Does |
+|---|---|
+| `list_projects` | List all project namespaces and mounted shares |
+| `switch_project` | Switch active project |
+| `create_project` | Create a new named project |
+| `delete_project` | Delete a project and all its data permanently |
+
+### AxonStore & Sharing
+
+| Tool | Does |
+|---|---|
+| `init_store` | Initialise AxonStore multi-user mode at a given base directory |
+| `get_store_status` | Check whether the AxonStore is initialised and return its metadata |
+| `share_project` | Generate an HMAC share key for a grantee |
+| `redeem_share` | Mount a shared project using a share string (read-only) |
+| `revoke_share` | Revoke a previously issued share key by `key_id` |
+| `list_shares` | List outgoing shares and incoming mounts with revocation status |
+
+### Sessions & Governance
+
+| Tool | Does |
+|---|---|
+| `list_sessions` | List active REPL/API sessions |
+| `get_session` | Get details for a specific session |
+| `get_active_leases` | List active write-lease counts per project |
+
+Use `show_graph` when the user asks to "show the graph", "visualise", or "see connections" for a topic. The tool opens the split panel inside VS Code — **no browser is opened**.
 
 ---
 
-## MCP Tool Names (agent mode)
+## MCP Tool Names (27 total — agent mode)
 
 When using Copilot in **agent mode** with the Axon MCP server, use these
 tool names (they differ deliberately from the OpenAI-format `tools.py` names):
+
+### Ingestion
 
 | MCP tool | Does |
 |---|---|
 | `ingest_text` | Single document ingest |
 | `ingest_texts` | Batch ingest (prefer this) |
 | `ingest_url` | Fetch URL and ingest |
-| `ingest_path` | Ingest a local file/directory |
+| `ingest_path` | Ingest a local file/directory (async, returns `job_id`) |
 | `get_job_status` | Poll async ingest job |
-| `search_knowledge` | Raw chunk retrieval |
-| `query_knowledge` | Synthesised answer |
-| `list_knowledge` | List indexed sources |
+
+### Search & Query
+
+| MCP tool | Does |
+|---|---|
+| `search_knowledge` | Raw chunk retrieval (threshold fallback: retries without threshold if zero results) |
+| `query_knowledge` | Synthesised answer via local LLM |
+
+### Knowledge Base Management
+
+| MCP tool | Does |
+|---|---|
+| `list_knowledge` | List indexed sources with chunk counts |
+| `delete_documents` | Remove documents by `doc_ids` list |
+| `clear_knowledge` | Wipe active project's vector store and BM25 index (irreversible) |
+| `get_stale_docs` | Find docs not refreshed in N days (default 30) |
+| `get_active_leases` | List active read/write leases held via AxonStore |
+
+### Project Management
+
+| MCP tool | Does |
+|---|---|
+| `list_projects` | List all project namespaces and mounted shares |
 | `switch_project` | Change active project |
-| `delete_documents` | Remove by ID |
-| `list_projects` | List all project namespaces |
-| `get_stale_docs` | Find docs not re-ingested in N days |
+| `create_project` | Create a new named project |
+| `delete_project` | Delete a project and all its data permanently |
+
+### Settings
+
+| MCP tool | Does |
+|---|---|
+| `get_current_settings` | Return active RAG flags, model config, and runtime settings |
+| `update_settings` | Toggle RAG flags at runtime (session-scoped, not persisted) |
+
+### Sessions
+
+| MCP tool | Does |
+|---|---|
+| `list_sessions` | List saved conversation sessions (up to 20 most recent) |
+| `get_session` | Retrieve a full session transcript by timestamp ID |
+
+### GraphRAG
+
+| MCP tool | Does |
+|---|---|
+| `graph_status` | Return entity count, edge count, community count, and rebuild state |
+| `graph_finalize` | Trigger community detection rebuild for global-mode GraphRAG |
+| `graph_data` | Return the full entity/relation graph as a JSON nodes+links payload |
+
+### AxonStore & Sharing
+
+| MCP tool | Does |
+|---|---|
+| `init_store` | Initialise AxonStore at a shared filesystem base path |
+| `share_project` | Generate a read-only share key for a grantee |
+| `redeem_share` | Mount a shared project using a share string (read-only) |
+| `list_shares` | List outgoing and incoming shares, including revoked status |
 
 ---
 
@@ -254,23 +357,6 @@ The following `config.yaml` fields under the `offline:` key control local model 
 When `local_assets_only: true`, Axon runs a preflight model audit at startup and logs
 `[local]`, `[hf_cache]`, `[remote]`, or `[MISSING]` for each active model. Startup is
 aborted with a `RuntimeError` if any active model is `[remote]` or `[MISSING]`.
-
-## Store Identity and Migration
-
-Each AxonStore has a `store_meta.json` at its root containing `store_version`,
-`store_id`, and `created_at`. Each project's `meta.json` contains a
-`project_id` used as the namespace for all chunk and source IDs.
-
-To migrate existing projects (backfill `project_id` and rename `_default` →
-`default`), use the `axon.migration` module:
-
-```python
-from axon.migration import run_migration
-from pathlib import Path
-run_migration(Path.home() / ".axon/projects")
-```
-
-`audit_legacy_chunk_ids(project_dir)` can report chunks with old basename-derived IDs.
 
 ---
 

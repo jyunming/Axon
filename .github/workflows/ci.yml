@@ -1,144 +1,954 @@
 name: CI
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 on:
-  pull_request:
-    branches: [main]  # only PRs targeting main trigger CI
+
+
+
+
+
+
+
+  push:
+
+
+
+
+
+
+
+    branches: [main, master, develop]
+
+
+
+
+
+
+
+  pull_request:  # all PRs, regardless of target branch
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 jobs:
+
+
+
+
+
+
+
   test:
+
+
+
+
+
+
+
     name: Test & Validate
+
+
+
+
+
+
+
     runs-on: ubuntu-latest
+
+
+
+
+
+
+
     strategy:
+
+
+
+
+
+
+
       matrix:
+
+
+
+
+
+
+
         python-version: ["3.10", "3.11", "3.12"]
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     steps:
+
+
+
+
+
+
+
       - uses: actions/checkout@v4
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
       - name: Free disk space
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+
+
+
+
+
+
           sudo apt-get clean
+
+
+
+
+
+
+
           df -h
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       - name: Set up Python ${{ matrix.python-version }}
+
+
+
+
+
+
+
         uses: actions/setup-python@v5
+
+
+
+
+
+
+
         with:
+
+
+
+
+
+
+
           python-version: ${{ matrix.python-version }}
+
+
+
+
+
+
+
           cache: pip
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
       - name: Cache pip dependencies
+
+
+
+
+
+
+
         uses: actions/cache@v4
+
+
+
+
+
+
+
         with:
+
+
+
+
+
+
+
           path: ~/.cache/pip
+
+
+
+
+
+
+
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
+
+
+
+
+
+
+
           restore-keys: |
+
+
+
+
+
+
+
             ${{ runner.os }}-pip-
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       - name: Install dependencies
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           pip install --upgrade pip
+
+
+
+
+
+
+
           pip install -r requirements.txt
+
+
+
+
+
+
+
           pip install -e ".[dev]"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
       - name: Syntax check (py_compile)
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           python -m py_compile src/axon/main.py
+
+
+
+
+
+
+
           python -m py_compile src/axon/api.py
+
+
+
+
+
+
+
           python -m py_compile src/axon/loaders.py
+
+
+
+
+
+
+
           python -m py_compile src/axon/retrievers.py
+
+
+
+
+
+
+
           python -m py_compile src/axon/splitters.py
+
+
+
+
+
+
+
           python -m py_compile src/axon/tools.py
+
+
+
+
+
+
+
           python -m py_compile src/axon/webapp.py
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       - name: Lint with ruff (if installed)
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           if pip show ruff &>/dev/null; then
+
+
+
+
+
+
+
             ruff check src/ tests/
+
+
+
+
+
+
+
           else
+
+
+
+
+
+
+
             echo "ruff not installed — skipping lint."
+
+
+
+
+
+
+
           fi
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
       - name: Format check with black (if installed)
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           if pip show black &>/dev/null; then
+
+
+
+
+
+
+
             black --check src/ tests/
+
+
+
+
+
+
+
           else
+
+
+
+
+
+
+
             echo "black not installed — skipping format check."
+
+
+
+
+
+
+
           fi
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
       - name: Type check with mypy (if installed)
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           if pip show mypy &>/dev/null; then
+
+
+
+
+
+
+
             mypy src/axon/ --ignore-missing-imports --no-error-summary
+
+
+
+
+
+
+
           else
+
+
+
+
+
+
+
             echo "mypy not installed — skipping type check."
+
+
+
+
+
+
+
           fi
+
+
+
+
+
+
+
         continue-on-error: true
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       - name: Run tests
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           if [ -d tests ] && [ -n "$(find tests -name '*.py' -not -name '__init__.py')" ]; then
+
+
+
+
+
+
+
             if pip show pytest-cov &>/dev/null; then
+
+
+
+
+
+
+
               python -m pytest tests/ -v --tb=short --cov=axon --cov-report=xml --cov-report=term
+
+
+
+
+
+
+
             else
+
+
+
+
+
+
+
               python -m pytest tests/ -v --tb=short
+
+
+
+
+
+
+
             fi
+
+
+
+
+
+
+
           else
+
+
+
+
+
+
+
             echo "No tests found — skipping pytest. Add tests to tests/ to enable this step."
+
+
+
+
+
+
+
           fi
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       - name: Run RAG evaluation smoke tests
+
+
+
+
+
+
+
         run: |
+
+
+
+
+
+
+
           python -m pytest tests/test_eval_smoke.py -m eval -v --tb=short --no-header
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       - name: Upload coverage to Codecov
+
+
+
+
+
+
+
         uses: codecov/codecov-action@v4
+
+
+
+
+
+
+
         with:
+
+
+
+
+
+
+
           file: ./coverage.xml
+
+
+
+
+
+
+
           fail_ci_if_error: false
 
-  smoke-e2e-stress:
-    name: E2E + Stress Smoke
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -e ".[dev]"
 
-      - name: Run smoke e2e + stress tests
-        run: |
-          python -m pytest \
-            tests/e2e/test_repl_e2e.py::test_repl_transcript_ingest_query_list_and_sessions \
-            tests/test_runtime_stress.py::test_concurrent_switch_and_ingest_fencing \
-            --tb=short --no-header --no-cov -v
+
+
+
+
+
+
+
+
+
+
 
   docker:
+
+
+
+
+
+
+
     runs-on: ubuntu-latest
+
+
+
+
+
+
+
     steps:
+
+
+
+
+
+
+
     - uses: actions/checkout@v4
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - name: Free disk space
+
+
+
+
+
+
+
       run: |
+
+
+
+
+
+
+
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+
+
+
+
+
+
         sudo apt-get clean
+
+
+
+
+
+
+
         docker system prune -af
+
+
+
+
+
+
+
         df -h
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - name: Build Docker image
+
+
+
+
+
+
+
       run: |
+
+
+
+
+
+
+
         docker build -t local-axon:test .
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - name: Test Docker image
+
+
+
+
+
+
+
       run: |
+
+
+
+
+
+
+
         docker run --rm local-axon:test axon --help
+

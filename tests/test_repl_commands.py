@@ -489,7 +489,7 @@ class TestReplRefresh:
 
 class TestReplStore:
     def test_store_whoami(self):
-        brain = _make_mock_brain(axon_store_mode=True, projects_root="/data/AxonStore/alice")
+        brain = _make_mock_brain(projects_root="/data/AxonStore/alice")
         brain._active_project = "research"
         with patch("getpass.getuser", return_value="alice"):
             output = _run_repl_with_commands(["/store whoami"], brain=brain)
