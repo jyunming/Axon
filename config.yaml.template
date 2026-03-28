@@ -622,7 +622,7 @@ vector_store:
 
 
 
-  provider: lancedb                   # options: lancedb, chroma, qdrant
+  provider: lancedb                   # options: lancedb (default, ships with pip install axon), chroma (pip install axon[chroma]), qdrant (pip install axon[qdrant])
 
 
 
