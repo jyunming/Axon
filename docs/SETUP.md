@@ -967,43 +967,48 @@ Open Copilot Chat (Ctrl+Shift+I or the chat icon in the Activity Bar). Type:
 @axon what files have I ingested?
 ```
 
-Copilot will call `axon_getCollection` or `axon_listProjects` automatically. You can also ask in plain language:
+Copilot will call `list_knowledge` or `list_projects` automatically. You can also ask in plain language:
 
 ```
 @axon search for information about neural networks
 ```
 
-### Available tools (27 total)
+### Available tools (32 total)
 
 | Tool | What it does |
 |---|---|
-| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer. If `threshold` filters out all results, automatically falls back to top-N candidates with a note. |
-| `axon_queryKnowledge` | Retrieval + answer via the configured LLM provider |
-| `axon_ingestText` | Ingest a text snippet directly |
-| `axon_ingestUrl` | Fetch and ingest a web page |
-| `axon_ingestPath` | Ingest a local file or directory (async; returns `job_id`) |
-| `axon_getIngestStatus` | Poll an ingest job by `job_id` — call after `axon_ingestPath` before searching |
-| `axon_listProjects` | List available projects |
-| `axon_switchProject` | Switch active project |
-| `axon_createProject` | Create a new project |
-| `axon_deleteProject` | Delete a project and all its data |
-| `axon_deleteDocuments` | Remove specific documents by ID |
-| `axon_getCollection` | List all ingested files with chunk counts |
-| `axon_clearCollection` | Wipe all data from the current project |
-| `axon_clearKnowledgeBase` | Alias for clearCollection — wipe all vectors and BM25 index |
-| `axon_updateSettings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
-| `axon_getSettings` | Read the current active Axon configuration (retrieval flags, RAG mode, LLM provider) |
-| `axon_shareProject` | Generate a share key for a project |
-| `axon_redeemShare` | Mount a project shared by another user |
-| `axon_revokeShare` | Revoke an active share |
-| `axon_listShares` | List outgoing and incoming project shares |
-| `axon_initStore` | Change the store base path (e.g. to a shared drive) |
-| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description. Accepts optional `alt_text` param to provide a description directly (enables headless/offline use without Copilot vision). |
-| `axon_refreshIngest` | Re-ingest files whose content has changed since last ingest |
-| `axon_listStaleDocs` | Find documents not re-ingested within N days |
-| `axon_showGraphStatus` | Show entity count, community summary count, and graph readiness |
-| `axon_showGraph` | Open the Axon Graph Panel for a query — shows answer, citations, and 3D entity/code graph side by side |
-| `axon_finalizeGraph` | Rebuild community summaries and finalize the knowledge graph for global-mode queries |
+| `search_knowledge` | Raw chunk retrieval — best for discovery, letting Copilot synthesise the answer. If `threshold` filters out all results, automatically falls back to top-N candidates with a note. |
+| `query_knowledge` | Retrieval + answer via the configured LLM provider |
+| `ingest_text` | Ingest a text snippet directly |
+| `ingest_texts` | Ingest multiple text snippets in one call |
+| `ingest_url` | Fetch and ingest a web page |
+| `ingest_path` | Ingest a local file or directory (async; returns `job_id`) |
+| `get_job_status` | Poll an ingest job by `job_id` — call after `ingest_path` before searching |
+| `list_projects` | List available projects |
+| `switch_project` | Switch active project |
+| `create_project` | Create a new project |
+| `delete_project` | Delete a project and all its data |
+| `delete_documents` | Remove specific documents by ID |
+| `list_knowledge` | List all ingested files with chunk counts |
+| `clear_knowledge` | Wipe all data from the current project |
+| `update_settings` | Adjust RAG settings (top_k, rerank, hyde, etc.) |
+| `get_current_settings` | Read the current active Axon configuration (retrieval flags, RAG mode, LLM provider) |
+| `share_project` | Generate a share key for a project |
+| `redeem_share` | Mount a project shared by another user |
+| `revoke_share` | Revoke an active share |
+| `list_shares` | List outgoing and incoming project shares |
+| `init_store` | Initialise AxonStore multi-user mode at a given base directory |
+| `get_store_status` | Check whether the AxonStore is initialised and return its metadata |
+| `ingest_image` | Describe an image via Copilot vision model and ingest the description. Accepts optional `alt_text` param to provide a description directly (enables headless/offline use without Copilot vision). |
+| `refresh_ingest` | Re-ingest files whose content has changed since last ingest |
+| `get_stale_docs` | Find documents not re-ingested within N days |
+| `graph_status` | Show entity count, community summary count, and graph readiness |
+| `show_graph` | Open the Axon Graph Panel for a query — shows answer, citations, and 3D entity/code graph side by side |
+| `graph_finalize` | Rebuild community summaries and finalize the knowledge graph for global-mode queries |
+| `graph_data` | Return raw graph payload (nodes + links) for the active project |
+| `list_sessions` | List active REPL/API sessions |
+| `get_session` | Get details for a specific session |
+| `get_active_leases` | List active write-lease counts per project |
 
 ### Available VS Code commands
 
@@ -1087,11 +1092,11 @@ Tabs that have no data are automatically disabled with a tooltip explaining whic
 ```
 1. axon-api starts (auto or manual)
 2. Copilot Chat: "Ingest my documents at /path/to/docs"
-   → extension calls axon_ingestPath → returns job_id
+   → extension calls ingest_path → returns job_id
 3. Copilot Chat: "Check if ingest is done" (or wait a moment)
-   → extension calls axon_getIngestStatus(job_id) → "completed"
+   → extension calls get_job_status(job_id) → "completed"
 4. Copilot Chat: "What are the main topics in those docs?"
-   → extension calls axon_searchKnowledge → Copilot synthesises answer
+   → extension calls search_knowledge → Copilot synthesises answer
 ```
 
 ### `@axon` — Conversational Shortcut
@@ -1102,7 +1107,7 @@ The Axon extension also registers a `@axon` chat participant. It is a **conversa
 @axon What are the main API changes in the last sprint?
 ```
 
-`@axon` posts your prompt to `/query` on the backend, the same path as `axon_queryKnowledge`. The result is identical. Use it when you prefer a conversational style; use `axon_*` tools directly when you want explicit tool invocations (e.g. in agent mode or pipelines). There is no behavioral difference.
+`@axon` posts your prompt to `/query` on the backend, the same path as `query_knowledge`. The result is identical. Use it when you prefer a conversational style; use tools directly when you want explicit tool invocations (e.g. in agent mode or pipelines). There is no behavioral difference.
 
 ### Troubleshooting the extension
 

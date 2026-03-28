@@ -197,7 +197,7 @@ to avoid burning the context window.
 
 ---
 
-## VS Code Extension LM Tool Names (27 total)
+## VS Code Extension LM Tool Names (32 total)
 
 When using the Axon VS Code extension in Copilot Chat (`@workspace` or inline), these LM tools are available:
 
@@ -205,55 +205,65 @@ When using the Axon VS Code extension in Copilot Chat (`@workspace` or inline), 
 
 | Tool | Does |
 |---|---|
-| `axon_searchKnowledge` | Raw chunk retrieval — best for discovery; Copilot synthesises the answer |
-| `axon_queryKnowledge` | Retrieval + answer via local LLM (requires Ollama) |
-| `axon_showGraph` | Open Graph Panel — shows answer, citations, and 3D entity/code graph in VS Code |
-| `axon_showGraphStatus` | Return GraphRAG community build status (in-progress flag + summary count) |
-| `axon_getSettings` | Read current active configuration (top_k, rerank, hyde, model, etc.) |
-| `axon_updateSettings` | Toggle RAG flags for the current session (hyde, rerank, graph_rag, etc.) |
+| `search_knowledge` | Raw chunk retrieval — best for discovery; Copilot synthesises the answer |
+| `query_knowledge` | Retrieval + answer via local LLM (requires Ollama) |
+| `show_graph` | Open Graph Panel — shows answer, citations, and 3D entity/code graph in VS Code |
+| `graph_status` | Return GraphRAG community build status (in-progress flag + summary count) |
+| `get_current_settings` | Read current active configuration (top_k, rerank, hyde, model, etc.) |
+| `update_settings` | Toggle RAG flags for the current session (hyde, rerank, graph_rag, etc.) |
+| `graph_data` | Return raw graph payload (nodes + links) for the active project |
+| `graph_finalize` | Trigger community rebuild on the knowledge graph for global-mode GraphRAG |
 
 ### Ingestion
 
 | Tool | Does |
 |---|---|
-| `axon_ingestText` | Ingest a raw text snippet |
-| `axon_ingestUrl` | Fetch a web page and ingest it |
-| `axon_ingestPath` | Ingest a local file or directory (async, returns `job_id`) |
-| `axon_getIngestStatus` | Poll ingest job status until `completed` |
-| `axon_refreshIngest` | Re-ingest tracked files whose content changed since last ingest |
-| `axon_ingestImage` | Describe an image via Copilot vision model and ingest the description |
+| `ingest_text` | Ingest a raw text snippet |
+| `ingest_texts` | Ingest multiple text snippets in one call |
+| `ingest_url` | Fetch a web page and ingest it |
+| `ingest_path` | Ingest a local file or directory (async, returns `job_id`) |
+| `get_job_status` | Poll ingest job status until `completed` |
+| `refresh_ingest` | Re-ingest tracked files whose content changed since last ingest |
+| `ingest_image` | Describe an image via Copilot vision model and ingest the description |
 
 ### Knowledge Base Management
 
 | Tool | Does |
 |---|---|
-| `axon_getCollection` | List indexed sources and chunk counts for the active project |
-| `axon_deleteDocuments` | Remove specific documents by ID |
-| `axon_clearCollection` | Wipe all data from the active project (irreversible) |
-| `axon_clearKnowledgeBase` | Alias for clearCollection — use only when a full re-ingest is intended |
-| `axon_listStaleDocs` | Return docs not re-ingested within N days (default 7) |
-| `axon_finalizeGraph` | Trigger community rebuild on the knowledge graph for global-mode GraphRAG |
+| `list_knowledge` | List indexed sources and chunk counts for the active project |
+| `delete_documents` | Remove specific documents by ID |
+| `clear_knowledge` | Wipe all data from the active project (irreversible) |
+| `get_stale_docs` | Return docs not re-ingested within N days (default 7) |
 
 ### Project Management
 
 | Tool | Does |
 |---|---|
-| `axon_listProjects` | List all project namespaces and mounted shares |
-| `axon_switchProject` | Switch active project |
-| `axon_createProject` | Create a new named project |
-| `axon_deleteProject` | Delete a project and all its data permanently |
+| `list_projects` | List all project namespaces and mounted shares |
+| `switch_project` | Switch active project |
+| `create_project` | Create a new named project |
+| `delete_project` | Delete a project and all its data permanently |
 
 ### AxonStore & Sharing
 
 | Tool | Does |
 |---|---|
-| `axon_initStore` | Initialise AxonStore multi-user mode at a given base directory |
-| `axon_shareProject` | Generate an HMAC share key for a grantee |
-| `axon_redeemShare` | Mount a shared project using a share string (read-only) |
-| `axon_revokeShare` | Revoke a previously issued share key by `key_id` |
-| `axon_listShares` | List outgoing shares and incoming mounts with revocation status |
+| `init_store` | Initialise AxonStore multi-user mode at a given base directory |
+| `get_store_status` | Check whether the AxonStore is initialised and return its metadata |
+| `share_project` | Generate an HMAC share key for a grantee |
+| `redeem_share` | Mount a shared project using a share string (read-only) |
+| `revoke_share` | Revoke a previously issued share key by `key_id` |
+| `list_shares` | List outgoing shares and incoming mounts with revocation status |
 
-Use `axon_showGraph` when the user asks to "show the graph", "visualise", or "see connections" for a topic. The tool opens the split panel inside VS Code — **no browser is opened**.
+### Sessions & Governance
+
+| Tool | Does |
+|---|---|
+| `list_sessions` | List active REPL/API sessions |
+| `get_session` | Get details for a specific session |
+| `get_active_leases` | List active write-lease counts per project |
+
+Use `show_graph` when the user asks to "show the graph", "visualise", or "see connections" for a topic. The tool opens the split panel inside VS Code — **no browser is opened**.
 
 ---
 
