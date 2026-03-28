@@ -698,6 +698,8 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 | **OpenAI Codex CLI** | `~/.codex/config.toml` | TOML format — differs from the JSON-based clients |
 | **Google Gemini CLI** | `~/.gemini/settings.json` | Same `mcpServers` JSON shape as Claude Code |
 | **Cursor** | `.cursor/mcp.json` | Same `mcpServers` JSON shape as Claude Code |
+| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Same `mcpServers` JSON shape as Claude Code |
+| **OpenAI Codex Desktop** | Settings → MCP Servers | Add `axon-mcp` as a new stdio connector |
 | **Any other MCP stdio host** | varies | Use `command: axon-mcp` |
 
 The two env vars are the same for every client:
@@ -833,6 +835,38 @@ Add an `mcpServers` block to `~/.gemini/settings.json` (create the file if it do
 Start `axon-api`, then start Gemini CLI. Axon tools are available immediately in the session.
 
 **Verify:** ask Gemini CLI to "list available tools" — `axon_*` entries should appear.
+
+---
+
+### Claude Desktop
+
+Edit (or create)  on macOS, or  on Windows:
+
+```json
+{
+  "mcpServers": {
+    "axon": {
+      "command": "axon-mcp",
+      "env": {
+        "RAG_API_BASE": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop. Axon tools appear in the tool picker automatically.
+
+---
+
+### OpenAI Codex Desktop
+
+Open Codex Desktop → Settings → MCP Servers → Add new → choose **stdio** transport:
+
+- **Command:** 
+- **Environment:** 
+
+Save and restart. All Axon tools will be listed in the agent tool picker.
 
 ---
 

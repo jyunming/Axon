@@ -548,7 +548,7 @@ Open `http://localhost:8501` in your browser if it doesn't open automatically.
 
 
 
-`axon-mcp` is a standard stdio server built on the open MCP protocol. It works with **Claude Code, OpenAI Codex CLI, Google Gemini CLI, Cursor, VS Code Copilot agent mode**, and any other MCP-compatible tool.
+`axon-mcp` is a standard stdio server built on the open MCP protocol. It works with **Claude Code, Claude Desktop, OpenAI Codex CLI, OpenAI Codex Desktop, Google Gemini CLI, Cursor, VS Code Copilot agent mode**, and any other MCP-compatible tool.
 
 
 
