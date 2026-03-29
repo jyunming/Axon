@@ -158,7 +158,10 @@ export class AxonConfigSetTool implements vscode.LanguageModelTool<any> {
 
         } else {
 
-          results.push(`${key} = ${JSON.stringify(data.new_value)} (was ${JSON.stringify(data.old_value)})`);
+          const isSensitive = /key|secret|password|token/i.test(key);
+          const display = isSensitive ? '[redacted]' : JSON.stringify(data.new_value);
+          const prev = isSensitive ? '[redacted]' : JSON.stringify(data.old_value);
+          results.push(`${key} = ${display} (was ${prev})`);
 
         }
 
@@ -388,7 +391,8 @@ export async function runConfigSetupWizard(apiBase: string, apiKey: string): Pro
 
         failed++;
 
-        state.outputChannel.appendLine(`Config set failed for ${key}: ${result.body}`);
+        const isSensitiveKey = /key|secret|password|token/i.test(key);
+        state.outputChannel.appendLine(`Config set failed for ${key}: HTTP ${result.status}${isSensitiveKey ? '' : ` — ${result.body}`}`);
 
       }
 

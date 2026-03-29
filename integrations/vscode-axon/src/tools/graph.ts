@@ -160,10 +160,6 @@ export class AxonGraphDataTool implements vscode.LanguageModelTool<any> {
 
       }
 
-      const nodeCount = (data.nodes || []).length;
-
-      const linkCount = (data.links || []).length;
-
       const MAX_NODES = 500;
 
       const MAX_LINKS = 1000;
@@ -171,6 +167,10 @@ export class AxonGraphDataTool implements vscode.LanguageModelTool<any> {
       const originalNodes = Array.isArray(data.nodes) ? data.nodes : [];
 
       const originalLinks = Array.isArray(data.links) ? data.links : [];
+
+      const nodeCount = originalNodes.length;
+
+      const linkCount = originalLinks.length;
 
       const truncatedNodes = originalNodes.slice(0, MAX_NODES);
 

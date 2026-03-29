@@ -233,6 +233,7 @@ llm:
   provider: ollama
   model: llama3.1:8b
   base_url: http://localhost:11434     # local Ollama daemon — no internet needed
+  models_dir: /mnt/aimodels/ollama     # Ollama model blobs (sets OLLAMA_MODELS)
 embedding:
   provider: sentence_transformers
   model: BAAI/bge-m3                  # Axon resolves this name to a local folder automatically
@@ -253,8 +254,6 @@ offline:
   embedding_models_dir: /mnt/aimodels/embedding
   hf_models_dir: /mnt/aimodels/hf
   tokenizer_cache_dir: /mnt/aimodels/tiktoken
-llm:
-  models_dir: /mnt/aimodels/ollama
 ```
 
 **Windows** (use backslashes or forward slashes — both work in YAML):

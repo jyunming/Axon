@@ -924,7 +924,10 @@ class TestURLLoader:
 
         loader = URLLoader()
 
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai, patch(
+            "axon.loaders.URLLoader._check_ssrf"
+        ), patch("httpx.Client") as mock_client_cls:
+            mock_gai.return_value = [(None, None, None, None, ("93.184.216.34", 0))]
             mock_http = mock_client_cls.return_value.__enter__.return_value
 
             mock_http.get.side_effect = httpx.TimeoutException("timeout", request=None)
@@ -937,7 +940,10 @@ class TestURLLoader:
 
         loader = URLLoader()
 
-        with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
+        with patch("axon.loaders.socket.getaddrinfo") as mock_gai, patch(
+            "axon.loaders.URLLoader._check_ssrf"
+        ), patch("httpx.Client") as mock_client_cls:
+            mock_gai.return_value = [(None, None, None, None, ("93.184.216.34", 0))]
             mock_http = mock_client_cls.return_value.__enter__.return_value
 
             mock_http.get.side_effect = httpx.TooManyRedirects("redirects", request=None)
