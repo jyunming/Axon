@@ -174,3 +174,35 @@ class TestSessionsBasic:
         assert result is None
 
         _s._SESSIONS_DIR = orig
+
+    def test_sessions_dir_project(self, tmp_path):
+        import axon.sessions as _s
+        from axon.sessions import _sessions_dir
+
+        orig = _s._SESSIONS_DIR
+        _s._SESSIONS_DIR = str(tmp_path / "sessions")
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "axon.projects.project_sessions_path", lambda x: str(tmp_path / "project_sessions")
+            )
+            d = _sessions_dir(project="myproject")
+            assert "project_sessions" in d
+            assert os.path.exists(d)
+        _s._SESSIONS_DIR = orig
+
+    def test_load_session_not_dict(self, tmp_path):
+        import axon.sessions as _s
+        from axon.sessions import _load_session
+
+        orig = _s._SESSIONS_DIR
+        _s._SESSIONS_DIR = str(tmp_path / "sessions")
+        os.makedirs(_s._SESSIONS_DIR, exist_ok=True)
+
+        # Write valid JSON but not a dict
+        not_dict_path = tmp_path / "sessions" / "session_list.json"
+        not_dict_path.write_text("[]", encoding="utf-8")
+
+        result = _load_session("list")
+        assert result is None
+
+        _s._SESSIONS_DIR = orig

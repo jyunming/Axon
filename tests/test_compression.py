@@ -367,6 +367,7 @@ class TestDiagnosticsPlumbing:
         from axon.main import AxonBrain, AxonConfig
 
         config = AxonConfig(
+            vector_store="chroma",
             vector_store_path=str(tmp_path / "vs"),
             bm25_path=str(tmp_path / "bm25"),
             projects_root=str(tmp_path / "projects"),

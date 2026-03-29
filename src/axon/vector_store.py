@@ -201,7 +201,7 @@ class OpenVectorStore:
         ids: list[str],
         texts: list[str],
         embeddings: list[list[float]],
-        metadatas: list[dict] = None,
+        metadatas: list[dict] | None = None,
     ):
         if self.provider == "chroma":
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
@@ -383,7 +383,10 @@ class OpenVectorStore:
         return []
 
     def search(
-        self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        filter_dict: dict | None = None,
     ) -> list[dict]:
         if self.provider == "chroma":
             where = None
@@ -618,7 +621,7 @@ class OpenVectorStore:
 
             self.client.delete(
                 collection_name="axon",
-                points_selector=PointIdsList(points=ids),
+                points_selector=PointIdsList(points=list(ids)),
             )
 
         elif self.provider == "lancedb":
@@ -658,7 +661,10 @@ class MultiVectorStore:
         self.collection = stores[0].collection if stores else None
 
     def search(
-        self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        filter_dict: dict | None = None,
     ) -> list[dict]:
         from concurrent.futures import ThreadPoolExecutor
 

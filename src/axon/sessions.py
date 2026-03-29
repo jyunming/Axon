@@ -15,7 +15,7 @@ def _sessions_dir(project: str | None = None) -> str:
     if project and project != "default":
         from axon.projects import project_sessions_path
 
-        d = project_sessions_path(project)
+        d: str = project_sessions_path(project)
     else:
         d = _SESSIONS_DIR
     os.makedirs(d, exist_ok=True)
@@ -82,7 +82,8 @@ def _load_session(session_id: str, project: str | None = None) -> dict | None:
         return None
     try:
         with open(p, encoding="utf-8") as f:
-            return _json.load(f)
+            data = _json.load(f)
+            return data if isinstance(data, dict) else None
     except Exception:
         return None
 

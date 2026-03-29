@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import pathlib
 import tempfile
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger("Axon")
 
@@ -16,6 +16,16 @@ if TYPE_CHECKING:
 
 
 class GraphRenderMixin:
+    if TYPE_CHECKING:
+        from axon.vector_store import OpenVectorStore
+
+        _community_levels: dict[int, dict[str, Any]]
+        _entity_graph: dict[str, dict]
+        _relation_graph: dict[str, list[dict]]
+        _code_graph: dict[str, Any]
+        _VIZ_TYPE_COLORS: dict[str, str]
+        vector_store: OpenVectorStore
+
     def build_graph_payload(self) -> dict:
         """Return a renderer-neutral graph payload normalised from internal graph state.
 

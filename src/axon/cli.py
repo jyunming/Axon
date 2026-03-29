@@ -281,7 +281,7 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
         src_col = src_client.get_collection("axon")
 
     except Exception as e:
-        print(f"  Failed to open ChromaDB collection: {e}")
+        print(f"  Failed to open ChromaDB collection: {err}")
 
         return
 
@@ -305,7 +305,7 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
         if not ids:
             break
 
-        embeddings = result.get("embeddings") or [[] for _ in ids]
+        embeddings: list[list[float]] = result.get("embeddings") or [[] for _ in ids]
 
         documents = result.get("documents") or ["" for _ in ids]
 
@@ -844,7 +844,7 @@ def main():
     if args.model:
         _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm", "github_copilot")
 
-        if "/" in args.model:
+        if isinstance(args.model, str) and "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
 
             if _prov in _PROVIDERS:
@@ -867,7 +867,7 @@ def main():
     if args.embed:
         _EMBED_PROVIDERS = ("sentence_transformers", "ollama", "fastembed", "openai")
 
-        if "/" in args.embed:
+        if isinstance(args.embed, str) and "/" in args.embed:
             _eprov, _emdl = args.embed.split("/", 1)
 
             if _eprov in _EMBED_PROVIDERS:
@@ -1041,7 +1041,7 @@ def main():
             print(f"\n  '{args.pull}' is ready.\n")
 
         except Exception as e:
-            print(f"\n  Error: Failed to pull '{args.pull}': {e}")
+            print(f"\n  Error: Failed to pull '{args.pull}': {err}")
 
         return
 
@@ -1101,7 +1101,7 @@ def main():
                 print(f"\n  Model '{config.llm_model}' ready.\n")
 
         except Exception as e:
-            logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
+            logger.warning(f"Could not auto-pull model '{config.llm_model}': {err}")
 
     # Animated init display — only when entering interactive REPL
 
@@ -1210,12 +1210,12 @@ def main():
             print(f"  Deleted project '{proj_name}'.")
 
         except ProjectHasChildrenError as e:
-            print(f"  {e}")
+            print(f"  {err}")
 
             sys.exit(1)
 
         except ValueError as e:
-            print(f"  {e}")
+            print(f"  {err}")
 
             sys.exit(1)
 
@@ -1230,7 +1230,7 @@ def main():
             brain.switch_project(proj_name)
 
         except ValueError as e:
-            print(f"  {e}")
+            print(f"  {err}")
 
             sys.exit(1)
 
@@ -1355,8 +1355,8 @@ def main():
         if errors:
             print(f"  Errors      : {len(errors)}")
 
-            for e in errors:
-                print(f"    • {e}")
+            for err in errors:
+                print(f"    • {err}")
 
         return
 
