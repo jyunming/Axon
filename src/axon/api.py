@@ -58,27 +58,19 @@ def get_brain_optional() -> AxonBrain | None:
 
 # Source-level dedup store: project → content_hash → {doc_id, last_ingested_at}
 
-
 _source_hashes: dict[str, dict[str, dict]] = {}
-
 
 # Async ingest job status store (in-memory, single-worker deployments only)
 
-
 _jobs: dict[str, dict] = {}
-
 
 _MAX_JOBS = 1000
 
-
 _JOB_TTL_SECONDS = 3600  # 60 minutes
-
 
 # ---------------------------------------------------------------------------
 
-
 # State-using helpers (depend on module-level brain/_jobs/_source_hashes)
-
 
 # ---------------------------------------------------------------------------
 
@@ -86,51 +78,7 @@ _JOB_TTL_SECONDS = 3600  # 60 minutes
 def _evict_old_jobs() -> None:
     """Remove completed/failed jobs older than _JOB_TTL_SECONDS and cap at _MAX_JOBS.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Processing jobs are never TTL-evicted so long-running ingests remain queryable.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -167,75 +115,9 @@ def _evict_old_jobs() -> None:
 def _check_dedup(text: str, project: str = "_global") -> dict | None:
     """Check whether *text* was already ingested in *project*.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Returns a ``{status, reason, doc_id}`` dict if the content is a duplicate.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Returns ``None`` if the content is new.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -302,9 +184,7 @@ def _get_user_dir() -> Path:
 
 # ---------------------------------------------------------------------------
 
-
 # Lifespan
-
 
 # ---------------------------------------------------------------------------
 
@@ -342,99 +222,11 @@ async def lifespan(app: FastAPI):
 def _auto_init_store(config: AxonConfig) -> None:
     """Create the default AxonStore layout when it does not yet exist.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     This is a silent first-run helper — it runs ``ensure_user_project()`` only
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     when the user directory is missing so that brand-new installs work without
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     requiring a manual ``init_store`` call first.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -454,12 +246,9 @@ def _auto_init_store(config: AxonConfig) -> None:
 
 # ---------------------------------------------------------------------------
 
-
 # App creation
 
-
 # ---------------------------------------------------------------------------
-
 
 app = FastAPI(
     title="Axon API",
@@ -468,9 +257,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
 # Optional API key authentication
-
 
 _RAG_API_KEY: str | None = os.getenv("RAG_API_KEY")
 
@@ -513,12 +300,9 @@ async def api_key_middleware(request: Request, call_next):
 
 # ---------------------------------------------------------------------------
 
-
 # Router registration — each sub-module registers its own APIRouter
 
-
 # ---------------------------------------------------------------------------
-
 
 from axon.api_routes.config_routes import router as _config_router  # noqa: E402
 from axon.api_routes.governance import router as _governance_router  # noqa: E402
@@ -532,39 +316,27 @@ from axon.api_routes.shares import router as _shares_router  # noqa: E402
 
 app.include_router(_config_router)
 
-
 app.include_router(_query_router)
-
 
 app.include_router(_ingest_router)
 
-
 app.include_router(_projects_router)
-
 
 app.include_router(_graph_router)
 
-
 app.include_router(_shares_router)
-
 
 app.include_router(_maintenance_router)
 
-
 app.include_router(_registry_router)
-
 
 app.include_router(_governance_router)
 
-
 # ---------------------------------------------------------------------------
-
 
 # Backward-compat re-exports so existing importers of axon.api still work
 
-
 # ---------------------------------------------------------------------------
-
 
 from axon.api_schemas import (  # noqa: E402,F401
     _BLOCKED_PATH_PREFIXES,

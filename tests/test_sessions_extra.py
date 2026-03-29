@@ -36,7 +36,6 @@ class TestSessionsBasic:
             orig = _s._SESSIONS_DIR
             _s._SESSIONS_DIR = str(tmp_path / "sessions")
             os.makedirs(_s._SESSIONS_DIR, exist_ok=True)
-
             session = {
                 "id": "20240101T120000000",
                 "started_at": "2024-01-01T12:00:00Z",
@@ -50,7 +49,6 @@ class TestSessionsBasic:
             assert loaded is not None
             assert loaded["id"] == "20240101T120000000"
             assert len(loaded["history"]) == 1
-
             _s._SESSIONS_DIR = orig
 
     def test_load_session_nonexistent_returns_none(self, tmp_path):
@@ -60,10 +58,8 @@ class TestSessionsBasic:
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
         os.makedirs(_s._SESSIONS_DIR, exist_ok=True)
-
         result = _load_session("nonexistent_id")
         assert result is None
-
         _s._SESSIONS_DIR = orig
 
     def test_list_sessions_empty(self, tmp_path):
@@ -73,10 +69,8 @@ class TestSessionsBasic:
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
         os.makedirs(_s._SESSIONS_DIR, exist_ok=True)
-
         sessions = _list_sessions()
         assert sessions == []
-
         _s._SESSIONS_DIR = orig
 
     def test_list_sessions_returns_saved(self, tmp_path):
@@ -86,7 +80,6 @@ class TestSessionsBasic:
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
         os.makedirs(_s._SESSIONS_DIR, exist_ok=True)
-
         for i in range(3):
             _save_session(
                 {
@@ -98,10 +91,8 @@ class TestSessionsBasic:
                     "history": [],
                 }
             )
-
         sessions = _list_sessions(limit=2)
         assert len(sessions) == 2
-
         _s._SESSIONS_DIR = orig
 
     def test_print_sessions_empty(self, capsys):
@@ -137,7 +128,6 @@ class TestSessionsBasic:
 
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = "/nonexistent/path/that/does/not/exist"
-
         session = {
             "id": "test",
             "project": "default",
@@ -145,7 +135,6 @@ class TestSessionsBasic:
         }
         # Should not raise
         _save_session(session)
-
         _s._SESSIONS_DIR = orig
 
     def test_sessions_dir_default_project(self, tmp_path):
@@ -165,12 +154,38 @@ class TestSessionsBasic:
         orig = _s._SESSIONS_DIR
         _s._SESSIONS_DIR = str(tmp_path / "sessions")
         os.makedirs(_s._SESSIONS_DIR, exist_ok=True)
-
         # Write corrupt JSON
         corrupt_path = tmp_path / "sessions" / "session_badid.json"
         corrupt_path.write_text("not valid json{{{", encoding="utf-8")
-
         result = _load_session("badid")
         assert result is None
+        _s._SESSIONS_DIR = orig
 
+    def test_sessions_dir_project(self, tmp_path):
+        import axon.sessions as _s
+        from axon.sessions import _sessions_dir
+
+        orig = _s._SESSIONS_DIR
+        _s._SESSIONS_DIR = str(tmp_path / "sessions")
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "axon.projects.project_sessions_path", lambda x: str(tmp_path / "project_sessions")
+            )
+            d = _sessions_dir(project="myproject")
+            assert "project_sessions" in d
+            assert os.path.exists(d)
+        _s._SESSIONS_DIR = orig
+
+    def test_load_session_not_dict(self, tmp_path):
+        import axon.sessions as _s
+        from axon.sessions import _load_session
+
+        orig = _s._SESSIONS_DIR
+        _s._SESSIONS_DIR = str(tmp_path / "sessions")
+        os.makedirs(_s._SESSIONS_DIR, exist_ok=True)
+        # Write valid JSON but not a dict
+        not_dict_path = tmp_path / "sessions" / "session_list.json"
+        not_dict_path.write_text("[]", encoding="utf-8")
+        result = _load_session("list")
+        assert result is None
         _s._SESSIONS_DIR = orig

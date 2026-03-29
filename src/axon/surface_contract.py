@@ -1,97 +1,25 @@
 """Surface capability registry for Axon.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 Defines which capabilities exist and which surfaces support them.
-
-
-
-
-
 
 
 Tier 1 = required on every supported surface.
 
 
-
-
-
-
-
 Tier 2 = required where practical; intentional exceptions are noted.
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 Usage::
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
     from axon.surface_contract import REGISTRY, Tier, Surface
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     tier1 = [c for c in REGISTRY if c.tier == Tier.ONE]
 
 
-
-
-
-
-
     repl_caps = [c for c in REGISTRY if Surface.REPL in c.supported_surfaces]
-
-
-
-
-
 
 
 """
@@ -568,27 +496,7 @@ def surface_capabilities(surface: Surface) -> list[Capability]:
 def unsupported_on(surface: Surface) -> list[tuple[Capability, str]]:
     """Return (capability, reason) pairs for capabilities NOT on *surface*.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Only includes Tier 1 and Tier 2 capabilities — API-only items are excluded.
-
-
-
-
-
-
 
     """
 

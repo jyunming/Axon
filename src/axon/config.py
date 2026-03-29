@@ -1,73 +1,10 @@
 """
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 src/axon/config.py
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 """
@@ -107,585 +44,181 @@ _USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "co
 _DEFAULT_CONFIG_YAML = """\
 
 
-
-
-
-
-
 # Axon Configuration — edit to customise behaviour.
-
-
-
-
-
 
 
 # Full option reference: axon --help  or  docs/ADMIN_REFERENCE.md
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 embedding:
-
-
-
-
-
 
 
   # Model used to convert text into vectors.
 
 
-
-
-
-
-
   # sentence_transformers runs locally; openai/ollama/fastembed also supported.
-
-
-
-
-
 
 
   provider: sentence_transformers
 
 
-
-
-
-
-
   model: all-MiniLM-L6-v2            # Replace with a larger model for better recall
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 llm:
 
 
-
-
-
-
-
   # Language model used for answer generation and advanced RAG strategies.
-
-
-
-
-
 
 
   # ollama runs locally; openai / gemini / grok / vllm need API keys.
 
 
-
-
-
-
-
   provider: ollama
-
-
-
-
-
 
 
   model: llama3.1:8b
 
 
-
-
-
-
-
   temperature: 0.7                   # 0.0 = deterministic  1.0 = creative
-
-
-
-
-
 
 
   max_tokens: 2048                   # Max tokens in the generated answer
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 vector_store:
-
-
-
-
-
 
 
   # Persistent vector store for embeddings.
 
 
-
-
-
-
-
   # lancedb (default) requires no extra service; qdrant supports remote mode.
-
-
-
-
-
 
 
   provider: lancedb
 
 
-
-
-
-
-
   path: ~/.axon/projects/default/lancedb_data
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 bm25:
 
 
-
-
-
-
-
   path: ~/.axon/projects/default/bm25_index
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 rag:
 
 
-
-
-
-
-
   top_k: 10                          # Chunks retrieved per query (recommended: 5–30)
-
-
-
-
-
 
 
   similarity_threshold: 0.3          # Min cosine similarity to include a chunk (0.0–1.0)
 
 
-
-
-
-
-
   hybrid_search: true                # Combine vector + BM25 sparse retrieval (recommended)
-
-
-
-
-
 
 
   rerank: false                      # BGE cross-encoder reranker — better precision, slower
 
 
-
-
-
-
-
   sentence_window: false             # Expand retrieved chunks with surrounding sentences
-
-
-
-
-
 
 
   sentence_window_size: 3            # Sentences of context on each side (recommended: 1–5)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
   # ── Advanced strategies — each adds extra LLM calls ─────────────────────────
-
-
-
-
-
 
 
   # raptor: builds a hierarchical summary tree at ingest time.
 
 
-
-
-
-
-
   # WARNING: raptor=true triggers many LLM calls during ingest. Suitable for
-
-
-
-
-
 
 
   #   large document sets (>5 MB); avoid for small corpora.
 
 
-
-
-
-
-
   raptor: false
-
-
-
-
-
 
 
   raptor_min_source_size_mb: 5.0     # Skip RAPTOR for sources smaller than this MB (0 = no filter)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
   # graph_rag: extracts entity relationships and uses them at query time.
-
-
-
-
-
 
 
   # WARNING: graph_rag=true triggers many LLM calls during ingest (entity
 
 
-
-
-
-
-
   #   extraction) AND at query time (graph traversal). Enable only when
-
-
-
-
-
 
 
   #   reasoning over entity relationships is essential.
 
 
-
-
-
-
-
   graph_rag: false
-
-
-
-
-
 
 
   graph_rag_community: false         # Community-level summaries (even more LLM calls)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 chunk:
-
-
-
-
-
 
 
   strategy: semantic                 # recursive | semantic | markdown | cosine_semantic
 
 
-
-
-
-
-
   size: 1000                         # Target chunk size in tokens (recommended: 400–2000)
-
-
-
-
-
 
 
   overlap: 200                       # Token overlap between adjacent chunks (recommended: 50–400)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 rerank:
 
 
-
-
-
-
-
   enabled: false
-
-
-
-
-
 
 
   provider: cross-encoder
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 query_transformations:
-
-
-
-
-
 
 
   multi_query: false                 # Generate multiple query paraphrases (adds 1 LLM call)
 
 
-
-
-
-
-
   hyde: false                        # Hypothetical document embedding (adds 1 LLM call)
-
-
-
-
-
 
 
   discussion_fallback: true          # Fall back to general LLM answer when retrieval confidence is low
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 repl:
-
-
-
-
-
 
 
   shell_passthrough: local_only      # Allow ! shell commands: local_only | any | disabled
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 web_search:
 
 
-
-
-
-
-
   enabled: false
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 offline:
 
 
-
-
-
-
-
   enabled: false
-
-
-
-
-
 
 
   local_assets_only: false
 
 
-
-
-
-
-
   local_models_dir: ""               # Path to local HF model cache for offline embedding
-
-
-
-
-
 
 
 """
@@ -1593,123 +1126,13 @@ class AxonConfig:
     def load(cls, path: str | None = None) -> "AxonConfig":
         """Load configuration from a YAML file.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         Defaults to ``~/.config/axon/config.yaml``.  On first run (file absent)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         the directory is created and a starter config is written automatically,
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         so the notice appears only once.  Passing an explicit *path* that does
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         not exist still produces a WARNING.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         """
 
@@ -2091,115 +1514,25 @@ class AxonConfig:
     def validate(cls, path: str | None = None) -> list["ConfigIssue"]:
         """Validate the config file at *path* (or the default user config path).
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         Returns a list of :class:`ConfigIssue` objects grouped by severity.  The
-
-
-
-
-
-
 
         method never raises — it is designed to be called from CLI / API surfaces
 
-
-
-
-
-
-
         where a clean list of findings is more useful than an exception.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         Three passes are executed in order:
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         1. **Structural pass** — unknown YAML keys are flagged; close matches are
-
-
-
-
-
-
 
            suggested via :func:`difflib.get_close_matches`.
 
-
-
-
-
-
-
         2. **Semantic pass** — known field values are range- and enum-checked on
-
-
-
-
-
-
 
            the constructed dataclass.
 
-
-
-
-
-
-
         3. **Store health pass** — the AxonStore directory layout is inspected on
 
-
-
-
-
-
-
            disk to surface mis-configuration or un-initialised stores.
-
-
-
-
-
-
 
         """
 

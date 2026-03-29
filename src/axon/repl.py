@@ -84,123 +84,13 @@ def _save_env_key(env_name: str, key: str) -> None:
 def _prompt_key_if_missing(provider: str, brain) -> bool:
     """If *provider* needs an API key/token and none is set, prompt the user.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     For github_copilot: runs the OAuth device flow (browser-based).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     For other providers: prompts for the API key via getpass.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Saves to ~/.axon/.env and patches brain.config in-place.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Returns True when a key is available (already set or just obtained).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -276,24 +166,17 @@ def _prompt_key_if_missing(provider: str, brain) -> bool:
 
 # ---------------------------------------------------------------------------
 
-
 # GitHub Copilot OAuth helpers
-
 
 # ---------------------------------------------------------------------------
 
-
 # GitHub Copilot does NOT accept Personal Access Tokens.  The required flow is:
-
 
 #   1. OAuth device flow  →  GitHub OAuth token  (stored in ~/.axon/.env)
 
-
 #   2. OAuth token        →  Copilot session token  (in-memory, ~30 min TTL)
 
-
 #   3. Session token used as Bearer on every API call.
-
 
 # ---------------------------------------------------------------------------
 
@@ -412,99 +295,11 @@ _MODEL_CTX: dict[str, int] = {
 def _infer_provider(model: str) -> str:
     """Guess LLM provider from model name.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Returns "gemini" for gemini-* models, "openai" for gpt-*/o1-*/o3-*/o4-*
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     models (without a colon, since Ollama uses name:tag format), and "ollama"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     for everything else (local models, including gpt-oss:tag Ollama models).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -549,339 +344,31 @@ def _show_context(
 ) -> None:
     """Display a formatted context window panel with token usage, model info, and chat history.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Shows:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     - Model info: LLM provider/model and context window size; embedding provider/model
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - Token usage: Rough estimates (4 chars/token) with visual bar and color indicator
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     - RAG settings: top_k, similarity_threshold, hybrid_search, rerank, hyde, multi_query toggles
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - Chat history: Last 10 turns (user/assistant messages)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     - Last retrieved sources: Up to 8 chunks with similarity scores and source names
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - System prompt: Full text (word-wrapped)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     All content is wrapped in a box with section separators for readability.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Args:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         brain: AxonBrain instance to extract model and config info.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         chat_history: List of message dicts {"role": "user"|"assistant", "content": str}.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         last_sources: List of document dicts from last retrieval (with "vector_score", "metadata", "text").
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         last_query: The user query that was used for the last retrieval.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -1168,195 +655,19 @@ def _show_context(
 def _do_compact(brain: AxonBrain, chat_history: list) -> None:
     """Summarize chat history via LLM and replace it with a single summary turn.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Condenses all messages in chat_history into a 4-6 sentence summary using the configured LLM.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     The original conversation is replaced with a single message prefixed with
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     "[Conversation summary]: " to preserve context while freeing up token space.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     If chat_history is empty, prints a message and returns without action.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Args:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         brain: AxonBrain instance used to call the LLM for summarization.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         chat_history: List of message dicts to summarize (modified in-place; emptied and refilled with summary).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -1398,7 +709,6 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 
-
 _HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
 
 
@@ -1410,7 +720,6 @@ def _box_width() -> int:
 
 # FIGlet "Big" ASCII art for AXON — all chars are 1-col wide, each line is 35 cols
 
-
 _AXON_ART = [
     " █████╗ ██╗  ██╗ ██████╗ ███╗   ██╗",
     "██╔══██╗╚██╗██╔╝██╔═══██╗████╗  ██║",
@@ -1420,9 +729,7 @@ _AXON_ART = [
     "╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝",
 ]
 
-
 # 24-bit blue gradient: light sky → cornflower → dodger → royal → medium → cobalt
-
 
 _AXON_BLUE = [
     "\x1b[38;2;173;216;230m",  # light blue
@@ -1433,12 +740,9 @@ _AXON_BLUE = [
     "\x1b[38;2;0;71;171m",  # cobalt blue
 ]
 
-
 _AXON_RST = "\x1b[0m"
 
-
 # Symmetrical brain/axon hub design (25 columns wide)
-
 
 _BRAIN_ART = [
     "(O)~~.             .~~(O)",
@@ -1668,195 +972,19 @@ def _build_header(brain: AxonBrain, tick_lines: list | None = None) -> list:
 def _draw_header(brain: AxonBrain, tick_lines: list | None = None) -> None:
     """Clear screen and draw the welcome header box with LLM and embedding model info.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Displays initialization status lines (e.g., "✓ Embedding ready [CPU]", "✓ BM25 · 42 docs").
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     Clears the entire screen and redraws the header with hints for available REPL commands.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Uses ANSI codes to clear and position the cursor — no scroll region (natural terminal scrollback).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     Args:
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         brain: AxonBrain instance to extract model and provider information.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         tick_lines: Optional list of status messages (e.g., ["Starting", "Embedding ready [CPU]"])
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                    to display in the header box.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -1879,99 +1007,11 @@ def _draw_header(brain: AxonBrain, tick_lines: list | None = None) -> None:
 def _print_recent_turns(history: list, n_turns: int = 2) -> None:
     """Print the last n_turns of Q&A below the header so context is visible.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Args:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         history: chat_history list of {"role": ..., "content": ...} dicts.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         n_turns: Number of complete Q&A turns to show (each turn = 1 user + 1 assistant message).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -2006,145 +1046,19 @@ class _InitDisplay(logging.Handler):
     """Intercepts initialization log messages and renders animated status in a box.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Displays a 7-line box with title and status line updated in-place using ANSI cursor positioning.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     Uses a braille spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) that rotates every 0.08 seconds.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Collects completed steps as checkmarks (✓) for the final banner display.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     The box is printed once at initialization, then the step line (line 5) is updated in-place
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     as different initialization phases complete (Starting, Loading models, Vector store ready, etc.).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     """
@@ -2334,9 +1248,7 @@ _AT_TEXT_EXTS = {
     ".ipynb",
 }
 
-
 # Extensions handled by dedicated loaders (extract clean text from binary formats)
-
 
 _AT_LOADER_EXTS = {
     ".docx",
@@ -2356,9 +1268,7 @@ _AT_LOADER_EXTS = {
     ".tex",
 }
 
-
 _AT_DIR_MAX_BYTES = 120_000  # ~120 KB total across all files in a folder
-
 
 _AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
 
@@ -2366,99 +1276,11 @@ _AT_FILE_MAX_BYTES = 40_000  # ~40 KB per single file
 def _expand_at_files(text: str) -> str:
     """Expand @path references in user input with file/folder contents (read-only).
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - @file.txt / @file.docx / @file.pdf → inlines extracted text
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     - @folder/   → recursively reads all supported files in the folder (capped at
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                    _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -2604,9 +1426,7 @@ def _expand_at_files(text: str) -> str:
 
 # ---------------------------------------------------------------------------
 
-
 # /config command handler
-
 
 # ---------------------------------------------------------------------------
 
@@ -2614,67 +1434,17 @@ def _expand_at_files(text: str) -> str:
 def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
     """Handle /config sub-commands.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Sub-commands:
-
-
-
-
-
-
 
       (empty) / show   — render config table
 
-
-
-
-
-
-
       validate          — run AxonConfig.validate() and show issues
-
-
-
-
-
-
 
       wizard            — launch interactive setup wizard
 
-
-
-
-
-
-
       reset             — overwrite config.yaml with defaults
 
-
-
-
-
-
-
       set <key> <value> — set a dot-notation field
-
-
-
-
-
-
 
     """
 
@@ -2811,363 +1581,33 @@ def _interactive_repl(
 ) -> None:
     """Interactive REPL chat session with session persistence and live tab completion.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Features:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     - Session persistence: auto-saves to ~/.axon/sessions/session_<timestamp>.json
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
       /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - @file/folder context: type @path/file.txt or @path/folder/ to inline contents into your query (read-only)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     - Shell passthrough: !command runs a shell command (local-only by default)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     Args:
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         brain: AxonBrain instance to use for queries.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         stream: If True, streams LLM response token-by-token; if False, waits for full response.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         init_display: Optional _InitDisplay handler to stop after initialization.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         quiet: Suppress spinners and progress bars (auto-enabled for non-TTY stdin).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 

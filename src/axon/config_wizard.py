@@ -1,49 +1,16 @@
 """Interactive configuration wizard for Axon.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 Provides:
-
-
-
-
-
 
 
   - run_wizard()         — interactive config editor (numbered menus + validated inputs)
 
 
-
-
-
-
-
   - render_issues()      — rich-formatted validation report
 
 
-
-
-
-
-
   - render_config_table() — rich table of current config grouped by section
-
-
-
-
-
 
 
 """
@@ -60,35 +27,9 @@ logger = logging.getLogger(__name__)
 def render_issues(issues: list) -> None:
     """Print a rich-formatted validation report to the terminal.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     *issues* is a list of :class:`axon.config.ConfigIssue` instances.
 
-
-
-
-
-
-
     Falls back to plain-text output when *rich* is unavailable.
-
-
-
-
-
-
 
     """
 
@@ -161,35 +102,9 @@ def render_issues(issues: list) -> None:
 def render_config_table(config: Any) -> None:
     """Print the current config as a rich table grouped by section.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     *config* is an :class:`axon.config.AxonConfig` instance.
 
-
-
-
-
-
-
     Falls back to plain-text key=value output when *rich* is unavailable.
-
-
-
-
-
-
 
     """
 
@@ -282,131 +197,27 @@ def render_config_table(config: Any) -> None:
 def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
     """Run the interactive config wizard in the terminal.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Starts by asking the user to choose a setup mode:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     * **Quick**    — only LLM, Embedding, Vector Store (get running in 2 minutes).
 
-
-
-
-
-
-
     * **Standard** — common settings: all of Quick plus Chunking, Retrieval,
-
-
-
-
-
-
 
       Reranking, basic Query Transformations, Output, Offline, and Store.
 
-
-
-
-
-
-
     * **Full**     — every AxonConfig parameter across all 16 sections.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     Returns a dict of changed fields.  The caller is responsible for saving.
 
-
-
-
-
-
-
     If *brain* is provided its ``brain.config`` is used to pre-fill values.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     Choice fields display a numbered menu — type the number or the value.
 
-
-
-
-
-
-
     Numeric fields validate the input on the spot and re-ask on bad input.
-
-
-
-
-
-
 
     API key fields show '***set***' when already configured.
 
-
-
-
-
-
-
     Answer 'n' at any section prompt to skip that section.
-
-
-
-
-
-
 
     """
 
@@ -444,35 +255,9 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
     def _pick(label: str, field: str, choices: list[str], default: Any) -> None:
         """Display a numbered menu and loop until the user picks a valid item.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         Accepts either the number (1-N) or the value string itself.
 
-
-
-
-
-
-
         For boolean choices the value stored in *changes* is a Python bool.
-
-
-
-
-
-
 
         """
 
