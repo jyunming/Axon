@@ -80,7 +80,7 @@ export class AxonShowGraphTool implements vscode.LanguageModelTool<any> {
 
       return new (vscode as any).LanguageModelToolResult([
 
-        new (vscode as any).LanguageModelTextPart(`Error opening graph panel: ${err}`)
+        new (vscode as any).LanguageModelTextPart(`Error opening graph panel: ${err instanceof Error ? err.message : String(err)}`)
 
       ]);
 
