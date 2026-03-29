@@ -45,7 +45,7 @@ Fetch an HTTP/HTTPS URL and ingest its text content. HTML is stripped automatica
 | `metadata` | dict | `null` | Extra metadata merged with page metadata |
 | `project` | string | `null` | Target project |
 
-**Returns:** `{"job_id": "..."}` — poll with `get_job_status`.
+**Returns:** `{"status": "ingested"|"skipped", "doc_id": "...", "url": "..."}` — synchronous, no polling needed.
 
 ### `ingest_path`
 
@@ -59,11 +59,11 @@ Walk and ingest a local file or directory (always async). Path must be within `R
 
 ### `get_job_status`
 
-Poll the status of an async ingest job started by `ingest_path` or `ingest_url`.
+Poll the status of an async ingest job started by `ingest_path`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `job_id` | string | required | Job ID from `ingest_path` or `ingest_url` |
+| `job_id` | string | required | Job ID from `ingest_path` |
 
 **Returns:** `{"job_id": "...", "status": "processing|completed|failed", "started_at": "...", "completed_at": "...", "path": "...", "error": null}`
 
@@ -322,7 +322,7 @@ Return the full entity/relation graph as JSON for inspection, export, or custom 
 
 - All tools operate on the **active project**. Most ingest, search, and query tools accept an optional `project` parameter validated against the active project (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`. Use `switch_project` to change the active project.
 
-- `ingest_path` and `ingest_url` are always async — they return a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`.
+- `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
 
 - `clear_knowledge` and `delete_project` are irreversible.
 

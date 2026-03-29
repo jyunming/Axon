@@ -46,8 +46,8 @@ Ingest the docs at /path/to/repo/docs
 Show me the graph for "authentication flow"
 ```
 
-Claude will automatically call `search_knowledge`, `ingest_path`, or `show_graph`
-from the tool list below — no slash commands needed.
+Claude will automatically call `search_knowledge` or `ingest_path`
+from the tool list below — no slash commands needed. (`show_graph` is VS Code-only and is not available via MCP.)
 
 **Optional — load this file as persistent context:**
 
@@ -62,7 +62,7 @@ See docs/SKILLS.md for the full Axon tool reference.
 
 ## How to read this document
 
-Tool names are **identical** on both the MCP server and the VS Code LM tools — use the same name everywhere.
+This document covers **MCP tool names**. MCP hosts (Claude Code, Copilot agent mode, VS Code LM tools) call these tools by the same names. The separate OpenAI-format tool schemas in `src/axon/tools.py` use a different naming set and are not covered here. `show_graph` is VS Code-only and does not appear in the MCP server.
 
 Each skill entry follows this pattern:
 
@@ -222,13 +222,14 @@ Return the current active configuration (sensitive fields masked).
 - **Use when** the user asks what model, provider, or RAG settings are active.
 
 ### `update_settings`
-Change runtime configuration without restarting the server.
-- **Use when** the user wants to switch LLM provider, change model, enable/disable RAG features, etc.
-- **Key params (any subset):** `llm_provider`, `llm_model`, `embedding_provider`, `embedding_model`,
-  `top_k`, `similarity_threshold`, `hybrid_search`, `rerank`, `raptor`, `graph_rag`,
-  `graph_rag_ner_backend`, `graph_rag_community`, `graph_rag_depth`, `graph_rag_budget`,
-  `graph_rag_relations`, `graph_rag_relation_budget`, `code_graph_bridge`,
-  `persist` (bool — write change to config.yaml).
+Change runtime RAG and retrieval configuration without restarting the server.
+- **Use when** the user wants to adjust retrieval behaviour for the current session.
+- **Key params (any subset):** `top_k`, `similarity_threshold`, `hybrid_search`, `rerank`,
+  `hyde`, `multi_query`, `step_back`, `query_decompose`, `compress_context`,
+  `graph_rag`, `raptor`, `truth_grounding`, `discussion_fallback`,
+  `sentence_window`, `sentence_window_size`, `crag_lite`, `code_graph`,
+  `graph_rag_mode`, `cite`.
+- Model/provider changes (`llm_provider`, `llm_model`, etc.) must be made via `config.yaml` — they are not exposed through this tool.
 
 ---
 
@@ -241,7 +242,7 @@ Initialise the AxonStore directory and register the current user.
 
 ### `share_project`
 Generate a share string for another user to mount your project read-only.
-- **Key params:** `project_name` (required), `grantee_username` (required).
+- **Key params:** `project` (required), `grantee` (required).
 
 ### `redeem_share`
 Mount a shared project using a share string from another user.
