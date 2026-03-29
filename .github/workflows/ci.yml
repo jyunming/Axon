@@ -1519,7 +1519,6 @@ jobs:
 
 
       - name: Upload coverage to Codecov
-        if: hashFiles('coverage.xml') != ''
 
 
 
@@ -1567,7 +1566,7 @@ jobs:
 
 
 
-          file: ./coverage.xml
+          files: ./coverage.xml
 
 
 

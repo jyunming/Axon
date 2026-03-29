@@ -567,7 +567,8 @@ OLLAMA_EMBED_MODEL=nomic-embed-text
 # Bind to localhost by default for local setups. For Docker/Compose deployments, set AXON_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
 AXON_HOST=127.0.0.1
 AXON_PORT=8000
-# Where ChromaDB stores its data
+# Vector store storage (Chroma-only — ignored for LanceDB and other providers)
+# Where ChromaDB stores its data when `vector_store.provider: chroma`
 CHROMA_DATA_PATH=./chroma_data
 # Where BM25 index is stored
 BM25_INDEX_PATH=./bm25_index
