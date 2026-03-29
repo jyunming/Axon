@@ -1,34 +1,265 @@
 """Cross-surface parity contract tests (SP-052).
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Validates that the surface capability registry is consistent with:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 - VS Code extension manifest (package.json tool declarations)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 - REPL command set (via repl.py source inspection)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 - CLI argument set (via cli.py source inspection)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 - API route set (via api_routes imports)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 These tests enforce the declared parity tier matrix.  They do NOT test runtime
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 behaviour; they test that the declared contract matches the actual code surface.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 A failure here means either:
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   (a) a surface drifted from the registry without updating the registry, or
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   (b) the registry claims a surface is unsupported but the surface actually has it.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 """
@@ -136,15 +367,15 @@ class TestVsCodeManifestContract:
             pytest.skip("VS Code extension directory not found")
 
     def test_manifest_tool_count(self):
-        """Extension manifest should declare 32 tools (snake_case names, MCP-parity set)."""
+        """Extension manifest should declare 34 tools (32 original + config_validate + config_set)."""
 
         manifest = _extension_manifest()
 
         tools = manifest["contributes"]["languageModelTools"]
 
         assert (
-            len(tools) == 32
-        ), f"Expected 32 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+            len(tools) == 34
+        ), f"Expected 34 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
     def test_tier1_vscode_capabilities_in_manifest(self):
         """Every Tier 1 capability with VS Code support has a corresponding manifest tool."""

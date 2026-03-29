@@ -2153,6 +2153,8 @@ class TestRaptor:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
         from axon.main import AxonBrain, AxonConfig
 
+        cfg_kwargs.setdefault("raptor_min_source_size_mb", 0.0)
+
         config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
 
         brain = AxonBrain(config)
@@ -3725,40 +3727,313 @@ class TestHybridThresholdFiltering:
     """Validates that the similarity threshold is applied to the fused score when
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     hybrid_search=True, so exact-token BM25 hits are not suppressed by a low
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     vector_score alone.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     The filtering logic being tested (from main.py):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         if r.get("fused_only"):
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             filtered_results.append(r)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
             continue
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         if cfg.hybrid_search:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
             sig = r.get("score", r.get("vector_score", 0.0))
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         else:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
             sig = r.get("vector_score", r.get("score", 0.0))
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         if sig >= cfg.similarity_threshold:
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
             filtered_results.append(r)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -4028,6 +4303,27 @@ class TestSlashCommandOrder:
 class TestGraphRAGRobustness:
 
     """Tests for GraphRAG robustness improvements: Jaccard matching, budget slicing,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     entity pruning, relation extraction, and 1-hop traversal."""
@@ -5895,7 +6191,7 @@ class TestGraphRAGAuditFixes:
 
         brain.config.graph_rag_global_top_communities = 0
 
-        brain.config.raptor_max_source_size_mb = 0.0
+        brain.config.raptor_min_source_size_mb = 0.0
 
         brain._entity_graph = {}
 
@@ -6369,7 +6665,7 @@ class TestGraphRAGTask6Fixes:
 
         brain.config.graph_rag_global_top_communities = 0
 
-        brain.config.raptor_max_source_size_mb = 0.0
+        brain.config.raptor_min_source_size_mb = 0.0
 
         brain.config.graph_rag_global_map_max_length = 500
 
@@ -6618,6 +6914,27 @@ class TestGraphRAGTask6Fixes:
 
     def test_leiden_child_substitution_finds_summary(self):
         """When community context exceeds token budget, _generate_community_summaries
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         substitutes ranked child reports by rank (highest rank first)."""
@@ -6874,7 +7191,7 @@ class TestGraphRAGTask7Fixes:
 
         brain.config.graph_rag_global_top_communities = 0
 
-        brain.config.raptor_max_source_size_mb = 0.0
+        brain.config.raptor_min_source_size_mb = 0.0
 
         brain.config.graph_rag_exact_entity_boost = 3.0
 
@@ -7314,6 +7631,8 @@ class TestRaptorTask8Fixes:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
         from axon.main import AxonBrain, AxonConfig
 
+        cfg_kwargs.setdefault("raptor_min_source_size_mb", 0.0)
+
         config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
 
         brain = AxonBrain(config)
@@ -7414,13 +7733,97 @@ class TestRaptorTask8Fixes:
         """25-chunk source with raptor=True: leaf chunks skipped, RAPTOR summaries auto-included.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         A1 change: large sources with raptor=True now auto-include their RAPTOR level-1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         summaries in GraphRAG entity extraction, even when graph_rag_include_raptor_summaries
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         is False. The entity graph may be populated from RAPTOR summaries (not leaf chunks).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         """
@@ -7769,6 +8172,8 @@ class TestRaptorTask9Fixes:
 
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
         from axon.main import AxonBrain, AxonConfig
+
+        cfg_kwargs.setdefault("raptor_min_source_size_mb", 0.0)
 
         config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
 
@@ -8180,6 +8585,8 @@ class TestRaptorTask10Fixes:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **cfg_kwargs):
         from axon.main import AxonBrain, AxonConfig
 
+        cfg_kwargs.setdefault("raptor_min_source_size_mb", 0.0)
+
         config = AxonConfig(hybrid_search=False, rerank=False, **cfg_kwargs)
 
         brain = AxonBrain(config)
@@ -8214,6 +8621,7 @@ class TestRaptorTask10Fixes:
             raptor_chunk_group_size=2,
             raptor_max_levels=1,
             raptor_cache_summaries=False,
+            raptor_min_source_size_mb=0.0,
             graph_rag=False,
             hybrid_search=False,
             rerank=False,
@@ -8504,7 +8912,7 @@ class TestFundamentalFixes:
 
         brain.config.graph_rag_global_top_communities = 0
 
-        brain.config.raptor_max_source_size_mb = 0.0
+        brain.config.raptor_min_source_size_mb = 0.0
 
         brain._entity_graph = {}
 
@@ -8934,7 +9342,7 @@ class TestRuntimeFixes:
 
         brain.config.graph_rag_global_top_communities = 0
 
-        brain.config.raptor_max_source_size_mb = 0.0
+        brain.config.raptor_min_source_size_mb = 0.0
 
         brain.config.graph_rag_community = True
 
@@ -9098,8 +9506,8 @@ class TestRuntimeFixes:
 
     # ------------------------------------------------------------------
 
-    def test_raptor_skips_large_source(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
-        """raptor_max_source_size_mb=0.001: large source excluded from RAPTOR, still indexed."""
+    def test_raptor_skips_small_source(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25):
+        """raptor_min_source_size_mb=0.001: small source excluded from RAPTOR, still indexed."""
 
         brain = self._make_raptor_brain(
             MockReranker,
@@ -9109,10 +9517,10 @@ class TestRuntimeFixes:
             MockBM25,
             raptor=True,
             raptor_chunk_group_size=2,
-            raptor_max_source_size_mb=0.001,
+            raptor_min_source_size_mb=0.001,
         )
 
-        # 0.001 MB = ~1024 bytes; large_text is 2000 bytes
+        # 0.001 MB = ~1024 bytes; large_text is 2000 bytes (above threshold), small_text is below
 
         large_text = "x" * 2000
 
@@ -9135,9 +9543,9 @@ class TestRuntimeFixes:
 
         called_sources = {d.get("metadata", {}).get("source", "") for d in called_docs}
 
-        assert "large.txt" not in called_sources, "Large source must be excluded from RAPTOR"
+        assert "small.txt" not in called_sources, "Small source must be excluded from RAPTOR"
 
-        assert "small.txt" in called_sources, "Small source must pass through to RAPTOR"
+        assert "large.txt" in called_sources, "Large source must pass through to RAPTOR"
 
         # All original docs must still reach the vector store (IDs are chunk-suffixed)
 
@@ -9154,7 +9562,7 @@ class TestRuntimeFixes:
     def test_raptor_size_guard_zero_means_no_filter(
         self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25
     ):
-        """raptor_max_source_size_mb=0.0 passes all docs to RAPTOR regardless of size."""
+        """raptor_min_source_size_mb=0.0 passes all docs to RAPTOR regardless of size."""
 
         brain = self._make_raptor_brain(
             MockReranker,
@@ -9164,7 +9572,7 @@ class TestRuntimeFixes:
             MockBM25,
             raptor=True,
             raptor_chunk_group_size=2,
-            raptor_max_source_size_mb=0.0,
+            raptor_min_source_size_mb=0.0,
         )
 
         large_text = "x" * 10000
@@ -9729,6 +10137,8 @@ class TestSourcePolicy:
     def _make_brain(self, MockReranker, MockEmbed, MockLLM, MockStore, MockBM25, **kwargs):
         from axon.main import AxonBrain, AxonConfig
 
+        kwargs.setdefault("raptor_min_source_size_mb", 0.0)
+
         config = AxonConfig(**kwargs)
 
         brain = AxonBrain(config)
@@ -9916,10 +10326,73 @@ class TestSourcePolicy:
         """source_policy_enabled=True, dataset_type=codebase → _extract_entities NOT called.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         Per the code graph report, prose GraphRAG is disabled for codebase by default.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         Code uses a separate structural graph, not the entity/community pipeline.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         """

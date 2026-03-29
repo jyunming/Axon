@@ -41,7 +41,7 @@ offline:
   enabled: true
   local_models_dir: /mnt/aimodels          # root for HF model directories
 vector_store:
-  provider: chroma                          # chroma or lancedb (both local)
+  provider: lancedb                         # lancedb or chroma (both fully local)
 ```
 
 ### Compatible providers
@@ -76,11 +76,11 @@ embedding:
   model: BAAI/bge-m3                        # resolved via embedding_models_dir below
 offline:
   local_assets_only: true
-local_dirs:
   embedding_models_dir: /mnt/aimodels/embedding   # sentence-transformers / fastembed models
   hf_models_dir: /mnt/aimodels/hf                 # reranker, GLiNER, REBEL, LLMLingua
   tokenizer_cache_dir: /mnt/aimodels/tiktoken      # tiktoken BPE cache
-  ollama_models_dir: /mnt/aimodels/ollama          # Ollama model blobs (sets OLLAMA_MODELS)
+llm:
+  models_dir: /mnt/aimodels/ollama                 # Ollama model blobs (sets OLLAMA_MODELS)
 ```
 
 ### Preflight audit output
@@ -90,7 +90,7 @@ On startup Axon logs a model asset table:
 ```
 Model asset audit:
   [local]         embedding     /mnt/aimodels/embedding/BAAI--bge-m3
-  [local]         reranker      /mnt/aimodels/hf/BAAI--bge-reranker-base
+  [local]         reranker      /mnt/aimodels/hf/cross-encoder--ms-marco-MiniLM-L-6-v2
   [n/a]           gliner        (disabled)
   [n/a]           rebel         (disabled)
   [n/a]           llmlingua     (disabled)
@@ -122,7 +122,7 @@ The first folder that exists on disk is used. If you give an absolute path (star
 │   ├── BAAI--bge-m3/            # resolved by embedding_models_dir
 │   └── all-MiniLM-L6-v2/
 ├── hf/
-│   ├── BAAI--bge-reranker-base/ # cross-encoder reranker
+│   ├── cross-encoder--ms-marco-MiniLM-L-6-v2/ # cross-encoder reranker (default)
 │   ├── urchade--gliner_medium/  # GLiNER NER (if graph_rag_ner_backend: gliner)
 │   └── Babelscape--rebel-large/ # REBEL relations (if graph_rag_relation_backend: rebel)
 ├── tiktoken/                    # tiktoken BPE encodings
@@ -165,9 +165,9 @@ The reranker re-scores retrieved chunks to improve relevance — it is only need
 
 ```python
 from sentence_transformers import CrossEncoder
-model = CrossEncoder("BAAI/bge-reranker-base")
-model.save("/mnt/aimodels/hf/BAAI--bge-reranker-base")    # Linux / macOS
-# model.save("C:\\aimodels\\hf\\BAAI--bge-reranker-base") # Windows
+model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+model.save("/mnt/aimodels/hf/cross-encoder--ms-marco-MiniLM-L-6-v2")    # Linux / macOS
+# model.save("C:\\aimodels\\hf\\cross-encoder--ms-marco-MiniLM-L-6-v2") # Windows
 ```
 
 ### FastEmbed model (alternative to sentence-transformers)
@@ -241,21 +241,21 @@ rag:
   top_k: 10
   hybrid_search: true
   rerank: true
-  rerank_model: BAAI/bge-reranker-base
+  rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
   cite: true
   discuss: false                        # disable: no internet to fall back to for general knowledge
   raptor: false                         # disable in offline_mode (needs LLM calls during ingest)
   graph_rag: false                      # same
 vector_store:
-  provider: chroma                      # fully local; lancedb also works
+  provider: lancedb                     # fully local; chroma also works
 offline:
   enabled: true
   local_models_dir: /mnt/aimodels      # fallback root if per-type dirs below are not set
-local_dirs:
   embedding_models_dir: /mnt/aimodels/embedding
   hf_models_dir: /mnt/aimodels/hf
   tokenizer_cache_dir: /mnt/aimodels/tiktoken
-  ollama_models_dir: /mnt/aimodels/ollama
+llm:
+  models_dir: /mnt/aimodels/ollama
 ```
 
 **Windows** (use backslashes or forward slashes — both work in YAML):
@@ -265,6 +265,7 @@ llm:
   provider: ollama
   model: llama3.1:8b
   base_url: http://localhost:11434
+  models_dir: C:/aimodels/ollama
 embedding:
   provider: sentence_transformers
   model: BAAI/bge-m3
@@ -272,21 +273,19 @@ rag:
   top_k: 10
   hybrid_search: true
   rerank: true
-  rerank_model: BAAI/bge-reranker-base
+  rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
   cite: true
   discuss: false
   raptor: false
   graph_rag: false
 vector_store:
-  provider: chroma
+  provider: lancedb
 offline:
   enabled: true
   local_models_dir: C:/aimodels
-local_dirs:
   embedding_models_dir: C:/aimodels/embedding
   hf_models_dir: C:/aimodels/hf
   tokenizer_cache_dir: C:/aimodels/tiktoken
-  ollama_models_dir: C:/aimodels/ollama
 ```
 
 > **Want RAPTOR and GraphRAG too?** Replace `offline: { enabled: true }` with

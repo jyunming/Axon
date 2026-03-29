@@ -21,7 +21,6 @@ pip install -e .
 ```
 
 > You should see `Successfully installed axon-...` at the end. If you see errors, check that your Python version is 3.10+ with `python --version`.
-
 > **Tip:** It is good practice to use a virtual environment so Axon's packages don't conflict with other Python projects. See [SETUP.md § 2](SETUP.md#2-install-the-package) for step-by-step instructions.
 
 ```bash
@@ -33,11 +32,9 @@ ollama pull phi3:mini     # lighter option — needs ~4 GB RAM
 ```
 
 > **Verify Ollama is running** before continuing. Open a new terminal and run:
-
 > ```bash
 > curl http://localhost:11434
 > ```
-
 > You should see `Ollama is running`. If you get "connection refused", Ollama hasn't started yet — open the Ollama app from your Applications/Start menu, or run `ollama serve` in a terminal and leave it running.
 
 ---
@@ -61,6 +58,36 @@ Each project gets its own subfolder under your user directory (e.g. `~/.axon/Axo
 | 1,000 code files | 50–100 MB |
 | Embedding model (`all-MiniLM-L6-v2`) | ~90 MB |
 | LLM via Ollama (`llama3.1:8b`) | ~4.7 GB |
+
+---
+
+## First-time Configuration
+
+Run the interactive wizard to set your LLM provider, model, embedding settings, and retrieval flags — no manual YAML editing needed:
+
+```bash
+axon --setup
+```
+
+![Axon config wizard — mode selection](assets/config_wizard.png)
+
+Choose a setup mode:
+
+| Mode | Sections | Best for |
+|------|----------|----------|
+| **quick** | 3 (provider, model, embeddings) | Fast start — sensible defaults for everything else |
+| **standard** | 16 (all main settings) | Most users — covers model paths, RAG flags, chunk strategy |
+| **full** | 16 + RAPTOR/GraphRAG sub-params | Power users and production deployments |
+
+> **Tip:** Press **Ctrl+C** at any prompt to exit immediately without saving. Your existing `config.yaml` is untouched until you confirm at the end.
+
+You can also run the wizard from inside the REPL at any time:
+
+```
+axon> /config wizard
+```
+
+> **Skip RAPTOR for small sources** — RAPTOR is worth enabling only when your sources are large (books, long specs). The wizard will warn you if you enable it on a small corpus.
 
 ---
 
@@ -203,9 +230,11 @@ After installing the VSIX and starting `axon-api`, open Copilot Chat (`Ctrl+Shif
 
 **Open the Graph panel:**
 
+Just ask in Copilot Chat:
+
 ```
-Command Palette (Ctrl+Shift+P) → Axon: Show Graph for Query…
-Command Palette → Axon: Show Graph for Selection   ← with text selected in the editor
+@axon show me the graph for how authentication works
+@axon visualise the retrieval pipeline
 ```
 
 > Full setup guide including Python discovery, settings, and troubleshooting: [SETUP.md § 11](SETUP.md#11-vs-code-extension-github-copilot-integration)
@@ -227,7 +256,6 @@ You should see `Uvicorn running on http://0.0.0.0:8000`. Leave this terminal ope
 **Easiest way to explore:** open `http://localhost:8000/docs` in your browser — this shows every endpoint with a form to try it interactively. No code needed.
 
 > **What is `curl`?** It is a command-line tool for making HTTP requests — like clicking a button in a browser, but scriptable. If you prefer a visual interface, use the Swagger UI at `/docs` instead.
-
 > **Getting a `403 Forbidden` error when ingesting?** Axon only allows reading files from within a configured base directory (`RAG_INGEST_BASE`). If you get a 403, check the `RAG_INGEST_BASE` value in your `.env` file and make sure it covers the folder you are trying to ingest from. By default it is set to your home directory.
 
 **Ingest a folder (returns immediately, runs in the background):**
@@ -296,7 +324,7 @@ Open `http://localhost:8501` in your browser if it doesn't open automatically.
 
 ## Entry Point 5 — MCP Server (for AI coding agents)
 
-> **What is MCP?** Model Context Protocol is an open standard that lets AI coding agents call external tools programmatically. This is different from the VS Code extension (Entry Point 2): the extension gives you an `@axon` chat participant inside Copilot Chat; the MCP server gives any MCP-compatible agent direct access to all 27 Axon tools without a chat interface.
+> **What is MCP?** Model Context Protocol is an open standard that lets AI coding agents call external tools programmatically. This is different from the VS Code extension (Entry Point 2): the extension gives you an `@axon` chat participant inside Copilot Chat; the MCP server gives any MCP-compatible agent direct access to all 30 Axon tools without a chat interface.
 
 `axon-mcp` is a standard stdio server built on the open MCP protocol. It works with **Claude Code, Claude Desktop, OpenAI Codex CLI, OpenAI Codex Desktop, Google Gemini CLI, Cursor, VS Code Copilot agent mode**, and any other MCP-compatible tool.
 
@@ -378,11 +406,8 @@ These special scope names let you query multiple projects in one go. They are re
 Both features are **off by default** to keep your first ingest fast. Enable them once your documents are indexed and you want richer answers to complex questions.
 
 > **What are RAPTOR and GraphRAG?**
-
 > - **RAPTOR** — after ingesting, it generates summary notes that group related chunks together. Helps with big-picture questions that no single paragraph can answer on its own.
-
 > - **GraphRAG** — extracts named entities (people, places, concepts) and the relationships between them from your documents, then builds a graph. When you ask a question it can follow the connections to find related information you might otherwise miss.
-
 > **What is an "LLM call"?** One request sent to the language model (Ollama, OpenAI, etc.). More calls means longer ingest time but usually better answer quality.
 
 ### When should you enable these?
@@ -405,11 +430,9 @@ Both features are **off by default** to keep your first ingest fast. Enable them
 ### Start with: free graph (no extra LLM calls)
 
 > **Prerequisite:** Graph features require extra libraries. Install them once:
-
 > ```bash
 > pip install "axon[graphrag]"
 > ```
-
 > The quotes are required on most terminals.
 
 Edit `~/.config/axon/config.yaml` (Linux/macOS) or `C:\Users\<you>\.config\axon\config.yaml` (Windows):
@@ -432,11 +455,11 @@ rag:
 
 ### Reduce ingest time
 
-**Skip RAPTOR for large files:**
+**Skip RAPTOR for small files:**
 
 ```yaml
 rag:
-  raptor_max_source_size_mb: 2.0   # skip RAPTOR for any source file larger than 2 MB
+  raptor_min_source_size_mb: 2.0   # skip RAPTOR for any source file smaller than 2 MB
 ```
 
 **Turn both off during a big initial ingest, then turn on for daily use:**
@@ -451,42 +474,34 @@ rag:
 
 ### Visualize the graph
 
-The interactive 3D graph works everywhere — how it opens depends on which tool you're using:
+**Easiest: just ask the AI**
 
-| Where you are | How the graph opens |
-|---|---|
-| **VS Code extension** | Embedded webview panel — no browser tab needed |
-| **REPL, API, MCP, or any other tool** | Opens in your default browser automatically |
-
-**VS Code — Graph Panel:**
+In VS Code Copilot Chat:
 
 ```
-Command Palette (Ctrl+Shift+P) → Axon: Show Graph for Query…
+@axon show me the graph for how retrieval works
+@axon visualise the authentication module
 ```
 
-Or select text in the editor, then `Axon: Show Graph for Selection`. The panel opens as a split-view alongside your answer:
+In any MCP-connected agent (Claude Code, Gemini CLI, Cursor, Copilot agent mode) — just ask naturally:
+
+```
+Show me the knowledge graph for the authentication flow
+```
+
+The graph opens as an embedded panel inside VS Code, or in your default browser everywhere else. No commands needed.
 
 ![Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph](assets/vscode-graph-panel.png)
 
 Clicking any citation or graph node opens the source file at the exact line in the editor.
 
-**REPL — opens in browser:**
+**Alternatives — open the graph directly:**
 
-```
-/graph viz              # opens the live graph in your default browser
-/graph-viz              # export to a temp HTML file and print the path
-/graph-viz /out.html    # export to a specific file
-```
-
-**API — opens in browser or save to file:**
-
-```bash
-curl http://localhost:8000/graph/visualize -o graph.html
-# Then open it:
-open graph.html        # macOS
-xdg-open graph.html   # Linux
-start graph.html       # Windows
-```
+| Where | Command |
+|---|---|
+| **REPL** | `/graph viz` — exports to HTML and opens in browser |
+| **VS Code Command Palette** | `Ctrl+Shift+P` → `Axon: Show Graph for Query…` |
+| **API** | `curl http://localhost:8000/graph/visualize -o graph.html` |
 
 | Tab | What it shows | How to enable |
 |---|---|---|

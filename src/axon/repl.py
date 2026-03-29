@@ -34,6 +34,7 @@ from axon.vector_store import MultiVectorStore  # noqa: E402
 _SLASH_COMMANDS = [
     "/clear",
     "/compact",
+    "/config ",
     "/context",
     "/discuss",
     "/embed ",
@@ -84,16 +85,121 @@ def _prompt_key_if_missing(provider: str, brain) -> bool:
     """If *provider* needs an API key/token and none is set, prompt the user.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     For github_copilot: runs the OAuth device flow (browser-based).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     For other providers: prompts for the API key via getpass.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Saves to ~/.axon/.env and patches brain.config in-place.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Returns True when a key is available (already set or just obtained).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -307,13 +413,97 @@ def _infer_provider(model: str) -> str:
     """Guess LLM provider from model name.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Returns "gemini" for gemini-* models, "openai" for gpt-*/o1-*/o3-*/o4-*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     models (without a colon, since Ollama uses name:tag format), and "ollama"
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     for everything else (local models, including gpt-oss:tag Ollama models).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -360,43 +550,337 @@ def _show_context(
     """Display a formatted context window panel with token usage, model info, and chat history.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Shows:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     - Model info: LLM provider/model and context window size; embedding provider/model
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - Token usage: Rough estimates (4 chars/token) with visual bar and color indicator
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     - RAG settings: top_k, similarity_threshold, hybrid_search, rerank, hyde, multi_query toggles
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - Chat history: Last 10 turns (user/assistant messages)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     - Last retrieved sources: Up to 8 chunks with similarity scores and source names
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - System prompt: Full text (word-wrapped)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     All content is wrapped in a box with section separators for readability.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Args:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         brain: AxonBrain instance to extract model and config info.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         chat_history: List of message dicts {"role": "user"|"assistant", "content": str}.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         last_sources: List of document dicts from last retrieval (with "vector_score", "metadata", "text").
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         last_query: The user query that was used for the last retrieval.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -685,25 +1169,193 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
     """Summarize chat history via LLM and replace it with a single summary turn.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Condenses all messages in chat_history into a 4-6 sentence summary using the configured LLM.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     The original conversation is replaced with a single message prefixed with
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     "[Conversation summary]: " to preserve context while freeing up token space.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     If chat_history is empty, prints a message and returns without action.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Args:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         brain: AxonBrain instance used to call the LLM for summarization.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         chat_history: List of message dicts to summarize (modified in-place; emptied and refilled with summary).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -1017,25 +1669,193 @@ def _draw_header(brain: AxonBrain, tick_lines: list | None = None) -> None:
     """Clear screen and draw the welcome header box with LLM and embedding model info.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Displays initialization status lines (e.g., "✓ Embedding ready [CPU]", "✓ BM25 · 42 docs").
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     Clears the entire screen and redraws the header with hints for available REPL commands.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Uses ANSI codes to clear and position the cursor — no scroll region (natural terminal scrollback).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     Args:
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         brain: AxonBrain instance to extract model and provider information.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         tick_lines: Optional list of status messages (e.g., ["Starting", "Embedding ready [CPU]"])
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                    to display in the header box.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -1060,13 +1880,97 @@ def _print_recent_turns(history: list, n_turns: int = 2) -> None:
     """Print the last n_turns of Q&A below the header so context is visible.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Args:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         history: chat_history list of {"role": ..., "content": ...} dicts.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         n_turns: Number of complete Q&A turns to show (each turn = 1 user + 1 assistant message).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -1102,19 +2006,145 @@ class _InitDisplay(logging.Handler):
     """Intercepts initialization log messages and renders animated status in a box.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Displays a 7-line box with title and status line updated in-place using ANSI cursor positioning.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     Uses a braille spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) that rotates every 0.08 seconds.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Collects completed steps as checkmarks (✓) for the final banner display.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     The box is printed once at initialization, then the step line (line 5) is updated in-place
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     as different initialization phases complete (Starting, Loading models, Vector store ready, etc.).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -1337,13 +2367,97 @@ def _expand_at_files(text: str) -> str:
     """Expand @path references in user input with file/folder contents (read-only).
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - @file.txt / @file.docx / @file.pdf → inlines extracted text
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     - @folder/   → recursively reads all supported files in the folder (capped at
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                    _AT_DIR_MAX_BYTES total; unsupported / oversized files are skipped)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -1488,6 +2602,207 @@ def _expand_at_files(text: str) -> str:
     return re.sub(r"@(\S+)", _replace, text)
 
 
+# ---------------------------------------------------------------------------
+
+
+# /config command handler
+
+
+# ---------------------------------------------------------------------------
+
+
+def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
+    """Handle /config sub-commands.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Sub-commands:
+
+
+
+
+
+
+
+      (empty) / show   — render config table
+
+
+
+
+
+
+
+      validate          — run AxonConfig.validate() and show issues
+
+
+
+
+
+
+
+      wizard            — launch interactive setup wizard
+
+
+
+
+
+
+
+      reset             — overwrite config.yaml with defaults
+
+
+
+
+
+
+
+      set <key> <value> — set a dot-notation field
+
+
+
+
+
+
+
+    """
+
+    from axon.config import AxonConfig
+    from axon.config_wizard import render_config_table, render_issues, run_wizard
+
+    parts = arg.split(None, 2)
+
+    subcmd = parts[0].lower() if parts else ""
+
+    if subcmd in ("", "show"):
+        if brain is None:
+            print("  Brain not initialised.")
+
+            return
+
+        render_config_table(brain.config)
+
+    elif subcmd == "validate":
+        issues = AxonConfig.validate(cfg_path or None)
+
+        render_issues(issues)
+
+    elif subcmd == "wizard":
+        if brain is None:
+            print("  Brain not initialised.")
+
+            return
+
+        try:
+            changes = run_wizard(brain=brain, config_path=cfg_path)
+
+        except KeyboardInterrupt:
+            print("\n  Setup cancelled.")
+
+            return
+
+        if changes:
+            for key, val in changes.items():
+                setattr(brain.config, key, val)
+
+            brain.config.save(cfg_path or None)
+
+            print(f"  Saved {len(changes)} change(s) to {cfg_path or '(default path)'}.")
+
+    elif subcmd == "reset":
+        try:
+            confirm = input("  Overwrite config.yaml with defaults? [y/N] ").strip().lower()
+
+        except (EOFError, KeyboardInterrupt):
+            confirm = "n"
+
+        if confirm == "y":
+            import os
+            from pathlib import Path
+
+            from axon.config import _DEFAULT_CONFIG_YAML, _USER_CONFIG_PATH
+
+            target = cfg_path or str(_USER_CONFIG_PATH)
+
+            os.makedirs(os.path.dirname(os.path.expanduser(target)), exist_ok=True)
+
+            Path(os.path.expanduser(target)).write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
+
+            print(f"  Config reset to defaults at {target}")
+
+        else:
+            print("  Cancelled.")
+
+    elif subcmd == "set":
+        if len(parts) < 3:
+            print("  Usage: /config set <key> <value>")
+
+            print("  Example: /config set chunk.strategy markdown")
+
+            return
+
+        from axon.api_routes.config_routes import _DOT_TO_FLAT
+
+        dot_key = parts[1]
+
+        raw_val: str = parts[2]
+
+        flat_key = _DOT_TO_FLAT.get(dot_key, dot_key.replace(".", "_"))
+
+        if brain is None:
+            print("  Brain not initialised.")
+
+            return
+
+        if not hasattr(brain.config, flat_key):
+            print(f"  Unknown config key '{dot_key}'. Known keys: {sorted(_DOT_TO_FLAT.keys())}")
+
+            return
+
+        # Coerce value type based on existing attribute type
+
+        current = getattr(brain.config, flat_key)
+
+        try:
+            if isinstance(current, bool):
+                coerced = raw_val.lower() in ("true", "1", "yes")
+
+            elif isinstance(current, int):
+                coerced = int(raw_val)
+
+            elif isinstance(current, float):
+                coerced = float(raw_val)
+
+            else:
+                coerced = raw_val
+
+        except (ValueError, TypeError):
+            coerced = raw_val
+
+        setattr(brain.config, flat_key, coerced)
+
+        brain.config.save(cfg_path or None)
+
+        print(f"  Set {dot_key} = {coerced!r}  (saved to config).")
+
+    else:
+        print(
+            f"  Unknown sub-command '{subcmd}'. "
+            "Usage: /config [show|validate|wizard|reset|set <key> <value>]"
+        )
+
+
 def _interactive_repl(
     brain: AxonBrain,
     stream: bool = True,
@@ -1497,46 +2812,361 @@ def _interactive_repl(
     """Interactive REPL chat session with session persistence and live tab completion.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Features:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     - Session persistence: auto-saves to ~/.axon/sessions/session_<timestamp>.json
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - Live tab completion: slash commands, filesystem paths, Ollama model names via prompt_toolkit
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     - Animated spinners: braille spinner during init and LLM generation (disabled in quiet mode)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
       /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - @file/folder context: type @path/file.txt or @path/folder/ to inline contents into your query (read-only)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     - Shell passthrough: !command runs a shell command (local-only by default)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     - Pinned status info: token usage, model info, RAG settings visible at terminal bottom
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     Args:
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         brain: AxonBrain instance to use for queries.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
         stream: If True, streams LLM response token-by-token; if False, waits for full response.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         init_display: Optional _InitDisplay handler to stop after initialization.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         quiet: Suppress spinners and progress bars (auto-enabled for non-TTY stdin).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -2148,6 +3778,16 @@ def _interactive_repl(
                         "\n"
                         "  Reports age based on the last ingest timestamp for each source.\n"
                         "  Use /refresh to re-ingest any changed files.",
+                        "config": "  /config                        show current config as a table\n"
+                        "  /config show                   same as /config\n"
+                        "  /config validate               validate config.yaml and list issues\n"
+                        "  /config wizard                 interactive setup wizard\n"
+                        "  /config reset                  overwrite config.yaml with defaults\n"
+                        "  /config set <key> <value>      set a dot-notation config key\n"
+                        "\n"
+                        "  Example: /config set chunk.strategy markdown\n"
+                        "           /config set rag.top_k 15\n"
+                        "           /config set llm.model gemma3:4b",
                     }
 
                     key = arg.lstrip("/")
@@ -2176,6 +3816,7 @@ def _interactive_repl(
                         "  /project [sub]  manage projects (list, new, switch, delete, folder)\n"
                         "  /pull <name>    pull an Ollama model\n"
                         "  /quit           exit Axon\n"
+                        "  /config [sub]   show, validate, or edit config (validate, wizard, set, reset)\n"
                         "  /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
                         "  /refresh        re-ingest documents whose content has changed\n"
                         "  /resume <id>    load a saved session\n"
@@ -3693,6 +5334,13 @@ def _interactive_repl(
                     print(f"  Unknown sub-command '{sub}'.")
 
                     print("  Usage: /graph status | /graph finalize | /graph viz [path]")
+
+            elif cmd == "/config":
+                _cfg_path = (
+                    getattr(brain.config, "_loaded_path", "") if brain is not None else ""
+                ) or ""
+
+                _handle_config_cmd(arg.strip(), brain, _cfg_path)
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")

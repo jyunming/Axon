@@ -438,7 +438,7 @@
 
 
 
-        "description": "Ask questions answered by your local Axon RAG knowledge base. Uses the same backend synthesis as query_knowledge \u2014 consistent behavior, no separate Copilot step.",
+        "description": "Ask questions answered by your local Axon RAG knowledge base. Uses the same backend synthesis as query_knowledge — consistent behavior, no separate Copilot step.",
 
 
 
@@ -5262,7 +5262,7 @@
 
 
 
-            "docs": { "type": "array", "description": "Array of {text, metadata} objects to ingest" },
+            "docs": {
 
 
 
@@ -5270,7 +5270,55 @@
 
 
 
-            "project": { "type": "string", "description": "Target project name (optional)" }
+              "type": "array",
+
+
+
+
+
+
+
+              "description": "Array of {text, metadata} objects to ingest"
+
+
+
+
+
+
+
+            },
+
+
+
+
+
+
+
+            "project": {
+
+
+
+
+
+
+
+              "type": "string",
+
+
+
+
+
+
+
+              "description": "Target project name (optional)"
+
+
+
+
+
+
+
+            }
 
 
 
@@ -5286,7 +5334,23 @@
 
 
 
-          "required": ["docs"]
+          "required": [
+
+
+
+
+
+
+
+            "docs"
+
+
+
+
+
+
+
+          ]
 
 
 
@@ -5342,7 +5406,31 @@
 
 
 
-        "inputSchema": { "type": "object", "properties": {} }
+        "inputSchema": {
+
+
+
+
+
+
+
+          "type": "object",
+
+
+
+
+
+
+
+          "properties": {}
+
+
+
+
+
+
+
+        }
 
 
 
@@ -5414,7 +5502,31 @@
 
 
 
-            "session_id": { "type": "string", "description": "The session ID to retrieve" }
+            "session_id": {
+
+
+
+
+
+
+
+              "type": "string",
+
+
+
+
+
+
+
+              "description": "The session ID to retrieve"
+
+
+
+
+
+
+
+            }
 
 
 
@@ -5430,7 +5542,23 @@
 
 
 
-          "required": ["session_id"]
+          "required": [
+
+
+
+
+
+
+
+            "session_id"
+
+
+
+
+
+
+
+          ]
 
 
 
@@ -5486,7 +5614,31 @@
 
 
 
-        "inputSchema": { "type": "object", "properties": {} }
+        "inputSchema": {
+
+
+
+
+
+
+
+          "type": "object",
+
+
+
+
+
+
+
+          "properties": {}
+
+
+
+
+
+
+
+        }
 
 
 
@@ -5534,7 +5686,359 @@
 
 
 
-        "inputSchema": { "type": "object", "properties": {} }
+        "inputSchema": {
+
+
+
+
+
+
+
+          "type": "object",
+
+
+
+
+
+
+
+          "properties": {}
+
+
+
+
+
+
+
+        }
+
+
+
+
+
+
+
+      },
+
+
+
+
+
+
+
+      {
+
+
+
+
+
+
+
+        "name": "config_validate",
+
+
+
+
+
+
+
+        "tags": [
+
+
+
+
+
+
+
+          "axon",
+
+
+
+
+
+
+
+          "config"
+
+
+
+
+
+
+
+        ],
+
+
+
+
+
+
+
+        "toolReferenceName": "axonConfigValidate",
+
+
+
+
+
+
+
+        "displayName": "Axon: Validate Config",
+
+
+
+
+
+
+
+        "modelDescription": "Validates the Axon config.yaml file and returns a list of issues (errors, warnings, and info).",
+
+
+
+
+
+
+
+        "inputSchema": {
+
+
+
+
+
+
+
+          "type": "object",
+
+
+
+
+
+
+
+          "properties": {}
+
+
+
+
+
+
+
+        }
+
+
+
+
+
+
+
+      },
+
+
+
+
+
+
+
+      {
+
+
+
+
+
+
+
+        "name": "config_set",
+
+
+
+
+
+
+
+        "tags": [
+
+
+
+
+
+
+
+          "axon",
+
+
+
+
+
+
+
+          "config"
+
+
+
+
+
+
+
+        ],
+
+
+
+
+
+
+
+        "toolReferenceName": "axonConfigSet",
+
+
+
+
+
+
+
+        "displayName": "Axon: Set Config Fields",
+
+
+
+
+
+
+
+        "modelDescription": "Sets one or more Axon config fields using dot-notation keys (e.g. chunk.strategy, llm.model, rag.top_k).",
+
+
+
+
+
+
+
+        "inputSchema": {
+
+
+
+
+
+
+
+          "type": "object",
+
+
+
+
+
+
+
+          "properties": {
+
+
+
+
+
+
+
+            "changes": {
+
+
+
+
+
+
+
+              "type": "object",
+
+
+
+
+
+
+
+              "description": "Map of dot-notation key to new value, e.g. {\"chunk.strategy\": \"markdown\", \"rag.top_k\": 15}",
+
+
+
+
+
+
+
+              "additionalProperties": true
+
+
+
+
+
+
+
+            },
+
+
+
+
+
+
+
+            "persist": {
+
+
+
+
+
+
+
+              "type": "boolean",
+
+
+
+
+
+
+
+              "description": "Whether to save changes to config.yaml on disk (default: true)"
+
+
+
+
+
+
+
+            }
+
+
+
+
+
+
+
+          },
+
+
+
+
+
+
+
+          "required": [
+
+
+
+
+
+
+
+            "changes"
+
+
+
+
+
+
+
+          ]
+
+
+
+
+
+
+
+        }
 
 
 
@@ -6127,6 +6631,38 @@
 
 
         "title": "Axon: Show Graph for Selection"
+
+
+
+
+
+
+
+      },
+
+
+
+
+
+
+
+      {
+
+
+
+
+
+
+
+        "command": "axon.configSetup",
+
+
+
+
+
+
+
+        "title": "Axon: Config Setup Wizard"
 
 
 
@@ -6727,4 +7263,10 @@
 
 
 }
+
+
+
+
+
+
 

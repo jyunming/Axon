@@ -48,15 +48,21 @@ Total memory footprint: 2–8 GB RAM/VRAM depending on model selection.
 **Installation:**
 
 ```bash
+
 pip install sentence-transformers
+
 ```
 
 **Usage:**
 
 ```python
+
 from sentence_transformers import SentenceTransformer
+
 model = SentenceTransformer('all-MiniLM-L6-v2')
+
 embeddings = model.encode(texts)
+
 ```
 
 ### Alternative: BAAI/bge-small-en-v1.5 (via FastEmbed)
@@ -86,7 +92,9 @@ embeddings = model.encode(texts)
 **Installation:**
 
 ```bash
+
 pip install fastembed
+
 ```
 
 ### Alternative: nomic-embed-text (via Ollama)
@@ -118,7 +126,9 @@ pip install fastembed
 **Installation:**
 
 ```bash
+
 ollama pull nomic-embed-text
+
 ```
 
 ### Comparison Table
@@ -136,9 +146,13 @@ ollama pull nomic-embed-text
 or documents with long passages. Requires `pip install 'axon[fastembed]'`:
 
 ```yaml
+
 embedding:
+
   provider: fastembed
+
   model: BAAI/bge-m3
+
 ```
 
 ---
@@ -166,53 +180,81 @@ The system supports cloud providers in addition to local Ollama models. Set `llm
 **Ollama (local, default — no API key needed):**
 
 ```yaml
+
 llm:
+
   provider: ollama
+
   model: llama3.1:8b
+
 ```
 
 **OpenAI:**
 
 ```yaml
+
 llm:
+
   provider: openai
+
   model: gpt-4o          # or gpt-4.1, o3-mini, gpt-3.5-turbo
+
   openai_api_key: sk-... # or export OPENAI_API_KEY=sk-...
+
 ```
 
 **xAI Grok:**
 
 ```yaml
+
 llm:
+
   provider: grok
+
   model: grok-3          # or grok-3-fast, grok-2
+
   grok_api_key: xai-...  # or export XAI_API_KEY=xai-...
+
 ```
 
 **Google Gemini:**
 
 ```yaml
+
 llm:
+
   provider: gemini
+
   model: gemini-2.0-flash  # or gemini-1.5-pro
+
   gemini_api_key: AIza...  # or export GEMINI_API_KEY=AIza...
+
 ```
 
 **vLLM (self-hosted):**
 
 ```yaml
+
 llm:
+
   provider: vllm
+
   model: mistral-7b-instruct
+
   vllm_base_url: http://localhost:8000/v1
+
 ```
 
 **GitHub Copilot (VS Code bridge):**
 
 ```yaml
+
 llm:
+
   provider: copilot        # alias: "github_copilot" also accepted
+
   model: gpt-4o            # any model available in your Copilot subscription
+
 ```
 
 > **`copilot` vs `github_copilot`:** These are two distinct providers.
@@ -222,20 +264,31 @@ llm:
 **GitHub Copilot API (PAT-based, no VS Code required):**
 
 ```yaml
+
 llm:
+
   provider: github_copilot
+
   model: gpt-4o
+
   # export GITHUB_COPILOT_PAT=<oauth-token>  (use device flow: axon /keys set github_copilot)
+
 ```
 
 **Ollama Cloud (remote Ollama-compatible endpoint):**
 
 ```yaml
+
 llm:
+
   provider: ollama_cloud
+
   model: llama3.1:8b          # any model available on your hosted endpoint
+
   # export OLLAMA_CLOUD_URL=https://your-ollama-host
+
   # export OLLAMA_CLOUD_KEY=your-api-key
+
 ```
 
 Use `ollama_cloud` when your Ollama instance is running on a remote server rather than localhost.
@@ -291,7 +344,9 @@ instead of the default `OLLAMA_HOST`. Both env vars are required when using this
 **Ollama Installation:**
 
 ```bash
+
 ollama pull llama3.1:8b
+
 ```
 
 ### Alternative: Qwen2.5-7B-Instruct
@@ -320,7 +375,9 @@ ollama pull llama3.1:8b
 **Ollama Installation:**
 
 ```bash
+
 ollama pull qwen2.5:7b
+
 ```
 
 ### Alternative: Phi-3 Mini (3.8B)
@@ -351,7 +408,9 @@ ollama pull qwen2.5:7b
 **Ollama Installation:**
 
 ```bash
+
 ollama pull phi3:mini
+
 ```
 
 ### Alternative: Mistral 7B Instruct
@@ -380,7 +439,9 @@ ollama pull phi3:mini
 **Ollama Installation:**
 
 ```bash
+
 ollama pull mistral:7b
+
 ```
 
 ### Comparison Table
@@ -471,7 +532,6 @@ Set `max_workers` in `config.yaml` to match your hardware — see
 | nomic-embed-text | 500 | 100 |
 
 ### LLM Inference Speed (tokens/sec)
-
 | Model | CPU (16 cores) | RTX 3060 | RTX 4090 |
 |-------|----------------|----------|----------|
 | Phi-3 Mini | 15 | 40 | 100 |
@@ -485,14 +545,23 @@ Set `max_workers` in `config.yaml` to match your hardware — see
 ### Option 1: Maximum Speed (Low Resource)
 
 ```yaml
+
 embedding:
+
   provider: sentence_transformers
+
   model: all-MiniLM-L6-v2
+
 llm:
+
   provider: ollama
+
   model: phi3:mini
+
 vector_store:
-  provider: chroma
+
+  provider: lancedb
+
 ```
 
 **Total Memory:** ~3-4 GB
@@ -502,14 +571,23 @@ vector_store:
 ### Option 2: Balanced (Recommended)
 
 ```yaml
+
 embedding:
+
   provider: sentence_transformers
+
   model: all-MiniLM-L6-v2
+
 llm:
+
   provider: ollama
+
   model: llama3.1:8b
+
 vector_store:
-  provider: chroma
+
+  provider: lancedb
+
 ```
 
 **Total Memory:** ~6-8 GB
@@ -519,14 +597,23 @@ vector_store:
 ### Option 3: Maximum Quality
 
 ```yaml
+
 embedding:
+
   provider: ollama
+
   model: nomic-embed-text
+
 llm:
+
   provider: ollama
+
   model: qwen2.5:7b
+
 vector_store:
+
   provider: qdrant
+
 ```
 
 **Total Memory:** ~10-12 GB
@@ -552,3 +639,4 @@ vector_store:
 *Research compiled: February 26, 2026*
 
 *Recommended configuration updated for local deployment*
+

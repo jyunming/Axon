@@ -65,11 +65,11 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 <td width="50%" valign="top">
 
 ### 📥 Ingest Everything
-- **54 file formats** — PDF, DOCX, XLSX, PPTX, Jupyter, images, 30+ code formats
+- **54 file formats** — PDF, DOCX, XLSX, PPTX, Jupyter, images, 24 code formats
 - URL ingestion — any public web page
 - SHA-256 dedup skips unchanged files
 - Stale detection for modified sources
-- 5 content-aware chunking strategies
+- 4 content-aware chunking strategies
 
 </td>
 <td width="50%" valign="top">
@@ -97,8 +97,8 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 
 ### 🛡️ Governance & Agents
 - **Governance Console** — full audit trail of every query
-- Graceful maintenance states: `online → draining → readonly → offline`
-- **REST API** — 48 endpoints with Swagger docs at `/docs`
+- Graceful maintenance states: `normal → draining → readonly → offline`
+- **REST API** — 54 endpoints with Swagger docs at `/docs`
 - **MCP server** — 30 tools for Claude Code, Codex, Gemini, Cursor, Copilot
 - **`@axon`** VS Code chat participant with Graph and Governance panels
 
@@ -133,8 +133,10 @@ axon               # launches the interactive REPL
 ## 🔌 VS Code + GitHub Copilot
 
 <div align="center">
-  <img src="docs/assets/AxonCopilot.gif" alt="Axon Copilot integration" width="800" />
+  <img src="docs/assets/AxonCopilot.gif" alt="Axon Copilot integration" width="400" />
 </div>
+
+<br/>
 
 <div align="center">
   <img src="docs/assets/vscode-graph-panel.png" alt="Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph" width="820" />

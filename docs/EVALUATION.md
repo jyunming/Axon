@@ -5,6 +5,7 @@ Evaluation answers the question: *"How good are the answers Axon gives?"*
 Axon ships with two evaluation layers:
 
 - **Smoke tests** — fast checks that run automatically on every code change. No internet, no AI model needed. They verify the retrieval math is correct.
+
 - **RAGAS evaluation** — a full end-to-end quality run that sends real questions through Axon and scores how good the answers are, using a local LLM (no OpenAI API key required).
 
 > **What is RAGAS?** RAGAS (Retrieval-Augmented Generation Assessment) is an open-source Python library that measures RAG pipeline quality across four dimensions: does the answer match the retrieved text, did retrieval find the right information, and does the answer actually address the question. See [github.com/explodinggradients/ragas](https://github.com/explodinggradients/ragas).
@@ -16,10 +17,15 @@ Axon ships with two evaluation layers:
 `tests/test_eval_smoke.py` verifies that the four core RAG quality signals are computable and produce correct values against a tiny mocked corpus. No live model or API key needed.
 
 ```bash
+
 # Run eval smoke tests only
+
 python -m pytest -m eval tests/test_eval_smoke.py -v --no-cov
+
 # Run as part of the full test suite
+
 python -m pytest tests/ -v --no-cov
+
 ```
 
 ### Metrics covered
@@ -44,32 +50,44 @@ These checks use simple keyword matching — no additional AI model or internet 
 ### Prerequisites
 
 ```bash
+
 pip install ragas langchain-community datasets
+
 ollama pull llama3.1:8b
+
 ollama pull nomic-embed-text    # embedding model used by RAGAS
+
 ```
 
 ### Run an evaluation
 
 ```bash
+
 python scripts/evaluate.py \
+
   --testset examples/eval_testset.jsonl \
+
   --config config.yaml
+
 ```
 
 This will:
+
 1. Load `AxonBrain` from your `config.yaml`
+
 2. Run each question through the full RAG pipeline (retrieval → context → synthesis)
+
 3. Score results with RAGAS using local Ollama models
+
 4. Write a Markdown report to `eval_report_<timestamp>.md`
 
 ### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--testset` | required | Path to JSONL testset file |
+| `--testset` | — *(required)* | Path to JSONL testset file |
 | `--config` | `config.yaml` | Path to Axon config file |
-| `--model` | `null` | Override LLM model (uses config value if omitted) |
+| `--model` | — | Override LLM model; omit to use the value from `config.yaml` |
 | `--output` | `eval_report_<ts>.md` | Output report file path |
 
 ---
@@ -81,8 +99,11 @@ This will:
 Testsets are JSONL files — one JSON object per line:
 
 ```jsonl
+
 {"question": "How does hybrid search work?", "ground_truth": "Hybrid search combines vector search with BM25 keyword search, merging results using Reciprocal Rank Fusion."}
+
 {"question": "What embedding models are supported?", "ground_truth": "Sentence Transformers, Ollama, FastEmbed, and OpenAI embeddings are supported."}
+
 ```
 
 | Field | Required | Description |
@@ -95,8 +116,11 @@ A starter testset is included at `examples/eval_testset.jsonl`.
 ### Building a good testset
 
 - **Cover your actual use cases** — use questions you expect real users to ask
+
 - **Write specific ground truths** — vague ground truths hurt `context_recall` scoring
+
 - **Include hard cases** — questions that require combining multiple documents
+
 - **Aim for 20–50 questions** — enough for stable aggregate scores, fast enough to run regularly
 
 ---
@@ -113,8 +137,11 @@ A starter testset is included at `examples/eval_testset.jsonl`.
 ### How to use these scores
 
 - **Low `context_recall`** → try increasing `top_k`, enabling `hybrid_search`, or adding HyDE
+
 - **Low `context_precision`** → try enabling `rerank`, raising `similarity_threshold`, or lowering `top_k`
+
 - **Low `faithfulness`** → your LLM is hallucinating beyond retrieved context; try enabling `cite` + `compress`
+
 - **Low `answer_relevancy`** → check your system prompt and consider enabling `step_back` or `decompose`
 
 ---
@@ -126,24 +153,39 @@ A starter testset is included at `examples/eval_testset.jsonl`.
 Add this to your GitHub Actions workflow file to run smoke tests on every push:
 
 ```yaml
+
 - name: Run eval smoke tests
+
   run: python -m pytest -m eval tests/test_eval_smoke.py -v --no-cov
+
 ```
 
 For RAGAS scoring in CI (requires Ollama available on the runner):
 
 ```yaml
+
 - name: Run RAGAS evaluation
+
   run: |
+
     python scripts/evaluate.py \
+
       --testset examples/eval_testset.jsonl \
+
       --output eval_report.md
+
   continue-on-error: true   # non-blocking — report is an artifact
+
 - name: Upload eval report
+
   uses: actions/upload-artifact@v4
+
   with:
+
     name: eval-report
+
     path: eval_report.md
+
 ```
 
 The existing CI workflow runs smoke tests automatically on every push via the `eval` marker.
@@ -153,19 +195,27 @@ The existing CI workflow runs smoke tests automatically on every push via the `e
 ## 6. Example Evaluation Report
 
 ```markdown
+
 # RAG Evaluation Report
+
 **Generated:** 2026-03-26 14:30
+
 **Samples:** 10
+
 ## Scores
+
 | Metric              | Score  |
 |---------------------|--------|
 | faithfulness        | 0.8750 |
 | context_recall      | 0.7200 |
 | context_precision   | 0.6900 |
 | answer_relevancy    | 0.8400 |
+
 ```
 
 ---
 
 *See [ADVANCED_RAG.md](ADVANCED_RAG.md) for tuning guidance on each RAG technique.*
+
 *See [ADMIN_REFERENCE.md § 6.4](ADMIN_REFERENCE.md) for the full list of RAG flags and their defaults.*
+

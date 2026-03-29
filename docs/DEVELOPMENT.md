@@ -55,7 +55,8 @@ make docker-logs   # View logs
 Axon/
 ├── src/axon/          # Main package
 │   ├── main.py             # Core RAG engine
-│   ├── api.py              # REST API endpoints
+│   ├── api.py              # FastAPI app factory and route registration
+│   ├── api_routes/         # Route handlers (54 endpoints across 8 files)
 │   ├── webapp.py           # Streamlit UI
 │   ├── loaders.py          # Document loaders
 │   ├── retrievers.py       # Search implementations
@@ -82,10 +83,13 @@ Axon/
 └── README.md              # Root overview + links to docs/
 ```
 
-> **Version sync:** `pyproject.toml` is the primary source of truth for the Python package version. A version bump requires updating all three locations in sync:
+> **Version sync:** `pyproject.toml` is the primary source of truth for the Python package version. A version bump requires updating all six locations in sync:
 > - `pyproject.toml` → `version = "X.Y.Z"`
-> - `integrations/vscode-axon/package.json` → `"version": "X.Y.Z"` (VSIX artefact)
+> - `setup.py` → `version="X.Y.Z"`
+> - `src/__init__.py` → `__version__ = "X.Y.Z"`
 > - `src/axon/__init__.py` → `__version__ = "X.Y.Z"`
+> - `src/axon/api.py` → FastAPI `version=` field
+> - `integrations/vscode-axon/package.json` → `"version": "X.Y.Z"` (VSIX artefact)
 
 ### 4. Development Workflow
 

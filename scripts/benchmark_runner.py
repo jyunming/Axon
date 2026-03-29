@@ -1,36 +1,51 @@
 """
+
 scripts/benchmark_runner.py — Benchmark automation (Epic 5, Story 5.3).
 
 Compares baseline Axon retrieval against each feature variant using the shared
+
 metric schema defined in Story 5.2 / benchmark_framework.md.
 
 Metrics produced (Story 5.2 IDs):
+
   P@5   — Precision at 5 (retrieval quality proxy)
+
   R@5   — Recall at 5
+
   RTL   — Retrieval latency P95 (ms)
+
   IHO   — Ingest overhead % vs baseline
+
   TCR   — Token-count reduction (1 - post/pre; compression variants only)
+
   CTI   — Citation integrity (% results with valid source attribution)
 
 Usage::
 
     # Smoke run (CI-safe, no model downloads):
+
     python scripts/benchmark_runner.py --smoke
 
     # Full run (same smoke behaviour until real-model mode is added):
+
     python scripts/benchmark_runner.py
 
     # Single slice:
+
     python scripts/benchmark_runner.py --slice prose_factual
 
     # Custom output directory:
+
     python scripts/benchmark_runner.py --out results/
 
 Outputs::
 
     benchmark_<slice>_<timestamp>.json     — per-slice detailed results
+
     benchmark_unified_<timestamp>.json     — aggregated summary
+
     benchmark_unified_<timestamp>.md       — human-readable comparison report
+
 """
 
 from __future__ import annotations
@@ -46,14 +61,19 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
+
 # Path setup
+
 # ---------------------------------------------------------------------------
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # ---------------------------------------------------------------------------
+
 # Fixed benchmark corpus — "Prose Factual" slice
+
 # Topic IDs: 0=python/axon, 1=retrieval, 2=embeddings, 3=bm25/fusion, 4=graph
+
 # ---------------------------------------------------------------------------
 
 _PROSE_DOCS: list[dict] = [
@@ -120,6 +140,7 @@ _PROSE_DOCS: list[dict] = [
 ]
 
 # Ground-truth: (query_text, [relevant_doc_ids])
+
 _PROSE_QUERIES: list[tuple[str, list[str]]] = [
     ("What Python version performance improvements exist?", ["pf_0"]),
     ("How does sentence-window retrieval expand context?", ["pf_1"]),
@@ -134,55 +155,77 @@ _PROSE_QUERIES: list[tuple[str, list[str]]] = [
 ]
 
 # ---------------------------------------------------------------------------
+
 # Deterministic topic-aware embeddings (CI-safe — no model download required)
+
 # ---------------------------------------------------------------------------
 
 
 def _unit_normalize(vec: list[float]) -> list[float]:
     norm = math.sqrt(sum(x * x for x in vec))
+
     return [x / norm for x in vec] if norm > 0 else vec
 
 
 def _topic_vector(topic: int, item_seed: int, dim: int) -> list[float]:
     rng_t = random.Random(topic * 31337)
+
     base = [rng_t.gauss(0, 1) for _ in range(dim)]
+
     rng_i = random.Random(item_seed)
+
     noisy = [b + 0.12 * rng_i.gauss(0, 1) for b in base]
+
     return _unit_normalize(noisy)
 
 
 def _make_embed_fn(dim: int):
     """Return an embed(texts) function tied to the prose corpus."""
+
     _doc_map = {d["id"]: d for d in _PROSE_DOCS}
+
     _text_to_id = {d["text"]: d["id"] for d in _PROSE_DOCS}
+
     _query_topic = {q: relevant[0] for q, relevant in _PROSE_QUERIES if relevant}
 
     def embed(texts: list[str]) -> list[list[float]]:
         result = []
+
         for t in texts:
             if t in _text_to_id:
                 doc = _doc_map[_text_to_id[t]]
+
                 result.append(_topic_vector(doc["topic"], hash(doc["id"]) & 0xFFFF, dim))
+
             elif t in _query_topic:
                 target_id = _query_topic[t]
+
                 doc = _doc_map[target_id]
+
                 result.append(_topic_vector(doc["topic"], hash(t) & 0xFFFF, dim))
+
             else:
                 result.append(_topic_vector(0, hash(t) & 0xFFFF, dim))
+
         return result
 
     return embed
 
 
 # ---------------------------------------------------------------------------
+
 # Metric helpers (Story 5.2)
+
 # ---------------------------------------------------------------------------
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
+
     na = math.sqrt(sum(x * x for x in a))
+
     nb = math.sqrt(sum(x * x for x in b))
+
     return dot / (na * nb) if na > 0 and nb > 0 else 0.0
 
 
@@ -200,13 +243,18 @@ def _recall_at_k(retrieved: list[str], relevant: list[str], k: int) -> float:
 
 def _citation_integrity(doc_ids: list[str]) -> float:
     """Fraction of retrieved docs that carry source metadata (CTI)."""
+
     id_map = {d["id"]: d for d in _PROSE_DOCS}
+
     ok = sum(1 for did in doc_ids if id_map.get(did, {}).get("metadata", {}).get("source"))
+
     return ok / len(doc_ids) if doc_ids else 1.0
 
 
 # ---------------------------------------------------------------------------
+
 # Feature variants
+
 # ---------------------------------------------------------------------------
 
 _VARIANTS: list[dict[str, Any]] = [
@@ -223,40 +271,58 @@ _VARIANTS: list[dict[str, Any]] = [
     {"name": "bge_m3", "label": "BGE-M3 Dense (1024-dim)", "dim": 1024, "compress": False},
 ]
 
-
 # ---------------------------------------------------------------------------
+
 # Single-variant smoke benchmark
+
 # ---------------------------------------------------------------------------
 
 
 def run_variant(variant: dict, docs: list[dict], queries: list[tuple], top_k: int = 5) -> dict:
     dim = variant["dim"]
+
     embed = _make_embed_fn(dim)
 
     # Ingest
+
     corpus_vecs: dict[str, list[float]] = {}
+
     t0 = time.perf_counter()
+
     for doc in docs:
         corpus_vecs[doc["id"]] = embed([doc["text"]])[0]
+
     ingest_s = time.perf_counter() - t0
 
     # Queries
+
     latencies: list[float] = []
+
     p5_scores: list[float] = []
+
     r5_scores: list[float] = []
+
     tcr_scores: list[float] = []
 
     for query_text, relevant in queries:
         t1 = time.perf_counter()
+
         q_vec = embed([query_text])[0]
+
         retrieved = _brute_search(q_vec, corpus_vecs, k=top_k)
+
         latencies.append((time.perf_counter() - t1) * 1000.0)
+
         p5_scores.append(_precision_at_k(retrieved, relevant, top_k))
+
         r5_scores.append(_recall_at_k(retrieved, relevant, top_k))
+
         tcr_scores.append(variant.get("tcr", 0.0))
 
     n = len(latencies)
+
     sorted_lats = sorted(latencies)
+
     p95_idx = max(0, int(math.ceil(0.95 * n)) - 1)
 
     return {
@@ -278,61 +344,90 @@ def run_variant(variant: dict, docs: list[dict], queries: list[tuple], top_k: in
 
 def _fill_iho(results: list[dict]) -> None:
     """Compute IHO (ingest overhead %) relative to baseline in-place."""
+
     base = next((r for r in results if r["variant"] == "baseline"), None)
+
     if not base:
         return
+
     base_t = base["ingest_sec"] or 1e-9
+
     for r in results:
         r["metrics"]["IHO"] = round((r["ingest_sec"] - base_t) / base_t * 100.0, 1)
 
 
 # ---------------------------------------------------------------------------
+
 # Release gate check (release_gate_policy.md)
+
 # ---------------------------------------------------------------------------
 
 
 def gate_check(results: list[dict]) -> list[str]:
     """Return list of gate violation strings (empty = all pass)."""
+
     issues: list[str] = []
+
     base = next((r for r in results if r["variant"] == "baseline"), None)
+
     if not base:
         return issues
+
     base_p5 = base["metrics"]["P@5"]
+
     for r in results:
         if r["variant"] == "baseline":
             continue
+
         m = r["metrics"]
+
         label = r["label"]
+
         delta = m["P@5"] - base_p5
+
         if delta < -0.02:
             issues.append(f"GATE-A [{label}]: P@5 regression {delta:+.3f} (limit -0.02)")
+
         if m["RTL_p95_ms"] > 2000:
             issues.append(f"GATE-B [{label}]: RTL_p95 {m['RTL_p95_ms']:.0f}ms > 2000ms")
+
         if m["IHO"] > 50:
             issues.append(f"GATE-C [{label}]: IHO {m['IHO']:.0f}% > 50%")
+
     return issues
 
 
 # ---------------------------------------------------------------------------
+
 # Output helpers
+
 # ---------------------------------------------------------------------------
 
 
 def print_table(results: list[dict], slice_name: str) -> None:
     print()
+
     print("=" * 82)
+
     print(f"  Benchmark Slice: {slice_name.replace('_', ' ').title()} (Story 5.3 / Schema 5.2)")
+
     print("=" * 82)
+
     header = f"{'Variant':<34} {'Dim':>5} {'P@5':>6} {'R@5':>6} {'RTL p95':>9} {'IHO%':>7} {'TCR':>6} {'CTI':>6}"
+
     print(header)
+
     print("-" * 82)
+
     for r in results:
         m = r["metrics"]
+
         print(
             f"{r['label']:<34} {r['dim']:>5} "
             f"{m['P@5']:>6.3f} {m['R@5']:>6.3f} {m['RTL_p95_ms']:>9.1f} "
             f"{m['IHO']:>7.1f} {m['TCR']:>6.3f} {m['CTI']:>6.3f}"
         )
+
     print()
 
 
@@ -342,7 +437,9 @@ def save_results(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Per-slice JSON
+
     slice_path = out_dir / f"benchmark_{slice_name}_{ts}.json"
+
     with open(slice_path, "w") as f:
         json.dump(
             {"schema_version": "5.2", "slice": slice_name, "timestamp": ts, "results": results},
@@ -351,7 +448,9 @@ def save_results(
         )
 
     # Unified JSON
+
     uni_json = out_dir / f"benchmark_unified_{ts}.json"
+
     with open(uni_json, "w") as f:
         json.dump(
             {
@@ -369,26 +468,33 @@ def save_results(
         )
 
     # Unified Markdown (matches Gemini CLI report format)
+
     uni_md = out_dir / f"benchmark_unified_{ts}.md"
+
     lines = [
         "# Unified Benchmark Report",
         f"\nSlice: {slice_name} | Schema: 5.2 | Timestamp: {ts}\n",
         "| Variant | Dim | P@5 | R@5 | RTL p95 (ms) | IHO% | TCR | CTI |",
         "|---------|-----|-----|-----|-------------|------|-----|-----|",
     ]
+
     for r in results:
         m = r["metrics"]
+
         lines.append(
             f"| {r['label']} | {r['dim']} | {m['P@5']:.3f} | {m['R@5']:.3f} | "
             f"{m['RTL_p95_ms']:.1f} | {m['IHO']:.1f} | {m['TCR']:.3f} | {m['CTI']:.3f} |"
         )
+
     uni_md.write_text("\n".join(lines))
 
     return str(slice_path), str(uni_json), str(uni_md)
 
 
 # ---------------------------------------------------------------------------
+
 # CLI
+
 # ---------------------------------------------------------------------------
 
 _SLICES = {
@@ -398,53 +504,73 @@ _SLICES = {
 
 def main(argv: list[str] | None = None) -> int:
     p = ArgumentParser(description="Axon retrieval benchmark runner — Story 5.3")
+
     p.add_argument(
         "--smoke",
         action="store_true",
         default=True,
         help="Smoke run with deterministic mocked embeddings (CI-safe, default).",
     )
+
     p.add_argument(
         "--slice",
         default="prose_factual",
         choices=list(_SLICES.keys()),
         help="Benchmark slice to run.",
     )
+
     p.add_argument("--out", default=".test_tmp_bench", help="Output directory for results.")
+
     p.add_argument(
         "--top-k", type=int, default=5, dest="top_k", help="Retrieval top-k (default 5)."
     )
+
     args = p.parse_args(argv)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     _, docs, queries = _SLICES[args.slice]
 
     print(f"\nAxon Benchmark Runner — {args.slice} (smoke={args.smoke}, k={args.top_k})")
+
     print(f"Corpus: {len(docs)} docs | Queries: {len(queries)}\n")
 
     results: list[dict] = []
+
     for v in _VARIANTS:
         print(f"  {v['label']:<36}", end="", flush=True)
+
         r = run_variant(v, docs, queries, top_k=args.top_k)
+
         results.append(r)
+
         print(f"P@5={r['metrics']['P@5']:.3f}  RTL_p95={r['metrics']['RTL_p95_ms']:.1f}ms")
 
     _fill_iho(results)
+
     print_table(results, args.slice)
 
     issues = gate_check(results)
+
     if issues:
         print("Release gate VIOLATIONS:")
+
         for issue in issues:
             print(f"  ! {issue}")
+
         print()
+
     else:
         print("All release gates PASS.\n")
 
     sp, uj, um = save_results(results, args.slice, Path(args.out), ts)
+
     print("Results saved:")
+
     print(f"  {sp}")
+
     print(f"  {uj}")
+
     print(f"  {um}")
 
     return 1 if issues else 0

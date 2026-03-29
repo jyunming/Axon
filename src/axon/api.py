@@ -87,7 +87,49 @@ def _evict_old_jobs() -> None:
     """Remove completed/failed jobs older than _JOB_TTL_SECONDS and cap at _MAX_JOBS.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Processing jobs are never TTL-evicted so long-running ingests remain queryable.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -126,10 +168,73 @@ def _check_dedup(text: str, project: str = "_global") -> dict | None:
     """Check whether *text* was already ingested in *project*.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Returns a ``{status, reason, doc_id}`` dict if the content is a duplicate.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Returns ``None`` if the content is new.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -238,13 +343,97 @@ def _auto_init_store(config: AxonConfig) -> None:
     """Create the default AxonStore layout when it does not yet exist.
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     This is a silent first-run helper — it runs ``ensure_user_project()`` only
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     when the user directory is missing so that brand-new installs work without
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     requiring a manual ``init_store`` call first.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     """
@@ -331,6 +520,7 @@ async def api_key_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 
 
+from axon.api_routes.config_routes import router as _config_router  # noqa: E402
 from axon.api_routes.governance import router as _governance_router  # noqa: E402
 from axon.api_routes.graph import router as _graph_router  # noqa: E402
 from axon.api_routes.ingest import router as _ingest_router  # noqa: E402
@@ -339,6 +529,9 @@ from axon.api_routes.projects import router as _projects_router  # noqa: E402
 from axon.api_routes.query import router as _query_router  # noqa: E402
 from axon.api_routes.registry import router as _registry_router  # noqa: E402
 from axon.api_routes.shares import router as _shares_router  # noqa: E402
+
+app.include_router(_config_router)
+
 
 app.include_router(_query_router)
 

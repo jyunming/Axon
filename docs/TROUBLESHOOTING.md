@@ -72,7 +72,7 @@ docker compose up -d
 
 **Cause:** Ollama defaults to a 2048-token context window (`num_ctx`). When RAG context documents fill this window, conversation history gets silently truncated.
 
-**Fix:** This is now handled automatically — `num_ctx` is set to 8192 in all Ollama calls. If you still experience issues with very long conversations, you can increase it further in `main.py` (`OpenLLM` class, search for `num_ctx`).
+**Fix:** This is now handled automatically — `num_ctx` is set to 8192 in all Ollama calls. If you still experience issues with very long conversations, you can increase it further in `llm.py` (`OpenLLM` class, search for `num_ctx`).
 
 ---
 
@@ -384,10 +384,10 @@ relation extraction). For 100 chunks that is 100–300 LLM calls before any quer
 4. **Limit RAPTOR to small sources** — skip RAPTOR for files larger than N MB:
    ```yaml
    rag:
-     raptor_max_source_size_mb: 2.0
+     raptor_min_source_size_mb: 2.0
    ```
 
-5. **Reduce RAPTOR group size** — fewer chunks per summary = fewer LLM calls:
+5. **Increase RAPTOR group size** — more chunks per summary = fewer summaries = fewer LLM calls:
    ```yaml
    rag:
      raptor_chunk_group_size: 10   # default is 5

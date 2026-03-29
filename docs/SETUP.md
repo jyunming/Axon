@@ -434,16 +434,25 @@ To ingest image files, pull the LLaVA vision model first (requires ~5 GB disk an
 ollama pull llava
 ```
 
-No config change needed. When Axon encounters a supported image file (`.png`, `.bmp`, `.tif`, `.tiff`, `.pgm`) during ingest, it sends it to LLaVA for a text caption and indexes that caption.
+No config change needed. When Axon encounters a supported image file (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`, `.pgm`) during ingest, it sends it to LLaVA for a text caption and indexes that caption.
 
 ---
 
 ## 7. Configure config.yaml
 
 Axon auto-creates `~/.config/axon/config.yaml` on first run with sensible defaults.
-Edit that file to customise behaviour, or pass `--config /path/to/your.yaml` to use a different file.
 
-> **Data storage:** Your knowledge base always uses the AxonStore structure at `~/.axon/AxonStore/<username>/` by default. To move it to a shared drive or different disk, set `store.base` in `config.yaml` or the `AXON_STORE_BASE` env var — see [AXON_STORE.md](AXON_STORE.md).
+**Quickest option — interactive wizard:**
+
+```bash
+axon --setup
+```
+
+The wizard walks you through provider, model, embedding, and RAG flag selection with
+validated inputs and sensible defaults. No manual YAML editing required. You can also
+run it at any time from inside the REPL with `/config wizard`.
+
+To edit the file directly instead:
 
 ```bash
 # Linux / macOS
@@ -451,6 +460,8 @@ $EDITOR ~/.config/axon/config.yaml
 # Windows (PowerShell)
 notepad $env:USERPROFILE\.config\axon\config.yaml
 ```
+
+> **Data storage:** Your knowledge base always uses the AxonStore structure at `~/.axon/AxonStore/<username>/` by default. To move it to a shared drive or different disk, set `store.base` in `config.yaml` or the `AXON_STORE_BASE` env var — see [AXON_STORE.md](AXON_STORE.md).
 
 Here are complete configurations for each tier:
 
@@ -466,7 +477,7 @@ llm:
   temperature: 0.7
   max_tokens: 2048
 vector_store:
-  provider: chroma   # path derived automatically from store.base
+  provider: lancedb   # path derived automatically from store.base
 rag:
   top_k: 10
   similarity_threshold: 0.3
@@ -491,7 +502,7 @@ llm:
   temperature: 0.7
   max_tokens: 2048
 vector_store:
-  provider: chroma   # path derived automatically from store.base
+  provider: lancedb   # path derived automatically from store.base
 rag:
   top_k: 10
   similarity_threshold: 0.3
@@ -858,7 +869,7 @@ Expected: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}
 
 ### Available MCP tools
 
-For the full list of all 27 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
+For the full list of all 30 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
 
 > **Tip:** use `search_knowledge` (not `query_knowledge`) in agent mode — the agent's own LLM synthesises the answer from raw chunks, so no Ollama is required.
 

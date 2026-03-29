@@ -82,7 +82,7 @@ tool_name
 Ask a question and get a synthesised answer from the knowledge base.
 - **Use when** the user asks a question and wants a direct answer.
 - **Do not use** when you need to inspect raw chunks before answering — use `search_knowledge` instead.
-- **Key params:** `query` (required), `top_k` (optional, default 5), `project` (optional).
+- **Key params:** `query` (required), `top_k` (optional — overrides the global `top_k` setting), `project` (optional).
 
 ### `search_knowledge`
 Retrieve raw document chunks without calling the LLM.

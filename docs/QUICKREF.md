@@ -72,6 +72,8 @@ axon --provider openai --model gpt-4o "Your question"
 axon --pull llama3.1:8b
 # CLI — see all providers and locally available models
 axon --list-models
+# CLI — run the interactive setup wizard
+axon --setup
 # CLI — advanced RAG flags (can be combined)
 axon --cite "Summarise my documents"        # inline [Document N] citations
 axon --no-cite "Your question"              # suppress citations for cleaner output
@@ -95,7 +97,7 @@ You: Explain this code @./src/axon/main.py
 You: What changed in @./src/axon/
 You: Compare @report.pdf with @notes.docx
 ```
-Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, images (`.png`, `.bmp`, `.tif`, `.pgm`)
+Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, images (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.pgm`)
 
 **REPL slash commands (interactive mode):**
 
@@ -168,6 +170,35 @@ git rebase origin/main
 
 ## Configuration
 
+### Config Wizard & REPL Commands
+
+Launch the interactive setup wizard (no manual YAML editing required):
+
+```bash
+axon --setup          # CLI — runs before the REPL starts
+axon> /config wizard  # REPL — run at any time while Axon is running
+```
+
+The wizard walks through provider, model, embedding, RAG flags, and chunk strategy.
+Choose a mode:
+
+| Mode | Sections covered | Best for |
+|------|-----------------|----------|
+| `quick` | 3 (provider, model, embeddings) | Fast start |
+| `standard` | 16 (all main settings) | Most users |
+| `full` | 16 + RAPTOR/GraphRAG sub-params | Power users |
+
+Other `/config` subcommands:
+
+| Command | What it does |
+|---------|-------------|
+| `/config` or `/config show` | Print current config as a rich table |
+| `/config validate` | Validate `config.yaml` and list warnings/errors |
+| `/config set <key> <value>` | Set a dot-notation key live (e.g. `rag.top_k 20`) |
+| `/config reset` | Overwrite `config.yaml` with defaults |
+
+REST API equivalents: `GET /config`, `GET /config/validate`, `POST /config/set`, `POST /config/reset`.
+
 ### Environment Variables
 ```bash
 # Copy template
@@ -237,7 +268,7 @@ rag:
   # > Shipped config.yaml has raptor: false and graph_rag: false for fast first-run.
   raptor: true
   raptor_max_levels: 1
-  raptor_max_source_size_mb: 5.0
+  raptor_min_source_size_mb: 5.0
   graph_rag: true
   graph_rag_budget: 3
   graph_rag_relations: true
@@ -269,7 +300,7 @@ offline:
 ```
 
 Effects when enabled:
-- Bare model names (`all-MiniLM-L6-v2`, `bge-reranker-base`) auto-resolved to `<local_models_dir>/<name>/`
+- Bare model names (`all-MiniLM-L6-v2`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) auto-resolved to `<local_models_dir>/<name>/`
 - `TRANSFORMERS_OFFLINE=1`, `HF_HUB_OFFLINE=1` set before any model loads
 - Web search permanently disabled (`/search` toggle is blocked)
 

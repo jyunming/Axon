@@ -6,7 +6,23 @@
 
 
 
+
+
+
+
+
+
+
+
 requires = ["setuptools>=65.0", "wheel"]
+
+
+
+
+
+
+
+
 
 
 
@@ -30,7 +46,31 @@ build-backend = "setuptools.build_meta"
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [project]
+
+
+
+
+
+
+
+
 
 
 
@@ -46,7 +86,23 @@ name = "axon"
 
 
 
+
+
+
+
+
+
+
+
 version = "0.9.0"
+
+
+
+
+
+
+
+
 
 
 
@@ -62,7 +118,23 @@ description = "General-purpose open-source RAG and embedding interface"
 
 
 
+
+
+
+
+
+
+
+
 readme = "README.md"
+
+
+
+
+
+
+
+
 
 
 
@@ -78,7 +150,23 @@ requires-python = ">=3.10"
 
 
 
+
+
+
+
+
+
+
+
 license = {text = "MIT"}
+
+
+
+
+
+
+
+
 
 
 
@@ -94,6 +182,14 @@ authors = [
 
 
 
+
+
+
+
+
+
+
+
     {name = "Open Source Contributor"}
 
 
@@ -102,7 +198,23 @@ authors = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -118,7 +230,23 @@ classifiers = [
 
 
 
+
+
+
+
+
+
+
+
     "Development Status :: 4 - Beta",
+
+
+
+
+
+
+
+
 
 
 
@@ -134,7 +262,23 @@ classifiers = [
 
 
 
+
+
+
+
+
+
+
+
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+
+
+
+
+
+
+
+
 
 
 
@@ -150,7 +294,23 @@ classifiers = [
 
 
 
+
+
+
+
+
+
+
+
     "Programming Language :: Python :: 3",
+
+
+
+
+
+
+
+
 
 
 
@@ -166,7 +326,23 @@ classifiers = [
 
 
 
+
+
+
+
+
+
+
+
     "Programming Language :: Python :: 3.11",
+
+
+
+
+
+
+
+
 
 
 
@@ -182,7 +358,31 @@ classifiers = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -206,7 +406,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "numpy>=1.20.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -222,7 +438,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "python-dotenv>=1.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -238,7 +470,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "sentence-transformers>=3.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -254,7 +502,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "ollama>=0.1.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -270,7 +534,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "streamlit>=1.30.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -286,7 +566,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "mcp>=1.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -302,7 +598,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "pandas>=2.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -318,7 +630,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "tqdm>=4.66.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -334,7 +662,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "uvicorn>=0.22.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -350,7 +694,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "pymupdf>=1.24.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -366,7 +726,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "openpyxl>=3.1.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -382,7 +758,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "prompt_toolkit>=3.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -398,6 +790,14 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
     "google-genai>=1.4.0",
 
 
@@ -406,7 +806,31 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -430,7 +854,23 @@ dependencies = [
 
 
 
+
+
+
+
+
+
+
+
 dev = [
+
+
+
+
+
+
+
+
 
 
 
@@ -446,7 +886,23 @@ dev = [
 
 
 
+
+
+
+
+
+
+
+
     "pytest-asyncio>=0.21.0,<1.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -462,7 +918,23 @@ dev = [
 
 
 
+
+
+
+
+
+
+
+
     "black==23.12.1",
+
+
+
+
+
+
+
+
 
 
 
@@ -478,7 +950,23 @@ dev = [
 
 
 
+
+
+
+
+
+
+
+
     "mypy>=1.5.0,<2.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -494,7 +982,23 @@ dev = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -510,6 +1014,14 @@ chroma = [
 
 
 
+
+
+
+
+
+
+
+
     "chromadb>=0.4.0",
 
 
@@ -518,7 +1030,23 @@ chroma = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -534,6 +1062,14 @@ qdrant = [
 
 
 
+
+
+
+
+
+
+
+
     "qdrant-client>=1.7.0,<2.0.0",
 
 
@@ -542,7 +1078,23 @@ qdrant = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -558,6 +1110,14 @@ fastembed = [
 
 
 
+
+
+
+
+
+
+
+
     "fastembed>=0.1.0,<1.0.0",
 
 
@@ -566,7 +1126,23 @@ fastembed = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -582,7 +1158,23 @@ graphrag = [
 
 
 
+
+
+
+
+
+
+
+
     "networkx>=3.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -598,6 +1190,14 @@ graphrag = [
 
 
 
+
+
+
+
+
+
+
+
     "igraph>=1.0.0",
 
 
@@ -606,7 +1206,23 @@ graphrag = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -622,6 +1238,14 @@ gliner = [
 
 
 
+
+
+
+
+
+
+
+
     "gliner>=0.2.0",
 
 
@@ -630,7 +1254,23 @@ gliner = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -646,6 +1286,14 @@ llmlingua = [
 
 
 
+
+
+
+
+
+
+
+
     "llmlingua>=0.2.0",
 
 
@@ -654,7 +1302,23 @@ llmlingua = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -670,6 +1334,14 @@ rebel = [
 
 
 
+
+
+
+
+
+
+
+
     "transformers>=4.20.0",
 
 
@@ -678,7 +1350,23 @@ rebel = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -694,7 +1382,23 @@ loaders = [
 
 
 
+
+
+
+
+
+
+
+
     "ebooklib>=0.18",
+
+
+
+
+
+
+
+
 
 
 
@@ -710,6 +1414,14 @@ loaders = [
 
 
 
+
+
+
+
+
+
+
+
     "extract-msg>=0.28.0",
 
 
@@ -718,7 +1430,23 @@ loaders = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -734,6 +1462,14 @@ eval = [
 
 
 
+
+
+
+
+
+
+
+
     "deepeval>=0.21.0",
 
 
@@ -742,7 +1478,23 @@ eval = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -758,7 +1510,23 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
     "chromadb>=0.4.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -774,7 +1542,23 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
     "fastembed>=0.1.0,<1.0.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -790,7 +1574,23 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
     "leidenalg>=0.11.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -806,7 +1606,23 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
     "gliner>=0.2.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -822,7 +1638,23 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
     "transformers>=4.20.0",
+
+
+
+
+
+
+
+
 
 
 
@@ -838,7 +1670,23 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
     "striprtf>=0.0.26",
+
+
+
+
+
+
+
+
 
 
 
@@ -854,7 +1702,31 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -878,7 +1750,23 @@ all = [
 
 
 
+
+
+
+
+
+
+
+
 axon = "axon.cli:main"
+
+
+
+
+
+
+
+
 
 
 
@@ -894,7 +1782,23 @@ axon-ui = "axon.webapp:main_ui"
 
 
 
+
+
+
+
+
+
+
+
 axon-api = "axon.api:main"
+
+
+
+
+
+
+
+
 
 
 
@@ -918,7 +1822,31 @@ axon-mcp = "axon.mcp_server:main"
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [tool.black]
+
+
+
+
+
+
+
+
 
 
 
@@ -934,7 +1862,23 @@ line-length = 100
 
 
 
+
+
+
+
+
+
+
+
 target-version = ['py310', 'py311', 'py312']
+
+
+
+
+
+
+
+
 
 
 
@@ -950,7 +1894,23 @@ include = '\.pyi?$'
 
 
 
+
+
+
+
+
+
+
+
 extend-exclude = '''
+
+
+
+
+
+
+
+
 
 
 
@@ -966,7 +1926,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
   # directories
+
+
+
+
+
+
+
+
 
 
 
@@ -982,7 +1958,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
   | \.git
+
+
+
+
+
+
+
+
 
 
 
@@ -998,7 +1990,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
   | \.mypy_cache
+
+
+
+
+
+
+
+
 
 
 
@@ -1014,7 +2022,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
   | \.venv
+
+
+
+
+
+
+
+
 
 
 
@@ -1030,7 +2054,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
   | dist
+
+
+
+
+
+
+
+
 
 
 
@@ -1046,7 +2086,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
 )/
+
+
+
+
+
+
+
+
 
 
 
@@ -1062,7 +2118,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
 | tests/e2e/test_vscode_extension_server_e2e\.py
+
+
+
+
+
+
+
+
 
 
 
@@ -1078,7 +2150,23 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
 | tests/e2e/vscode_helpers\.py
+
+
+
+
+
+
+
+
 
 
 
@@ -1102,7 +2190,31 @@ extend-exclude = '''
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [tool.ruff]
+
+
+
+
+
+
+
+
 
 
 
@@ -1118,7 +2230,23 @@ line-length = 100
 
 
 
+
+
+
+
+
+
+
+
 target-version = "py310"
+
+
+
+
+
+
+
+
 
 
 
@@ -1134,7 +2262,23 @@ exclude = [
 
 
 
+
+
+
+
+
+
+
+
     ".test_tmp",
+
+
+
+
+
+
+
+
 
 
 
@@ -1150,7 +2294,23 @@ exclude = [
 
 
 
+
+
+
+
+
+
+
+
     "tests/e2e/test_vscode_extension_server_e2e.py",
+
+
+
+
+
+
+
+
 
 
 
@@ -1166,6 +2326,14 @@ exclude = [
 
 
 
+
+
+
+
+
+
+
+
     "tests/e2e/vscode_helpers.py",
 
 
@@ -1174,7 +2342,23 @@ exclude = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -1190,7 +2374,23 @@ select = [
 
 
 
+
+
+
+
+
+
+
+
     "E",   # pycodestyle errors
+
+
+
+
+
+
+
+
 
 
 
@@ -1206,7 +2406,23 @@ select = [
 
 
 
+
+
+
+
+
+
+
+
     "F",   # pyflakes
+
+
+
+
+
+
+
+
 
 
 
@@ -1222,7 +2438,23 @@ select = [
 
 
 
+
+
+
+
+
+
+
+
     "C",   # flake8-comprehensions
+
+
+
+
+
+
+
+
 
 
 
@@ -1238,6 +2470,14 @@ select = [
 
 
 
+
+
+
+
+
+
+
+
     "UP",  # pyupgrade
 
 
@@ -1246,7 +2486,23 @@ select = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -1262,7 +2518,23 @@ ignore = [
 
 
 
+
+
+
+
+
+
+
+
     "E501",  # line too long (handled by black)
+
+
+
+
+
+
+
+
 
 
 
@@ -1278,7 +2550,23 @@ ignore = [
 
 
 
+
+
+
+
+
+
+
+
     "C901",  # too complex
+
+
+
+
+
+
+
+
 
 
 
@@ -1294,7 +2582,23 @@ ignore = [
 
 
 
+
+
+
+
+
+
+
+
     "B905",  # zip-without-explicit-strict — lengths are guaranteed equal at call sites
+
+
+
+
+
+
+
+
 
 
 
@@ -1310,7 +2614,31 @@ ignore = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1334,7 +2662,31 @@ ignore = [
 
 
 
+
+
+
+
+
+
+
+
 known-first-party = ["axon"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1358,7 +2710,23 @@ known-first-party = ["axon"]
 
 
 
+
+
+
+
+
+
+
+
 "__init__.py" = ["F401"]  # unused imports
+
+
+
+
+
+
+
+
 
 
 
@@ -1382,7 +2750,31 @@ known-first-party = ["axon"]
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [tool.mypy]
+
+
+
+
+
+
+
+
 
 
 
@@ -1398,7 +2790,23 @@ python_version = "3.10"
 
 
 
+
+
+
+
+
+
+
+
 warn_return_any = true
+
+
+
+
+
+
+
+
 
 
 
@@ -1414,7 +2822,23 @@ warn_unused_configs = true
 
 
 
+
+
+
+
+
+
+
+
 disallow_untyped_defs = false
+
+
+
+
+
+
+
+
 
 
 
@@ -1430,7 +2854,23 @@ disallow_incomplete_defs = false
 
 
 
+
+
+
+
+
+
+
+
 check_untyped_defs = true
+
+
+
+
+
+
+
+
 
 
 
@@ -1446,7 +2886,23 @@ no_implicit_optional = true
 
 
 
+
+
+
+
+
+
+
+
 warn_redundant_casts = true
+
+
+
+
+
+
+
+
 
 
 
@@ -1462,7 +2918,23 @@ warn_unused_ignores = true
 
 
 
+
+
+
+
+
+
+
+
 warn_no_return = true
+
+
+
+
+
+
+
+
 
 
 
@@ -1486,7 +2958,31 @@ strict_equality = true
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [[tool.mypy.overrides]]
+
+
+
+
+
+
+
+
 
 
 
@@ -1502,7 +2998,23 @@ module = [
 
 
 
+
+
+
+
+
+
+
+
     "chromadb.*",
+
+
+
+
+
+
+
+
 
 
 
@@ -1518,7 +3030,23 @@ module = [
 
 
 
+
+
+
+
+
+
+
+
     "sentence_transformers.*",
+
+
+
+
+
+
+
+
 
 
 
@@ -1534,7 +3062,23 @@ module = [
 
 
 
+
+
+
+
+
+
+
+
     "rank_bm25.*",
+
+
+
+
+
+
+
+
 
 
 
@@ -1550,7 +3094,23 @@ module = [
 
 
 
+
+
+
+
+
+
+
+
     "fastembed.*",
+
+
+
+
+
+
+
+
 
 
 
@@ -1566,7 +3126,23 @@ module = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -1598,7 +3174,39 @@ ignore_missing_imports = true
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [tool.pytest.ini_options]
+
+
+
+
+
+
+
+
 
 
 
@@ -1614,7 +3222,23 @@ testpaths = ["tests"]
 
 
 
+
+
+
+
+
+
+
+
 python_files = ["test_*.py"]
+
+
+
+
+
+
+
+
 
 
 
@@ -1630,7 +3254,23 @@ python_classes = ["Test*"]
 
 
 
+
+
+
+
+
+
+
+
 python_functions = ["test_*"]
+
+
+
+
+
+
+
+
 
 
 
@@ -1646,7 +3286,23 @@ tmp_path_retention_policy = "none"
 
 
 
+
+
+
+
+
+
+
+
 addopts = [
+
+
+
+
+
+
+
+
 
 
 
@@ -1662,7 +3318,23 @@ addopts = [
 
 
 
+
+
+
+
+
+
+
+
     "--strict-markers",
+
+
+
+
+
+
+
+
 
 
 
@@ -1678,7 +3350,23 @@ addopts = [
 
 
 
+
+
+
+
+
+
+
+
     "--cov-report=term-missing",
+
+
+
+
+
+
+
+
 
 
 
@@ -1694,6 +3382,14 @@ addopts = [
 
 
 
+
+
+
+
+
+
+
+
     "--cov-report=xml",
 
 
@@ -1702,7 +3398,23 @@ addopts = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
 
 
 
@@ -1718,7 +3430,23 @@ markers = [
 
 
 
+
+
+
+
+
+
+
+
     "e2e: marks end-to-end feature tests",
+
+
+
+
+
+
+
+
 
 
 
@@ -1734,7 +3462,23 @@ markers = [
 
 
 
+
+
+
+
+
+
+
+
     "integration: marks tests as integration tests",
+
+
+
+
+
+
+
+
 
 
 
@@ -1750,7 +3494,23 @@ markers = [
 
 
 
+
+
+
+
+
+
+
+
     "demo: marks end-to-end happy-path demo tests",
+
+
+
+
+
+
+
+
 
 
 
@@ -1766,7 +3526,23 @@ markers = [
 
 
 
+
+
+
+
+
+
+
+
     "stress: marks high-volume concurrency stress tests",
+
+
+
+
+
+
+
+
 
 
 
@@ -1782,6 +3558,14 @@ markers = [
 
 
 
+
+
+
+
+
+
+
+
     "extension: marks VS Code extension qualification tests",
 
 
@@ -1790,7 +3574,31 @@ markers = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1814,7 +3622,23 @@ markers = [
 
 
 
+
+
+
+
+
+
+
+
 source = ["src/axon"]
+
+
+
+
+
+
+
+
 
 
 
@@ -1830,7 +3654,23 @@ omit = [
 
 
 
+
+
+
+
+
+
+
+
     "*/tests/*",
+
+
+
+
+
+
+
+
 
 
 
@@ -1846,7 +3686,23 @@ omit = [
 
 
 
+
+
+
+
+
+
+
+
     "*/__pycache__/*",
+
+
+
+
+
+
+
+
 
 
 
@@ -1862,7 +3718,31 @@ omit = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1886,7 +3766,23 @@ omit = [
 
 
 
+
+
+
+
+
+
+
+
 exclude_lines = [
+
+
+
+
+
+
+
+
 
 
 
@@ -1902,7 +3798,23 @@ exclude_lines = [
 
 
 
+
+
+
+
+
+
+
+
     "def __repr__",
+
+
+
+
+
+
+
+
 
 
 
@@ -1918,7 +3830,23 @@ exclude_lines = [
 
 
 
+
+
+
+
+
+
+
+
     "raise NotImplementedError",
+
+
+
+
+
+
+
+
 
 
 
@@ -1934,7 +3862,23 @@ exclude_lines = [
 
 
 
+
+
+
+
+
+
+
+
     "if TYPE_CHECKING:",
+
+
+
+
+
+
+
+
 
 
 
@@ -1950,6 +3894,14 @@ exclude_lines = [
 
 
 
+
+
+
+
+
+
+
+
     "@(abc\\.)?abstractmethod",
 
 
@@ -1958,5 +3910,15 @@ exclude_lines = [
 
 
 
+
+
+
+
+
+
+
+
 ]
+
+
 
