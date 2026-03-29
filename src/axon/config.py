@@ -1776,12 +1776,12 @@ class AxonConfig:
             if "provider" in vs:
                 config_dict["vector_store"] = vs["provider"]
 
-            if "path" in vs:
-                config_dict["vector_store_path"] = vs["path"]
+            # vector_store_path is always derived from AxonStore in __post_init__
+            # — ignore any path value in config.yaml.
 
         if "bm25" in data:
-            if "path" in data["bm25"]:
-                config_dict["bm25_path"] = data["bm25"]["path"]
+            pass  # bm25_path is always derived from AxonStore in __post_init__
+            # — ignore any path value in config.yaml.
 
         if "rag" in data:
             config_dict.update(data["rag"])

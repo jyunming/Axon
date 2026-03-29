@@ -218,7 +218,7 @@ export async function runConfigSetupWizard(apiBase: string, apiKey: string): Pro
 
   const providerPick = await vscode.window.showQuickPick(
 
-    ['ollama', 'openai', 'gemini', 'grok', 'vllm', 'github_copilot'],
+    ['ollama', 'openai', 'gemini', 'grok', 'vllm', 'copilot'],
 
     { title: 'Axon Config Setup (1/5)', placeHolder: 'Select LLM provider' }
 

@@ -381,7 +381,7 @@ relation extraction). For 100 chunks that is 100–300 LLM calls before any quer
      graph_rag_entity_min_frequency: 3  # stricter: entities must appear in >= 3 chunks
    ```
 
-4. **Limit RAPTOR to small sources** — skip RAPTOR for files larger than N MB:
+4. **Limit RAPTOR to small sources** — skip RAPTOR for sources smaller than N MB:
    ```yaml
    rag:
      raptor_min_source_size_mb: 2.0

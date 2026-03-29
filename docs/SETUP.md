@@ -66,7 +66,7 @@ venv\Scripts\activate
 Install the package. Choose the option that matches your needs:
 
 ```bash
-# Minimal install (sentence-transformers + ChromaDB + Ollama LLM)
+# Minimal install (sentence-transformers + LanceDB + Ollama LLM)
 pip install -e .
 # With development tools (tests, linting, type checking)
 pip install -e ".[dev]"

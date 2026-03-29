@@ -71,6 +71,7 @@ vector_store:
 llm:
   provider: ollama
   model: llama3.1:8b
+  models_dir: /mnt/aimodels/ollama                 # Ollama model blobs (sets OLLAMA_MODELS)
 embedding:
   provider: sentence_transformers
   model: BAAI/bge-m3                        # resolved via embedding_models_dir below
@@ -79,8 +80,6 @@ offline:
   embedding_models_dir: /mnt/aimodels/embedding   # sentence-transformers / fastembed models
   hf_models_dir: /mnt/aimodels/hf                 # reranker, GLiNER, REBEL, LLMLingua
   tokenizer_cache_dir: /mnt/aimodels/tiktoken      # tiktoken BPE cache
-llm:
-  models_dir: /mnt/aimodels/ollama                 # Ollama model blobs (sets OLLAMA_MODELS)
 ```
 
 ### Preflight audit output
