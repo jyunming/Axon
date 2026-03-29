@@ -10,11 +10,13 @@ AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
 """
 
 
+import difflib
+import getpass
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 
@@ -25,6 +27,337 @@ logger = logging.getLogger("Axon")
 
 
 _USER_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "axon", "config.yaml")
+
+
+# ---------------------------------------------------------------------------
+
+
+# Canonical default config — single source of truth used by every entry point
+
+
+# (CLI --config-reset, REPL /config reset, POST /config/reset, wizard).
+
+
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_CONFIG_YAML = """\
+
+
+# Axon Configuration — edit to customise behaviour.
+
+
+# Full option reference: axon --help  or  docs/ADMIN_REFERENCE.md
+
+
+embedding:
+
+
+  # Model used to convert text into vectors.
+
+
+  # sentence_transformers runs locally; openai/ollama/fastembed also supported.
+
+
+  provider: sentence_transformers
+
+
+  model: all-MiniLM-L6-v2            # Replace with a larger model for better recall
+
+
+llm:
+
+
+  # Language model used for answer generation and advanced RAG strategies.
+
+
+  # ollama runs locally; openai / gemini / grok / vllm need API keys.
+
+
+  provider: ollama
+
+
+  model: llama3.1:8b
+
+
+  temperature: 0.7                   # 0.0 = deterministic  1.0 = creative
+
+
+  max_tokens: 2048                   # Max tokens in the generated answer
+
+
+vector_store:
+
+
+  # Persistent vector store for embeddings.
+
+
+  # lancedb (default) requires no extra service; qdrant supports remote mode.
+
+
+  provider: lancedb
+
+
+  path: ~/.axon/projects/default/lancedb_data
+
+
+bm25:
+
+
+  path: ~/.axon/projects/default/bm25_index
+
+
+rag:
+
+
+  top_k: 10                          # Chunks retrieved per query (recommended: 5–30)
+
+
+  similarity_threshold: 0.3          # Min cosine similarity to include a chunk (0.0–1.0)
+
+
+  hybrid_search: true                # Combine vector + BM25 sparse retrieval (recommended)
+
+
+  rerank: false                      # BGE cross-encoder reranker — better precision, slower
+
+
+  sentence_window: false             # Expand retrieved chunks with surrounding sentences
+
+
+  sentence_window_size: 3            # Sentences of context on each side (recommended: 1–5)
+
+
+  # ── Advanced strategies — each adds extra LLM calls ─────────────────────────
+
+
+  # raptor: builds a hierarchical summary tree at ingest time.
+
+
+  # WARNING: raptor=true triggers many LLM calls during ingest. Suitable for
+
+
+  #   large document sets (>5 MB); avoid for small corpora.
+
+
+  raptor: false
+
+
+  raptor_min_source_size_mb: 5.0     # Skip RAPTOR for sources smaller than this MB (0 = no filter)
+
+
+  # graph_rag: extracts entity relationships and uses them at query time.
+
+
+  # WARNING: graph_rag=true triggers many LLM calls during ingest (entity
+
+
+  #   extraction) AND at query time (graph traversal). Enable only when
+
+
+  #   reasoning over entity relationships is essential.
+
+
+  graph_rag: false
+
+
+  graph_rag_community: false         # Community-level summaries (even more LLM calls)
+
+
+chunk:
+
+
+  strategy: semantic                 # recursive | semantic | markdown | cosine_semantic
+
+
+  size: 1000                         # Target chunk size in tokens (recommended: 400–2000)
+
+
+  overlap: 200                       # Token overlap between adjacent chunks (recommended: 50–400)
+
+
+rerank:
+
+
+  enabled: false
+
+
+  provider: cross-encoder
+
+
+query_transformations:
+
+
+  multi_query: false                 # Generate multiple query paraphrases (adds 1 LLM call)
+
+
+  hyde: false                        # Hypothetical document embedding (adds 1 LLM call)
+
+
+  discussion_fallback: true          # Fall back to general LLM answer when retrieval confidence is low
+
+
+repl:
+
+
+  shell_passthrough: local_only      # Allow ! shell commands: local_only | any | disabled
+
+
+web_search:
+
+
+  enabled: false
+
+
+offline:
+
+
+  enabled: false
+
+
+  local_assets_only: false
+
+
+  local_models_dir: ""               # Path to local HF model cache for offline embedding
+
+
+"""
+
+
+# ---------------------------------------------------------------------------
+
+
+# Known YAML keys per section — used for structural validation.
+
+
+# ---------------------------------------------------------------------------
+
+
+_KNOWN_YAML_KEYS: dict[str, set[str]] = {
+    "llm": {
+        "provider",
+        "model",
+        "base_url",
+        "models_dir",
+        "openai_api_key",
+        "grok_api_key",
+        "gemini_api_key",
+        "vllm_base_url",
+        "temperature",
+        "max_tokens",
+        "api_key",
+        "timeout",
+        "ollama_cloud_key",
+        "ollama_cloud_url",
+    },
+    "embedding": {"provider", "model", "model_path"},
+    "vector_store": {
+        "provider",
+        "path",
+        "qdrant_url",
+        "qdrant_api_key",
+        "qdrant_collection",
+        "lancedb_path",
+    },
+    "rag": {
+        "hybrid_search",
+        "hyde",
+        "multi_query",
+        "step_back",
+        "decompose",
+        "compress",
+        "rerank",
+        "sentence_window",
+        "sentence_window_size",
+        "crag_lite",
+        "crag_lite_confidence_threshold",
+        "cite",
+        "raptor",
+        "graph_rag",
+        "discuss",
+        "top_k",
+        "similarity_threshold",
+        "parent_doc",
+        "parent_chunk_size",
+        "query_router",
+        "code_graph",
+        "code_graph_bridge",
+        "graph_rag_mode",
+        "graph_rag_depth",
+        "graph_rag_budget",
+        "graph_rag_relations",
+        "graph_rag_community",
+        "graph_rag_community_backend",
+        "graph_rag_relation_budget",
+        "graph_rag_entity_min_frequency",
+        "graph_rag_global_top_communities",
+        "raptor_max_levels",
+        "raptor_min_source_size_mb",
+        "truth_grounding",
+        "rerank_top_k",
+        "discussion_fallback",
+        "hybrid_weight",
+        "hybrid_mode",
+        "raptor_chunk_group_size",
+        "dedup_on_ingest",
+    },
+    "chunk": {
+        "strategy",
+        "size",
+        "overlap",
+        "cosine_semantic_threshold",
+        "parent_chunk_size",
+        "cosine_semantic_max_size",
+    },
+    "rerank": {"enabled", "model", "top_k", "provider"},
+    "offline": {
+        "enabled",
+        "local_assets_only",
+        "local_models_dir",
+        "embedding_models_dir",
+        "hf_models_dir",
+        "tokenizer_cache_dir",
+    },
+    "web_search": {"enabled", "brave_api_key", "num_results", "safe_search"},
+    "store": {"base"},
+    "repl": {"shell_passthrough"},
+    "api": {"key", "allow_origins"},
+    "bm25": {"path"},
+    "query_transformations": {
+        "multi_query",
+        "hyde",
+        "step_back",
+        "query_decompose",
+        "discussion_fallback",
+    },
+    "context_compression": {"enabled", "strategy", "token_budget"},
+    "advanced": {"raptor", "graph_rag", "graph_rag_community"},
+}
+
+
+@dataclass
+class ConfigIssue:
+
+    """A single validation finding for a config.yaml field."""
+
+    level: Literal["error", "warn", "info"]
+
+    section: str
+
+    field: str
+
+    message: str
+
+    suggestion: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "level": self.level,
+            "section": self.section,
+            "field": self.field,
+            "message": self.message,
+            "suggestion": self.suggestion,
+        }
 
 
 @dataclass
@@ -537,9 +870,9 @@ class AxonConfig:
 
     graph_rag_global_top_communities: int = 0
 
-    # RAPTOR source-size guard --' skip RAPTOR for sources larger than this MB (0=no limit)
+    # RAPTOR source-size guard — skip RAPTOR for sources smaller than this MB (0=no filter)
 
-    raptor_max_source_size_mb: float = 0.0
+    raptor_min_source_size_mb: float = 5.0
 
     # Deferred batch saves --' suppress per-call disk writes during batch ingest.
 
@@ -793,145 +1126,15 @@ class AxonConfig:
     def load(cls, path: str | None = None) -> "AxonConfig":
         """Load configuration from a YAML file.
 
-
         Defaults to ``~/.config/axon/config.yaml``.  On first run (file absent)
-
 
         the directory is created and a starter config is written automatically,
 
-
         so the notice appears only once.  Passing an explicit *path* that does
-
 
         not exist still produces a WARNING.
 
-
         """
-
-        _DEFAULT_CONFIG_YAML = """\
-
-
-# Axon Configuration --' edit to customise behaviour.
-
-
-# Full option reference: axon --help or https://github.com/...
-
-
-embedding:
-
-
-  provider: sentence_transformers
-
-
-  model: all-MiniLM-L6-v2
-
-
-llm:
-
-
-  provider: ollama
-
-
-  model: llama3.1:8b
-
-
-  temperature: 0.7
-
-
-  max_tokens: 2048
-
-
-vector_store:
-
-
-  provider: lancedb
-
-
-  path: ~/.axon/projects/default/lancedb_data
-
-
-bm25:
-
-
-  path: ~/.axon/projects/default/bm25_index
-
-
-rag:
-
-
-  top_k: 10
-
-
-  similarity_threshold: 0.3
-
-
-  hybrid_search: true
-
-
-  raptor: false
-
-
-  graph_rag: false
-
-
-  graph_rag_community: false
-
-
-chunk:
-
-
-  size: 1000
-
-
-  overlap: 200
-
-
-rerank:
-
-
-  enabled: false
-
-
-  provider: cross-encoder
-
-
-query_transformations:
-
-
-  multi_query: false
-
-
-  hyde: false
-
-
-  discussion_fallback: true
-
-
-repl:
-
-
-  shell_passthrough: local_only
-
-
-web_search:
-
-
-  enabled: false
-
-
-offline:
-
-
-  enabled: false
-
-
-  local_assets_only: false
-
-
-  local_models_dir: ""
-
-
-"""
 
         using_default = path is None
 
@@ -996,12 +1199,12 @@ offline:
             if "provider" in vs:
                 config_dict["vector_store"] = vs["provider"]
 
-            if "path" in vs:
-                config_dict["vector_store_path"] = vs["path"]
+            # vector_store_path is always derived from AxonStore in __post_init__
+            # — ignore any path value in config.yaml.
 
         if "bm25" in data:
-            if "path" in data["bm25"]:
-                config_dict["bm25_path"] = data["bm25"]["path"]
+            pass  # bm25_path is always derived from AxonStore in __post_init__
+            # — ignore any path value in config.yaml.
 
         if "rag" in data:
             config_dict.update(data["rag"])
@@ -1306,3 +1509,353 @@ offline:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
         logger.info(f"Configuration saved to {target}")
+
+    @classmethod
+    def validate(cls, path: str | None = None) -> list["ConfigIssue"]:
+        """Validate the config file at *path* (or the default user config path).
+
+        Returns a list of :class:`ConfigIssue` objects grouped by severity.  The
+
+        method never raises — it is designed to be called from CLI / API surfaces
+
+        where a clean list of findings is more useful than an exception.
+
+        Three passes are executed in order:
+
+        1. **Structural pass** — unknown YAML keys are flagged; close matches are
+
+           suggested via :func:`difflib.get_close_matches`.
+
+        2. **Semantic pass** — known field values are range- and enum-checked on
+
+           the constructed dataclass.
+
+        3. **Store health pass** — the AxonStore directory layout is inspected on
+
+           disk to surface mis-configuration or un-initialised stores.
+
+        """
+
+        issues: list[ConfigIssue] = []
+
+        effective_path = path or str(_USER_CONFIG_PATH)
+
+        # ------------------------------------------------------------------ #
+
+        # 0. File existence                                                    #
+
+        # ------------------------------------------------------------------ #
+
+        if not os.path.exists(effective_path):
+            issues.append(
+                ConfigIssue(
+                    level="info",
+                    section="config",
+                    field="path",
+                    message=f"Config file not found at {effective_path}. Using dataclass defaults.",
+                    suggestion="Run `axon --setup` to create a starter config.",
+                )
+            )
+
+            return issues
+
+        try:
+            with open(os.path.expanduser(effective_path), encoding="utf-8") as _f:
+                raw: dict = yaml.safe_load(_f) or {}
+
+        except (yaml.YAMLError, OSError) as exc:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="config",
+                    field="path",
+                    message=f"Could not read config file: {exc}",
+                    suggestion="Check the file for YAML syntax errors.",
+                )
+            )
+
+            return issues
+
+        # ------------------------------------------------------------------ #
+
+        # 1. Structural pass — unknown keys                                    #
+
+        # ------------------------------------------------------------------ #
+
+        for section, keys in raw.items():
+            if not isinstance(keys, dict):
+                continue
+
+            known = _KNOWN_YAML_KEYS.get(section, set())
+
+            if not known:
+                continue
+
+            for key in keys:
+                if key not in known:
+                    close = difflib.get_close_matches(key, known, n=1, cutoff=0.6)
+
+                    suggestion = f"Did you mean '{close[0]}'?" if close else ""
+
+                    issues.append(
+                        ConfigIssue(
+                            level="warn",
+                            section=section,
+                            field=key,
+                            message=f"Unknown key '{key}' in section '{section}'.",
+                            suggestion=suggestion,
+                        )
+                    )
+
+        # ------------------------------------------------------------------ #
+
+        # 2. Semantic pass — construct dataclass and check field values        #
+
+        # ------------------------------------------------------------------ #
+
+        try:
+            cfg = cls.load(effective_path)
+
+        except Exception as exc:  # pragma: no cover
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="config",
+                    field="(load)",
+                    message=f"Failed to load config: {exc}",
+                )
+            )
+
+            return issues
+
+        _VALID_CHUNK_STRATEGIES = {"recursive", "semantic", "markdown", "cosine_semantic"}
+
+        if cfg.chunk_strategy not in _VALID_CHUNK_STRATEGIES:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="chunk",
+                    field="strategy",
+                    message=(
+                        f"Invalid chunk.strategy '{cfg.chunk_strategy}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_CHUNK_STRATEGIES))}."
+                    ),
+                    suggestion="Set chunk.strategy to 'recursive', 'semantic', 'markdown', "
+                    "or 'cosine_semantic'.",
+                )
+            )
+
+        _VALID_GRAPH_RAG_MODES = {"local", "global", "hybrid"}
+
+        if cfg.graph_rag_mode not in _VALID_GRAPH_RAG_MODES:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_mode",
+                    message=(
+                        f"Invalid graph_rag_mode '{cfg.graph_rag_mode}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_GRAPH_RAG_MODES))}."
+                    ),
+                )
+            )
+
+        _VALID_GRAPH_RAG_DEPTHS = {"light", "standard", "deep"}
+
+        if cfg.graph_rag_depth not in _VALID_GRAPH_RAG_DEPTHS:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_depth",
+                    message=(
+                        f"Invalid graph_rag_depth '{cfg.graph_rag_depth}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_GRAPH_RAG_DEPTHS))}."
+                    ),
+                )
+            )
+
+        _VALID_QUERY_ROUTERS = {"heuristic", "llm", "off"}
+
+        if cfg.query_router not in _VALID_QUERY_ROUTERS:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="query_router",
+                    message=(
+                        f"Invalid query_router '{cfg.query_router}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_QUERY_ROUTERS))}."
+                    ),
+                )
+            )
+
+        if cfg.top_k < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="top_k",
+                    message=f"top_k must be >= 1, got {cfg.top_k}.",
+                    suggestion="Set rag.top_k to a positive integer (e.g. 10).",
+                )
+            )
+
+        if not (0.0 <= cfg.similarity_threshold <= 1.0):
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="similarity_threshold",
+                    message=(
+                        f"similarity_threshold must be between 0.0 and 1.0, "
+                        f"got {cfg.similarity_threshold}."
+                    ),
+                )
+            )
+
+        if cfg.sentence_window_size < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="sentence_window_size",
+                    message=f"sentence_window_size must be >= 1, got {cfg.sentence_window_size}.",
+                )
+            )
+
+        # API key warnings
+
+        if cfg.llm_provider == "openai":
+            if not cfg.openai_api_key and not os.getenv("OPENAI_API_KEY"):
+                issues.append(
+                    ConfigIssue(
+                        level="warn",
+                        section="llm",
+                        field="openai_api_key",
+                        message="llm.provider is 'openai' but no OpenAI API key is configured.",
+                        suggestion=(
+                            "Set llm.openai_api_key in config.yaml or export OPENAI_API_KEY."
+                        ),
+                    )
+                )
+
+        if cfg.llm_provider == "gemini":
+            if not cfg.gemini_api_key and not os.getenv("GEMINI_API_KEY"):
+                issues.append(
+                    ConfigIssue(
+                        level="warn",
+                        section="llm",
+                        field="gemini_api_key",
+                        message="llm.provider is 'gemini' but no Gemini API key is configured.",
+                        suggestion=(
+                            "Set llm.gemini_api_key in config.yaml or export GEMINI_API_KEY."
+                        ),
+                    )
+                )
+
+        if cfg.llm_provider == "grok":
+            if (
+                not cfg.grok_api_key
+                and not os.getenv("XAI_API_KEY")
+                and not os.getenv("GROK_API_KEY")
+            ):
+                issues.append(
+                    ConfigIssue(
+                        level="warn",
+                        section="llm",
+                        field="grok_api_key",
+                        message="llm.provider is 'grok' but no Grok API key is configured.",
+                        suggestion=("Set llm.grok_api_key in config.yaml or export XAI_API_KEY."),
+                    )
+                )
+
+        # ------------------------------------------------------------------ #
+
+        # 3. Store health pass                                                 #
+
+        # ------------------------------------------------------------------ #
+
+        env_store_base = os.getenv("AXON_STORE_BASE", "")
+
+        config_store_base = ""
+
+        if isinstance(raw.get("store"), dict):
+            config_store_base = raw["store"].get("base", "")
+
+        # Effective base: env wins, then config, then default
+
+        effective_base = env_store_base or config_store_base or str(Path.home() / ".axon")
+
+        if env_store_base and config_store_base and env_store_base != config_store_base:
+            issues.append(
+                ConfigIssue(
+                    level="warn",
+                    section="store",
+                    field="base",
+                    message=(
+                        f"AXON_STORE_BASE env var ('{env_store_base}') overrides "
+                        f"config store.base ('{config_store_base}'). Env wins."
+                    ),
+                    suggestion="Remove one of them to avoid confusion.",
+                )
+            )
+
+        base_path = Path(effective_base).expanduser()
+
+        # Only warn when the user has explicitly set a custom base that doesn't exist
+
+        if not base_path.exists() and (env_store_base or config_store_base):
+            issues.append(
+                ConfigIssue(
+                    level="warn",
+                    section="store",
+                    field="base",
+                    message=f"Store base directory does not exist: {base_path}",
+                    suggestion="Create the directory or update store.base in config.yaml.",
+                )
+            )
+
+        elif base_path.exists():
+            username = getpass.getuser()
+
+            store_meta = base_path / "AxonStore" / username / "store_meta.json"
+
+            if not store_meta.exists():
+                issues.append(
+                    ConfigIssue(
+                        level="info",
+                        section="store",
+                        field="store_meta.json",
+                        message=(
+                            f"AxonStore not initialised at {base_path}. "
+                            "No store_meta.json found."
+                        ),
+                        suggestion="Run `axon --store-init <path>` to initialise the store.",
+                    )
+                )
+
+            else:
+                try:
+                    import json as _json
+
+                    _meta = _json.loads(store_meta.read_text(encoding="utf-8"))
+
+                    _store_id = _meta.get("store_id", "<unknown>")
+
+                    issues.append(
+                        ConfigIssue(
+                            level="info",
+                            section="store",
+                            field="store_meta.json",
+                            message=(
+                                f"AxonStore initialised at {store_meta.parent} "
+                                f"(store_id={_store_id})."
+                            ),
+                        )
+                    )
+
+                except Exception:
+                    pass
+
+        return issues

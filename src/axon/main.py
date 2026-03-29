@@ -185,24 +185,17 @@ Your primary goal is to help the user by answering questions based on the provid
     def _resolve_model_path(self, model_name: str, kind: str = "hf") -> str:
         """Resolve a HuggingFace model ID to a local path when offline_mode or local_assets_only is on.
 
-
         If the name is already an absolute path or starts with '.' it is returned
-
 
         unchanged.  Otherwise the short name and org--name variants are looked up
 
-
         across the configured model roots in priority order.
-
 
         kind:
 
-
             "embedding"  — checks embedding_models_dir before local_models_dir
 
-
             "hf"         — checks hf_models_dir before local_models_dir
-
 
         """
 
@@ -249,27 +242,19 @@ Your primary goal is to help the user by answering questions based on the provid
     def _preflight_model_audit(self) -> None:
         """Log the source classification for every model asset and fail fast when
 
-
         ``local_assets_only`` is enabled but a model still resolves to a remote ID.
-
 
         Source kinds:
 
-
           local_path         — absolute path that exists on disk
-
 
           local_path_missing — absolute path that does NOT exist (misconfigured)
 
-
           hf_cache           — bare HF model ID present in the local HF hub cache
-
 
           remote_id          — bare HF model ID with no local copy found
 
-
           n/a                — feature disabled, model will never be loaded
-
 
         """
 
@@ -756,9 +741,7 @@ Your primary goal is to help the user by answering questions based on the provid
     def should_recommend_project(self) -> bool:
         """Return True if we should recommend creating a dedicated project.
 
-
         True if the active project is 'default' AND no OTHER named projects exist yet.
-
 
         """
 
@@ -790,27 +773,19 @@ Your primary goal is to help the user by answering questions based on the provid
     def _switch_to_scope(self, scope: str) -> None:
         """Switch to a merged read-only scope (@projects, @mounts, or @store).
 
-
         Collects vector stores and BM25 indices from the relevant project dirs,
-
 
         wraps them in MultiVectorStore / MultiBM25Retriever, and marks the brain
 
-
         as read-only so ingest() raises a clear error.
-
 
         Args:
 
-
             scope: One of "@projects", "@mounts", or "@store".
-
 
         Raises:
 
-
             ValueError: If no projects are found for the requested scope.
-
 
         """
 
@@ -1021,39 +996,27 @@ Your primary goal is to help the user by answering questions based on the provid
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
 
-
         Embedding and LLM are kept (expensive to reload). The "default" sentinel
-
 
         restores the paths from config.yaml.
 
-
         When switching to a *parent* project (one that has sub-projects), the
-
 
         read path (self.vector_store / self.bm25) becomes a Multi* fan-out over
 
-
         the parent's own store plus all descendants. The write path
-
 
         (self._own_vector_store / self._own_bm25) always points only to the
 
-
         parent's own data directory.
-
 
         Args:
 
-
             name: Project name (slash-separated for sub-projects) or "default".
-
 
         Raises:
 
-
             ValueError: If the project does not exist (use /project new first).
-
 
         """
 
@@ -1609,21 +1572,15 @@ Your primary goal is to help the user by answering questions based on the provid
     def _validate_embedding_meta(self, *, on_mismatch: str = "raise") -> None:
         """Compare the current embedding config against the persisted collection meta.
 
-
         Args:
-
 
             on_mismatch: ``"raise"`` (default, used before ingest) raises
 
-
                 ``ValueError`` to prevent silent collection corruption.
-
 
                 ``"warn"`` logs a warning but allows the operation to continue
 
-
                 (used at query time so existing data is still accessible).
-
 
         """
 
@@ -1661,21 +1618,15 @@ Your primary goal is to help the user by answering questions based on the provid
     def finalize_ingest(self) -> None:
         """Flush all deferred saves and trigger community rebuild.
 
-
         Call once after the last ``ingest()`` when ``ingest_batch_mode=True``.
-
 
         Flushes BM25, entity/relation/claims graphs, then delegates to
 
-
         ``finalize_graph()`` for community rebuild.
-
 
         Safe to call when ``ingest_batch_mode=False`` (flush is a no-op; community
 
-
         rebuild still runs as normal).
-
 
         """
 
@@ -1706,24 +1657,17 @@ Your primary goal is to help the user by answering questions based on the provid
     def _raptor_group_by_structure(self, chunks: list[dict], n: int) -> list[list[dict]]:
         """Group chunks for RAPTOR summarization using section/heading boundaries.
 
-
         Detection priority (any one match = new section starts):
-
 
           1. metadata["heading"] or metadata["section"] is non-empty
 
-
           2. text starts with a Markdown heading (#, ##, ###)
-
 
           3. text starts with numbered/lettered heading pattern
 
-
         Fallback: if no heading found across any chunk, pure fixed windows of size n.
 
-
         Within detected sections: further split into sub-windows of size n if section > n.
-
 
         """
 
@@ -1979,39 +1923,27 @@ Your primary goal is to help the user by answering questions based on the provid
     def _raptor_drilldown(self, query: str, results: list[dict], cfg=None) -> list[dict]:
         """Replace RAPTOR summary hits with their underlying leaf chunks.
 
-
         For each result whose metadata contains ``raptor_level >= 1``:
-
 
         * If ``children_ids`` is stored in the node's metadata, fetch those exact
 
-
           descendants via ``get_by_ids`` and recurse until leaf chunks are reached
-
 
           (P2+P3 — true tree traversal, no spurious cross-source contamination).
 
-
         * If ``children_ids`` is absent (level-1 nodes ingested before multi-level
-
 
           RAPTOR was added), fall back to a filtered ``search`` using the now-fixed
 
-
           Chroma ``where`` clause (P1).
-
 
         * After all substitutions, deduplicate by ID keeping the highest-scored
 
-
           occurrence (P4).
-
 
         Non-RAPTOR results pass through unchanged.  Falls back to keeping the
 
-
         summary when window metadata is missing or any fetch fails.
-
 
         """
 
@@ -2157,18 +2089,13 @@ Your primary goal is to help the user by answering questions based on the provid
     def _apply_artifact_ranking(self, results: list[dict], cfg=None) -> list[dict]:
         """Re-order results by artifact type according to ``raptor_retrieval_mode``.
 
-
         Applies a score multiplier per artifact type, then re-sorts:
-
 
         * ``tree_traversal`` (default): leaf ×1.5 > raptor ×1.0 > community ×0.7
 
-
         * ``summary_first``:            raptor ×1.5 > leaf ×1.0 > community ×0.7
 
-
         * ``corpus_overview``:          community ×1.5 > raptor ×1.0 > leaf ×0.7
-
 
         """
 
@@ -2214,18 +2141,13 @@ Your primary goal is to help the user by answering questions based on the provid
     def _detect_dataset_type(self, doc: dict) -> tuple[str, bool]:
         """Detect the dataset type for a document using content-based heuristics.
 
-
         Returns:
-
 
             Tuple of (dataset_type, has_code) where dataset_type is one of
 
-
             'codebase', 'paper', 'doc', 'discussion', 'knowledge'
 
-
             and has_code is True when a doc-type document also contains code blocks.
-
 
         """
 
@@ -2420,15 +2342,11 @@ Your primary goal is to help the user by answering questions based on the provid
     def _index_sentence_windows(self, documents: list[dict]) -> None:
         """Segment eligible chunks into sentences and add to the sentence index.
 
-
         Called at the end of :meth:`ingest` when ``config.sentence_window`` is
-
 
         enabled.  Only non-code, non-RAPTOR-summary leaf chunks are eligible.
 
-
         Overhead (embedding time in ms) is logged at INFO level.
-
 
         """
 
@@ -2501,21 +2419,15 @@ Your primary goal is to help the user by answering questions based on the provid
     def _split_with_parents(self, documents: list[dict]) -> list[dict]:
         """Split documents using parent-document (small-to-big) strategy.
 
-
         1. Split each raw document into large parent chunks (parent_chunk_size).
-
 
         2. Split each parent into small child chunks (chunk_size) for indexing.
 
-
         3. Store the parent text in every child's metadata so that at generation
-
 
            time _build_context() can return the richer parent passage instead of
 
-
            the small retrieval chunk.
-
 
         """
 
@@ -2574,36 +2486,25 @@ Your primary goal is to help the user by answering questions based on the provid
     ) -> None:
         """Chunk, deduplicate, embed, and store *documents* in the knowledge base.
 
-
         Each document must be a dict with keys ``id`` (str), ``text`` (str), and
-
 
         optionally ``metadata`` (dict).  Chunking strategy and deduplication are
 
-
         governed by the active :class:`AxonConfig`.  When ``raptor=True``,
-
 
         summary nodes are generated and indexed alongside leaf chunks.  When
 
-
         ``graph_rag=True``, entities are extracted and added to the entity graph.
-
 
         Args:
 
-
             documents: List of document dicts with 'id', 'text', optional 'metadata'.
-
 
             progress_callback: Optional callable(phase: str, **kwargs) invoked at each
 
-
                 pipeline phase transition.  Phases: loading, chunking, raptor, graph_build,
 
-
                 embedding, code_graph, finalizing.
-
 
         """
 
@@ -2789,11 +2690,11 @@ Your primary goal is to help the user by answering questions based on the provid
         _progress("raptor", chunks_total=len(documents))
 
         if self.config.raptor:
-            # Source-size guard — skip RAPTOR for sources whose estimated text size exceeds threshold
+            # Source-size guard — skip RAPTOR for sources whose estimated text size is below threshold
 
-            _raptor_max_mb = getattr(self.config, "raptor_max_source_size_mb", 0.0)
+            _raptor_min_mb = self.config.raptor_min_source_size_mb
 
-            if _raptor_max_mb > 0.0:
+            if _raptor_min_mb > 0.0:
                 from collections import defaultdict as _dfl
 
                 _size_by_source: dict = _dfl(int)
@@ -2803,15 +2704,15 @@ Your primary goal is to help the user by answering questions based on the provid
 
                     _size_by_source[_src] += len(_d.get("text", ""))
 
-                _max_bytes = int(_raptor_max_mb * 1024 * 1024)
+                _max_bytes = int(_raptor_min_mb * 1024 * 1024)
 
-                _skipped_sources = {src for src, sz in _size_by_source.items() if sz > _max_bytes}
+                _skipped_sources = {src for src, sz in _size_by_source.items() if sz < _max_bytes}
 
                 if _skipped_sources:
                     logger.info(
-                        "   RAPTOR: skipping %d large source(s) > %.1f MB",
+                        "   RAPTOR: skipping %d small source(s) < %.1f MB",
                         len(_skipped_sources),
-                        _raptor_max_mb,
+                        _raptor_min_mb,
                     )
 
                 _raptor_eligible = [
@@ -3554,12 +3455,9 @@ Your primary goal is to help the user by answering questions based on the provid
 
 # ---------------------------------------------------------------------------
 
-
 # Phase 3 re-exports — backward-compat, existing callers need no changes
 
-
 # ---------------------------------------------------------------------------
-
 
 from axon.cli import _print_project_tree, _write_python_discovery, main  # noqa: E402,F401
 

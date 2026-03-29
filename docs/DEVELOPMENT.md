@@ -55,7 +55,8 @@ make docker-logs   # View logs
 Axon/
 ├── src/axon/          # Main package
 │   ├── main.py             # Core RAG engine
-│   ├── api.py              # REST API endpoints
+│   ├── api.py              # FastAPI app factory and route registration
+│   ├── api_routes/         # Route handlers (54 endpoints across 8 files)
 │   ├── webapp.py           # Streamlit UI
 │   ├── loaders.py          # Document loaders
 │   ├── retrievers.py       # Search implementations
@@ -82,10 +83,13 @@ Axon/
 └── README.md              # Root overview + links to docs/
 ```
 
-> **Version sync:** `pyproject.toml` is the primary source of truth for the Python package version. A version bump requires updating all three locations in sync:
+> **Version sync:** `pyproject.toml` is the primary source of truth for the Python package version. A version bump requires updating all six locations in sync:
 > - `pyproject.toml` → `version = "X.Y.Z"`
-> - `integrations/vscode-axon/package.json` → `"version": "X.Y.Z"` (VSIX artefact)
+> - `setup.py` → `version="X.Y.Z"`
+> - `src/__init__.py` → `__version__ = "X.Y.Z"`
 > - `src/axon/__init__.py` → `__version__ = "X.Y.Z"`
+> - `src/axon/api.py` → FastAPI `version=` field
+> - `integrations/vscode-axon/package.json` → `"version": "X.Y.Z"` (VSIX artefact)
 
 ### 4. Development Workflow
 
@@ -129,10 +133,8 @@ def test_feature_name():
     """Test description."""
     # Arrange
     input_data = setup_test_data()
-
     # Act
     result = function_under_test(input_data)
-
     # Assert
     assert result == expected_output
 ```
@@ -157,22 +159,18 @@ pytest --cov=axon --cov-report=html  # With coverage
 **Example:**
 ```python
 from typing import List, Dict, Any
-
 def search_documents(
     query: str,
     top_k: int = 10,
     filters: Dict[str, Any] = None
 ) -> List[Dict[str, Any]]:
     """Search for documents matching the query.
-
     Args:
         query: Search query string.
         top_k: Maximum number of results to return.
         filters: Optional metadata filters.
-
     Returns:
         List of documents with scores and metadata.
-
     Example:
         >>> results = search_documents("Python tutorial", top_k=5)
         >>> len(results)
@@ -209,7 +207,6 @@ curl -X POST http://localhost:8000/query \
 ```python
 import cProfile
 import pstats
-
 profiler = cProfile.Profile()
 profiler.enable()
 # Code to profile

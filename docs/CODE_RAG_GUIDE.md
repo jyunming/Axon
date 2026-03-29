@@ -17,10 +17,10 @@ axon --code-graph --ingest ./src/
 ```
 
 Or in `config.yaml`:
-```yaml
-rag:
-  code_graph: true
-```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rag.code_graph` | bool | `false` | Build a structural code graph during ingest (file/class/function relationships) |
 
 **What it indexes:**
 - `CONTAINS` edges — file → class, class → method, file → function
@@ -96,20 +96,22 @@ its methods, the files it imports, and any documentation that mentions it by nam
 
 ## 5. AST-Aware Chunking
 
-For Python files, Axon uses an AST-aware splitter that respects syntactic boundaries:
+For source code files, Axon automatically uses a `CodeAwareSplitter` that respects syntactic boundaries — no config change needed:
 
 - Functions and methods are never split mid-body
 - Class definitions are kept together with their docstring and `__init__`
 - Module-level code is chunked separately from class bodies
 
-Enable via config:
-```yaml
-chunk:
-  strategy: code   # or: recursive (default), semantic, markdown
-```
+This is triggered automatically whenever a file is loaded by `CodeFileLoader` (i.e. any extension Axon recognises as source code: `.py`, `.ts`, `.js`, `.go`, `.rs`, etc.). It is not controlled by `chunk.strategy`.
 
-The `code` strategy automatically detects Python, JavaScript/TypeScript, and other supported
-languages and falls back to recursive splitting for unrecognised extensions.
+The `chunk.strategy` setting controls chunking for **non-code documents** only. Valid values:
+
+| Value | Description |
+|-------|-------------|
+| `semantic` | *(default)* Sentence-boundary semantic splitting |
+| `recursive` | Character-based recursive splitting |
+| `markdown` | Header-aware Markdown splitting |
+| `cosine_semantic` | Cosine-similarity-based semantic splitting |
 
 ---
 
@@ -130,23 +132,19 @@ and the code graph overlaid. Code nodes are rendered as squares; document nodes 
 
 ## 7. Recommended Config for Code Corpora
 
-```yaml
-rag:
-  hybrid_search: true     # BM25 lexical matching is especially effective for code
-  rerank: true            # cross-encoder reranking improves symbol disambiguation
-  code_graph: true        # enable structural graph + lexical boost
-  graph_rag: false        # optional; enable for architecture-level questions
-  top_k: 20               # wider candidate pool for the lexical booster to work with
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rag.hybrid_search` | bool | `false` | Enable BM25 + vector hybrid search — especially effective for code identifiers |
+| `rag.rerank` | bool | `false` | Cross-encoder reranking; improves symbol disambiguation |
+| `rag.code_graph` | bool | `false` | Structural code graph + lexical boost |
+| `rag.graph_rag` | bool | `false` | GraphRAG entity graph; enable for architecture-level queries |
+| `rag.top_k` | int | `10` | Candidate pool size; `20` recommended to give the lexical booster more to work with |
+| `chunk.strategy` | string | `semantic` | Chunking strategy for non-code documents; code files use `CodeAwareSplitter` automatically |
 
-chunk:
-  strategy: code          # AST-aware splitting for Python; recursive fallback for others
-```
+For **architecture-level queries** ("How does the ingestion pipeline connect to the vector store?"), also set:
 
-For **architecture-level queries** ("How does the ingestion pipeline connect to the vector
-store?"), also enable:
-```yaml
-rag:
-  graph_rag: true
-  graph_rag_mode: local   # entity + relation descriptions
-  graph_rag_depth: light  # fast; uses noun-phrase extraction without LLM at ingest
-```
+| Parameter | Type | Recommended | Description |
+|-----------|------|-------------|-------------|
+| `rag.graph_rag` | bool | `true` | Enable GraphRAG entity graph |
+| `rag.graph_rag_mode` | string | `local` | `local` — entity + relation descriptions |
+| `rag.graph_rag_depth` | string | `light` | `light` — noun-phrase extraction without LLM at ingest (fast) |

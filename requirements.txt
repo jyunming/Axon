@@ -31,7 +31,6 @@ google-genai>=1.4.0
 sentence-transformers>=3.0.0
 tf-keras>=2.0.0
 
-
 # Document loaders
 python-docx>=1.0.0
 python-pptx>=0.6.18
@@ -53,3 +52,4 @@ pyarrow>=10.0.0
 # ragas>=0.1.0
 # langchain-community>=0.0.20
 # datasets>=2.14.0
+

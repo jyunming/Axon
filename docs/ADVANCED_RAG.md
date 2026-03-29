@@ -107,13 +107,13 @@ LLM context limits.
 
 ---
 
-## 7. BGE Reranking
+## 7. Reranking
 
 **Flag:** `rerank: true`
 **CLI:** `axon --rerank "your query"`
 **REPL:** `/rag rerank`
 
-A cross-encoder model (default: `BAAI/bge-reranker-base`) re-scores the top-K retrieved chunks
+A cross-encoder model (default: `cross-encoder/ms-marco-MiniLM-L-6-v2`) re-scores the top-K retrieved chunks
 by jointly encoding the query and each chunk. The re-scored order replaces the original ranking
 before synthesis.
 
@@ -152,7 +152,7 @@ chunk retrieval.
 
 ---
 
-## 8b. CRAG-Lite — Corrective Retrieval
+## 9. CRAG-Lite — Corrective Retrieval
 
 **Flag:** `crag_lite: true`
 **Config:** `rag.crag_lite: true`, `rag.crag_lite_confidence_threshold: 0.4`
@@ -199,7 +199,7 @@ of granularity.
 rag:
   raptor: true
   raptor_max_levels: 1          # number of summary levels to build (1 is usually sufficient)
-  raptor_max_source_size_mb: 5.0  # skip RAPTOR for sources smaller than this
+  raptor_min_source_size_mb: 5.0  # skip RAPTOR for sources smaller than this
 ```
 
 **Cost:** Significant additional LLM calls at ingest time (one per cluster per level).
@@ -384,7 +384,7 @@ optimal RAG strategy for it. This happens transparently — no user action is re
 | Profile | Description | Strategy applied |
 |---------|-------------|-----------------|
 | `factual` | Short lookups, specific named facts or definitions | Standard vector + BM25 |
-| `synthesis` | Broad questions drawing from multiple document sections | Multi-query + RAPTOR summaries |
+| `synthesis` | Broad questions drawing from multiple document sections | RAPTOR summaries + parent-doc retrieval |
 | `table_lookup` | Structured data, statistics, numerical queries | BM25-heavy; parent-doc retrieval |
 | `entity_relation` | Relationships and connections between entities | GraphRAG local mode |
 | `corpus_exploration` | Themes, topics, corpus-wide summaries | RAPTOR + multi-query, parent-doc retrieval (graph_rag disabled) |
@@ -394,7 +394,7 @@ optimal RAG strategy for it. This happens transparently — no user action is re
 **Heuristic (default, zero LLM cost):**
 
 The router inspects query length and matches against keyword sets:
-- Queries > 80 chars with synthesis keywords → `synthesis`
+- Synthesis keywords, or queries > 80 chars → `synthesis`
 - Relation/connection keywords → `entity_relation`
 - Statistics/table keywords → `table_lookup`
 - Corpus/overview keywords → `corpus_exploration`
@@ -460,3 +460,4 @@ verification. This is a web-snippet escalation mechanism, not a verified citatio
 
 Summary: Axon's grounding is retrieval-based and best-effort. If you need validated citation
 accuracy, perform post-generation validation outside of Axon.
+

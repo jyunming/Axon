@@ -13,7 +13,7 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Returns `{"status": "ok"}` — use for liveness probes |
+| `GET` | `/health` | Returns `{"status": "ok", "project": "<active-project>"}` — use for liveness probes; returns `503` while the brain is initialising |
 
 ---
 
@@ -23,8 +23,10 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 |--------|------|-------------|
 | `POST` | `/query` | Full RAG query — returns synthesised answer with optional citations |
 | `POST` | `/query/stream` | Streaming RAG query — returns Server-Sent Events (`text/event-stream`) |
+| `POST` | `/query/visualize` | Full RAG query — returns a self-contained HTML page with answer, citations, and highlighted graph nodes |
 | `POST` | `/search` | Semantic / hybrid search — returns raw document chunks with scores |
 | `POST` | `/search/raw` | Retrieval without LLM synthesis — returns chunks plus optional trace |
+| `POST` | `/search/visualize` | Like `/query/visualize` but without LLM synthesis — shows raw retrieved chunks in HTML |
 
 **`POST /query` body:**
 ```json
@@ -55,7 +57,6 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 
 > **`null` vs explicit value:** All RAG flag fields default to `null`, meaning they inherit the
 > server's current global config. Pass an explicit `true`/`false` to override for this request only.
-
 > **Project field:** `project` must match the brain's currently active project. If it
 > differs, the server returns `409 Conflict`. Use `POST /project/switch` first to change
 > the active project. Omit `project` to query whichever project is currently active.
@@ -120,7 +121,7 @@ retrieval `trace` object (pipeline step timings and intermediate results).
   "graph_rag": null               // enable entity extraction during ingest — null inherits global config
 }
 ```
-Response: `{"message": "Ingestion started", "job_id": "abc123", "status": "processing"}`
+Response: `{"message": "Ingestion started for /path/to/documents", "job_id": "abc123", "status": "processing"}`
 
 **`GET /ingest/status/{job_id}` response:**
 ```json
@@ -219,7 +220,10 @@ check to prevent accidental writes or reads to the wrong corpus.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/config` | Return active RAG flags, model config, and runtime settings (sensitive fields masked as `"***"`: `api_key`, `gemini_api_key`, `ollama_cloud_key`, `copilot_pat`, `brave_api_key`, `qdrant_api_key`) |
+| `GET` | `/config/validate` | Validate the current `config.yaml` — returns `{"valid": bool, "issue_count": int, "issues": [...]}` |
 | `POST` | `/config/update` | Update LLM/embedding provider or RAG flags without restart |
+| `POST` | `/config/set` | Set a single config field using dot-notation (e.g. `chunk.strategy`) — accepts `{"key": "rag.top_k", "value": 20, "persist": false}` |
+| `POST` | `/config/reset` | Reset `config.yaml` to built-in defaults — returns `{"written_to": "<path>"}`. Running brain is not reloaded; call `POST /config/update` to apply |
 
 **`POST /config/update` body (all fields optional):**
 ```json
@@ -340,6 +344,7 @@ each poll. VS Code calls this to receive tasks queued while the user was offline
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/store/status` | AxonStore initialisation status and metadata — safe to call before the brain is ready; polls `store_meta.json` directly |
 | `GET` | `/store/whoami` | AxonStore identity — returns `username` and `store_path` |
 | `POST` | `/store/init` | Change the store base path (e.g. to a shared drive) |
 | `POST` | `/share/generate` | Generate a read-only share key for a project and grantee |
@@ -393,7 +398,7 @@ All endpoints return standard HTTP status codes:
 | `400` | Bad request — invalid body or parameters |
 | `403` | Forbidden — attempted write to a read-only mount |
 | `404` | Not found — project, job, or session ID does not exist |
-| `409` | Conflict — duplicate project name or ongoing ingest |
+| `409` | Conflict — duplicate project name, ongoing ingest, or `project` field mismatch |
 | `503` | Service unavailable — brain not initialized (start the server first) |
 | `500` | Internal server error — check server logs |
 

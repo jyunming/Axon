@@ -104,9 +104,7 @@ async def _post(path: str, body: dict) -> Any:
 
 # ---------------------------------------------------------------------------
 
-
 # Tools
-
 
 # ---------------------------------------------------------------------------
 
@@ -115,27 +113,19 @@ async def _post(path: str, body: dict) -> Any:
 async def ingest_text(text: str, metadata: dict | None = None, project: str | None = None) -> Any:
     """Ingest a single text document into the Axon knowledge base.
 
-
     Prefer ingest_texts for multiple documents — it uses one embedding call.
-
 
     Always set metadata.source so the collection can be audited.
 
-
     Duplicate content (same SHA-256) is silently skipped; status will be 'skipped'.
-
 
     Args:
 
-
         text: The text content to store.
-
 
         metadata: Optional dict, e.g. {"source": "https://...", "topic": "react"}.
 
-
         project: Target project. Omit to use the active project.
-
 
     """
 
@@ -154,21 +144,15 @@ async def ingest_text(text: str, metadata: dict | None = None, project: str | No
 async def ingest_texts(docs: list[dict], project: str | None = None) -> Any:
     """Ingest multiple documents in a single batched embedding call.
 
-
     Each item must have at least a "text" key. Optional keys: "doc_id", "metadata".
-
 
     This is the preferred ingest tool — never call ingest_text in a loop.
 
-
     Args:
-
 
         docs: List of dicts, each with "text" and optional "doc_id"/"metadata".
 
-
         project: Target project applied to all docs.
-
 
     """
 
@@ -184,24 +168,17 @@ async def ingest_texts(docs: list[dict], project: str | None = None) -> Any:
 async def ingest_url(url: str, metadata: dict | None = None, project: str | None = None) -> Any:
     """Fetch an HTTP/HTTPS URL and ingest its text content.
 
-
     HTML is stripped automatically. Private/internal URLs (127.x, 10.x,
-
 
     192.168.x, 169.254.x, 172.16-31.x) are blocked server-side.
 
-
     Args:
-
 
         url: The HTTP or HTTPS URL to fetch.
 
-
         metadata: Optional extra metadata merged with the page's source metadata.
 
-
         project: Target project.
-
 
     """
 
@@ -220,18 +197,13 @@ async def ingest_url(url: str, metadata: dict | None = None, project: str | None
 async def ingest_path(path: str) -> Any:
     """Ingest a local file or directory into the knowledge base (async).
 
-
     Returns immediately with a job_id. Poll get_job_status(job_id) until
-
 
     status is 'completed' or 'failed'. Path must be within RAG_INGEST_BASE.
 
-
     Args:
 
-
         path: Absolute or relative path to a file or directory.
-
 
     """
 
@@ -242,21 +214,15 @@ async def ingest_path(path: str) -> Any:
 async def refresh_ingest(project: str | None = None) -> Any:
     """Re-ingest all sources that have changed on disk since they were last indexed.
 
-
     Compares SHA-256 hashes of previously indexed files against their current
-
 
     on-disk content. Changed files are re-chunked and re-embedded; unchanged
 
-
     files are skipped.  Returns a job_id for async polling via get_job_status.
-
 
     Args:
 
-
         project: Target project. Omit to use the active project.
-
 
     """
 
@@ -272,18 +238,13 @@ async def refresh_ingest(project: str | None = None) -> Any:
 async def get_job_status(job_id: str) -> Any:
     """Poll the status of an async ingest job started by ingest_path.
 
-
     Returns a dict with: job_id, status (processing|completed|failed),
-
 
     started_at, completed_at, path, error.
 
-
     Args:
 
-
         job_id: The job_id returned by ingest_path.
-
 
     """
 
@@ -299,38 +260,28 @@ async def search_knowledge(
 ) -> Any:
     """Retrieve raw document chunks from the knowledge base.
 
-
     Best for multi-step reasoning where you want to inspect individual chunks
-
 
     before synthesising an answer. Use query_knowledge for direct answers.
 
-
     Args:
-
 
         query: The search query string.
 
-
         top_k: Number of chunks to return (default 5).
-
 
         filters: Optional metadata filters, e.g. {"source": "https://..."}.
 
-
         project: Expected active project. Returns 409 if it does not match
-
 
             the brain's current active project. Use switch_project to change
 
-
             the active project before calling this tool.
-
 
     """
 
     if top_k < 1:
-        return {"error": "top_k must be >= 1"}
+        raise ValueError("top_k must be >= 1")
 
     body: dict = {"query": query, "top_k": top_k}
 
@@ -352,38 +303,28 @@ async def query_knowledge(
 ) -> Any:
     """Ask a question and get a synthesised answer from the knowledge base.
 
-
     Performs retrieval + generation in one call. Use search_knowledge instead
-
 
     if you need to inspect raw chunks before answering.
 
-
     Args:
-
 
         query: The question to ask.
 
-
         top_k: Number of chunks to retrieve for context (overrides global setting).
-
 
         filters: Optional metadata filters for retrieval.
 
-
         project: Expected active project. Returns 409 if it does not match
-
 
             the brain's current active project. Use switch_project to change
 
-
             the active project before calling this tool.
-
 
     """
 
     if top_k is not None and top_k < 1:
-        return {"error": "top_k must be >= 1"}
+        raise ValueError("top_k must be >= 1")
 
     body: dict = {"query": query}
 
@@ -403,12 +344,9 @@ async def query_knowledge(
 async def list_knowledge() -> Any:
     """List all indexed sources in the active project with chunk counts.
 
-
     Call this before a large ingest to check what's already indexed and avoid
 
-
     re-ingesting duplicate content.
-
 
     """
 
@@ -419,18 +357,13 @@ async def list_knowledge() -> Any:
 async def switch_project(project_name: str) -> Any:
     """Switch the knowledge base to a different project.
 
-
     WARNING: This mutates global server state. Do not call from concurrent
-
 
     request handlers. Prefer passing 'project' directly to ingest tools instead.
 
-
     Args:
 
-
         project_name: The project name to activate, e.g. "react-docs".
-
 
     """
 
@@ -441,15 +374,11 @@ async def switch_project(project_name: str) -> Any:
 async def delete_documents(doc_ids: list[str]) -> Any:
     """Remove documents from the knowledge base by their IDs.
 
-
     Deletes from both the vector store and the BM25 index.
-
 
     Args:
 
-
         doc_ids: List of document IDs to delete.
-
 
     """
 
@@ -460,15 +389,11 @@ async def delete_documents(doc_ids: list[str]) -> Any:
 async def list_projects() -> Any:
     """List all knowledge base projects.
 
-
     Returns on-disk projects (with metadata) plus any project seen only in the
-
 
     current server session.  Call this to discover available namespaces before
 
-
     switching or querying a project.
-
 
     """
 
@@ -479,21 +404,15 @@ async def list_projects() -> Any:
 async def get_stale_docs(days: int = 7) -> Any:
     """Return documents that have not been re-ingested within *days* calendar days.
 
-
     Use this to identify outdated knowledge that should be refreshed.  Only
-
 
     documents ingested during the current server process lifetime are tracked —
 
-
     restart tracking begins fresh after each server restart.
-
 
     Args:
 
-
         days: Flag documents not re-ingested within this many days (default 7).
-
 
     """
 
@@ -504,15 +423,11 @@ async def get_stale_docs(days: int = 7) -> Any:
 async def create_project(name: str, description: str = "") -> Any:
     """Create a new knowledge base project.
 
-
     Args:
-
 
         name: Name of the project to create.
 
-
         description: Optional description of the project contents.
-
 
     """
 
@@ -523,18 +438,13 @@ async def create_project(name: str, description: str = "") -> Any:
 async def delete_project(name: str) -> Any:
     """Delete a knowledge base project and all its data.
 
-
     DANGER: This action is irreversible. It deletes all vectors and local files
-
 
     associated with the project.
 
-
     Args:
 
-
         name: Name of the project to delete.
-
 
     """
 
@@ -545,9 +455,7 @@ async def delete_project(name: str) -> Any:
 async def clear_knowledge() -> Any:
     """Wipe all data from the active project's vector store and index.
 
-
     Use this to reset a project without deleting the namespace itself.
-
 
     """
 
@@ -558,9 +466,7 @@ async def clear_knowledge() -> Any:
 async def get_current_settings() -> Any:
     """Return the active Axon RAG and model configuration.
 
-
     Call this to check current top_k, threshold, and strategy settings.
-
 
     """
 
@@ -591,66 +497,45 @@ async def update_settings(
 ) -> Any:
     """Update global Axon RAG and retrieval settings for the current session.
 
-
     Args:
-
 
         top_k: Number of chunks to retrieve (1-50).
 
-
         similarity_threshold: Minimum match score (0.0-1.0).
-
 
         hybrid_search: Toggle hybrid BM25 + Vector search.
 
-
         rerank: Toggle cross-encoder reranking.
-
 
         hyde: Toggle Hypothetical Document Embeddings.
 
-
         multi_query: Toggle multi-query retrieval (3 rephrased queries merged).
-
 
         step_back: Toggle step-back prompting (abstract query before retrieval).
 
-
         query_decompose: Toggle query decomposition into atomic sub-questions.
-
 
         compress_context: Toggle LLM context compression before generation.
 
-
         raptor: Toggle RAPTOR hierarchical summaries.
-
 
         graph_rag: Toggle GraphRAG entity expansion.
 
-
         truth_grounding: Toggle truth-grounding enforcement on retrieved chunks.
-
 
         discussion_fallback: Allow general-knowledge fallback when no chunks found.
 
-
         sentence_window: Toggle sentence-window retrieval (expands chunks with context sentences).
-
 
         sentence_window_size: Number of surrounding sentences per side (1-10, default 2).
 
-
         crag_lite: Toggle CRAG-lite corrective retrieval on low-confidence chunks.
-
 
         code_graph: Toggle code-graph retrieval for code-related queries.
 
-
         graph_rag_mode: GraphRAG query mode — "local", "global", or "hybrid".
 
-
         cite: Include inline source citations in generated answers.
-
 
     """
 
@@ -670,12 +555,9 @@ async def list_sessions() -> Any:
 async def get_session(session_id: str) -> Any:
     """Retrieve a specific chat session by its ID.
 
-
     Args:
 
-
         session_id: The ID of the session to load.
-
 
     """
 
@@ -689,24 +571,17 @@ async def share_project(
 ) -> Any:
     """Generate a share key allowing another user to access one of your projects.
 
-
     The returned share_string should be transmitted to the grantee out-of-band
-
 
     (e.g. Slack, email). The grantee then calls redeem_share to mount the project.
 
-
     All shares are read-only; write access is not supported.
-
 
     Args:
 
-
         project: Name of the project to share (must exist).
 
-
         grantee: OS username of the recipient.
-
 
     """
 
@@ -720,18 +595,13 @@ async def share_project(
 async def redeem_share(share_string: str) -> Any:
     """Redeem a share string, creating a mount descriptor in your mounts/ directory.
 
-
     After redemption, the shared project appears as mounts/{owner}_{project}
-
 
     and can be queried normally.
 
-
     Args:
 
-
         share_string: The base64 share string generated by share_project() on the owner's machine.
-
 
     """
 
@@ -742,15 +612,11 @@ async def redeem_share(share_string: str) -> Any:
 async def list_shares() -> Any:
     """List all active shares for the current user.
 
-
     Returns 'sharing' (projects this user has shared with others, with revocation
-
 
     status) and 'shared' (projects others have shared with this user, with mount
 
-
     names). Use to audit access or troubleshoot missing shared projects.
-
 
     """
 
@@ -761,21 +627,15 @@ async def list_shares() -> Any:
 async def revoke_share(key_id: str) -> Any:
     """Revoke a previously generated share key, cutting off the grantee's access.
 
-
     The grantee's mount becomes broken immediately; they will receive a 404 on
-
 
     their next project-list or switch attempt.  Use list_shares to find the
 
-
     key_id of the share you want to revoke.
-
 
     Args:
 
-
         key_id: The key ID of the share to revoke (from list_shares output).
-
 
     """
 
@@ -786,18 +646,13 @@ async def revoke_share(key_id: str) -> Any:
 async def get_store_status() -> Any:
     """Check whether the AxonStore has been initialised.
 
-
     Returns store metadata (path, version, creation date) when the store
-
 
     exists, or ``{"initialized": false}`` on a fresh install.  Clients should
 
-
     call this on startup before any other tool to decide whether to prompt the
 
-
     user to run ``init_store``.
-
 
     """
 
@@ -808,45 +663,31 @@ async def get_store_status() -> Any:
 async def init_store(base_path: str, persist: bool = False) -> Any:
     """Initialise AxonStore multi-user mode at the given base directory.
 
-
     Must be called once before any share-related tools (list_shares,
-
 
     share_project, redeem_share, revoke_share) will work. Safe to call
 
-
     repeatedly — subsequent calls update the base path and reinitialise
-
 
     the brain.
 
-
     Args:
-
 
         base_path: Absolute path to the directory where the AxonStore/
 
-
                    folder will be created (e.g. '/data' creates
-
 
                    '/data/AxonStore/<username>/').
 
-
         persist: Write the new store path to config.yaml so it survives
-
 
                  server restarts. Defaults to False so that test or
 
-
                  temporary calls do not permanently alter the user config.
-
 
                  Pass True only when you intend to switch to AxonStore
 
-
                  mode permanently.
-
 
     """
 
@@ -857,18 +698,13 @@ async def init_store(base_path: str, persist: bool = False) -> Any:
 async def graph_status() -> Any:
     """Return current GraphRAG knowledge-graph status.
 
-
     Reports entity count, edge count, community summary count, whether a
-
 
     community rebuild is in progress, and whether the graph is ready for
 
-
     graph-augmented retrieval.  Use before running graph_finalize() to check
 
-
     whether a rebuild is actually needed.
-
 
     """
 
@@ -879,18 +715,13 @@ async def graph_status() -> Any:
 async def graph_finalize() -> Any:
     """Trigger an explicit GraphRAG community detection rebuild.
 
-
     Rebuilds community summaries from the current entity graph.  Call this
-
 
     after a large ingest batch when you want graph-augmented answers to
 
-
     reflect the latest knowledge without waiting for the automatic rebuild.
 
-
     Returns the number of community summaries produced.
-
 
     """
 
@@ -901,18 +732,13 @@ async def graph_finalize() -> Any:
 async def graph_data() -> Any:
     """Return the full entity/relation knowledge-graph payload as JSON.
 
-
     Returns a dict with 'nodes' and 'links' arrays describing every entity
-
 
     and relation currently in the graph.  Useful for inspection, export, or
 
-
     building custom visualisations.  Returns empty arrays when no graph has
 
-
     been built yet.
-
 
     """
 
@@ -923,18 +749,13 @@ async def graph_data() -> Any:
 async def get_active_leases() -> Any:
     """Return active write-lease counts for all projects currently tracked by the server.
 
-
     Operator tool — shows which projects have in-flight write operations,
-
 
     whether they are draining, and their epoch counter.  Use this to check
 
-
     whether it is safe to put a project into 'readonly' or 'offline' maintenance
 
-
     state (wait for active_leases to reach 0 first).
-
 
     """
 
@@ -943,9 +764,7 @@ async def get_active_leases() -> Any:
 
 # ---------------------------------------------------------------------------
 
-
 # Entry point
-
 
 # ---------------------------------------------------------------------------
 

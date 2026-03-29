@@ -154,18 +154,13 @@ class OpenVectorStore:
     def _sanitize_chroma_meta(metadatas: list[dict] | None) -> list[dict] | None:
         """Coerce metadata dicts to Chroma-safe scalar types.
 
-
         Chroma only accepts ``str | int | float | bool`` per field.
-
 
         - list  → pipe-joined string (e.g. imports, calls, env_vars)
 
-
         - None  → omitted
 
-
         - other → str(v)
-
 
         """
 
@@ -201,7 +196,7 @@ class OpenVectorStore:
         ids: list[str],
         texts: list[str],
         embeddings: list[list[float]],
-        metadatas: list[dict] = None,
+        metadatas: list[dict] | None = None,
     ):
         if self.provider == "chroma":
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
@@ -306,21 +301,15 @@ class OpenVectorStore:
     def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
 
-
         Returns:
-
 
             List of dicts sorted by source name, each with keys:
 
-
                 - source (str): The metadata 'source' value, or 'unknown' if not set.
-
 
                 - chunks (int): Number of chunks stored for that source.
 
-
                 - doc_ids (List[str]): All chunk IDs belonging to this source.
-
 
         """
 
@@ -383,7 +372,10 @@ class OpenVectorStore:
         return []
 
     def search(
-        self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        filter_dict: dict | None = None,
     ) -> list[dict]:
         if self.provider == "chroma":
             where = None
@@ -447,12 +439,9 @@ class OpenVectorStore:
     def get_by_ids(self, ids: list[str]) -> list[dict]:
         """Fetch stored documents by their IDs (used by GraphRAG expansion).
 
-
         Returns a list of result dicts in the same format as search(), with score=1.0
 
-
         since these docs are fetched by exact ID (not scored).
-
 
         """
 
@@ -544,27 +533,19 @@ class OpenVectorStore:
     def optimize_index(self) -> str:
         """Build or rebuild an ANN index on the LanceDB vector column.
 
-
         For LanceDB: creates an IVF_PQ index which dramatically reduces
-
 
         memory usage and speeds up search on large collections (>10k vectors).
 
-
         Requires at least 256 vectors; safe to call on smaller tables (no-op).
-
 
         For Chroma/Qdrant: returns an informational message (they manage
 
-
         their own indexes automatically).
-
 
         Returns:
 
-
             Status message describing what was done.
-
 
         """
 
@@ -618,7 +599,7 @@ class OpenVectorStore:
 
             self.client.delete(
                 collection_name="axon",
-                points_selector=PointIdsList(points=ids),
+                points_selector=PointIdsList(points=list(ids)),
             )
 
         elif self.provider == "lancedb":
@@ -658,7 +639,10 @@ class MultiVectorStore:
         self.collection = stores[0].collection if stores else None
 
     def search(
-        self, query_embedding: list[float], top_k: int = 10, filter_dict: dict = None
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        filter_dict: dict | None = None,
     ) -> list[dict]:
         from concurrent.futures import ThreadPoolExecutor
 

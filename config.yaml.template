@@ -6,7 +6,23 @@
 
 
 
+
+
+
+
+
+
+
+
 #
+
+
+
+
+
+
+
+
 
 
 
@@ -22,7 +38,23 @@
 
 
 
+
+
+
+
+
+
+
+
 # Axon will also create a minimal starter config automatically on first run.
+
+
+
+
+
+
+
+
 
 
 
@@ -38,7 +70,23 @@
 
 
 
+
+
+
+
+
+
+
+
 # Full option reference: axon --help
+
+
+
+
+
+
+
+
 
 
 
@@ -62,7 +110,31 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -78,7 +150,23 @@
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -94,7 +182,23 @@ embedding:
 
 
 
+
+
+
+
+
+
+
+
   provider: sentence_transformers     # options: sentence_transformers, openai, ollama
+
+
+
+
+
+
+
+
 
 
 
@@ -110,6 +214,14 @@ embedding:
 
 
 
+
+
+
+
+
+
+
+
   # provider: openai
 
 
@@ -118,7 +230,23 @@ embedding:
 
 
 
+
+
+
+
+
+
+
+
   # model: text-embedding-3-small
+
+
+
+
+
+
+
+
 
 
 
@@ -142,7 +270,31 @@ embedding:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -158,7 +310,23 @@ embedding:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -174,7 +342,31 @@ embedding:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -198,7 +390,23 @@ embedding:
 
 
 
+
+
+
+
+
+
+
+
 llm:
+
+
+
+
+
+
+
+
 
 
 
@@ -214,6 +422,14 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
   model: llama3.1:8b                  # any model pulled via `ollama pull <model>`
 
 
@@ -222,7 +438,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
   temperature: 0.3                    # lower = more factual; 0.7 for conversational tone
+
+
+
+
+
+
+
+
 
 
 
@@ -246,7 +478,31 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Option 2 — OpenAI
+
+
+
+
+
+
+
+
 
 
 
@@ -262,7 +518,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   provider: openai
+
+
+
+
+
+
+
+
 
 
 
@@ -278,7 +550,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   openai_api_key: sk-...            # or set OPENAI_API_KEY env var
+
+
+
+
+
+
+
+
 
 
 
@@ -294,7 +582,31 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   max_tokens: 2048
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -318,7 +630,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 # llm:
+
+
+
+
+
+
+
+
 
 
 
@@ -334,7 +662,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   model: grok-3                     # or grok-3-fast, grok-2
+
+
+
+
+
+
+
+
 
 
 
@@ -350,6 +694,14 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   temperature: 0.3
 
 
@@ -358,7 +710,31 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   max_tokens: 2048
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -382,7 +758,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 # llm:
+
+
+
+
+
+
+
+
 
 
 
@@ -398,7 +790,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   model: gemini-2.0-flash           # or gemini-1.5-pro
+
+
+
+
+
+
+
+
 
 
 
@@ -414,6 +822,14 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   temperature: 0.3
 
 
@@ -422,7 +838,31 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   max_tokens: 2048
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -446,7 +886,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 # llm:
+
+
+
+
+
+
+
+
 
 
 
@@ -462,7 +918,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   model: mistral-7b-instruct        # model ID as served by your vLLM instance
+
+
+
+
+
+
+
+
 
 
 
@@ -478,7 +950,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   temperature: 0.3
+
+
+
+
+
+
+
+
 
 
 
@@ -502,7 +990,31 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Option 6 — GitHub Copilot (VS Code extension bridge)
+
+
+
+
+
+
+
+
 
 
 
@@ -518,7 +1030,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   provider: copilot                 # routes through the Axon VS Code extension
+
+
+
+
+
+
+
+
 
 
 
@@ -542,7 +1070,31 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Option 7 — GitHub Copilot API (PAT-based, no VS Code required)
+
+
+
+
+
+
+
+
 
 
 
@@ -558,6 +1110,14 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   provider: github_copilot
 
 
@@ -566,7 +1126,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 #   model: gpt-4o
+
+
+
+
+
+
+
+
 
 
 
@@ -590,7 +1166,31 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -606,7 +1206,23 @@ llm:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -622,7 +1238,23 @@ vector_store:
 
 
 
+
+
+
+
+
+
+
+
   provider: lancedb                   # options: lancedb (default, ships with pip install axon), chroma (pip install axon[chroma]), qdrant (pip install axon[qdrant])
+
+
+
+
+
+
+
+
 
 
 
@@ -638,7 +1270,23 @@ vector_store:
 
 
 
+
+
+
+
+
+
+
+
   # For remote Qdrant:
+
+
+
+
+
+
+
+
 
 
 
@@ -654,7 +1302,23 @@ vector_store:
 
 
 
+
+
+
+
+
+
+
+
   # url: http://localhost:6333
+
+
+
+
+
+
+
+
 
 
 
@@ -678,7 +1342,31 @@ vector_store:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -694,6 +1382,14 @@ vector_store:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -702,7 +1398,23 @@ vector_store:
 
 
 
+
+
+
+
+
+
+
+
 bm25:
+
+
+
+
+
+
+
+
 
 
 
@@ -726,7 +1438,31 @@ bm25:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -742,7 +1478,23 @@ bm25:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -758,7 +1510,23 @@ rag:
 
 
 
+
+
+
+
+
+
+
+
   top_k: 10                           # number of chunks returned before reranking
+
+
+
+
+
+
+
+
 
 
 
@@ -774,6 +1542,14 @@ rag:
 
 
 
+
+
+
+
+
+
+
+
   hybrid_search: true                 # combine BM25 + vector scores (recommended)
 
 
@@ -782,7 +1558,37 @@ rag:
 
 
 
+
+
+
+
+
+
+
+
   discussion_fallback: true           # fall back to LLM general knowledge on zero hits
+
+  code_graph: false                   # build File+Symbol nodes with CONTAINS/IMPORTS edges during code ingest
+
+  code_graph_bridge: false            # add MENTIONED_IN edges linking prose docs to code symbols
+
+  query_router: heuristic             # heuristic | llm | off — auto-select retrieval strategy per query
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -799,6 +1605,14 @@ rag:
 
 
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -814,7 +1628,23 @@ rag:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -830,6 +1660,14 @@ chunk:
 
 
 
+
+
+
+
+
+
+
+
   size: 1000                          # characters per chunk
 
 
@@ -838,7 +1676,23 @@ chunk:
 
 
 
+
+
+
+
+
+
+
+
   overlap: 200                        # character overlap between adjacent chunks
+
+
+
+
+
+
+
+
 
 
 
@@ -862,7 +1716,31 @@ chunk:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -878,7 +1756,23 @@ chunk:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -894,6 +1788,14 @@ rerank:
 
 
 
+
+
+
+
+
+
+
+
   enabled: false                      # enable for higher precision; adds ~100 ms/query
 
 
@@ -902,7 +1804,23 @@ rerank:
 
 
 
+
+
+
+
+
+
+
+
   provider: cross-encoder             # options: cross-encoder, cohere
+
+
+
+
+
+
+
+
 
 
 
@@ -926,7 +1844,31 @@ rerank:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -942,7 +1884,23 @@ rerank:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -958,7 +1916,23 @@ query_transformations:
 
 
 
+
+
+
+
+
+
+
+
   multi_query: false                  # generate N query variants for richer recall
+
+
+
+
+
+
+
+
 
 
 
@@ -974,7 +1948,23 @@ query_transformations:
 
 
 
+
+
+
+
+
+
+
+
   step_back: false                    # abstraction step-back prompting
+
+
+
+
+
+
+
+
 
 
 
@@ -998,7 +1988,31 @@ query_transformations:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1014,6 +2028,14 @@ query_transformations:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -1022,7 +2044,23 @@ query_transformations:
 
 
 
+
+
+
+
+
+
+
+
 repl:
+
+
+
+
+
+
+
+
 
 
 
@@ -1046,7 +2084,31 @@ repl:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1062,7 +2124,23 @@ repl:
 
 
 
+
+
+
+
+
+
+
+
 #
+
+
+
+
+
+
+
+
 
 
 
@@ -1078,7 +2156,23 @@ repl:
 
 
 
+
+
+
+
+
+
+
+
 # increase indexing time.  Enable them once your base corpus is loaded and
+
+
+
+
+
+
+
+
 
 
 
@@ -1094,7 +2188,23 @@ repl:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1110,6 +2220,14 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
   raptor: false                       # hierarchical summarisation (LLM per chunk group)
 
 
@@ -1118,7 +2236,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
   graph_rag: false                    # entity graph construction (LLM per document)
+
+
+
+
+
+
+
+
 
 
 
@@ -1142,7 +2276,31 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Best-known-method (BKM) parameters for RAPTOR and GraphRAG.
+
+
+
+
+
+
+
+
 
 
 
@@ -1158,6 +2316,14 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # Uncomment to override.
 
 
@@ -1166,7 +2332,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 #
+
+
+
+
+
+
+
+
 
 
 
@@ -1182,7 +2364,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # raptor_chunk_group_size: 5          # summarise every N leaf chunks together (default 5)
+
+
+
+
+
+
+
+
 
 
 
@@ -1198,7 +2396,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # raptor_max_source_size_mb: 5.0      # skip RAPTOR for sources > 5 MB (prevents OOM on large PDFs)
+
+
+
+
+
+
+
+
 
 
 
@@ -1214,7 +2428,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # GraphRAG BKM
+
+
+
+
+
+
+
+
 
 
 
@@ -1230,7 +2460,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # graph_rag_ner_backend: gliner       # gliner is 10–50x faster than llm; llm gives richer descriptions
+
+
+
+
+
+
+
+
 
 
 
@@ -1246,7 +2492,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # graph_rag_relation_budget: 30       # max chunks to extract relations from per ingest batch
+
+
+
+
+
+
+
+
 
 
 
@@ -1262,7 +2524,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # graph_rag_community_lazy: true      # rebuild communities only when finalize_graph() is called
+
+
+
+
+
+
+
+
 
 
 
@@ -1286,7 +2564,31 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1302,6 +2604,14 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -1310,7 +2620,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # sentence_window: false              # expand each hit to ±N surrounding sentences
+
+
+
+
+
+
+
+
 
 
 
@@ -1334,7 +2660,31 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1350,7 +2700,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1374,7 +2740,31 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1390,7 +2780,23 @@ advanced:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1406,7 +2812,23 @@ web_search:
 
 
 
+
+
+
+
+
+
+
+
   enabled: false
+
+
+
+
+
+
+
+
 
 
 
@@ -1430,7 +2852,31 @@ web_search:
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1446,7 +2892,23 @@ web_search:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1462,7 +2924,23 @@ offline:
 
 
 
+
+
+
+
+
+
+
+
   enabled: false
+
+
+
+
+
+
+
+
 
 
 
@@ -1478,7 +2956,37 @@ offline:
 
 
 
-  local_models_dir: ""
+
+
+
+
+
+
+
+
+  local_models_dir: ""               # legacy fallback root for both embedding and HF models
+
+  embedding_models_dir: ""            # root for sentence-transformers / fastembed model files
+
+  hf_models_dir: ""                   # root for GLiNER, REBEL, LLMLingua, cross-encoder reranker
+
+  tokenizer_cache_dir: ""             # override TIKTOKEN_CACHE_DIR for offline tiktoken BPE encoding
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1495,6 +3003,14 @@ offline:
 
 
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1510,7 +3026,23 @@ offline:
 
 
 
+
+
+
+
+
+
+
+
 # ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
 
 
 
@@ -1526,7 +3058,23 @@ offline:
 
 
 
+
+
+
+
+
+
+
+
 #   ~/.axon/AxonStore/<username>/
+
+
+
+
+
+
+
+
 
 
 
@@ -1542,7 +3090,23 @@ offline:
 
 
 
+
+
+
+
+
+
+
+
 # Override to a shared network drive to enable cross-user sharing:
+
+
+
+
+
+
+
+
 
 
 
@@ -1558,6 +3122,14 @@ offline:
 
 
 
+
+
+
+
+
+
+
+
 #   base: /data/axon-store            # shared filesystem mount point
 
 
@@ -1566,5 +3138,15 @@ offline:
 
 
 
+
+
+
+
+
+
+
+
 #                                     # set AXON_STORE_BASE env var instead if preferred
+
+
 

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/axon-mark.png" alt="Axon" width="280" />
+  <img src="docs/assets/repl-animation.gif" alt="Axon" width="400" />
 
   <h3>Your documents, answerable. On your hardware.</h3>
 
@@ -18,7 +18,7 @@
 ---
 
 <div align="center">
-  <img src="docs/assets/repl-demo.gif" alt="Axon REPL demo" width="820" />
+  <img src="docs/assets/repl-demo.png" alt="Axon REPL startup" width="820" />
 </div>
 
 ---
@@ -65,11 +65,11 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 <td width="50%" valign="top">
 
 ### 📥 Ingest Everything
-- **54 file formats** — PDF, DOCX, XLSX, PPTX, Jupyter, images, 30+ code formats
+- **54 file formats** — PDF, DOCX, XLSX, PPTX, Jupyter, images, 24 code formats
 - URL ingestion — any public web page
 - SHA-256 dedup skips unchanged files
 - Stale detection for modified sources
-- 5 content-aware chunking strategies
+- 4 content-aware chunking strategies
 
 </td>
 <td width="50%" valign="top">
@@ -97,9 +97,9 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 
 ### 🛡️ Governance & Agents
 - **Governance Console** — full audit trail of every query
-- Graceful maintenance states: `online → draining → readonly → offline`
-- **REST API** — 48 endpoints with Swagger docs at `/docs`
-- **MCP server** — 27 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- Graceful maintenance states: `normal → draining → readonly → offline`
+- **REST API** — 54 endpoints with Swagger docs at `/docs`
+- **MCP server** — 30 tools for Claude Code, Codex, Gemini, Cursor, Copilot
 - **`@axon`** VS Code chat participant with Graph and Governance panels
 
 </td>
@@ -111,32 +111,11 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 ## ⚡ Quick Start
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/jyunming/Axon.git
-cd Axon
-pip install -e .
-
-# 2. Install Ollama (https://ollama.com) then pull a model
-#    (or configure a cloud provider — see docs/MODEL_GUIDE.md)
-ollama pull llama3.1:8b
-
-# 3. Start the REPL
-axon
+pip install -e .   # requires Python 3.10+ and Ollama
+axon               # launches the interactive REPL
 ```
 
-```
-axon> /ingest ./my-docs/
-Ingested 142 chunks from 18 files.
-
-axon> /ingest https://docs.example.com/api
-Fetched and ingested 23 chunks.
-
-axon> How does the authentication flow work?
-The system uses JWT tokens issued at /auth/login...  [source: api-overview.md §3]
-```
-
-> **Windows:** Use [Windows Terminal](https://aka.ms/terminal) and set `$env:PYTHONUTF8=1` before running — this tells Python to read files as UTF-8, which prevents encoding errors on documents with non-ASCII characters.
-> **Full setup (extensions, MCP, cloud providers):** [docs/SETUP.md](docs/SETUP.md)
+**[→ Full installation guide with VS Code, MCP, and cloud provider setup](docs/GETTING_STARTED.md)**
 
 ---
 
@@ -154,7 +133,13 @@ The system uses JWT tokens issued at /auth/login...  [source: api-overview.md §
 ## 🔌 VS Code + GitHub Copilot
 
 <div align="center">
-  <img src="docs/assets/AxonCopilot.gif" alt="Axon Copilot integration" width="800" />
+  <img src="docs/assets/AxonCopilot.gif" alt="Axon Copilot integration" width="400" />
+</div>
+
+<br/>
+
+<div align="center">
+  <img src="docs/assets/vscode-graph-panel.png" alt="Axon VS Code Graph Panel — answer, cited sources, and interactive 3D code graph" width="820" />
 </div>
 
 <br/>
@@ -166,7 +151,7 @@ Extensions panel  →  "..."  →  Install from VSIX...
 →  integrations/vscode-axon/axon-copilot-0.9.0.vsix
 ```
 
-Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 27 tools appear in the agent hammer menu automatically.
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 30 tools appear in the agent hammer menu automatically.
 
 **[Full setup guide →](docs/SETUP.md)**
 
@@ -189,7 +174,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 🔑 | **[Admin Reference](docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
 | ⚡ | **[Quick Reference](docs/QUICKREF.md)** | Commands and flags at a glance |
 | 📡 | **[API Reference](docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
-| 🔌 | **[MCP Tools](docs/MCP_TOOLS.md)** | All 27 MCP tool signatures with parameter defaults |
+| 🔌 | **[MCP Tools](docs/MCP_TOOLS.md)** | All 30 MCP tool signatures with parameter defaults |
 
 **Deep dives**
 

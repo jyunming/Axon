@@ -1,60 +1,171 @@
 """
+
+
 Additional pytest tests for axon/main.py (AxonBrain) targeting missed ingest/query lines.
 
+
 Coverage targets (from the original gap list):
+
+
   841-876   : entity-graph merging from descendant projects
+
+
   881-905   : relation-graph merging from descendant projects
+
+
   910-920   : entity-embeddings merging from descendant projects
+
+
   925-947   : claims-graph merging from descendant projects
+
+
   952-961   : community-summaries merging from descendant projects
+
+
   967-972   : mount-kind project switch
+
+
   977-978   : scope-kind (@) project switch
+
+
   1031-1032 : _save_doc_versions warning on error
+
+
   1070-1071 : _save_embedding_meta dimension fallback
+
+
   1134      : finalize_ingest saves claims graph
+
+
   1137-1138 : finalize_ingest saves code graph
+
+
   1266-1268 : _generate_raptor_summaries node build exception
+
+
   1295      : recursive RAPTOR no next windows -> break
+
+
   1301      : upper-level RAPTOR summary empty -> None
+
+
   1324-1326 : upper-level RAPTOR node build exception
+
+
   1368      : _collect_leaves depth > 5 guard
+
+
   1405-1412 : RAPTOR drilldown fallback when children_ids present but store empty
+
+
   1423-1426 : RAPTOR drilldown legacy no children_ids
+
+
   1429-1430 : RAPTOR drilldown no leaves -> keep summary
+
+
   1433      : RAPTOR drilldown reranker path
+
+
   1448-1450 : RAPTOR drilldown dedup replace higher-scored
+
+
   1548      : _detect_dataset_type manifest lock extension
+
+
   1595-1596 : _detect_dataset_type code ratio 0.15-0.5 -> doc+has_code / >0.5 -> codebase
+
+
   1626      : _get_splitter_for_type paper
+
+
   1628      : _get_splitter_for_type discussion
+
+
   1632      : _get_splitter_for_type doc+has_code
+
+
   1646      : _get_splitter_for_type default fallback
+
+
   1669      : _split_with_parents has_code path
+
+
   1676      : _split_with_parents child_splitter None fallback
+
+
   1734      : ingest has_code annotation in chunked path
+
+
   1742      : ingest splitter=None -> chunked.append(doc)
+
+
   1795-1797 : ingest contextual_retrieval path
+
+
   1895      : GraphRAG source_policy skip
+
+
   1928      : GraphRAG entity-type update branch
+
+
   1951      : GraphRAG entity description update (no existing desc)
+
+
   1961      : GraphRAG entity description update (existing desc absent)
+
+
   1970-1973 : GraphRAG legacy list format entity migration
+
+
   2021-2027 : GraphRAG relation budget cap
+
+
   2053-2054 : GraphRAG legacy tuple relation fallback
+
+
   2057      : GraphRAG empty subject skip
+
+
   2091      : GraphRAG text_unit_ids accumulation
+
+
   2112-2121 : GraphRAG REBEL edge-count logging
+
+
   2134      : GraphRAG relation-target stub with empty target -> skip
+
+
   2136-2143 : GraphRAG relation-target entity stub creation
+
+
   2151-2153 : GraphRAG relation stub chunk_id update
+
+
   2155      : GraphRAG stub added -> save entity graph
+
+
   2187      : GraphRAG canonicalize entities (graph_rag_canonicalize=True)
+
+
   2191      : GraphRAG canonicalize relations
+
+
   2197-2214 : GraphRAG claims extraction path
+
+
   2217-2235 : GraphRAG community rebuild paths (defer=False, async and sync)
+
+
   2288-2293 : code_graph_bridge path
+
+
   2328      : ingest duplicate chunk-ID collision warning
+
+
 """
+
+
 from __future__ import annotations
 
 import json
@@ -64,7 +175,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # ---------------------------------------------------------------------------
+
+
 # Shared helpers (mirrors test_main_extra.py conventions)
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -87,12 +202,15 @@ def _make_config(tmp_path, **kwargs):
         "discussion_fallback": False,
         "similarity_threshold": 0.0,
     }
+
     defaults.update(kwargs)
+
     return AxonConfig(**defaults)
 
 
 def _make_brain(tmp_path, **cfg_kwargs):
     """Construct a fully-mocked AxonBrain."""
+
     from axon.main import AxonBrain
 
     cfg = _make_config(tmp_path, **cfg_kwargs)
@@ -120,57 +238,89 @@ def _make_brain(tmp_path, **cfg_kwargs):
         brain = AxonBrain(cfg)
 
     # Wire up lightweight mocks so ingest() can run without real IO
+
     brain._ingested_hashes = set()
+
     brain._save_hash_store = MagicMock()
+
     brain._save_entity_graph = MagicMock()
+
     brain._save_relation_graph = MagicMock()
+
     brain._save_claims_graph = MagicMock()
+
     brain._save_code_graph = MagicMock()
+
     brain._save_doc_versions = MagicMock()
+
     brain._save_embedding_meta = MagicMock()
+
     brain._extract_entities = MagicMock(return_value=[])
+
     brain._extract_relations = MagicMock(return_value=[])
+
     brain._extract_claims = MagicMock(return_value=[])
+
     brain._embed_entities = MagicMock()
+
     brain._canonicalize_entity_descriptions = MagicMock()
+
     brain._canonicalize_relation_descriptions = MagicMock()
+
     brain._rebuild_communities = MagicMock()
+
     brain._build_code_graph_from_chunks = MagicMock()
+
     brain._build_code_doc_bridge = MagicMock()
+
     brain._assert_write_allowed = MagicMock()
 
     brain.embedding = MagicMock()
+
     brain.embedding.embed.return_value = [[0.1] * 10]
+
     brain.embedding.embed_query.return_value = [0.1] * 10
+
     brain.embedding.dimension = 10
 
     brain.vector_store = MagicMock()
+
     brain.vector_store.search.return_value = []
+
     brain._own_vector_store = brain.vector_store
 
     brain.bm25_retriever = MagicMock()
+
     brain._own_bm25 = None  # disable BM25 add_documents calls
 
     brain.llm = MagicMock()
+
     brain.llm.complete.return_value = "summary text"
 
     brain.reranker = None
 
     # Set the splitter to None so ingest() skips the type-detection path
+
     # unless a test specifically sets it.
+
     brain.splitter = None
 
     # Provide a simple synchronous executor mock to avoid thread leaks on Windows
+
     class SyncExecutor:
         def submit(self, fn, *args, **kwargs):
             from concurrent.futures import Future
 
             f = Future()
+
             try:
                 result = fn(*args, **kwargs)
+
                 f.set_result(result)
+
             except Exception as e:
                 f.set_exception(e)
+
             return f
 
         def map(self, fn, *iterables):
@@ -193,7 +343,9 @@ def _make_brain(tmp_path, **cfg_kwargs):
 @pytest.fixture
 def brain(tmp_path):
     b = _make_brain(tmp_path)
+
     yield b
+
     b.close()
 
 
@@ -202,7 +354,9 @@ def _simple_doc(doc_id="doc1", text="hello world", source="test.txt"):
 
 
 # ===========================================================================
+
 # 1. Ingest basic paths — no splitter, no flags
+
 # ===========================================================================
 
 
@@ -268,12 +422,9 @@ class TestIngestBasic:
 # ===========================================================================
 # 2. _save_doc_versions error branch (line 1031-1032)
 # ===========================================================================
-
-
 class TestSaveDocVersions:
     def test_save_doc_versions_logs_on_error(self, brain, tmp_path, caplog):
         """_save_doc_versions writes a warning when an OS error occurs (line 1031-1032)."""
-
         brain._save_doc_versions = MagicMock(side_effect=OSError("disk full"))
         # Call directly — should not raise
         try:
@@ -303,8 +454,6 @@ class TestSaveDocVersions:
 # ===========================================================================
 # 3. _save_embedding_meta dimension fallback (line 1070-1071)
 # ===========================================================================
-
-
 class TestSaveEmbeddingMeta:
     def test_dimension_fallback_on_invalid(self, tmp_path):
         """When embedding.dimension is not int-castable, dimension defaults to 0."""
@@ -326,8 +475,6 @@ class TestSaveEmbeddingMeta:
 # ===========================================================================
 # 4. finalize_ingest paths (lines 1133-1138)
 # ===========================================================================
-
-
 class TestFinalizeIngest:
     def test_finalize_ingest_batch_mode_saves_claims_and_code(self, brain):
         """finalize_ingest with batch_mode saves claims graph and code graph."""
@@ -336,9 +483,7 @@ class TestFinalizeIngest:
         brain._claims_graph = {"chunk1": [{"subject": "a", "object": "b", "type": "x"}]}
         brain._code_graph = {"nodes": {"fn1": {}}}
         brain.finalize_graph = MagicMock()
-
         brain.finalize_ingest()
-
         brain._save_claims_graph.assert_called()
         brain._save_code_graph.assert_called()
         brain.finalize_graph.assert_called()
@@ -363,12 +508,12 @@ class TestFinalizeIngest:
 # ===========================================================================
 # 5. RAPTOR summary generation (lines 1266-1268, 1295, 1301, 1324-1326)
 # ===========================================================================
-
-
 class TestRaptorSummaries:
     def _make_raptor_brain(self, tmp_path):
         b = _make_brain(tmp_path, raptor=True, raptor_chunk_group_size=2)
+
         b._extract_entities = MagicMock(return_value=[])
+
         return b
 
     def test_raptor_summaries_generated_on_ingest(self, tmp_path):
@@ -460,17 +605,17 @@ class TestRaptorSummaries:
         assert brain.llm.complete.call_count == first_llm_calls
         brain.close()
 
-    def test_raptor_max_source_size_skips_large_source(self, tmp_path):
-        """RAPTOR skips sources whose estimated text size exceeds raptor_max_source_size_mb."""
+    def test_raptor_min_source_size_skips_small_source(self, tmp_path):
+        """RAPTOR skips sources whose estimated text size is below raptor_min_source_size_mb."""
         brain = _make_brain(
-            tmp_path, raptor=True, raptor_chunk_group_size=2, raptor_max_source_size_mb=0.0001
+            tmp_path, raptor=True, raptor_chunk_group_size=2, raptor_min_source_size_mb=0.001
         )
         brain.llm.complete.return_value = "summary"
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
-        # Huge doc that exceeds 0.0001 MB (102 bytes)
+        # Source totals ~400 bytes, below the 0.001 MB (1024 bytes) threshold — RAPTOR skips it
         docs = [
-            {"id": "big1", "text": "x" * 200, "metadata": {"source": "big.txt"}},
-            {"id": "big2", "text": "y" * 200, "metadata": {"source": "big.txt"}},
+            {"id": "small1", "text": "x" * 200, "metadata": {"source": "small.txt"}},
+            {"id": "small2", "text": "y" * 200, "metadata": {"source": "small.txt"}},
         ]
         brain.ingest(docs)
         ids_stored = brain.vector_store.add.call_args[0][0]
@@ -482,8 +627,6 @@ class TestRaptorSummaries:
 # ===========================================================================
 # 6. RAPTOR drilldown paths (lines 1368, 1405-1412, 1423-1426, 1429-1430, 1433, 1448-1450)
 # ===========================================================================
-
-
 class TestRaptorDrilldown:
     def _make_drilldown_brain(self, tmp_path, **kw):
         return _make_brain(tmp_path, raptor=True, **kw)
@@ -495,8 +638,10 @@ class TestRaptorDrilldown:
             "window_start": 0,
             "window_end": 1,
         }
+
         if children_ids is not None:
             meta["children_ids"] = children_ids
+
         return {"id": rid, "text": "summary", "score": score, "metadata": meta}
 
     def test_drilldown_depth_guard_returns_empty(self, tmp_path):
@@ -611,8 +756,6 @@ class TestRaptorDrilldown:
 # ===========================================================================
 # 7. _detect_dataset_type paths (lines 1548, 1595-1596)
 # ===========================================================================
-
-
 class TestDetectDatasetType:
     def test_lock_extension_returns_manifest(self, brain):
         doc = {"id": "lock1", "text": "content", "metadata": {"source": "packages.lock"}}
@@ -699,8 +842,6 @@ class TestDetectDatasetType:
 # ===========================================================================
 # 8. _get_splitter_for_type paths (lines 1626, 1628, 1632, 1646)
 # ===========================================================================
-
-
 class TestGetSplitterForType:
     def test_paper_returns_semantic_splitter(self, brain):
         from axon.splitters import SemanticTextSplitter
@@ -750,8 +891,6 @@ class TestGetSplitterForType:
 # ===========================================================================
 # 9. _split_with_parents paths (lines 1669, 1676)
 # ===========================================================================
-
-
 class TestSplitWithParents:
     def test_split_with_parents_annotates_has_code(self, brain):
         """has_code path sets metadata['has_code'] = True (line 1669)."""
@@ -782,8 +921,6 @@ class TestSplitWithParents:
 # ===========================================================================
 # 10. Ingest type-detection + has_code annotation (lines 1734, 1742)
 # ===========================================================================
-
-
 class TestIngestTypePaths:
     def test_ingest_annotates_has_code_in_chunked_path(self, tmp_path):
         """When splitter is set and has_code=True, metadata is annotated (line 1734)."""
@@ -815,8 +952,6 @@ class TestIngestTypePaths:
 # ===========================================================================
 # 11. Contextual retrieval path during ingest (lines 1795-1797)
 # ===========================================================================
-
-
 class TestContextualRetrieval:
     def test_contextual_retrieval_prepends_context(self, tmp_path):
         brain = _make_brain(tmp_path, contextual_retrieval=True)
@@ -834,13 +969,14 @@ class TestContextualRetrieval:
 # ===========================================================================
 # 12. GraphRAG entity extraction paths (lines 1895, 1928, 1951, 1961, 1970-1973)
 # ===========================================================================
-
-
 class TestGraphRagEntityExtraction:
     def _graph_brain(self, tmp_path, **kw):
         defaults = {"graph_rag": True, "graph_rag_relations": False}
+
         defaults.update(kw)
+
         b = _make_brain(tmp_path, **defaults)
+
         return b
 
     def test_graphrag_new_entity_added_to_graph(self, tmp_path):
@@ -944,8 +1080,6 @@ class TestGraphRagEntityExtraction:
 # ===========================================================================
 # 13. GraphRAG relation extraction paths (lines 2021-2027, 2053-2054, 2057, 2091)
 # ===========================================================================
-
-
 class TestGraphRagRelations:
     def _rel_brain(self, tmp_path, **kw):
         defaults = {
@@ -953,8 +1087,11 @@ class TestGraphRagRelations:
             "graph_rag_relations": True,
             "graph_rag_min_entities_for_relations": 0,
         }
+
         defaults.update(kw)
+
         b = _make_brain(tmp_path, **defaults)
+
         return b
 
     def test_relation_triple_dict_stored(self, tmp_path):
@@ -1109,8 +1246,6 @@ class TestGraphRagRelations:
 # ===========================================================================
 # 14. GraphRAG claims + canonicalize paths (lines 2187, 2191, 2197-2214)
 # ===========================================================================
-
-
 class TestGraphRagClaims:
     def test_claims_extracted_and_stored(self, tmp_path):
         brain = _make_brain(
@@ -1185,8 +1320,6 @@ class TestGraphRagClaims:
 # ===========================================================================
 # 15. GraphRAG community rebuild paths (lines 2217-2235)
 # ===========================================================================
-
-
 class TestGraphRagCommunityRebuild:
     def test_community_rebuild_deferred_by_default(self, tmp_path):
         """graph_rag_community_defer=True (default) skips immediate rebuild."""
@@ -1240,24 +1373,31 @@ class TestGraphRagCommunityRebuild:
             return_value=[{"name": "AsyncNode", "type": "T", "description": ""}]
         )
         brain.embedding.embed.side_effect = lambda texts: [[0.1] * 10] * len(texts)
-
         submitted_fns = []
         real_executor = ThreadPoolExecutor(max_workers=1)
 
         def tracking_submit(fn, *args, **kwargs):
             submitted_fns.append(fn)
+
             return real_executor.submit(fn, *args, **kwargs)
 
         brain._executor.submit = tracking_submit
+
         brain.ingest([_simple_doc("d1", "async community entity")])
+
         # Wait briefly for any submitted futures to complete
+
         real_executor.shutdown(wait=True)
+
         assert len(submitted_fns) >= 1
+
         brain.close()
 
 
 # ===========================================================================
+
 # 16. Code graph paths during ingest (lines 2280-2297)
+
 # ===========================================================================
 
 
@@ -1324,18 +1464,19 @@ class TestCodeGraphIngest:
 # ===========================================================================
 # 17. Descendant project graph-merging paths (lines 841-961)
 # ===========================================================================
-
-
 class TestDescendantGraphMerge:
+
     """Tests for switch_project's graph-merging logic from descendant projects."""
 
     def _setup_desc_files(
         self, desc_bm25_dir, entity=True, relation=True, emb=True, claims=True, summaries=True
     ):
         """Write fake JSON graph files into a descendant bm25 directory."""
+
         import pathlib
 
         base = pathlib.Path(desc_bm25_dir)
+
         base.mkdir(parents=True, exist_ok=True)
 
         if entity:
@@ -1348,22 +1489,27 @@ class TestDescendantGraphMerge:
                     "degree": 1,
                 }
             }
+
             (base / ".entity_graph.json").write_text(json.dumps(entity_data), encoding="utf-8")
 
         if relation:
             rel_data = {"alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}]}
+
             (base / ".relation_graph.json").write_text(json.dumps(rel_data), encoding="utf-8")
 
         if emb:
             emb_data = {"alice": [0.1, 0.2, 0.3]}
+
             (base / ".entity_embeddings.json").write_text(json.dumps(emb_data), encoding="utf-8")
 
         if claims:
             claims_data = {"c1": [{"subject": "a", "object": "b", "type": "t"}]}
+
             (base / ".claims_graph.json").write_text(json.dumps(claims_data), encoding="utf-8")
 
         if summaries:
             summ_data = {"comm_0": {"summary": "community summary", "level": 1}}
+
             (base / ".community_summaries.json").write_text(json.dumps(summ_data), encoding="utf-8")
 
     def test_entity_graph_merged_from_descendant(self, tmp_path):
@@ -1372,7 +1518,6 @@ class TestDescendantGraphMerge:
         desc_dir = tmp_path / "desc_bm25"
         self._setup_desc_files(str(desc_dir))
         # Simulate the inner logic of switch_project with descendants
-
         desc_graph_path = desc_dir / ".entity_graph.json"
         raw = json.loads(desc_graph_path.read_text(encoding="utf-8"))
         for entity, node in raw.items():
@@ -1407,7 +1552,6 @@ class TestDescendantGraphMerge:
         }
         desc_dir = tmp_path / "desc2"
         self._setup_desc_files(str(desc_dir))
-
         raw = json.loads((desc_dir / ".entity_graph.json").read_text(encoding="utf-8"))
         for entity, node in raw.items():
             if not isinstance(entity, str) or not isinstance(node, dict):
@@ -1511,8 +1655,6 @@ class TestDescendantGraphMerge:
 # ===========================================================================
 # 18. _raptor_group_by_structure (heading-based grouping)
 # ===========================================================================
-
-
 class TestRaptorGroupByStructure:
     def test_no_headings_falls_back_to_fixed_windows(self, brain):
         chunks = [{"id": f"c{i}", "text": f"plain text {i}", "metadata": {}} for i in range(6)]
@@ -1544,8 +1686,6 @@ class TestRaptorGroupByStructure:
 # ===========================================================================
 # 19. _validate_embedding_meta paths
 # ===========================================================================
-
-
 class TestValidateEmbeddingMeta:
     def test_no_meta_returns_silently(self, brain, tmp_path):
         """No persisted embedding meta → validation is a no-op."""
@@ -1591,8 +1731,6 @@ class TestValidateEmbeddingMeta:
 # ===========================================================================
 # 20. _apply_artifact_ranking paths
 # ===========================================================================
-
-
 class TestApplyArtifactRanking:
     def test_tree_traversal_boosts_leaf(self, brain):
         brain.config.raptor_retrieval_mode = "tree_traversal"
@@ -1625,8 +1763,6 @@ class TestApplyArtifactRanking:
 # ===========================================================================
 # 21. get_doc_versions and _load_doc_versions
 # ===========================================================================
-
-
 class TestDocVersions:
     def test_get_doc_versions_returns_copy(self, brain):
         brain._doc_versions = {"a.txt": {"chunk_count": 2}}
@@ -1676,8 +1812,6 @@ class TestDocVersions:
 # ===========================================================================
 # 22. Parent-chunk storage (parent_chunk_size > 0 path)
 # ===========================================================================
-
-
 class TestParentChunkIngest:
     def test_ingest_with_parent_chunk_size(self, tmp_path):
         """parent_chunk_size > 0 triggers _split_with_parents."""
@@ -1713,8 +1847,6 @@ class TestParentChunkIngest:
 # ===========================================================================
 # 23. Project switch kind detection (lines 967-978)
 # ===========================================================================
-
-
 class TestProjectSwitchKinds:
     def test_mount_kind_set_on_mounts_prefix(self, tmp_path):
         """switch_project('mounts/myfs') sets _active_project_kind='mounted' (line 967-972)."""
@@ -1762,8 +1894,6 @@ class TestProjectSwitchKinds:
 # ===========================================================================
 # 24. Ingest diagnostics: source IDs logged
 # ===========================================================================
-
-
 class TestIngestDiagnostics:
     def test_source_id_in_metadata_logged(self, brain, caplog):
         import logging
@@ -1791,8 +1921,6 @@ class TestIngestDiagnostics:
 # ===========================================================================
 # 25. Additional RAPTOR drilldown: _collect_leaves recursion depth guard
 # ===========================================================================
-
-
 class TestCollectLeavesDepthGuard:
     def test_collect_leaves_returns_empty_at_depth_6(self, brain):
         """_collect_leaves returns [] when depth exceeds 5."""

@@ -31,6 +31,14 @@ def test_vscode_extension_manifest_exposes_graph_commands_and_tool():
 
 
 def test_vscode_extension_activation_and_graph_panel_smoke(make_brain, live_api_server, tmp_path):
+    import shutil
+
+    if not shutil.which("node"):
+        pytest.skip("Node.js not available")
+    ext_js = Path("integrations/vscode-axon/out/extension.js")
+    if not ext_js.exists():
+        pytest.skip("Extension not built — run: cd integrations/vscode-axon && npm run compile")
+
     brain = make_brain(graph_rag=True, code_graph=True)
 
     graph_doc = tmp_path / "graph_note.txt"

@@ -267,7 +267,7 @@ Use `show_graph` when the user asks to "show the graph", "visualise", or "see co
 
 ---
 
-## MCP Tool Names (27 total — agent mode)
+## MCP Tool Names (30 total — agent mode)
 
 When using Copilot in **agent mode** with the Axon MCP server, use these
 tool names (they differ deliberately from the OpenAI-format `tools.py` names):

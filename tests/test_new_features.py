@@ -6,6 +6,7 @@ Covers _KNOWN_DIMS, dataset type detection, doc versions, hybrid_mode=rrf,
 and health endpoint behaviour.
 """
 
+import importlib
 import threading
 import time
 from types import SimpleNamespace
@@ -1045,6 +1046,7 @@ class TestClassifyRetrievalFailure:
         assert "right_file_wrong_block" in labels2
 
 
+@pytest.mark.skipif(importlib.util.find_spec("gliner") is None, reason="gliner not installed")
 class TestGLiNERConfigModel:
     """Fix 1 — _ensure_gliner respects graph_rag_gliner_model from config."""
 
@@ -1105,6 +1107,7 @@ class TestREBELZeroEdgeWarning:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(importlib.util.find_spec("gliner") is None, reason="gliner not installed")
 def test_gliner_local_files_only_when_local_path(tmp_path):
     """_ensure_gliner passes local_files_only=True when model path is absolute."""
     from axon.main import AxonBrain
@@ -1193,6 +1196,7 @@ def test_extract_relations_rebel_decodes_generated_token_ids_like_tensor(tmp_pat
     assert rels[0]["relation"] == "competes with"
 
 
+@pytest.mark.skipif(importlib.util.find_spec("gliner") is None, reason="gliner not installed")
 def test_gliner_shared_cache_loads_once_across_threads():
     """Concurrent _ensure_gliner calls should load a shared model only once."""
     from axon.main import AxonBrain
@@ -1236,6 +1240,7 @@ def test_gliner_shared_cache_loads_once_across_threads():
     assert all(result is sentinel for result in results)
 
 
+@pytest.mark.skipif(importlib.util.find_spec("llmlingua") is None, reason="llmlingua not installed")
 def test_llmlingua_uses_config_model(tmp_path):
     """_ensure_llmlingua reads graph_rag_llmlingua_model from config."""
     from axon.main import AxonBrain

@@ -69,14 +69,14 @@ Aggregated operator status. No query parameters.
 
 Query the audit log. All parameters are optional.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `project` | string | Filter by project name |
-| `action` | string | Filter by action (see schema below) |
-| `surface` | string | Filter by surface (`api`, `repl`, `vscode`, …) |
-| `status` | string | Filter by status (`completed`, `failed`, `started`) |
-| `since` | ISO-8601 string | Return events at or after this timestamp |
-| `limit` | int (1–1000) | Max events to return (default 50) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | — | Filter by project name |
+| `action` | string | — | Filter by action (see schema below) |
+| `surface` | string | — | Filter by surface (`api`, `repl`, `vscode`, …) |
+| `status` | string | — | Filter by status (`completed`, `failed`, `started`) |
+| `since` | ISO-8601 string | — | Return events at or after this timestamp |
+| `limit` | int (1–1000) | `50` | Max events to return |
 
 **Response 200**
 ```json
@@ -202,10 +202,10 @@ Audited wrapper for graph community rebuild. Emits `graph_finalize` events befor
 
 Audited wrapper for maintenance state transitions.
 
-| Query param | Required | Description |
-|-------------|----------|-------------|
-| `name` | yes | Project name |
-| `state` | yes | `normal`, `readonly`, `draining`, or `offline` |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | — *(required)* | Project name |
+| `state` | string | — *(required)* | `normal`, `readonly`, `draining`, or `offline` |
 
 **Response 200**
 ```json

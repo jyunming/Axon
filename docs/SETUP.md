@@ -36,7 +36,6 @@ Before starting, ensure you have:
 | **RAM** | 16 GB minimum | 32 GB recommended |
 
 > **GPU (optional):** A CUDA-compatible GPU significantly speeds up inference. Ollama automatically uses the GPU if available. CPU-only works but is slower.
-
 > **Windows:** Use [Windows Terminal](https://aka.ms/terminal) for best results. Add `$env:PYTHONUTF8=1` to your PowerShell profile (or run it before starting Axon) to avoid encoding errors when reading documents that contain non-ASCII characters:
 > ```powershell
 > # Add to $PROFILE to make permanent
@@ -58,10 +57,8 @@ Create and activate a Python virtual environment:
 
 ```bash
 python -m venv venv
-
 # Linux / macOS
 source venv/bin/activate
-
 # Windows
 venv\Scripts\activate
 ```
@@ -69,18 +66,14 @@ venv\Scripts\activate
 Install the package. Choose the option that matches your needs:
 
 ```bash
-# Minimal install (sentence-transformers + ChromaDB + Ollama LLM)
+# Minimal install (sentence-transformers + LanceDB + Ollama LLM)
 pip install -e .
-
 # With development tools (tests, linting, type checking)
 pip install -e ".[dev]"
-
 # With FastEmbed embedding support
 pip install -e ".[fastembed]"
-
 # With Qdrant vector store
 pip install -e ".[qdrant]"
-
 # Everything (all optional features + dev tools)
 pip install -e ".[all]"
 ```
@@ -326,7 +319,6 @@ Uses Ollama to serve embedding models locally. Better quality than `all-MiniLM-L
 ```bash
 # Recommended: nomic-embed-text (137M params, 768-dim, 8192 token context)
 ollama pull nomic-embed-text
-
 # Alternative: larger, stronger (335M params, 1024-dim)
 ollama pull mxbai-embed-large
 ```
@@ -442,24 +434,34 @@ To ingest image files, pull the LLaVA vision model first (requires ~5 GB disk an
 ollama pull llava
 ```
 
-No config change needed. When Axon encounters a supported image file (`.png`, `.bmp`, `.tif`, `.tiff`, `.pgm`) during ingest, it sends it to LLaVA for a text caption and indexes that caption.
+No config change needed. When Axon encounters a supported image file (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`, `.pgm`) during ingest, it sends it to LLaVA for a text caption and indexes that caption.
 
 ---
 
 ## 7. Configure config.yaml
 
 Axon auto-creates `~/.config/axon/config.yaml` on first run with sensible defaults.
-Edit that file to customise behaviour, or pass `--config /path/to/your.yaml` to use a different file.
 
-> **Data storage:** Your knowledge base always uses the AxonStore structure at `~/.axon/AxonStore/<username>/` by default. To move it to a shared drive or different disk, set `store.base` in `config.yaml` or the `AXON_STORE_BASE` env var — see [AXON_STORE.md](AXON_STORE.md).
+**Quickest option — interactive wizard:**
+
+```bash
+axon --setup
+```
+
+The wizard walks you through provider, model, embedding, and RAG flag selection with
+validated inputs and sensible defaults. No manual YAML editing required. You can also
+run it at any time from inside the REPL with `/config wizard`.
+
+To edit the file directly instead:
 
 ```bash
 # Linux / macOS
 $EDITOR ~/.config/axon/config.yaml
-
 # Windows (PowerShell)
 notepad $env:USERPROFILE\.config\axon\config.yaml
 ```
+
+> **Data storage:** Your knowledge base always uses the AxonStore structure at `~/.axon/AxonStore/<username>/` by default. To move it to a shared drive or different disk, set `store.base` in `config.yaml` or the `AXON_STORE_BASE` env var — see [AXON_STORE.md](AXON_STORE.md).
 
 Here are complete configurations for each tier:
 
@@ -468,26 +470,21 @@ Here are complete configurations for each tier:
 embedding:
   provider: sentence_transformers
   model: all-MiniLM-L6-v2
-
 llm:
   provider: ollama
   model: phi3:mini
   base_url: http://localhost:11434
   temperature: 0.7
   max_tokens: 2048
-
 vector_store:
-  provider: chroma   # path derived automatically from store.base
-
+  provider: lancedb   # path derived automatically from store.base
 rag:
   top_k: 10
   similarity_threshold: 0.3
   hybrid_search: true
-
 chunk:
   size: 1000
   overlap: 200
-
 rerank:
   enabled: false
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
@@ -498,26 +495,21 @@ rerank:
 embedding:
   provider: sentence_transformers
   model: all-MiniLM-L6-v2
-
 llm:
   provider: ollama
   model: llama3.1:8b
   base_url: http://localhost:11434
   temperature: 0.7
   max_tokens: 2048
-
 vector_store:
-  provider: chroma   # path derived automatically from store.base
-
+  provider: lancedb   # path derived automatically from store.base
 rag:
   top_k: 10
   similarity_threshold: 0.3
   hybrid_search: true
-
 chunk:
   size: 1000
   overlap: 200
-
 rerank:
   enabled: false
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
@@ -532,26 +524,21 @@ embedding:
   model: nomic-embed-text
   # Ollama endpoint is shared with the LLM — set base_url under llm: below,
   # or set the OLLAMA_HOST env var to override globally.
-
 llm:
   provider: ollama
   model: qwen2.5:7b
   base_url: http://localhost:11434
   temperature: 0.7
   max_tokens: 2048
-
 vector_store:
   provider: qdrant   # path derived automatically from store.base
-
 rag:
   top_k: 10
   similarity_threshold: 0.4
   hybrid_search: true
-
 chunk:
   size: 1000
   overlap: 200
-
 rerank:
   enabled: true
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
@@ -572,34 +559,26 @@ Edit `.env`:
 ```bash
 # Ollama server location (default: localhost)
 OLLAMA_HOST=http://localhost:11434
-
 # Default LLM model name (must match what you pulled)
 OLLAMA_MODEL=llama3.1
-
 # Default embedding model for Ollama provider (if using ollama embeddings)
 OLLAMA_EMBED_MODEL=nomic-embed-text
-
 # API server settings
 # Bind to localhost by default for local setups. For Docker/Compose deployments, set AXON_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
 AXON_HOST=127.0.0.1
 AXON_PORT=8000
-
-# Where ChromaDB stores its data
+# Vector store storage (Chroma-only — ignored for LanceDB and other providers)
+# Where ChromaDB stores its data when `vector_store.provider: chroma`
 CHROMA_DATA_PATH=./chroma_data
-
 # Where BM25 index is stored
 BM25_INDEX_PATH=./bm25_index
-
 # Custom root directory for named projects (optional)
 # Defaults to ~/.axon/projects — useful for shared drives or multiple workspaces
 # AXON_PROJECTS_ROOT=/mnt/nas/axon-projects
-
 # Log verbosity: DEBUG, INFO, WARNING, ERROR
 LOG_LEVEL=INFO
-
 # Security: restrict file ingestion to this directory
 # RAG_INGEST_BASE=/home/user/documents
-
 # Streamlit UI port
 STREAMLIT_SERVER_PORT=8501
 STREAMLIT_SERVER_ADDRESS=0.0.0.0
@@ -645,7 +624,6 @@ Create a test file:
 ```bash
 # Linux / macOS
 echo "The capital of France is Paris. Paris is known for the Eiffel Tower." > ./test_doc.txt
-
 # Windows (PowerShell)
 "The capital of France is Paris. Paris is known for the Eiffel Tower." | Out-File -FilePath .\test_doc.txt -Encoding utf8
 ```
@@ -698,6 +676,8 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 | **OpenAI Codex CLI** | `~/.codex/config.toml` | TOML format — differs from the JSON-based clients |
 | **Google Gemini CLI** | `~/.gemini/settings.json` | Same `mcpServers` JSON shape as Claude Code |
 | **Cursor** | `.cursor/mcp.json` | Same `mcpServers` JSON shape as Claude Code |
+| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Same `mcpServers` JSON shape as Claude Code |
+| **OpenAI Codex Desktop** | Settings → MCP Servers | Add `axon-mcp` as a new stdio connector |
 | **Any other MCP stdio host** | varies | Use `command: axon-mcp` |
 
 The two env vars are the same for every client:
@@ -802,7 +782,6 @@ Codex uses TOML format. Add a block to `~/.codex/config.toml`:
 [mcp_servers.axon]
 command = "axon-mcp"
 args = []
-
 [mcp_servers.axon.env]
 RAG_API_BASE = "http://localhost:8000"
 ```
@@ -836,6 +815,38 @@ Start `axon-api`, then start Gemini CLI. Axon tools are available immediately in
 
 ---
 
+### Claude Desktop
+
+Edit (or create) `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, or `%APPDATA%\Claude\claude_desktop_config.json` on Windows:
+
+```json
+{
+  "mcpServers": {
+    "axon": {
+      "command": "axon-mcp",
+      "env": {
+        "RAG_API_BASE": "http://localhost:8000"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop. Axon tools appear in the tool picker automatically.
+
+---
+
+### OpenAI Codex Desktop
+
+Open Codex Desktop → Settings → MCP Servers → Add new → choose **stdio** transport:
+
+- **Command:** `axon-mcp`
+- **Environment:** `RAG_API_BASE=http://localhost:8000` (add `RAG_API_KEY=<your-key>` if you set one in config.yaml)
+
+Save and restart. All Axon tools will be listed in the agent tool picker.
+
+---
+
 ### Any other MCP stdio host
 
 Any tool that accepts `command` + `env` works with the same pattern. If `axon-mcp` is not on PATH, use the full path to the binary (see platform notes above) or fall back to:
@@ -859,7 +870,7 @@ Expected: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}
 
 ### Available MCP tools
 
-For the full list of all 27 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
+For the full list of all 30 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
 
 > **Tip:** use `search_knowledge` (not `query_knowledge`) in agent mode — the agent's own LLM synthesises the answer from raw chunks, so no Ollama is required.
 
@@ -1066,10 +1077,8 @@ rag:
 ```bash
 # Knowledge graph (prose documents)
 axon --ingest ./docs/ --graph-rag
-
 # Code graph (source code) — set code_graph: true in config.yaml first
 axon --ingest ./src/
-
 # Both at once — set code_graph: true in config.yaml, then:
 axon --ingest ./project/ --graph-rag
 ```
@@ -1079,7 +1088,6 @@ axon --ingest ./project/ --graph-rag
 ```
 Ctrl+Shift+P → Axon: Show Graph for Query…
 Ctrl+Shift+P → Axon: Show Graph for Selection   (select text first)
-
 Copilot Chat:
   @axon show me the graph for how retrieval works
   @axon visualise the authentication module
