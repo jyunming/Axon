@@ -582,7 +582,7 @@
 
 
 
-            "topK": {
+            "top_k": {
 
 
 
@@ -5734,7 +5734,7 @@
 
 
 
-        "name": "config_validate",
+        "name": "axonConfigValidate",
 
 
 
@@ -5846,7 +5846,7 @@
 
 
 
-        "name": "config_set",
+        "name": "axonConfigSet",
 
 
 

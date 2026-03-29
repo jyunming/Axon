@@ -40,7 +40,7 @@ export class AxonSearchTool implements vscode.LanguageModelTool<any> {
 
     const apiKey = config.get<string>('apiKey', '');
 
-    const { query, topK = 5, threshold, filters, project } = options.input;
+    const { query, top_k: topK = 5, threshold, filters, project } = options.input;
 
     try {
 
@@ -88,7 +88,8 @@ export class AxonSearchTool implements vscode.LanguageModelTool<any> {
 
     } catch (err) {
 
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error during Axon search: ${err}`)]);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error during Axon search: ${errorMessage}`)]);
 
     }
 
@@ -160,7 +161,8 @@ export class AxonQueryTool implements vscode.LanguageModelTool<any> {
 
     } catch (err) {
 
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error calling Axon query: ${err}`)]);
+      const message = err instanceof Error ? err.message : String(err);
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Error calling Axon query at ${apiBase}/query: ${message}`)]);
 
     }
 
