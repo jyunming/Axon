@@ -1,6 +1,8 @@
 """Code-aware retrieval: doc bridge, lexical boost, symbol search (CodeRetrievalMixin)."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import logging
 import os
 import re
@@ -381,6 +383,11 @@ def _classify_retrieval_failure(
 
 
 class CodeRetrievalMixin:
+    if TYPE_CHECKING:
+        from axon.config import AxonConfig
+        config: AxonConfig
+        _code_graph: dict[str, Any]
+
     def _build_code_doc_bridge(self, prose_chunks: list[dict]) -> None:
         """Phase 3: add MENTIONED_IN edges from code symbol nodes to prose chunks.
 

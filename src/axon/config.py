@@ -81,7 +81,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
+import yaml  # type: ignore
 
 logger = logging.getLogger("Axon")
 
@@ -1718,6 +1718,8 @@ class AxonConfig:
         if using_default:
             path = str(_USER_CONFIG_PATH)
 
+        assert path is not None
+
         if not os.path.exists(path):
             if using_default:
                 try:
@@ -2207,6 +2209,8 @@ class AxonConfig:
 
         effective_path = path or str(_USER_CONFIG_PATH)
 
+        assert effective_path is not None
+
         # ------------------------------------------------------------------ #
 
         # 0. File existence                                                    #
@@ -2453,6 +2457,8 @@ class AxonConfig:
         # Effective base: env wins, then config, then default
 
         effective_base = env_store_base or config_store_base or str(Path.home() / ".axon")
+
+        assert effective_base is not None
 
         if env_store_base and config_store_base and env_store_base != config_store_base:
             issues.append(
