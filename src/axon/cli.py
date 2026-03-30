@@ -281,8 +281,7 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
         src_col = src_client.get_collection("axon")
 
     except Exception as e:
-        print(f"  Failed to open ChromaDB collection: {err}")
-
+        print(f"  Failed to open ChromaDB collection: {e}")
         return
 
     # Read all documents in batches
@@ -1041,7 +1040,7 @@ def main():
             print(f"\n  '{args.pull}' is ready.\n")
 
         except Exception as e:
-            print(f"\n  Error: Failed to pull '{args.pull}': {err}")
+            print(f"\n  Error: Failed to pull '{args.pull}': {e}")
 
         return
 
@@ -1101,7 +1100,7 @@ def main():
                 print(f"\n  Model '{config.llm_model}' ready.\n")
 
         except Exception as e:
-            logger.warning(f"Could not auto-pull model '{config.llm_model}': {err}")
+            logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
 
     # Animated init display — only when entering interactive REPL
 
@@ -1210,12 +1209,12 @@ def main():
             print(f"  Deleted project '{proj_name}'.")
 
         except ProjectHasChildrenError as e:
-            print(f"  {err}")
+            print(f"  {e}")
 
             sys.exit(1)
 
         except ValueError as e:
-            print(f"  {err}")
+            print(f"  {e}")
 
             sys.exit(1)
 
@@ -1230,7 +1229,7 @@ def main():
             brain.switch_project(proj_name)
 
         except ValueError as e:
-            print(f"  {err}")
+            print(f"  {e}")
 
             sys.exit(1)
 

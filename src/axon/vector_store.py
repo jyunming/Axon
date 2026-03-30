@@ -297,11 +297,43 @@ class OpenVectorStore:
 
             if self.collection is None:
                 self.collection = self.client.create_table(
-                    "axon", data=rows, mode="overwrite", metric="cosine"
+                    "axon",
+                    data=rows,
+                    mode="overwrite",
+                    data_storage_version="stable",
                 )
-
             else:
                 self.collection.add(rows)
+
+            # Merge fragments and purge old versions to keep disk usage clean
+            try:
+                from datetime import timedelta
+
+                self.collection.optimize(
+                    cleanup_older_than=timedelta(seconds=0),
+                    delete_unverified=True,
+                )
+            except Exception:
+                pass
+
+            # Auto-build IVF_PQ index once corpus is large enough (≥1000 vectors)
+            try:
+                count = self.collection.count_rows()
+                if count >= 1000:
+                    num_partitions = min(256, max(8, count // 500))
+                    self.collection.create_index(
+                        metric="cosine",
+                        vector_column_name="vector",
+                        num_partitions=num_partitions,
+                        num_sub_vectors=24,
+                        replace=True,
+                    )
+                    logger.debug(
+                        f"LanceDB: IVF_PQ index built on {count} vectors "
+                        f"(partitions={num_partitions})"
+                    )
+            except Exception as e:
+                logger.debug(f"LanceDB: auto index build skipped — {e}")
 
     def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
@@ -588,13 +620,18 @@ class OpenVectorStore:
                 )
 
             try:
+                num_partitions = min(256, max(8, count // 500))
                 self.collection.create_index(
                     metric="cosine",
                     vector_column_name="vector",
+                    num_partitions=num_partitions,
+                    num_sub_vectors=24,
                     replace=True,
                 )
 
-                return f"LanceDB: IVF_PQ index built on {count} vectors."
+                return (
+                    f"LanceDB: IVF_PQ index built on {count} vectors (partitions={num_partitions})."
+                )
 
             except Exception as e:
                 return f"LanceDB: index creation failed — {e}"
