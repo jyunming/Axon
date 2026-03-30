@@ -185,41 +185,13 @@ async def reset_config():
     """Reset config.yaml to built-in defaults.
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
     Writes the default config template to the user config path and returns the
-
-
-
-
-
 
 
     path that was written.  The running brain is NOT reloaded — restart or call
 
 
-
-
-
-
-
     POST /config/update to apply the new values.
-
-
-
-
-
 
 
     """
@@ -245,41 +217,13 @@ async def set_config_field(request: ConfigSetRequest):
     """Set a single config field using dot-notation (e.g. chunk.strategy).
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
     The dot key is mapped to the flat dataclass attribute name via
-
-
-
-
-
 
 
     ``_DOT_TO_FLAT``.  Pass ``persist: true`` to also save the change to
 
 
-
-
-
-
-
     config.yaml on disk.
-
-
-
-
-
 
 
     """

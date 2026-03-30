@@ -24,75 +24,9 @@ logger = logging.getLogger("Axon")
 def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
     """Print a recursive project tree with active-project marker and metadata.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Uses the already-fetched ``children`` list from list_projects() rather than
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     calling has_children() again, avoiding redundant directory traversals.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 
@@ -121,99 +55,11 @@ def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
 def _write_python_discovery() -> None:
     """Write current Python executable path to ~/.axon/.python_path.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Called once at startup so the VS Code extension can auto-detect the Python
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     interpreter regardless of whether axon was installed via pip, venv, or pipx.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Failures are silently ignored — this is a best-effort helper.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     """
 

@@ -182,7 +182,6 @@ response includes a `diagnostics` object containing `confidence`, `fallback_trig
 
 ## 10. RAPTOR — Hierarchical Clustering Summaries
 
-
 **Flag:** `raptor: true` (also set at ingest time)
 **CLI:** `axon --raptor --ingest ./docs/`
 **REPL:** `/rag raptor`
@@ -461,3 +460,4 @@ verification. This is a web-snippet escalation mechanism, not a verified citatio
 
 Summary: Axon's grounding is retrieval-based and best-effort. If you need validated citation
 accuracy, perform post-generation validation outside of Axon.
+

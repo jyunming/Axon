@@ -117,8 +117,6 @@ class TestContextCompressorNoneStrategy:
 # ---------------------------------------------------------------------------
 # Story 3.2 — Sentence strategy
 # ---------------------------------------------------------------------------
-
-
 class TestSentenceStrategy:
     def test_sentence_compresses_chunk(self):
         llm = _make_llm("short answer")
@@ -202,8 +200,6 @@ class TestSentenceStrategy:
 # ---------------------------------------------------------------------------
 # Story 3.2 — LLMLingua strategy
 # ---------------------------------------------------------------------------
-
-
 class TestLLMLinguaStrategy:
     def _mock_lingua(self, compressed="compressed output"):
         lingua = MagicMock()
@@ -298,8 +294,6 @@ class TestLLMLinguaStrategy:
 # ---------------------------------------------------------------------------
 # Story 3.3 — Compression telemetry
 # ---------------------------------------------------------------------------
-
-
 class TestCompressionTelemetry:
     def test_pre_tokens_positive(self):
         c = ContextCompressor(llm=_make_llm("short"))
@@ -356,8 +350,6 @@ class TestCompressionTelemetry:
 # ---------------------------------------------------------------------------
 # Story 3.3 — Diagnostics plumbing via AxonBrain.query()
 # ---------------------------------------------------------------------------
-
-
 class TestDiagnosticsPlumbing:
     """Verify compression fields appear in CodeRetrievalDiagnostics."""
 
@@ -367,6 +359,7 @@ class TestDiagnosticsPlumbing:
         from axon.main import AxonBrain, AxonConfig
 
         config = AxonConfig(
+            vector_store="chroma",
             vector_store_path=str(tmp_path / "vs"),
             bm25_path=str(tmp_path / "bm25"),
             projects_root=str(tmp_path / "projects"),
@@ -416,7 +409,6 @@ class TestDiagnosticsPlumbing:
     def test_compression_diagnostics_written_after_query(self, tmp_path):
         brain, mock_llm = self._make_brain(tmp_path)
         mock_llm.complete.return_value = "short answer"
-
         results = [
             {
                 "id": "d1",
@@ -428,7 +420,6 @@ class TestDiagnosticsPlumbing:
         ]
         brain.vector_store.search.return_value = results
         brain.bm25.search.return_value = []
-
         brain.query("What is this?")
         diag = brain._last_diagnostics
         # compression_strategy should be set because compress_context=True
