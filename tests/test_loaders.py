@@ -1,5 +1,5 @@
 from __future__ import annotations
-﻿"""
+"""
 
 
 tests/test_loaders.py
