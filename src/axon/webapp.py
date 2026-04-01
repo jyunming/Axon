@@ -8,7 +8,12 @@ from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 
-import streamlit as st
+try:
+    import streamlit as st
+
+    _STREAMLIT_AVAILABLE = True
+except ImportError:
+    _STREAMLIT_AVAILABLE = False
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -1326,8 +1331,15 @@ st.markdown(
 # Entry point
 # ---------------------------------------------------------------------------
 def main_ui():
-    """Entry point for studio-brain-ui command."""
+    """Entry point for the axon-ui command."""
     import subprocess
+
+    if not _STREAMLIT_AVAILABLE:
+        print(
+            "ERROR: streamlit is not installed.\n" "Install it with:  pip install axon-rag[ui]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     app_path = os.path.abspath(__file__)
     subprocess.run(["streamlit", "run", app_path])
