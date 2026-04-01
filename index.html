@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
-    
+
     <style>
         :root {
             --bg-color: #030712;
@@ -149,7 +149,7 @@
             margin-bottom: 16px;
             font-weight: 700;
         }
-        
+
         .section-subtitle {
             text-align: center;
             color: var(--text-muted);
@@ -258,7 +258,7 @@
             box-shadow: 0 30px 60px -15px rgba(0,0,0,0.6);
             transition: transform 0.4s ease;
         }
-        
+
         .showcase-visual img:hover {
             transform: scale(1.02);
             border-color: rgba(96, 165, 250, 0.4);
@@ -292,7 +292,7 @@
             transform: translateY(30px);
             transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
         }
-        
+
         .reveal.active {
             opacity: 1;
             transform: translateY(0);
@@ -310,7 +310,7 @@
 
         .orb-1 { top: -10%; left: -10%; width: 500px; height: 500px; background: rgba(59, 130, 246, 0.2); }
         .orb-2 { bottom: -10%; right: -10%; width: 600px; height: 600px; background: rgba(139, 92, 246, 0.15); animation-delay: -4s; }
-        
+
         @keyframes pulse {
             0% { transform: scale(1); opacity: 0.3; }
             100% { transform: scale(1.2); opacity: 0.5; }
@@ -323,7 +323,7 @@
             margin: 0; /* Gives that scrolling effect as the typing happens */
             border-right: .15em solid #60a5fa; /* The typwriter cursor */
             color: #10b981;
-            animation: 
+            animation:
               typing 3s steps(40, end),
               blink-caret .75s step-end infinite;
         }
@@ -385,9 +385,9 @@
             border-color: rgba(96, 165, 250, 0.8);
             box-shadow: 0 12px 24px rgba(0,0,0,0.5);
         }
-        
+
         /* Center - Private Project */
-        .proj-private { 
+        .proj-private {
             max-width: 360px;
             background: linear-gradient(135deg, rgba(30, 58, 138, 0.95), rgba(15, 23, 42, 0.95));
             border-color: rgba(96, 165, 250, 0.6);
@@ -395,15 +395,15 @@
         }
 
         /* Left - Mounted In */
-        .proj-mounted { 
-            background: linear-gradient(135deg, rgba(76, 29, 149, 0.8), rgba(15, 23, 42, 0.9)); 
+        .proj-mounted {
+            background: linear-gradient(135deg, rgba(76, 29, 149, 0.8), rgba(15, 23, 42, 0.9));
             border-color: rgba(139, 92, 246, 0.4);
         }
         .proj-mounted:hover { border-color: rgba(167, 139, 250, 0.8); }
 
         /* Right - Shared Out */
-        .proj-shared { 
-            background: linear-gradient(135deg, rgba(131, 24, 67, 0.8), rgba(15, 23, 42, 0.9)); 
+        .proj-shared {
+            background: linear-gradient(135deg, rgba(131, 24, 67, 0.8), rgba(15, 23, 42, 0.9));
             border-color: rgba(236, 72, 153, 0.4);
         }
         .proj-shared:hover { border-color: rgba(244, 114, 182, 0.8); }
@@ -421,7 +421,7 @@
             background: rgba(255,255,255,0.3);
             transition: background 0.3s, transform 0.3s;
         }
-        .iso-box:hover .iso-node { 
+        .iso-box:hover .iso-node {
             background: rgba(255,255,255,0.9);
             transform: scale(1.2);
         }
@@ -457,10 +457,10 @@
 
     <!-- Hero Section -->
     <header class="container">
-        <div class="pill reveal active">Axon RAG Engine v0.9.0</div>
+        <div class="pill reveal active">Axon RAG Engine v0.1.0</div>
         <h1 class="reveal active">Your documents, answerable.<br>On your hardware.</h1>
         <p class="hero-subtitle reveal active">Drop in PDFs, code, spreadsheets, or URLs. Ask anything, get cited answers from a local LLM. Nothing leaves your machine.</p>
-        
+
         <div class="terminal-window reveal active" style="transition-delay: 0.2s;">
             <div class="terminal-header">
                 <div class="dot red"></div>
@@ -484,7 +484,7 @@
                 <h3>Graph Intelligence</h3>
                 <p>RAPTOR hierarchies, GraphRAG entity mapping, and rich AST Code Graphs.</p>
             </div>
-            
+
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-secondary">📥</div>
                 <h3>Ingest Everything</h3>
@@ -520,7 +520,7 @@
     <!-- Visual Showcases -->
     <section class="showcase container">
         <h2 class="section-title reveal" style="margin-bottom: 80px;">See it in Action</h2>
-        
+
         <!-- Showcase 1: REPL -->
         <div class="showcase-row reveal">
             <div class="showcase-content">
@@ -577,7 +577,7 @@
             <div class="showcase-visual isolation-graphic">
                 <div class="showcase-glow"></div>
                 <div class="iso-container">
-                    
+
                     <!-- Left: Mounted Project -->
                     <div class="iso-box proj-mounted">
                         <span style="font-size: 1rem; display: block; margin-bottom: 4px; color: #fff;">📥 Mounted Project</span>
@@ -586,7 +586,7 @@
                             <div class="iso-node"></div><div class="iso-node"></div>
                         </div>
                     </div>
-                    
+
                     <!-- Arrow Mounts -->
                     <div class="iso-arrow-container" style="flex-direction: row;">
                         <span class="iso-label" style="color: #a78bfa;">@mounts</span>
@@ -639,7 +639,7 @@
                 </svg>
                 View Axon on GitHub
             </a>
-            
+
             <div style="width: 100%; display: flex; justify-content: center;">
                 <div style="font-family: monospace; background: #0f172a; border: 1px solid var(--glass-border); padding: 16px 32px; border-radius: 8px; display: inline-block; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5);">
                     <span style="color: #60a5fa;">$</span> pip install -e . && axon
@@ -652,7 +652,7 @@
     <script>
         const canvas = document.getElementById('network-canvas');
         const ctx = canvas.getContext('2d');
-        
+
         let width, height;
         let particles = [];
         const particleCount = 80;
@@ -693,7 +693,7 @@
                         this.vy -= forceDirectionY * force * 0.05;
                     }
                 }
-                
+
                 // Limit speed
                 const maxSpeed = 2;
                 const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
@@ -763,7 +763,7 @@
 
         // Scroll Reveal Animation Observer
         const revealElements = document.querySelectorAll('.reveal');
-        
+
         const revealObserver = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
@@ -771,7 +771,7 @@
                 }
             });
         }, { threshold: 0.1 });
-        
+
         revealElements.forEach(el => revealObserver.observe(el));
     </script>
 </body>
