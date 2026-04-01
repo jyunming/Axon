@@ -148,7 +148,7 @@ Install the bundled VSIX to unlock the **`@axon` chat participant**, **Knowledge
 
 ```
 Extensions panel  →  "..."  →  Install from VSIX...
-→  integrations/vscode-axon/axon-copilot-0.9.0.vsix
+→  run `axon-ext`  (or install from VSIX manually)
 ```
 
 Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 30 tools appear in the agent hammer menu automatically.

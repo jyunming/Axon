@@ -642,4 +642,4 @@ MIT License - See [LICENSE](LICENSE) file.
 ---
 
 **Last Updated:** 2026-03-17
-**Version:** 0.9.0
+**Version:** see `axon --version`

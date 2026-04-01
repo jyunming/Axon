@@ -384,7 +384,9 @@ def mock_api_response(url_path: str, method: str, body: dict) -> dict:
     """Return a realistic mock JSON body for the given Axon API path."""
     p = url_path.rstrip("/")
     if p in ("/health", ""):
-        return {"status": "ok", "project": "default", "version": "0.9.0"}
+        from axon import __version__
+
+        return {"status": "ok", "project": "default", "version": __version__}
     if p == "/search":
         return {
             "results": [

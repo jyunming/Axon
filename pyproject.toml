@@ -3,35 +3,39 @@ requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "axon"
-version = "0.9.0"
-description = "General-purpose open-source RAG and embedding interface"
+name = "axon-rag"
+version = "0.1.0"
+description = "General-purpose open-source RAG engine with multi-LLM, hybrid retrieval, GraphRAG, and MCP support"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Open Source Contributor"}
 ]
+keywords = ["rag", "llm", "embeddings", "vector-search", "knowledge-base", "mcp", "ollama", "graphrag"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
 ]
+
 dependencies = [
     "numpy>=1.20.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
-    "lancedb>=0.6.0",
     "sentence-transformers>=3.0.0",
     "tf-keras>=2.0.0",
     "ollama>=0.1.0",
+    "openai>=1.0.0",
+    "google-genai>=1.4.0",
     "rank_bm25>=0.2.2",
-    "streamlit>=1.30.0",
     "httpx>=0.25.0",
     "mcp>=1.0.0",
     "pyyaml>=6.0.0",
@@ -47,18 +51,13 @@ dependencies = [
     "pyarrow>=10.0.0",
     "prompt_toolkit>=3.0.0",
     "rich>=13.0.0",
-    "google-genai>=1.4.0",
+    "tiktoken>=0.7.0",
+    "lancedb>=0.6.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0,<8.0.0",
-    "pytest-asyncio>=0.21.0,<1.0.0",
-    "pytest-cov>=4.1.0,<5.0.0",
-    "black==23.12.1",
-    "ruff>=0.1.0,<1.0.0",
-    "mypy>=1.5.0,<2.0.0",
-    "pre-commit>=3.4.0,<4.0.0",
+ui = [
+    "streamlit>=1.30.0",
 ]
 chroma = [
     "chromadb>=0.4.0",
@@ -91,7 +90,17 @@ loaders = [
 eval = [
     "deepeval>=0.21.0",
 ]
+dev = [
+    "pytest>=7.4.0,<8.0.0",
+    "pytest-asyncio>=0.21.0,<1.0.0",
+    "pytest-cov>=4.1.0,<5.0.0",
+    "black==23.12.1",
+    "ruff>=0.1.0,<1.0.0",
+    "mypy>=1.5.0,<2.0.0",
+    "pre-commit>=3.4.0,<4.0.0",
+]
 all = [
+    "streamlit>=1.30.0",
     "chromadb>=0.4.0",
     "qdrant-client>=1.7.0,<2.0.0",
     "fastembed>=0.1.0,<1.0.0",
@@ -106,11 +115,27 @@ all = [
     "extract-msg>=0.28.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jyunming/studio_brain_open"
+Documentation = "https://github.com/jyunming/studio_brain_open/tree/main/docs"
+Repository = "https://github.com/jyunming/studio_brain_open"
+"Bug Tracker" = "https://github.com/jyunming/studio_brain_open/issues"
+
 [project.scripts]
 axon = "axon.cli:main"
 axon-ui = "axon.webapp:main_ui"
 axon-api = "axon.api:main"
 axon-mcp = "axon.mcp_server:main"
+axon-ext = "axon.ext_install:install_vscode_extension"
+
+# Required for src/ layout — without this setuptools won't find the axon package
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+axon = [
+    "extensions/*.vsix",
+]
 
 [tool.black]
 line-length = 100

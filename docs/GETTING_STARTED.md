@@ -185,7 +185,7 @@ The VS Code extension adds an `@axon` chat participant, a live Knowledge Graph p
 
 **Install:**
 
-Open VS Code → Extensions panel (`Ctrl+Shift+X`) → click `···` (top-right of the panel) → **Install from VSIX** → select the file `integrations/vscode-axon/axon-copilot-0.9.0.vsix` from the Axon folder → reload VS Code.
+Run `axon-ext` after installing `axon-rag` to install automatically, or open VS Code → Extensions panel (`Ctrl+Shift+X`) → click `···` → **Install from VSIX** → select `axon-copilot-<version>.vsix` → reload VS Code.
 
 > **What is a VSIX file?** It is the file format for VS Code extensions — like an installer package specific to VS Code.
 

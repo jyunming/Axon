@@ -2,7 +2,7 @@
   "name": "axon-copilot",
   "displayName": "Axon Copilot",
   "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
-  "version": "0.9.0",
+  "version": "0.1.0",
   "publisher": "axon",
   "engines": {
     "vscode": "^1.93.0"

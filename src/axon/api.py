@@ -13,6 +13,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from axon import __version__
 from axon import shares as _shares  # noqa: F401 — tests patch axon.api._shares.*
 from axon.api_schemas import _compute_content_hash  # noqa: F401
 from axon.main import AxonBrain, AxonConfig
@@ -253,7 +254,7 @@ def _auto_init_store(config: AxonConfig) -> None:
 app = FastAPI(
     title="Axon API",
     description="REST API for agent orchestration and document retrieval",
-    version="0.9.0",
+    version=__version__,
     lifespan=lifespan,
 )
 

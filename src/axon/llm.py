@@ -17,6 +17,13 @@ import logging
 import threading
 import uuid
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
+try:
+    _AXON_VERSION = _pkg_version("axon-rag")
+except PackageNotFoundError:
+    _AXON_VERSION = "0.0.0+dev"
 
 from axon.config import AxonConfig
 
@@ -149,8 +156,8 @@ def _refresh_copilot_session(oauth_token: str) -> dict:
         "https://api.github.com/copilot_internal/v2/token",
         headers={
             "Authorization": f"token {oauth_token}",
-            "Editor-Version": "axon/0.9.0",
-            "Editor-Plugin-Version": "axon/0.9.0",
+            "Editor-Version": f"axon/{_AXON_VERSION}",
+            "Editor-Plugin-Version": f"axon/{_AXON_VERSION}",
         },
         timeout=10,
     )
@@ -229,7 +236,7 @@ def _fetch_copilot_models(llm: "OpenLLM") -> list[str]:
             "https://api.githubcopilot.com/models",
             headers={
                 "Authorization": f"Bearer {session_token}",
-                "Editor-Version": "axon/0.9.0",
+                "Editor-Version": f"axon/{_AXON_VERSION}",
                 "Copilot-Integration-Id": "axon",
             },
             timeout=10,
@@ -407,8 +414,8 @@ class OpenLLM:
                 base_url="https://api.githubcopilot.com",
                 api_key=session_token,
                 default_headers={
-                    "Editor-Version": "axon/0.9.0",
-                    "Editor-Plugin-Version": "axon/0.9.0",
+                    "Editor-Version": f"axon/{_AXON_VERSION}",
+                    "Editor-Plugin-Version": f"axon/{_AXON_VERSION}",
                     "Copilot-Integration-Id": "axon",
                 },
             )
