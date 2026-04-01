@@ -128,7 +128,6 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
 
     except Exception as e:
         print(f"  Failed to open ChromaDB collection: {e}")
-
         return
 
     # Read all documents in batches

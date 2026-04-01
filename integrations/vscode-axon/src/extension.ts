@@ -286,8 +286,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         (vscode as any).lm.registerTool('get_active_leases', new AxonGetActiveLeasesTool()),
 
+        (vscode as any).lm.registerTool('axon_config_validate', new AxonConfigValidateTool()),
         (vscode as any).lm.registerTool('axonConfigValidate', new AxonConfigValidateTool()),
 
+        (vscode as any).lm.registerTool('axon_config_set', new AxonConfigSetTool()),
         (vscode as any).lm.registerTool('axonConfigSet', new AxonConfigSetTool()),
 
       );

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
+import yaml  # type: ignore
 
 logger = logging.getLogger("Axon")
 
@@ -258,6 +258,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "qdrant_api_key",
         "qdrant_collection",
         "lancedb_path",
+        "tqdb_bits",
     },
     "rag": {
         "hybrid_search",
@@ -449,9 +450,11 @@ class AxonConfig:
 
     # Vector Store
 
-    vector_store: Literal["chroma", "qdrant", "lancedb"] = "lancedb"
+    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "lancedb"
 
     vector_store_path: str = ""
+
+    tqdb_bits: int = 8
 
     # BM25 Settings
 
@@ -1141,6 +1144,8 @@ class AxonConfig:
         if using_default:
             path = str(_USER_CONFIG_PATH)
 
+        assert path is not None
+
         if not os.path.exists(path):
             if using_default:
                 try:
@@ -1198,6 +1203,9 @@ class AxonConfig:
 
             if "provider" in vs:
                 config_dict["vector_store"] = vs["provider"]
+
+            if "tqdb_bits" in vs:
+                config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
 
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
@@ -1395,6 +1403,7 @@ class AxonConfig:
             "vector_store": {
                 "provider": flat["vector_store"],
                 "path": flat["vector_store_path"],
+                "tqdb_bits": flat["tqdb_bits"],
             },
             "bm25": {
                 "path": flat["bm25_path"],

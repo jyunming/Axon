@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger("Axon")
 
@@ -381,6 +382,12 @@ def _classify_retrieval_failure(
 
 
 class CodeRetrievalMixin:
+    if TYPE_CHECKING:
+        from axon.config import AxonConfig
+
+        config: AxonConfig
+        _code_graph: dict[str, Any]
+
     def _build_code_doc_bridge(self, prose_chunks: list[dict]) -> None:
         """Phase 3: add MENTIONED_IN edges from code symbol nodes to prose chunks.
 
