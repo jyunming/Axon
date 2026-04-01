@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Tests for text splitters."""
 
 import pytest
@@ -399,6 +400,8 @@ def test_splitter_chunk_metadata_inherits_existing():
         meta = chunk.get("metadata", {})
         assert meta["source_id"] == "custom_src_id"
         assert meta["chunk_kind"] == "raptor_l1"
+
+
 """Comprehensive tests for src/axon/splitters.py.
 
 Targets missed coverage lines:
@@ -411,15 +414,9 @@ import math
 import sys
 from unittest.mock import patch
 
-import pytest
-
 from axon.splitters import (
-    CodeAwareSplitter,
     CosineSemanticSplitter,
     MarkdownSplitter,
-    RecursiveCharacterTextSplitter,
-    SemanticTextSplitter,
-    TableSplitter,
     _split_sentences,
 )
 
@@ -495,7 +492,7 @@ class TestSplitSentences:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestSemanticTextSplitter:
+class TestSemanticTextSplitterV2:
     def test_invalid_chunk_size_raises_value_error(self):
         with pytest.raises(ValueError, match="chunk_size"):
             SemanticTextSplitter(chunk_size=0)
@@ -619,7 +616,7 @@ class TestSemanticTextSplitter:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestTableSplitter:
+class TestTableSplitterV2:
     def test_basic_single_row(self):
         splitter = TableSplitter(table_name="Sales", batch_size=1)
         rows = [{"product": "widget", "price": "9.99"}]
@@ -665,7 +662,7 @@ class TestTableSplitter:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestRecursiveCharacterTextSplitter:
+class TestRecursiveCharacterTextSplitterV2:
     def test_invalid_chunk_size_raises(self):
         with pytest.raises(ValueError):
             RecursiveCharacterTextSplitter(chunk_size=0)

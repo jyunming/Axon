@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Tests for configuration management."""
 
 
@@ -142,7 +143,9 @@ class TestAxonConfig:
         assert config.rerank is True
 
         assert config.reranker_model == "BAAI/bge-reranker-v2-m3"
-﻿"""
+
+
+"""
 
 
 tests/test_config_extra.py
@@ -174,9 +177,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-import yaml
-
-from axon.config import AxonConfig
 
 # ---------------------------------------------------------------------------
 
@@ -1001,8 +1001,9 @@ class TestLoad:
 
         assert cfg.ollama_base_url == "http://custom-ollama:11434"
 
-    def test_load_llm_models_dir_mapped_to_ollama_models_dir(self, tmp_path):
+    def test_load_llm_models_dir_mapped_to_ollama_models_dir(self, tmp_path, monkeypatch):
         """load() maps llm.models_dir â†' ollama_models_dir."""
+        monkeypatch.delenv("OLLAMA_MODELS", raising=False)
 
         data = {"llm": {"models_dir": "/ollama/models"}}
 

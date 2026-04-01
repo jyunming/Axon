@@ -1,9 +1,9 @@
 """Stress and Performance tests for Axon."""
-import os
 import time
-import uuid
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
+
 from axon.main import AxonBrain, AxonConfig
 
 

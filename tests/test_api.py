@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 tests/test_api.py
 
@@ -2139,19 +2140,14 @@ def test_switch_mount_revocation_check_runs_for_mounts():
 
     assert resp.status_code == 200
     mock_validate.assert_called_once()
-"""Extra tests for axon.api to push coverage above 90%."""
-import os
-from datetime import datetime, timezone
-from unittest.mock import patch
 
-from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # _evict_old_jobs (lines 47, 49-51)
 # ---------------------------------------------------------------------------
 
 
-class TestEvictOldJobs:
+class TestEvictOldJobsExtra:
     def test_evicts_expired_jobs(self):
         """Expired jobs (started_at_ts < cutoff) are removed (line 47)."""
         import axon.api as api_module
@@ -2245,6 +2241,8 @@ class TestApiMain:
             with patch.dict(os.environ, env, clear=True):
                 api_module.main()
             mock_run.assert_called_once()
+
+
 """
 tests/test_api_coverage.py
 
@@ -2255,11 +2253,9 @@ import asyncio
 import hashlib
 import threading
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-import axon.api as api_module
 from axon.api import app
 
 client = TestClient(app, raise_server_exceptions=False)
@@ -2734,14 +2730,14 @@ def test_add_text_dedup_uses_active_project_not_global():
 
     # Cleanup
     api_mod._source_hashes.pop("work", None)
+
+
 """Tests for axon.api — increasing coverage."""
 import os
-from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-import axon.api as api_module
 from axon.api import app
 
 client = TestClient(app, raise_server_exceptions=False)
@@ -2779,7 +2775,7 @@ def test_get_config_no_brain():
     assert response.status_code == 503
 
 
-def test_get_config_success(mock_brain):
+def test_get_config_success_with_mock(mock_brain):
     api_module.brain = mock_brain
     mock_brain._apply_overrides.return_value = mock_brain.config
     response = client.get("/config")
@@ -2813,7 +2809,7 @@ def test_list_sessions_success(mock_brain):
     assert "sessions" in response.json()
 
 
-def test_get_session_not_found(mock_brain):
+def test_get_session_not_found_with_mock(mock_brain):
     api_module.brain = mock_brain
     with patch("axon.sessions._load_session", return_value=None):
         response = client.get("/session/missing")
@@ -2826,6 +2822,8 @@ def test_get_session_success(mock_brain):
         response = client.get("/session/s1")
     assert response.status_code == 200
     assert response.json()["id"] == "s1"
+
+
 """Extra coverage tests for api_routes sub-modules.
 
 Targets missed lines in:
@@ -2833,12 +2831,10 @@ Targets missed lines in:
 """
 
 import os
-from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-import axon.api as api_module
 from axon.api import app
 
 client = TestClient(app, raise_server_exceptions=False)
@@ -3031,7 +3027,7 @@ class TestCodeGraphData:
 # ===========================================================================
 
 
-def _refresh_and_poll(client, api_module):
+def _refresh_and_poll_v2(client, api_module):
     """POST /ingest/refresh (async) → GET /ingest/status/{job_id} → job dict.
 
     TestClient runs BackgroundTasks synchronously, so the job is always
@@ -3068,7 +3064,7 @@ class TestIngestRefresh:
         brain = _make_brain()
         brain.get_doc_versions.return_value = {"/nonexistent/path.txt": {"content_hash": "abc123"}}
         api_module.brain = brain
-        job = _refresh_and_poll(client, api_module)
+        job = _refresh_and_poll_v2(client, api_module)
         assert "/nonexistent/path.txt" in job["missing"]
 
     def test_no_loader_for_extension_reported_as_error(self, tmp_path):
@@ -3083,7 +3079,7 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {}  # no loader for .exotic123
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            job = _refresh_and_poll(client, api_module)
+            job = _refresh_and_poll_v2(client, api_module)
 
         assert len(job["errors"]) == 1
         assert "no loader" in job["errors"][0]["error"]
@@ -3102,7 +3098,7 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            job = _refresh_and_poll(client, api_module)
+            job = _refresh_and_poll_v2(client, api_module)
 
         assert len(job["errors"]) == 1
         assert "no documents" in job["errors"][0]["error"]
@@ -3125,7 +3121,7 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            job = _refresh_and_poll(client, api_module)
+            job = _refresh_and_poll_v2(client, api_module)
 
         assert str(txt_file) in job["skipped"]
 
@@ -3145,7 +3141,7 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            job = _refresh_and_poll(client, api_module)
+            job = _refresh_and_poll_v2(client, api_module)
 
         assert str(txt_file) in job["reingested"]
 
@@ -3163,7 +3159,7 @@ class TestIngestRefresh:
         mock_loader_mgr.loaders = {".txt": mock_loader_instance}
 
         with patch("axon.loaders.DirectoryLoader", return_value=mock_loader_mgr):
-            job = _refresh_and_poll(client, api_module)
+            job = _refresh_and_poll_v2(client, api_module)
 
         assert len(job["errors"]) == 1
 

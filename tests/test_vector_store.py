@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 tests/test_vector_store_extra.py
 
@@ -1352,6 +1353,8 @@ class TestOpenVectorStoreEdgeCases:
         meta = json.loads(rows[0]["metadata_json"])
         assert meta["source"] == "a.txt"
         assert meta["page"] == 1
+
+
 """
 tests/test_vector_store_extra.py
 
@@ -1365,12 +1368,6 @@ Target missed coverage lines: 46-63, 93-94, 97-101, 127-128, 152, 168-186,
 381, 383-385, 391, 433-442, 445-449, 481-483.
 """
 
-import os
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-from axon.config import AxonConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1418,7 +1415,7 @@ def _make_lancedb_mocks():
 # ---------------------------------------------------------------------------
 
 
-class TestSanitizeChromaMeta:
+class TestSanitizeChromaMetaV2:
     """Tests for OpenVectorStore._sanitize_chroma_meta."""
 
     def _sanitize(self, metadatas):
@@ -1477,7 +1474,7 @@ class TestSanitizeChromaMeta:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenVectorStoreChroma:
+class TestOpenVectorStoreChromaV2:
     """Tests for OpenVectorStore with the chroma provider."""
 
     def _make_store(self, mock_chromadb=None, **config_kwargs):
@@ -1782,7 +1779,7 @@ class TestOpenVectorStoreChroma:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenVectorStoreQdrant:
+class TestOpenVectorStoreQdrantV2:
     """Tests for OpenVectorStore with the qdrant provider."""
 
     def _make_store_local(self, mock_qdrant=None):
@@ -2013,7 +2010,7 @@ class TestOpenVectorStoreQdrant:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenVectorStoreLanceDB:
+class TestOpenVectorStoreLanceDBV2:
     """Tests for OpenVectorStore with the lancedb provider."""
 
     def _make_store(self, mock_lancedb=None, open_table_raises=False):
@@ -2344,7 +2341,7 @@ class TestOpenVectorStoreLanceDB:
 # ---------------------------------------------------------------------------
 
 
-class TestMultiVectorStore:
+class TestMultiVectorStoreV2:
     """Tests for MultiVectorStore fan-out read-only wrapper."""
 
     def _make_mock_store(self, provider="chroma"):
@@ -2510,7 +2507,7 @@ class TestMultiVectorStore:
 # ---------------------------------------------------------------------------
 
 
-class TestMultiBM25Retriever:
+class TestMultiBM25RetrieverV2:
     """Tests for MultiBM25Retriever fan-out BM25 wrapper."""
 
     def _make_retriever_mock(self):
@@ -2612,7 +2609,7 @@ class TestMultiBM25Retriever:
 # ---------------------------------------------------------------------------
 
 
-class TestOpenVectorStoreEdgeCases:
+class TestOpenVectorStoreEdgeCasesV2:
     """Additional edge case tests for corner branches."""
 
     def test_chroma_list_documents_doc_ids_populated(self):
@@ -2705,10 +2702,11 @@ class TestOpenVectorStoreEdgeCases:
         meta = json.loads(rows[0]["metadata_json"])
         assert meta["source"] == "a.txt"
         assert meta["page"] == 1
+
+
 """Tests for axon.collection_ops."""
-import pytest
-from unittest.mock import MagicMock
 from axon.collection_ops import clear_active_project
+
 
 def test_clear_active_project():
     brain = MagicMock()
@@ -2717,9 +2715,9 @@ def test_clear_active_project():
     brain.bm25 = MagicMock()
     brain._ingested_hashes = {"h1"}
     brain._doc_versions = {"v1": 1}
-    
+
     clear_active_project(brain)
-    
+
     assert brain._active_project == "myproj"  # It stays on the project, but wipes its data
     assert brain._ingested_hashes == set()
     assert brain._doc_versions == {}

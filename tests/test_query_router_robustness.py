@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -156,6 +157,8 @@ class TestQueryRouterRobustness:
         print(f"\nAverage classification latency: {avg_ms:.4f} ms")
         # Assert that it's fast enough (e.g., < 1ms per query)
         assert avg_ms < 1.0
+
+
 """Comprehensive tests for src/axon/query_router.py.
 
 Covers missed lines: 112-113, 155, 177, 202-203, 215-228, 243-244, 424-429,
@@ -196,7 +199,7 @@ class SyncExecutor:
 import tempfile
 from collections import OrderedDict
 from threading import Lock
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -280,10 +283,10 @@ def _make_config(**kwargs) -> AxonConfig:
     return AxonConfig(**defaults)
 
 
-def _make_full_stub(**config_kwargs) -> RouterStub:
-    """Return a RouterStub pre-wired with sensible mock components."""
+def _make_full_stub(**config_kwargs) -> RouterStubV2:
+    """Return a RouterStubV2 pre-wired with sensible mock components."""
     cfg = _make_config(**config_kwargs)
-    stub = RouterStub(cfg)
+    stub = RouterStubV2(cfg)
     stub.llm = MagicMock()
     stub.llm.complete.return_value = "mock answer"
     stub.llm.generate.return_value = "factual"
@@ -323,7 +326,7 @@ def _make_full_stub(**config_kwargs) -> RouterStub:
     return stub
 
 
-class RouterStub(QueryRouterMixin):
+class RouterStubV2(QueryRouterMixin):
     """Minimal concrete class that mixes in QueryRouterMixin."""
 
     _CORPUS_KEYWORDS = _CORPUS_KEYWORDS

@@ -258,6 +258,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "qdrant_api_key",
         "qdrant_collection",
         "lancedb_path",
+        "tqdb_bits",
     },
     "rag": {
         "hybrid_search",
@@ -449,9 +450,11 @@ class AxonConfig:
 
     # Vector Store
 
-    vector_store: Literal["chroma", "qdrant", "lancedb"] = "lancedb"
+    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "lancedb"
 
     vector_store_path: str = ""
+
+    tqdb_bits: int = 8
 
     # BM25 Settings
 
@@ -1201,6 +1204,9 @@ class AxonConfig:
             if "provider" in vs:
                 config_dict["vector_store"] = vs["provider"]
 
+            if "tqdb_bits" in vs:
+                config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
+
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
 
@@ -1542,8 +1548,6 @@ class AxonConfig:
 
         effective_path = path or str(_USER_CONFIG_PATH)
 
-        assert effective_path is not None
-
         # ------------------------------------------------------------------ #
 
         # 0. File existence                                                    #
@@ -1790,8 +1794,6 @@ class AxonConfig:
         # Effective base: env wins, then config, then default
 
         effective_base = env_store_base or config_store_base or str(Path.home() / ".axon")
-
-        assert effective_base is not None
 
         if env_store_base and config_store_base and env_store_base != config_store_base:
             issues.append(

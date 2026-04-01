@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Comprehensive tests for GraphRagMixin in axon.graph_rag.
 
 Covers: entity/relation persistence, community detection, community summaries,
@@ -1810,10 +1811,6 @@ class TestMatchEntitiesByEmbedding:
 
 
 """Tests for axon.graph_render."""
-import os
-import json
-import pytest
-from unittest.mock import MagicMock, patch
 from axon.graph_render import GraphRenderMixin
 
 
@@ -1853,20 +1850,14 @@ def test_build_graph_payload_empty():
     payload = brain.build_graph_payload()
     assert isinstance(payload, dict)
     assert "nodes" in payload
+
+
 """Comprehensive tests for GraphRagMixin in axon.graph_rag.
 
 Covers: entity/relation persistence, community detection, community summaries,
 graph search helpers, entity matching, claims, prune, resolve aliases, and more.
 """
 
-import json
-import os
-import tempfile
-import threading
-from unittest.mock import MagicMock, patch
-
-from axon.config import AxonConfig
-from axon.graph_rag import GraphRagMixin
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1949,7 +1940,7 @@ def _make_brain(config=None, **extra_attrs):
 # ---------------------------------------------------------------------------
 
 
-class TestEntityGraphPersistence:
+class TestEntityGraphPersistenceV2:
     def test_save_then_load_roundtrip(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2027,7 +2018,7 @@ class TestEntityGraphPersistence:
 # ---------------------------------------------------------------------------
 
 
-class TestRelationGraphPersistence:
+class TestRelationGraphPersistenceV2:
     def test_save_load_roundtrip(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2090,7 +2081,7 @@ class TestRelationGraphPersistence:
 # ---------------------------------------------------------------------------
 
 
-class TestCommunityPersistence:
+class TestCommunityPersistenceV2:
     def test_save_load_community_levels(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2178,7 +2169,7 @@ class TestCommunityPersistence:
 # ---------------------------------------------------------------------------
 
 
-class TestEntityEmbeddingsPersistence:
+class TestEntityEmbeddingsPersistenceV2:
     def test_save_load_entity_embeddings(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2203,7 +2194,7 @@ class TestEntityEmbeddingsPersistence:
             brain._save_entity_embeddings()  # must not raise
 
 
-class TestClaimsGraphPersistence:
+class TestClaimsGraphPersistenceV2:
     def test_save_load_claims_graph(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2233,7 +2224,7 @@ class TestClaimsGraphPersistence:
 # ---------------------------------------------------------------------------
 
 
-class TestCodeGraphPersistence:
+class TestCodeGraphPersistenceV2:
     def test_load_code_graph_exception_returns_empty(self, tmp_path):
         """Lines 89-90: exception during load returns empty."""
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
@@ -2248,7 +2239,7 @@ class TestCodeGraphPersistence:
 # ---------------------------------------------------------------------------
 
 
-class TestBuildNetworkxGraph:
+class TestBuildNetworkxGraphV2:
     def test_empty_graph(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2322,7 +2313,7 @@ class TestBuildNetworkxGraph:
 # ---------------------------------------------------------------------------
 
 
-class TestRunCommunityDetection:
+class TestRunCommunityDetectionV2:
     def test_empty_graph_returns_empty(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2378,7 +2369,7 @@ class TestRunCommunityDetection:
 # ---------------------------------------------------------------------------
 
 
-class TestHierarchicalCommunityDetection:
+class TestHierarchicalCommunityDetectionV2:
     def test_returns_tuple_of_three(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2458,7 +2449,7 @@ class TestHierarchicalCommunityDetection:
 # ---------------------------------------------------------------------------
 
 
-class TestGenerateCommunitySummaries:
+class TestGenerateCommunitySummariesV2:
     def test_no_levels_returns_early(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2626,7 +2617,7 @@ class TestGenerateCommunitySummaries:
 # ---------------------------------------------------------------------------
 
 
-class TestIndexCommunityReports:
+class TestIndexCommunityReportsV2:
     def test_no_summaries_returns_early(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2710,7 +2701,7 @@ class TestIndexCommunityReports:
 # ---------------------------------------------------------------------------
 
 
-class TestGlobalSearchMapReduce:
+class TestGlobalSearchMapReduceV2:
     def test_no_summaries_returns_empty_string(self, tmp_path):
         """Line 1011-1012: no summaries → empty string."""
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
@@ -2821,7 +2812,7 @@ class TestGlobalSearchMapReduce:
 # ---------------------------------------------------------------------------
 
 
-class TestEntityMatches:
+class TestEntityMatchesV2:
     def _brain(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         return _make_brain(config=cfg)
@@ -2859,7 +2850,7 @@ class TestEntityMatches:
 # ---------------------------------------------------------------------------
 
 
-class TestClassifyQuery:
+class TestClassifyQueryV2:
     def test_heuristic_holistic_keyword(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2905,7 +2896,7 @@ class TestClassifyQuery:
 # ---------------------------------------------------------------------------
 
 
-class TestExtractEntities:
+class TestExtractEntitiesV2:
     def test_llm_path_parses_three_part_lines(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -2978,7 +2969,7 @@ class TestExtractEntities:
 # ---------------------------------------------------------------------------
 
 
-class TestExtractEntitiesLight:
+class TestExtractEntitiesLightV2:
     def test_finds_capitalized_phrases(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3025,7 +3016,7 @@ class TestExtractEntitiesLight:
 # ---------------------------------------------------------------------------
 
 
-class TestExtractRelations:
+class TestExtractRelationsV2:
     def test_parses_five_part_lines(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3093,7 +3084,7 @@ class TestExtractRelations:
 # ---------------------------------------------------------------------------
 
 
-class TestParseRebelOutput:
+class TestParseRebelOutputV2:
     def test_parses_single_triplet(self):
         text = "<triplet> Alice <subj> Acme Corp <obj> works at"
         result = GraphRagMixin._parse_rebel_output(text)
@@ -3128,7 +3119,7 @@ class TestParseRebelOutput:
 # ---------------------------------------------------------------------------
 
 
-class TestExtractClaims:
+class TestExtractClaimsV2:
     def test_parses_full_eight_part_line(self, tmp_path):
         """Lines 1956-1972: 8-part lines parsed into full claim dict."""
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
@@ -3174,7 +3165,7 @@ class TestExtractClaims:
 # ---------------------------------------------------------------------------
 
 
-class TestPruneEntityGraph:
+class TestPruneEntityGraphV2:
     def test_removes_entity_when_all_chunks_deleted(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3259,7 +3250,7 @@ class TestPruneEntityGraph:
 # ---------------------------------------------------------------------------
 
 
-class TestGetIncomingRelations:
+class TestGetIncomingRelationsV2:
     def test_returns_incoming_edges(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3296,7 +3287,7 @@ class TestGetIncomingRelations:
 # ---------------------------------------------------------------------------
 
 
-class TestLocalSearchContext:
+class TestLocalSearchContextV2:
     def test_empty_entities_returns_empty_string(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3383,7 +3374,7 @@ class TestLocalSearchContext:
 # ---------------------------------------------------------------------------
 
 
-class TestCanonicalizeEntityDescriptions:
+class TestCanonicalizeEntityDescriptionsV2:
     def test_skips_when_buffer_empty(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3455,7 +3446,7 @@ class TestCanonicalizeEntityDescriptions:
 # ---------------------------------------------------------------------------
 
 
-class TestCanonicalizeRelationDescriptions:
+class TestCanonicalizeRelationDescriptionsV2:
     def test_skips_when_config_disabled(self, tmp_path):
         """Line 2167-2168: disabled by config → returns early."""
         cfg = AxonConfig(
@@ -3501,7 +3492,7 @@ class TestCanonicalizeRelationDescriptions:
 # ---------------------------------------------------------------------------
 
 
-class TestResolveEntityAliases:
+class TestResolveEntityAliasesV2:
     def test_returns_zero_for_single_entity(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)
@@ -3571,7 +3562,7 @@ class TestResolveEntityAliases:
 # ---------------------------------------------------------------------------
 
 
-class TestEmbedEntities:
+class TestEmbedEntitiesV2:
     def test_embeds_and_saves(self, tmp_path):
         """Lines 1885-1904: entities are embedded and saved."""
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
@@ -3621,7 +3612,7 @@ class TestEmbedEntities:
 # ---------------------------------------------------------------------------
 
 
-class TestMatchEntitiesByEmbedding:
+class TestMatchEntitiesByEmbeddingV2:
     def test_returns_empty_when_no_embeddings(self, tmp_path):
         cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         brain = _make_brain(config=cfg)

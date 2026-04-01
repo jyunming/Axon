@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Tests for CodeGraphMixin in axon.code_graph."""
 import json
 
@@ -237,10 +238,9 @@ class TestResolveImport:
         brain = _make_brain(tmp_path)
         result = brain._resolve_import_to_file("not an import statement")
         assert result is None
-"""Tests for CodeGraphMixin in axon.code_graph."""
-import json
 
-from axon.config import AxonConfig
+
+"""Tests for CodeGraphMixin in axon.code_graph."""
 
 
 def _make_brain(tmp_path):
@@ -260,7 +260,7 @@ def _make_brain(tmp_path):
     return FakeBrain()
 
 
-class TestCodeGraphLoad:
+class TestCodeGraphLoadV2:
     def test_load_returns_empty_when_no_file(self, tmp_path):
         brain = _make_brain(tmp_path)
         result = brain._load_code_graph()
@@ -286,7 +286,7 @@ class TestCodeGraphLoad:
         assert result == {"nodes": {}, "edges": []}
 
 
-class TestCodeGraphSave:
+class TestCodeGraphSaveV2:
     def test_save_writes_file(self, tmp_path):
         brain = _make_brain(tmp_path)
         brain._code_graph = {"nodes": {"a": {"node_id": "a"}}, "edges": []}
@@ -305,7 +305,7 @@ class TestCodeGraphSave:
         assert (nested / ".code_graph.json").exists()
 
 
-class TestBuildCodeGraph:
+class TestBuildCodeGraphV2:
     def test_non_code_chunks_skipped(self, tmp_path):
         brain = _make_brain(tmp_path)
         chunks = [{"id": "c1", "text": "hello", "metadata": {"source_class": "text"}}]
@@ -447,7 +447,7 @@ class TestBuildCodeGraph:
         assert sym_node["chunk_ids"].count("c1") == 1
 
 
-class TestResolveImport:
+class TestResolveImportV2:
     def test_from_import_resolves(self, tmp_path):
         brain = _make_brain(tmp_path)
         brain._code_graph["nodes"]["/src/axon/splitters.py"] = {

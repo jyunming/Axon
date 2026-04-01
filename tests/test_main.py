@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import os
 from unittest.mock import MagicMock, patch
 
@@ -9415,6 +9416,8 @@ class TestOpenVectorStoreQdrant:
                 mock_qdrant_module.QdrantClient.assert_called()
             except Exception:
                 pass  # acceptable
+
+
 """
 Comprehensive pytest tests for axon/main.py (AxonBrain) targeting uncovered lines.
 
@@ -9430,8 +9433,7 @@ Coverage targets:
   2191, 2197-2214, 2217-2235, 2288-2293, 2328
 """
 
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -10366,7 +10368,7 @@ class TestQueryStream:
 # ===========================================================================
 
 
-class TestListDocuments:
+class TestListDocumentsV2:
     def test_list_documents_delegates_to_vector_store(self, brain):
         expected = [{"source": "file.txt", "chunks": 3, "doc_ids": ["a", "b", "c"]}]
         brain.vector_store.list_documents = MagicMock(return_value=expected)
@@ -10601,10 +10603,12 @@ class TestDocVersions:
     def test_save_doc_versions_writes_json(self, tmp_path):
         import json
 
+        from axon.main import AxonBrain
+
         brain = _make_brain(tmp_path)
         brain._doc_versions_path = str(tmp_path / "versions.json")
         brain._doc_versions = {"src.txt": {"content_hash": "xyz", "chunk_count": 1}}
-        brain._save_doc_versions()
+        AxonBrain._save_doc_versions(brain)
         data = json.loads((tmp_path / "versions.json").read_text())
         assert data["src.txt"]["content_hash"] == "xyz"
 
@@ -11284,6 +11288,8 @@ class TestLogStartupSummary:
         with patch("axon.projects.get_project_id", return_value=None):
             # Should not raise even without meta.json
             brain._log_startup_summary()
+
+
 """
 
 
@@ -11735,10 +11741,8 @@ Coverage targets (from the original gap list):
 """
 
 
-
 import json
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11809,8 +11813,6 @@ def _make_brain(tmp_path, **cfg_kwargs):
 
     brain._ingested_hashes = set()
 
-    brain._save_hash_store = MagicMock()
-
     brain._save_entity_graph = MagicMock()
 
     brain._save_relation_graph = MagicMock()
@@ -11841,8 +11843,6 @@ def _make_brain(tmp_path, **cfg_kwargs):
 
     brain._build_code_doc_bridge = MagicMock()
 
-    brain._assert_write_allowed = MagicMock()
-
     brain.embedding = MagicMock()
 
     brain.embedding.embed.return_value = [[0.1] * 10]
@@ -11865,7 +11865,7 @@ def _make_brain(tmp_path, **cfg_kwargs):
 
     brain.llm.complete.return_value = "summary text"
 
-    brain.reranker = None
+    brain.reranker = MagicMock()
 
     # Set the splitter to None so ingest() skips the type-detection path
 
@@ -11909,7 +11909,7 @@ def _make_brain(tmp_path, **cfg_kwargs):
 
 
 @pytest.fixture
-def brain(tmp_path):
+def brain_v2(tmp_path):
     b = _make_brain(tmp_path)
 
     yield b
@@ -12115,7 +12115,7 @@ class TestSaveEmbeddingMeta:
 # ===========================================================================
 
 
-class TestFinalizeIngest:
+class TestFinalizeIngestV2:
     def test_finalize_ingest_batch_mode_saves_claims_and_code(self, brain):
         """finalize_ingest with batch_mode saves claims graph and code graph."""
 
@@ -12362,7 +12362,7 @@ class TestRaptorSummaries:
 # ===========================================================================
 
 
-class TestRaptorDrilldown:
+class TestRaptorDrilldownV2:
     def _make_drilldown_brain(self, tmp_path, **kw):
         return _make_brain(tmp_path, raptor=True, **kw)
 
@@ -12571,7 +12571,7 @@ class TestRaptorDrilldown:
 # ===========================================================================
 
 
-class TestDetectDatasetType:
+class TestDetectDatasetTypeV2:
     def test_lock_extension_returns_manifest(self, brain):
         doc = {"id": "lock1", "text": "content", "metadata": {"source": "packages.lock"}}
 
@@ -13897,7 +13897,7 @@ class TestDescendantGraphMerge:
 # ===========================================================================
 
 
-class TestRaptorGroupByStructure:
+class TestRaptorGroupByStructureV2:
     def test_no_headings_falls_back_to_fixed_windows(self, brain):
         chunks = [{"id": f"c{i}", "text": f"plain text {i}", "metadata": {}} for i in range(6)]
 
@@ -13942,7 +13942,7 @@ class TestRaptorGroupByStructure:
 # ===========================================================================
 
 
-class TestValidateEmbeddingMeta:
+class TestValidateEmbeddingMetaV2:
     def test_no_meta_returns_silently(self, brain, tmp_path):
         """No persisted embedding meta → validation is a no-op."""
 
@@ -14002,7 +14002,7 @@ class TestValidateEmbeddingMeta:
 # ===========================================================================
 
 
-class TestApplyArtifactRanking:
+class TestApplyArtifactRankingV2:
     def test_tree_traversal_boosts_leaf(self, brain):
         brain.config.raptor_retrieval_mode = "tree_traversal"
 
@@ -14055,7 +14055,7 @@ class TestApplyArtifactRanking:
 # ===========================================================================
 
 
-class TestDocVersions:
+class TestDocVersionsV2:
     def test_get_doc_versions_returns_copy(self, brain):
         brain._doc_versions = {"a.txt": {"chunk_count": 2}}
 
@@ -14344,6 +14344,8 @@ class TestCollectLeavesDepthGuard:
         assert isinstance(result, list)
 
         brain.close()
+
+
 """Coverage round 2 — targets modules still below 90%.
 
 Covers:
@@ -14354,10 +14356,8 @@ Covers:
 """
 
 import io
-import json
-import os
 import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -14564,7 +14564,7 @@ def _make_fake_brain_for_detection():
     return fake
 
 
-class TestDetectDatasetType:
+class TestDetectDatasetTypeV3:
     def test_empty_text_returns_doc(self):
         """Empty text → lines=[] → returns ('doc', False) (lines 1574-1575)."""
         from axon.main import AxonBrain

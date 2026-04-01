@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Tests for src/axon/projects.py"""
 
 
@@ -887,11 +888,10 @@ class TestSetActiveProjectPermissionError:
         # Must not raise
 
         _p.set_active_project("myproject")
+
+
 """Extra tests for axon.projects to push coverage above 90%."""
 
-
-import json
-from unittest.mock import patch
 
 import pytest
 
@@ -1018,7 +1018,7 @@ class TestGetStoreNamespaceId:
 # ---------------------------------------------------------------------------
 
 
-class TestListDescendants:
+class TestListDescendantsV2:
     def test_cycle_detection_stops_recursion(self, tmp_path):
         """Cycle detection: already-visited resolved path returns [] (line 322)."""
 
@@ -1264,7 +1264,7 @@ class TestSetMaintenanceState:
 # ---------------------------------------------------------------------------
 
 
-class TestListProjects:
+class TestListProjectsV2:
     def test_non_dir_entries_skipped(self, tmp_path):
         """Non-directory entries in PROJECTS_ROOT are skipped (line 453)."""
 

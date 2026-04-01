@@ -13,8 +13,12 @@ for Phase 2 of the Axon refactor.
 """
 
 
+import json
 import logging
+import os
 from typing import Any
+
+import numpy as np
 
 from axon.config import AxonConfig
 
@@ -121,6 +125,32 @@ class OpenVectorStore:
             except Exception:
                 self.collection = None  # created lazily on first add()
 
+        elif self.provider == "turboquantdb":
+            # Lazy open: dimension is not known until first add(). If tqdb_meta.json
+            # exists (from a prior session), open immediately.
+            self._tqdb_meta_path = os.path.join(self.config.vector_store_path, "tqdb_meta.json")
+            self._tqdb_doc_index_path = os.path.join(
+                self.config.vector_store_path, "tqdb_doc_index.json"
+            )
+            os.makedirs(self.config.vector_store_path, exist_ok=True)
+            if os.path.exists(self._tqdb_meta_path):
+                with open(self._tqdb_meta_path) as f:
+                    meta = json.load(f)
+                import turboquantdb
+
+                logger.info(
+                    f"Initializing TurboQuantDB: {self.config.vector_store_path} "
+                    f"(dim={meta['dimension']}, bits={meta['bits']})"
+                )
+                self.client = turboquantdb.Database.open(
+                    self.config.vector_store_path,
+                    dimension=meta["dimension"],
+                    bits=meta["bits"],
+                    metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                )
+            else:
+                self.client = None  # opened lazily on first add()
+
     def close(self):
         """Release any open file handles or database connections."""
 
@@ -144,6 +174,14 @@ class OpenVectorStore:
             self.collection = None
 
         elif self.provider == "qdrant" and self.client:
+            self.client = None
+
+        elif self.provider == "turboquantdb" and self.client:
+            try:
+                if hasattr(self.client, "close"):
+                    self.client.close()
+            except Exception:
+                pass
             self.client = None
 
     # Chroma hard limit per collection.add() call.
@@ -273,8 +311,6 @@ class OpenVectorStore:
                 self.client.upsert(collection_name="axon", points=_batch)
 
         elif self.provider == "lancedb":
-            import json
-
             rows = []
 
             for i, (doc_id, emb, text) in enumerate(zip(ids, embeddings, texts)):
@@ -329,6 +365,59 @@ class OpenVectorStore:
                     )
             except Exception as e:
                 logger.debug(f"LanceDB: auto index build skipped — {e}")
+
+        elif self.provider == "turboquantdb":
+            if not ids:
+                return
+
+            # Lazy open on first add() — detect dimension from the first embedding batch.
+            if self.client is None:
+                import turboquantdb
+
+                dim = len(embeddings[0])
+                bits = getattr(self.config, "tqdb_bits", 8)
+                meta = {"dimension": dim, "bits": bits}
+                with open(self._tqdb_meta_path, "w") as f:
+                    json.dump(meta, f)
+                logger.info(
+                    f"Initializing TurboQuantDB: {self.config.vector_store_path} "
+                    f"(dim={dim}, bits={bits})"
+                )
+                self.client = turboquantdb.Database.open(
+                    self.config.vector_store_path,
+                    dimension=dim,
+                    bits=bits,
+                    metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                )
+
+            # L2-normalize so IP = cosine similarity (handles models that don't output unit vectors)
+            vecs = np.array(embeddings, dtype=np.float32)
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            vecs = np.divide(vecs, norms, where=norms > 0)
+            metas = metadatas if metadatas is not None else [{}] * len(ids)
+            self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
+
+            # Update sidecar doc index: source → [chunk_ids]
+            doc_index: dict[str, list[str]] = {}
+            if os.path.exists(self._tqdb_doc_index_path):
+                with open(self._tqdb_doc_index_path) as f:
+                    doc_index = json.load(f)
+            for chunk_id, meta in zip(ids, metas):
+                source = (meta or {}).get("source", "unknown")
+                doc_index.setdefault(source, [])
+                if chunk_id not in doc_index[source]:
+                    doc_index[source].append(chunk_id)
+            with open(self._tqdb_doc_index_path, "w") as f:
+                json.dump(doc_index, f)
+
+            # Auto-build ANN index once corpus is large enough (≥1000 vectors).
+            try:
+                n = len(self.client)
+                if n >= 1000:
+                    self.client.create_index()
+                    logger.debug(f"TurboQuantDB: ANN index built on {n} vectors")
+            except Exception as e:
+                logger.debug(f"TurboQuantDB: auto index build skipped — {e}")
 
     def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
@@ -401,6 +490,19 @@ class OpenVectorStore:
 
             return sorted(sources.values(), key=lambda x: x["source"])
 
+        elif self.provider == "turboquantdb":
+            if not os.path.exists(self._tqdb_doc_index_path):
+                return []
+            with open(self._tqdb_doc_index_path) as f:
+                doc_index: dict[str, list[str]] = json.load(f)
+            return sorted(
+                [
+                    {"source": src, "chunks": len(chunk_ids), "doc_ids": chunk_ids}
+                    for src, chunk_ids in doc_index.items()
+                ],
+                key=lambda x: x["source"],
+            )
+
         return []
 
     def search(
@@ -451,8 +553,6 @@ class OpenVectorStore:
             ]
 
         elif self.provider == "lancedb":
-            import json
-
             if self.collection is None:
                 return []
 
@@ -464,6 +564,25 @@ class OpenVectorStore:
                     "text": r["text"],
                     "score": max(0.0, 1.0 - r.get("_distance", 1.0)),
                     "metadata": json.loads(r.get("metadata_json", "{}")),
+                }
+                for r in results
+            ]
+
+        elif self.provider == "turboquantdb":
+            if self.client is None:
+                return []
+            q = np.array(query_embedding, dtype=np.float32)
+            q_norm = np.linalg.norm(q)
+            if q_norm > 0:
+                q = q / q_norm
+            tqdb_filter = filter_dict if filter_dict else None
+            results = self.client.search(q, top_k=top_k, filter=tqdb_filter, _use_ann=True)
+            return [
+                {
+                    "id": r["id"],
+                    "text": r.get("document", ""),
+                    "score": max(0.0, r["score"]),
+                    "metadata": r.get("metadata", {}),
                 }
                 for r in results
             ]
@@ -535,8 +654,6 @@ class OpenVectorStore:
                 return []
 
         if self.provider == "lancedb":
-            import json
-
             if self.collection is None:
                 return []
 
@@ -558,6 +675,25 @@ class OpenVectorStore:
             except Exception as e:
                 logger.debug(f"GraphRAG get_by_ids (LanceDB) failed: {e}")
 
+                return []
+
+        if self.provider == "turboquantdb":
+            if self.client is None:
+                return []
+            try:
+                recs = self.client.get_many(ids)
+                return [
+                    {
+                        "id": rec["id"],
+                        "text": rec.get("document", ""),
+                        "score": 1.0,
+                        "metadata": rec.get("metadata", {}),
+                    }
+                    for rec in recs
+                    if rec is not None
+                ]
+            except Exception as e:
+                logger.debug(f"GraphRAG get_by_ids (TurboQuantDB) failed: {e}")
                 return []
 
         return []
@@ -620,6 +756,21 @@ class OpenVectorStore:
         elif self.provider == "qdrant":
             return "Qdrant manages its HNSW index automatically — no action needed."
 
+        elif self.provider == "turboquantdb":
+            if self.client is None:
+                return "TurboQuantDB: no database open yet — ingest some documents first."
+            n = len(self.client)
+            if n < 256:
+                return (
+                    f"TurboQuantDB: only {n} vectors — need >=256 for ANN index. "
+                    "Using flat search for now."
+                )
+            try:
+                self.client.create_index()
+                return f"TurboQuantDB: ANN index built on {n} vectors."
+            except Exception as e:
+                return f"TurboQuantDB: index creation failed — {e}"
+
         return "Unknown provider."
 
     def delete_by_ids(self, ids: list[str]) -> None:
@@ -646,6 +797,27 @@ class OpenVectorStore:
             id_str = ", ".join(f"'{i}'" for i in ids)
 
             self.collection.delete(f"id IN ({id_str})")
+
+        elif self.provider == "turboquantdb":
+            if self.client is None:
+                return
+            for chunk_id in ids:
+                try:
+                    self.client.delete(chunk_id)
+                except Exception as e:
+                    logger.debug(f"TurboQuantDB delete {chunk_id} failed: {e}")
+
+            # Prune sidecar doc index
+            if os.path.exists(self._tqdb_doc_index_path):
+                with open(self._tqdb_doc_index_path) as f:
+                    doc_index: dict[str, list[str]] = json.load(f)
+                id_set = set(ids)
+                for source in list(doc_index.keys()):
+                    doc_index[source] = [i for i in doc_index[source] if i not in id_set]
+                    if not doc_index[source]:
+                        del doc_index[source]
+                with open(self._tqdb_doc_index_path, "w") as f:
+                    json.dump(doc_index, f)
 
 
 class MultiVectorStore:

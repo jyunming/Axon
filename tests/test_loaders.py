@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 
 
@@ -1076,12 +1077,10 @@ class TestRewriteGithubUrl:
                 assert called_url == raw_url
 
         assert docs[0]["text"] == "# Hello World"
+
+
 """Extra tests for axon.loaders to push coverage above 90%."""
 import asyncio
-import json
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # _check_file_size (line 29)

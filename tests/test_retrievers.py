@@ -1,5 +1,6 @@
 from __future__ import annotations
-﻿"""Tests for retriever modules."""
+
+"""Tests for retriever modules."""
 
 import os
 from unittest.mock import patch
@@ -442,8 +443,10 @@ class TestBM25BatchAdd:
         with patch.object(retriever, "save") as mock_save:
             retriever.flush()
             mock_save.assert_called_once()
+
+
 """Tests for OpenReranker providers in axon.rerank."""
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

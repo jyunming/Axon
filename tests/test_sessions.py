@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Tests for axon.sessions — covering uncovered lines."""
 import os
 from unittest.mock import MagicMock
@@ -207,11 +208,9 @@ class TestSessionsBasic:
         assert result is None
 
         _s._SESSIONS_DIR = orig
-"""Tests for axon.sessions — covering uncovered lines."""
-import os
-from unittest.mock import MagicMock
 
-import pytest
+
+"""Tests for axon.sessions — covering uncovered lines."""
 
 
 def _make_brain(provider="ollama", model="llama3", project="default"):
@@ -222,7 +221,7 @@ def _make_brain(provider="ollama", model="llama3", project="default"):
     return brain
 
 
-class TestSessionsBasic:
+class TestSessionsBasicV2:
     def test_new_session_structure(self, tmp_path):
         from axon.sessions import _new_session
 

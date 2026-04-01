@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Tests for axon.code_retrieval to reach ≥90% coverage."""
 
 from unittest.mock import MagicMock
@@ -376,28 +377,17 @@ class TestExpandWithCodeGraph:
         cfg.top_k = 10
         out, _ = brain._expand_with_code_graph("file", results, cfg=cfg)
         assert any(r.get("_code_graph_expanded") for r in out)
+
+
 """Tests for axon.code_retrieval to reach ≥90% coverage."""
 
-from unittest.mock import MagicMock
-
-import pytest
-
-from axon.code_retrieval import (
-    CodeRetrievalDiagnostics,
-    CodeRetrievalMixin,
-    _build_code_bm25_queries,
-    _classify_retrieval_failure,
-)
-from axon.code_retrieval import (
-    _looks_like_code_query as _is_code_query,
-)
 
 # ---------------------------------------------------------------------------
 # _is_code_query (lines 80-92)
 # ---------------------------------------------------------------------------
 
 
-class TestIsCodeQuery:
+class TestIsCodeQueryV2:
     def test_camel_case_is_code(self):
         assert _is_code_query("QueryRouter") is True
 
@@ -423,7 +413,7 @@ class TestIsCodeQuery:
 # ---------------------------------------------------------------------------
 
 
-class TestBuildCodeBm25Queries:
+class TestBuildCodeBm25QueriesV2:
     def test_camel_case_expansion(self):
         result = _build_code_bm25_queries("CodeAwareSplitter", frozenset(["CodeAwareSplitter"]))
         assert any("Code" in r or "code" in r.lower() for r in result)
@@ -456,7 +446,7 @@ class TestBuildCodeBm25Queries:
 # ---------------------------------------------------------------------------
 
 
-class TestClassifyRetrievalFailure:
+class TestClassifyRetrievalFailureV2:
     def test_empty_results_returns_empty(self):
         assert _classify_retrieval_failure([], frozenset(["foo"])) == []
 
@@ -520,7 +510,7 @@ def _make_mixin():
     return FakeBrain()
 
 
-class TestBuildCodeDocBridge:
+class TestBuildCodeDocBridgeV2:
     def test_empty_nodes_returns_immediately(self):
         brain = _make_mixin()
         brain._build_code_doc_bridge([{"text": "some prose", "id": "p1", "metadata": {}}])
@@ -549,7 +539,7 @@ class TestBuildCodeDocBridge:
 # ---------------------------------------------------------------------------
 
 
-class TestSymbolChannelSearch:
+class TestSymbolChannelSearchV2:
     def test_returns_empty_when_no_bm25(self):
         brain = _make_mixin()
         brain.bm25 = None
@@ -673,7 +663,7 @@ class TestSymbolChannelSearch:
 # ---------------------------------------------------------------------------
 
 
-class TestExpandWithCodeGraph:
+class TestExpandWithCodeGraphV2:
     def test_empty_nodes_returns_unchanged(self):
         brain = _make_mixin()
         results = [{"id": "r1", "text": "hi", "score": 0.9, "metadata": {}}]

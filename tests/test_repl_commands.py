@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Tests for REPL slash commands in axon.repl._interactive_repl."""
 import io
 import os
@@ -674,8 +675,9 @@ class TestStaleDefault:
         output = _run_repl_with_commands(["/stale"], brain=brain)
         # Should not error; default is 7 not 30
         assert isinstance(output, str)
+
+
 """Extra tests for axon.repl utility functions to push coverage above 90%."""
-from unittest.mock import MagicMock, patch
 
 
 def _make_brain_mock():
@@ -1193,12 +1195,11 @@ class TestInitDisplayEmit:
 
         d.emit(record)
         assert d._done.is_set()
+
+
 """Tests for axon.repl to push coverage toward 90%."""
 
 import sys
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 from tests.test_repl_commands import _make_mock_brain, _run_repl_with_commands
 
