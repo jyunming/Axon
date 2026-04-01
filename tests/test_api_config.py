@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import axon.api as api_module
 from axon.api import app
 
-client = TestClient(app)
+client = TestClient(app, raise_server_exceptions=False)
 
 from dataclasses import dataclass
 
@@ -16,6 +16,14 @@ from dataclasses import dataclass
 class FakeConfig:
     llm_model: str = "llama3"
     api_key: str = "secret"
+
+
+@pytest.fixture(autouse=True)
+def _reset_brain():
+    """Restore api_module.brain after every test to prevent state leakage."""
+    original = api_module.brain
+    yield
+    api_module.brain = original
 
 
 @pytest.fixture

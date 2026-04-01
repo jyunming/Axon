@@ -201,7 +201,7 @@ class TestSymbolChannelSearch:
         ]
         mock_bm25 = MagicMock()
         mock_bm25.corpus = corpus
-        del mock_bm25._retrievers  # ensure single-corpus path
+        del mock_bm25._retrievers  # ensure hasattr() returns False for single-corpus path
         brain.bm25 = mock_bm25
         result = brain._symbol_channel_search(frozenset(["build_graph"]), top_k=5)
         assert len(result) == 1
@@ -567,7 +567,7 @@ class TestSymbolChannelSearchV2:
         ]
         mock_bm25 = MagicMock()
         mock_bm25.corpus = corpus
-        del mock_bm25._retrievers  # ensure single-corpus path
+        del mock_bm25._retrievers  # ensure hasattr() returns False for single-corpus path
         brain.bm25 = mock_bm25
         result = brain._symbol_channel_search(frozenset(["build_graph"]), top_k=5)
         assert len(result) == 1

@@ -33,7 +33,7 @@ jobs:
       - name: Prepare publish directory
         run: |
           mkdir -p public
-          cp index.html public/
+          [ -f index.html ] && cp index.html public/ || true
           cp -r docs/assets public/ 2>/dev/null || true
 
       - name: Upload artifact

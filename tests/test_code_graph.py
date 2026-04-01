@@ -243,7 +243,7 @@ class TestResolveImport:
 """Tests for CodeGraphMixin in axon.code_graph."""
 
 
-def _make_brain(tmp_path):
+def _make_brain_v2(tmp_path):
     """Return a minimal object with CodeGraphMixin capabilities."""
     from axon.code_graph import CodeGraphMixin
 
@@ -262,25 +262,25 @@ def _make_brain(tmp_path):
 
 class TestCodeGraphLoadV2:
     def test_load_returns_empty_when_no_file(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         result = brain._load_code_graph()
         assert result == {"nodes": {}, "edges": []}
 
     def test_load_returns_data_from_file(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         data = {"nodes": {"a": {"node_id": "a"}}, "edges": [{"source": "a"}]}
         (tmp_path / ".code_graph.json").write_text(json.dumps(data), encoding="utf-8")
         result = brain._load_code_graph()
         assert result["nodes"]["a"]["node_id"] == "a"
 
     def test_load_corrupt_file_returns_empty(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         (tmp_path / ".code_graph.json").write_text("not json{{{", encoding="utf-8")
         result = brain._load_code_graph()
         assert result == {"nodes": {}, "edges": []}
 
     def test_load_missing_keys_returns_empty(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         (tmp_path / ".code_graph.json").write_text(json.dumps({"other": 1}), encoding="utf-8")
         result = brain._load_code_graph()
         assert result == {"nodes": {}, "edges": []}
@@ -288,7 +288,7 @@ class TestCodeGraphLoadV2:
 
 class TestCodeGraphSaveV2:
     def test_save_writes_file(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         brain._code_graph = {"nodes": {"a": {"node_id": "a"}}, "edges": []}
         brain._save_code_graph()
         path = tmp_path / ".code_graph.json"
@@ -297,7 +297,7 @@ class TestCodeGraphSaveV2:
         assert "nodes" in data
 
     def test_save_creates_parent_dirs(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         nested = tmp_path / "sub" / "dir"
         brain.config.bm25_path = str(nested)
         brain._code_graph = {"nodes": {}, "edges": []}
@@ -307,13 +307,13 @@ class TestCodeGraphSaveV2:
 
 class TestBuildCodeGraphV2:
     def test_non_code_chunks_skipped(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         chunks = [{"id": "c1", "text": "hello", "metadata": {"source_class": "text"}}]
         brain._build_code_graph_from_chunks(chunks)
         assert brain._code_graph["nodes"] == {}
 
     def test_code_chunk_creates_file_node(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         chunks = [
             {
                 "id": "c1",
@@ -334,7 +334,7 @@ class TestBuildCodeGraphV2:
         assert node["language"] == "python"
 
     def test_code_chunk_creates_symbol_node(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         chunks = [
             {
                 "id": "c1",
@@ -357,7 +357,7 @@ class TestBuildCodeGraphV2:
         assert brain._code_graph["nodes"][sym_id]["node_type"] == "function"
 
     def test_contains_edge_created(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         chunks = [
             {
                 "id": "c1",
@@ -378,7 +378,7 @@ class TestBuildCodeGraphV2:
         assert contains_edges[0]["source"] == "/src/bar.py"
 
     def test_imports_edge_from_string(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         # First add target file
         brain._code_graph["nodes"]["/src/utils.py"] = {
             "node_id": "/src/utils.py",
@@ -405,7 +405,7 @@ class TestBuildCodeGraphV2:
         assert len(import_edges) == 1
 
     def test_imports_from_list(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         brain._code_graph["nodes"]["/src/utils.py"] = {
             "node_id": "/src/utils.py",
             "node_type": "file",
@@ -430,7 +430,7 @@ class TestBuildCodeGraphV2:
         assert any(e["edge_type"] == "IMPORTS" for e in edges)
 
     def test_duplicate_chunks_not_added(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         chunk = {
             "id": "c1",
             "text": "def dup(): pass",
@@ -449,7 +449,7 @@ class TestBuildCodeGraphV2:
 
 class TestResolveImportV2:
     def test_from_import_resolves(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         brain._code_graph["nodes"]["/src/axon/splitters.py"] = {
             "node_type": "file",
             "file_path": "/src/axon/splitters.py",
@@ -458,7 +458,7 @@ class TestResolveImportV2:
         assert result == "/src/axon/splitters.py"
 
     def test_import_resolves(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         brain._code_graph["nodes"]["/src/axon/splitters.py"] = {
             "node_type": "file",
             "file_path": "/src/axon/splitters.py",
@@ -467,11 +467,11 @@ class TestResolveImportV2:
         assert result == "/src/axon/splitters.py"
 
     def test_no_match_returns_none(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         result = brain._resolve_import_to_file("from nonexistent import x")
         assert result is None
 
     def test_bad_stmt_returns_none(self, tmp_path):
-        brain = _make_brain(tmp_path)
+        brain = _make_brain_v2(tmp_path)
         result = brain._resolve_import_to_file("not an import statement")
         assert result is None

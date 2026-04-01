@@ -1403,6 +1403,7 @@ class AxonConfig:
             "vector_store": {
                 "provider": flat["vector_store"],
                 "path": flat["vector_store_path"],
+                "tqdb_bits": flat["tqdb_bits"],
             },
             "bm25": {
                 "path": flat["bm25_path"],

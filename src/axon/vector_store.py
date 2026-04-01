@@ -18,8 +18,6 @@ import logging
 import os
 from typing import Any
 
-import numpy as np
-
 from axon.config import AxonConfig
 
 logger = logging.getLogger("Axon")
@@ -337,34 +335,44 @@ class OpenVectorStore:
                 self.collection.add(rows)
 
             # Merge fragments and purge old versions to keep disk usage clean
-            try:
-                from datetime import timedelta
+            # Optimize periodically (every ~1000 ingested rows) to avoid write-amplification.
+            _rows = len(rows) if rows else 0
+            self._lancedb_rows_since_optimize = (
+                getattr(self, "_lancedb_rows_since_optimize", 0) + _rows
+            )
+            if self._lancedb_rows_since_optimize >= 1000:
+                try:
+                    from datetime import timedelta
 
-                self.collection.optimize(
-                    cleanup_older_than=timedelta(seconds=0),
-                    delete_unverified=True,
-                )
-            except Exception:
-                pass
+                    self.collection.optimize(
+                        cleanup_older_than=timedelta(seconds=0),
+                        delete_unverified=True,
+                    )
+                    self._lancedb_rows_since_optimize = 0
+                except Exception:
+                    pass
 
-            # Auto-build IVF_PQ index once corpus is large enough (≥1000 vectors)
-            try:
-                count = self.collection.count_rows()
-                if count >= 1000:
-                    num_partitions = min(256, max(8, count // 500))
-                    self.collection.create_index(
-                        metric="cosine",
-                        vector_column_name="vector",
-                        num_partitions=num_partitions,
-                        num_sub_vectors=24,
-                        replace=True,
-                    )
-                    logger.debug(
-                        f"LanceDB: IVF_PQ index built on {count} vectors "
-                        f"(partitions={num_partitions})"
-                    )
-            except Exception as e:
-                logger.debug(f"LanceDB: auto index build skipped — {e}")
+            # Auto-build IVF_PQ index once corpus is large enough (≥1000 vectors).
+            # Only attempt once per process to avoid repeated rebuilds.
+            if not getattr(self, "_lancedb_index_built", False):
+                try:
+                    count = self.collection.count_rows()
+                    if count >= 1000:
+                        num_partitions = min(256, max(8, count // 500))
+                        self.collection.create_index(
+                            metric="cosine",
+                            vector_column_name="vector",
+                            num_partitions=num_partitions,
+                            num_sub_vectors=24,
+                            replace=True,
+                        )
+                        self._lancedb_index_built = True
+                        logger.debug(
+                            f"LanceDB: IVF_PQ index built on {count} vectors "
+                            f"(partitions={num_partitions})"
+                        )
+                except Exception as e:
+                    logger.debug(f"LanceDB: auto index build skipped — {e}")
 
         elif self.provider == "turboquantdb":
             if not ids:
@@ -391,6 +399,8 @@ class OpenVectorStore:
                 )
 
             # L2-normalize so IP = cosine similarity (handles models that don't output unit vectors)
+            import numpy as np
+
             vecs = np.array(embeddings, dtype=np.float32)
             norms = np.linalg.norm(vecs, axis=1, keepdims=True)
             vecs = np.divide(vecs, norms, where=norms > 0)
@@ -400,15 +410,20 @@ class OpenVectorStore:
             # Update sidecar doc index: source → [chunk_ids]
             doc_index: dict[str, list[str]] = {}
             if os.path.exists(self._tqdb_doc_index_path):
-                with open(self._tqdb_doc_index_path) as f:
-                    doc_index = json.load(f)
+                try:
+                    with open(self._tqdb_doc_index_path) as f:
+                        doc_index = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    doc_index = {}
             for chunk_id, meta in zip(ids, metas):
                 source = (meta or {}).get("source", "unknown")
                 doc_index.setdefault(source, [])
                 if chunk_id not in doc_index[source]:
                     doc_index[source].append(chunk_id)
-            with open(self._tqdb_doc_index_path, "w") as f:
+            tmp_path = self._tqdb_doc_index_path + ".tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(doc_index, f)
+            os.replace(tmp_path, self._tqdb_doc_index_path)
 
             # Auto-build ANN index once corpus is large enough (≥1000 vectors).
             try:
@@ -493,8 +508,11 @@ class OpenVectorStore:
         elif self.provider == "turboquantdb":
             if not os.path.exists(self._tqdb_doc_index_path):
                 return []
-            with open(self._tqdb_doc_index_path) as f:
-                doc_index: dict[str, list[str]] = json.load(f)
+            try:
+                with open(self._tqdb_doc_index_path) as f:
+                    doc_index: dict[str, list[str]] = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                return []
             return sorted(
                 [
                     {"source": src, "chunks": len(chunk_ids), "doc_ids": chunk_ids}
@@ -571,6 +589,8 @@ class OpenVectorStore:
         elif self.provider == "turboquantdb":
             if self.client is None:
                 return []
+            import numpy as np
+
             q = np.array(query_embedding, dtype=np.float32)
             q_norm = np.linalg.norm(q)
             if q_norm > 0:
