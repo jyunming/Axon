@@ -247,13 +247,11 @@ make lint
 ### 10. Release Process
 
 1. Update version in **all** version files (must stay in sync):
-   - `pyproject.toml` (primary source of truth — also update `integrations/vscode-axon/package.json` and `src/axon/__init__.py`)
-   - `setup.py`
-   - `src/__init__.py`
-   - `src/axon/__init__.py`
-   - `src/axon/api.py` (FastAPI `version=` field)
+   - `pyproject.toml` ← **only file to change** for the Python package version
+   - `integrations/vscode-axon/package.json` ← bump manually to match, then `npm run package` to rebuild VSIX
+   - All other Python files (`api.py`, `llm.py`, `__init__.py`) read the version dynamically via `importlib.metadata`
 2. Run all tests: `make ci`
-3. Create git tag: `git tag v0.9.0`
+3. Create git tag: `git tag v0.1.0`
 4. Push tag: `git push --tags`
 5. GitHub Actions will build and publish
 

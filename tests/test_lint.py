@@ -52,9 +52,11 @@ def _is_allowed(line: str) -> bool:
 
     Uses filename:line fragments (without directory) so the check works on both
     Unix (src/axon/foo.py) and Windows (src\\axon\\foo.py).
+    Normalises backslashes to forward slashes before matching.
     """
+    normalized = line.replace("\\", "/")
     for path_frag, msg_frag in _MYPY_ALLOWED_ERRORS:
-        if path_frag in line and (not msg_frag or msg_frag in line):
+        if path_frag in normalized and (not msg_frag or msg_frag in normalized):
             return True
     return False
 

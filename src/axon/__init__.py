@@ -19,7 +19,12 @@ from .llm import OpenLLM
 from .main import AxonBrain
 from .vector_store import OpenVectorStore
 
-__version__ = "0.9.0"
+try:
+    from importlib.metadata import PackageNotFoundError, version
+
+    __version__ = version("axon-rag")
+except PackageNotFoundError:
+    __version__ = "0.0.0+dev"
 
 
 __all__ = [

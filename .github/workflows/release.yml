@@ -29,14 +29,14 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .
-          pip install build
+          pip install build twine
 
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build source distribution
-        run: python -m build --sdist
+      - name: Build distributions
+        run: python -m build
 
       - name: Generate changelog from git log
         id: changelog
@@ -79,6 +79,14 @@ jobs:
         with:
           name: "Axon v${{ steps.version.outputs.VERSION }}"
           body_path: CHANGELOG_RELEASE.md
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
