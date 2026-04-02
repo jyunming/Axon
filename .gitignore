@@ -126,6 +126,7 @@ list_gemini_models.py
 
 # AI assistant instruction files (kept locally, not versioned)
 CLAUDE.md
+AGENT.md
 .github/copilot-instructions.md
 
 # Runtime data

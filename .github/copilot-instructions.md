@@ -403,3 +403,14 @@ aborted with a `RuntimeError` if any active model is `[remote]` or `[MISSING]`.
 - Files imported by `axon/__init__.py` (e.g. `llm.py`) cannot do `from axon import __version__` — circular import; use `importlib.metadata.version("axon-rag")` directly instead
 - When moving a dep from base to an optional extra, guard its top-level import — e.g. `try: import streamlit as st; _AVAIL=True` / `except ImportError: _AVAIL=False`
 - Windows mypy outputs backslash paths; `_is_allowed()` in `test_lint.py` normalises with `.replace("\\", "/")` before matching the allowlist
+
+---
+
+## Branch & PR Rules
+
+- Always create a feature branch before touching any file — never commit directly to `main`
+- **One branch at a time** — never split work across multiple branches; consolidate into one before committing
+- **Before every push** — check for unresolved PR review comments first (`gh api repos/.../pulls/<n>/comments`); fix all findings before pushing to avoid wasting CI runs
+- **NEVER push or create a PR without explicit user approval**
+- Version bumps only for functional changes — doc/readme/HTML fixes do not justify a bump
+- No tag = no PyPI release; merging to main alone does nothing to PyPI

@@ -16,9 +16,9 @@ Drop in PDFs, code, spreadsheets, or URLs — ask anything, get cited answers fr
 
 ## Why Axon?
 
-Most RAG tools make you choose between cloud power and data privacy. Axon runs entirely on your hardware — full capability, zero egress.
+Most RAG tools make you choose between cloud power and data privacy. Axon can run entirely on your hardware — full capability, zero egress in local-only mode.
 
-- **Private by default** — all inference runs locally via Ollama. No API key required, no upload, no telemetry.
+- **Private by default** — by default, inference runs locally via Ollama. No API key required, no upload, no telemetry. Cloud providers (OpenAI, Gemini, Grok, vLLM, GitHub Copilot) are also supported via API keys.
 - **Ingest anything** — 54 file formats (PDF, DOCX, PPTX, Jupyter, code, images, URLs) with SHA-256 dedup.
 - **Works in your tools** — `@axon` in Copilot Chat, MCP server for Claude Code / Codex / Gemini CLI / Cursor, Graph panel in VS Code.
 - **Built for teams** — share your knowledge base with signed, revocable read-only keys.
@@ -32,7 +32,7 @@ Most RAG tools make you choose between cloud power and data privacy. Axon runs e
 pip install axon-rag
 ```
 
-Requires Python 3.10+ and [Ollama](https://ollama.com) running locally.
+Requires Python 3.10+. For local inference with the default config you'll also need [Ollama](https://ollama.com) running locally; cloud providers (OpenAI, Gemini, Grok, vLLM, GitHub Copilot) work via API keys and do not require Ollama.
 
 ### Optional extras
 
@@ -116,7 +116,7 @@ On first run, Axon creates `~/.config/axon/config.yaml`. Key settings:
 
 ```yaml
 llm:
-  provider: ollama          # ollama | openai | gemini | grok | copilot
+  provider: ollama          # ollama | openai | gemini | grok | vllm | ollama_cloud | github_copilot
   model: llama3.2
   base_url: http://localhost:11434
 
