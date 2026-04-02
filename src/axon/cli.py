@@ -213,7 +213,11 @@ def main():
 
     _write_python_discovery()
 
+    from axon import __version__
+
     parser = argparse.ArgumentParser(description="Axon CLI")
+
+    parser.add_argument("--version", action="version", version=f"axon-rag {__version__}")
 
     parser.add_argument("query", nargs="?", help="Question to ask")
 
