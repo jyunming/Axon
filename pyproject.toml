@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "axon-rag"
 version = "0.1.0"
 description = "General-purpose open-source RAG engine with multi-LLM, hybrid retrieval, GraphRAG, and MCP support"
-readme = "README.md"
+readme = "PYPI_README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [

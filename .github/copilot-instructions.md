@@ -382,3 +382,24 @@ aborted with a `RuntimeError` if any active model is `[remote]` or `[MISSING]`.
 - **Do** use `query_router: heuristic` (the default) for most deployments —
   it requires no LLM calls and selects the right retrieval strategy
   automatically.
+
+---
+
+## PyPI Publishing
+
+- Package name on PyPI: `axon-rag` — install with `pip install axon-rag`
+- Publishing is tag-triggered, NOT merge-triggered — merging to main does nothing to PyPI
+- Full release sequence: bump `pyproject.toml` version → bump `integrations/vscode-axon/package.json` → rebuild VSIX (`npm run package`) → commit → PR → merge → `git tag vX.Y.Z && git push origin vX.Y.Z`
+- NEVER bump version without a functional reason — packaging/doc/readme fixes alone do not justify a bump
+- PyPI releases are immutable — description cannot be updated after upload; always verify `PYPI_README.md` renders correctly before tagging
+- `PYPI_README.md` is the PyPI description (NOT `README.md`) — uses absolute URLs (`https://raw.githubusercontent.com/jyunming/Axon/main/...`) because PyPI cannot resolve relative paths or repo-relative images
+- GitHub release notes use `generate_notes: true` in `release.yml` — do NOT replace with custom git-log scripts (they dump entire history on first tag and misattribute authorship)
+
+---
+
+## Packaging Rules
+
+- `src/__init__.py` must NOT exist — `packages.find where=["src"]` would ship a bare `src` namespace package into user environments
+- Files imported by `axon/__init__.py` (e.g. `llm.py`) cannot do `from axon import __version__` — circular import; use `importlib.metadata.version("axon-rag")` directly instead
+- When moving a dep from base to an optional extra, guard its top-level import — e.g. `try: import streamlit as st; _AVAIL=True` / `except ImportError: _AVAIL=False`
+- Windows mypy outputs backslash paths; `_is_allowed()` in `test_lint.py` normalises with `.replace("\\", "/")` before matching the allowlist
