@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Axon RAG Brain - Private AI Knowledge Engine</title>
-    <!-- Google Fonts -->
+    <title>Axon — Private AI Knowledge Engine</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
@@ -21,11 +20,7 @@
             --text-muted: #9ca3af;
         }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         html, body {
             background-color: var(--bg-color);
@@ -33,128 +28,236 @@
             font-family: 'Inter', sans-serif;
             overflow-x: hidden;
             width: 100%;
-            margin: 0;
-            padding: 0;
             line-height: 1.6;
         }
 
-        h1, h2, h3, h4 {
-            font-family: 'Outfit', sans-serif;
-        }
+        h1, h2, h3, h4 { font-family: 'Outfit', sans-serif; }
 
         /* Canvas Background */
         #network-canvas {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 1;
-            opacity: 0.6;
-            pointer-events: none;
+            position: fixed; top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 1; opacity: 0.6; pointer-events: none;
         }
 
-        /* Layout & Container */
-        .container {
-            width: 90%;
-            max-width: 1200px;
-            margin: 0 auto;
+        .container { width: 90%; max-width: 1200px; margin: 0 auto; }
+
+        /* ── Navbar ── */
+        nav {
+            position: fixed; top: 0; left: 0; right: 0;
+            z-index: 100;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--glass-border);
+            background: rgba(3, 7, 18, 0.7);
         }
 
-        /* Header / Hero */
+        .nav-inner {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 0;
+        }
+
+        .nav-logo {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800; font-size: 1.25rem;
+            background: linear-gradient(90deg, #60a5fa, #c084fc);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex; align-items: center; gap: 24px;
+        }
+
+        .nav-links a {
+            color: var(--text-muted); text-decoration: none;
+            font-size: 0.875rem; font-weight: 500;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover { color: var(--text-main); }
+
+        .nav-pypi-btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.35);
+            color: #60a5fa !important;
+            padding: 7px 16px; border-radius: 8px;
+            font-size: 0.8rem !important; font-weight: 600 !important;
+            transition: background 0.2s, border-color 0.2s !important;
+        }
+
+        .nav-pypi-btn:hover {
+            background: rgba(59, 130, 246, 0.25) !important;
+            border-color: rgba(96, 165, 250, 0.6) !important;
+            color: #93c5fd !important;
+        }
+
+        @media (max-width: 640px) {
+            .nav-links { gap: 16px; }
+            .nav-links a:not(.nav-pypi-btn) { display: none; }
+        }
+
+        /* ── Hero ── */
         header {
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
             text-align: center;
-            position: relative;
-            z-index: 10;
+            position: relative; z-index: 10;
+            padding-top: 64px;
         }
 
         .pill {
-            background: rgba(59, 130, 246, 0.15);
+            background: rgba(59, 130, 246, 0.12);
             border: 1px solid rgba(59, 130, 246, 0.3);
             color: #60a5fa;
-            padding: 8px 16px;
-            border-radius: 999px;
-            font-size: 0.875rem;
-            font-weight: 500;
+            padding: 7px 16px; border-radius: 999px;
+            font-size: 0.8rem; font-weight: 500;
             margin-bottom: 24px;
             backdrop-filter: blur(8px);
             animation: float 4s ease-in-out infinite;
+            display: inline-flex; align-items: center; gap: 8px;
+        }
+
+        .pill-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #60a5fa;
+            box-shadow: 0 0 6px #60a5fa;
+            animation: pulse-dot 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
         }
 
         h1 {
             font-size: clamp(3rem, 6vw, 5rem);
-            font-weight: 800;
-            line-height: 1.1;
+            font-weight: 800; line-height: 1.1;
             margin-bottom: 24px;
             background: linear-gradient(to right, #60a5fa, #c084fc, #f472b6);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            letter-spacing: -0.02em;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; letter-spacing: -0.02em;
             max-width: 900px;
         }
 
         .hero-subtitle {
             font-size: clamp(1.125rem, 2vw, 1.375rem);
-            color: var(--text-muted);
-            max-width: 700px;
-            margin-bottom: 48px;
+            color: var(--text-muted); max-width: 680px;
+            margin-bottom: 40px;
         }
 
+        /* Hero CTA buttons */
+        .hero-cta {
+            display: flex; gap: 16px; flex-wrap: wrap;
+            justify-content: center; margin-bottom: 48px;
+        }
+
+        .btn-primary {
+            display: inline-flex; align-items: center; gap: 10px;
+            background: var(--accent-primary);
+            color: #fff; text-decoration: none;
+            padding: 13px 28px; border-radius: 10px;
+            font-weight: 600; font-size: 0.95rem;
+            transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 24px -4px rgba(59, 130, 246, 0.5);
+        }
+
+        .btn-primary:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px -4px rgba(59, 130, 246, 0.6);
+        }
+
+        .btn-secondary {
+            display: inline-flex; align-items: center; gap: 10px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--glass-border);
+            color: var(--text-main); text-decoration: none;
+            padding: 13px 28px; border-radius: 10px;
+            font-weight: 600; font-size: 0.95rem;
+            transition: background 0.2s, border-color 0.2s, transform 0.2s;
+            backdrop-filter: blur(8px);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        /* Terminal */
         .terminal-window {
-            background: #0f172a;
+            background: #0a0f1e;
             border: 1px solid var(--glass-border);
             border-radius: 12px;
-            padding: 16px;
-            width: 100%;
-            max-width: 600px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            margin-top: 2rem;
-            text-align: left;
-            font-family: monospace;
+            width: 100%; max-width: 580px;
+            box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.6);
+            text-align: left; font-family: monospace;
             overflow: hidden;
-            position: relative;
         }
 
         .terminal-header {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 16px;
+            display: flex; align-items: center; gap: 8px;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid var(--glass-border);
         }
 
-        .dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-        }
-        .dot.red { background: #ef4444; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; }
+        .dot.red    { background: #ef4444; }
         .dot.yellow { background: #f59e0b; }
-        .dot.green { background: #10b981; }
+        .dot.green  { background: #10b981; }
 
-        /* Features Section */
+        .terminal-title {
+            font-size: 0.75rem; color: var(--text-muted);
+            margin-left: 4px; font-family: 'Inter', sans-serif;
+        }
+
+        .terminal-body { padding: 20px; }
+
+        .term-line { display: flex; gap: 10px; margin-bottom: 6px; font-size: 0.875rem; }
+        .term-prompt { color: #60a5fa; user-select: none; }
+        .term-cmd { color: #f9fafb; }
+        .term-out { color: #6b7280; margin-left: 20px; margin-bottom: 4px; font-size: 0.8rem; }
+        .term-success { color: #10b981; }
+
+        .typewriter-cursor {
+            border-right: 2px solid #60a5fa;
+            animation: blink-caret 0.75s step-end infinite;
+            padding-right: 2px;
+        }
+
+        @keyframes blink-caret {
+            from, to { border-color: transparent; }
+            50% { border-color: #60a5fa; }
+        }
+
+        /* ── Ollama note ── */
+        .ollama-note {
+            margin-top: 14px;
+            font-size: 0.78rem; color: #6b7280;
+            max-width: 520px; text-align: center; line-height: 1.6;
+        }
+
+        .ollama-note a { color: #60a5fa; text-decoration: none; }
+        .ollama-note a:hover { text-decoration: underline; }
+
+        /* ── Features ── */
         .features {
-            padding: 120px 0;
-            position: relative;
-            z-index: 10;
+            padding: 80px 0 120px 0;
+            position: relative; z-index: 10;
         }
 
         .section-title {
-            text-align: center;
-            font-size: 2.5rem;
-            margin-bottom: 16px;
-            font-weight: 700;
+            text-align: center; font-size: 2.5rem;
+            margin-bottom: 16px; font-weight: 700;
         }
 
         .section-subtitle {
-            text-align: center;
-            color: var(--text-muted);
-            max-width: 600px;
-            margin: 0 auto 64px auto;
+            text-align: center; color: var(--text-muted);
+            max-width: 600px; margin: 0 auto 64px auto;
         }
 
         .grid {
@@ -165,26 +268,18 @@
 
         .glass-card {
             background: var(--glass-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
             border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            padding: 24px;
+            border-radius: 16px; padding: 24px;
             transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
-            position: relative;
-            overflow: hidden;
+            position: relative; overflow: hidden;
         }
 
         .glass-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 1px;
+            content: ''; position: absolute; top: 0; left: 0;
+            width: 100%; height: 1px;
             background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            opacity: 0;
-            transition: opacity 0.3s;
+            opacity: 0; transition: opacity 0.3s;
         }
 
         .glass-card:hover {
@@ -193,66 +288,39 @@
             border-color: rgba(255, 255, 255, 0.15);
         }
 
-        .glass-card:hover::before {
-            opacity: 1;
-        }
+        .glass-card:hover::before { opacity: 1; }
 
         .icon-wrapper {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 16px;
-            font-size: 1.5rem;
+            width: 48px; height: 48px; border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            margin-bottom: 16px; font-size: 1.5rem;
         }
 
-        .ic-primary { background: rgba(59, 130, 246, 0.1); color: var(--accent-primary); border: 1px solid rgba(59, 130, 246, 0.2); }
-        .ic-secondary { background: rgba(139, 92, 246, 0.1); color: var(--accent-secondary); border: 1px solid rgba(139, 92, 246, 0.2); }
-        .ic-tertiary { background: rgba(236, 72, 153, 0.1); color: var(--accent-tertiary); border: 1px solid rgba(236, 72, 153, 0.2); }
+        .ic-primary   { background: rgba(59,130,246,0.1);  color: var(--accent-primary);   border: 1px solid rgba(59,130,246,0.2); }
+        .ic-secondary { background: rgba(139,92,246,0.1);  color: var(--accent-secondary);  border: 1px solid rgba(139,92,246,0.2); }
+        .ic-tertiary  { background: rgba(236,72,153,0.1);  color: var(--accent-tertiary);   border: 1px solid rgba(236,72,153,0.2); }
 
-        .glass-card h3 {
-            font-size: 1.25rem;
-            margin-bottom: 12px;
-            color: #fff;
-        }
+        .glass-card h3 { font-size: 1.25rem; margin-bottom: 12px; color: #fff; }
+        .glass-card p  { color: var(--text-muted); font-size: 0.95rem; }
 
-        .glass-card p {
-            color: var(--text-muted);
-            font-size: 0.95rem;
-        }
-
-        /* Showcases */
+        /* ── Showcases ── */
         .showcase {
             padding: 60px 0 120px 0;
-            z-index: 10;
-            position: relative;
+            z-index: 10; position: relative;
         }
 
         .showcase-row {
-            display: flex;
-            align-items: center;
-            gap: 48px;
-            margin-bottom: 96px;
+            display: flex; align-items: center;
+            gap: 48px; margin-bottom: 96px;
         }
 
-        .showcase-row:nth-child(even) {
-            flex-direction: row-reverse;
-        }
+        .showcase-row:nth-child(even) { flex-direction: row-reverse; }
 
-        .showcase-content {
-            flex: 1;
-        }
-
-        .showcase-visual {
-            flex: 1;
-            position: relative;
-        }
+        .showcase-content { flex: 1; }
+        .showcase-visual  { flex: 1; position: relative; }
 
         .showcase-visual img {
-            width: 100%;
-            height: auto;
+            width: 100%; height: auto;
             border-radius: 12px;
             border: 1px solid var(--glass-border);
             box-shadow: 0 30px 60px -15px rgba(0,0,0,0.6);
@@ -265,186 +333,145 @@
         }
 
         .showcase-glow {
-            position: absolute;
-            top: 50%;
-            left: 50%;
+            position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 120%;
-            height: 120%;
+            width: 120%; height: 120%;
             background: radial-gradient(circle, var(--accent-secondary) 0%, transparent 60%);
-            opacity: 0.15;
-            z-index: -1;
-            filter: blur(40px);
+            opacity: 0.15; z-index: -1; filter: blur(40px);
         }
 
         .showcase-row:nth-child(odd) .showcase-glow {
             background: radial-gradient(circle, var(--accent-primary) 0%, transparent 60%);
         }
 
-        /* Animations */
+        .check-list { list-style: none; padding: 0; }
+        .check-list li {
+            margin-bottom: 12px; display: flex;
+            align-items: flex-start; gap: 12px;
+        }
+        .check-list li span.check { color: var(--accent-primary); }
+        .check-list li span.check-pink { color: var(--accent-tertiary); }
+
+        /* ── Animations ── */
         @keyframes float {
             0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-10px); }
+            50%       { transform: translateY(-8px); }
         }
 
         .reveal {
-            opacity: 0;
-            transform: translateY(30px);
+            opacity: 0; transform: translateY(30px);
             transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        .reveal.active {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        .reveal.active { opacity: 1; transform: translateY(0); }
 
         /* Gradient Orbs */
         .orb {
-            position: fixed;
-            border-radius: 50%;
-            filter: blur(80px);
-            z-index: 0;
-            opacity: 0.4;
+            position: fixed; border-radius: 50%;
+            filter: blur(80px); z-index: 0; opacity: 0.4;
             animation: pulse 8s alternate infinite;
         }
 
-        .orb-1 { top: -10%; left: -10%; width: 500px; height: 500px; background: rgba(59, 130, 246, 0.2); }
-        .orb-2 { bottom: -10%; right: -10%; width: 600px; height: 600px; background: rgba(139, 92, 246, 0.15); animation-delay: -4s; }
+        .orb-1 { top: -10%; left: -10%; width: 500px; height: 500px; background: rgba(59,130,246,0.2); }
+        .orb-2 { bottom: -10%; right: -10%; width: 600px; height: 600px; background: rgba(139,92,246,0.15); animation-delay: -4s; }
 
         @keyframes pulse {
-            0% { transform: scale(1); opacity: 0.3; }
+            0%   { transform: scale(1);   opacity: 0.3; }
             100% { transform: scale(1.2); opacity: 0.5; }
         }
 
-        /* Typewriter effect */
-        .typewriter {
-            overflow: hidden; /* Ensures the content is not revealed until the animation */
-            white-space: nowrap; /* Keeps the content on a single line */
-            margin: 0; /* Gives that scrolling effect as the typing happens */
-            border-right: .15em solid #60a5fa; /* The typwriter cursor */
-            color: #10b981;
-            animation:
-              typing 3s steps(40, end),
-              blink-caret .75s step-end infinite;
-        }
-
-        @keyframes typing {
-            from { width: 0 }
-            to { width: 100% }
-        }
-
-        @keyframes blink-caret {
-            from, to { border-color: transparent }
-            50% { border-color: #60a5fa; }
-        }
-
-        @media (max-width: 1024px) {
-            .showcase-row, .showcase-row:nth-child(even) {
-                flex-direction: column;
-                gap: 32px;
-            }
-            .showcase-content {
-                text-align: center;
-                padding: 0 20px;
-            }
-        }
-
-        /* Custom Project Isolation Graphic */
+        /* ── Project Isolation Graphic ── */
         .iso-container {
-            position: relative;
-            width: 100%;
-            min-height: 240px;
-            background: rgba(15, 23, 42, 0.4);
+            position: relative; width: 100%; min-height: 240px;
+            background: rgba(15,23,42,0.4);
             border: 1px solid var(--glass-border);
             border-radius: 16px;
             box-shadow: 0 30px 60px -15px rgba(0,0,0,0.6);
             backdrop-filter: blur(10px);
             font-family: 'Inter', sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 24px 16px;
-            gap: 12px;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            padding: 24px 16px; gap: 12px;
         }
+
         .iso-box {
-            background: linear-gradient(135deg, rgba(30, 58, 138, 0.8), rgba(15, 23, 42, 0.9));
-            border: 1px solid rgba(59, 130, 246, 0.4);
-            border-radius: 12px;
-            padding: 12px 16px;
-            width: 100%;
-            max-width: 320px;
-            text-align: center;
-            font-size: 0.85rem;
+            background: linear-gradient(135deg, rgba(30,58,138,0.8), rgba(15,23,42,0.9));
+            border: 1px solid rgba(59,130,246,0.4);
+            border-radius: 12px; padding: 12px 16px;
+            width: 100%; max-width: 320px;
+            text-align: center; font-size: 0.85rem;
             box-shadow: 0 8px 16px rgba(0,0,0,0.3);
-            transition: transform 0.3s ease, border-color 0.3s, box-shadow 0.3s;
+            transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
             position: relative;
         }
+
         .iso-box:hover {
             transform: translateY(-3px);
-            border-color: rgba(96, 165, 250, 0.8);
+            border-color: rgba(96,165,250,0.8);
             box-shadow: 0 12px 24px rgba(0,0,0,0.5);
         }
 
-        /* Center - Private Project */
-        .proj-private {
-            max-width: 360px;
-            background: linear-gradient(135deg, rgba(30, 58, 138, 0.95), rgba(15, 23, 42, 0.95));
-            border-color: rgba(96, 165, 250, 0.6);
-            padding: 16px 16px;
+        .proj-private  { max-width: 360px; background: linear-gradient(135deg, rgba(30,58,138,0.95), rgba(15,23,42,0.95)); border-color: rgba(96,165,250,0.6); padding: 16px; }
+        .proj-mounted  { background: linear-gradient(135deg, rgba(76,29,149,0.8), rgba(15,23,42,0.9)); border-color: rgba(139,92,246,0.4); }
+        .proj-mounted:hover { border-color: rgba(167,139,250,0.8); }
+        .proj-shared   { background: linear-gradient(135deg, rgba(131,24,67,0.8), rgba(15,23,42,0.9)); border-color: rgba(236,72,153,0.4); }
+        .proj-shared:hover { border-color: rgba(244,114,182,0.8); }
+
+        .iso-nodes { display: flex; justify-content: center; gap: 6px; margin-top: 8px; }
+        .iso-node  { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,0.3); transition: background 0.3s, transform 0.3s; }
+        .iso-box:hover .iso-node { background: rgba(255,255,255,0.9); transform: scale(1.2); }
+
+        .iso-arrow-container { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 60px; }
+        .iso-label { font-size: 0.70rem; color: var(--text-muted); font-family: monospace; background: #0f172a; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--glass-border); white-space: nowrap; }
+        .iso-svg-arrow { color: rgba(255,255,255,0.4); }
+
+        /* ── Footer ── */
+        footer {
+            text-align: center; padding: 80px 0;
+            border-top: 1px solid var(--glass-border);
+            position: relative; z-index: 10;
         }
 
-        /* Left - Mounted In */
-        .proj-mounted {
-            background: linear-gradient(135deg, rgba(76, 29, 149, 0.8), rgba(15, 23, 42, 0.9));
-            border-color: rgba(139, 92, 246, 0.4);
-        }
-        .proj-mounted:hover { border-color: rgba(167, 139, 250, 0.8); }
-
-        /* Right - Shared Out */
-        .proj-shared {
-            background: linear-gradient(135deg, rgba(131, 24, 67, 0.8), rgba(15, 23, 42, 0.9));
-            border-color: rgba(236, 72, 153, 0.4);
-        }
-        .proj-shared:hover { border-color: rgba(244, 114, 182, 0.8); }
-
-        .iso-nodes {
-            display: flex;
-            justify-content: center;
-            gap: 6px;
-            margin-top: 8px;
-        }
-        .iso-node {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: rgba(255,255,255,0.3);
-            transition: background 0.3s, transform 0.3s;
-        }
-        .iso-box:hover .iso-node {
-            background: rgba(255,255,255,0.9);
-            transform: scale(1.2);
+        .footer-cta-btns {
+            display: flex; gap: 16px;
+            justify-content: center; flex-wrap: wrap;
+            margin-bottom: 40px;
         }
 
-        .iso-arrow-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 4px;
-            min-width: 60px;
-        }
-        .iso-label {
-            font-size: 0.70rem;
-            color: var(--text-muted);
+        .footer-code-block {
+            display: inline-block;
             font-family: monospace;
-            background: #0f172a;
-            padding: 2px 10px;
-            border-radius: 999px;
+            background: #0a0f1e;
             border: 1px solid var(--glass-border);
-            white-space: nowrap;
+            padding: 18px 36px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5);
+            font-size: 0.95rem;
         }
-        .iso-svg-arrow {
-            color: rgba(255, 255, 255, 0.4);
+
+        .footer-code-block .prompt { color: #60a5fa; }
+        .footer-code-block .cmd    { color: #f9fafb; }
+        .footer-code-block .pkg    { color: #a78bfa; }
+
+        .footer-meta {
+            margin-top: 40px;
+            color: var(--text-muted); font-size: 0.8rem;
+        }
+
+        .footer-meta a { color: var(--text-muted); text-decoration: none; transition: color 0.2s; }
+        .footer-meta a:hover { color: var(--text-main); }
+
+        /* ── Responsive ── */
+        @media (max-width: 1024px) {
+            .showcase-row, .showcase-row:nth-child(even) {
+                flex-direction: column; gap: 32px;
+            }
+            .showcase-content { text-align: center; padding: 0 20px; }
+        }
+
+        @media (max-width: 640px) {
+            .hero-cta { flex-direction: column; align-items: center; }
+            .btn-primary, .btn-secondary { width: 100%; max-width: 300px; justify-content: center; }
         }
     </style>
 </head>
@@ -455,22 +482,77 @@
     <div class="orb orb-2"></div>
     <canvas id="network-canvas"></canvas>
 
+    <!-- Navbar -->
+    <nav>
+        <div class="container nav-inner">
+            <a class="nav-logo" href="#">Axon</a>
+            <div class="nav-links">
+                <a href="https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md" target="_blank" rel="noopener noreferrer">Docs</a>
+                <a href="https://github.com/jyunming/Axon" target="_blank" rel="noopener noreferrer">GitHub</a>
+                <a href="https://pypi.org/project/axon-rag/" target="_blank" rel="noopener noreferrer" class="nav-pypi-btn">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm-1.5 17.25V13.5H6l7.5-6.75v3.75H18L10.5 17.25z"/></svg>
+                    pip install axon-rag
+                </a>
+            </div>
+        </div>
+    </nav>
+
     <!-- Hero Section -->
     <header class="container">
-        <div class="pill reveal active">Axon RAG Engine v0.1.0</div>
+        <div class="pill reveal active">
+            <span class="pill-dot"></span>
+            v0.1.0 — now on PyPI
+        </div>
         <h1 class="reveal active">Your documents, answerable.<br>On your hardware.</h1>
         <p class="hero-subtitle reveal active">Drop in PDFs, code, spreadsheets, or URLs. Ask anything, get cited answers from a local LLM. Nothing leaves your machine.</p>
 
+        <!-- CTA Buttons -->
+        <div class="hero-cta reveal active" style="transition-delay: 0.1s;">
+            <a href="https://pypi.org/project/axon-rag/" target="_blank" rel="noopener noreferrer" class="btn-primary">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm-1.5 17.25V13.5H6l7.5-6.75v3.75H18L10.5 17.25z"/></svg>
+                pip install axon-rag
+            </a>
+            <a href="https://github.com/jyunming/Axon" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                </svg>
+                View on GitHub
+            </a>
+        </div>
+
+        <!-- Terminal -->
         <div class="terminal-window reveal active" style="transition-delay: 0.2s;">
             <div class="terminal-header">
                 <div class="dot red"></div>
                 <div class="dot yellow"></div>
                 <div class="dot green"></div>
+                <span class="terminal-title">bash</span>
             </div>
-            <div style="color: #94A3B8; margin-bottom: 8px;">$ axon</div>
-            <p style="color: #94A3B8; margin: 12px 0 8px 0; font-family: monospace; font-size: 0.9rem;">Axon - INFO - Initializing Axon...</p>
-            <p class="typewriter" style="color: #f9fafb; font-family: monospace;">Starting...</p>
+            <div class="terminal-body">
+                <div class="term-line">
+                    <span class="term-prompt">$</span>
+                    <span class="term-cmd">pip install axon-rag</span>
+                </div>
+                <div class="term-out">Successfully installed axon-rag-0.1.0</div>
+                <div class="term-line" style="margin-top: 10px;">
+                    <span class="term-prompt">$</span>
+                    <span class="term-cmd">axon ingest ~/docs/</span>
+                </div>
+                <div class="term-out">Ingested 42 files · 0 duplicates skipped</div>
+                <div class="term-line" style="margin-top: 10px;">
+                    <span class="term-prompt">$</span>
+                    <span class="term-cmd">axon query "What are the key findings?"</span>
+                </div>
+                <div class="term-out term-success">
+                    <span class="typewriter-cursor">Based on section 4.2 [1] and the summary [2]...</span>
+                </div>
+            </div>
         </div>
+
+        <p class="ollama-note reveal active" style="transition-delay: 0.3s;">
+            * By default, inference runs locally via <a href="https://ollama.com" target="_blank" rel="noopener noreferrer">Ollama</a> — no API key needed.
+            Cloud providers (OpenAI, Gemini, Grok, vLLM, GitHub Copilot) work via API keys and do not require Ollama.
+        </p>
     </header>
 
     <!-- Features Grid -->
@@ -484,34 +566,29 @@
                 <h3>Graph Intelligence</h3>
                 <p>RAPTOR hierarchies, GraphRAG entity mapping, and rich AST Code Graphs.</p>
             </div>
-
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-secondary">📥</div>
                 <h3>Ingest Everything</h3>
-                <p>Support for 54 formats including PDFs, Notebooks, and code with SHA-256 deduplication.</p>
+                <p>54 file formats — PDFs, Notebooks, DOCX, PPTX, code — with SHA-256 deduplication.</p>
             </div>
-
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-tertiary">🔒</div>
                 <h3>Air-Gapped Privacy</h3>
                 <p>Zero telemetry. Complete offline support via Ollama. Your data stays entirely yours.</p>
             </div>
-
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-secondary">🔍</div>
                 <h3>Advanced Retrieval</h3>
                 <p>Hybrid semantic search with BGE rerankers, HyDE, and dynamic context windows.</p>
             </div>
-
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-tertiary">🛡️</div>
-                <h3>AxonStore & Gov</h3>
+                <h3>AxonStore &amp; Gov</h3>
                 <p>Mount read-only graphs. Console tracks query audits and smoothly manages maintenance.</p>
             </div>
-
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-primary">🔌</div>
-                <h3>MCP & VS Code</h3>
+                <h3>MCP &amp; VS Code</h3>
                 <p>Interactive 3D native VS Code graphs. 30+ MCP tools bridging Axon to AI coders.</p>
             </div>
         </div>
@@ -525,16 +602,16 @@
         <div class="showcase-row reveal">
             <div class="showcase-content">
                 <h3 style="font-size: 2rem; margin-bottom: 16px; background: linear-gradient(90deg, #fff, #9ca3af); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Interactive REPL Workflow</h3>
-                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Interact directly with your knowledge base via our robust terminal REPL. Effortlessly swap models, trace sources, and query your GraphRAG database dynamically using natural language.</p>
-                <ul style="list-style: none; padding: 0;">
-                    <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;"><span style="color: var(--accent-primary);">✓</span> Zero setup required</li>
-                    <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;"><span style="color: var(--accent-primary);">✓</span> Interactive document citations</li>
-                    <li style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;"><span style="color: var(--accent-primary);">✓</span> Fast semantic search</li>
+                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Interact directly with your knowledge base via a robust terminal REPL. Effortlessly swap models, trace sources, and query your GraphRAG database dynamically using natural language.</p>
+                <ul class="check-list">
+                    <li><span class="check">✓</span> Zero setup — just <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">pip install axon-rag &amp;&amp; axon</code></li>
+                    <li><span class="check">✓</span> Interactive document citations</li>
+                    <li><span class="check">✓</span> Fast hybrid semantic search</li>
                 </ul>
             </div>
             <div class="showcase-visual">
                 <div class="showcase-glow"></div>
-                <img src="docs/assets/repl-animation.gif" alt="Axon REPL in action">
+                <img src="assets/repl-animation.gif" alt="Axon REPL in action">
             </div>
         </div>
 
@@ -543,10 +620,14 @@
             <div class="showcase-content">
                 <h3 style="font-size: 2rem; margin-bottom: 16px; background: linear-gradient(90deg, #fff, #9ca3af); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Knowledge Graph Integration</h3>
                 <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">The native VS Code extension opens an interactive 3D webview of your code relationships and retrieved sources. Visualize multi-hop RAG paths in real-time, right next to your editor.</p>
+                <ul class="check-list">
+                    <li><span class="check">✓</span> Install with <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">axon-ext</code> — no Marketplace needed</li>
+                    <li><span class="check">✓</span> <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">@axon</code> in Copilot Chat</li>
+                </ul>
             </div>
             <div class="showcase-visual">
                 <div class="showcase-glow"></div>
-                <img src="docs/assets/vscode-graph-panel.png" alt="Axon VS Code Knowledge Graph">
+                <img src="assets/vscode-graph-panel.png" alt="Axon VS Code Knowledge Graph">
             </div>
         </div>
 
@@ -554,31 +635,29 @@
         <div class="showcase-row reveal">
             <div class="showcase-content">
                 <h3 style="font-size: 2rem; margin-bottom: 16px; background: linear-gradient(90deg, #fff, #9ca3af); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">@axon in Copilot</h3>
-                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Bring Axon's deep context straight to GitHub Copilot Chat. By invoking <code>@axon</code>, Copilot can search your local indexed RAG database, summarizing complex project logic instantly.</p>
+                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Bring Axon's deep context straight to GitHub Copilot Chat. By invoking <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">@axon</code>, Copilot can search your local indexed RAG database, summarizing complex project logic instantly.</p>
             </div>
             <div class="showcase-visual">
                 <div class="showcase-glow"></div>
-                <img src="docs/assets/AxonCopilot.gif" alt="Axon VSCode Copilot Integration">
+                <img src="assets/AxonCopilot.gif" alt="Axon VSCode Copilot Integration">
             </div>
         </div>
 
         <!-- Showcase 4: Isolation & Governance -->
         <div class="showcase-row reveal">
             <div class="showcase-content">
-                <h3 style="font-size: 2rem; margin-bottom: 16px; background: linear-gradient(90deg, #fff, #9ca3af); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Project Isolation & AxonStore</h3>
-                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Maintain strict boundaries between different knowledge bases. Axon supports isolated projects with nesting natively. You can safely share read-only graphs with your team using cryptographically signed access leases, or federate queries across multiple mounted projects simultaneously using <code>@projects</code>.</p>
-                <ul style="list-style: none; padding: 0;">
-                    <li style="margin-bottom: 12px; display: flex; align-items: flex-start; gap: 12px;"><span style="color: var(--accent-tertiary);">✓</span> Cryptographically signed read-only shares</li>
-                    <li style="margin-bottom: 12px; display: flex; align-items: flex-start; gap: 12px;"><span style="color: var(--accent-tertiary);">✓</span> Zero external infrastructure needed</li>
-                    <li style="margin-bottom: 12px; display: flex; align-items: flex-start; gap: 12px;"><span style="color: var(--accent-tertiary);">✓</span> Admin maintenance safely drains active processes</li>
-                    <li style="margin-bottom: 12px; display: flex; align-items: flex-start; gap: 12px;"><span style="color: var(--accent-tertiary);">✓</span> Full Governance audit trail</li>
+                <h3 style="font-size: 2rem; margin-bottom: 16px; background: linear-gradient(90deg, #fff, #9ca3af); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Project Isolation &amp; AxonStore</h3>
+                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Maintain strict boundaries between different knowledge bases. Axon supports isolated projects with nesting natively. Share read-only graphs with your team using cryptographically signed access leases, or federate queries across multiple mounted projects simultaneously.</p>
+                <ul class="check-list">
+                    <li><span class="check-pink">✓</span> Cryptographically signed read-only shares</li>
+                    <li><span class="check-pink">✓</span> Zero external infrastructure needed</li>
+                    <li><span class="check-pink">✓</span> Admin maintenance safely drains active processes</li>
+                    <li><span class="check-pink">✓</span> Full governance audit trail</li>
                 </ul>
             </div>
             <div class="showcase-visual isolation-graphic">
                 <div class="showcase-glow"></div>
                 <div class="iso-container">
-
-                    <!-- Left: Mounted Project -->
                     <div class="iso-box proj-mounted">
                         <span style="font-size: 1rem; display: block; margin-bottom: 4px; color: #fff;">📥 Mounted Project</span>
                         Public Source Graph
@@ -586,16 +665,12 @@
                             <div class="iso-node"></div><div class="iso-node"></div>
                         </div>
                     </div>
-
-                    <!-- Arrow Mounts -->
-                    <div class="iso-arrow-container" style="flex-direction: row;">
+                    <div class="iso-arrow-container">
                         <span class="iso-label" style="color: #a78bfa;">@mounts</span>
                         <svg class="iso-svg-arrow" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="18" height="18">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 13.5L12 17.25m0 0l-3.75-3.75M12 17.25V6" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 13.5L12 17.25m0 0l-3.75-3.75M12 17.25V6"/>
                         </svg>
                     </div>
-
-                    <!-- Center: Private Project -->
                     <div class="iso-box proj-private">
                         <span style="font-size: 1.15rem; display: block; margin-bottom: 4px; color: #fff;">🛡️ My Private Project</span>
                         Local data + federated queries
@@ -603,16 +678,12 @@
                             <div class="iso-node"></div><div class="iso-node"></div><div class="iso-node"></div><div class="iso-node"></div>
                         </div>
                     </div>
-
-                    <!-- Arrow Shared -->
-                    <div class="iso-arrow-container" style="flex-direction: row;">
+                    <div class="iso-arrow-container">
                         <span class="iso-label" style="color: #f472b6;">Read-Only</span>
                         <svg class="iso-svg-arrow" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="18" height="18">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 13.5L12 17.25m0 0l-3.75-3.75M12 17.25V6" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 13.5L12 17.25m0 0l-3.75-3.75M12 17.25V6"/>
                         </svg>
                     </div>
-
-                    <!-- Right: Shared Project -->
                     <div class="iso-box proj-shared">
                         <span style="font-size: 1rem; display: block; margin-bottom: 4px; color: #fff;">📤 Shared Project</span>
                         Team Access
@@ -620,89 +691,80 @@
                             <div class="iso-node"></div><div class="iso-node"></div>
                         </div>
                     </div>
-
                 </div>
             </div>
         </div>
     </section>
 
     <!-- Footer -->
-    <footer style="text-align: center; padding: 60px 0; border-top: 1px solid var(--glass-border); position: relative; z-index: 10;">
+    <footer>
         <div class="container">
-            <h2 style="font-family: 'Outfit'; font-size: 2rem; margin-bottom: 24px;">Ready to index your world?</h2>
-            <p style="color: var(--text-muted); margin-bottom: 32px;">No cloud APIs, no telemetry, no subscription. Join the Open Source community.</p>
+            <h2 style="font-family: 'Outfit'; font-size: 2.25rem; margin-bottom: 16px;">Ready to index your world?</h2>
+            <p style="color: var(--text-muted); margin-bottom: 36px; max-width: 480px; margin-left: auto; margin-right: auto;">No cloud APIs, no telemetry, no subscription.<br>Open source, MIT licensed.</p>
 
-            <!-- GitHub Button -->
-            <a href="https://github.com/jyunming/Axon" target="_blank" style="display: inline-flex; align-items: center; gap: 12px; background: #f9fafb; color: #030712; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-family: 'Inter', sans-serif; transition: transform 0.2s, box-shadow 0.2s; margin-bottom: 40px; border: 1px solid transparent;">
-                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-                </svg>
-                View Axon on GitHub
-            </a>
+            <div class="footer-cta-btns">
+                <a href="https://pypi.org/project/axon-rag/" target="_blank" rel="noopener noreferrer" class="btn-primary">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm-1.5 17.25V13.5H6l7.5-6.75v3.75H18L10.5 17.25z"/></svg>
+                    View on PyPI
+                </a>
+                <a href="https://github.com/jyunming/Axon" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                    </svg>
+                    Star on GitHub
+                </a>
+                <a href="https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+                    📖 Documentation
+                </a>
+            </div>
 
-            <div style="width: 100%; display: flex; justify-content: center;">
-                <div style="font-family: monospace; background: #0f172a; border: 1px solid var(--glass-border); padding: 16px 32px; border-radius: 8px; display: inline-block; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5);">
-                    <span style="color: #60a5fa;">$</span> pip install -e . && axon
-                </div>
+            <div class="footer-code-block">
+                <span class="prompt">$</span> pip install <span class="pkg">axon-rag</span> <span style="color: #4b5563;">&amp;&amp;</span> <span class="cmd">axon</span>
+            </div>
+
+            <div class="footer-meta" style="margin-top: 48px;">
+                <p>MIT License &nbsp;·&nbsp;
+                   <a href="https://pypi.org/project/axon-rag/" target="_blank" rel="noopener noreferrer">PyPI</a> &nbsp;·&nbsp;
+                   <a href="https://github.com/jyunming/Axon" target="_blank" rel="noopener noreferrer">GitHub</a> &nbsp;·&nbsp;
+                   <a href="https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md" target="_blank" rel="noopener noreferrer">Docs</a> &nbsp;·&nbsp;
+                   <a href="https://github.com/jyunming/Axon/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+                </p>
             </div>
         </div>
     </footer>
 
-    <!-- Interactive Canvas Particle Script -->
+    <!-- Canvas Particle Script -->
     <script>
         const canvas = document.getElementById('network-canvas');
         const ctx = canvas.getContext('2d');
-
-        let width, height;
-        let particles = [];
-        const particleCount = 80;
-        const maxDistance = 150;
+        let width, height, particles = [];
+        const particleCount = 80, maxDistance = 150;
         let mouse = { x: null, y: null, radius: 250 };
 
-        function resize() {
-            width = canvas.width = window.innerWidth;
-            height = canvas.height = window.innerHeight;
-        }
+        function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; }
 
         class Particle {
             constructor() {
-                this.x = Math.random() * width;
-                this.y = Math.random() * height;
-                this.vx = (Math.random() - 0.5) * 1;
-                this.vy = (Math.random() - 0.5) * 1;
+                this.x = Math.random() * width; this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5); this.vy = (Math.random() - 0.5);
                 this.radius = Math.random() * 2 + 1;
             }
-
             update() {
-                this.x += this.vx;
-                this.y += this.vy;
-
+                this.x += this.vx; this.y += this.vy;
                 if (this.x < 0 || this.x > width) this.vx = -this.vx;
                 if (this.y < 0 || this.y > height) this.vy = -this.vy;
-
-                // Mouse interaction
                 if (mouse.x != null) {
-                    let dx = mouse.x - this.x;
-                    let dy = mouse.y - this.y;
-                    let distance = Math.sqrt(dx * dx + dy * dy);
-                    if (distance < mouse.radius) {
-                        const forceDirectionX = dx / distance;
-                        const forceDirectionY = dy / distance;
-                        const force = (mouse.radius - distance) / mouse.radius;
-                        this.vx -= forceDirectionX * force * 0.05;
-                        this.vy -= forceDirectionY * force * 0.05;
+                    const dx = mouse.x - this.x, dy = mouse.y - this.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist > 0.0001 && dist < mouse.radius) {
+                        const f = (mouse.radius - dist) / mouse.radius;
+                        this.vx -= (dx/dist) * f * 0.05;
+                        this.vy -= (dy/dist) * f * 0.05;
                     }
                 }
-
-                // Limit speed
-                const maxSpeed = 2;
-                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
-                if (speed > maxSpeed) {
-                    this.vx = (this.vx / speed) * maxSpeed;
-                    this.vy = (this.vy / speed) * maxSpeed;
-                }
+                const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+                if (speed > 2) { this.vx = (this.vx/speed)*2; this.vy = (this.vy/speed)*2; }
             }
-
             draw() {
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
@@ -712,31 +774,21 @@
         }
 
         function init() {
-            resize();
-            particles = [];
-            for (let i = 0; i < particleCount; i++) {
-                particles.push(new Particle());
-            }
+            resize(); particles = [];
+            for (let i = 0; i < particleCount; i++) particles.push(new Particle());
         }
 
         function animate() {
             ctx.clearRect(0, 0, width, height);
-
-            particles.forEach(p => {
-                p.update();
-                p.draw();
-            });
-
-            // Draw connections
+            particles.forEach(p => { p.update(); p.draw(); });
             for (let i = 0; i < particles.length; i++) {
                 for (let j = i + 1; j < particles.length; j++) {
                     const dx = particles[i].x - particles[j].x;
                     const dy = particles[i].y - particles[j].y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-
-                    if (distance < maxDistance) {
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < maxDistance) {
                         ctx.beginPath();
-                        ctx.strokeStyle = `rgba(96, 165, 250, ${1 - distance / maxDistance})`;
+                        ctx.strokeStyle = `rgba(96, 165, 250, ${1 - dist/maxDistance})`;
                         ctx.lineWidth = 0.5;
                         ctx.moveTo(particles[i].x, particles[i].y);
                         ctx.lineTo(particles[j].x, particles[j].y);
@@ -744,35 +796,19 @@
                     }
                 }
             }
-
             requestAnimationFrame(animate);
         }
 
         window.addEventListener('resize', init);
-        window.addEventListener('mousemove', (e) => {
-            mouse.x = e.x;
-            mouse.y = e.y;
-        });
-        window.addEventListener('mouseout', () => {
-            mouse.x = null;
-            mouse.y = null;
-        });
+        window.addEventListener('mousemove', e => { mouse.x = e.x; mouse.y = e.y; });
+        window.addEventListener('mouseout', () => { mouse.x = null; mouse.y = null; });
+        init(); animate();
 
-        init();
-        animate();
-
-        // Scroll Reveal Animation Observer
-        const revealElements = document.querySelectorAll('.reveal');
-
-        const revealObserver = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('active');
-                }
-            });
+        // Scroll reveal
+        const observer = new IntersectionObserver(entries => {
+            entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('active'); });
         }, { threshold: 0.1 });
-
-        revealElements.forEach(el => revealObserver.observe(el));
+        document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
     </script>
 </body>
 </html>

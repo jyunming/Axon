@@ -213,7 +213,17 @@ def main():
 
     _write_python_discovery()
 
+    try:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as _pkg_version
+
+        _axon_version = _pkg_version("axon-rag")
+    except PackageNotFoundError:
+        _axon_version = "0.0.0+dev"
+
     parser = argparse.ArgumentParser(description="Axon CLI")
+
+    parser.add_argument("--version", action="version", version=f"axon-rag {_axon_version}")
 
     parser.add_argument("query", nargs="?", help="Question to ask")
 

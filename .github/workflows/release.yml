@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history needed for changelog
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,47 +38,11 @@ jobs:
       - name: Build distributions
         run: python -m build
 
-      - name: Generate changelog from git log
-        id: changelog
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="$PREV_TAG..HEAD"
-          else
-            RANGE="HEAD"
-          fi
-
-          echo "## What's Changed" > CHANGELOG_RELEASE.md
-          echo "" >> CHANGELOG_RELEASE.md
-
-          # Features (commits with feat:)
-          FEATURES=$(git log $RANGE --oneline --no-merges --grep="^feat" 2>/dev/null || true)
-          if [ -n "$FEATURES" ]; then
-            echo "### New Features" >> CHANGELOG_RELEASE.md
-            git log $RANGE --oneline --no-merges --grep="^feat" | sed 's/^/- /' >> CHANGELOG_RELEASE.md
-            echo "" >> CHANGELOG_RELEASE.md
-          fi
-
-          # Fixes (commits with fix:)
-          FIXES=$(git log $RANGE --oneline --no-merges --grep="^fix" 2>/dev/null || true)
-          if [ -n "$FIXES" ]; then
-            echo "### Bug Fixes" >> CHANGELOG_RELEASE.md
-            git log $RANGE --oneline --no-merges --grep="^fix" | sed 's/^/- /' >> CHANGELOG_RELEASE.md
-            echo "" >> CHANGELOG_RELEASE.md
-          fi
-
-          # Everything else
-          echo "### All Changes" >> CHANGELOG_RELEASE.md
-          git log $RANGE --oneline --no-merges | sed 's/^/- /' >> CHANGELOG_RELEASE.md
-
-          echo "Generated changelog:"
-          cat CHANGELOG_RELEASE.md
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: "Axon v${{ steps.version.outputs.VERSION }}"
-          body_path: CHANGELOG_RELEASE.md
+          generate_notes: true
           files: |
             dist/*.tar.gz
             dist/*.whl
