@@ -544,6 +544,39 @@ rerank:
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
 ```
 
+### TurboQuantDB Setup
+
+TurboQuantDB (`tqdb` on PyPI) is the **default vector store** — fastest ingest, smallest disk, no external service needed. It is bundled with `axon-rag` and requires no separate install step.
+
+**Manual install (if needed):**
+```bash
+pip install tqdb
+```
+
+**config.yaml:**
+```yaml
+vector_store:
+  provider: turboquantdb
+  tqdb_bits: 8                  # quantization bits: 4 or 8
+  tqdb_fast_mode: false         # false = higher recall; true = faster queries
+  tqdb_rerank: true             # true = internal ANN rerank pass (improves recall)
+  # Optional tuning (omit to use TQDB defaults):
+  # tqdb_rerank_precision: null # null | "f16" | "f32" — exact reranking uses more disk
+  # tqdb_n_refinements: 5       # HNSW refinement passes; higher = better recall, slower build
+  # tqdb_alpha: 1.2             # HNSW pruning aggressiveness
+```
+
+**Preset configurations** (benchmarked on 700–5 500 chunks, dim 384–768):
+
+| Preset | bits | fast_mode | rerank | Recall@10 | Time-to-ready | Disk |
+|--------|------|-----------|--------|-----------|---------------|------|
+| b=8 HQ *(recommended)* | 8 | false | true | **1.000** | 0.1 s | 2.0 MB |
+| b=8 FastBuild | 8 | true | false | 0.99 | 0.2 s | 2.0 MB |
+| b=4 Balanced | 4 | false | true | 0.93 | 0.3 s | 1.9 MB |
+| b=4 FastBuild | 4 | true | false | 0.82 | 0.3 s | 1.9 MB |
+
+> **b=8 HQ** delivers perfect recall with 30–65× faster ingest and 7× smaller disk than ChromaDB.
+
 ---
 
 ## 8. Configure .env

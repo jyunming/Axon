@@ -697,11 +697,17 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
     _header("3 / 16  Vector Store")
 
     _label(
-        "lancedb = local file-based (no service needed).  qdrant = local or remote server.  chroma = local."
+        "turboquantdb (tqdb) = default — fastest ingest, smallest disk, no service needed."
+        "  lancedb = local columnar store.  qdrant = local or remote server.  chroma = local."
     )
 
     if not _section_skip("Vector Store"):
-        _pick("vector_store.provider", "vector_store", ["lancedb", "qdrant", "chroma"], "lancedb")
+        _pick(
+            "vector_store.provider",
+            "vector_store",
+            ["turboquantdb", "lancedb", "qdrant", "chroma"],
+            "turboquantdb",
+        )
 
         # path + qdrant creds: standard+
 
@@ -714,6 +720,16 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
         _ask_str("qdrant.url", "qdrant_url", "")
 
         _ask_secret("qdrant.api_key (Qdrant Cloud)", "qdrant_api_key")
+
+        # tqdb fields: full mode only
+        if _in("full"):
+            _label(
+                "turboquantdb fields are only used when provider=turboquantdb."
+                "  bits=8 + rerank=true is the recommended preset (perfect recall, ~2× compression)."
+            )
+            _pick("vector_store.tqdb_bits", "tqdb_bits", [4, 8], 8)
+            _pick("vector_store.tqdb_fast_mode", "tqdb_fast_mode", [False, True], False)
+            _pick("vector_store.tqdb_rerank", "tqdb_rerank", [True, False], True)
 
     # ── 4. Chunking  [standard / full] ────────────────────────────────────────
 

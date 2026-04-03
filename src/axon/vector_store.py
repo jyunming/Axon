@@ -12,7 +12,6 @@ for Phase 2 of the Axon refactor.
 
 """
 
-
 import json
 import logging
 import os
@@ -29,7 +28,6 @@ _MERGED_VIEW_WRITE_ERROR = (
 
 
 class OpenVectorStore:
-
     """Unified interface over ChromaDB, Qdrant, and LanceDB vector stores.
 
 
@@ -140,11 +138,14 @@ class OpenVectorStore:
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
                     f"(dim={meta['dimension']}, bits={meta['bits']})"
                 )
-                self.client = turboquantdb.Database.open(
+                self.client = turboquantdb.TurboQuantDB.open(
                     self.config.vector_store_path,
                     dimension=meta["dimension"],
                     bits=meta["bits"],
                     metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                    rerank=getattr(self.config, "tqdb_rerank", True),
+                    fast_mode=getattr(self.config, "tqdb_fast_mode", False),
+                    rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
                 )
             else:
                 self.client = None  # opened lazily on first add()
@@ -391,11 +392,14 @@ class OpenVectorStore:
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
                     f"(dim={dim}, bits={bits})"
                 )
-                self.client = turboquantdb.Database.open(
+                self.client = turboquantdb.TurboQuantDB.open(
                     self.config.vector_store_path,
                     dimension=dim,
                     bits=bits,
                     metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                    rerank=getattr(self.config, "tqdb_rerank", True),
+                    fast_mode=getattr(self.config, "tqdb_fast_mode", False),
+                    rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
                 )
 
             # L2-normalize so IP = cosine similarity (handles models that don't output unit vectors)
@@ -406,6 +410,7 @@ class OpenVectorStore:
             vecs = np.divide(vecs, norms, where=norms > 0)
             metas = metadatas if metadatas is not None else [{}] * len(ids)
             self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
+            self.client.flush()
 
             # Update sidecar doc index: source → [chunk_ids]
             doc_index: dict[str, list[str]] = {}
@@ -429,7 +434,13 @@ class OpenVectorStore:
             try:
                 n = len(self.client)
                 if n >= 1000:
-                    self.client.create_index()
+                    self.client.create_index(
+                        max_degree=getattr(self.config, "tqdb_max_degree", 32),
+                        ef_construction=getattr(self.config, "tqdb_ef_construction", 200),
+                        search_list_size=getattr(self.config, "tqdb_search_list_size", 128),
+                        alpha=getattr(self.config, "tqdb_alpha", None),
+                        n_refinements=getattr(self.config, "tqdb_n_refinements", None),
+                    )
                     logger.debug(f"TurboQuantDB: ANN index built on {n} vectors")
             except Exception as e:
                 logger.debug(f"TurboQuantDB: auto index build skipped — {e}")
@@ -596,7 +607,13 @@ class OpenVectorStore:
             if q_norm > 0:
                 q = q / q_norm
             tqdb_filter = filter_dict if filter_dict else None
-            results = self.client.search(q, top_k=top_k, filter=tqdb_filter, _use_ann=True)
+            results = self.client.search(
+                q,
+                top_k=top_k,
+                filter=tqdb_filter,
+                _use_ann=True,
+                ann_search_list_size=getattr(self.config, "tqdb_search_list_size", None),
+            )
             return [
                 {
                     "id": r["id"],
@@ -841,7 +858,6 @@ class OpenVectorStore:
 
 
 class MultiVectorStore:
-
     """Read-only fan-out wrapper over multiple OpenVectorStore instances.
 
 
@@ -929,7 +945,6 @@ class MultiVectorStore:
 
 
 class MultiBM25Retriever:
-
     """Read-only fan-out wrapper over multiple BM25Retriever instances.
 
 

@@ -838,7 +838,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 if target and Path(target).exists():
                     paths.append(
                         (
-                            str(Path(target) / "lancedb_data"),
+                            str(Path(target) / "tqdb_data"),
                             str(Path(target) / "bm25_index"),
                         )
                     )
@@ -1057,7 +1057,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
             target = Path(desc["target_project_dir"])
 
-            self.config.vector_store_path = str(target / "lancedb_data")
+            self.config.vector_store_path = str(target / "tqdb_data")
 
             self.config.bm25_path = str(target / "bm25_index")
 

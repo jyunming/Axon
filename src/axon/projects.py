@@ -10,7 +10,7 @@ Each project gets its own isolated vector store and BM25 index under:
     ~/.axon/projects/<name>/
 
 
-        lancedb_data/  — LanceDB vector store
+        tqdb_data/  — LanceDB vector store
 
 
         bm25_index/    — BM25 JSON corpus
@@ -359,9 +359,9 @@ def project_dir(name: str) -> Path:
 
 
 def project_vector_path(name: str) -> str:
-    """Return the absolute path to the project's vector store directory (``lancedb_data/``)."""
+    """Return the absolute path to the project's vector store directory (``tqdb_data/``)."""
 
-    return str(project_dir(name) / "lancedb_data")
+    return str(project_dir(name) / "tqdb_data")
 
 
 def project_bm25_path(name: str) -> str:
@@ -434,7 +434,7 @@ def _ensure_single_project(name: str, description: str) -> Path:
 
     root = project_dir(name)
 
-    (root / "lancedb_data").mkdir(parents=True, exist_ok=True)
+    (root / "tqdb_data").mkdir(parents=True, exist_ok=True)
 
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
 
@@ -948,7 +948,7 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
 
     """
 
-    (root / "lancedb_data").mkdir(parents=True, exist_ok=True)
+    (root / "tqdb_data").mkdir(parents=True, exist_ok=True)
 
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
 

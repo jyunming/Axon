@@ -9,7 +9,6 @@ AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
 
 """
 
-
 import difflib
 import getpass
 import logging
@@ -92,13 +91,14 @@ vector_store:
   # Persistent vector store for embeddings.
 
 
-  # lancedb (default) requires no extra service; qdrant supports remote mode.
+  # tqdb (default) — fastest ingest, smallest disk, no extra service needed.
+  # Alternatives: lancedb, qdrant, chroma
 
 
-  provider: lancedb
+  provider: turboquantdb
 
 
-  path: ~/.axon/projects/default/lancedb_data
+  path: ~/.axon/projects/default/tqdb_data
 
 
 bm25:
@@ -259,6 +259,14 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "qdrant_collection",
         "lancedb_path",
         "tqdb_bits",
+        "tqdb_fast_mode",
+        "tqdb_rerank",
+        "tqdb_rerank_precision",
+        "tqdb_ef_construction",
+        "tqdb_max_degree",
+        "tqdb_search_list_size",
+        "tqdb_alpha",
+        "tqdb_n_refinements",
     },
     "rag": {
         "hybrid_search",
@@ -338,7 +346,6 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
 
 @dataclass
 class ConfigIssue:
-
     """A single validation finding for a config.yaml field."""
 
     level: Literal["error", "warn", "info"]
@@ -363,7 +370,6 @@ class ConfigIssue:
 
 @dataclass
 class AxonConfig:
-
     """Configuration for Axon."""
 
     # Internal tracking
@@ -450,11 +456,19 @@ class AxonConfig:
 
     # Vector Store
 
-    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "lancedb"
+    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "turboquantdb"
 
     vector_store_path: str = ""
 
     tqdb_bits: int = 8
+    tqdb_fast_mode: bool = False
+    tqdb_rerank: bool = True
+    tqdb_rerank_precision: str | None = None  # None | "f16" | "f32"
+    tqdb_ef_construction: int = 200
+    tqdb_max_degree: int = 32
+    tqdb_search_list_size: int = 128
+    tqdb_alpha: float | None = None  # HNSW pruning aggressiveness (None = TQDB default 1.2)
+    tqdb_n_refinements: int | None = None  # HNSW refinement passes (None = TQDB default 5)
 
     # BM25 Settings
 
@@ -522,7 +536,7 @@ class AxonConfig:
         # Respect explicitly-provided absolute paths (e.g. in tests) — only set defaults.
 
         if not self.vector_store_path or not os.path.isabs(self.vector_store_path):
-            self.vector_store_path = str(user_dir / "default" / "lancedb_data")
+            self.vector_store_path = str(user_dir / "default" / "tqdb_data")
 
         if not self.bm25_path or not os.path.isabs(self.bm25_path):
             self.bm25_path = str(user_dir / "default" / "bm25_index")
@@ -1206,6 +1220,24 @@ class AxonConfig:
 
             if "tqdb_bits" in vs:
                 config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
+            if "tqdb_fast_mode" in vs:
+                config_dict["tqdb_fast_mode"] = bool(vs["tqdb_fast_mode"])
+            if "tqdb_rerank" in vs:
+                config_dict["tqdb_rerank"] = bool(vs["tqdb_rerank"])
+            if "tqdb_ef_construction" in vs:
+                config_dict["tqdb_ef_construction"] = int(vs["tqdb_ef_construction"])
+            if "tqdb_max_degree" in vs:
+                config_dict["tqdb_max_degree"] = int(vs["tqdb_max_degree"])
+            if "tqdb_search_list_size" in vs:
+                config_dict["tqdb_search_list_size"] = int(vs["tqdb_search_list_size"])
+            if "tqdb_rerank_precision" in vs:
+                config_dict["tqdb_rerank_precision"] = vs["tqdb_rerank_precision"] or None
+            if "tqdb_alpha" in vs:
+                raw = vs["tqdb_alpha"]
+                config_dict["tqdb_alpha"] = float(raw) if raw is not None else None
+            if "tqdb_n_refinements" in vs:
+                raw = vs["tqdb_n_refinements"]
+                config_dict["tqdb_n_refinements"] = int(raw) if raw is not None else None
 
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
@@ -1404,6 +1436,14 @@ class AxonConfig:
                 "provider": flat["vector_store"],
                 "path": flat["vector_store_path"],
                 "tqdb_bits": flat["tqdb_bits"],
+                "tqdb_fast_mode": flat["tqdb_fast_mode"],
+                "tqdb_rerank": flat["tqdb_rerank"],
+                "tqdb_rerank_precision": flat["tqdb_rerank_precision"],
+                "tqdb_ef_construction": flat["tqdb_ef_construction"],
+                "tqdb_max_degree": flat["tqdb_max_degree"],
+                "tqdb_search_list_size": flat["tqdb_search_list_size"],
+                "tqdb_alpha": flat["tqdb_alpha"],
+                "tqdb_n_refinements": flat["tqdb_n_refinements"],
             },
             "bm25": {
                 "path": flat["bm25_path"],

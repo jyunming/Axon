@@ -2704,6 +2704,154 @@ class TestOpenVectorStoreEdgeCasesV2:
         assert meta["page"] == 1
 
 
+# ---------------------------------------------------------------------------
+# OpenVectorStore — turboquantdb provider
+# ---------------------------------------------------------------------------
+
+import json as _json
+import tempfile as _tempfile
+
+
+def _make_tqdb_mock():
+    """Return (mock_turboquantdb_module, mock_db_instance)."""
+    mock_db = MagicMock()
+    mock_db.__len__ = MagicMock(return_value=0)
+    mock_tqdb_mod = MagicMock()
+    mock_tqdb_mod.TurboQuantDB.open.return_value = mock_db
+    return mock_tqdb_mod, mock_db
+
+
+class TestOpenVectorStoreTQDB:
+    """Tests for OpenVectorStore with the turboquantdb provider."""
+
+    def _make_store(self, mock_tqdb_mod, tmp_path, **config_kwargs):
+        cfg = _make_config(
+            vector_store="turboquantdb",
+            vector_store_path=str(tmp_path),
+            **config_kwargs,
+        )
+        with patch.dict("sys.modules", {"turboquantdb": mock_tqdb_mod}):
+            from axon.vector_store import OpenVectorStore
+
+            store = OpenVectorStore(cfg)
+        return store
+
+    def test_init_lazy_when_no_meta(self):
+        """Client stays None when tqdb_meta.json does not exist yet."""
+        mock_tqdb_mod, _ = _make_tqdb_mock()
+        with _tempfile.TemporaryDirectory() as tmp:
+            store = self._make_store(mock_tqdb_mod, tmp)
+        assert store.client is None
+        mock_tqdb_mod.TurboQuantDB.open.assert_not_called()
+
+    def test_init_eager_when_meta_exists(self):
+        """Client is opened immediately if tqdb_meta.json is present."""
+        mock_tqdb_mod, mock_db = _make_tqdb_mock()
+        with _tempfile.TemporaryDirectory() as tmp:
+            meta_path = os.path.join(tmp, "tqdb_meta.json")
+            with open(meta_path, "w") as f:
+                _json.dump({"dimension": 8, "bits": 4}, f)
+            store = self._make_store(
+                mock_tqdb_mod, tmp, tqdb_bits=4, tqdb_rerank=False, tqdb_fast_mode=True
+            )
+        mock_tqdb_mod.TurboQuantDB.open.assert_called_once()
+        call_kwargs = mock_tqdb_mod.TurboQuantDB.open.call_args[1]
+        assert call_kwargs["bits"] == 4
+        assert call_kwargs["rerank"] is False
+        assert call_kwargs["fast_mode"] is True
+        assert call_kwargs["rerank_precision"] is None
+        assert store.client is mock_db
+
+    def test_add_creates_client_and_inserts(self):
+        """Lazy open fires on first add(); insert_batch is called with normalised vectors."""
+        import numpy as np
+
+        mock_tqdb_mod, mock_db = _make_tqdb_mock()
+        mock_db.__len__ = MagicMock(return_value=5)
+        with _tempfile.TemporaryDirectory() as tmp:
+            store = self._make_store(
+                mock_tqdb_mod, tmp, tqdb_bits=8, tqdb_rerank=True, tqdb_fast_mode=False
+            )
+            assert store.client is None
+            vecs = np.random.rand(3, 8).astype("float32")
+            with patch.dict("sys.modules", {"turboquantdb": mock_tqdb_mod}):
+                store.add(
+                    ids=["a", "b", "c"],
+                    texts=["t1", "t2", "t3"],
+                    embeddings=vecs.tolist(),
+                    metadatas=[{"source": "f"} for _ in range(3)],
+                )
+        mock_tqdb_mod.TurboQuantDB.open.assert_called_once()
+        call_kwargs = mock_tqdb_mod.TurboQuantDB.open.call_args[1]
+        assert call_kwargs["bits"] == 8
+        assert call_kwargs["rerank"] is True
+        assert call_kwargs["fast_mode"] is False
+        assert call_kwargs["rerank_precision"] is None
+        mock_db.insert_batch.assert_called_once()
+        mock_db.flush.assert_called_once()
+        inserted_vecs = mock_db.insert_batch.call_args[1]["vectors"]
+        # Vectors should be L2-normalised
+        norms = np.linalg.norm(inserted_vecs, axis=1)
+        np.testing.assert_allclose(norms, np.ones(3), atol=1e-5)
+
+    def test_add_builds_index_at_threshold(self):
+        """create_index() is called with config params once corpus reaches 1000 vectors."""
+        mock_tqdb_mod, mock_db = _make_tqdb_mock()
+        mock_db.__len__ = MagicMock(return_value=1000)
+        with _tempfile.TemporaryDirectory() as tmp:
+            store = self._make_store(
+                mock_tqdb_mod,
+                tmp,
+                tqdb_max_degree=16,
+                tqdb_ef_construction=100,
+                tqdb_search_list_size=64,
+            )
+            import numpy as np
+
+            vecs = np.random.rand(2, 8).astype("float32")
+            with patch.dict("sys.modules", {"turboquantdb": mock_tqdb_mod}):
+                store.add(
+                    ids=["x", "y"],
+                    texts=["t", "t"],
+                    embeddings=vecs.tolist(),
+                    metadatas=[{"source": "f"}, {"source": "f"}],
+                )
+        mock_db.create_index.assert_called_once_with(
+            max_degree=16, ef_construction=100, search_list_size=64, alpha=None, n_refinements=None
+        )
+
+    def test_search_returns_formatted_results(self):
+        """search() returns list of dicts with id/text/score/metadata; score clamped ≥ 0."""
+        mock_tqdb_mod, mock_db = _make_tqdb_mock()
+        mock_db.search.return_value = [
+            {"id": "a", "score": 0.9, "document": "hello", "metadata": {"source": "f.txt"}},
+            {"id": "b", "score": -0.1, "document": "world", "metadata": {}},
+        ]
+        with _tempfile.TemporaryDirectory() as tmp:
+            store = self._make_store(mock_tqdb_mod, tmp)
+            store.client = mock_db  # inject directly
+            import numpy as np
+
+            results = store.search(np.zeros(8).tolist(), top_k=2)
+        assert len(results) == 2
+        assert results[0] == {
+            "id": "a",
+            "text": "hello",
+            "score": 0.9,
+            "metadata": {"source": "f.txt"},
+        }
+        assert results[1]["score"] == 0.0  # clamped from -0.1
+
+    def test_search_returns_empty_when_no_client(self):
+        """search() returns [] gracefully when client has not been initialised."""
+        mock_tqdb_mod, _ = _make_tqdb_mock()
+        with _tempfile.TemporaryDirectory() as tmp:
+            store = self._make_store(mock_tqdb_mod, tmp)
+        assert store.client is None
+        results = store.search([0.0] * 8, top_k=5)
+        assert results == []
+
+
 """Tests for axon.collection_ops."""
 from axon.collection_ops import clear_active_project
 

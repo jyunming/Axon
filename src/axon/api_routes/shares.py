@@ -76,7 +76,7 @@ async def store_init(request: StoreInitRequest):
 
     config.projects_root = str(user_dir)
 
-    config.vector_store_path = str(user_dir / "default" / "lancedb_data")
+    config.vector_store_path = str(user_dir / "default" / "tqdb_data")
 
     config.bm25_path = str(user_dir / "default" / "bm25_index")
 

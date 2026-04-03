@@ -20,6 +20,7 @@ rich>=13.0.0
 tiktoken>=0.7.0
 
 # Vector Stores
+tqdb>=0.1.0
 chromadb>=0.4.0
 qdrant-client>=1.7.0
 lancedb>=0.8.0

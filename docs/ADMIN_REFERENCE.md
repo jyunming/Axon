@@ -526,9 +526,24 @@ Set `vector_store.provider` in `config.yaml`:
 
 | Provider value | Description | Install |
 |---------------|-------------|---------|
-| `lancedb` | Embedded columnar store (default) | Bundled |
+| `turboquantdb` | Quantized embedded store — fastest ingest, smallest disk *(default)* | Bundled (`tqdb` on PyPI) |
+| `lancedb` | Embedded columnar store | Bundled |
 | `chroma` | Local persistent store | Bundled |
 | `qdrant` | Local or remote Qdrant | `pip install 'axon[qdrant]'` |
+
+**TurboQuantDB config fields** (only used when `provider: turboquantdb`):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tqdb_bits` | int | `8` | Quantization bits per coordinate (`4` or `8`) |
+| `tqdb_fast_mode` | bool | `false` | Trade index build CPU for faster queries; slightly lowers recall |
+| `tqdb_rerank` | bool | `true` | Enable internal ANN rerank pass; improves recall at small CPU cost |
+| `tqdb_rerank_precision` | str\|null | `null` | Rerank precision: `null` = dequant, `"f16"` or `"f32"` = exact (uses more disk) |
+| `tqdb_ef_construction` | int | `200` | HNSW build quality — higher = better recall, slower build |
+| `tqdb_max_degree` | int | `32` | HNSW graph degree — higher = better recall, larger index |
+| `tqdb_search_list_size` | int | `128` | ANN candidate list size (ef_construction alias for build; ef_search at query time) |
+| `tqdb_alpha` | float\|null | `null` | HNSW pruning aggressiveness (`null` = TQDB default 1.2) |
+| `tqdb_n_refinements` | int\|null | `null` | HNSW refinement passes during build (`null` = TQDB default 5) |
 
 ### 6.4 RAG Flags — Complete List
 
