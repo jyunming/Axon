@@ -3494,7 +3494,9 @@ def _interactive_repl(
 
                             brain.config.projects_root = str(user_dir)
 
-                            brain.config.vector_store_path = str(user_dir / "default" / "tqdb_data")
+                            brain.config.vector_store_path = str(
+                                user_dir / "default" / "vector_store_data"
+                            )
 
                             brain.config.bm25_path = str(user_dir / "default" / "bm25_index")
 

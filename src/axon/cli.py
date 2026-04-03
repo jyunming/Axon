@@ -90,7 +90,7 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
     # Resolve the source chroma path
 
     if chroma_path_arg == "auto":
-        # Auto-detect: replace 'tqdb_data' with 'chroma_data' in the current path
+        # Auto-detect: replace 'vector_store_data' with 'chroma_data' in the current path
 
         lance_path = Path(brain.config.vector_store_path)
 
@@ -1387,7 +1387,7 @@ def main():
 
             brain.config.projects_root = str(user_dir)
 
-            brain.config.vector_store_path = str(user_dir / "default" / "tqdb_data")
+            brain.config.vector_store_path = str(user_dir / "default" / "vector_store_data")
 
             brain.config.bm25_path = str(user_dir / "default" / "bm25_index")
 

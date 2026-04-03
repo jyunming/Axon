@@ -98,7 +98,7 @@ vector_store:
   provider: turboquantdb
 
 
-  path: ~/.axon/projects/default/tqdb_data
+  path: ~/.axon/projects/default/vector_store_data
 
 
 bm25:
@@ -536,7 +536,7 @@ class AxonConfig:
         # Respect explicitly-provided absolute paths (e.g. in tests) — only set defaults.
 
         if not self.vector_store_path or not os.path.isabs(self.vector_store_path):
-            self.vector_store_path = str(user_dir / "default" / "tqdb_data")
+            self.vector_store_path = str(user_dir / "default" / "vector_store_data")
 
         if not self.bm25_path or not os.path.isabs(self.bm25_path):
             self.bm25_path = str(user_dir / "default" / "bm25_index")
