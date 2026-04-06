@@ -1,0 +1,31 @@
+Module: axon.retrievers — BM25Retriever
+
+BM25Retriever is a keyword-based retriever that complements vector search for
+specific term matching. It is implemented using the BM25Okapi algorithm from
+the rank_bm25 library.
+
+The class stores its document corpus as a JSON file on disk at
+bm25_corpus.json within the configured storage path. It maintains a lazy-rebuild
+flag: the BM25Okapi index is rebuilt exactly once on the first search() call
+after the last write, rather than on every document addition. This change was
+introduced to fix an O(N-squared) performance issue where bulk ingest would
+rebuild the index after every single document.
+
+Key methods:
+- add_documents(docs): Adds a batch of documents to the corpus and marks the
+  index as dirty. Does not immediately rebuild the BM25Okapi index.
+- search(query, top_k): Triggers a lazy index rebuild if the dirty flag is set,
+  then calls BM25Okapi.get_scores() to rank all corpus documents. Returns the
+  top_k results by score, filtered to scores above zero.
+- save(): Writes the corpus to bm25_corpus.json using an atomic os.replace()
+  operation. Falls back to shutil.copy2 if os.replace fails across filesystems.
+- load(): Reads the corpus from bm25_corpus.json and rebuilds the BM25Okapi
+  index from the loaded documents.
+- delete_documents(ids): Removes documents by ID, rebuilds the index, and saves.
+
+The search path is offloaded to a ThreadPoolExecutor in QueryRouterMixin to
+prevent blocking the async FastAPI event loop during BM25 scoring, which is
+a CPU-bound operation.
+
+BM25Retriever depends on: rank_bm25 (BM25Okapi), os, json, logging.
+QueryRouterMixin depends on: BM25Retriever (for hybrid search).

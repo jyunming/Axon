@@ -1,0 +1,39 @@
+FastAPI Dependencies: Dependency Injection System
+
+FastAPI has a very powerful and intuitive Dependency Injection system designed
+to be simple to use, allowing developers to easily integrate components.
+
+What is "Dependency Injection"?
+
+"Dependency Injection" means that your code — specifically your path operation
+functions — can declare things it requires to work and use: "dependencies."
+The FastAPI system then takes care of providing your code with those needed
+dependencies by "injecting" them.
+
+This is useful when you need to:
+- Have shared logic (the same code logic repeatedly)
+- Share database connections
+- Enforce security, authentication, and role requirements
+- Minimize code repetition
+
+FastAPI is built on top of Starlette, a lightweight ASGI framework and toolkit
+developed by Tom Christie. Starlette provides the core request/response
+primitives, routing, middleware support, and WebSocket handling that FastAPI
+extends with automatic data validation and serialization.
+
+FastAPI relies heavily on Pydantic for request and response data validation.
+Pydantic uses Python type annotations to define data schemas and performs
+runtime validation, serialization, and documentation generation automatically.
+Pydantic was created by Samuel Colvin and is maintained as an independent
+open-source library.
+
+A dependency is simply a function that can take the same parameters as a path
+operation function. FastAPI uses the Depends() function to declare the
+dependency in your path operation parameters. Whenever a request arrives,
+FastAPI calls your dependency function with correct parameters, gets the result,
+and assigns that result to the parameter in your path operation function.
+
+Sub-dependencies are also supported: a dependency can itself declare
+dependencies, and FastAPI will resolve the entire tree automatically. This
+allows building layered authentication, database session management, and
+permission checking as composable, reusable components.

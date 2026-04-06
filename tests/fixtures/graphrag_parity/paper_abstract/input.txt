@@ -1,0 +1,30 @@
+Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
+
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni,
+Vladimir Karpukhin, Naman Goyal, Heinrich Kuttler, Mike Lewis,
+Wen-tau Yih, Tim Rocktaschel, Sebastian Riedel, Douwe Kiela
+Facebook AI Research; University College London; New York University
+
+Abstract
+
+Large pre-trained language models store factual knowledge in their parameters
+and achieve strong results when fine-tuned on downstream tasks. However, their
+ability to access and precisely manipulate knowledge remains limited, and
+performance on knowledge-intensive tasks lags behind task-specific
+architectures. These models also struggle to provide decision provenance and
+update world knowledge.
+
+We explore a general-purpose fine-tuning approach for retrieval-augmented
+generation (RAG) that combines pre-trained parametric and non-parametric memory
+for language generation. A pre-trained seq2seq model acts as parametric memory,
+and a dense vector index of Wikipedia acts as non-parametric memory, which is
+accessed with a pre-trained neural retriever. We compare two formulations: one
+where the same retrieved passages are used throughout generation (RAG-Sequence),
+and another where different passages can be used for each token (RAG-Token).
+
+We evaluated our models on a wide range of knowledge-intensive NLP tasks. When
+fine-tuned on open-domain question-answering, RAG models achieve state-of-the-art
+results on three open-domain QA benchmarks, surpassing both parametric seq2seq
+models and task-specific retrieve-and-extract architectures. For language
+generation tasks, RAG models produce language that is more specific, diverse,
+and factual than a parametric-only seq2seq baseline.

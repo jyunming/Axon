@@ -1,0 +1,35 @@
+Contributing to Axon
+
+Axon is a local-first Retrieval-Augmented Generation (RAG) framework developed
+by jyunming. It is published on PyPI as axon-rag and supports multiple vector
+stores, embedding providers, and LLM backends.
+
+Development Setup
+
+Prerequisites: Python 3.10 or higher, Git, and Ollama for local LLM support.
+Ollama is a runtime for running large language models locally without cloud
+dependencies. The recommended development setup installs Axon in editable mode
+using pip install -e ".[dev]".
+
+Development Workflow
+
+Tests are run with pytest. The test suite contains over 3300 tests covering
+unit, integration, API, and end-to-end scenarios. The pre-commit hook runs
+black, ruff, and pytest automatically before every commit.
+
+Code formatting uses black version 23.12.1. The version is pinned in
+pyproject.toml to ensure consistent formatting across all contributors and CI.
+Ruff handles linting and import ordering. Mypy is used for type checking.
+
+The pre-commit hook runs the full test suite, which takes approximately 7
+minutes. Contributors should run ruff --fix before committing to avoid
+hook failures on auto-fixable lint issues.
+
+The project uses a feature branch workflow. All changes must be made on a
+feature branch — never on main. Pull requests target the main branch.
+The GitHub Actions CI pipeline runs on every pull request. GitHub Copilot
+reviews all pull requests automatically.
+
+PyPI publishing is tag-triggered: merging to main does not publish. A release
+requires bumping the version in pyproject.toml, creating a git tag matching the
+version, and pushing the tag to trigger the GitHub Actions release workflow.

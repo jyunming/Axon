@@ -1,0 +1,42 @@
+Python asyncio — Coroutines and Tasks
+
+This section outlines high-level asyncio APIs for working with coroutines and Tasks.
+
+Coroutines
+
+Coroutines declared with the async/await syntax are the preferred way of writing
+asyncio applications. Simply calling a coroutine will not schedule it to be
+executed — it returns a coroutine object that must be run through one of several
+mechanisms provided by the asyncio module.
+
+To actually run a coroutine, asyncio provides the following mechanisms:
+
+The asyncio.run() function runs the top-level entry point "main()" function and
+manages the event loop lifecycle. This is the standard entry point for asyncio
+programs.
+
+Awaiting on a coroutine allows you to call other coroutines sequentially within
+an async context. The calling coroutine suspends until the awaited coroutine
+completes.
+
+The asyncio.create_task() function runs coroutines concurrently as asyncio Tasks.
+When a coroutine is wrapped into a Task, it is automatically scheduled to run on
+the current event loop.
+
+The asyncio.TaskGroup class, introduced in Python 3.11, provides a modern
+alternative to create_task() with stronger safety guarantees. All tasks in a
+TaskGroup are cancelled if any task raises an exception.
+
+Awaitables
+
+An awaitable object can be used in an await expression. The three main types of
+awaitable objects in asyncio are coroutines, Tasks, and Futures.
+
+Tasks are used to schedule coroutines concurrently. A Task wraps a coroutine
+object and manages its execution on the event loop.
+
+Futures are special low-level awaitable objects that represent the eventual result
+of an asynchronous operation. When a Future object is awaited, the coroutine will
+wait until the Future is resolved in another part of the program. Futures are
+sometimes exposed by libraries and asyncio APIs, but generally do not need to be
+created at the application level.
