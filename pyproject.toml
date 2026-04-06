@@ -54,7 +54,7 @@ dependencies = [
     "rich>=13.0.0",
     "tiktoken>=0.7.0",
     "lancedb>=0.8.0",
-    "tqdb>=0.1.0",
+    "tqdb>=0.2.1",
 ]
 
 [project.optional-dependencies]
@@ -66,9 +66,6 @@ chroma = [
 ]
 qdrant = [
     "qdrant-client>=1.7.0,<2.0.0",
-]
-tqdb = [
-    "tqdb>=0.1.0",
 ]
 fastembed = [
     "fastembed>=0.1.0,<1.0.0",

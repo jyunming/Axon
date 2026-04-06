@@ -122,27 +122,26 @@ class OpenVectorStore:
                 self.collection = None  # created lazily on first add()
 
         elif self.provider == "turboquantdb":
-            # Lazy open: dimension is not known until first add(). If tqdb_meta.json
-            # exists (from a prior session), open immediately.
-            self._tqdb_meta_path = os.path.join(self.config.vector_store_path, "tqdb_meta.json")
-            self._tqdb_doc_index_path = os.path.join(
-                self.config.vector_store_path, "tqdb_doc_index.json"
-            )
+            # Lazy open: dimension is not known until first add(). If tqdb's own
+            # manifest.json exists (from a prior session), open immediately.
             os.makedirs(self.config.vector_store_path, exist_ok=True)
-            if os.path.exists(self._tqdb_meta_path):
-                with open(self._tqdb_meta_path) as f:
-                    meta = json.load(f)
-                import turboquantdb
+            manifest_path = os.path.join(self.config.vector_store_path, "manifest.json")
+            if os.path.exists(manifest_path):
+                with open(manifest_path) as f:
+                    mf = json.load(f)
+                dim, bits = mf["d"], mf["b"]
+                import tqdb
 
                 logger.info(
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
-                    f"(dim={meta['dimension']}, bits={meta['bits']})"
+                    f"(dim={dim}, bits={bits})"
                 )
-                self.client = turboquantdb.TurboQuantDB.open(
+                self.client = tqdb.Database.open(
                     self.config.vector_store_path,
-                    dimension=meta["dimension"],
-                    bits=meta["bits"],
-                    metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                    dimension=dim,
+                    bits=bits,
+                    metric="ip",
+                    normalize=True,  # engine normalises internally; IP ≡ cosine
                     rerank=getattr(self.config, "tqdb_rerank", True),
                     fast_mode=getattr(self.config, "tqdb_fast_mode", False),
                     rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
@@ -381,59 +380,38 @@ class OpenVectorStore:
 
             # Lazy open on first add() — detect dimension from the first embedding batch.
             if self.client is None:
-                import turboquantdb
+                import tqdb
 
                 dim = len(embeddings[0])
-                bits = getattr(self.config, "tqdb_bits", 8)
-                meta = {"dimension": dim, "bits": bits}
-                with open(self._tqdb_meta_path, "w") as f:
-                    json.dump(meta, f)
+                bits = getattr(self.config, "tqdb_bits", 4)
                 logger.info(
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
                     f"(dim={dim}, bits={bits})"
                 )
-                self.client = turboquantdb.TurboQuantDB.open(
+                self.client = tqdb.Database.open(
                     self.config.vector_store_path,
                     dimension=dim,
                     bits=bits,
-                    metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                    metric="ip",
+                    normalize=True,  # engine normalises internally; IP ≡ cosine
                     rerank=getattr(self.config, "tqdb_rerank", True),
                     fast_mode=getattr(self.config, "tqdb_fast_mode", False),
                     rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
                 )
+                # tqdb writes manifest.json on open — no sidecar needed.
 
-            # L2-normalize so IP = cosine similarity (handles models that don't output unit vectors)
-            import numpy as np
-
-            vecs = np.array(embeddings, dtype=np.float32)
-            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-            vecs = np.divide(vecs, norms, where=norms > 0)
             metas = metadatas if metadatas is not None else [{}] * len(ids)
+            # normalize=True on the engine handles L2 normalisation internally.
+            vecs = embeddings if not isinstance(embeddings, list) else embeddings
             self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
             self.client.flush()
 
-            # Update sidecar doc index: source → [chunk_ids]
-            doc_index: dict[str, list[str]] = {}
-            if os.path.exists(self._tqdb_doc_index_path):
-                try:
-                    with open(self._tqdb_doc_index_path) as f:
-                        doc_index = json.load(f)
-                except (OSError, json.JSONDecodeError):
-                    doc_index = {}
-            for chunk_id, meta in zip(ids, metas):
-                source = (meta or {}).get("source", "unknown")
-                doc_index.setdefault(source, [])
-                if chunk_id not in doc_index[source]:
-                    doc_index[source].append(chunk_id)
-            tmp_path = self._tqdb_doc_index_path + ".tmp"
-            with open(tmp_path, "w") as f:
-                json.dump(doc_index, f)
-            os.replace(tmp_path, self._tqdb_doc_index_path)
-
-            # Auto-build ANN index once corpus is large enough (≥1000 vectors).
+            # Auto-build ANN index once corpus reaches 1000 vectors — but only once.
+            # Phase 1 (hybrid dark-vector fix, tqdb ≥0.2.1) ensures post-index inserts
+            # are found via the brute-force dark-slot scan, so a one-time build is correct.
             try:
                 n = len(self.client)
-                if n >= 1000:
+                if n >= 1000 and not self.client.stats().get("has_index", False):
                     self.client.create_index(
                         max_degree=getattr(self.config, "tqdb_max_degree", 32),
                         ef_construction=getattr(self.config, "tqdb_ef_construction", 200),
@@ -517,20 +495,17 @@ class OpenVectorStore:
             return sorted(sources.values(), key=lambda x: x["source"])
 
         elif self.provider == "turboquantdb":
-            if not os.path.exists(self._tqdb_doc_index_path):
+            if self.client is None:
                 return []
             try:
-                with open(self._tqdb_doc_index_path) as f:
-                    doc_index: dict[str, list[str]] = json.load(f)
-            except (OSError, json.JSONDecodeError):
+                counts = self.client.list_metadata_values("source")
+                return sorted(
+                    [{"source": src, "chunks": count} for src, count in counts.items()],
+                    key=lambda x: x["source"],
+                )
+            except Exception as e:
+                logger.debug(f"TurboQuantDB list_documents failed: {e}")
                 return []
-            return sorted(
-                [
-                    {"source": src, "chunks": len(chunk_ids), "doc_ids": chunk_ids}
-                    for src, chunk_ids in doc_index.items()
-                ],
-                key=lambda x: x["source"],
-            )
 
         return []
 
@@ -603,9 +578,7 @@ class OpenVectorStore:
             import numpy as np
 
             q = np.array(query_embedding, dtype=np.float32)
-            q_norm = np.linalg.norm(q)
-            if q_norm > 0:
-                q = q / q_norm
+            # normalize=True on the engine handles query normalisation internally.
             tqdb_filter = filter_dict if filter_dict else None
             results = self.client.search(
                 q,
@@ -843,18 +816,6 @@ class OpenVectorStore:
                     self.client.delete(chunk_id)
                 except Exception as e:
                     logger.debug(f"TurboQuantDB delete {chunk_id} failed: {e}")
-
-            # Prune sidecar doc index
-            if os.path.exists(self._tqdb_doc_index_path):
-                with open(self._tqdb_doc_index_path) as f:
-                    doc_index: dict[str, list[str]] = json.load(f)
-                id_set = set(ids)
-                for source in list(doc_index.keys()):
-                    doc_index[source] = [i for i in doc_index[source] if i not in id_set]
-                    if not doc_index[source]:
-                        del doc_index[source]
-                with open(self._tqdb_doc_index_path, "w") as f:
-                    json.dump(doc_index, f)
 
 
 class MultiVectorStore:

@@ -9,7 +9,6 @@ from axon.main import AxonConfig
 
 
 class TestAxonConfig:
-
     """Test the AxonConfig class."""
 
     def test_default_config(self):
@@ -23,7 +22,7 @@ class TestAxonConfig:
 
         assert config.llm_provider == "ollama"
 
-        assert config.vector_store == "lancedb"
+        assert config.vector_store == "turboquantdb"
 
         assert config.top_k == 10
 
@@ -204,7 +203,6 @@ def _write_yaml(path: Path, data: dict) -> None:
 
 
 class TestSave:
-
     """Tests for AxonConfig.save()."""
 
     def test_save_to_explicit_path(self, tmp_path):
@@ -696,7 +694,6 @@ class TestSave:
 
 
 class TestLoad:
-
     """Tests for AxonConfig.load() including edge cases."""
 
     def test_load_nonexistent_explicit_path_returns_defaults(self, tmp_path):
@@ -1255,7 +1252,6 @@ class TestLoad:
 
 
 class TestPostInit:
-
     """Tests for __post_init__ environment-variable handling."""
 
     def test_api_key_from_env_api_key(self, monkeypatch):
@@ -1362,7 +1358,7 @@ class TestPostInit:
 
         assert cfg.vector_store_path != ""
 
-        assert "lancedb_data" in cfg.vector_store_path
+        assert "vector_store_data" in cfg.vector_store_path
 
         assert "bm25_index" in cfg.bm25_path
 
@@ -1377,7 +1373,6 @@ class TestPostInit:
 
 
 class TestFirstRunConfigCreation:
-
     """P0-1: AxonConfig.load() must return starter file values on first run.
 
 
@@ -1503,7 +1498,7 @@ class TestStoreDerivedPaths:
 
         assert user in cfg.projects_root
 
-        assert "lancedb_data" in cfg.vector_store_path
+        assert "vector_store_data" in cfg.vector_store_path
 
         assert "bm25_index" in cfg.bm25_path
 

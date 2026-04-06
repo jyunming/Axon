@@ -535,7 +535,7 @@ Set `vector_store.provider` in `config.yaml`:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `tqdb_bits` | int | `8` | Quantization bits per coordinate (`4` or `8`) |
+| `tqdb_bits` | int | `4` | Quantization bits per coordinate (`2`, `4`, or `8`) |
 | `tqdb_fast_mode` | bool | `false` | Trade index build CPU for faster queries; slightly lowers recall |
 | `tqdb_rerank` | bool | `true` | Enable internal ANN rerank pass; improves recall at small CPU cost |
 | `tqdb_rerank_precision` | str\|null | `null` | Rerank precision: `null` = dequant, `"f16"` or `"f32"` = exact (uses more disk) |

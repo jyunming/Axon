@@ -557,7 +557,7 @@ pip install tqdb
 ```yaml
 vector_store:
   provider: turboquantdb
-  tqdb_bits: 8                  # quantization bits: 4 or 8
+  tqdb_bits: 4                  # quantization bits: 2 | 4 | 8 (default: 4)
   tqdb_fast_mode: false         # false = higher recall; true = faster queries
   tqdb_rerank: true             # true = internal ANN rerank pass (improves recall)
   # Optional tuning (omit to use TQDB defaults):
@@ -568,14 +568,14 @@ vector_store:
 
 **Preset configurations** (benchmarked on 700–5 500 chunks, dim 384–768):
 
-| Preset | bits | fast_mode | rerank | Recall@10 | Time-to-ready | Disk |
-|--------|------|-----------|--------|-----------|---------------|------|
-| b=8 HQ *(recommended)* | 8 | false | true | **1.000** | 0.1 s | 2.0 MB |
-| b=8 FastBuild | 8 | true | false | 0.99 | 0.2 s | 2.0 MB |
-| b=4 Balanced | 4 | false | true | 0.93 | 0.3 s | 1.9 MB |
-| b=4 FastBuild | 4 | true | false | 0.82 | 0.3 s | 1.9 MB |
+| Preset | bits | fast_mode | rerank | Recall@10 | p50 latency | Disk |
+|--------|------|-----------|--------|-----------|-------------|------|
+| b=4 Balanced *(default)* | 4 | false | true | 0.89 | 2.5 ms | 5.2 MB |
+| b=8 High Quality | 8 | false | true | **0.99** | 3.4 ms | 9.2 MB |
+| b=8 Fast Query | 8 | true | true | **0.99** | 1.8 ms | 9.2 MB |
+| b=2 Minimal Disk | 2 | false | true | 0.67 | 2.1 ms | 3.2 MB |
 
-> **b=8 HQ** delivers perfect recall with 30–65× faster ingest and 7× smaller disk than ChromaDB.
+> **b=4 Balanced** is the default — best recall/disk/RAM tradeoff for most workloads. Use b=8 when recall is critical, b=2 when disk is the constraint.
 
 ---
 

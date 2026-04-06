@@ -87,18 +87,18 @@ llm:
 
 vector_store:
 
-
-  # Persistent vector store for embeddings.
-
-
-  # tqdb (default) — fastest ingest, smallest disk, no extra service needed.
-  # Alternatives: lancedb, qdrant, chroma
-
-
-  provider: turboquantdb
-
+  provider: turboquantdb    # turboquantdb (default) | lancedb | chroma | qdrant
 
   path: ~/.axon/projects/default/vector_store_data
+
+  # TurboQuantDB tuning (only used when provider: turboquantdb)
+  # Default preset — b=4 + rerank=True — best recall/size tradeoff for most workloads.
+  # tqdb_bits: 4            # 2 | 4 | 8  — lower = smaller disk/RAM, lower recall
+  # tqdb_rerank: true       # rerank pass after ANN (~0.5 ms overhead, improves recall)
+  # tqdb_fast_mode: false   # true = faster index build; recall unchanged with rerank=true
+  # tqdb_ef_construction: 200   # HNSW build quality (higher = better recall, slower build)
+  # tqdb_max_degree: 32         # HNSW graph degree
+  # tqdb_search_list_size: 128  # ANN candidate list size at query time
 
 
 bm25:
@@ -460,7 +460,7 @@ class AxonConfig:
 
     vector_store_path: str = ""
 
-    tqdb_bits: int = 8
+    tqdb_bits: int = 4
     tqdb_fast_mode: bool = False
     tqdb_rerank: bool = True
     tqdb_rerank_precision: str | None = None  # None | "f16" | "f32"
