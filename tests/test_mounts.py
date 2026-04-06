@@ -607,7 +607,7 @@ class TestRedeemShareKeyDescriptor:
 
         (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
 
-        (user_dir / "myproject" / "lancedb_data").mkdir(parents=True, exist_ok=True)
+        (user_dir / "myproject" / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
         (user_dir / "myproject" / "meta.json").write_text(
             json.dumps({"name": "myproject", "project_id": "ns_myproject"}),

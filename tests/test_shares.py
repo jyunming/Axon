@@ -24,7 +24,7 @@ def _make_user_dir(tmp_path: Path, username: str) -> Path:
 
     # Create a dummy project so redeem can find it
 
-    (user_dir / "myproject" / "lancedb_data").mkdir(parents=True, exist_ok=True)
+    (user_dir / "myproject" / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
     (user_dir / "myproject" / "meta.json").write_text(
         json.dumps({"name": "myproject", "description": "test"})
@@ -226,7 +226,7 @@ class TestHmacTamper:
 
         # Create another project for the tamper attempt
 
-        (owner_dir / "otherproject" / "lancedb_data").mkdir(parents=True, exist_ok=True)
+        (owner_dir / "otherproject" / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
         (owner_dir / "otherproject" / "meta.json").write_text(
             json.dumps({"name": "otherproject", "description": "other"})

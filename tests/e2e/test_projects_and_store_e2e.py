@@ -111,8 +111,8 @@ def test_store_init_whoami_and_share_lifecycle(api_client, make_brain, tmp_path)
     assert (user_dir / ".shares").exists()
 
     assert api_module.brain.config.vector_store_path.endswith(
-        "default/lancedb_data"
-    ) or api_module.brain.config.vector_store_path.endswith("default\\lancedb_data")
+        "default/vector_store_data"
+    ) or api_module.brain.config.vector_store_path.endswith("default\\vector_store_data")
 
     whoami = api_client.get("/store/whoami")
 

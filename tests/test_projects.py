@@ -67,7 +67,7 @@ class TestEnsureProject:
 
         root = project_dir("testproj")
 
-        assert (root / "lancedb_data").is_dir()
+        assert (root / "vector_store_data").is_dir()
 
         assert (root / "bm25_index").is_dir()
 
@@ -285,7 +285,7 @@ class TestSubProjectEnsure:
 
         root = project_dir("research/papers")
 
-        assert (root / "lancedb_data").is_dir()
+        assert (root / "vector_store_data").is_dir()
 
         assert (root / "bm25_index").is_dir()
 
@@ -1343,7 +1343,7 @@ class TestEnsureSingleProjectAt:
 
         proj_root.mkdir()
 
-        (proj_root / "lancedb_data").mkdir()
+        (proj_root / "vector_store_data").mkdir()
 
         (proj_root / "bm25_index").mkdir()
 
