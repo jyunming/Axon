@@ -431,6 +431,39 @@ class CodeRetrievalMixin:
                         )
                         existing_edges.add(ek)
 
+    def _get_symbol_cache(
+        self, corpora: list[list[dict]]
+    ) -> tuple[list[dict], list[tuple[dict, dict, str, str]], dict[str, list[tuple[dict, str]]]]:
+        """Build/reuse cached symbol metadata structures for repeated channel queries."""
+        signature = tuple((id(c), len(c)) for c in corpora)
+        if getattr(self, "_symbol_cache_signature", None) == signature:
+            return (
+                self._symbol_flat_docs,
+                self._symbol_entries,
+                self._symbol_exact,
+            )
+
+        flat_docs: list[dict] = [doc for corpus in corpora for doc in corpus]
+        entries: list[tuple[dict, dict, str, str]] = []
+        exact: dict[str, list[tuple[dict, str]]] = {}
+        for doc in flat_docs:
+            meta = doc.get("metadata", {})
+            sym = (meta.get("symbol_name") or "").lower()
+            qname = (meta.get("qualified_name") or "").lower()
+            if not sym and not qname:
+                continue
+            entries.append((doc, meta, sym, qname))
+            if sym:
+                exact.setdefault(sym, []).append((doc, "symbol_name"))
+            if qname:
+                exact.setdefault(qname, []).append((doc, "qualified_name"))
+
+        self._symbol_cache_signature = signature
+        self._symbol_flat_docs = flat_docs
+        self._symbol_entries = entries
+        self._symbol_exact = exact
+        return flat_docs, entries, exact
+
     def _apply_code_lexical_boost(
         self,
         results: list[dict],
@@ -599,46 +632,123 @@ class CodeRetrievalMixin:
         else:
             return []
 
+        if getattr(self.config, "symbol_index_engine", "python") == "rust":
+            from axon.rust_bridge import get_rust_bridge
+
+            flat_docs, entries, exact = self._get_symbol_cache(corpora)
+            bridge = get_rust_bridge()
+            if not filters and bridge.can_symbol_index():
+                if getattr(self, "_symbol_rust_index_signature", None) != getattr(
+                    self, "_symbol_cache_signature", None
+                ):
+                    rust_index = bridge.build_symbol_index(corpora=corpora)
+                    if rust_index is not None:
+                        self._symbol_rust_index = rust_index
+                        self._symbol_rust_index_signature = getattr(
+                            self, "_symbol_cache_signature", None
+                        )
+                rust_index = getattr(self, "_symbol_rust_index", None)
+                if rust_index is not None:
+                    rust_hits = bridge.search_symbol_index(
+                        index=rust_index,
+                        query_tokens=sorted(long_tokens),
+                        top_k=top_k,
+                    )
+                    if rust_hits is not None:
+                        normalized_hits: list[dict] = []
+                        for hit in rust_hits:
+                            idx = hit.get("index", hit.get("doc_index"))
+                            if not isinstance(idx, int) or idx < 0 or idx >= len(flat_docs):
+                                continue
+                            doc = dict(flat_docs[idx])
+                            try:
+                                doc["score"] = float(hit.get("score", 1.0))
+                            except (TypeError, ValueError):
+                                doc["score"] = 0.0
+                            meta = dict(doc.get("metadata", {}))
+                            meta["channel"] = hit.get("channel") or "symbol_name"
+                            doc["metadata"] = meta
+                            normalized_hits.append(doc)
+                        import heapq as _heapq
+
+                        return _heapq.nlargest(
+                            top_k, normalized_hits, key=lambda x: x.get("score", 0.0)
+                        )
+            if bridge.can_symbol_search():
+                rust_hits = bridge.symbol_channel_search(
+                    corpora=corpora,
+                    query_tokens=sorted(long_tokens),
+                    top_k=top_k,
+                    filters=filters,
+                )
+                if rust_hits is not None:
+                    normalized_hits: list[dict] = []
+                    for hit in rust_hits:
+                        if not isinstance(hit, dict):
+                            continue
+                        if "id" in hit and "metadata" in hit:
+                            normalized_hits.append(hit)
+                            continue
+                        idx = hit.get("index", hit.get("doc_index"))
+                        if not isinstance(idx, int) or idx < 0 or idx >= len(flat_docs):
+                            continue
+                        doc = dict(flat_docs[idx])
+                        score = hit.get("score", 1.0)
+                        try:
+                            doc["score"] = float(score)
+                        except (TypeError, ValueError):
+                            doc["score"] = 0.0
+                        meta = dict(doc.get("metadata", {}))
+                        channel = hit.get("channel") or "symbol_name"
+                        meta["channel"] = channel
+                        doc["metadata"] = meta
+                        normalized_hits.append(doc)
+                    import heapq as _heapq
+
+                    return _heapq.nlargest(
+                        top_k, normalized_hits, key=lambda x: x.get("score", 0.0)
+                    )
+            elif not getattr(self.config, "rust_fallback_enabled", True):
+                return []
+
+        flat_docs, entries, exact = self._get_symbol_cache(corpora)
         hits: dict[str, dict] = {}  # id → best result
-        for corpus in corpora:
-            for doc in corpus:
+        # Fast path: exact matches from cached map (score=1.0)
+        for tok in long_tokens:
+            for doc, channel in exact.get(tok, []):
                 meta = doc.get("metadata", {})
-                sym = (meta.get("symbol_name") or "").lower()
-                qname = (meta.get("qualified_name") or "").lower()
-                if not sym and not qname:
+                if filters and not all(meta.get(k) == v for k, v in filters.items()):
+                    continue
+                doc_id = doc.get("id", "")
+                if doc_id not in hits:
+                    result = dict(doc)
+                    result["score"] = 1.0
+                    result["metadata"] = dict(meta)
+                    result["metadata"]["channel"] = channel
+                    hits[doc_id] = result
+
+        # If exact hits already satisfy top_k, partial matches cannot outrank them.
+        if len(hits) < top_k:
+            for doc, meta, sym, qname in entries:
+                # Apply metadata filters if provided
+                if filters and not all(meta.get(k) == v for k, v in filters.items()):
                     continue
 
-                # Apply metadata filters if provided
-                if filters:
-                    match = all(meta.get(k) == v for k, v in filters.items())
-                    if not match:
-                        continue
-
-                # Score: exact match = 1.0, partial = 0.6
+                # Score: partial = 0.6 only (exact handled in fast path)
                 best_score = 0.0
                 best_channel = "symbol_name"
-                if sym:
-                    if sym in long_tokens:
-                        best_score = 1.0
-                        best_channel = "symbol_name"
-                    elif any(tok in sym for tok in long_tokens):
-                        best_score = max(best_score, 0.6)
-                        best_channel = "symbol_name"
-                if qname:
-                    if qname in long_tokens:
-                        if 1.0 >= best_score:
-                            best_score = 1.0
-                            best_channel = "qualified_name"
-                    elif any(tok in qname for tok in long_tokens):
-                        if 0.6 > best_score:
-                            best_score = 0.6
-                            best_channel = "qualified_name"
-
+                if sym and any(tok in sym for tok in long_tokens):
+                    best_score = 0.6
+                    best_channel = "symbol_name"
+                if qname and any(tok in qname for tok in long_tokens):
+                    if 0.6 > best_score:
+                        best_score = 0.6
+                        best_channel = "qualified_name"
                 if best_score == 0.0:
                     continue
 
                 doc_id = doc.get("id", "")
-                if doc_id not in hits or best_score > hits[doc_id]["score"]:
+                if doc_id not in hits:
                     result = dict(doc)
                     result["score"] = best_score
                     result["metadata"] = dict(meta)

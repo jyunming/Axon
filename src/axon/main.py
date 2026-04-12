@@ -496,7 +496,11 @@ Your primary goal is to help the user by answering questions based on the provid
         try:
             from axon.retrievers import BM25Retriever
 
-            self.bm25 = BM25Retriever(storage_path=self.config.bm25_path)
+            self.bm25 = BM25Retriever(
+                storage_path=self.config.bm25_path,
+                engine=getattr(self.config, "bm25_engine", "python"),
+                rust_fallback_enabled=getattr(self.config, "rust_fallback_enabled", True),
+            )
 
         except ImportError:
             self.bm25 = None
@@ -901,7 +905,13 @@ Your primary goal is to help the user by answering questions based on the provid
             all_vs.append(OpenVectorStore(cfg))
 
             try:
-                all_bm25.append(_BM25(storage_path=bpath))
+                all_bm25.append(
+                    _BM25(
+                        storage_path=bpath,
+                        engine=getattr(cfg, "bm25_engine", "python"),
+                        rust_fallback_enabled=getattr(cfg, "rust_fallback_enabled", True),
+                    )
+                )
 
             except Exception:
                 pass
@@ -1114,7 +1124,11 @@ Your primary goal is to help the user by answering questions based on the provid
         try:
             from axon.retrievers import BM25Retriever
 
-            own_bm25 = BM25Retriever(storage_path=self.config.bm25_path)
+            own_bm25 = BM25Retriever(
+                storage_path=self.config.bm25_path,
+                engine=getattr(self.config, "bm25_engine", "python"),
+                rust_fallback_enabled=getattr(self.config, "rust_fallback_enabled", True),
+            )
 
         except ImportError:
             own_bm25 = None
@@ -1155,7 +1169,13 @@ Your primary goal is to help the user by answering questions based on the provid
 
             for cfg in child_configs:
                 try:
-                    all_bm25.append(_BM25(storage_path=cfg.bm25_path))
+                    all_bm25.append(
+                        _BM25(
+                            storage_path=cfg.bm25_path,
+                            engine=getattr(cfg, "bm25_engine", "python"),
+                            rust_fallback_enabled=getattr(cfg, "rust_fallback_enabled", True),
+                        )
+                    )
 
                 except Exception:
                     pass
@@ -2479,6 +2499,30 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return all_chunks
 
+    def _maybe_rust_preprocess_documents(self, documents: list[dict]) -> list[dict]:
+        """Optionally preprocess ingest documents via Rust, with Python fallback."""
+        if getattr(self.config, "ingest_engine", "python") != "rust":
+            return documents
+
+        from axon.rust_bridge import get_rust_bridge
+
+        bridge = get_rust_bridge()
+        if not bridge.can_ingest_preprocess():
+            if getattr(self.config, "rust_fallback_enabled", True):
+                return documents
+            raise RuntimeError(
+                "ingest_engine is set to 'rust' but Rust ingest preprocessing is unavailable."
+            )
+
+        batch_size = int(getattr(self.config, "rust_batch_size", 512))
+        processed = bridge.preprocess_documents(documents, batch_size=batch_size)
+        if processed is not None:
+            return processed
+
+        if getattr(self.config, "rust_fallback_enabled", True):
+            return documents
+        raise RuntimeError("Rust ingest preprocessing failed and fallback is disabled.")
+
     def ingest(
         self,
         documents: list[dict[str, Any]],
@@ -2638,6 +2682,8 @@ Your primary goal is to help the user by answering questions based on the provid
 
                 if "source_id" in _meta and not _meta["source_id"].startswith(_ns_prefix):
                     _meta["source_id"] = _ns_prefix + _meta["source_id"]
+
+        documents = self._maybe_rust_preprocess_documents(documents)
 
         if self.config.dedup_on_ingest:
             before = len(documents)
@@ -3117,12 +3163,14 @@ Your primary goal is to help the user by answering questions based on the provid
                 _rel_budget = getattr(self.config, "graph_rag_relation_budget", 0)
 
                 if _rel_budget > 0 and len(_rel_chunks) > _rel_budget:
-                    _rel_chunks = sorted(
+                    import heapq as _heapq
+
+                    _rel_chunks = _heapq.nlargest(
+                        _rel_budget,
                         _rel_chunks,
                         key=lambda d: _entity_count_by_doc.get(d["id"], 0)
                         / max(len(d.get("text", "")), 1),
-                        reverse=True,
-                    )[:_rel_budget]
+                    )
 
                     logger.info(
                         f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
@@ -3405,6 +3453,13 @@ Your primary goal is to help the user by answering questions based on the provid
 
                     else:
                         self._rebuild_communities()
+
+        # Flush deferred sidecar writes (e.g., TurboQuantDB doc index) at ingest end.
+        try:
+            if hasattr(self._own_vector_store, "flush_pending_writes"):
+                self._own_vector_store.flush_pending_writes()
+        except Exception:
+            pass
 
         _progress("finalizing", chunks_total=n_chunks)
 

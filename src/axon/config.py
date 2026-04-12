@@ -259,6 +259,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "qdrant_collection",
         "lancedb_path",
         "tqdb_bits",
+        "tqdb_compact_metadata",
     },
     "rag": {
         "hybrid_search",
@@ -301,6 +302,48 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "hybrid_mode",
         "raptor_chunk_group_size",
         "dedup_on_ingest",
+        "graph_rag_local_batch_fetch",
+        "graph_rag_local_cached_incoming",
+        "graph_rag_local_cached_incoming_counts",
+        "graph_rag_extraction_cache",
+        "graph_rag_extraction_cache_size",
+        "graph_rag_profile",
+        "graph_rag_local_relation_support_fast",
+        "graph_rag_local_entity_degree_fast",
+        "graph_rag_local_early_cutoff",
+        "graph_rag_local_early_cutoff_factor",
+        "graph_rag_llm_cache",
+        "graph_rag_llm_cache_size",
+        "graph_rag_global_max_map_chunks",
+        "graph_rag_global_reduce_skip_if_top_score_gte",
+        "graph_rag_global_reduce_skip_if_top_points_le",
+        "graph_rag_rebuild_skip_if_unchanged",
+        "graph_rag_global_answer_cache",
+        "graph_rag_global_answer_cache_size",
+        "graph_rag_global_map_cache",
+        "graph_rag_global_map_cache_size",
+        "graph_rag_community_summary_compact_persist",
+        "graph_rag_relation_compact_persist",
+        "graph_rag_relation_shard_persist",
+        "graph_rag_relation_shard_count",
+        "graph_rag_relation_shard_parallel_writes",
+        "graph_rag_relation_shard_write_workers",
+        "graph_rag_relation_shard_parallel_load",
+        "graph_rag_relation_shard_load_workers",
+        "graph_rag_relation_shard_selective_rewrite",
+        "graph_rag_relation_shard_list_manifest",
+        "graph_rag_relation_shard_parallel_signatures",
+        "graph_rag_relation_shard_signature_workers",
+        "graph_rag_relation_pickle_cache",
+        "graph_rag_relation_pickle_cache_protocol",
+        "graph_rag_map_workers",
+        "graph_rag_map_auto_workers",
+        "graph_rag_map_use_dedicated_pool",
+        "ingest_engine",
+        "bm25_engine",
+        "symbol_index_engine",
+        "rust_fallback_enabled",
+        "rust_batch_size",
     },
     "chunk": {
         "strategy",
@@ -455,10 +498,16 @@ class AxonConfig:
     vector_store_path: str = ""
 
     tqdb_bits: int = 8
+    tqdb_compact_metadata: bool = True
 
     # BM25 Settings
 
     bm25_path: str = ""
+    bm25_engine: Literal["python", "rust"] = "python"
+    ingest_engine: Literal["python", "rust"] = "python"
+    symbol_index_engine: Literal["python", "rust"] = "python"
+    rust_fallback_enabled: bool = True
+    rust_batch_size: int = 512
 
     def __post_init__(self) -> None:
         """Populate fields from environment variables and resolve storage paths."""
@@ -844,6 +893,40 @@ class AxonConfig:
     graph_rag_local_top_k_relationships: int = 10
 
     graph_rag_local_include_relationship_weight: bool = False
+    graph_rag_local_batch_fetch: bool = True
+    graph_rag_local_cached_incoming: bool = True
+    graph_rag_local_cached_incoming_counts: bool = True
+    graph_rag_extraction_cache: bool = True
+    graph_rag_extraction_cache_size: int = 5000
+    graph_rag_profile: bool = False
+    graph_rag_local_relation_support_fast: bool = True
+    graph_rag_local_entity_degree_fast: bool = True
+    graph_rag_local_early_cutoff: bool = True
+    graph_rag_local_early_cutoff_factor: float = 0.2
+    graph_rag_llm_cache: bool = True
+    graph_rag_llm_cache_size: int = 2000
+    graph_rag_global_max_map_chunks: int = 0
+    graph_rag_global_reduce_skip_if_top_score_gte: float = 95.0
+    graph_rag_global_reduce_skip_if_top_points_le: int = 1
+    graph_rag_rebuild_skip_if_unchanged: bool = True
+    graph_rag_global_answer_cache: bool = True
+    graph_rag_global_answer_cache_size: int = 500
+    graph_rag_global_map_cache: bool = True
+    graph_rag_global_map_cache_size: int = 2000
+    graph_rag_community_summary_compact_persist: bool = False
+    graph_rag_relation_compact_persist: bool = True
+    graph_rag_relation_shard_persist: bool = False
+    graph_rag_relation_shard_count: int = 16
+    graph_rag_relation_shard_parallel_writes: bool = True
+    graph_rag_relation_shard_write_workers: int = 4
+    graph_rag_relation_shard_parallel_load: bool = True
+    graph_rag_relation_shard_load_workers: int = 4
+    graph_rag_relation_shard_selective_rewrite: bool = True
+    graph_rag_relation_shard_list_manifest: bool = False
+    graph_rag_relation_shard_parallel_signatures: bool = False
+    graph_rag_relation_shard_signature_workers: int = 4
+    graph_rag_relation_pickle_cache: bool = False
+    graph_rag_relation_pickle_cache_protocol: int = 4
 
     # Unified candidate ranking weights
 
@@ -993,13 +1076,13 @@ class AxonConfig:
 
     graph_rag_entity_min_frequency: int = 2
 
-    # Dedicated thread pool size for map-reduce phase (0 = use max_workers).
-
-    # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
-
-    # from starving the shared executor during concurrent ingest.
-
+    # Map-phase worker controls:
+    # - graph_rag_map_workers > 0: fixed dedicated pool size
+    # - graph_rag_map_workers = 0: auto mode (bounded dedicated pool by graph_rag_map_auto_workers)
+    # Set graph_rag_map_use_dedicated_pool=False to keep legacy shared-executor behavior.
     graph_rag_map_workers: int = 0
+    graph_rag_map_auto_workers: int = 4
+    graph_rag_map_use_dedicated_pool: bool = True
 
     # Alternative NER backend. "gliner" skips LLM for entity extraction.
 
@@ -1206,6 +1289,8 @@ class AxonConfig:
 
             if "tqdb_bits" in vs:
                 config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
+            if "tqdb_compact_metadata" in vs:
+                config_dict["tqdb_compact_metadata"] = bool(vs["tqdb_compact_metadata"])
 
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
@@ -1404,6 +1489,7 @@ class AxonConfig:
                 "provider": flat["vector_store"],
                 "path": flat["vector_store_path"],
                 "tqdb_bits": flat["tqdb_bits"],
+                "tqdb_compact_metadata": flat["tqdb_compact_metadata"],
             },
             "bm25": {
                 "path": flat["bm25_path"],
@@ -1419,6 +1505,65 @@ class AxonConfig:
                 "graph_rag": flat["graph_rag"],
                 "graph_rag_community": flat["graph_rag_community"],
                 "dedup_on_ingest": flat["dedup_on_ingest"],
+                "ingest_engine": flat["ingest_engine"],
+                "bm25_engine": flat["bm25_engine"],
+                "symbol_index_engine": flat["symbol_index_engine"],
+                "rust_fallback_enabled": flat["rust_fallback_enabled"],
+                "rust_batch_size": flat["rust_batch_size"],
+                "graph_rag_llm_cache": flat["graph_rag_llm_cache"],
+                "graph_rag_llm_cache_size": flat["graph_rag_llm_cache_size"],
+                "graph_rag_global_max_map_chunks": flat["graph_rag_global_max_map_chunks"],
+                "graph_rag_global_reduce_skip_if_top_score_gte": flat[
+                    "graph_rag_global_reduce_skip_if_top_score_gte"
+                ],
+                "graph_rag_global_reduce_skip_if_top_points_le": flat[
+                    "graph_rag_global_reduce_skip_if_top_points_le"
+                ],
+                "graph_rag_rebuild_skip_if_unchanged": flat["graph_rag_rebuild_skip_if_unchanged"],
+                "graph_rag_global_answer_cache": flat["graph_rag_global_answer_cache"],
+                "graph_rag_global_answer_cache_size": flat["graph_rag_global_answer_cache_size"],
+                "graph_rag_global_map_cache": flat["graph_rag_global_map_cache"],
+                "graph_rag_global_map_cache_size": flat["graph_rag_global_map_cache_size"],
+                "graph_rag_local_cached_incoming_counts": flat[
+                    "graph_rag_local_cached_incoming_counts"
+                ],
+                "graph_rag_community_summary_compact_persist": flat[
+                    "graph_rag_community_summary_compact_persist"
+                ],
+                "graph_rag_relation_compact_persist": flat["graph_rag_relation_compact_persist"],
+                "graph_rag_relation_shard_persist": flat["graph_rag_relation_shard_persist"],
+                "graph_rag_relation_shard_count": flat["graph_rag_relation_shard_count"],
+                "graph_rag_relation_shard_parallel_writes": flat[
+                    "graph_rag_relation_shard_parallel_writes"
+                ],
+                "graph_rag_relation_shard_write_workers": flat[
+                    "graph_rag_relation_shard_write_workers"
+                ],
+                "graph_rag_relation_shard_parallel_load": flat[
+                    "graph_rag_relation_shard_parallel_load"
+                ],
+                "graph_rag_relation_shard_load_workers": flat[
+                    "graph_rag_relation_shard_load_workers"
+                ],
+                "graph_rag_relation_shard_selective_rewrite": flat[
+                    "graph_rag_relation_shard_selective_rewrite"
+                ],
+                "graph_rag_relation_shard_list_manifest": flat[
+                    "graph_rag_relation_shard_list_manifest"
+                ],
+                "graph_rag_relation_shard_parallel_signatures": flat[
+                    "graph_rag_relation_shard_parallel_signatures"
+                ],
+                "graph_rag_relation_shard_signature_workers": flat[
+                    "graph_rag_relation_shard_signature_workers"
+                ],
+                "graph_rag_relation_pickle_cache": flat["graph_rag_relation_pickle_cache"],
+                "graph_rag_relation_pickle_cache_protocol": flat[
+                    "graph_rag_relation_pickle_cache_protocol"
+                ],
+                "graph_rag_map_workers": flat["graph_rag_map_workers"],
+                "graph_rag_map_auto_workers": flat["graph_rag_map_auto_workers"],
+                "graph_rag_map_use_dedicated_pool": flat["graph_rag_map_use_dedicated_pool"],
             },
             "chunk": {
                 "strategy": flat["chunk_strategy"],
@@ -1730,6 +1875,196 @@ class AxonConfig:
                     section="rag",
                     field="sentence_window_size",
                     message=f"sentence_window_size must be >= 1, got {cfg.sentence_window_size}.",
+                )
+            )
+
+        _VALID_ENGINES = {"python", "rust"}
+        if cfg.ingest_engine not in _VALID_ENGINES:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="ingest_engine",
+                    message=(
+                        f"Invalid ingest_engine '{cfg.ingest_engine}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_ENGINES))}."
+                    ),
+                )
+            )
+        if cfg.bm25_engine not in _VALID_ENGINES:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="bm25_engine",
+                    message=(
+                        f"Invalid bm25_engine '{cfg.bm25_engine}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_ENGINES))}."
+                    ),
+                )
+            )
+        if cfg.symbol_index_engine not in _VALID_ENGINES:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="symbol_index_engine",
+                    message=(
+                        f"Invalid symbol_index_engine '{cfg.symbol_index_engine}'. "
+                        f"Must be one of: {', '.join(sorted(_VALID_ENGINES))}."
+                    ),
+                )
+            )
+        if cfg.rust_batch_size < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="rust_batch_size",
+                    message=f"rust_batch_size must be >= 1, got {cfg.rust_batch_size}.",
+                )
+            )
+        if cfg.graph_rag_llm_cache_size < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_llm_cache_size",
+                    message=(
+                        "graph_rag_llm_cache_size must be >= 1, got "
+                        f"{cfg.graph_rag_llm_cache_size}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_global_max_map_chunks < 0:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_global_max_map_chunks",
+                    message=(
+                        "graph_rag_global_max_map_chunks must be >= 0, got "
+                        f"{cfg.graph_rag_global_max_map_chunks}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_global_reduce_skip_if_top_points_le < 0:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_global_reduce_skip_if_top_points_le",
+                    message=(
+                        "graph_rag_global_reduce_skip_if_top_points_le must be >= 0, got "
+                        f"{cfg.graph_rag_global_reduce_skip_if_top_points_le}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_global_answer_cache_size < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_global_answer_cache_size",
+                    message=(
+                        "graph_rag_global_answer_cache_size must be >= 1, got "
+                        f"{cfg.graph_rag_global_answer_cache_size}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_global_map_cache_size < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_global_map_cache_size",
+                    message=(
+                        "graph_rag_global_map_cache_size must be >= 1, got "
+                        f"{cfg.graph_rag_global_map_cache_size}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_map_workers < 0:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_map_workers",
+                    message=(
+                        "graph_rag_map_workers must be >= 0, got " f"{cfg.graph_rag_map_workers}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_map_auto_workers < 0:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_map_auto_workers",
+                    message=(
+                        "graph_rag_map_auto_workers must be >= 0, got "
+                        f"{cfg.graph_rag_map_auto_workers}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_relation_shard_count < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_relation_shard_count",
+                    message=(
+                        "graph_rag_relation_shard_count must be >= 1, got "
+                        f"{cfg.graph_rag_relation_shard_count}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_relation_shard_write_workers < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_relation_shard_write_workers",
+                    message=(
+                        "graph_rag_relation_shard_write_workers must be >= 1, got "
+                        f"{cfg.graph_rag_relation_shard_write_workers}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_relation_shard_load_workers < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_relation_shard_load_workers",
+                    message=(
+                        "graph_rag_relation_shard_load_workers must be >= 1, got "
+                        f"{cfg.graph_rag_relation_shard_load_workers}."
+                    ),
+                )
+            )
+        if cfg.graph_rag_relation_shard_signature_workers < 1:
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_relation_shard_signature_workers",
+                    message=(
+                        "graph_rag_relation_shard_signature_workers must be >= 1, got "
+                        f"{cfg.graph_rag_relation_shard_signature_workers}."
+                    ),
+                )
+            )
+        if not (1 <= cfg.graph_rag_relation_pickle_cache_protocol <= 5):
+            issues.append(
+                ConfigIssue(
+                    level="error",
+                    section="rag",
+                    field="graph_rag_relation_pickle_cache_protocol",
+                    message=(
+                        "graph_rag_relation_pickle_cache_protocol must be between 1 and 5, got "
+                        f"{cfg.graph_rag_relation_pickle_cache_protocol}."
+                    ),
                 )
             )
 

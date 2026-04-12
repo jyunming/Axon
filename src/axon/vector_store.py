@@ -130,6 +130,8 @@ class OpenVectorStore:
             self._tqdb_doc_index_path = os.path.join(
                 self.config.vector_store_path, "tqdb_doc_index.json"
             )
+            self._tqdb_doc_index_cache: dict[str, list[str]] | None = None
+            self._tqdb_doc_index_dirty: bool = False
             os.makedirs(self.config.vector_store_path, exist_ok=True)
             if os.path.exists(self._tqdb_meta_path):
                 with open(self._tqdb_meta_path) as f:
@@ -148,6 +150,40 @@ class OpenVectorStore:
                 )
             else:
                 self.client = None  # opened lazily on first add()
+
+    def _tqdb_load_doc_index(self) -> dict[str, list[str]]:
+        if getattr(self, "_tqdb_doc_index_cache", None) is not None:
+            return self._tqdb_doc_index_cache or {}
+        doc_index: dict[str, list[str]] = {}
+        if os.path.exists(getattr(self, "_tqdb_doc_index_path", "")):
+            try:
+                with open(self._tqdb_doc_index_path) as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    doc_index = {
+                        str(k): [str(x) for x in v]
+                        for k, v in loaded.items()
+                        if isinstance(v, list)
+                    }
+            except (OSError, json.JSONDecodeError):
+                doc_index = {}
+        self._tqdb_doc_index_cache = doc_index
+        return doc_index
+
+    def _tqdb_flush_doc_index(self, force: bool = False) -> None:
+        if self.provider != "turboquantdb":
+            return
+        if not force and not getattr(self, "_tqdb_doc_index_dirty", False):
+            return
+        doc_index = self._tqdb_doc_index_cache or {}
+        tmp_path = self._tqdb_doc_index_path + ".tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(doc_index, f)
+            os.replace(tmp_path, self._tqdb_doc_index_path)
+            self._tqdb_doc_index_dirty = False
+        except Exception as e:
+            logger.debug(f"TurboQuantDB doc index flush skipped: {e}")
 
     def close(self):
         """Release any open file handles or database connections."""
@@ -176,15 +212,29 @@ class OpenVectorStore:
 
         elif self.provider == "turboquantdb" and self.client:
             try:
+                self.flush_pending_writes()
                 if hasattr(self.client, "close"):
                     self.client.close()
             except Exception:
                 pass
             self.client = None
 
+    def flush_pending_writes(self) -> None:
+        """Flush deferred sidecar writes to disk."""
+        if self.provider == "turboquantdb":
+            self._tqdb_flush_doc_index(force=True)
+
     # Chroma hard limit per collection.add() call.
 
     _CHROMA_MAX_BATCH = 5000
+    _TQDB_META_KEY_COMPACT = {
+        "source": "s",
+        "graph_rag_type": "grt",
+        "community_key": "ck",
+        "level": "lv",
+        "dataset_type": "dt",
+    }
+    _TQDB_META_KEY_EXPAND = {v: k for k, v in _TQDB_META_KEY_COMPACT.items()}
 
     @staticmethod
     def _sanitize_chroma_meta(metadatas: list[dict] | None) -> list[dict] | None:
@@ -226,6 +276,33 @@ class OpenVectorStore:
             result.append(sanitized)
 
         return result
+
+    def _tqdb_compact_metadata_dict(self, meta: dict | None) -> dict:
+        if not isinstance(meta, dict):
+            return {}
+        if not bool(getattr(self.config, "tqdb_compact_metadata", True)):
+            return dict(meta)
+        out = {}
+        for k, v in meta.items():
+            out[self._TQDB_META_KEY_COMPACT.get(str(k), str(k))] = v
+        return out
+
+    def _tqdb_expand_metadata_dict(self, meta: dict | None) -> dict:
+        if not isinstance(meta, dict):
+            return {}
+        if not bool(getattr(self.config, "tqdb_compact_metadata", True)):
+            return dict(meta)
+        out = {}
+        for k, v in meta.items():
+            out[self._TQDB_META_KEY_EXPAND.get(str(k), str(k))] = v
+        return out
+
+    def _tqdb_compact_filter_dict(self, filter_dict: dict | None) -> dict | None:
+        if not isinstance(filter_dict, dict):
+            return None
+        if not bool(getattr(self.config, "tqdb_compact_metadata", True)):
+            return filter_dict
+        return {self._TQDB_META_KEY_COMPACT.get(str(k), str(k)): v for k, v in filter_dict.items()}
 
     def add(
         self,
@@ -405,25 +482,27 @@ class OpenVectorStore:
             norms = np.linalg.norm(vecs, axis=1, keepdims=True)
             vecs = np.divide(vecs, norms, where=norms > 0)
             metas = metadatas if metadatas is not None else [{}] * len(ids)
-            self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
+            metas_compact = [self._tqdb_compact_metadata_dict(m) for m in metas]
+            self.client.insert_batch(
+                ids=ids, vectors=vecs, metadatas=metas_compact, documents=texts
+            )
 
             # Update sidecar doc index: source → [chunk_ids]
-            doc_index: dict[str, list[str]] = {}
-            if os.path.exists(self._tqdb_doc_index_path):
-                try:
-                    with open(self._tqdb_doc_index_path) as f:
-                        doc_index = json.load(f)
-                except (OSError, json.JSONDecodeError):
-                    doc_index = {}
+            doc_index = self._tqdb_load_doc_index()
+            doc_index_sets: dict[str, set[str]] = {
+                src: set(chunk_ids) for src, chunk_ids in doc_index.items()
+            }
             for chunk_id, meta in zip(ids, metas):
                 source = (meta or {}).get("source", "unknown")
                 doc_index.setdefault(source, [])
-                if chunk_id not in doc_index[source]:
+                src_set = doc_index_sets.setdefault(source, set(doc_index[source]))
+                if chunk_id not in src_set:
+                    src_set.add(chunk_id)
                     doc_index[source].append(chunk_id)
-            tmp_path = self._tqdb_doc_index_path + ".tmp"
-            with open(tmp_path, "w") as f:
-                json.dump(doc_index, f)
-            os.replace(tmp_path, self._tqdb_doc_index_path)
+                    self._tqdb_doc_index_dirty = True
+            # In normal mode flush immediately; in batch ingest defer to close/finalize.
+            if not getattr(self.config, "ingest_batch_mode", False):
+                self._tqdb_flush_doc_index()
 
             # Auto-build ANN index once corpus is large enough (≥1000 vectors).
             try:
@@ -506,12 +585,8 @@ class OpenVectorStore:
             return sorted(sources.values(), key=lambda x: x["source"])
 
         elif self.provider == "turboquantdb":
-            if not os.path.exists(self._tqdb_doc_index_path):
-                return []
-            try:
-                with open(self._tqdb_doc_index_path) as f:
-                    doc_index: dict[str, list[str]] = json.load(f)
-            except (OSError, json.JSONDecodeError):
+            doc_index = self._tqdb_load_doc_index()
+            if not doc_index:
                 return []
             return sorted(
                 [
@@ -595,14 +670,14 @@ class OpenVectorStore:
             q_norm = np.linalg.norm(q)
             if q_norm > 0:
                 q = q / q_norm
-            tqdb_filter = filter_dict if filter_dict else None
+            tqdb_filter = self._tqdb_compact_filter_dict(filter_dict)
             results = self.client.search(q, top_k=top_k, filter=tqdb_filter, _use_ann=True)
             return [
                 {
                     "id": r["id"],
                     "text": r.get("document", ""),
                     "score": max(0.0, r["score"]),
-                    "metadata": r.get("metadata", {}),
+                    "metadata": self._tqdb_expand_metadata_dict(r.get("metadata", {})),
                 }
                 for r in results
             ]
@@ -707,7 +782,7 @@ class OpenVectorStore:
                         "id": rec["id"],
                         "text": rec.get("document", ""),
                         "score": 1.0,
-                        "metadata": rec.get("metadata", {}),
+                        "metadata": self._tqdb_expand_metadata_dict(rec.get("metadata", {})),
                     }
                     for rec in recs
                     if rec is not None
@@ -828,16 +903,19 @@ class OpenVectorStore:
                     logger.debug(f"TurboQuantDB delete {chunk_id} failed: {e}")
 
             # Prune sidecar doc index
-            if os.path.exists(self._tqdb_doc_index_path):
-                with open(self._tqdb_doc_index_path) as f:
-                    doc_index: dict[str, list[str]] = json.load(f)
+            doc_index = self._tqdb_load_doc_index()
+            if doc_index:
                 id_set = set(ids)
                 for source in list(doc_index.keys()):
-                    doc_index[source] = [i for i in doc_index[source] if i not in id_set]
-                    if not doc_index[source]:
+                    after = [i for i in doc_index[source] if i not in id_set]
+                    if len(after) != len(doc_index[source]):
+                        self._tqdb_doc_index_dirty = True
+                    if after:
+                        doc_index[source] = after
+                    else:
                         del doc_index[source]
-                with open(self._tqdb_doc_index_path, "w") as f:
-                    json.dump(doc_index, f)
+                if not getattr(self.config, "ingest_batch_mode", False):
+                    self._tqdb_flush_doc_index()
 
 
 class MultiVectorStore:
@@ -873,6 +951,7 @@ class MultiVectorStore:
         top_k: int = 10,
         filter_dict: dict | None = None,
     ) -> list[dict]:
+        import heapq
         from concurrent.futures import ThreadPoolExecutor
 
         seen: dict[str, dict] = {}
@@ -890,7 +969,7 @@ class MultiVectorStore:
                     if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
                         seen[doc_id] = doc
 
-        return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
+        return heapq.nlargest(top_k, seen.values(), key=lambda d: d["score"])
 
     def add(self, *args, **kwargs):
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
@@ -950,6 +1029,7 @@ class MultiBM25Retriever:
                 r.close()
 
     def search(self, query: str, top_k: int = 10) -> list[dict]:
+        import heapq
         from concurrent.futures import ThreadPoolExecutor
 
         seen: dict[str, dict] = {}
@@ -964,7 +1044,7 @@ class MultiBM25Retriever:
                     if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
                         seen[doc_id] = doc
 
-        return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
+        return heapq.nlargest(top_k, seen.values(), key=lambda d: d["score"])
 
     def delete_documents(self, doc_ids: list[str]) -> None:
         """Disallow deletes in merged read-only views."""
