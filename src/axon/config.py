@@ -98,7 +98,7 @@ vector_store:
   provider: lancedb
 
 
-  path: ~/.axon/projects/default/lancedb_data
+  path: ~/.axon/projects/default/vector_data
 
 
 bm25:
@@ -259,6 +259,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "qdrant_collection",
         "lancedb_path",
         "tqdb_bits",
+        "tqdb_compact_metadata",
     },
     "rag": {
         "hybrid_search",
@@ -455,6 +456,7 @@ class AxonConfig:
     vector_store_path: str = ""
 
     tqdb_bits: int = 8
+    tqdb_compact_metadata: bool = True
 
     # BM25 Settings
 
@@ -522,7 +524,7 @@ class AxonConfig:
         # Respect explicitly-provided absolute paths (e.g. in tests) — only set defaults.
 
         if not self.vector_store_path or not os.path.isabs(self.vector_store_path):
-            self.vector_store_path = str(user_dir / "default" / "lancedb_data")
+            self.vector_store_path = str(user_dir / "default" / "vector_data")
 
         if not self.bm25_path or not os.path.isabs(self.bm25_path):
             self.bm25_path = str(user_dir / "default" / "bm25_index")
@@ -844,6 +846,40 @@ class AxonConfig:
     graph_rag_local_top_k_relationships: int = 10
 
     graph_rag_local_include_relationship_weight: bool = False
+    graph_rag_local_batch_fetch: bool = True
+    graph_rag_local_cached_incoming: bool = True
+    graph_rag_local_cached_incoming_counts: bool = True
+    graph_rag_extraction_cache: bool = True
+    graph_rag_extraction_cache_size: int = 5000
+    graph_rag_profile: bool = False
+    graph_rag_local_relation_support_fast: bool = True
+    graph_rag_local_entity_degree_fast: bool = True
+    graph_rag_local_early_cutoff: bool = True
+    graph_rag_local_early_cutoff_factor: float = 0.2
+    graph_rag_llm_cache: bool = True
+    graph_rag_llm_cache_size: int = 2000
+    graph_rag_global_max_map_chunks: int = 0
+    graph_rag_global_reduce_skip_if_top_score_gte: float = 95.0
+    graph_rag_global_reduce_skip_if_top_points_le: int = 1
+    graph_rag_rebuild_skip_if_unchanged: bool = True
+    graph_rag_global_answer_cache: bool = True
+    graph_rag_global_answer_cache_size: int = 500
+    graph_rag_global_map_cache: bool = True
+    graph_rag_global_map_cache_size: int = 2000
+    graph_rag_community_summary_compact_persist: bool = False
+    graph_rag_relation_compact_persist: bool = True
+    graph_rag_relation_shard_persist: bool = False
+    graph_rag_relation_shard_count: int = 16
+    graph_rag_relation_shard_parallel_writes: bool = True
+    graph_rag_relation_shard_write_workers: int = 4
+    graph_rag_relation_shard_parallel_load: bool = True
+    graph_rag_relation_shard_load_workers: int = 4
+    graph_rag_relation_shard_selective_rewrite: bool = True
+    graph_rag_relation_shard_list_manifest: bool = False
+    graph_rag_relation_shard_parallel_signatures: bool = False
+    graph_rag_relation_shard_signature_workers: int = 4
+    graph_rag_relation_pickle_cache: bool = False
+    graph_rag_relation_pickle_cache_protocol: int = 4
 
     # Unified candidate ranking weights
 
@@ -993,13 +1029,13 @@ class AxonConfig:
 
     graph_rag_entity_min_frequency: int = 2
 
-    # Dedicated thread pool size for map-reduce phase (0 = use max_workers).
-
-    # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
-
-    # from starving the shared executor during concurrent ingest.
-
+    # Map-phase worker controls:
+    # - graph_rag_map_workers > 0: fixed dedicated pool size
+    # - graph_rag_map_workers = 0: auto mode (bounded dedicated pool by graph_rag_map_auto_workers)
+    # Set graph_rag_map_use_dedicated_pool=False to keep legacy shared-executor behavior.
     graph_rag_map_workers: int = 0
+    graph_rag_map_auto_workers: int = 4
+    graph_rag_map_use_dedicated_pool: bool = True
 
     # Alternative NER backend. "gliner" skips LLM for entity extraction.
 
@@ -1206,6 +1242,8 @@ class AxonConfig:
 
             if "tqdb_bits" in vs:
                 config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
+            if "tqdb_compact_metadata" in vs:
+                config_dict["tqdb_compact_metadata"] = bool(vs["tqdb_compact_metadata"])
 
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
@@ -1404,6 +1442,7 @@ class AxonConfig:
                 "provider": flat["vector_store"],
                 "path": flat["vector_store_path"],
                 "tqdb_bits": flat["tqdb_bits"],
+                "tqdb_compact_metadata": flat["tqdb_compact_metadata"],
             },
             "bm25": {
                 "path": flat["bm25_path"],
@@ -1868,3 +1907,6 @@ class AxonConfig:
                     pass
 
         return issues
+
+
+

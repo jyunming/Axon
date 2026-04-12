@@ -1362,7 +1362,7 @@ class TestPostInit:
 
         assert cfg.vector_store_path != ""
 
-        assert "lancedb_data" in cfg.vector_store_path
+        assert "vector_data" in cfg.vector_store_path
 
         assert "bm25_index" in cfg.bm25_path
 
@@ -1503,7 +1503,7 @@ class TestStoreDerivedPaths:
 
         assert user in cfg.projects_root
 
-        assert "lancedb_data" in cfg.vector_store_path
+        assert "vector_data" in cfg.vector_store_path
 
         assert "bm25_index" in cfg.bm25_path
 
@@ -1517,3 +1517,6 @@ class TestStoreDerivedPaths:
         assert ".axon" in cfg.axon_store_base or "axon" in cfg.axon_store_base.lower()
 
         assert "AxonStore" in cfg.projects_root
+
+
+
