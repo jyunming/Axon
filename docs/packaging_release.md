@@ -38,6 +38,22 @@ Release workflow builds:
 
 Then uploads artifacts to GitHub Release and PyPI.
 
+## PyPI Trusted Publisher (OIDC)
+Configure once in PyPI (Project -> Publishing -> Add publisher):
+
+- Owner: `jyunming`
+- Repository name: `studio_brain_open`
+- Workflow name: `release.yml`
+- Environment name: (leave empty unless you enforce one in GitHub)
+
+After that, no `PYPI_API_TOKEN` secret is required. Publishing is performed by:
+
+`pypa/gh-action-pypi-publish@release/v1`
+
+with GitHub Actions permission:
+
+`id-token: write`
+
 ## Safety checks
 CI + Release run:
 
