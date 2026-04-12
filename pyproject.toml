@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=65.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "axon-rag"
-version = "0.1.0"
+dynamic = ["version"]
 description = "General-purpose open-source RAG engine with multi-LLM, hybrid retrieval, GraphRAG, and MCP support"
 readme = "PYPI_README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "tqdm>=4.66.0",
     "fastapi>=0.100.0",
+    "python-multipart>=0.0.9",
     "uvicorn>=0.22.0",
     "python-docx>=1.0.0",
     "python-pptx>=0.6.18",
@@ -129,14 +130,13 @@ axon-api = "axon.api:main"
 axon-mcp = "axon.mcp_server:main"
 axon-ext = "axon.ext_install:install_vscode_extension"
 
-# Required for src/ layout — without this setuptools won't find the axon package
-[tool.setuptools.packages.find]
-where = ["src"]
-exclude = ["src*"]  # prevent shipping the bare src namespace package
-
-[tool.setuptools.package-data]
-axon = [
-    "extensions/*.vsix",
+[tool.maturin]
+manifest-path = "src/axon/Cargo.toml"
+module-name = "axon.axon_rust"
+python-source = "src"
+include = [
+    { path = "src/axon/extensions/*.vsix", format = "wheel" },
+    { path = "src/axon/extensions/*.vsix", format = "sdist" },
 ]
 
 [tool.black]

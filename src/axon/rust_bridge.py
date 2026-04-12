@@ -21,14 +21,20 @@ class RustBridge:
             return self._module
         self._attempted = True
 
-        module_name = os.getenv("AXON_RUST_MODULE", "axon_rust")
-        try:
-            self._module = importlib.import_module(module_name)
-            logger.info("Rust bridge loaded module '%s'.", module_name)
-        except Exception as exc:
-            self._module = None
-            self._load_error = str(exc)
-            logger.debug("Rust bridge unavailable (%s): %s", module_name, exc)
+        preferred = os.getenv("AXON_RUST_MODULE", "axon.axon_rust")
+        candidates = [preferred]
+        if preferred != "axon_rust":
+            candidates.append("axon_rust")
+
+        for module_name in candidates:
+            try:
+                self._module = importlib.import_module(module_name)
+                logger.info("Rust bridge loaded module '%s'.", module_name)
+                break
+            except Exception as exc:
+                self._module = None
+                self._load_error = str(exc)
+                logger.debug("Rust bridge unavailable (%s): %s", module_name, exc)
         return self._module
 
     def is_available(self) -> bool:

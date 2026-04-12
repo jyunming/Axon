@@ -287,22 +287,39 @@ async def api_key_middleware(request: Request, call_next):
     """Enforce X-API-Key header when RAG_API_KEY is configured."""
 
     if _RAG_API_KEY:
-        if request.url.path != "/health":
-            provided = request.headers.get("X-API-Key")
+        path = request.url.path
+        if path == "/health" or path == "/gui" or path.startswith("/gui/"):
+            return await call_next(request)
 
-            if provided != _RAG_API_KEY:
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Invalid or missing X-API-Key header."},
-                )
+        provided = request.headers.get("X-API-Key")
+        if provided != _RAG_API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing X-API-Key header."},
+            )
 
     return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
+# Static files for WebGUI
+# ---------------------------------------------------------------------------
 
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+
+gui_dir = Path(__file__).parent / "gui"
+if gui_dir.exists():
+
+    @app.get("/gui", include_in_schema=False)
+    async def gui_redirect():
+        return RedirectResponse(url="/gui/")
+
+    app.mount("/gui/", StaticFiles(directory=str(gui_dir), html=True), name="gui")
+
+
+# ---------------------------------------------------------------------------
 # Router registration — each sub-module registers its own APIRouter
-
 # ---------------------------------------------------------------------------
 
 from axon.api_routes.config_routes import router as _config_router  # noqa: E402
@@ -315,23 +332,21 @@ from axon.api_routes.query import router as _query_router  # noqa: E402
 from axon.api_routes.registry import router as _registry_router  # noqa: E402
 from axon.api_routes.shares import router as _shares_router  # noqa: E402
 
-app.include_router(_config_router)
+_ROUTERS = (
+    _config_router,
+    _query_router,
+    _ingest_router,
+    _projects_router,
+    _graph_router,
+    _shares_router,
+    _maintenance_router,
+    _registry_router,
+    _governance_router,
+)
 
-app.include_router(_query_router)
-
-app.include_router(_ingest_router)
-
-app.include_router(_projects_router)
-
-app.include_router(_graph_router)
-
-app.include_router(_shares_router)
-
-app.include_router(_maintenance_router)
-
-app.include_router(_registry_router)
-
-app.include_router(_governance_router)
+for _router in _ROUTERS:
+    app.include_router(_router)
+    app.include_router(_router, prefix="/v1")
 
 # ---------------------------------------------------------------------------
 

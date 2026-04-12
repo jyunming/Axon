@@ -149,6 +149,9 @@ async def query_brain_stream(request: QueryRequest):
                 request.query, filters=request.filters, overrides=overrides
             ):
                 if isinstance(chunk, dict):
+                    # Add type field if not present to help frontend dispatching
+                    if "type" not in chunk:
+                        chunk["type"] = "sources"
                     yield f"data: {json.dumps(chunk)}\n\n"
                 else:
                     yield f"data: {chunk}\n\n"
