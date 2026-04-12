@@ -24,6 +24,10 @@ python scripts/bump_version.py 0.2.0
 python scripts/audit_packaging.py --expected-version 0.2.0
 ```
 
+`bump_version.py` also syncs:
+- `integrations/vscode-axon/package.json`
+- `index.html` (website version badge/install snippet)
+
 ## Release by tag
 Push a tag matching Cargo version:
 
@@ -64,5 +68,7 @@ python scripts/audit_packaging.py
 This enforces:
 - `maturin` backend
 - dynamic versioning from Cargo
+- VS Code extension version matches Cargo
+- website version strings match Cargo
 - no duplicate Rust manifest
 - tag version matches Cargo version (release workflow)

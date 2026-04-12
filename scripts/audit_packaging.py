@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from pathlib import Path
 
 try:
@@ -23,6 +25,8 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     pyproject = _load_toml(root / "pyproject.toml")
     cargo = _load_toml(root / "src" / "axon" / "Cargo.toml")
+    extension_package_json = root / "integrations" / "vscode-axon" / "package.json"
+    website = root / "index.html"
 
     errors: list[str] = []
 
@@ -42,6 +46,36 @@ def main() -> int:
     if not cargo_version:
         errors.append("src/axon/Cargo.toml package.version is missing")
 
+    try:
+        ext_data = json.loads(extension_package_json.read_text(encoding="utf-8"))
+        ext_version = ext_data.get("version")
+    except Exception as exc:  # pragma: no cover
+        ext_version = None
+        errors.append(f"failed to read integrations/vscode-axon/package.json: {exc}")
+
+    if ext_version != cargo_version:
+        errors.append(
+            "version mismatch: integrations/vscode-axon/package.json "
+            f"has {ext_version!r}, Cargo.toml has {cargo_version!r}"
+        )
+
+    website_text = website.read_text(encoding="utf-8")
+    hero_match = re.search(r"v(\d+\.\d+\.\d+)\s+—\s+now on PyPI", website_text)
+    install_match = re.search(r"Successfully installed axon-rag-(\d+\.\d+\.\d+)", website_text)
+    hero_version = hero_match.group(1) if hero_match else None
+    install_version = install_match.group(1) if install_match else None
+
+    if hero_version != cargo_version:
+        errors.append(
+            f"website version mismatch: index.html hero pill has {hero_version!r}, "
+            f"Cargo.toml has {cargo_version!r}"
+        )
+    if install_version != cargo_version:
+        errors.append(
+            f"website version mismatch: index.html terminal install line has {install_version!r}, "
+            f"Cargo.toml has {cargo_version!r}"
+        )
+
     duplicate_manifest = root / "src" / "axon" / "axon_rust_Cargo.toml"
     if duplicate_manifest.exists():
         errors.append("duplicate manifest exists: src/axon/axon_rust_Cargo.toml")
@@ -52,6 +86,9 @@ def main() -> int:
         )
 
     print(f"Cargo version: {cargo_version}")
+    print(f"VS Code extension version: {ext_version}")
+    print(f"Website hero version: {hero_version}")
+    print(f"Website terminal version: {install_version}")
     if errors:
         print("Packaging audit FAILED:")
         for e in errors:
