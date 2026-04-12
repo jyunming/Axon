@@ -1517,6 +1517,3 @@ class TestStoreDerivedPaths:
         assert ".axon" in cfg.axon_store_base or "axon" in cfg.axon_store_base.lower()
 
         assert "AxonStore" in cfg.projects_root
-
-
-

@@ -142,6 +142,25 @@ class ConfigSetRequest(BaseModel):
     persist: bool = True
 
 
+def _reinitialize_runtime_components(brain, changed_keys: set[str]) -> None:
+    """Apply runtime side effects for config changes that affect live services."""
+
+    if changed_keys & {"llm_provider", "llm_model"}:
+        from axon.llm import OpenLLM
+
+        brain.llm = OpenLLM(brain.config)
+
+    if changed_keys & {"embedding_provider", "embedding_model"}:
+        from axon.embeddings import OpenEmbedding
+
+        brain.embedding = OpenEmbedding(brain.config)
+
+    if changed_keys & {"rerank", "reranker_model"} and getattr(brain.config, "rerank", False):
+        from axon.rerank import OpenReranker
+
+        brain.reranker = OpenReranker(brain.config)
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -250,10 +269,13 @@ async def set_config_field(request: ConfigSetRequest):
 
     setattr(brain.config, flat_key, request.value)
 
+    _reinitialize_runtime_components(brain, {flat_key})
+
     if request.persist:
         brain.config.save()
 
     return {
+        "status": "success",
         "key": request.key,
         "flat_key": flat_key,
         "old_value": old_value,

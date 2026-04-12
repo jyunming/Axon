@@ -476,8 +476,6 @@ class TestBM25BatchAdd:
 """Tests for OpenReranker providers in axon.rerank."""
 from unittest.mock import MagicMock
 
-import pytest
-
 from axon.config import AxonConfig
 
 

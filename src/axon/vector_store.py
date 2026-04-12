@@ -1053,6 +1053,3 @@ class MultiBM25Retriever:
 
     def add_documents(self, *args, **kwargs):
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
-
-
-

@@ -298,7 +298,19 @@ curl -X POST http://localhost:8000/search \
 
 ## Entry Point 4 — Browser UI
 
-A visual chat interface. No terminal commands needed after launch.
+Two browser interfaces are available depending on your preference.
+
+### Option A — Built-in WebGUI (recommended)
+
+Served by `axon-api` at no extra cost. If the API is running, just open:
+
+**[http://localhost:8000/gui/](http://localhost:8000/gui/)**
+
+Features: chat, document ingest, graph explorer, project switcher, settings panel.
+
+### Option B — Streamlit UI
+
+Full-featured alternative with an advanced settings panel.
 
 **Launch:**
 
@@ -308,15 +320,15 @@ axon-ui   # opens automatically at http://localhost:8501
 
 Open `http://localhost:8501` in your browser if it doesn't open automatically.
 
-**Ingest:**
+**Ingest (both UIs):**
 
-- Left sidebar → **Knowledge Hub** → paste a URL, type a file path, or upload a file directly
+- Sidebar → **Knowledge Hub** (Streamlit) or the paperclip/upload button (WebGUI)
 
-**Query:**
+**Query (both UIs):**
 
 - Type in the chat input at the bottom → press Enter
 
-**Settings:**
+**Settings (Streamlit):**
 
 - Left sidebar → **Model & Settings** → toggle hybrid search, reranking, HyDE, RAPTOR, and GraphRAG. Leave these off for now — they are advanced search techniques explained in the [RAPTOR + GraphRAG](#raptor--graphrag--getting-the-most-out-of-axon) section below.
 

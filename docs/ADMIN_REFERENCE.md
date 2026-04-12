@@ -14,9 +14,11 @@ For interactive API docs, start `axon-api` and open `http://localhost:8000/docs`
 | Command | Starts | Default Port | Best For |
 |---------|--------|-------------|---------|
 | `axon` | Interactive REPL | — | Day-to-day exploration, power users |
-| `axon-api` | FastAPI REST server | `8000` | Agents, scripts, CI pipelines |
+| `axon-api` | FastAPI REST server + WebGUI | `8000` | Agents, scripts, CI pipelines, browser UI |
 | `axon-mcp` | MCP stdio server | — | GitHub Copilot agent mode, Claude Code |
-| `axon-ui` | Streamlit web UI | `8501` | Browser-based exploration |
+| `axon-ui` | Streamlit web UI | `8501` | Alternative browser-based exploration |
+
+When `axon-api` is running, the built-in WebGUI is available at `http://localhost:8000/gui/` — no separate command needed. It provides chat, document management, and graph exploration in a single-page app.
 
 Start flags:
 

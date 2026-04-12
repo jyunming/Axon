@@ -5,10 +5,11 @@ import asyncio
 import logging
 import os
 import pathlib
+import tempfile
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import (
@@ -23,6 +24,17 @@ from axon.api_schemas import (
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
+_PATH_ENRICHMENT_EXCLUDED_TYPES = frozenset(
+    {
+        "csv",
+        "tsv",
+        "excel",
+        "parquet",
+        "image",
+        "code",
+    }
+)
+
 
 def _enforce_write_access(brain, operation: str) -> None:
     """Translate AxonBrain write-access denials into HTTP 403 responses."""
@@ -30,6 +42,19 @@ def _enforce_write_access(brain, operation: str) -> None:
         brain._assert_write_allowed(operation)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+
+
+def _normalise_uploaded_filename(filename: str | None, index: int) -> str:
+    """Return a safe basename for an uploaded file, preserving its extension."""
+
+    raw_name = pathlib.Path(filename or "").name.strip()
+    if not raw_name:
+        raw_name = f"upload_{index}"
+
+    safe_stem = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in raw_name)
+    safe_stem = safe_stem.strip("._") or f"upload_{index}"
+
+    return safe_stem
 
 
 @router.post("/ingest/refresh")
@@ -462,6 +487,112 @@ async def ingest_url(request: URLIngestRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
     return {"status": "ingested", "doc_id": doc["id"], "url": request.url}
+
+
+@router.post("/ingest/upload")
+async def ingest_upload(
+    files: list[UploadFile] = File(...),
+    project: str | None = Form(None),
+):
+    """Accept multipart file uploads, load them through the normal file loaders, and ingest."""
+
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    _enforce_project(project, brain)
+    _enforce_write_access(brain, "ingest")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+
+    from axon.loaders import DirectoryLoader
+
+    loader_mgr = DirectoryLoader()
+    docs_to_ingest: list[dict] = []
+    results: list[dict] = []
+    total_chunks = 0
+
+    with tempfile.TemporaryDirectory(prefix="axon_upload_") as tmp_dir:
+        temp_root = pathlib.Path(tmp_dir)
+        used_names: set[str] = set()
+
+        for index, upload in enumerate(files):
+            safe_name = _normalise_uploaded_filename(upload.filename, index)
+
+            candidate_name = safe_name
+            stem = pathlib.Path(safe_name).stem
+            suffix = pathlib.Path(safe_name).suffix
+            counter = 1
+            while candidate_name.lower() in used_names:
+                candidate_name = f"{stem}_{counter}{suffix}"
+                counter += 1
+            used_names.add(candidate_name.lower())
+
+            ext = pathlib.Path(candidate_name).suffix.lower()
+            loader = loader_mgr.loaders.get(ext)
+            if loader is None:
+                results.append(
+                    {
+                        "filename": candidate_name,
+                        "status": "unsupported",
+                        "error": f"Unsupported file type: {ext or 'no extension'}",
+                        "chunks": 0,
+                    }
+                )
+                await upload.close()
+                continue
+
+            temp_path = temp_root / candidate_name
+            data = await upload.read()
+            temp_path.write_bytes(data)
+            await upload.close()
+
+            try:
+                docs = await asyncio.to_thread(loader.load, str(temp_path))
+            except Exception as exc:
+                logger.error("Failed to ingest uploaded file %s: %s", candidate_name, exc)
+                results.append(
+                    {
+                        "filename": candidate_name,
+                        "status": "error",
+                        "error": str(exc),
+                        "chunks": 0,
+                    }
+                )
+                continue
+
+            for doc in docs:
+                doc["metadata"]["source"] = candidate_name
+                if doc["metadata"].get("type") not in _PATH_ENRICHMENT_EXCLUDED_TYPES:
+                    doc["text"] = f"[File Path: {candidate_name}]\n{doc['text']}"
+
+            docs_to_ingest.extend(docs)
+            total_chunks += len(docs)
+            results.append(
+                {
+                    "filename": candidate_name,
+                    "status": "ingested",
+                    "error": None,
+                    "chunks": len(docs),
+                }
+            )
+
+        if docs_to_ingest:
+            try:
+                await asyncio.to_thread(brain.ingest, docs_to_ingest)
+            except Exception as exc:
+                logger.error("Error ingesting uploaded file batch: %s", exc)
+                raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "status": "success" if docs_to_ingest else "error",
+        "files": results,
+        "ingested_files": sum(1 for item in results if item["status"] == "ingested"),
+        "ingested_chunks": total_chunks,
+    }
 
 
 @router.post("/delete")

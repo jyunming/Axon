@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
+from axon.api_routes import enforce_project as _enforce_project
 from axon.api_routes.ingest import _enforce_write_access
 from axon.api_schemas import QueryVisualizeRequest, SearchVisualizeRequest
 
@@ -285,7 +286,7 @@ async def get_graph_visualization():
 
 
 @router.get("/graph/data", tags=["graph"])
-async def graph_data():
+async def graph_data(project: str | None = Query(None, description="Expected active project")):
     """Return the entity/relation knowledge-graph payload for VS Code webview consumption."""
 
     from axon import api as _api
@@ -294,6 +295,8 @@ async def graph_data():
 
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    _enforce_project(project, brain)
 
     payload = brain.build_graph_payload()
 
@@ -304,7 +307,7 @@ async def graph_data():
 
 
 @router.get("/code-graph/data", tags=["graph"])
-async def code_graph_data():
+async def code_graph_data(project: str | None = Query(None, description="Expected active project")):
     """Return the code structure graph as JSON for VS Code webview."""
 
     from axon import api as _api
@@ -313,5 +316,7 @@ async def code_graph_data():
 
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    _enforce_project(project, brain)
 
     return brain.build_code_graph_payload()

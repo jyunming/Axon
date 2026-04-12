@@ -154,9 +154,13 @@ async def query_brain_stream(request: QueryRequest):
                         chunk["type"] = "sources"
                     yield f"data: {json.dumps(chunk)}\n\n"
                 else:
+                    if isinstance(chunk, str) and chunk.startswith("[ERROR]"):
+                        content = chunk.replace("[ERROR]", "", 1).strip()
+                        yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
+                        return
                     yield f"data: {chunk}\n\n"
         except Exception as e:
-            yield f"data: [ERROR] {str(e)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

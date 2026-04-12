@@ -198,13 +198,14 @@
       var chunkIds = n.chunk_ids || [];
       if (chunkIds.some(function (id) { return hitChunkIds.has(id); })) { return true; }
       var ev = Array.isArray(n.evidence) ? n.evidence : [];
+      if (ev.some(function (e) { return e.chunk_id && hitChunkIds.has(e.chunk_id); })) { return true; }
       return ev.some(function (e) {
         var src = normSrc(e.source || '');
         if (!src) { return false; }
         if (hitFilePaths.has(src)) { return true; }
         var found = false;
         hitFilePaths.forEach(function (h) {
-          if (!found && src.endsWith('/' + h.split('/').pop())) { found = true; }
+          if (!found && (src.endsWith('/' + h.split('/').pop()) || h.endsWith('/' + src.split('/').pop()))) { found = true; }
         });
         return found;
       });

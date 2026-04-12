@@ -16,12 +16,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          # Linux x86_64 — manylinux (glibc, most Linux distros)
+          - os: ubuntu-latest
+            maturin-target: x86_64
+            maturin-manylinux: auto
+          # Linux arm64 — manylinux (Raspberry Pi, AWS Graviton, Docker ARM)
+          - os: ubuntu-latest
+            maturin-target: aarch64
+            maturin-manylinux: auto
+          # Linux x86_64 musl — Alpine / distroless Docker images
+          - os: ubuntu-latest
+            maturin-target: x86_64-unknown-linux-musl
+            maturin-manylinux: musllinux_1_2
+          # macOS arm64 — Apple Silicon (M1/M2/M3)
+          - os: macos-latest
+            maturin-target: aarch64-apple-darwin
+            maturin-manylinux: ""
+          # macOS x86_64 — Intel Mac
+          - os: macos-13
+            maturin-target: x86_64-apple-darwin
+            maturin-manylinux: ""
+          # Windows x86_64
+          - os: windows-latest
+            maturin-target: x86_64
+            maturin-manylinux: ""
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate tag version against Cargo version
+      - name: Validate tag version against pyproject.toml
+        shell: bash
         run: |
           python scripts/audit_packaging.py --expected-version "${GITHUB_REF_NAME#v}"
 
@@ -29,12 +54,14 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release --out dist --interpreter 3.10 3.11 3.12
+          target: ${{ matrix.maturin-target }}
+          manylinux: ${{ matrix.maturin-manylinux || 'auto' }}
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
+          name: wheels-${{ matrix.os }}-${{ matrix.maturin-target }}
           path: dist/*.whl
 
   sdist:

@@ -650,15 +650,18 @@ curl -X POST http://localhost:8000/query \
 
 Expected response includes the answer "Paris" synthesized from the ingested document.
 
-### Step 5: (Optional) Start the Web UI
+### Step 5: (Optional) Open the Web UI
 
-In a separate terminal:
+**Built-in WebGUI** — served by `axon-api` (already running from Step 4):
+
+Open [http://localhost:8000/gui/](http://localhost:8000/gui/) in your browser. No extra command needed.
+
+**Streamlit UI** — full-featured alternative with advanced settings panel:
 ```bash
 axon-ui
 # Or:
 make run-ui
 ```
-
 Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ---
@@ -1201,7 +1204,8 @@ For common errors and step-by-step fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTI
 | Pull vision model | `ollama pull llava` |
 | List pulled models | `ollama list` |
 | Start API | `axon-api` or `make run-api` |
-| Start UI | `axon-ui` or `make run-ui` |
+| Open WebGUI | `http://localhost:8000/gui/` (when `axon-api` is running) |
+| Start Streamlit UI | `axon-ui` or `make run-ui` |
 | Health check | `curl http://localhost:8000/health` |
 | Ingest a file | `axon --ingest ./path/to/file` |
 | Run a query | `axon "your question"` |

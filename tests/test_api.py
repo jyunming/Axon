@@ -401,7 +401,19 @@ def test_query_stream_error_yields_error_chunk():
     resp = client.post("/query/stream", json={"query": "test"})
     # StreamingResponse always returns 200; error appears in body
     assert resp.status_code == 200
-    assert "[ERROR]" in resp.text
+    assert '"type": "error"' in resp.text
+    assert "llm down" in resp.text
+
+
+def test_query_stream_normalizes_raw_error_chunk():
+    api_module.brain = _make_brain()
+    api_module.brain.query_stream = MagicMock(
+        return_value=iter(["[ERROR] 404 NOT_FOUND. {'error': {'code': 404}}"])
+    )
+    resp = client.post("/query/stream", json={"query": "test"})
+    assert resp.status_code == 200
+    assert '"type": "error"' in resp.text
+    assert "[ERROR]" not in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -996,6 +1008,76 @@ def test_ingest_url_dedup_skips_second_identical_url():
     data2 = resp2.json()
     assert data2["status"] == "skipped"
     assert api_module.brain.ingest.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# /ingest/upload
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_upload_503_no_brain():
+    resp = client.post(
+        "/ingest/upload",
+        files=[("files", ("note.txt", b"hello world", "text/plain"))],
+    )
+    assert resp.status_code == 503
+
+
+def test_ingest_upload_text_file_success():
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+    api_module.brain._active_project = "default"
+
+    resp = client.post(
+        "/ingest/upload",
+        data={"project": "default"},
+        files=[("files", ("note.txt", b"hello from upload", "text/plain"))],
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "success"
+    assert payload["ingested_files"] == 1
+    assert payload["ingested_chunks"] == 1
+    assert payload["files"][0]["filename"] == "note.txt"
+    assert payload["files"][0]["status"] == "ingested"
+
+    ingested_docs = api_module.brain.ingest.call_args[0][0]
+    assert len(ingested_docs) == 1
+    assert ingested_docs[0]["metadata"]["source"] == "note.txt"
+    assert ingested_docs[0]["text"].startswith("[File Path: note.txt]\n")
+
+
+def test_ingest_upload_unsupported_file_is_reported():
+    api_module.brain = _make_brain()
+
+    resp = client.post(
+        "/ingest/upload",
+        files=[("files", ("archive.xyz", b"not supported", "application/octet-stream"))],
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "error"
+    assert payload["ingested_files"] == 0
+    assert payload["files"][0]["status"] == "unsupported"
+    api_module.brain.ingest.assert_not_called()
+
+
+def test_ingest_upload_permission_error_returns_403():
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot ingest: project 'alpha' is in 'readonly' maintenance state."
+    )
+
+    resp = client.post(
+        "/ingest/upload",
+        files=[("files", ("note.txt", b"hello world", "text/plain"))],
+    )
+
+    assert resp.status_code == 403
+    assert "readonly" in resp.json()["detail"]
+    api_module.brain.ingest.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1696,6 +1778,17 @@ def test_graph_data_returns_503_no_brain():
     api_module.brain = None
     resp = client.get("/graph/data")
     assert resp.status_code == 503
+
+
+def test_graph_data_rejects_mismatched_project():
+    """GET /graph/data returns 409 when the requested project is not active."""
+    brain = _make_brain()
+    brain._active_project = "default"
+    api_module.brain = brain
+
+    resp = client.get("/graph/data?project=research")
+    assert resp.status_code == 409
+    assert "Use POST /project/switch" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

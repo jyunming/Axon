@@ -1907,6 +1907,3 @@ class AxonConfig:
                     pass
 
         return issues
-
-
-

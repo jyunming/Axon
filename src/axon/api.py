@@ -305,8 +305,8 @@ async def api_key_middleware(request: Request, call_next):
 # Static files for WebGUI
 # ---------------------------------------------------------------------------
 
-from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 gui_dir = Path(__file__).parent / "gui"
 if gui_dir.exists():

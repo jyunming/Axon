@@ -12,7 +12,6 @@ class AxonChat {
         this.messages = [];
         this.isStreaming = false;
 
-        // Diagnostic panel elements
         this.diagnosticPanel = document.getElementById('diagnostic-panel');
         this.diagnosticSteps = document.getElementById('diagnostic-steps');
 
@@ -21,137 +20,161 @@ class AxonChat {
 
     setupListeners() {
         this.sendBtn.addEventListener('click', () => this.handleSendMessage());
-        this.input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
+        this.input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
                 this.handleSendMessage();
             }
         });
 
-        // Quick actions
-        document.querySelectorAll('.action-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                this.input.value = btn.dataset.query;
-                this.handleSendMessage();
-            });
+        this.container.addEventListener('click', (event) => {
+            const actionButton = event.target.closest('.action-btn');
+            if (!actionButton) return;
+
+            this.input.value = actionButton.dataset.query || '';
+            this.handleSendMessage();
         });
     }
 
-    async handleSendMessage() {
-        const text = this.input.value.trim();
-        if (!text || this.isStreaming) return;
+    setStreamingState(isStreaming) {
+        this.isStreaming = isStreaming;
+        this.sendBtn.disabled = isStreaming;
+    }
 
-        this.input.value = '';
-        this.input.style.height = 'auto';
+    createWelcomeMessage() {
+        const welcome = document.createElement('div');
+        welcome.className = 'welcome-message';
 
-        // Hide welcome message if it's there
-        const welcome = this.container.querySelector('.welcome-message');
-        if (welcome) welcome.remove();
+        const icon = document.createElement('div');
+        icon.className = 'welcome-icon';
+        icon.textContent = 'AI';
 
-        this.addMessage('user', text);
+        const heading = document.createElement('h2');
+        heading.textContent = 'How can I help you today?';
 
-        // Prep assistant response
-        const assistantMsgDiv = this.addMessage('assistant', '');
-        const contentDiv = assistantMsgDiv.querySelector('.message-content');
-        this.isStreaming = true;
+        const description = document.createElement('p');
+        description.textContent = 'Axon is your local AI partner. Ask a question about your ingested documents or start by uploading a file.';
 
-        // Clear diagnostics
-        this.clearDiagnostics();
-        this.diagnosticPanel.classList.remove('hidden');
+        const actions = document.createElement('div');
+        actions.className = 'quick-actions';
 
-        let fullContent = '';
-        let sources = [];
+        const quickActions = [
+            ['Summarize project', 'Summarize my project'],
+            ['Identify entities', 'What are the key entities?'],
+            ['Compare documents', 'Compare recent documents']
+        ];
 
-        try {
-            await this.api.streamQuery(
-                text,
-                {},
-                (tokenData) => {
-                    if (tokenData.type === 'token') {
-                        fullContent += tokenData.content;
-                        contentDiv.innerHTML = marked.parse(fullContent);
-                    } else if (tokenData.type === 'sources') {
-                        sources = tokenData.content;
-                        this.renderSources(assistantMsgDiv, sources);
-                    }
-                    this.container.scrollTop = this.container.scrollHeight;
-                },
-                (diagnostic) => {
-                    this.addDiagnosticStep(diagnostic);
-                }
-            );
-        } catch (error) {
-            console.error('Chat error:', error);
-            contentDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
-        } finally {
-            this.isStreaming = true; // Wait for any trailing data? No, it's done.
-            this.isStreaming = false;
-        }
+        quickActions.forEach(([label, query]) => {
+            const button = document.createElement('button');
+            button.className = 'action-btn';
+            button.dataset.query = query;
+            button.textContent = label;
+            actions.appendChild(button);
+        });
+
+        welcome.append(icon, heading, description, actions);
+        return welcome;
+    }
+
+    addMessage(role, text) {
+        const message = document.createElement('div');
+        message.className = `message ${role}`;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'message-avatar';
+        avatar.textContent = role === 'assistant' ? 'AI' : 'You';
+
+        const content = document.createElement('div');
+        content.className = 'message-content';
+
+        const textNode = document.createElement('div');
+        textNode.className = 'message-text';
+        textNode.textContent = text;
+
+        content.appendChild(textNode);
+        message.append(avatar, content);
+
+        this.container.appendChild(message);
+        this.container.scrollTop = this.container.scrollHeight;
+
+        this.messages.push({ role, content: text });
+        return message;
     }
 
     renderSources(messageDiv, sources) {
         if (!sources || sources.length === 0) return;
 
+        const content = messageDiv.querySelector('.message-content');
         let sourcesDiv = messageDiv.querySelector('.sources-expander');
+
         if (!sourcesDiv) {
             sourcesDiv = document.createElement('div');
             sourcesDiv.className = 'sources-expander';
-            messageDiv.querySelector('.message-content').appendChild(sourcesDiv);
+            content.appendChild(sourcesDiv);
         }
 
-        const sourcesHtml = sources.map((s, i) => `
-            <div class="source-card">
-                <div class="source-header">
-                    <span class="source-index">[${i+1}]</span>
-                    <span class="source-name">${s.metadata?.source || 'Document'}</span>
-                    <span class="source-score">${(s.score * 100).toFixed(0)}% Match</span>
-                </div>
-                <div class="source-snippet">${s.page_content.substring(0, 150)}...</div>
-            </div>
-        `).join('');
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = `Sources (${sources.length})`;
 
-        sourcesDiv.innerHTML = `
-            <details>
-                <summary><i class="fas fa-book"></i> Sources (${sources.length})</summary>
-                <div class="sources-list">${sourcesHtml}</div>
-            </details>
-        `;
-    }
+        const list = document.createElement('div');
+        list.className = 'sources-list';
 
-    addMessage(role, text) {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `message ${role}`;
+        sources.forEach((source, index) => {
+            const card = document.createElement('div');
+            card.className = 'source-card';
 
-        const avatar = document.createElement('div');
-        avatar.className = 'message-avatar';
-        avatar.innerHTML = role === 'assistant' ? '<i class="fas fa-robot"></i>' : '<i class="fas fa-user"></i>';
+            const header = document.createElement('div');
+            header.className = 'source-header';
 
-        const content = document.createElement('div');
-        content.className = 'message-content';
-        content.innerHTML = role === 'assistant' ? marked.parse(text) : text;
+            const sourceIndex = document.createElement('span');
+            sourceIndex.className = 'source-index';
+            sourceIndex.textContent = `[${index + 1}]`;
 
-        msgDiv.appendChild(avatar);
-        msgDiv.appendChild(content);
+            const sourceName = document.createElement('span');
+            sourceName.className = 'source-name';
+            sourceName.textContent = source.metadata?.source || source.source || 'Document';
 
-        this.container.appendChild(msgDiv);
-        this.container.scrollTop = this.container.scrollHeight;
+            const score = document.createElement('span');
+            score.className = 'source-score';
+            score.textContent = Number.isFinite(source.score)
+                ? `${(source.score * 100).toFixed(0)}% Match`
+                : 'Match unavailable';
 
-        this.messages.push({ role, content: text });
-        return msgDiv;
+            const snippet = document.createElement('div');
+            snippet.className = 'source-snippet';
+            const excerpt = source.text || source.page_content || '';
+            snippet.textContent = excerpt
+                ? `${excerpt.substring(0, 150)}${excerpt.length > 150 ? '...' : ''}`
+                : 'No excerpt available.';
+
+            header.append(sourceIndex, sourceName, score);
+            card.append(header, snippet);
+            list.appendChild(card);
+        });
+
+        details.append(summary, list);
+        sourcesDiv.replaceChildren(details);
     }
 
     addDiagnosticStep(step) {
-        const li = document.createElement('li');
-        li.innerHTML = `<div class="spinner"></div> <span>${step}</span>`;
-        this.diagnosticSteps.appendChild(li);
+        const item = document.createElement('li');
 
-        // If there's a previous step, replace its spinner with a check
-        const previous = li.previousElementSibling;
+        const spinner = document.createElement('div');
+        spinner.className = 'spinner';
+
+        const text = document.createElement('span');
+        text.textContent = step;
+
+        item.append(spinner, text);
+        this.diagnosticSteps.appendChild(item);
+
+        const previous = item.previousElementSibling;
         if (previous) {
-            const spinner = previous.querySelector('.spinner');
-            if (spinner) {
-                spinner.className = 'fas fa-check-circle';
-                spinner.style.fontSize = '12px';
+            const previousSpinner = previous.querySelector('.spinner');
+            if (previousSpinner) {
+                previousSpinner.className = 'step-complete';
+                previousSpinner.textContent = 'OK';
             }
         }
     }
@@ -161,10 +184,65 @@ class AxonChat {
     }
 
     clearHistory() {
-        this.container.innerHTML = '';
+        this.container.replaceChildren(this.createWelcomeMessage());
         this.messages = [];
-        // Add welcome back
-        // ...
+        this.clearDiagnostics();
+        this.diagnosticPanel.classList.add('hidden');
+        this.setStreamingState(false);
+        this.input.value = '';
+        this.input.style.height = 'auto';
+    }
+
+    async handleSendMessage() {
+        const text = this.input.value.trim();
+        if (!text || this.isStreaming) return;
+
+        this.input.value = '';
+        this.input.style.height = 'auto';
+
+        const welcome = this.container.querySelector('.welcome-message');
+        if (welcome) welcome.remove();
+
+        this.addMessage('user', text);
+
+        const assistantMsgDiv = this.addMessage('assistant', '');
+        const textDiv = assistantMsgDiv.querySelector('.message-text');
+
+        this.setStreamingState(true);
+        this.clearDiagnostics();
+        this.diagnosticPanel.classList.remove('hidden');
+
+        let fullContent = '';
+
+        try {
+            await this.api.streamQuery(
+                text,
+                {},
+                (tokenData) => {
+                    if (tokenData.type === 'token') {
+                        fullContent += tokenData.content;
+                        textDiv.textContent = fullContent;
+                    } else if (tokenData.type === 'sources') {
+                        this.renderSources(assistantMsgDiv, tokenData.content);
+                    }
+
+                    this.container.scrollTop = this.container.scrollHeight;
+                },
+                (diagnostic) => {
+                    this.addDiagnosticStep(diagnostic);
+                }
+            );
+        } catch (error) {
+            console.error('Chat error:', error);
+            textDiv.textContent = `Error: ${error.message}`;
+        } finally {
+            // Always release the send lock, even if streaming fails mid-response.
+            this.setStreamingState(false);
+
+            if (this.diagnosticSteps.childElementCount === 0) {
+                this.diagnosticPanel.classList.add('hidden');
+            }
+        }
     }
 }
 

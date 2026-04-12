@@ -543,7 +543,7 @@ class GraphRagMixin:
             shard_count = int(getattr(self.config, "graph_rag_relation_shard_count", 16) or 16)
             shard_count = max(1, shard_count)
             src_keys = sorted(k for k in self._relation_graph.keys() if isinstance(k, str))
-            buckets: list[dict] = [dict() for _ in range(shard_count)]
+            buckets: list[dict] = [{} for _ in range(shard_count)]
             for i, src in enumerate(src_keys):
                 buckets[i % shard_count][src] = self._relation_graph[src]
             state_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.shard_state.json"
@@ -2201,10 +2201,16 @@ class GraphRagMixin:
                                     if isinstance(_doc, dict):
                                         doc_map[_cid] = _doc
                         _iter_ids = text_unit_ids_all
-                        _fetch = lambda _cid: doc_map.get(_cid)
+
+                        def _fetch(_cid, _m=doc_map):
+                            return _m.get(_cid)
+
                     else:
                         _iter_ids = text_unit_ids_all
-                        _fetch = lambda _cid: None
+
+                        def _fetch(_cid):  # noqa: F811
+                            return None
+
                     for cid in _iter_ids:
                         if _batch_fetch:
                             doc = _fetch(cid)

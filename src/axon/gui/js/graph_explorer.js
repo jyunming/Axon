@@ -35,11 +35,16 @@ class AxonGraph {
             .onNodeClick(node => {
                 // Focus camera on node
                 const distance = 40;
-                const distRatio = 1 + distance/Math.hypot(node.x, node.y, node.z);
+                const x = Number.isFinite(node.x) ? node.x : 0;
+                const y = Number.isFinite(node.y) ? node.y : 0;
+                const z = Number.isFinite(node.z) ? node.z : 0;
+                const radius = Math.hypot(x, y, z);
+                const safeRadius = radius > 0 ? radius : 1;
+                const distRatio = 1 + distance / safeRadius;
 
                 this.graph.cameraPosition(
-                    { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
-                    node,
+                    { x: x * distRatio, y: y * distRatio, z: z * distRatio },
+                    { x, y, z },
                     1500
                 );
             });
@@ -48,6 +53,8 @@ class AxonGraph {
     }
 
     async refresh() {
+        if (!this.graph) return;
+
         try {
             const data = await this.api.getGraphData();
             if (data && data.nodes) {

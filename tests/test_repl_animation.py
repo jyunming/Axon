@@ -77,7 +77,7 @@ def test_open_studio_config_path_defaults():
 
     # Paths are always derived from the AxonStore layout
 
-    assert config.vector_store_path == os.path.join(axon_store_root, "default", "lancedb_data")
+    assert config.vector_store_path == os.path.join(axon_store_root, "default", "vector_data")
 
     assert config.bm25_path == os.path.join(axon_store_root, "default", "bm25_index")
 

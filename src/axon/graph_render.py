@@ -152,6 +152,7 @@ class GraphRenderMixin:
                     "color": self._VIZ_TYPE_COLORS.get(node.get("type") or "UNKNOWN", "#aec7e8"),
                     "val": 4 + min(chunk_count, 18),
                     "chunk_count": chunk_count,
+                    "chunk_ids": node.get("chunk_ids", []),
                     "degree": node.get("degree", 0),
                     "community": community,
                     "description": (node.get("description") or "")[:220],
@@ -435,13 +436,23 @@ class GraphRenderMixin:
 
       const distance = 120;
 
-      const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+      const x = Number.isFinite(node.x) ? node.x : 0;
+
+      const y = Number.isFinite(node.y) ? node.y : 0;
+
+      const z = Number.isFinite(node.z) ? node.z : 0;
+
+      const radius = Math.hypot(x, y, z);
+
+      const safeRadius = radius > 0 ? radius : 1;
+
+      const distRatio = 1 + distance / safeRadius;
 
       Graph.cameraPosition(
 
-        {{ x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }},
+        {{ x: x * distRatio, y: y * distRatio, z: z * distRatio }},
 
-        node, 1400
+        {{ x, y, z }}, 1400
 
       );
 
