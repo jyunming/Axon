@@ -42,19 +42,219 @@ class GraphRagMixin:
     _shared_rebel_pipelines: dict[tuple[str, bool], object] = {}
     _shared_gliner_lock = threading.Lock()
     _shared_rebel_lock = threading.Lock()
+    _GR_CS_KEY_COMPACT = {
+        "title": "t",
+        "summary": "s",
+        "full_content": "f",
+        "rank": "r",
+        "level": "l",
+        "member_hash": "mh",
+        "indexed_hash": "ih",
+        "findings": "fd",
+        "rating": "rt",
+        "rating_explanation": "re",
+    }
+    _GR_CS_KEY_EXPAND = {v: k for k, v in _GR_CS_KEY_COMPACT.items()}
+
+    def _gr_profile_enabled(self) -> bool:
+        return bool(getattr(self.config, "graph_rag_profile", False))
+
+    def _gr_log_profile(self, section: str, elapsed_s: float, **extra) -> None:
+        if not self._gr_profile_enabled():
+            return
+        suffix = " ".join(f"{k}={v}" for k, v in extra.items())
+        logger.info(
+            "GraphRAG profile: %s %.2fms%s",
+            section,
+            elapsed_s * 1000.0,
+            f" {suffix}" if suffix else "",
+        )
+
+    def _gr_cache_get(self, bucket: str, key: str):
+        store = getattr(self, "_graph_rag_cache", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._graph_rag_cache = store
+        return store.get(bucket, {}).get(key)
+
+    def _gr_cache_put(self, bucket: str, key: str, value) -> None:
+        if bucket == "global_answer":
+            if not getattr(self.config, "graph_rag_global_answer_cache", True):
+                return
+            cap = int(getattr(self.config, "graph_rag_global_answer_cache_size", 500))
+            if cap <= 0:
+                return
+        elif bucket == "global_map":
+            if not getattr(self.config, "graph_rag_global_map_cache", True):
+                return
+            cap = int(getattr(self.config, "graph_rag_global_map_cache_size", 2000))
+            if cap <= 0:
+                return
+        else:
+            cap = 0
+        _is_llm_bucket = bucket.startswith("llm:")
+        if cap == 0 and _is_llm_bucket:
+            if not getattr(self.config, "graph_rag_llm_cache", True):
+                return
+            cap = int(getattr(self.config, "graph_rag_llm_cache_size", 2000))
+        elif cap == 0:
+            if not getattr(self.config, "graph_rag_extraction_cache", True):
+                return
+            cap = int(getattr(self.config, "graph_rag_extraction_cache_size", 5000))
+        if cap <= 0:
+            return
+        store = getattr(self, "_graph_rag_cache", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._graph_rag_cache = store
+        bucket_map = store.setdefault(bucket, {})
+        bucket_map[key] = value
+        if len(bucket_map) > cap:
+            # dict is insertion ordered; pop oldest inserted
+            oldest = next(iter(bucket_map))
+            bucket_map.pop(oldest, None)
+
+    def _gr_text_hash(self, text: str) -> str:
+        import hashlib as _hashlib
+
+        return _hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
+
+    def _gr_llm_complete_cached(
+        self,
+        bucket: str,
+        prompt: str,
+        system_prompt: str | None = None,
+        **kwargs,
+    ) -> str:
+        """LLM completion with semantic response cache keyed by prompt+options."""
+        if not getattr(self.config, "graph_rag_llm_cache", True):
+            return self.llm.complete(prompt, system_prompt=system_prompt, **kwargs)
+        _llm_name = getattr(getattr(self, "llm", None), "__class__", type("x", (), {})).__name__
+        _kwargs_key = "|".join(f"{k}={kwargs[k]}" for k in sorted(kwargs.keys()))
+        _key = self._gr_text_hash(
+            f"{_llm_name}|{bucket}|{system_prompt or ''}|{_kwargs_key}|{prompt}"
+        )
+        _cache_bucket = f"llm:{bucket}"
+        _cached = self._gr_cache_get(_cache_bucket, _key)
+        if _cached is not None:
+            return _cached
+        _out = self.llm.complete(prompt, system_prompt=system_prompt, **kwargs)
+        self._gr_cache_put(_cache_bucket, _key, _out)
+        return _out
+
+    def _gr_write_json_if_changed(self, path, payload, *, sort_keys: bool = False) -> bool:
+        """Atomically write JSON only when content changed. Returns True if written."""
+        import hashlib as _hashlib
+        import json as _json
+        import os as _os
+        import pathlib as _pathlib
+
+        p = _pathlib.Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        text = _json.dumps(payload, sort_keys=sort_keys, separators=(",", ":"))
+        digest = _hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
+        cache = getattr(self, "_gr_persist_hashes", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._gr_persist_hashes = cache
+        p_key = str(p)
+        if cache.get(p_key) == digest and p.exists():
+            return False
+        if p.exists() and cache.get(p_key) is None:
+            try:
+                existing = p.read_text(encoding="utf-8")
+                existing_digest = _hashlib.sha1(
+                    existing.encode("utf-8", errors="replace")
+                ).hexdigest()
+                cache[p_key] = existing_digest
+                if existing_digest == digest:
+                    return False
+            except Exception:
+                pass
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        _os.replace(tmp, p)
+        cache[p_key] = digest
+        return True
+
+    def _gr_json_load_path(self, path):
+        """Load JSON from path using orjson when available, else stdlib json."""
+        import json as _json
+        import os as _os
+        import pathlib as _pathlib
+
+        p = _pathlib.Path(path)
+        raw = p.read_bytes()
+        _prefer_orjson = _os.getenv("AXON_GRAPHRAG_ORJSON_LOAD", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not _prefer_orjson:
+            return _json.loads(raw.decode("utf-8"))
+        _orjson = getattr(self, "_gr_orjson", None)
+        if _orjson is None:
+            try:
+                import orjson as _orjson_mod  # type: ignore
+
+                _orjson = _orjson_mod
+            except Exception:
+                _orjson = False
+            self._gr_orjson = _orjson
+        if _orjson and _orjson is not False:
+            return _orjson.loads(raw)
+        return _json.loads(raw.decode("utf-8"))
+
+    def _get_incoming_relation_index(self) -> dict[str, list]:
+        if not getattr(self.config, "graph_rag_local_cached_incoming", True):
+            return {}
+        rel = self._relation_graph
+        sig = (len(rel), sum(len(v) for v in rel.values()))
+        if getattr(self, "_incoming_rel_sig", None) == sig and hasattr(self, "_incoming_rel_index"):
+            return self._incoming_rel_index
+        idx: dict[str, list] = {}
+        for src, entries in rel.items():
+            for entry in entries:
+                tgt = (entry.get("target", "") or "").lower()
+                if not tgt:
+                    continue
+                # Store (source, original_entry_ref) to avoid duplicating relation dicts.
+                idx.setdefault(tgt, []).append((src, entry))
+        self._incoming_rel_sig = sig
+        self._incoming_rel_index = idx
+        return idx
+
+    def _get_incoming_relation_count_map(self) -> dict[str, int]:
+        """Return cached incoming edge counts per entity keyed to relation-graph signature."""
+        if not bool(getattr(self.config, "graph_rag_local_cached_incoming_counts", True)):
+            return {}
+        idx = self._get_incoming_relation_index()
+        if not idx:
+            return {}
+        sig = getattr(self, "_incoming_rel_sig", None)
+        if sig is None:
+            sig = (len(self._relation_graph), sum(len(v) for v in self._relation_graph.values()))
+        if getattr(self, "_incoming_count_sig", None) == sig and hasattr(
+            self, "_incoming_count_map"
+        ):
+            return self._incoming_count_map
+        cmap = {k: len(v) for k, v in idx.items()}
+        self._incoming_count_sig = sig
+        self._incoming_count_map = cmap
+        return cmap
 
     def _load_entity_graph(self) -> dict:
         """Load persisted entity→doc_id graph from disk.
 
         Shape: {entity_lower: {"description": str, "chunk_ids": list[str]}}
         """
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
         if path.exists():
             try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
+                raw = self._gr_json_load_path(path)
                 if not isinstance(raw, dict):
                     return {}
                 cleaned: dict = {}
@@ -75,12 +275,10 @@ class GraphRagMixin:
 
     def _save_entity_graph(self) -> None:
         """Persist entity graph to disk."""
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self._entity_graph), encoding="utf-8")
+        self._gr_write_json_if_changed(path, self._entity_graph)
 
     def _load_code_graph(self) -> dict:
         """Load code graph from disk. Returns empty graph if not found."""
@@ -99,27 +297,224 @@ class GraphRagMixin:
 
     def _save_code_graph(self) -> None:
         """Persist code graph to disk."""
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self._code_graph), encoding="utf-8")
+        self._gr_write_json_if_changed(path, self._code_graph)
 
     def _load_relation_graph(self) -> dict:
         """Load persisted relation graph from disk.
 
         Shape: {source_entity_lower: [{target: str, relation: str, chunk_id: str}]}
         """
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
+        shards_manifest = pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.json"
+        shards_list_manifest = pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.lst"
+        shard_state_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.shard_state.json"
+        shard_cache_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.cache.pkl"
+        shard_cache_meta_path = (
+            pathlib.Path(self.config.bm25_path) / ".relation_graph.cache.meta.json"
+        )
+        if shards_manifest.exists():
+            try:
+                cache_key = None
+                if bool(getattr(self.config, "graph_rag_relation_pickle_cache", False)):
+                    try:
+                        if shard_state_path.exists():
+                            _state = self._gr_json_load_path(shard_state_path)
+                            if isinstance(_state, dict) and isinstance(
+                                _state.get("signatures"), list
+                            ):
+                                cache_key = self._gr_text_hash(
+                                    "|".join(str(x) for x in _state.get("signatures", []))
+                                )
+                    except Exception:
+                        cache_key = None
+                    if cache_key and shard_cache_path.exists() and shard_cache_meta_path.exists():
+                        try:
+                            _meta = self._gr_json_load_path(shard_cache_meta_path)
+                            if isinstance(_meta, dict) and _meta.get("key") == cache_key:
+                                import pickle as _pickle
+
+                                with open(shard_cache_path, "rb") as _f:
+                                    _cached = _pickle.load(_f)
+                                if isinstance(_cached, dict):
+                                    return _cached
+                        except Exception:
+                            pass
+                shard_names: list[str] = []
+                try:
+                    sig = (
+                        shards_manifest.stat().st_mtime_ns if shards_manifest.exists() else 0,
+                        shards_list_manifest.stat().st_mtime_ns
+                        if shards_list_manifest.exists()
+                        else 0,
+                    )
+                except Exception:
+                    sig = None
+                if (
+                    sig is not None
+                    and getattr(self, "_rel_shard_names_sig", None) == sig
+                    and isinstance(getattr(self, "_rel_shard_names_cache", None), list)
+                ):
+                    shard_names = list(self._rel_shard_names_cache)
+                else:
+                    if (
+                        bool(getattr(self.config, "graph_rag_relation_shard_list_manifest", True))
+                        and shards_list_manifest.exists()
+                    ):
+                        shard_names = [
+                            ln.strip()
+                            for ln in shards_list_manifest.read_text(encoding="utf-8").splitlines()
+                            if ln.strip()
+                        ]
+                    if not shard_names:
+                        raw_manifest = self._gr_json_load_path(shards_manifest)
+                        if (
+                            isinstance(raw_manifest, dict)
+                            and raw_manifest.get("format") == "rg_rel_shard_v1"
+                            and isinstance(raw_manifest.get("shards"), list)
+                        ):
+                            shard_names = [x for x in raw_manifest["shards"] if isinstance(x, str)]
+                    if sig is not None:
+                        self._rel_shard_names_sig = sig
+                        self._rel_shard_names_cache = list(shard_names)
+                if shard_names:
+                    merged: dict = {}
+
+                    def _decode_shard(shard_name: str) -> dict:
+                        shard_path = pathlib.Path(self.config.bm25_path) / shard_name
+                        if not shard_path.exists():
+                            return {}
+                        shard_raw = self._gr_json_load_path(shard_path)
+                        if not isinstance(shard_raw, dict):
+                            return {}
+                        out: dict = {}
+                        if shard_raw.get("format") == "rg_rel_v2" and isinstance(
+                            shard_raw.get("g"), dict
+                        ):
+                            for key, value in shard_raw["g"].items():
+                                if not isinstance(key, str) or not isinstance(value, list):
+                                    continue
+                                out_entries = []
+                                for entry in value:
+                                    if (
+                                        isinstance(entry, list | tuple)
+                                        and len(entry) >= 3
+                                        and isinstance(entry[0], str)
+                                        and isinstance(entry[1], str)
+                                        and isinstance(entry[2], str)
+                                    ):
+                                        out_entries.append(
+                                            {
+                                                "target": entry[0],
+                                                "relation": entry[1],
+                                                "chunk_id": entry[2],
+                                            }
+                                        )
+                                if out_entries:
+                                    out.setdefault(key, []).extend(out_entries)
+                        else:
+                            for key, value in shard_raw.items():
+                                if not isinstance(key, str) or not isinstance(value, list):
+                                    continue
+                                out_entries = [
+                                    entry
+                                    for entry in value
+                                    if isinstance(entry, dict)
+                                    and "target" in entry
+                                    and "relation" in entry
+                                    and "chunk_id" in entry
+                                ]
+                                if out_entries:
+                                    out.setdefault(key, []).extend(out_entries)
+                        return out
+
+                    use_parallel = (
+                        bool(getattr(self.config, "graph_rag_relation_shard_parallel_load", True))
+                        and len(shard_names) > 1
+                    )
+                    if use_parallel:
+                        from concurrent.futures import ThreadPoolExecutor
+
+                        workers = min(
+                            int(
+                                getattr(self.config, "graph_rag_relation_shard_load_workers", 4)
+                                or 4
+                            ),
+                            len(shard_names),
+                        )
+                        workers = max(1, workers)
+                        with ThreadPoolExecutor(max_workers=workers) as ex:
+                            for part in ex.map(_decode_shard, shard_names):
+                                for key, value in part.items():
+                                    merged.setdefault(key, []).extend(value)
+                    else:
+                        for n in shard_names:
+                            part = _decode_shard(n)
+                            for key, value in part.items():
+                                merged.setdefault(key, []).extend(value)
+                    if (
+                        bool(getattr(self.config, "graph_rag_relation_pickle_cache", False))
+                        and cache_key
+                    ):
+                        try:
+                            import json as _json
+                            import os as _os
+                            import pickle as _pickle
+
+                            proto = int(
+                                getattr(self.config, "graph_rag_relation_pickle_cache_protocol", 4)
+                                or 4
+                            )
+                            proto = min(max(1, proto), 5)
+                            _tmp = shard_cache_path.with_suffix(shard_cache_path.suffix + ".tmp")
+                            with open(_tmp, "wb") as _f:
+                                _pickle.dump(merged, _f, protocol=proto)
+                            _os.replace(_tmp, shard_cache_path)
+                            _tmp_meta = shard_cache_meta_path.with_suffix(
+                                shard_cache_meta_path.suffix + ".tmp"
+                            )
+                            _tmp_meta.write_text(_json.dumps({"key": cache_key}), encoding="utf-8")
+                            _os.replace(_tmp_meta, shard_cache_meta_path)
+                        except Exception:
+                            pass
+                    return merged
+            except Exception:
+                pass
         if path.exists():
             try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
+                raw = self._gr_json_load_path(path)
                 if not isinstance(raw, dict):
                     return {}
+                # Compact format: {"format":"rg_rel_v2","g": {src:[[tgt,rel,cid],...]}}
+                if raw.get("format") == "rg_rel_v2" and isinstance(raw.get("g"), dict):
+                    graph_raw = raw.get("g", {})
+                    cleaned_v2: dict = {}
+                    for key, value in graph_raw.items():
+                        if not isinstance(key, str) or not isinstance(value, list):
+                            continue
+                        out_entries = []
+                        for entry in value:
+                            if (
+                                isinstance(entry, list | tuple)
+                                and len(entry) >= 3
+                                and isinstance(entry[0], str)
+                                and isinstance(entry[1], str)
+                                and isinstance(entry[2], str)
+                            ):
+                                out_entries.append(
+                                    {
+                                        "target": entry[0],
+                                        "relation": entry[1],
+                                        "chunk_id": entry[2],
+                                    }
+                                )
+                        if out_entries:
+                            cleaned_v2[key] = out_entries
+                    return cleaned_v2
                 cleaned: dict = {}
                 for key, value in raw.items():
                     if not isinstance(key, str) or not isinstance(value, list):
@@ -139,12 +534,185 @@ class GraphRagMixin:
 
     def _save_relation_graph(self) -> None:
         """Persist relation graph to disk."""
-        import json
+        import hashlib
+        import os
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self._relation_graph), encoding="utf-8")
+        if bool(getattr(self.config, "graph_rag_relation_shard_persist", False)):
+            shard_count = int(getattr(self.config, "graph_rag_relation_shard_count", 16) or 16)
+            shard_count = max(1, shard_count)
+            src_keys = sorted(k for k in self._relation_graph.keys() if isinstance(k, str))
+            buckets: list[dict] = [dict() for _ in range(shard_count)]
+            for i, src in enumerate(src_keys):
+                buckets[i % shard_count][src] = self._relation_graph[src]
+            state_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.shard_state.json"
+            prev_state = {}
+            try:
+                if state_path.exists():
+                    _raw_state = self._gr_json_load_path(state_path)
+                    if isinstance(_raw_state, dict):
+                        prev_state = _raw_state
+            except Exception:
+                prev_state = {}
+            prev_sigs = prev_state.get("signatures", []) if isinstance(prev_state, dict) else []
+            prev_compact = (
+                bool(prev_state.get("compact", False)) if isinstance(prev_state, dict) else False
+            )
+            prev_shard_count = (
+                int(prev_state.get("shard_count", 0)) if isinstance(prev_state, dict) else 0
+            )
+            compact_mode = bool(getattr(self.config, "graph_rag_relation_compact_persist", True))
+            selective = bool(
+                getattr(self.config, "graph_rag_relation_shard_selective_rewrite", True)
+            )
+
+            def _bucket_sig(bucket: dict) -> str:
+                h = hashlib.sha1()
+                for src in sorted(bucket.keys()):
+                    h.update(src.encode("utf-8", errors="replace"))
+                    entries = bucket.get(src, [])
+                    h.update(str(len(entries)).encode("utf-8"))
+                    for e in entries:
+                        if not isinstance(e, dict):
+                            continue
+                        h.update(str(e.get("target", "")).encode("utf-8", errors="replace"))
+                        h.update(str(e.get("relation", "")).encode("utf-8", errors="replace"))
+                        h.update(str(e.get("chunk_id", "")).encode("utf-8", errors="replace"))
+                return h.hexdigest()
+
+            if (
+                bool(getattr(self.config, "graph_rag_relation_shard_parallel_signatures", True))
+                and len(buckets) > 1
+            ):
+                from concurrent.futures import ThreadPoolExecutor
+
+                workers = min(
+                    int(getattr(self.config, "graph_rag_relation_shard_signature_workers", 4) or 4),
+                    len(buckets),
+                )
+                workers = max(1, workers)
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    curr_sigs = list(ex.map(_bucket_sig, buckets))
+            else:
+                curr_sigs = [_bucket_sig(b) for b in buckets]
+            shard_names: list[str] = []
+            shard_tasks: list[tuple[str, object]] = []
+            for i, bucket in enumerate(buckets):
+                shard_name = f".relation_graph.shard.{i:03d}.json"
+                shard_path = pathlib.Path(self.config.bm25_path) / shard_name
+                shard_names.append(shard_name)
+                if (
+                    selective
+                    and isinstance(prev_sigs, list)
+                    and i < len(prev_sigs)
+                    and prev_sigs[i] == curr_sigs[i]
+                    and prev_compact == compact_mode
+                    and prev_shard_count == shard_count
+                    and shard_path.exists()
+                ):
+                    continue
+                if compact_mode:
+                    compact_graph = {}
+                    for src, entries in bucket.items():
+                        compact_entries = []
+                        for e in entries:
+                            if not isinstance(e, dict):
+                                continue
+                            tgt = e.get("target")
+                            rel = e.get("relation")
+                            cid = e.get("chunk_id")
+                            if (
+                                isinstance(tgt, str)
+                                and isinstance(rel, str)
+                                and isinstance(cid, str)
+                            ):
+                                compact_entries.append([tgt, rel, cid])
+                        if compact_entries:
+                            compact_graph[src] = compact_entries
+                    payload = {"format": "rg_rel_v2", "g": compact_graph}
+                else:
+                    payload = bucket
+                shard_tasks.append((str(shard_path), payload))
+            if (
+                bool(getattr(self.config, "graph_rag_relation_shard_parallel_writes", True))
+                and len(shard_tasks) > 1
+            ):
+                from concurrent.futures import ThreadPoolExecutor
+
+                workers = min(
+                    int(getattr(self.config, "graph_rag_relation_shard_write_workers", 4) or 4),
+                    len(shard_tasks),
+                )
+                workers = max(1, workers)
+
+                def _write_task(task):
+                    p, pl = task
+                    self._gr_write_json_if_changed(p, pl)
+
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    list(ex.map(_write_task, shard_tasks))
+            else:
+                for p, pl in shard_tasks:
+                    self._gr_write_json_if_changed(p, pl)
+            manifest = {
+                "format": "rg_rel_shard_v1",
+                "compact": compact_mode,
+                "shards": shard_names,
+            }
+            manifest_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.json"
+            self._gr_write_json_if_changed(manifest_path, manifest, sort_keys=True)
+            if bool(getattr(self.config, "graph_rag_relation_shard_list_manifest", True)):
+                list_manifest_path = (
+                    pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.lst"
+                )
+                list_payload = "\n".join(shard_names) + ("\n" if shard_names else "")
+                try:
+                    existing = (
+                        list_manifest_path.read_text(encoding="utf-8")
+                        if list_manifest_path.exists()
+                        else None
+                    )
+                    if existing != list_payload:
+                        tmp = list_manifest_path.with_suffix(list_manifest_path.suffix + ".tmp")
+                        tmp.write_text(list_payload, encoding="utf-8")
+                        os.replace(tmp, list_manifest_path)
+                except Exception:
+                    pass
+            state_payload = {
+                "format": "rg_rel_shard_state_v1",
+                "compact": compact_mode,
+                "shard_count": shard_count,
+                "signatures": curr_sigs,
+            }
+            self._gr_write_json_if_changed(state_path, state_payload, sort_keys=True)
+            # Best effort cleanup of monolithic file to avoid duplicate storage.
+            try:
+                if path.exists():
+                    os.remove(path)
+            except OSError:
+                pass
+            return
+        if bool(getattr(self.config, "graph_rag_relation_compact_persist", True)):
+            compact_graph = {}
+            for src, entries in self._relation_graph.items():
+                if not isinstance(src, str) or not isinstance(entries, list):
+                    continue
+                compact_entries = []
+                for e in entries:
+                    if not isinstance(e, dict):
+                        continue
+                    tgt = e.get("target")
+                    rel = e.get("relation")
+                    cid = e.get("chunk_id")
+                    if isinstance(tgt, str) and isinstance(rel, str) and isinstance(cid, str):
+                        compact_entries.append([tgt, rel, cid])
+                if compact_entries:
+                    compact_graph[src] = compact_entries
+            payload = {"format": "rg_rel_v2", "g": compact_graph}
+            self._gr_write_json_if_changed(path, payload)
+        else:
+            self._gr_write_json_if_changed(path, self._relation_graph)
 
     def _load_community_levels(self) -> dict:
         """Load persisted hierarchical community levels from disk.
@@ -166,15 +734,12 @@ class GraphRagMixin:
 
     def _save_community_levels(self) -> None:
         """Persist hierarchical community levels to disk."""
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".community_levels.json"
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps({str(k): v for k, v in self._community_levels.items()}),
-                encoding="utf-8",
+            self._gr_write_json_if_changed(
+                path, {str(k): v for k, v in self._community_levels.items()}, sort_keys=True
             )
         except Exception as e:
             logger.debug(f"Could not save community levels: {e}")
@@ -214,29 +779,37 @@ class GraphRagMixin:
 
     def _save_community_hierarchy(self) -> None:
         """Persist community hierarchy to disk."""
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".community_hierarchy.json"
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps({str(k): v for k, v in self._community_hierarchy.items()}),
-                encoding="utf-8",
+            self._gr_write_json_if_changed(
+                path,
+                {str(k): v for k, v in self._community_hierarchy.items()},
+                sort_keys=True,
             )
         except Exception as e:
             logger.debug(f"Could not save community hierarchy: {e}")
 
     def _load_community_summaries(self) -> dict:
         """Load persisted community summaries from disk."""
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".community_summaries.json"
         try:
             if path.exists():
-                raw = json.loads(path.read_text(encoding="utf-8"))
+                raw = self._gr_json_load_path(path)
                 if isinstance(raw, dict):
+                    if raw.get("format") == "gr_cs_v2" and isinstance(raw.get("s"), dict):
+                        out = {}
+                        for cid, item in raw["s"].items():
+                            if not isinstance(cid, str) or not isinstance(item, dict):
+                                continue
+                            expanded = {}
+                            for k, v in item.items():
+                                expanded[self._GR_CS_KEY_EXPAND.get(k, k)] = v
+                            out[cid] = expanded
+                        return out
                     return raw
         except Exception:
             pass
@@ -244,13 +817,23 @@ class GraphRagMixin:
 
     def _save_community_summaries(self) -> None:
         """Persist community summaries to disk."""
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".community_summaries.json"
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._community_summaries), encoding="utf-8")
+            if bool(getattr(self.config, "graph_rag_community_summary_compact_persist", True)):
+                compact = {}
+                for cid, item in self._community_summaries.items():
+                    if not isinstance(cid, str) or not isinstance(item, dict):
+                        continue
+                    citem = {}
+                    for k, v in item.items():
+                        citem[self._GR_CS_KEY_COMPACT.get(k, k)] = v
+                    compact[cid] = citem
+                payload = {"format": "gr_cs_v2", "s": compact}
+                self._gr_write_json_if_changed(path, payload, sort_keys=True)
+            else:
+                self._gr_write_json_if_changed(path, self._community_summaries, sort_keys=True)
         except Exception as e:
             logger.debug(f"Could not save community summaries: {e}")
 
@@ -271,13 +854,11 @@ class GraphRagMixin:
 
     def _save_entity_embeddings(self) -> None:
         """Persist entity embeddings to disk."""
-        import json
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".entity_embeddings.json"
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._entity_embeddings), encoding="utf-8")
+            self._gr_write_json_if_changed(path, self._entity_embeddings)
         except Exception as e:
             logger.debug(f"Could not save entity embeddings: {e}")
 
@@ -657,6 +1238,16 @@ class GraphRagMixin:
     def _rebuild_communities(self) -> None:
         """Run community detection and generate summaries."""
         with self._community_rebuild_lock:
+            if bool(getattr(self.config, "graph_rag_rebuild_skip_if_unchanged", True)):
+                _sig = (
+                    len(self._entity_graph),
+                    len(self._relation_graph),
+                    sum(len(v.get("chunk_ids", [])) for v in self._entity_graph.values()),
+                    sum(len(v) for v in self._relation_graph.values()),
+                )
+                if _sig == getattr(self, "_gr_last_community_rebuild_sig", None):
+                    logger.debug("GraphRAG: skip community rebuild (graph unchanged).")
+                    return
             # Entity alias resolution — merge near-duplicates before community detection
             if getattr(self.config, "graph_rag_entity_resolve", False):
                 self._resolve_entity_aliases()
@@ -691,6 +1282,13 @@ class GraphRagMixin:
                         self._generate_community_summaries()
                         if getattr(self.config, "graph_rag_index_community_reports", True):
                             self._index_community_reports_in_vector_store()
+            if bool(getattr(self.config, "graph_rag_rebuild_skip_if_unchanged", True)):
+                self._gr_last_community_rebuild_sig = (
+                    len(self._entity_graph),
+                    len(self._relation_graph),
+                    sum(len(v.get("chunk_ids", [])) for v in self._entity_graph.values()),
+                    sum(len(v) for v in self._relation_graph.values()),
+                )
 
     def finalize_graph(self, force: bool = False) -> None:
         """Explicitly trigger community rebuild.
@@ -892,7 +1490,8 @@ class GraphRagMixin:
                 "Output only valid JSON. No markdown code blocks."
             )
             try:
-                raw_text = self.llm.complete(
+                raw_text = self._gr_llm_complete_cached(
+                    "community_summary",
                     prompt,
                     system_prompt="You are an expert knowledge graph analyst.",
                 )
@@ -1044,6 +1643,9 @@ class GraphRagMixin:
         """Map-reduce global search over community reports (Item 4)."""
         import json as _json
         import re as _re
+        import time as _time
+
+        _t0_total = _time.perf_counter()
 
         if not self._community_summaries:
             return ""
@@ -1064,6 +1666,8 @@ class GraphRagMixin:
         # Dynamic community pre-filter — cheap token-overlap relevance score
         _top_n_communities = getattr(cfg, "graph_rag_global_top_communities", 0)
         if _top_n_communities > 0 and len(level_summaries) > _top_n_communities:
+            import heapq as _heapq
+
             _query_words = set(query.lower().split())
 
             def _community_relevance(cs_item: tuple) -> float:
@@ -1071,11 +1675,30 @@ class GraphRagMixin:
                 text = ((cs.get("title") or "") + " " + (cs.get("summary") or "")).lower()
                 return len(_query_words & set(text.split())) / max(len(_query_words), 1)
 
-            sorted_summaries = sorted(
-                level_summaries.items(), key=_community_relevance, reverse=True
+            top_summaries = _heapq.nlargest(
+                _top_n_communities, level_summaries.items(), key=_community_relevance
             )
-            level_summaries = dict(sorted_summaries[:_top_n_communities])
+            level_summaries = dict(top_summaries)
             logger.debug("GraphRAG global: pre-filtered to top %d communities.", _top_n_communities)
+
+        # Global answer cache: short-circuit repeated query+graph-signature requests.
+        if bool(getattr(cfg, "graph_rag_global_answer_cache", True)):
+            _sig_parts = []
+            for _k, _cs in sorted(level_summaries.items(), key=lambda kv: kv[0]):
+                _sig_parts.append(
+                    f"{_k}:{_cs.get('member_hash','')}:{_cs.get('indexed_hash','')}:{_cs.get('rank',0)}"
+                )
+            _ans_key = self._gr_text_hash(
+                f"{query}|lvl={target_level}|topc={_top_n_communities}|{'|'.join(_sig_parts)}"
+            )
+            _ans_cached = self._gr_cache_get("global_answer", _ans_key)
+            if _ans_cached is not None:
+                self._gr_log_profile(
+                    "global_search.answer_cache_hit", _time.perf_counter() - _t0_total
+                )
+                return _ans_cached
+        else:
+            _ans_key = None
 
         # Chunk reports so large reports don't get hard-truncated and later sections aren't lost
         _MAP_CHUNK_CHARS = int(getattr(cfg, "graph_rag_global_map_max_length", 500) or 500) * 4
@@ -1097,8 +1720,14 @@ class GraphRagMixin:
         all_chunks: list[tuple[str, str]] = []
         for cid, cs in level_summaries.items():
             all_chunks.extend(_chunk_report(cid, cs))
+        _max_map_chunks = int(getattr(cfg, "graph_rag_global_max_map_chunks", 0) or 0)
+        if _max_map_chunks > 0 and len(all_chunks) > _max_map_chunks:
+            all_chunks = all_chunks[:_max_map_chunks]
         rng = _random.Random(42)
         rng.shuffle(all_chunks)
+        self._gr_log_profile(
+            "global_search.prepare_chunks", _time.perf_counter() - _t0_total, chunks=len(all_chunks)
+        )
 
         # Token-level compression of community report chunks before LLM map phase
         if getattr(cfg, "graph_rag_report_compress", False) is True and all_chunks:
@@ -1131,6 +1760,11 @@ class GraphRagMixin:
             chunk_id, report_chunk = args
             if not report_chunk:
                 return []
+            _chunk_sig = self._gr_text_hash(report_chunk)
+            _map_key = self._gr_text_hash(f"{query}|{chunk_id}|{_chunk_sig}")
+            _map_cached = self._gr_cache_get("global_map", _map_key)
+            if isinstance(_map_cached, list):
+                return _map_cached
             prompt = (
                 "---Role---\n"
                 "You are a helpful assistant responding to questions about the dataset.\n\n"
@@ -1145,7 +1779,8 @@ class GraphRagMixin:
                 "Higher score = more relevant. Output only valid JSON."
             )
             try:
-                raw = self.llm.complete(
+                raw = self._gr_llm_complete_cached(
+                    "global_map_chunk",
                     prompt,
                     system_prompt="You are a knowledge graph analysis assistant.",
                 )
@@ -1153,41 +1788,99 @@ class GraphRagMixin:
                 points = _json.loads(raw_clean)
                 if not isinstance(points, list):
                     return []
-                return [
+                out = [
                     (float(p.get("score", 0)), str(p.get("point", "")))
                     for p in points
                     if isinstance(p, dict) and p.get("point")
                 ]
+                self._gr_cache_put("global_map", _map_key, out)
+                return out
             except Exception:
                 return []
 
         # Map phase — parallel over shuffled chunks; use a dedicated pool when
         # graph_rag_map_workers is set, so map-reduce does not starve the shared executor
         # during concurrent ingest.
-        all_points = []
-        _map_workers_cfg = getattr(cfg, "graph_rag_map_workers", 0)
+        import heapq as _heapq
+
+        if top_points <= 0:
+            return _GRAPHRAG_NO_DATA_ANSWER
+        top_heap: list[tuple[float, str]] = []
+        _points_seen = 0
+
+        def _consume_point(_score: float, _point: str) -> None:
+            nonlocal top_heap, _points_seen
+            _points_seen += 1
+            if _score < min_score:
+                return
+            if len(top_heap) < top_points:
+                _heapq.heappush(top_heap, (_score, _point))
+            elif _score > top_heap[0][0]:
+                _heapq.heapreplace(top_heap, (_score, _point))
+
+        _map_workers_cfg = int(getattr(cfg, "graph_rag_map_workers", 0) or 0)
+        _map_auto_workers = int(getattr(cfg, "graph_rag_map_auto_workers", 4) or 0)
+        _map_use_dedicated_pool = bool(getattr(cfg, "graph_rag_map_use_dedicated_pool", True))
+        _map_workers_effective = 0
+        if _map_workers_cfg > 0:
+            _map_workers_effective = min(_map_workers_cfg, max(1, len(all_chunks)))
+        elif _map_use_dedicated_pool and _map_auto_workers > 0:
+            import os as _os
+
+            _cpu_cap = max(1, int(_os.cpu_count() or 4))
+            _map_workers_effective = min(_map_auto_workers, _cpu_cap, max(1, len(all_chunks)))
+        _t0_map = _time.perf_counter()
         try:
-            if isinstance(_map_workers_cfg, int) and _map_workers_cfg > 0:
+            if _map_workers_effective > 0:
                 from concurrent.futures import ThreadPoolExecutor as _TPE
 
-                with _TPE(max_workers=_map_workers_cfg) as _map_pool:
-                    results = list(_map_pool.map(_map_community, all_chunks))
+                with _TPE(max_workers=_map_workers_effective) as _map_pool:
+                    for point_list in _map_pool.map(_map_community, all_chunks):
+                        for score, point in point_list:
+                            _consume_point(score, point)
             else:
-                results = list(self._executor.map(_map_community, all_chunks))
-            for point_list in results:
-                all_points.extend(point_list)
+                for point_list in self._executor.map(_map_community, all_chunks):
+                    for score, point in point_list:
+                        _consume_point(score, point)
         except Exception:
             return ""
+        self._gr_log_profile(
+            "global_search.map_phase",
+            _time.perf_counter() - _t0_map,
+            points_seen=_points_seen,
+            heap_size=len(top_heap),
+            workers=_map_workers_effective,
+        )
 
-        # Filter and sort
-        filtered = [(score, point) for score, point in all_points if score >= min_score]
-        filtered.sort(reverse=True)
-        top = filtered[:top_points]
+        # Extract top points in descending score order
+        top = _heapq.nlargest(top_points, top_heap, key=lambda x: x[0])
 
         if not top:
             return _GRAPHRAG_NO_DATA_ANSWER
+        _skip_reduce_points_le = int(
+            getattr(cfg, "graph_rag_global_reduce_skip_if_top_points_le", 1) or 0
+        )
+        _skip_reduce_score_gte = float(
+            getattr(cfg, "graph_rag_global_reduce_skip_if_top_score_gte", 95.0) or 95.0
+        )
+        if (
+            _skip_reduce_points_le > 0
+            and len(top) <= _skip_reduce_points_le
+            and top[0][0] >= _skip_reduce_score_gte
+        ):
+            self._gr_log_profile(
+                "global_search.reduce_skipped",
+                _time.perf_counter() - _t0_total,
+                top_points=len(top),
+                top_score=top[0][0],
+            )
+            out = top[0][1]
+            if _ans_key is not None:
+                self._gr_cache_put("global_answer", _ans_key, out)
+            return out
 
         # --- REDUCE PHASE: token-budget assembly ---
+        _t0_reduce = _time.perf_counter()
         reduce_max_tokens = getattr(cfg, "graph_rag_global_reduce_max_tokens", 8000)
         analyst_lines = []
         token_estimate = 0
@@ -1219,20 +1912,51 @@ class GraphRagMixin:
                 " where relevant."
             )
         try:
-            response = self.llm.complete(
+            response = self._gr_llm_complete_cached(
+                "global_reduce",
                 reduce_prompt,
                 system_prompt=reduce_system_prompt,
             )
-            return response.strip() if response else _GRAPHRAG_NO_DATA_ANSWER
+            out = response.strip() if response else _GRAPHRAG_NO_DATA_ANSWER
+            if _ans_key is not None:
+                self._gr_cache_put("global_answer", _ans_key, out)
+            self._gr_log_profile(
+                "global_search.reduce_phase",
+                _time.perf_counter() - _t0_reduce,
+                analysts=len(analyst_lines),
+            )
+            self._gr_log_profile("global_search.total", _time.perf_counter() - _t0_total)
+            return out
         except Exception as e:
             logger.debug(f"GraphRAG global reduce failed: {e}")
             # Fallback: return raw analyst summaries
-            return "**Knowledge Graph Findings:**\n\n" + reduce_context
+            self._gr_log_profile(
+                "global_search.reduce_phase(error)",
+                _time.perf_counter() - _t0_reduce,
+                analysts=len(analyst_lines),
+            )
+            self._gr_log_profile("global_search.total", _time.perf_counter() - _t0_total)
+            out = "**Knowledge Graph Findings:**\n\n" + reduce_context
+            if _ans_key is not None:
+                self._gr_cache_put("global_answer", _ans_key, out)
+            return out
 
     def _get_incoming_relations(self, entity: str) -> list[dict]:
         """Return all relation entries where entity is the target (GAP 4: incoming edges)."""
-        results = []
         ent_lower = entity.lower()
+        idx = self._get_incoming_relation_index()
+        if idx:
+            out = []
+            for item in idx.get(ent_lower, []):
+                if isinstance(item, tuple) and len(item) == 2:
+                    src, entry = item
+                    if isinstance(entry, dict):
+                        out.append({**entry, "source": src, "direction": "incoming"})
+                elif isinstance(item, dict):
+                    # Backward-compat with older in-memory cache shape.
+                    out.append(item)
+            return out
+        results = []
         for src, entries in self._relation_graph.items():
             for entry in entries:
                 if entry.get("target", "").lower() == ent_lower:
@@ -1245,12 +1969,16 @@ class GraphRagMixin:
         TASK 11: Replaces fixed 25/50/25 budget split with joint ranking across all
         artifact types, then greedy-fill up to total_budget tokens.
         """
+        import time as _time
+
+        _t0_total = _time.perf_counter()
         if not matched_entities:
             return ""
 
         import re as _re
 
         # --- Phase 1: Setup ---
+        _t0_setup = _time.perf_counter()
         total_budget = getattr(cfg, "graph_rag_local_max_context_tokens", 8000)
         top_k_entities = getattr(cfg, "graph_rag_local_top_k_entities", 10)
         top_k_relationships = getattr(cfg, "graph_rag_local_top_k_relationships", 10)
@@ -1263,10 +1991,18 @@ class GraphRagMixin:
 
         _query_tokens = set(query.lower().split()) | set(_re.split(r"[\s\W_]+", query.lower()))
         _boost = getattr(self.config, "graph_rag_exact_entity_boost", 3.0)
+        _fast_degree = bool(getattr(cfg, "graph_rag_local_entity_degree_fast", True))
+        _incoming_count_map: dict[str, int] = {}
+        if _fast_degree:
+            _incoming_count_map = self._get_incoming_relation_count_map()
 
         def _entity_degree(ent: str) -> int:
-            outgoing = len(self._relation_graph.get(ent.lower(), []))
-            incoming = len(self._get_incoming_relations(ent))
+            ent_lower = ent.lower()
+            outgoing = len(self._relation_graph.get(ent_lower, []))
+            if _incoming_count_map:
+                incoming = _incoming_count_map.get(ent_lower, 0)
+            else:
+                incoming = len(self._get_incoming_relations(ent))
             return outgoing + incoming
 
         def _entity_raw(ent: str) -> float:
@@ -1274,9 +2010,13 @@ class GraphRagMixin:
 
         ranked_entities = sorted(matched_entities, key=_entity_raw, reverse=True)
         ranked_entities = ranked_entities[:top_k_entities]
+        self._gr_log_profile("local_search.setup", _time.perf_counter() - _t0_setup)
 
         # --- Phase 2: Collect all candidates into a flat list ---
-        candidates: list[dict] = []
+        _t0_collect = _time.perf_counter()
+        # Store candidates as lightweight tuples to reduce per-candidate allocations:
+        # (score, tokens, type, text)
+        candidates: list[tuple[float, int, str, str]] = []
 
         # Entities
         raw_scores = [_entity_raw(e) for e in ranked_entities]
@@ -1288,38 +2028,53 @@ class GraphRagMixin:
             if not desc:
                 continue
             line = f"  - {ent} [{ent_type}]: {desc}" if ent_type else f"  - {ent}: {desc}"
-            candidates.append(
-                {
-                    "type": "entity",
-                    "score": entity_weight * (raw / max_raw),
-                    "text": line,
-                    "tokens": len(line) // 4 + 1,
-                    "key": ent.lower(),
-                }
-            )
+            candidates.append((entity_weight * (raw / max_raw), len(line) // 4 + 1, "entity", line))
 
         # Relations — collect outgoing (top 3/entity) + incoming (top 2/entity)
-        def _mutual_count(e_entry, ranked):
-            tgt = e_entry.get("target", "")
-            return sum(
-                1
-                for ee in ranked
-                if tgt in {x.get("target", "") for x in self._relation_graph.get(ee.lower(), [])}
-            )
+        _use_fast_rel_support = bool(getattr(cfg, "graph_rag_local_relation_support_fast", True))
+        if _use_fast_rel_support:
+            target_support_count: dict[str, int] = {}
+            for ee in ranked_entities:
+                tset: set[str] = set()
+                for rel in self._relation_graph.get(ee.lower(), []):
+                    tgt = rel.get("target", "")
+                    if tgt:
+                        tset.add(tgt)
+                for tgt in tset:
+                    target_support_count[tgt] = target_support_count.get(tgt, 0) + 1
+
+            def _mutual_count(e_entry, ranked):
+                tgt = e_entry.get("target", "")
+                return target_support_count.get(tgt, 0)
+
+        else:
+
+            def _mutual_count(e_entry, ranked):
+                tgt = e_entry.get("target", "")
+                return sum(
+                    1
+                    for ee in ranked
+                    if tgt
+                    in {x.get("target", "") for x in self._relation_graph.get(ee.lower(), [])}
+                )
 
         rel_candidates_raw: list[tuple[float, dict, str]] = []
         seen_rel_keys: set = set()
         for ent in ranked_entities:
             ent_lower = ent.lower()
             outgoing = self._relation_graph.get(ent_lower, [])
-            sorted_outgoing = sorted(
-                outgoing, key=lambda e: _mutual_count(e, ranked_entities), reverse=True
-            )
-            for entry in sorted_outgoing[:3]:
-                mc = _mutual_count(entry, ranked_entities)
+            out_scored: list[tuple[float, dict]] = []
+            for entry in outgoing:
+                out_scored.append((_mutual_count(entry, ranked_entities), entry))
+            out_scored.sort(key=lambda x: x[0], reverse=True)
+            for mc, entry in out_scored[:3]:
                 rel_candidates_raw.append((mc, entry, ent))
-            for entry in self._get_incoming_relations(ent)[:2]:
-                mc = _mutual_count(entry, ranked_entities)
+
+            in_scored: list[tuple[float, dict]] = []
+            for entry in self._get_incoming_relations(ent):
+                in_scored.append((_mutual_count(entry, ranked_entities), entry))
+            in_scored.sort(key=lambda x: x[0], reverse=True)
+            for mc, entry in in_scored[:2]:
                 rel_candidates_raw.append((mc, entry, ent))
 
         # Sort by mutual count, cap at top_k_relationships, normalize
@@ -1340,14 +2095,7 @@ class GraphRagMixin:
                 continue
             seen_rel_keys.add(rel_key)
             within = (mc + 1) / (max_mutual + 1)
-            candidates.append(
-                {
-                    "type": "relation",
-                    "score": relation_weight * within,
-                    "text": line,
-                    "tokens": len(line) // 4 + 1,
-                }
-            )
+            candidates.append((relation_weight * within, len(line) // 4 + 1, "relation", line))
 
         # Communities — finest level, deduplicated by summary_key
         if self._community_levels and self._community_summaries:
@@ -1384,54 +2132,104 @@ class GraphRagMixin:
             for rank, ctext, _ in community_raws:
                 within = rank / max_rank
                 candidates.append(
-                    {
-                        "type": "community",
-                        "score": community_weight * within,
-                        "text": ctext,
-                        "tokens": len(ctext) // 4 + 1,
-                    }
+                    (community_weight * within, len(ctext) // 4 + 1, "community", ctext)
                 )
+
+        # Early cut-off: if current highest-scored candidates already fill budget and
+        # all selected scores are strictly above max text-unit score, skip text-unit fetch.
+        _skip_text_units = False
+        if (
+            bool(getattr(cfg, "graph_rag_local_early_cutoff", True))
+            and candidates
+            and total_budget > 0
+        ):
+            _factor = float(getattr(cfg, "graph_rag_local_early_cutoff_factor", 0.2))
+            if _factor < 0.0:
+                _factor = 0.0
+            _ordered = sorted(candidates, key=lambda c: c[0], reverse=True)
+            _used_probe = 0
+            _min_score = None
+            for _c in _ordered:
+                _tok = _c[1]
+                if _used_probe + _tok <= total_budget:
+                    _used_probe += _tok
+                    _min_score = _c[0] if _min_score is None else min(_min_score, _c[0])
+            # If the selected score floor is above text-unit max score with a margin,
+            # lower-scored text-unit candidates cannot improve the final selection.
+            if (
+                _used_probe >= total_budget
+                and _min_score is not None
+                and _min_score >= (text_unit_weight * (1.0 + _factor))
+            ):
+                _skip_text_units = True
 
         # Text units — from entity chunk_ids, cap at 20, rank by relation count
-        seen_chunks: set = set()
-        text_unit_ids_all: list[str] = []
-        for ent in ranked_entities:
-            node = self._entity_graph.get(ent.lower(), {})
-            chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else []
-            for cid in chunk_ids:
-                if cid not in seen_chunks:
-                    seen_chunks.add(cid)
-                    text_unit_ids_all.append(cid)
+        if not _skip_text_units:
+            seen_chunks: set = set()
+            text_unit_ids_all: list[str] = []
+            for ent in ranked_entities:
+                node = self._entity_graph.get(ent.lower(), {})
+                chunk_ids = node.get("chunk_ids", []) if isinstance(node, dict) else []
+                for cid in chunk_ids:
+                    if cid not in seen_chunks:
+                        seen_chunks.add(cid)
+                        text_unit_ids_all.append(cid)
+                    if len(text_unit_ids_all) >= 20:
+                        break
                 if len(text_unit_ids_all) >= 20:
                     break
-            if len(text_unit_ids_all) >= 20:
-                break
 
-        def _tu_rel_count(cid: str) -> int:
-            return len(self._text_unit_relation_map.get(cid, []))
+            def _tu_rel_count(cid: str) -> int:
+                return len(self._text_unit_relation_map.get(cid, []))
 
-        max_rel = max((_tu_rel_count(c) for c in text_unit_ids_all), default=0)
-        for cid in text_unit_ids_all:
-            try:
-                docs = self.vector_store.get_by_ids([cid])
-                if not docs:
-                    continue
-                text_snippet = docs[0].get("text", "")[:200].strip()
-                if not text_snippet:
-                    continue
-                line = f"  [{cid}] {text_snippet}..."
-                rc = _tu_rel_count(cid)
-                within = (rc + 1) / (max_rel + 1)
-                candidates.append(
-                    {
-                        "type": "text_unit",
-                        "score": text_unit_weight * within,
-                        "text": line,
-                        "tokens": len(line) // 4 + 1,
-                    }
-                )
-            except Exception:
-                pass
+            max_rel = max((_tu_rel_count(c) for c in text_unit_ids_all), default=0)
+            if text_unit_ids_all:
+                try:
+                    _batch_fetch = bool(getattr(cfg, "graph_rag_local_batch_fetch", True))
+                    if _batch_fetch:
+                        docs_all = self.vector_store.get_by_ids(text_unit_ids_all)
+                        doc_map = {}
+                        if isinstance(docs_all, list):
+                            # Preferred path: fetch by document id when available.
+                            for d in docs_all:
+                                if isinstance(d, dict) and d.get("id"):
+                                    doc_map[str(d.get("id"))] = d
+                            # Backward-compatible fallback: some stores return docs without id but
+                            # preserve order for the requested ids.
+                            if not doc_map and len(docs_all) == len(text_unit_ids_all):
+                                for _cid, _doc in zip(text_unit_ids_all, docs_all):
+                                    if isinstance(_doc, dict):
+                                        doc_map[_cid] = _doc
+                        _iter_ids = text_unit_ids_all
+                        _fetch = lambda _cid: doc_map.get(_cid)
+                    else:
+                        _iter_ids = text_unit_ids_all
+                        _fetch = lambda _cid: None
+                    for cid in _iter_ids:
+                        if _batch_fetch:
+                            doc = _fetch(cid)
+                        else:
+                            docs_one = self.vector_store.get_by_ids([cid])
+                            doc = docs_one[0] if docs_one else None
+                        if not doc:
+                            continue
+                        text_snippet = doc.get("text", "")[:200].strip()
+                        if not text_snippet:
+                            continue
+                        line = f"  [{cid}] {text_snippet}..."
+                        rc = _tu_rel_count(cid)
+                        within = (rc + 1) / (max_rel + 1)
+                        candidates.append(
+                            (
+                                text_unit_weight * within,
+                                len(line) // 4 + 1,
+                                "text_unit",
+                                line,
+                            )
+                        )
+                except Exception:
+                    pass
+        self._gr_log_profile("local_search.collect", _time.perf_counter() - _t0_collect)
 
         # Claims — high-signal factual assertions, fixed score
         if self._claims_graph:
@@ -1445,24 +2243,19 @@ class GraphRagMixin:
                             if desc:
                                 claim_lines.append(f"  - [{status}] {desc}")
             for line in claim_lines[:10]:
-                candidates.append(
-                    {
-                        "type": "claim",
-                        "score": entity_weight * 1.0,
-                        "text": line,
-                        "tokens": len(line) // 4 + 1,
-                    }
-                )
+                candidates.append((entity_weight * 1.0, len(line) // 4 + 1, "claim", line))
 
         # --- Phase 3: Sort and greedy-fill ---
-        candidates.sort(key=lambda c: c["score"], reverse=True)
-        selected: list[dict] = []
+        _t0_select = _time.perf_counter()
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        selected: list[tuple[float, int, str, str]] = []
         used = 0
         for c in candidates:
-            if used + c["tokens"] <= total_budget:
+            if used + c[1] <= total_budget:
                 selected.append(c)
-                used += c["tokens"]
+                used += c[1]
             # continue (not break) — smaller items later may still fit
+        self._gr_log_profile("local_search.select", _time.perf_counter() - _t0_select)
 
         # --- Phase 4: Reassemble into section-formatted output ---
         by_type: dict[str, list[str]] = {
@@ -1473,7 +2266,7 @@ class GraphRagMixin:
             "claim": [],
         }
         for c in selected:
-            by_type[c["type"]].append(c["text"])
+            by_type[c[2]].append(c[3])
 
         parts: list[str] = []
         if by_type["entity"]:
@@ -1487,7 +2280,15 @@ class GraphRagMixin:
         if by_type["claim"]:
             parts.append("**Claims / Facts:**\n" + "\n".join(by_type["claim"]))
 
-        return "\n\n".join(parts)
+        out = "\n\n".join(parts)
+        self._gr_log_profile(
+            "local_search.total",
+            _time.perf_counter() - _t0_total,
+            matched=len(matched_entities),
+            candidates=len(candidates),
+            selected=len(selected),
+        )
+        return out
 
     def _entity_matches(self, q_entity: str, g_entity: str) -> float:
         """Return Jaccard-based match score between 0.0 and 1.0."""
@@ -1546,7 +2347,15 @@ class GraphRagMixin:
                 "targeted factual lookup? Answer only YES or NO.\n\nQuestion: " + query
             )
             try:
-                ans = self.llm.complete(prompt, max_tokens=5).strip().upper()
+                ans = (
+                    self._gr_llm_complete_cached(
+                        "query_router_llm",
+                        prompt,
+                        max_tokens=5,
+                    )
+                    .strip()
+                    .upper()
+                )
                 return ans.startswith("Y")
             except Exception:
                 return False
@@ -1842,13 +2651,31 @@ class GraphRagMixin:
           {"name": str, "type": str, "description": str}
         Returns an empty list on failure or when the LLM produces no output.
         """
+        import time as _time
+
+        _t0 = _time.perf_counter()
+        _depth = getattr(self.config, "graph_rag_depth", "standard")
+        _ner_backend = getattr(self.config, "graph_rag_ner_backend", "llm")
+        _cache_key = f"{_depth}|{_ner_backend}|{self._gr_text_hash(text[:3000])}"
+        if getattr(self.config, "graph_rag_extraction_cache", True):
+            _cached = self._gr_cache_get("entities", _cache_key)
+            if _cached is not None:
+                self._gr_log_profile("extract_entities(cache_hit)", _time.perf_counter() - _t0)
+                return _cached
+
         # A3: light tier — skip LLM entirely
-        if getattr(self.config, "graph_rag_depth", "standard") == "light":
-            return self._extract_entities_light(text)
+        if _depth == "light":
+            _out = self._extract_entities_light(text)
+            self._gr_cache_put("entities", _cache_key, _out)
+            self._gr_log_profile("extract_entities(light)", _time.perf_counter() - _t0)
+            return _out
 
         # GLiNER fast-path — skip LLM for NER when backend is "gliner"
-        if getattr(self.config, "graph_rag_ner_backend", "llm") == "gliner":
-            return self._extract_entities_gliner(text)
+        if _ner_backend == "gliner":
+            _out = self._extract_entities_gliner(text)
+            self._gr_cache_put("entities", _cache_key, _out)
+            self._gr_log_profile("extract_entities(gliner)", _time.perf_counter() - _t0)
+            return _out
 
         prompt = (
             "Extract the key named entities from the following text.\n"
@@ -1859,8 +2686,10 @@ class GraphRagMixin:
             + text[:3000]
         )
         try:
-            raw = self.llm.complete(
-                prompt, system_prompt="You are a named entity extraction specialist."
+            raw = self._gr_llm_complete_cached(
+                "extract_entities_llm",
+                prompt,
+                system_prompt="You are a named entity extraction specialist.",
             )
             entities = []
             for line in raw.splitlines():
@@ -1896,8 +2725,12 @@ class GraphRagMixin:
                             "description": "",
                         }
                     )
-            return entities[:20]
+            _out = entities[:20]
+            self._gr_cache_put("entities", _cache_key, _out)
+            self._gr_log_profile("extract_entities(llm)", _time.perf_counter() - _t0)
+            return _out
         except Exception:
+            self._gr_log_profile("extract_entities(error)", _time.perf_counter() - _t0)
             return []
 
     def _extract_relations(self, text: str) -> list[dict]:
@@ -1907,13 +2740,30 @@ class GraphRagMixin:
         {"subject": str, "relation": str, "object": str, "description": str}.
         Returns an empty list on failure or when the LLM produces no output.
         """
+        import time as _time
+
+        _t0 = _time.perf_counter()
+        _depth = getattr(self.config, "graph_rag_depth", "standard")
+        _rel_backend = getattr(self.config, "graph_rag_relation_backend", "llm")
+        _cache_key = f"{_depth}|{_rel_backend}|{self._gr_text_hash(text[:3000])}"
+        if getattr(self.config, "graph_rag_extraction_cache", True):
+            _cached = self._gr_cache_get("relations", _cache_key)
+            if _cached is not None:
+                self._gr_log_profile("extract_relations(cache_hit)", _time.perf_counter() - _t0)
+                return _cached
+
         # A3: light tier skips all relation extraction
-        if getattr(self.config, "graph_rag_depth", "standard") == "light":
+        if _depth == "light":
+            self._gr_cache_put("relations", _cache_key, [])
+            self._gr_log_profile("extract_relations(light_skip)", _time.perf_counter() - _t0)
             return []
 
         # REBEL fast-path — skip LLM when backend is "rebel"
-        if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
-            return self._extract_relations_rebel(text)
+        if _rel_backend == "rebel":
+            _out = self._extract_relations_rebel(text)
+            self._gr_cache_put("relations", _cache_key, _out)
+            self._gr_log_profile("extract_relations(rebel)", _time.perf_counter() - _t0)
+            return _out
 
         prompt = (
             "Extract key relationships from the following text.\n"
@@ -1923,8 +2773,10 @@ class GraphRagMixin:
             "No bullets or extra text. If no clear relationships, output nothing.\n\n" + text[:3000]
         )
         try:
-            raw = self.llm.complete(
-                prompt, system_prompt="You are a knowledge graph extraction specialist."
+            raw = self._gr_llm_complete_cached(
+                "extract_relations_llm",
+                prompt,
+                system_prompt="You are a knowledge graph extraction specialist.",
             )
             triples = []
             for line in raw.splitlines():
@@ -1966,8 +2818,12 @@ class GraphRagMixin:
                             "strength": 5,
                         }
                     )
-            return triples[:15]
+            _out = triples[:15]
+            self._gr_cache_put("relations", _cache_key, _out)
+            self._gr_log_profile("extract_relations(llm)", _time.perf_counter() - _t0)
+            return _out
         except Exception:
+            self._gr_log_profile("extract_relations(error)", _time.perf_counter() - _t0)
             return []
 
     def _embed_entities(self, entity_keys: list) -> None:
@@ -2031,7 +2887,8 @@ class GraphRagMixin:
             "No bullets or extra text. If no clear claims, output nothing.\n\n" + text[:3000]
         )
         try:
-            raw = self.llm.complete(
+            raw = self._gr_llm_complete_cached(
+                "extract_claims_llm",
                 prompt,
                 system_prompt="You are a fact extraction specialist.",
             )
@@ -2231,7 +3088,8 @@ class GraphRagMixin:
                 "Output only the description, no preamble."
             )
             try:
-                result = self.llm.complete(
+                result = self._gr_llm_complete_cached(
+                    "canonicalize_entity_desc",
                     prompt,
                     system_prompt="You are a knowledge graph curation specialist.",
                 )
@@ -2274,7 +3132,8 @@ class GraphRagMixin:
                 "Output only the description, no preamble."
             )
             try:
-                result = self.llm.complete(
+                result = self._gr_llm_complete_cached(
+                    "canonicalize_relation_desc",
                     prompt,
                     system_prompt="You are a knowledge graph curation specialist.",
                 )

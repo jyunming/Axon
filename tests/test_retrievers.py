@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
+import pytest
+
 from axon.retrievers import BM25Retriever, weighted_score_fusion
 
 
@@ -105,6 +107,32 @@ class TestBM25Retriever:
         r.search("word1")
         assert r._dirty is False
         assert r.bm25 is not None
+
+    def test_rust_engine_requires_capability_when_fallback_disabled(self, tmp_path):
+        class _Bridge:
+            def can_bm25(self):
+                return False
+
+        with patch("axon.retrievers.get_rust_bridge", return_value=_Bridge()):
+            with pytest.raises(RuntimeError, match="Rust BM25 capability is unavailable"):
+                BM25Retriever(
+                    storage_path=str(tmp_path),
+                    engine="rust",
+                    rust_fallback_enabled=False,
+                )
+
+    def test_rust_engine_falls_back_to_python_when_enabled(self, tmp_path):
+        class _Bridge:
+            def can_bm25(self):
+                return False
+
+        with patch("axon.retrievers.get_rust_bridge", return_value=_Bridge()):
+            r = BM25Retriever(
+                storage_path=str(tmp_path),
+                engine="rust",
+                rust_fallback_enabled=True,
+            )
+            assert r._bm25_backend == "python"
 
 
 class TestWeightedScoreFusion:
