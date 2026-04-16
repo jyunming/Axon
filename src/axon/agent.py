@@ -1418,6 +1418,8 @@ def _tool_run_shell(args: dict) -> str:
             text=True,
             timeout=timeout,
             cwd=os.getcwd(),
+            encoding="utf-8",
+            errors="replace",
         )
         success = result.returncode == 0
         has_stderr = bool(result.stderr.strip())

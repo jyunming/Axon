@@ -1816,7 +1816,7 @@ def _expand_at_files(text: str) -> str:
 
         return m.group(0)
 
-    return re.sub(r"@(\S+)", _replace, text)
+    return re.sub(r"(?<!\\S)@(\\S+)", _replace, text)
 
 
 # ---------------------------------------------------------------------------
@@ -3507,6 +3507,60 @@ def _interactive_repl(
 
                             print(f"  GraphRAG mode set to '{rag_val.lower()}'")
 
+                    elif rag_opt in ("max-hops", "max_hops", "graph-rag-max-hops"):
+                        if not rag_val:
+                            _cur = getattr(brain.config, "graph_rag_max_hops", 2)
+                            print(f"  graph_rag_max_hops = {_cur}")
+                            print("  Usage: /rag max-hops <int>  (0 = direct matches only)")
+                        else:
+                            try:
+                                _hops = int(rag_val)
+                                if _hops < 0:
+                                    raise ValueError
+                                brain.config.graph_rag_max_hops = _hops
+                                print(f"  GraphRAG max hops set to {_hops}")
+                            except ValueError:
+                                print("  Usage: /rag max-hops <non-negative integer>")
+
+                    elif rag_opt in ("hop-decay", "hop_decay", "graph-rag-hop-decay"):
+                        if not rag_val:
+                            _cur = getattr(brain.config, "graph_rag_hop_decay", 0.7)
+                            print(f"  graph_rag_hop_decay = {_cur}")
+                            print("  Usage: /rag hop-decay <float 0.0–1.0>")
+                        else:
+                            try:
+                                _decay = float(rag_val)
+                                if not (0.0 <= _decay <= 1.0):
+                                    raise ValueError
+                                brain.config.graph_rag_hop_decay = _decay
+                                print(f"  GraphRAG hop decay set to {_decay}")
+                            except ValueError:
+                                print("  Usage: /rag hop-decay <float between 0.0 and 1.0>")
+
+                    elif rag_opt in (
+                        "distance-weighted",
+                        "distance_weighted",
+                        "graph-rag-distance-weighted",
+                    ):
+                        _choices = {
+                            "on": True,
+                            "true": True,
+                            "1": True,
+                            "off": False,
+                            "false": False,
+                            "0": False,
+                        }
+                        if rag_val.lower() not in _choices:
+                            print("  Usage: /rag distance-weighted on|off")
+                        else:
+                            brain.config.graph_rag_distance_weighted = _choices[rag_val.lower()]
+                            _state = (
+                                "ON (Dijkstra)"
+                                if brain.config.graph_rag_distance_weighted
+                                else "OFF (BFS)"
+                            )
+                            print(f"  GraphRAG distance weighted → {_state}")
+
                     elif rag_opt == "rerank-model":
                         if not rag_val:
                             print(f"  Current reranker: {brain.config.reranker_model}")
@@ -3543,7 +3597,8 @@ def _interactive_repl(
                         print(
                             f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, "
                             f"hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag, "
-                            f"sentence-window, sentence-window-size, crag-lite, code-graph, graph-rag-mode"
+                            f"sentence-window, sentence-window-size, crag-lite, code-graph, graph-rag-mode, "
+                            f"max-hops, hop-decay, distance-weighted"
                         )
 
             elif cmd == "/llm":

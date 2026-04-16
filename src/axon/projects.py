@@ -911,14 +911,14 @@ def delete_project(name: str) -> None:
     for attempt in range(3):
         try:
             shutil.rmtree(root)
-
             break
-
         except PermissionError:
             if attempt == 2:
                 raise
-
             time.sleep(0.5)
+        except FileNotFoundError:
+            # Another process deleted it concurrently — treat as success
+            break
 
     # If this was the active project, reset to default
 
