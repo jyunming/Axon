@@ -280,9 +280,6 @@ class TestSymbolChannelSearch:
         brain.bm25 = mock_bm25
 
         class _Bridge:
-            def can_symbol_index(self):
-                return False
-
             def can_symbol_search(self):
                 return True
 

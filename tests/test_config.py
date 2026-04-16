@@ -109,6 +109,30 @@ class TestAxonConfig:
 
         assert config.dedup_on_ingest is False
 
+    def test_yaml_rag_rust_engines(self, tmp_path):
+        """Rust engine toggles are loaded from rag section in YAML."""
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(
+                {
+                    "rag": {
+                        "ingest_engine": "rust",
+                        "bm25_engine": "rust",
+                        "symbol_index_engine": "rust",
+                        "rust_fallback_enabled": False,
+                        "rust_batch_size": 1024,
+                    }
+                },
+                f,
+            )
+
+        config = AxonConfig.load(str(config_path))
+        assert config.ingest_engine == "rust"
+        assert config.bm25_engine == "rust"
+        assert config.symbol_index_engine == "rust"
+        assert config.rust_fallback_enabled is False
+        assert config.rust_batch_size == 1024
+
     def test_yaml_query_decompose_and_compress(self, tmp_path):
         """query_decompose and compress_context are loaded from their YAML sections."""
 

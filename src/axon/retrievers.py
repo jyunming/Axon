@@ -11,6 +11,8 @@ except ImportError:
 
 from axon.rust_bridge import get_rust_bridge
 
+from axon.rust_bridge import get_rust_bridge
+
 logger = logging.getLogger("Axon.Retrievers")
 
 
