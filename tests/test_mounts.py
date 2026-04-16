@@ -2,7 +2,6 @@
 
 
 import json
-import unittest.mock as mock
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -15,7 +14,7 @@ from pathlib import Path
 
 
 def _make_user_dir(tmp_path: Path, username: str) -> Path:
-    user_dir = tmp_path / username / "AxonStore"
+    user_dir = tmp_path / "AxonStore" / username
 
     user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -25,7 +24,7 @@ def _make_user_dir(tmp_path: Path, username: str) -> Path:
 
 
 def _make_project_dir(user_dir: Path, project: str) -> Path:
-    proj = user_dir / "Workspace" / project
+    proj = user_dir / project
 
     proj.mkdir(parents=True, exist_ok=True)
 
@@ -604,15 +603,13 @@ class TestRedeemShareKeyDescriptor:
     """Verify descriptor creation works on all platforms (Windows, Linux, macOS)."""
 
     def _make_user_dir(self, tmp_path: Path, username: str) -> Path:
-        user_dir = tmp_path / username / "AxonStore"
+        user_dir = tmp_path / "AxonStore" / username
 
         (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
 
-        workspace = user_dir / "Workspace"
+        (user_dir / "myproject" / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
-        (workspace / "myproject" / "vector_data").mkdir(parents=True, exist_ok=True)
-
-        (workspace / "myproject" / "meta.json").write_text(
+        (user_dir / "myproject" / "meta.json").write_text(
             json.dumps({"name": "myproject", "project_id": "ns_myproject"}),
             encoding="utf-8",
         )
@@ -627,10 +624,9 @@ class TestRedeemShareKeyDescriptor:
 
         grantee_dir = self._make_user_dir(tmp_path, "bob")
 
-        with mock.patch("getpass.getuser", side_effect=["alice", "bob"]):
-            gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+        gen = shares.generate_share_key(owner_dir, "myproject", "bob")
 
-            result = shares.redeem_share_key(grantee_dir, gen["share_string"])
+        result = shares.redeem_share_key(grantee_dir, gen["share_string"])
 
         assert "descriptor" in result
 
@@ -661,10 +657,9 @@ class TestRedeemShareKeyDescriptor:
 
         grantee_dir = self._make_user_dir(tmp_path, "bob")
 
-        with mock.patch("getpass.getuser", side_effect=["alice", "bob"]):
-            gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+        gen = shares.generate_share_key(owner_dir, "myproject", "bob")
 
-            result = shares.redeem_share_key(grantee_dir, gen["share_string"])
+        result = shares.redeem_share_key(grantee_dir, gen["share_string"])
 
         assert result["descriptor"]["project_id"] == "ns_myproject"
 
@@ -676,14 +671,13 @@ class TestRedeemShareKeyDescriptor:
 
         grantee_dir = self._make_user_dir(tmp_path, "bob")
 
-        with mock.patch("getpass.getuser", side_effect=["alice", "bob", "bob"]):
-            gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+        gen = shares.generate_share_key(owner_dir, "myproject", "bob")
 
-            shares.redeem_share_key(grantee_dir, gen["share_string"])
+        shares.redeem_share_key(grantee_dir, gen["share_string"])
 
-            # Redeem again — should not error; descriptor overwritten
+        # Redeem again — should not error; descriptor overwritten
 
-            shares.redeem_share_key(grantee_dir, gen["share_string"])
+        shares.redeem_share_key(grantee_dir, gen["share_string"])
 
         loaded = load_mount_descriptor(grantee_dir, "alice_myproject")
 
@@ -696,10 +690,9 @@ class TestRedeemShareKeyDescriptor:
 
         grantee_dir = self._make_user_dir(tmp_path, "bob")
 
-        with mock.patch("getpass.getuser", side_effect=["alice", "bob"]):
-            gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+        gen = shares.generate_share_key(owner_dir, "myproject", "bob")
 
-            result = shares.redeem_share_key(grantee_dir, gen["share_string"])
+        result = shares.redeem_share_key(grantee_dir, gen["share_string"])
 
         assert result["mount_name"] == "alice_myproject"
 

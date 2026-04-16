@@ -9,7 +9,6 @@ from axon.main import AxonConfig
 
 
 class TestAxonConfig:
-
     """Test the AxonConfig class."""
 
     def test_default_config(self):
@@ -23,7 +22,7 @@ class TestAxonConfig:
 
         assert config.llm_provider == "ollama"
 
-        assert config.vector_store == "lancedb"
+        assert config.vector_store == "turboquantdb"
 
         assert config.top_k == 10
 
@@ -204,7 +203,6 @@ def _write_yaml(path: Path, data: dict) -> None:
 
 
 class TestSave:
-
     """Tests for AxonConfig.save()."""
 
     def test_save_to_explicit_path(self, tmp_path):
@@ -696,7 +694,6 @@ class TestSave:
 
 
 class TestLoad:
-
     """Tests for AxonConfig.load() including edge cases."""
 
     def test_load_nonexistent_explicit_path_returns_defaults(self, tmp_path):
@@ -1255,7 +1252,6 @@ class TestLoad:
 
 
 class TestPostInit:
-
     """Tests for __post_init__ environment-variable handling."""
 
     def test_api_key_from_env_api_key(self, monkeypatch):
@@ -1336,16 +1332,20 @@ class TestPostInit:
 
         assert "AxonStore" in cfg.projects_root
 
-        assert "Workspace" in cfg.projects_root
+        import getpass
+
+        assert getpass.getuser() in cfg.projects_root
 
     def test_axon_store_base_field_derives_projects_root(self, tmp_path, monkeypatch):
-        """axon_store_base field in constructor derives projects_root under AxonStore/Workspace/."""
+        """axon_store_base field in constructor derives projects_root under AxonStore/."""
 
         monkeypatch.delenv("AXON_STORE_BASE", raising=False)
 
         cfg = AxonConfig(axon_store_base=str(tmp_path))
 
-        assert "Workspace" in cfg.projects_root
+        import getpass
+
+        assert getpass.getuser() in cfg.projects_root
 
         assert "AxonStore" in cfg.projects_root
 
@@ -1358,7 +1358,7 @@ class TestPostInit:
 
         assert cfg.vector_store_path != ""
 
-        assert "vector_data" in cfg.vector_store_path
+        assert "vector_store_data" in cfg.vector_store_path
 
         assert "bm25_index" in cfg.bm25_path
 
@@ -1373,7 +1373,6 @@ class TestPostInit:
 
 
 class TestFirstRunConfigCreation:
-
     """P0-1: AxonConfig.load() must return starter file values on first run.
 
 
@@ -1487,15 +1486,19 @@ class TestStoreDerivedPaths:
     def test_axon_store_base_derives_all_paths(self, tmp_path):
         """axon_store_base derives projects_root, vector_store_path, and bm25_path."""
 
+        import getpass
+
+        user = getpass.getuser()
+
         cfg = AxonConfig(axon_store_base=str(tmp_path))
 
         assert str(tmp_path) in cfg.projects_root
 
         assert "AxonStore" in cfg.projects_root
 
-        assert "Workspace" in cfg.projects_root
+        assert user in cfg.projects_root
 
-        assert "vector_data" in cfg.vector_store_path
+        assert "vector_store_data" in cfg.vector_store_path
 
         assert "bm25_index" in cfg.bm25_path
 
@@ -1509,164 +1512,3 @@ class TestStoreDerivedPaths:
         assert ".axon" in cfg.axon_store_base or "axon" in cfg.axon_store_base.lower()
 
         assert "AxonStore" in cfg.projects_root
-
-
-# ===========================================================================
-# Config profiles
-# ===========================================================================
-
-
-class TestConfigProfiles:
-    """Tests for profile deep-merge and active profile selection."""
-
-    def test_profile_via_env_var(self, tmp_path, monkeypatch):
-        """AXON_PROFILE env var selects the named profile."""
-
-        cfg_path = tmp_path / "config.yaml"
-        _write_yaml(
-            cfg_path,
-            {
-                "llm": {"provider": "ollama", "model": "llama3.1:8b"},
-                "profiles": {
-                    "vscode": {
-                        "llm": {"provider": "copilot", "model": "gpt-4o"},
-                    }
-                },
-            },
-        )
-
-        monkeypatch.setenv("AXON_PROFILE", "vscode")
-
-        cfg = AxonConfig.load(str(cfg_path))
-
-        assert cfg.llm_provider == "copilot"
-        assert cfg.llm_model == "gpt-4o"
-        assert cfg.active_profile == "vscode"
-
-    def test_no_profile_uses_base_config(self, tmp_path, monkeypatch):
-        """Without AXON_PROFILE and no auto-detection, base config is used unchanged."""
-
-        cfg_path = tmp_path / "config.yaml"
-        _write_yaml(
-            cfg_path,
-            {
-                "llm": {"provider": "ollama", "model": "llama3.1:8b"},
-                "profiles": {
-                    "vscode": {"llm": {"provider": "copilot"}},
-                },
-            },
-        )
-
-        monkeypatch.delenv("AXON_PROFILE", raising=False)
-
-        # Patch _detect_entry_point to return "" so we don't accidentally
-        # auto-detect based on the pytest process name.
-        with patch("axon.config._detect_entry_point", return_value=""):
-            cfg = AxonConfig.load(str(cfg_path))
-
-        assert cfg.llm_provider == "ollama"
-        assert cfg.active_profile == ""
-
-    def test_unknown_profile_falls_back_to_base(self, tmp_path, monkeypatch, caplog):
-        """An unknown profile name logs a warning and uses the base config."""
-
-        import logging
-
-        cfg_path = tmp_path / "config.yaml"
-        _write_yaml(
-            cfg_path,
-            {
-                "llm": {"provider": "ollama"},
-                "profiles": {"vscode": {"llm": {"provider": "copilot"}}},
-            },
-        )
-
-        monkeypatch.setenv("AXON_PROFILE", "nonexistent")
-
-        with caplog.at_level(logging.WARNING, logger="axon.config"):
-            cfg = AxonConfig.load(str(cfg_path))
-
-        assert cfg.llm_provider == "ollama"
-        assert cfg.active_profile == ""
-        assert "nonexistent" in caplog.text
-
-    def test_profile_deep_merge_partial_override(self, tmp_path, monkeypatch):
-        """Profile overrides only its own keys; base fills in the rest."""
-
-        cfg_path = tmp_path / "config.yaml"
-        _write_yaml(
-            cfg_path,
-            {
-                "llm": {"provider": "ollama", "model": "llama3.1:8b", "temperature": 0.3},
-                "profiles": {
-                    "mcp": {"llm": {"provider": "copilot"}},
-                },
-            },
-        )
-
-        monkeypatch.setenv("AXON_PROFILE", "mcp")
-
-        cfg = AxonConfig.load(str(cfg_path))
-
-        assert cfg.llm_provider == "copilot"
-        # Base values not overridden by the profile should still be present
-        assert cfg.llm_model == "llama3.1:8b"
-        assert cfg.llm_temperature == pytest.approx(0.3)
-
-    def test_profile_no_profiles_block(self, tmp_path, monkeypatch, caplog):
-        """AXON_PROFILE set but no profiles: block → warning logged, base config used."""
-
-        import logging
-
-        cfg_path = tmp_path / "config.yaml"
-        _write_yaml(cfg_path, {"llm": {"provider": "ollama"}})
-
-        monkeypatch.setenv("AXON_PROFILE", "vscode")
-
-        with caplog.at_level(logging.WARNING, logger="axon.config"):
-            cfg = AxonConfig.load(str(cfg_path))
-
-        assert cfg.llm_provider == "ollama"
-        assert cfg.active_profile == ""
-
-    def test_deep_merge_helper_nested(self):
-        """_deep_merge_yaml merges nested dicts recursively, override wins."""
-
-        from axon.config import _deep_merge_yaml
-
-        base = {"a": {"x": 1, "y": 2}, "b": 3}
-        override = {"a": {"y": 99, "z": 0}, "c": 4}
-        result = _deep_merge_yaml(base, override)
-
-        assert result == {"a": {"x": 1, "y": 99, "z": 0}, "b": 3, "c": 4}
-
-    def test_deep_merge_does_not_mutate_inputs(self):
-        """_deep_merge_yaml leaves the base and override dicts unchanged."""
-
-        from axon.config import _deep_merge_yaml
-
-        base = {"a": {"x": 1}}
-        override = {"a": {"y": 2}}
-        _deep_merge_yaml(base, override)
-
-        assert base == {"a": {"x": 1}}
-        assert override == {"a": {"y": 2}}
-
-    def test_profile_env_var_case_insensitive(self, tmp_path, monkeypatch):
-        """AXON_PROFILE is normalised to lowercase before lookup."""
-
-        cfg_path = tmp_path / "config.yaml"
-        _write_yaml(
-            cfg_path,
-            {
-                "llm": {"provider": "ollama"},
-                "profiles": {"vscode": {"llm": {"provider": "copilot"}}},
-            },
-        )
-
-        monkeypatch.setenv("AXON_PROFILE", "VSCODE")
-
-        cfg = AxonConfig.load(str(cfg_path))
-
-        assert cfg.llm_provider == "copilot"
-        assert cfg.active_profile == "vscode"

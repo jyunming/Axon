@@ -10,7 +10,7 @@ Each project gets its own isolated vector store and BM25 index under:
     ~/.axon/projects/<name>/
 
 
-        vector_data/   — vector store (provider-neutral)
+        vector_store_data/  — vector store data (tqdb, lancedb, chroma, qdrant)
 
 
         bm25_index/    — BM25 JSON corpus
@@ -359,15 +359,9 @@ def project_dir(name: str) -> Path:
 
 
 def project_vector_path(name: str) -> str:
-    """Return the absolute path to the project's vector store directory (``vector_data/``)."""
+    """Return the absolute path to the project's vector store directory (``vector_store_data/``)."""
 
-    d = project_dir(name)
-    # Backward-compat: silently migrate existing lancedb_data → vector_data
-    legacy = d / "lancedb_data"
-    target = d / "vector_data"
-    if legacy.exists() and not target.exists():
-        legacy.rename(target)
-    return str(target)
+    return str(project_dir(name) / "vector_store_data")
 
 
 def project_bm25_path(name: str) -> str:
@@ -440,7 +434,7 @@ def _ensure_single_project(name: str, description: str) -> Path:
 
     root = project_dir(name)
 
-    (root / "vector_data").mkdir(parents=True, exist_ok=True)
+    (root / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
 
@@ -954,13 +948,7 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
 
     """
 
-    # Backward-compat: silently migrate existing lancedb_data → vector_data
-    _old_vd = root / "lancedb_data"
-    _new_vd = root / "vector_data"
-    if _old_vd.exists() and not _new_vd.exists():
-        _old_vd.rename(_new_vd)
-
-    (root / "vector_data").mkdir(parents=True, exist_ok=True)
+    (root / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
 

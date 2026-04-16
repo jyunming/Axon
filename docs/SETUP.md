@@ -544,6 +544,39 @@ rerank:
   model: cross-encoder/ms-marco-MiniLM-L-6-v2
 ```
 
+### TurboQuantDB Setup
+
+TurboQuantDB (`tqdb` on PyPI) is the **default vector store** — fastest ingest, smallest disk, no external service needed. It is bundled with `axon-rag` and requires no separate install step.
+
+**Manual install (if needed):**
+```bash
+pip install tqdb
+```
+
+**config.yaml:**
+```yaml
+vector_store:
+  provider: turboquantdb
+  tqdb_bits: 4                  # quantization bits: 2 | 4 | 8 (default: 4)
+  tqdb_fast_mode: false         # false = higher recall; true = faster queries
+  tqdb_rerank: true             # true = internal ANN rerank pass (improves recall)
+  # Optional tuning (omit to use TQDB defaults):
+  # tqdb_rerank_precision: null # null | "f16" | "f32" — exact reranking uses more disk
+  # tqdb_n_refinements: 5       # HNSW refinement passes; higher = better recall, slower build
+  # tqdb_alpha: 1.2             # HNSW pruning aggressiveness
+```
+
+**Preset configurations** (benchmarked on 700–5 500 chunks, dim 384–768):
+
+| Preset | bits | fast_mode | rerank | Recall@10 | p50 latency | Disk |
+|--------|------|-----------|--------|-----------|-------------|------|
+| b=4 Balanced *(default)* | 4 | false | true | 0.89 | 2.5 ms | 5.2 MB |
+| b=8 High Quality | 8 | false | true | **0.99** | 3.4 ms | 9.2 MB |
+| b=8 Fast Query | 8 | true | true | **0.99** | 1.8 ms | 9.2 MB |
+| b=2 Minimal Disk | 2 | false | true | 0.67 | 2.1 ms | 3.2 MB |
+
+> **b=4 Balanced** is the default — best recall/disk/RAM tradeoff for most workloads. Use b=8 when recall is critical, b=2 when disk is the constraint.
+
 ---
 
 ## 8. Configure .env

@@ -154,7 +154,7 @@ Your primary goal is to help the user by answering questions based on the provid
 5. **Agentic & Proactive**: Be helpful, concise, and encourage further discussion or ingestion of more data if needed.
 
 
-6. **No emoji**: Do not use emoji in your responses. Use markdown formatting (bold, lists, code blocks, headings) where it improves readability.
+6. **No emoji**: Do not use emoji in your responses. Plain text only.
 
 
 """
@@ -177,7 +177,7 @@ Your primary goal is to help the user by answering questions based on the provid
 4. **No Speculation**: Do not infer, guess, or fill gaps with outside knowledge.
 
 
-5. **No emoji**: Do not use emoji in your responses. Use markdown formatting (bold, lists, code blocks, headings) where it improves readability.
+5. **No emoji**: Do not use emoji in your responses. Plain text only.
 
 
 """
@@ -838,7 +838,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 if target and Path(target).exists():
                     paths.append(
                         (
-                            str(Path(target) / "vector_data"),
+                            str(Path(target) / "vector_store_data"),
                             str(Path(target) / "bm25_index"),
                         )
                     )
@@ -1057,7 +1057,7 @@ Your primary goal is to help the user by answering questions based on the provid
 
             target = Path(desc["target_project_dir"])
 
-            self.config.vector_store_path = str(target / "vector_data")
+            self.config.vector_store_path = str(target / "vector_store_data")
 
             self.config.bm25_path = str(target / "bm25_index")
 
@@ -3117,14 +3117,12 @@ Your primary goal is to help the user by answering questions based on the provid
                 _rel_budget = getattr(self.config, "graph_rag_relation_budget", 0)
 
                 if _rel_budget > 0 and len(_rel_chunks) > _rel_budget:
-                    import heapq as _heapq
-
-                    _rel_chunks = _heapq.nlargest(
-                        _rel_budget,
+                    _rel_chunks = sorted(
                         _rel_chunks,
                         key=lambda d: _entity_count_by_doc.get(d["id"], 0)
                         / max(len(d.get("text", "")), 1),
-                    )
+                        reverse=True,
+                    )[:_rel_budget]
 
                     logger.info(
                         f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
@@ -3407,13 +3405,6 @@ Your primary goal is to help the user by answering questions based on the provid
 
                     else:
                         self._rebuild_communities()
-
-        # Flush deferred sidecar writes (e.g., TurboQuantDB doc index) at ingest end.
-        try:
-            if hasattr(self._own_vector_store, "flush_pending_writes"):
-                self._own_vector_store.flush_pending_writes()
-        except Exception:
-            pass
 
         _progress("finalizing", chunks_total=n_chunks)
 

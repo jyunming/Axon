@@ -9,7 +9,6 @@ AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
 
 """
 
-
 import difflib
 import getpass
 import logging
@@ -88,17 +87,18 @@ llm:
 
 vector_store:
 
+  provider: turboquantdb    # turboquantdb (default) | lancedb | chroma | qdrant
 
-  # Persistent vector store for embeddings.
+  path: ~/.axon/projects/default/vector_store_data
 
-
-  # lancedb (default) requires no extra service; qdrant supports remote mode.
-
-
-  provider: lancedb
-
-
-  path: ~/.axon/projects/default/vector_data
+  # TurboQuantDB tuning (only used when provider: turboquantdb)
+  # Default preset — b=4 + rerank=True — best recall/size tradeoff for most workloads.
+  # tqdb_bits: 4            # 2 | 4 | 8  — lower = smaller disk/RAM, lower recall
+  # tqdb_rerank: true       # rerank pass after ANN (~0.5 ms overhead, improves recall)
+  # tqdb_fast_mode: false   # true = faster index build; recall unchanged with rerank=true
+  # tqdb_ef_construction: 200   # HNSW build quality (higher = better recall, slower build)
+  # tqdb_max_degree: 32         # HNSW graph degree
+  # tqdb_search_list_size: 128  # ANN candidate list size at query time
 
 
 bm25:
@@ -259,7 +259,14 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "qdrant_collection",
         "lancedb_path",
         "tqdb_bits",
-        "tqdb_compact_metadata",
+        "tqdb_fast_mode",
+        "tqdb_rerank",
+        "tqdb_rerank_precision",
+        "tqdb_ef_construction",
+        "tqdb_max_degree",
+        "tqdb_search_list_size",
+        "tqdb_alpha",
+        "tqdb_n_refinements",
     },
     "rag": {
         "hybrid_search",
@@ -339,7 +346,6 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
 
 @dataclass
 class ConfigIssue:
-
     """A single validation finding for a config.yaml field."""
 
     level: Literal["error", "warn", "info"]
@@ -364,7 +370,6 @@ class ConfigIssue:
 
 @dataclass
 class AxonConfig:
-
     """Configuration for Axon."""
 
     # Internal tracking
@@ -451,12 +456,19 @@ class AxonConfig:
 
     # Vector Store
 
-    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "lancedb"
+    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "turboquantdb"
 
     vector_store_path: str = ""
 
-    tqdb_bits: int = 8
-    tqdb_compact_metadata: bool = True
+    tqdb_bits: int = 4
+    tqdb_fast_mode: bool = False
+    tqdb_rerank: bool = True
+    tqdb_rerank_precision: str | None = None  # None | "f16" | "f32"
+    tqdb_ef_construction: int = 200
+    tqdb_max_degree: int = 32
+    tqdb_search_list_size: int = 128
+    tqdb_alpha: float | None = None  # HNSW pruning aggressiveness (None = TQDB default 1.2)
+    tqdb_n_refinements: int | None = None  # HNSW refinement passes (None = TQDB default 5)
 
     # BM25 Settings
 
@@ -524,7 +536,7 @@ class AxonConfig:
         # Respect explicitly-provided absolute paths (e.g. in tests) — only set defaults.
 
         if not self.vector_store_path or not os.path.isabs(self.vector_store_path):
-            self.vector_store_path = str(user_dir / "default" / "vector_data")
+            self.vector_store_path = str(user_dir / "default" / "vector_store_data")
 
         if not self.bm25_path or not os.path.isabs(self.bm25_path):
             self.bm25_path = str(user_dir / "default" / "bm25_index")
@@ -846,40 +858,6 @@ class AxonConfig:
     graph_rag_local_top_k_relationships: int = 10
 
     graph_rag_local_include_relationship_weight: bool = False
-    graph_rag_local_batch_fetch: bool = True
-    graph_rag_local_cached_incoming: bool = True
-    graph_rag_local_cached_incoming_counts: bool = True
-    graph_rag_extraction_cache: bool = True
-    graph_rag_extraction_cache_size: int = 5000
-    graph_rag_profile: bool = False
-    graph_rag_local_relation_support_fast: bool = True
-    graph_rag_local_entity_degree_fast: bool = True
-    graph_rag_local_early_cutoff: bool = True
-    graph_rag_local_early_cutoff_factor: float = 0.2
-    graph_rag_llm_cache: bool = True
-    graph_rag_llm_cache_size: int = 2000
-    graph_rag_global_max_map_chunks: int = 0
-    graph_rag_global_reduce_skip_if_top_score_gte: float = 95.0
-    graph_rag_global_reduce_skip_if_top_points_le: int = 1
-    graph_rag_rebuild_skip_if_unchanged: bool = True
-    graph_rag_global_answer_cache: bool = True
-    graph_rag_global_answer_cache_size: int = 500
-    graph_rag_global_map_cache: bool = True
-    graph_rag_global_map_cache_size: int = 2000
-    graph_rag_community_summary_compact_persist: bool = False
-    graph_rag_relation_compact_persist: bool = True
-    graph_rag_relation_shard_persist: bool = False
-    graph_rag_relation_shard_count: int = 16
-    graph_rag_relation_shard_parallel_writes: bool = True
-    graph_rag_relation_shard_write_workers: int = 4
-    graph_rag_relation_shard_parallel_load: bool = True
-    graph_rag_relation_shard_load_workers: int = 4
-    graph_rag_relation_shard_selective_rewrite: bool = True
-    graph_rag_relation_shard_list_manifest: bool = False
-    graph_rag_relation_shard_parallel_signatures: bool = False
-    graph_rag_relation_shard_signature_workers: int = 4
-    graph_rag_relation_pickle_cache: bool = False
-    graph_rag_relation_pickle_cache_protocol: int = 4
 
     # Unified candidate ranking weights
 
@@ -1029,13 +1007,13 @@ class AxonConfig:
 
     graph_rag_entity_min_frequency: int = 2
 
-    # Map-phase worker controls:
-    # - graph_rag_map_workers > 0: fixed dedicated pool size
-    # - graph_rag_map_workers = 0: auto mode (bounded dedicated pool by graph_rag_map_auto_workers)
-    # Set graph_rag_map_use_dedicated_pool=False to keep legacy shared-executor behavior.
+    # Dedicated thread pool size for map-reduce phase (0 = use max_workers).
+
+    # When set, _global_search_map_reduce creates an isolated pool, preventing map-reduce
+
+    # from starving the shared executor during concurrent ingest.
+
     graph_rag_map_workers: int = 0
-    graph_rag_map_auto_workers: int = 4
-    graph_rag_map_use_dedicated_pool: bool = True
 
     # Alternative NER backend. "gliner" skips LLM for entity extraction.
 
@@ -1242,8 +1220,24 @@ class AxonConfig:
 
             if "tqdb_bits" in vs:
                 config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
-            if "tqdb_compact_metadata" in vs:
-                config_dict["tqdb_compact_metadata"] = bool(vs["tqdb_compact_metadata"])
+            if "tqdb_fast_mode" in vs:
+                config_dict["tqdb_fast_mode"] = bool(vs["tqdb_fast_mode"])
+            if "tqdb_rerank" in vs:
+                config_dict["tqdb_rerank"] = bool(vs["tqdb_rerank"])
+            if "tqdb_ef_construction" in vs:
+                config_dict["tqdb_ef_construction"] = int(vs["tqdb_ef_construction"])
+            if "tqdb_max_degree" in vs:
+                config_dict["tqdb_max_degree"] = int(vs["tqdb_max_degree"])
+            if "tqdb_search_list_size" in vs:
+                config_dict["tqdb_search_list_size"] = int(vs["tqdb_search_list_size"])
+            if "tqdb_rerank_precision" in vs:
+                config_dict["tqdb_rerank_precision"] = vs["tqdb_rerank_precision"] or None
+            if "tqdb_alpha" in vs:
+                raw = vs["tqdb_alpha"]
+                config_dict["tqdb_alpha"] = float(raw) if raw is not None else None
+            if "tqdb_n_refinements" in vs:
+                raw = vs["tqdb_n_refinements"]
+                config_dict["tqdb_n_refinements"] = int(raw) if raw is not None else None
 
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
@@ -1442,7 +1436,14 @@ class AxonConfig:
                 "provider": flat["vector_store"],
                 "path": flat["vector_store_path"],
                 "tqdb_bits": flat["tqdb_bits"],
-                "tqdb_compact_metadata": flat["tqdb_compact_metadata"],
+                "tqdb_fast_mode": flat["tqdb_fast_mode"],
+                "tqdb_rerank": flat["tqdb_rerank"],
+                "tqdb_rerank_precision": flat["tqdb_rerank_precision"],
+                "tqdb_ef_construction": flat["tqdb_ef_construction"],
+                "tqdb_max_degree": flat["tqdb_max_degree"],
+                "tqdb_search_list_size": flat["tqdb_search_list_size"],
+                "tqdb_alpha": flat["tqdb_alpha"],
+                "tqdb_n_refinements": flat["tqdb_n_refinements"],
             },
             "bm25": {
                 "path": flat["bm25_path"],

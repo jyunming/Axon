@@ -4,7 +4,10 @@ import logging
 import os
 from typing import Any
 
-from rank_bm25 import BM25Okapi
+try:
+    from rank_bm25 import BM25Okapi
+except ImportError:
+    BM25Okapi = None  # type: ignore[assignment,misc]
 
 from axon.rust_bridge import get_rust_bridge
 

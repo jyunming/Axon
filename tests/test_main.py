@@ -73,7 +73,7 @@ class TestAxonConfig:
         assert config.embedding_provider == "sentence_transformers"
         assert config.embedding_model == "all-MiniLM-L6-v2"
         assert config.llm_provider == "ollama"
-        assert config.vector_store == "lancedb"
+        assert config.vector_store == "turboquantdb"
         assert config.hybrid_search is True
         assert config.top_k == 10
         assert config.discussion_fallback is True
