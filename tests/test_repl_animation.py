@@ -64,21 +64,21 @@ def test_brain_art_content():
 
 
 def test_open_studio_config_path_defaults():
-    import getpass
     import os
 
     from axon.main import AxonConfig
 
     config = AxonConfig()
 
-    username = getpass.getuser()
+    # New layout: no username layer; Workspace/ replaces {username}/
+    axon_store_root = os.path.join(os.path.expanduser("~"), ".axon", "AxonStore")
 
-    axon_store_root = os.path.join(os.path.expanduser("~"), ".axon", "AxonStore", username)
+    workspace = os.path.join(axon_store_root, "Workspace")
 
     # Paths are always derived from the AxonStore layout
 
-    assert config.vector_store_path == os.path.join(axon_store_root, "default", "vector_data")
+    assert config.vector_store_path == os.path.join(workspace, "default", "vector_data")
 
-    assert config.bm25_path == os.path.join(axon_store_root, "default", "bm25_index")
+    assert config.bm25_path == os.path.join(workspace, "default", "bm25_index")
 
-    assert config.projects_root == axon_store_root
+    assert config.projects_root == workspace

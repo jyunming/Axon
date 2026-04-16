@@ -10,8 +10,11 @@ import re
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from axon.main import AxonBrain
@@ -32,6 +35,7 @@ from axon.sessions import (  # noqa: E402
 from axon.vector_store import MultiVectorStore  # noqa: E402
 
 _SLASH_COMMANDS = [
+    "/agent",
     "/clear",
     "/compact",
     "/config ",
@@ -59,8 +63,383 @@ _SLASH_COMMANDS = [
     "/share ",
     "/stale",
     "/store ",
+    "/theme ",
     "/vllm-url ",
 ]
+
+_SLASH_CMD_DESC: dict[str, str] = {
+    "/agent": "Toggle agent mode (LLM calls Axon tools)",
+    "/clear": "Clear conversation history",
+    "/compact": "Summarize and compact chat history",
+    "/config": "Show current configuration",
+    "/context": "Show or clear attached context files",
+    "/discuss": "Toggle discussion fallback mode",
+    "/embed": "Switch embedding model",
+    "/exit": "Exit Axon",
+    "/graph": "GraphRAG operations (build / query / export)",
+    "/graph-viz": "Open graph visualisation in browser",
+    "/help": "Show all commands",
+    "/ingest": "Ingest a file or directory into the knowledge base",
+    "/keys": "Show keyboard shortcuts",
+    "/list": "List indexed documents",
+    "/llm": "Adjust LLM parameters (e.g. temperature)",
+    "/model": "Switch LLM model",
+    "/project": "Switch or manage project namespaces",
+    "/pull": "Fetch and ingest from a URL",
+    "/quit": "Exit Axon",
+    "/rag": "Toggle RAG flags (hybrid / rerank / hyde / graph)",
+    "/refresh": "Re-ingest files that have changed",
+    "/resume": "Resume a previous session",
+    "/retry": "Retry the last query",
+    "/search": "Toggle semantic search mode",
+    "/sessions": "List saved sessions",
+    "/share": "Share a project or manage share keys",
+    "/stale": "Show documents not refreshed recently",
+    "/store": "AxonStore management (init / status / share)",
+    "/theme": "Switch syntax-highlighting theme",
+    "/vllm-url": "Set the vLLM server base URL",
+}
+
+
+_BLOCK_MATH_RE = re.compile(r"\$\$(.*?)\$\$", re.DOTALL)
+_INLINE_MATH_RE = re.compile(r"\$([^$\n]{1,300}?)\$")
+
+# ---------------------------------------------------------------------------
+# Markdown code-block syntax-highlight theme (switchable via /theme)
+# ---------------------------------------------------------------------------
+
+_PREFS_FILE = Path.home() / ".axon" / "prefs.json"
+
+
+def _load_prefs() -> dict:
+    try:
+        import json
+
+        return json.loads(_PREFS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_pref(key: str, value: object) -> None:
+    import json
+
+    prefs = _load_prefs()
+    prefs[key] = value
+    _PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PREFS_FILE.write_text(json.dumps(prefs, indent=2))
+
+
+_MD_CODE_THEME: str = str(_load_prefs().get("md_code_theme", "monokai"))
+
+# ---------------------------------------------------------------------------
+# GitHub-style callout pre-processor
+# ---------------------------------------------------------------------------
+
+_CALLOUT_RE = re.compile(
+    r"^> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][^\n]*\n((?:^> [^\n]*\n?)*)",
+    re.MULTILINE,
+)
+_CALLOUT_RICH: dict[str, tuple[str, str]] = {
+    "NOTE": ("ℹ", "cyan"),
+    "TIP": ("✦", "green"),
+    "IMPORTANT": ("★", "magenta"),
+    "WARNING": ("⚠", "yellow"),
+    "CAUTION": ("✖", "red"),
+}
+
+_TASK_LIST_RE = re.compile(r"^([ \t]*[-*+] )\[([ xX])\] ", re.MULTILINE)
+_STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~", re.DOTALL)
+
+
+def _preprocess_markdown(text: str) -> str:
+    """Apply terminal-friendly substitutions before passing text to Rich Markdown.
+
+    * ``- [x]`` / ``- [ ]`` → ✅ / ☐  (task lists)
+    * ``~~text~~``           → ``text``   (strikethrough — unsupported in Rich)
+    * ``> [!NOTE]`` etc.     → ``> **ℹ NOTE:** …`` (GitHub callout → blockquote)
+    """
+
+    def _task_sub(m: re.Match) -> str:
+        checked = m.group(2).strip()
+        return m.group(1) + ("✅ " if checked.lower() == "x" else "☐ ")
+
+    text = _TASK_LIST_RE.sub(_task_sub, text)
+    text = _STRIKETHROUGH_RE.sub(r"\1", text)
+
+    def _callout_sub(m: re.Match) -> str:
+        ctype = m.group(1)
+        icon, color = _CALLOUT_RICH[ctype]
+        body_lines = m.group(2)
+        body = "\n".join(
+            line[2:] if line.startswith("> ") else line for line in body_lines.rstrip().splitlines()
+        )
+        # Emit as a bold-prefixed blockquote — Rich renders ▌ border.
+        prefix = f"**{icon} {ctype}:**"
+        if body.strip():
+            return f"> {prefix} {body.strip()}\n"
+        return f"> {prefix}\n"
+
+    text = _CALLOUT_RE.sub(_callout_sub, text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# LaTeX → Unicode converter for terminal display
+# ---------------------------------------------------------------------------
+
+_LATEX_SYMBOLS: list[tuple[str, str]] = [
+    # Greek letters — lowercase
+    (r"\alpha", "α"),
+    (r"\beta", "β"),
+    (r"\gamma", "γ"),
+    (r"\delta", "δ"),
+    (r"\epsilon", "ε"),
+    (r"\varepsilon", "ε"),
+    (r"\zeta", "ζ"),
+    (r"\eta", "η"),
+    (r"\theta", "θ"),
+    (r"\vartheta", "ϑ"),
+    (r"\iota", "ι"),
+    (r"\kappa", "κ"),
+    (r"\lambda", "λ"),
+    (r"\mu", "μ"),
+    (r"\nu", "ν"),
+    (r"\xi", "ξ"),
+    (r"\pi", "π"),
+    (r"\rho", "ρ"),
+    (r"\sigma", "σ"),
+    (r"\tau", "τ"),
+    (r"\upsilon", "υ"),
+    (r"\phi", "φ"),
+    (r"\varphi", "φ"),
+    (r"\chi", "χ"),
+    (r"\psi", "ψ"),
+    (r"\omega", "ω"),
+    # Greek letters — uppercase
+    (r"\Gamma", "Γ"),
+    (r"\Delta", "Δ"),
+    (r"\Theta", "Θ"),
+    (r"\Lambda", "Λ"),
+    (r"\Xi", "Ξ"),
+    (r"\Pi", "Π"),
+    (r"\Sigma", "Σ"),
+    (r"\Upsilon", "Υ"),
+    (r"\Phi", "Φ"),
+    (r"\Psi", "Ψ"),
+    (r"\Omega", "Ω"),
+    # Operators and relations
+    (r"\approx", "≈"),
+    (r"\neq", "≠"),
+    (r"\leq", "≤"),
+    (r"\geq", "≥"),
+    (r"\ll", "≪"),
+    (r"\gg", "≫"),
+    (r"\pm", "±"),
+    (r"\mp", "∓"),
+    (r"\times", "×"),
+    (r"\cdot", "·"),
+    (r"\div", "÷"),
+    (r"\circ", "∘"),
+    (r"\infty", "∞"),
+    (r"\partial", "∂"),
+    (r"\nabla", "∇"),
+    (r"\forall", "∀"),
+    (r"\exists", "∃"),
+    (r"\in", "∈"),
+    (r"\notin", "∉"),
+    (r"\subset", "⊂"),
+    (r"\subseteq", "⊆"),
+    (r"\supset", "⊃"),
+    (r"\cup", "∪"),
+    (r"\cap", "∩"),
+    (r"\emptyset", "∅"),
+    (r"\to", "→"),
+    (r"\rightarrow", "→"),
+    (r"\leftarrow", "←"),
+    (r"\Rightarrow", "⇒"),
+    (r"\Leftarrow", "⇐"),
+    (r"\Leftrightarrow", "⇔"),
+    (r"\leftrightarrow", "↔"),
+    (r"\uparrow", "↑"),
+    (r"\downarrow", "↓"),
+    (r"\perp", "⊥"),
+    (r"\parallel", "∥"),
+    (r"\sim", "∼"),
+    (r"\simeq", "≃"),
+    (r"\equiv", "≡"),
+    (r"\propto", "∝"),
+    (r"\therefore", "∴"),
+    (r"\because", "∵"),
+    # Blackboard bold / script
+    (r"\mathbb{R}", "ℝ"),
+    (r"\mathbb{Z}", "ℤ"),
+    (r"\mathbb{N}", "ℕ"),
+    (r"\mathbb{Q}", "ℚ"),
+    (r"\mathbb{C}", "ℂ"),
+    (r"\mathbb{E}", "𝔼"),
+    (r"\mathcal{O}", "𝒪"),
+    # Functions
+    (r"\log", "log"),
+    (r"\ln", "ln"),
+    (r"\exp", "exp"),
+    (r"\sin", "sin"),
+    (r"\cos", "cos"),
+    (r"\tan", "tan"),
+    (r"\min", "min"),
+    (r"\max", "max"),
+    (r"\sup", "sup"),
+    (r"\inf", "inf"),
+    (r"\lim", "lim"),
+    (r"\det", "det"),
+    (r"\text{sign}", "sign"),
+    (r"\text{argmin}", "argmin"),
+    (r"\text{argmax}", "argmax"),
+    # Sums, integrals, products
+    (r"\sum", "∑"),
+    (r"\prod", "∏"),
+    (r"\int", "∫"),
+    (r"\iint", "∬"),
+    (r"\oint", "∮"),
+    # Dots
+    (r"\ldots", "…"),
+    (r"\cdots", "⋯"),
+    (r"\vdots", "⋮"),
+    (r"\ddots", "⋱"),
+    # Brackets / norms
+    (r"\langle", "⟨"),
+    (r"\rangle", "⟩"),
+    (r"\|", "‖"),
+    (r"\left\|", "‖"),
+    (r"\right\|", "‖"),
+    (r"\left|", "|"),
+    (r"\right|", "|"),
+    # Misc
+    (r"\sqrt", "√"),
+    (r"\prime", "′"),
+    (r"^\prime", "′"),
+    (r"\dag", "†"),
+    (r"\top", "ᵀ"),
+    (r"^\top", "ᵀ"),
+]
+
+_SUPERSCRIPT_MAP = str.maketrans(
+    "0123456789+-=()naebijrstuvwxyz",
+    "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿᵃᵉᵇⁱʲʳˢᵗᵘᵛʷˣʸᶻ",
+)
+_SUBSCRIPT_MAP = str.maketrans(
+    "0123456789+-=()aeijnorstuvx",
+    "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢⱼₙₒᵣₛₜᵤᵥₓ",
+)
+
+_FRAC_RE = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+_SUP_RE = re.compile(r"\^\{([^{}]{1,20})\}|\^([A-Za-z0-9])")
+_SUB_RE = re.compile(r"_\{([^{}]{1,20})\}|_([A-Za-z0-9])")
+_CMD_ARG_RE = re.compile(r"\\[a-zA-Z]+\{([^{}]*)\}")
+
+
+def _latex_to_unicode(formula: str) -> str:
+    """Convert a LaTeX formula string to a Unicode-rich terminal representation.
+
+    Handles Greek letters, operators, blackboard bold, fractions, super/subscripts,
+    and common functions.  Falls back to the raw token for unknown commands.
+    """
+    s = formula
+
+    # 1. Substitute named symbols — longest key first to avoid partial matches
+    #    (e.g. \infty before \in, \int before \in, \iint before \int).
+    for latex, uni in sorted(_LATEX_SYMBOLS, key=lambda t: len(t[0]), reverse=True):
+        s = s.replace(latex, uni)
+
+    # 2. \\frac{num}{den} → num/den
+    s = _FRAC_RE.sub(lambda m: f"{m.group(1)}/{m.group(2)}", s)
+
+    # 3. Superscripts  ^{...} or ^x
+    def _sup(m: re.Match) -> str:
+        inner = m.group(1) or m.group(2)
+        return inner.translate(_SUPERSCRIPT_MAP)
+
+    s = _SUP_RE.sub(_sup, s)
+
+    # 4. Subscripts  _{...} or _x
+    def _sub(m: re.Match) -> str:
+        inner = m.group(1) or m.group(2)
+        return inner.translate(_SUBSCRIPT_MAP)
+
+    s = _SUB_RE.sub(_sub, s)
+
+    # 5. Strip remaining \cmd{arg} wrappers → keep the arg (e.g. \text{foo} → foo)
+    s = _CMD_ARG_RE.sub(lambda m: m.group(1), s)
+
+    # 6. Remove remaining backslash commands
+    s = re.sub(r"\\[a-zA-Z]+", "", s)
+
+    # 7. Convert \sqrt{...} → √(...)
+    s = re.sub(r"√\{([^{}]*)\}", r"√(\1)", s)
+
+    # 8. Strip remaining bare braces (artifacts from nested commands)
+    s = s.replace("{", "").replace("}", "")
+
+    # 9. Strip leftover bare backslashes and tidy whitespace
+    s = s.replace("\\", "").strip()
+    s = re.sub(r" {2,}", " ", s)
+
+    return s
+
+
+def _make_math_renderable(text: str):  # type: ignore[return]
+    """Return a Rich renderable for *text* with math formula support.
+
+    Block formulas (``$$...$$``) become cyan-bordered panels with LaTeX
+    symbols converted to Unicode (Greek letters, operators, fractions, etc.).
+    Inline formulas (``$...$``) are converted to Unicode and wrapped in
+    backticks so Markdown renders them as code spans.
+
+    Returns a single Rich renderable suitable for ``Live.update()``
+    or ``Console.print()``.
+    """
+    from rich.console import Group as _RGroup
+    from rich.markdown import Markdown as _RM
+    from rich.panel import Panel as _RP
+    from rich.text import Text as _RT
+
+    # Apply task-list / strikethrough / callout substitutions first.
+    text = _preprocess_markdown(text)
+
+    # Split on $$...$$ — result alternates [text, formula, text, formula, ...]
+    segments = _BLOCK_MATH_RE.split(text)
+    renderables = []
+
+    for i, seg in enumerate(segments):
+        if i % 2 == 1:
+            # Block math: convert to Unicode and display in a bordered panel.
+            formula = _latex_to_unicode(seg.strip())
+            renderables.append(
+                _RP(
+                    _RT(formula, style="bold cyan"),
+                    title="[dim cyan]∫ math[/dim cyan]",
+                    border_style="dim cyan",
+                    padding=(0, 1),
+                )
+            )
+        elif seg.strip():
+            # Regular text: convert inline $...$ to Unicode, then wrap in backticks
+            # so Rich Markdown displays them as code spans with visual distinction.
+            def _replace_inline(m: re.Match) -> str:
+                return "`" + _latex_to_unicode(m.group(1)) + "`"
+
+            styled = _INLINE_MATH_RE.sub(_replace_inline, seg)
+            renderables.append(_RM(styled, code_theme=_MD_CODE_THEME))
+
+    if not renderables:
+        return _RM(text, code_theme=_MD_CODE_THEME)
+    if len(renderables) == 1:
+        return renderables[0]
+    return _RGroup(*renderables)
+
+
+def _render_rich_with_math(text: str, console) -> None:  # type: ignore[type-arg]
+    """Print *text* with math support via :func:`_make_math_renderable`."""
+    console.print(_make_math_renderable(text))
 
 
 def _save_env_key(env_name: str, key: str) -> None:
@@ -1080,23 +1459,38 @@ class _InitDisplay(logging.Handler):
 
         self.tick_lines: list = []  # collected for the final banner
 
-        # Print CLOSED 7-line box immediately — step line updated in-place
+        # Redirect stderr to /dev/null for the duration of the animation so
+        # that library noise (e.g. transformers "UNEXPECTED key" warnings) does
+        # not write bytes to the terminal and corrupt the alternate screen.
+        self._real_stderr = sys.stderr
+        try:
+            sys.stderr = open(os.devnull, "w", encoding="utf-8")
+        except Exception:
+            pass
 
         bw = _box_width()
 
         art_pad = " " * max(0, bw - 39)  # 4 indent + 35 art cols = 39 vis cols
 
         _art_rows = "".join(
-            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃\n"
+            f"\r  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃\n"
             for i, line in enumerate(_AXON_ART)
         )
 
+        # Enter the alternate screen buffer: gives us a completely clean canvas
+        # so we can redraw from \x1b[H (top-left) every frame with zero cursor-
+        # tracking arithmetic.  Primary screen content is preserved and restored
+        # automatically when we exit with \x1b[?1049l in stop().
         sys.stdout.write(
-            f"\n  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
-            f"  ┃{' ' * bw}┃\n" + _art_rows + f"  ┃{' ' * bw}┃\n"
-            f"  ┃{'    ⠿  Initializing…'.ljust(bw)}┃\n"  # step line (3rd from bottom)
-            f"  ┃{' ' * bw}┃\n"
-            f"  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
+            "\x1b[?1049h"  # enter alternate screen
+            "\x1b[?25l"  # hide cursor
+            "\x1b[H"  # cursor to top-left (1, 1)
+            f"\r\n"  # blank line for top margin
+            f"\r  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
+            f"\r  ┃{' ' * bw}┃\n" + _art_rows + f"\r  ┃{' ' * bw}┃\n"
+            f"\r  ┃{'    ⠿  Initializing…'.ljust(bw)}┃\n"
+            f"\r  ┃{' ' * bw}┃\n"
+            f"\r  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
         )
 
         sys.stdout.flush()
@@ -1111,59 +1505,48 @@ class _InitDisplay(logging.Handler):
                 self._anim_frame += 1
 
                 bw = _box_width()
-
                 apad_w = max(0, bw - 39)
 
-                # Rebuild the 6 animated art rows (AXON text + signal animation)
-
-                art_rows = [
-                    f"  ┃    {_AXON_BLUE[i]}{_AXON_ART[i]}{_AXON_RST}"
-                    f"{_anim_pad(i, self._anim_frame, apad_w)}┃"
+                art_rows = "".join(
+                    f"\r  ┃    {_AXON_BLUE[i]}{_AXON_ART[i]}{_AXON_RST}"
+                    f"{_anim_pad(i, self._anim_frame, apad_w)}┃\n"
                     for i in range(6)
-                ]
-
-                # Box line layout (1-indexed, cursor rests at line 14 after init print):
-
-                #  1=blank  2=╭╮  3=┃blank┃  4-9=art  10=┃blank┃  11=┃step┃  12=┃blank┃  13=╰╯
-
-                # Go up 10 from line 14 → line 4 (first art row), rewrite all 6.
-
-                sys.stdout.write("\033[10A")
-
-                for arow in art_rows:
-                    sys.stdout.write(f"\r{arow}\n")
-
-                # Cursor now at line 10 (blank row after art).
+                )
 
                 if self._step:
                     spinner = self._FRAMES[self._idx % len(self._FRAMES)]
-
-                    line = _brow(f"    {spinner}  {self._step}")
-
-                    # Down 1 → line 11 (step), write, newline → 12, down 2 → 14.
-
-                    sys.stdout.write(f"\033[1B\r{line}\n\033[2B")
-
+                    step_text = f"    {spinner}  {self._step}"
                     self._idx += 1
-
+                elif self.tick_lines:
+                    step_text = f"    ✓  {self.tick_lines[-1]}"
                 else:
-                    # Skip blank(10) step(11) blank(12) bottom(13) → back to line 14.
+                    step_text = "    ⠿  Initializing…"
 
-                    sys.stdout.write("\033[4B")
+                step_line = f"\r  ┃{step_text.ljust(bw)}┃\n"
 
+                # Cursor to home on the alternate screen, then redraw the full
+                # box from scratch.  No cursor arithmetic needed at all — we
+                # always know exactly where we are.
+                buf = (
+                    "\x1b[H"  # cursor to (1,1) on alternate screen
+                    "\r\n"  # blank top-margin line
+                    f"\r  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
+                    f"\r  ┃{' ' * bw}┃\n"
+                    + art_rows
+                    + f"\r  ┃{' ' * bw}┃\n"
+                    + step_line
+                    + f"\r  ┃{' ' * bw}┃\n"
+                    f"\r  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
+                )
+                sys.stdout.write(buf)
                 sys.stdout.flush()
 
     def _tick(self, label: str) -> None:
         with self._lock:
             self._step = ""
-
             self.tick_lines.append(label)
-
-            line = _brow(f"    ✓  {label}")
-
-            sys.stdout.write(f"\033[3A\r{line}\n\033[2B")
-
-            sys.stdout.flush()
+            # The next spin_loop frame redraws the whole box showing "✓ label"
+            # in the step line — no relative cursor positioning needed here.
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
@@ -1204,6 +1587,18 @@ class _InitDisplay(logging.Handler):
             self._step = ""
 
         self._thread.join(timeout=0.5)
+
+        # Restore stderr before any further output
+        try:
+            sys.stderr.close()
+        except Exception:
+            pass
+        sys.stderr = self._real_stderr
+
+        # Exit alternate screen — the primary screen with its original content
+        # is restored automatically by the terminal.  Also restore the cursor.
+        sys.stdout.write("\x1b[?1049l\x1b[?25h")
+        sys.stdout.flush()
 
 
 _AT_TEXT_EXTS = {
@@ -1573,11 +1968,66 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
         )
 
 
+def _find_bash() -> list[str] | None:
+    """Detect the best available bash interpreter on the current platform.
+
+    Returns a command prefix suitable for ``subprocess.run([*prefix, cmd])``,
+    or ``None`` if no bash is found (caller should fall back to ``shell=True``).
+
+    Detection order:
+    1. ``bash`` in PATH  — covers Linux, macOS, and Windows with Git Bash in PATH.
+    2. ``wsl`` in PATH   — Windows Subsystem for Linux (Windows only).
+    3. Known Git Bash install paths (Windows only).
+    """
+    import shutil as _shutil
+
+    if _shutil.which("bash"):
+        return ["bash", "-c"]
+
+    if sys.platform == "win32":
+        if _shutil.which("wsl"):
+            return ["wsl", "bash", "-c"]
+        for _p in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ]:
+            if os.path.exists(_p):
+                return [_p, "-c"]
+
+    return None
+
+
+def _resolve_bash(setting: str) -> list[str] | None:
+    """Return bash command prefix according to ``repl.shell`` config value."""
+    import shutil as _shutil
+
+    if setting == "native":
+        return None
+    if setting == "wsl":
+        return ["wsl", "bash", "-c"] if _shutil.which("wsl") else None
+    if setting == "gitbash":
+        for _p in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ]:
+            if os.path.exists(_p):
+                return [_p, "-c"]
+        return None
+    if setting == "bash":
+        b = _shutil.which("bash")
+        return [b, "-c"] if b else None
+    # "auto" (default)
+    return _find_bash()
+
+
 def _interactive_repl(
     brain: AxonBrain,
     stream: bool = True,
     init_display: _InitDisplay | None = None,
     quiet: bool = False,
+    _scripted_inputs: list[str] | None = None,
 ) -> None:
     """Interactive REPL chat session with session persistence and live tab completion.
 
@@ -1591,7 +2041,7 @@ def _interactive_repl(
 
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
 
-      /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
+      /compact, /context, /sessions, /resume, /retry, /clear, /project, /agent, /keys, /vllm-url, /quit, /exit
 
     - @file/folder context: type @path/file.txt or @path/folder/ to inline contents into your query (read-only)
 
@@ -1635,18 +2085,30 @@ def _interactive_repl(
 
     # ── Input: prefer prompt_toolkit (live completions), fall back to readline ──
 
-    _pt_session = None
+    _pt_app = None
+    _input_queue = None
+    _repl_event_loop = None  # captured inside _repl_loop_async for thread-safe run_in_terminal
+    _spin_state: dict = {"active": False, "idx": 0}
+    _SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
     try:
         import glob as _pglob
 
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.application import Application
+        from prompt_toolkit.buffer import Buffer
         from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.filters import Condition, has_completions
         from prompt_toolkit.formatted_text import ANSI as _PTANSI
         from prompt_toolkit.formatted_text import HTML as _PThtml
         from prompt_toolkit.formatted_text import FormattedText as _PTFT  # noqa: F401
         from prompt_toolkit.history import FileHistory as _FileHistory
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.key_binding.bindings.emacs import load_emacs_bindings
+        from prompt_toolkit.layout import Layout
+        from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+        from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+        from prompt_toolkit.layout.menus import CompletionsMenu
+        from prompt_toolkit.patch_stdout import patch_stdout as _pt_patch_stdout
         from prompt_toolkit.styles import Style
 
         _HIST_DIR = os.path.expanduser("~/.axon")
@@ -1658,8 +2120,16 @@ def _interactive_repl(
         _PT_STYLE = Style.from_dict(
             {
                 "": "",
-                "completion-menu.completion.current": "bg:#444466 #ffffff",
+                # Completion menu — dark panel with highlighted selection
+                "completion-menu": "bg:#1e2030 #cdd6f4",
+                "completion-menu.completion": "bg:#1e2030 #cdd6f4",
+                "completion-menu.completion.current": "bg:#363a4f #cba6f7 bold",
+                "completion-menu.meta.completion": "bg:#1e2030 #6c7086 italic",
+                "completion-menu.meta.completion.current": "bg:#363a4f #89b4fa italic",
+                "completion-menu.border": "#494d64",
+                # Input area
                 "bottom-toolbar": "bg:#0a2a5e #c8d8f0",
+                "separator": "#334466",
             }
         )
 
@@ -1677,7 +2147,8 @@ def _interactive_repl(
                         c = cmd.rstrip()
 
                         if c.startswith(text):
-                            yield Completion(c[len(text) :], display=c, display_meta="command")
+                            desc = _SLASH_CMD_DESC.get(c, "")
+                            yield Completion(c[len(text) :], display=c, display_meta=desc)
 
                 # ── /ingest path / glob ───────────────────────────────────
 
@@ -1838,6 +2309,19 @@ def _interactive_repl(
                             pass
 
         def _toolbar():
+            # Fast-path: if embedding is in progress, show the progress bar immediately
+            # without hitting ChromaDB (which may be locked during ingest).
+            from axon._ui_state import state as _ui_state_fast
+
+            _embed_prog_fast = _ui_state_fast.get("embed_progress", "")
+            if _embed_prog_fast:
+                _BON = "\x1b[1m"
+                _RST = "\x1b[0m"
+                m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+                emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
+                row1 = f"  {_BON}LLM\x1b[22m  {m}    {_BON}Embed\x1b[22m  {emb}"
+                return _PTANSI(f"{row1}\n  \x1b[1;32m{_embed_prog_fast}\x1b[0m{_RST}")
+
             def _t(s: str, w: int) -> str:
                 return s if len(s) <= w else s[: w - 1] + "…"
 
@@ -1912,14 +2396,117 @@ def _interactive_repl(
 
             return _PTANSI(f"{row1}\n{row2}{_RST}")
 
-        _pt_session = PromptSession(
-            completer=_PTCompleter(brain),
-            auto_suggest=AutoSuggestFromHistory(),
-            style=_PT_STYLE,
-            complete_while_typing=True,
-            bottom_toolbar=_toolbar,
-            history=_FileHistory(_HIST_FILE),
-        )
+        # Build the Application when running interactively on a real TTY.
+        # Skip in test-mode (_scripted_inputs) or when stdout is not a terminal.
+        if _scripted_inputs is None and sys.stdout.isatty():
+
+            def _handle_enter(buf: Buffer) -> None:
+                text = buf.text
+                if text.strip() and _input_queue is not None:
+                    _input_queue.put_nowait(text)
+                # Do NOT call buf.reset() here — prompt_toolkit resets the buffer
+                # after accept_handler returns and records history before reset.
+
+            _input_buf = Buffer(
+                completer=_PTCompleter(brain),
+                complete_while_typing=True,
+                history=_FileHistory(_HIST_FILE),
+                name="input",
+                accept_handler=_handle_enter,
+            )
+
+            _kb = KeyBindings()
+
+            @_kb.add("enter")
+            def _handle_enter_key(event):
+                # validate_and_handle() calls accept_handler then resets the buffer.
+                # This is what PromptSession does internally; we must wire it
+                # explicitly in a raw Application since load_emacs_bindings()
+                # does not include the submit-on-enter behaviour.
+                event.current_buffer.validate_and_handle()
+
+            @_kb.add("c-c")
+            def _handle_ctrl_c(event):
+                if _input_buf.text:
+                    _input_buf.reset()
+                else:
+                    event.app.exit(exception=KeyboardInterrupt())
+
+            @_kb.add("c-d")
+            def _handle_ctrl_d(event):
+                event.app.exit(exception=EOFError())
+
+            from prompt_toolkit.key_binding import merge_key_bindings
+
+            from axon._ui_state import state as _ui_state_spin
+
+            def _spinner_line() -> str:
+                ep = _ui_state_spin.get("embed_progress", "")
+                if ep:
+                    return f"  \x1b[1;32m\u2022 {ep}\x1b[0m"
+                frame = _SPIN_FRAMES[_spin_state["idx"] % len(_SPIN_FRAMES)]
+                return f"  \x1b[1;33m{frame} Thinking\u2026  Ctrl+C to cancel\x1b[0m"
+
+            _pt_app = Application(
+                layout=Layout(
+                    HSplit(
+                        [
+                            # Spinner row — rendered by prompt_toolkit for smooth ~12fps animation.
+                            # Disappears instantly when _spin_state["active"] becomes False.
+                            ConditionalContainer(
+                                content=Window(
+                                    content=FormattedTextControl(lambda: _PTANSI(_spinner_line())),
+                                    height=1,
+                                ),
+                                filter=Condition(lambda: bool(_spin_state["active"])),
+                            ),
+                            # Completions expand upward above the input row
+                            ConditionalContainer(
+                                content=CompletionsMenu(max_height=8, scroll_offset=1),
+                                filter=has_completions,
+                            ),
+                            # Thin separator line between conversation and input area
+                            Window(
+                                height=1,
+                                char="─",
+                                style="class:separator",
+                            ),
+                            Window(
+                                content=BufferControl(
+                                    buffer=_input_buf,
+                                    focusable=True,
+                                    include_default_input_processors=True,
+                                ),
+                                get_line_prefix=lambda lineno, wrap_count: _PThtml(
+                                    "<ansigreen><b>></b></ansigreen> "
+                                ),
+                                height=1,
+                                wrap_lines=False,
+                            ),
+                            # Thin separator between input and status bar
+                            Window(
+                                height=1,
+                                char="─",
+                                style="class:separator",
+                            ),
+                            Window(
+                                content=FormattedTextControl(_toolbar),
+                                height=2,
+                                style="class:bottom-toolbar",
+                            ),
+                        ]
+                    )
+                ),
+                key_bindings=merge_key_bindings([load_emacs_bindings(), _kb]),
+                style=_PT_STYLE,
+                mouse_support=False,
+                full_screen=False,
+            )
+
+            # Store app reference so background threads can trigger redraws.
+            from axon._ui_state import state as _ui_state_ref
+
+            _ui_state_ref["_pt_app"] = _pt_app
 
     except ImportError:
         # Fall back to readline with history persistence
@@ -2009,12 +2596,19 @@ def _interactive_repl(
 
         print(row2)
 
+    # Shared iterator for test-mode scripted inputs (covers both main loop and
+    # mid-command confirmation prompts like /clear and /project new).
+    _script_iter = iter(_scripted_inputs) if _scripted_inputs is not None else None
+
     def _read_input(prompt: str = "") -> str:
-        if _pt_session:
-            _p = _PThtml("<ansigreen><b>You</b></ansigreen>: ") if not prompt else prompt
-
-            return _pt_session.prompt(_p)
-
+        # During Application.run_in_terminal the terminal is given back to us,
+        # so plain input() works correctly here.  In test-mode, consume from the
+        # scripted iterator so mid-command prompts get the right canned answer.
+        if _script_iter is not None:
+            try:
+                return next(_script_iter)
+            except StopIteration:
+                raise EOFError
         return input(prompt if prompt else "\033[1;32mYou\033[0m: ")
 
     def _shell_passthrough_allowed() -> tuple[bool, str]:
@@ -2058,6 +2652,8 @@ def _interactive_repl(
 
     _last_query: str = ""
 
+    _agent_mode: bool = False
+
     # Initial snapshot to avoid printing status on the very first query
 
     m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
@@ -2074,15 +2670,14 @@ def _interactive_repl(
 
     _last_config_snapshot: tuple = (m, s_v, d_v, h_v, tk, thr)
 
-    while True:
-        try:
-            user_input = _read_input().strip()
+    # Resolve bash once at REPL startup — used by both ! passthrough and run_shell agent tool.
+    _bash_cmd: list[str] | None = _resolve_bash(
+        str(getattr(brain.config, "repl_shell", "auto")).lower().strip()
+    )
 
-        except (EOFError, KeyboardInterrupt):
-            break
-
-        if not user_input:
-            continue
+    def _process_input_sync(user_input: str) -> bool:
+        """Process one REPL input. Returns True to exit the REPL loop."""
+        nonlocal session, _agent_mode, _last_sources, _last_query, _last_config_snapshot
 
         # --- Shell passthrough: !command ---
 
@@ -2098,13 +2693,49 @@ def _interactive_repl(
                         f"(repl.shell_passthrough={policy})."
                     )
 
-                    continue
+                    return False
 
                 import subprocess
 
-                subprocess.run(shell_cmd, shell=True)
+                # Intercept `cd` — child subprocess cwd changes don't propagate to the
+                # parent REPL process, so we call os.chdir() directly instead.
+                _sc = shell_cmd.strip()
+                if _sc == "cd" or _sc.startswith("cd "):
+                    _target = _sc[2:].strip() or str(Path.home())
+                    try:
+                        os.chdir(Path(_target).expanduser())
+                        print(f"  {os.getcwd()}")
+                    except OSError as _cde:
+                        print(f"  cd: {_cde}")
+                    return False
 
-            continue
+                # Route through bash when available; fall back to cmd.exe / /bin/sh.
+                # Use run_in_terminal so the Application suspends while the subprocess
+                # writes to the raw TTY — prevents display corruption.
+                def _run_shell_cmd() -> None:
+                    if _bash_cmd:
+                        subprocess.run([*_bash_cmd, shell_cmd], cwd=os.getcwd())
+                    else:
+                        subprocess.run(shell_cmd, shell=True)
+
+                if _pt_app is not None and _repl_event_loop is not None:
+                    import asyncio as _aio
+
+                    from prompt_toolkit.application import in_terminal as _in_terminal
+
+                    async def _run_shell_in_terminal() -> None:
+                        async with _in_terminal():
+                            _run_shell_cmd()
+
+                    _fut = _aio.run_coroutine_threadsafe(
+                        _run_shell_in_terminal(),
+                        _repl_event_loop,
+                    )
+                    _fut.result()
+                else:
+                    _run_shell_cmd()
+
+            return False
 
         # --- Slash commands ---
 
@@ -2123,7 +2754,7 @@ def _interactive_repl(
                 cmd = "/help"
 
             if cmd in ("/quit", "/exit", "/q"):
-                break
+                return True
 
             elif cmd == "/help":
                 if arg:
@@ -2228,6 +2859,13 @@ def _interactive_repl(
                         "  Example: /config set chunk.strategy markdown\n"
                         "           /config set rag.top_k 15\n"
                         "           /config set llm.model gemma3:4b",
+                        "theme": "  /theme                         show current markdown code-block theme\n"
+                        "  /theme list                    list popular theme names\n"
+                        "  /theme <name>                  switch to a Pygments theme by name\n"
+                        "\n"
+                        "  Choice is saved to ~/.axon/prefs.json and restored on next launch.\n"
+                        "  Any valid Pygments style name is accepted (e.g. dracula, nord, vs).\n"
+                        "  Default: monokai",
                     }
 
                     key = arg.lstrip("/")
@@ -2241,8 +2879,10 @@ def _interactive_repl(
                 else:
                     print(
                         "\n"
+                        "  /agent          toggle agent mode (LLM can call Axon tools directly)\n"
                         "  /clear          clear knowledge base for current project\n"
                         "  /compact        summarise conversation to free context\n"
+                        "  /config [sub]   show, validate, or edit config (validate, wizard, set, reset)\n"
                         "  /context        show current conversation context size\n"
                         "  /discuss        toggle discussion fallback (general knowledge)\n"
                         "  /embed [model]  show or switch embedding model\n"
@@ -2256,7 +2896,6 @@ def _interactive_repl(
                         "  /project [sub]  manage projects (list, new, switch, delete, folder)\n"
                         "  /pull <name>    pull an Ollama model\n"
                         "  /quit           exit Axon\n"
-                        "  /config [sub]   show, validate, or edit config (validate, wizard, set, reset)\n"
                         "  /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
                         "  /refresh        re-ingest documents whose content has changed\n"
                         "  /resume <id>    load a saved session\n"
@@ -2266,6 +2905,8 @@ def _interactive_repl(
                         "  /share [sub]    share projects (generate, redeem, revoke, list)\n"
                         "  /stale [days]   list documents not refreshed in N days (default: 7)\n"
                         "  /store [sub]    AxonStore multi-user mode (init, whoami)\n"
+                        "  /theme [name]   show or switch markdown code-block highlight theme\n"
+                        "  /vllm-url <url> set the vLLM server base URL\n"
                         "\n"
                         "  Shell:   !<cmd>  run a shell command (local-only default)\n"
                         "  Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
@@ -2623,7 +3264,7 @@ def _interactive_repl(
                 if _confirm not in ("y", "yes"):
                     print("  Clear cancelled.")
 
-                    continue
+                    return False
 
                 try:
                     brain._assert_write_allowed("clear")
@@ -3667,23 +4308,37 @@ def _interactive_repl(
                 sub = sub_parts[0].lower() if sub_parts else ""
 
                 if not sub or sub == "status":
+                    # Prefer the backend's own status() for consistency across backends.
+                    try:
+                        _bs = brain._graph_backend.status()
+                        _backend_name = _bs.get("backend", "graphrag")
+                        _entities = _bs.get("entities", 0)
+                        _relations = _bs.get("relations", 0)
+                        _summaries = _bs.get("community_summaries", 0)
+                        _communities = _bs.get("communities", 0)
+                    except Exception:
+                        # Graceful fallback for legacy or stub backends.
+                        _backend_name = "graphrag"
+                        _entities = len(getattr(brain, "_entity_graph", {}) or {})
+                        _relations = sum(
+                            len(v) for v in (getattr(brain, "_relation_graph", {}) or {}).values()
+                        )
+                        _summaries = len(getattr(brain, "_community_summaries", {}) or {})
+                        _communities = 0
+
                     in_progress = getattr(brain, "_community_build_in_progress", False)
-
-                    summaries = getattr(brain, "_community_summaries", {}) or {}
-
-                    entities = getattr(brain, "_entity_graph", {})
-
-                    relations = getattr(brain, "_relation_graph", {})
-
-                    relation_edges = sum(len(v) for v in relations.values())
 
                     print("\n  GraphRAG status:")
 
-                    print(f"    Entities:              {len(entities)}")
+                    print(f"    Backend:               {_backend_name}")
 
-                    print(f"    Relation edges:        {relation_edges}")
+                    print(f"    Entities:              {_entities}")
 
-                    print(f"    Community summaries:   {len(summaries)}")
+                    print(f"    Relation edges:        {_relations}")
+
+                    print(f"    Communities:           {_communities}")
+
+                    print(f"    Community summaries:   {_summaries}")
 
                     print(f"    Community build:       {'in progress' if in_progress else 'idle'}")
 
@@ -3775,6 +4430,43 @@ def _interactive_repl(
 
                     print("  Usage: /graph status | /graph finalize | /graph viz [path]")
 
+            elif cmd == "/theme":
+                global _MD_CODE_THEME
+                _theme_arg = arg.strip()
+                if not _theme_arg or _theme_arg == "show":
+                    print(f"  Current markdown code theme: {_MD_CODE_THEME}")
+                    print("  Use /theme list  to see popular themes.")
+                    print("  Use /theme <name>  to switch.")
+                elif _theme_arg == "list":
+                    _popular = [
+                        "monokai",
+                        "dracula",
+                        "gruvbox-dark",
+                        "nord",
+                        "one-dark",
+                        "solarized-dark",
+                        "solarized-light",
+                        "github-dark",
+                        "vim",
+                        "vs",
+                        "friendly",
+                        "tango",
+                    ]
+                    print("  Popular themes (any Pygments style name is accepted):")
+                    for _t in _popular:
+                        marker = " ◀ current" if _t == _MD_CODE_THEME else ""
+                        print(f"    {_t}{marker}")
+                else:
+                    try:
+                        from pygments.styles import get_style_by_name
+
+                        get_style_by_name(_theme_arg)  # raises if unknown
+                        _MD_CODE_THEME = _theme_arg
+                        _save_pref("md_code_theme", _theme_arg)
+                        print(f"  Markdown code theme set to: {_theme_arg}")
+                    except Exception:
+                        print(f"  Unknown theme '{_theme_arg}'. Run /theme list for suggestions.")
+
             elif cmd == "/config":
                 _cfg_path = (
                     getattr(brain.config, "_loaded_path", "") if brain is not None else ""
@@ -3782,22 +4474,63 @@ def _interactive_repl(
 
                 _handle_config_cmd(arg.strip(), brain, _cfg_path)
 
+            elif cmd == "/agent":
+                _agent_mode = not _agent_mode
+                state = "ON" if _agent_mode else "OFF"
+                print(
+                    f"  Agent mode {state}. LLM can now call Axon tools directly."
+                    if _agent_mode
+                    else "  Agent mode OFF. Back to Q&A mode."
+                )
+
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")
 
             if cmd != "/retry":
-                continue
+                return False
 
         # --- @file expansion: replace @path references with file contents ---
 
         query_text = _expand_at_files(user_input)
 
-        if query_text != user_input:
-            at_files = re.findall(r"@(\S+)", user_input)
+        # Always resolve @file references — even when _expand_at_files could not
+        # expand the content (file not at CWD).  The resolved absolute path is
+        # prepended for agent mode regardless so the LLM can call ingest_path
+        # with the correct path instead of the user-typed relative form.
+        def _resolve_at_path(p: str) -> str:
+            expanded = Path(p).expanduser()
+            if expanded.is_absolute():
+                logger.debug("@file resolved (absolute): %s", expanded)
+                return str(expanded)
+            cwd_resolved = expanded.resolve()
+            if cwd_resolved.exists():
+                logger.debug("@file resolved (cwd): %s", cwd_resolved)
+                return str(cwd_resolved)
+            home_resolved = Path.home() / p
+            if home_resolved.exists():
+                logger.debug("@file resolved (home fallback): %s", home_resolved)
+                return str(home_resolved)
+            logger.warning(
+                "@file '%s' not found — tried cwd (%s) and home (%s). "
+                "Use ~/path or an absolute path to be explicit.",
+                p,
+                cwd_resolved,
+                home_resolved,
+            )
+            return str(home_resolved)  # best guess pointing at home even if missing
 
-            print(f"  Attached: {', '.join(at_files)}")
+        at_files = re.findall(r"@(\S+)", user_input)
+        if at_files:
+            at_files_abs = [_resolve_at_path(p) for p in at_files]
+            print(f"  Attached: {', '.join(at_files_abs)}")
 
-        # --- Regular query — use Rich Live for spinner + streaming response ---
+            # In agent mode, prepend the resolved absolute file paths so the agent can
+            # call ingest_path(path=...) instead of add_text with the content blob.
+            if _agent_mode:
+                paths_note = "  ".join(at_files_abs)
+                query_text = f"[Attached file path(s): {paths_note}]\n\n{query_text}"
+
+        # --- Regular query — use Rich Console for output + toolbar spinner ---
 
         response_parts: list = []
 
@@ -3805,30 +4538,189 @@ def _interactive_repl(
 
         try:
             from rich.console import Console as _RC
-            from rich.live import Live as _RL
-            from rich.markdown import Markdown as _RM
-            from rich.text import Text as _RT
 
-            _console = _RC()
+            _console = _RC(file=sys.stdout, force_terminal=True)
 
-            # ── Spinner phase (transient=True removes it cleanly when stopped) ──
+            # Helpers that route Rich output through prompt_toolkit's own output
+            # pipeline so ANSI codes render correctly on Windows (no ?[ artifacts).
+            import io as _io
 
-            _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            def _rich_print(markup: str, **kw) -> None:
+                _buf = _io.StringIO()
+                _cap = _RC(file=_buf, force_terminal=True, width=_console.width or 120)
+                _cap.print(markup, **kw)
+                _ansi = _buf.getvalue()
+                sys.stdout.write(_ansi)
+                sys.stdout.flush()
 
-            _spin_stop = threading.Event()
-
-            _spin_idx = [0]
-
-            def _spin_update(live: _RL) -> None:
-                while not _spin_stop.wait(0.1):
-                    f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
-
-                    live.update(_RT.from_markup(f"[bold yellow]Axon:[/bold yellow] {f} thinking…"))
-
-                    _spin_idx[0] += 1
+            def _rich_render(text: str, indent: str = "", right_margin: int = 0) -> None:
+                _buf = _io.StringIO()
+                _w = max(40, (_console.width or 120) - len(indent) - right_margin)
+                _cap = _RC(file=_buf, force_terminal=True, width=_w)
+                _cap.print(_make_math_renderable(text))
+                _ansi = _buf.getvalue()
+                if indent:
+                    _ansi = "\n".join(indent + ln if ln else ln for ln in _ansi.split("\n"))
+                sys.stdout.write(_ansi)
+                sys.stdout.flush()
 
             if stream:
-                token_gen = brain.query_stream(query_text, chat_history=chat_history)
+                if _agent_mode:
+                    # Agent mode: run_agent_loop in a thread with spinner feedback,
+                    # then render the result as rich markdown (same as non-streaming path).
+                    from axon.agent import REPL_TOOLS, run_agent_loop
+
+                    def _confirm_cb(msg: str) -> bool:
+                        # Called from the agent background thread — must suspend the
+                        # prompt_toolkit Application before reading stdin, otherwise
+                        # keystrokes go to the Application rather than to input().
+                        # NOTE: `run_in_terminal` (module-level) calls ensure_future()
+                        # synchronously in the calling thread → fails with "no current
+                        # event loop".  Use `in_terminal` (async ctx-mgr) inside a
+                        # proper coroutine scheduled on the REPL event loop instead.
+                        try:
+                            _result: list = []
+
+                            def _do_confirm() -> None:
+                                ans = input(f"\n  ⚠️  {msg} [y/N]: ").strip().lower()
+                                _result.append(ans == "y")
+
+                            if _pt_app is not None and _repl_event_loop is not None:
+                                import asyncio as _aio
+
+                                from prompt_toolkit.application import (
+                                    in_terminal as _in_terminal,
+                                )
+
+                                async def _run_confirm() -> None:
+                                    async with _in_terminal():
+                                        _do_confirm()
+
+                                fut = _aio.run_coroutine_threadsafe(
+                                    _run_confirm(),
+                                    _repl_event_loop,
+                                )
+                                fut.result()
+                                return _result[0] if _result else False
+                            else:
+                                _do_confirm()
+                                return _result[0] if _result else False
+                        except (EOFError, KeyboardInterrupt):
+                            return False
+
+                    # Tool-step callback: print each Axon tool's result as a
+                    # labelled block immediately after execution.
+                    # run_shell prints its own "Bash" block — skip it here.
+                    _SKIP_STEP_CB = {"run_shell"}
+                    # Tools whose output is retrieval/listing detail — show only
+                    # the first (summary) line; the synthesised answer carries the value.
+                    _SUMMARY_ONLY_TOOLS = {
+                        "search_knowledge",
+                        "query_knowledge",
+                        "list_knowledge",
+                        "graph_data",
+                    }
+
+                    # Collect tool steps during agent execution; render them
+                    # inside the Axon response block after the agent finishes.
+                    _tool_steps: list[tuple[str, str]] = []
+
+                    def _agent_step_cb(tool_name: str, result: str) -> None:
+                        if tool_name in _SKIP_STEP_CB:
+                            return
+                        _tool_steps.append((tool_name, result))
+
+                    _agent_result: list = []
+                    _agent_err: list = []
+                    _agent_spin_stop = threading.Event()
+
+                    def _run_agent() -> None:
+                        try:
+                            _agent_result.append(
+                                run_agent_loop(
+                                    brain.llm,
+                                    brain,
+                                    query_text,
+                                    chat_history,
+                                    tools=REPL_TOOLS,
+                                    confirm_cb=_confirm_cb,
+                                    step_cb=_agent_step_cb,
+                                )
+                            )
+                        except Exception as _ae:
+                            _agent_err.append(_ae)
+                        finally:
+                            _agent_spin_stop.set()
+
+                    _agent_thread = threading.Thread(target=_run_agent, daemon=True)
+                    _agent_thread.start()
+
+                    if not quiet:
+                        # Echo user message then show thinking indicator in conversation area.
+                        _rich_print(f"\n[bold cyan]>[/bold cyan] {user_input}\n")
+                        _spin_state["active"] = True
+                        _spin_state["idx"] = 0
+                        _ast = threading.Thread(target=_animate_spinner, daemon=True)
+                        _ast.start()
+                        _agent_spin_stop.wait()
+                        _spin_state["active"] = False
+                        _ast.join(timeout=0.5)
+                    else:
+                        _agent_thread.join()
+
+                    if _agent_err:
+                        _rich_print(f"[bold red]Axon:[/bold red] ⚠️  {_agent_err[0]}\n")
+                        response_parts = []
+                    else:
+                        _agent_response = _agent_result[0] if _agent_result else ""
+                        _rich_print("[bold yellow]Axon:[/bold yellow]")
+                        # Render buffered tool steps inside the response block.
+                        _YEL = "\x1b[33m"
+                        _GRN = "\x1b[1;32m"
+                        _RED = "\x1b[1;31m"
+                        _DIM = "\x1b[2m"
+                        _RST = "\x1b[0m"
+                        for _tname, _tresult in _tool_steps:
+                            _is_err = (
+                                _tresult.startswith("⚠️")
+                                or _tresult.startswith("🚫")
+                                or _tresult.startswith("No files matched")
+                                or _tresult.startswith("No path")
+                                or _tresult.startswith("No text")
+                                or _tresult.startswith("Unknown tool")
+                            )
+                            _icon = "✗" if _is_err else "✓"
+                            _clr = _RED if _is_err else _GRN
+                            _tlines = _tresult.strip().splitlines()
+                            _first = _tlines[0] if _tlines else "(no output)"
+                            _rest = _tlines[1:]
+                            print(f"  {_DIM}↳ {_tname}{_RST}  " f"{_clr}{_icon}{_RST}  {_first}")
+                            if _is_err:
+                                for _ln in _rest[:3]:
+                                    print(f"       {_ln}")
+                            elif _tname in _SUMMARY_ONLY_TOOLS:
+                                if _rest:
+                                    print(f"       {_DIM}({len(_rest)} line(s) collapsed){_RST}")
+                            else:
+                                for _ln in _rest[:3]:
+                                    print(f"       {_ln}")
+                                if len(_rest) > 3:
+                                    print(f"       {_DIM}… +{len(_rest) - 3} more{_RST}")
+                        if _tool_steps:
+                            print()
+                        _rich_render(_agent_response, indent="  ", right_margin=6)
+                        print()
+                        response_parts = [_agent_response]
+
+                    response = "".join(response_parts)
+                    if not _cancelled:
+                        chat_history.append({"role": "user", "content": user_input})
+                        chat_history.append({"role": "assistant", "content": response})
+                        _last_query = user_input
+                        _save_session(session)
+                    return False
+                else:
+                    token_gen = brain.query_stream(query_text, chat_history=chat_history)
 
                 if not quiet:
                     m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
@@ -3855,84 +4747,56 @@ def _interactive_repl(
                                 changes.append(val)
 
                         if changes:
-                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
+                            _rich_print(f"[dim]  {'  │  '.join(changes)}[/dim]")
 
                         _last_config_snapshot = _snap
 
-                    print()
+                    # Echo user message then show thinking indicator in conversation area.
+                    if not quiet:
+                        _rich_print(f"\n[bold cyan]>[/bold cyan] {user_input}\n")
 
-                    # Spinner until first real token arrives
+                    # Collect all streaming tokens while spinner shows.
+                    # Writing token-by-token conflicts with prompt_toolkit's
+                    # Application redraws (invalidate races run_in_terminal),
+                    # causing truncated output. Collect first, render once after
+                    # spinner fully stops. Rich markdown is also restored this way.
+                    _spin_state["active"] = True
+                    _spin_state["idx"] = 0
+                    _st = threading.Thread(target=_animate_spinner, daemon=True)
+                    _st.start()
 
-                    with _RL(
-                        _RT.from_markup("[bold yellow]Axon:[/bold yellow] ⠋ thinking…"),
-                        console=_console,
-                        transient=True,
-                        refresh_per_second=10,
-                    ) as _spin_live:
-                        _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
-
-                        _st.start()
-
+                    _stream_error = None
+                    try:
                         for chunk in token_gen:
                             if isinstance(chunk, dict):
                                 if chunk.get("type") == "sources":
                                     _last_sources = chunk.get("sources", [])
-
                                 continue
-
                             response_parts.append(chunk)
-
-                            break  # first token → exit spinner
-
-                        _spin_stop.set()
-
+                    except KeyboardInterrupt:
+                        _cancelled = True
+                    except Exception as _se:
+                        _stream_error = _se
+                    finally:
+                        _spin_state["active"] = False
                         _st.join(timeout=0.3)
-
-                    # spinner gone (transient); cursor is at a clean line
-
-                # Stream remaining tokens via Rich Live (plain text + cursor),
-
-                # then swap to full Markdown on completion — no raw cursor
-
-                # save/restore so the terminal scrollback is never corrupted.
-
-                try:
-                    _console.print("[bold yellow]Axon:[/bold yellow]")
+                        # Let the final Application invalidate (spinner row removal)
+                        # be processed by the event loop before we write anything.
+                        time.sleep(0.12)
 
                     _accumulated = "".join(response_parts)
 
-                    with _RL(
-                        _RT(_accumulated + " ▋"),
-                        console=_console,
-                        transient=False,
-                        refresh_per_second=15,
-                    ) as live:
-                        for chunk in token_gen:
-                            if isinstance(chunk, dict):
-                                if chunk.get("type") == "sources":
-                                    _last_sources = chunk.get("sources", [])
+                    if _stream_error is not None:
+                        _rich_print(f"[bold red]Axon:[/bold red] ⚠️  {_stream_error}\n")
+                    elif _accumulated:
+                        _rich_print("[bold yellow]Axon:[/bold yellow]")
+                        _rich_render(_accumulated)
+                        print()
+                    else:
+                        _rich_print("[bold yellow]Axon:[/bold yellow] (no response)\n")
 
-                                continue
-
-                            _accumulated += chunk
-
-                            response_parts.append(chunk)
-
-                            live.update(_RT(_accumulated + " ▋"))
-
-                        # All tokens received — swap plain text for Markdown
-
-                        live.update(_RM(_accumulated))
-
-                    print()
-
-                except KeyboardInterrupt:
-                    _cancelled = True
-
-                    if _accumulated:
-                        _console.print(_RM(_accumulated))
-
-                    print("\n  !  Cancelled.\n")
+                    if _cancelled:
+                        _rich_print("  ⚠  Cancelled.\n")
 
             else:
                 # Non-streaming: spinner while brain.query() blocks
@@ -3968,7 +4832,7 @@ def _interactive_repl(
                                 changes.append(val)
 
                         if changes:
-                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
+                            _rich_print(f"[dim]  {'  │  '.join(changes)}[/dim]")
 
                         _last_config_snapshot = _snap
 
@@ -3987,25 +4851,15 @@ def _interactive_repl(
                 _qt.start()
 
                 if not quiet:
-                    print()
-
-                    with _RL(
-                        _RT.from_markup("[bold yellow]Axon:[/bold yellow] ⠋ thinking…"),
-                        console=_console,
-                        transient=True,
-                        refresh_per_second=10,
-                    ) as _spin_live2:
-                        _st2 = threading.Thread(
-                            target=_spin_update, args=(_spin_live2,), daemon=True
-                        )
-
-                        _st2.start()
-
-                        _spin_stop2.wait()
-
-                        _spin_stop.set()
-
-                        _st2.join(timeout=0.3)
+                    # Echo user message then show thinking indicator in conversation area.
+                    _rich_print(f"\n[bold cyan]>[/bold cyan] {user_input}\n")
+                    _spin_state["active"] = True
+                    _spin_state["idx"] = 0
+                    _st2 = threading.Thread(target=_animate_spinner, daemon=True)
+                    _st2.start()
+                    _spin_stop2.wait()
+                    _spin_state["active"] = False
+                    _st2.join(timeout=0.5)
 
                 else:
                     _qt.join()
@@ -4015,11 +4869,9 @@ def _interactive_repl(
 
                 response = _result[0] if _result else ""
 
-                print()  # blank line between You: and Axon:
+                _rich_print("[bold yellow]Axon:[/bold yellow]")
 
-                _console.print("[bold yellow]Axon:[/bold yellow]")
-
-                _console.print(_RM(response))
+                _rich_render(response)
 
                 print()  # blank line after Brain response, before next You:
 
@@ -4072,3 +4924,71 @@ def _interactive_repl(
             _last_query = user_input
 
             _save_session(session)  # persist after every turn
+
+        return False
+
+    # ── Main REPL runner ───────────────────────────────────────────────────────
+
+    # Always define _animate_spinner so _process_input_sync can reference it
+    # whether running in Application mode or readline fallback.
+    def _animate_spinner() -> None:
+        """Drive the Application's spinner row via invalidate() at ~12fps."""
+        while _spin_state["active"]:
+            _spin_state["idx"] += 1
+            if _pt_app is not None:
+                _pt_app.invalidate()
+            time.sleep(0.08)
+        # One final invalidate to remove the spinner row from the layout.
+        if _pt_app is not None:
+            _pt_app.invalidate()
+
+    if _pt_app is not None and _scripted_inputs is None:
+        # Application loop: runs continuously so toolbar+input are always
+        # visible.  Processing happens in asyncio.to_thread so the event loop
+        # (and the Application) keep running during LLM calls.
+
+        async def _repl_loop_async() -> None:
+            nonlocal _input_queue, _repl_event_loop
+            _input_queue = asyncio.Queue()
+            _repl_event_loop = asyncio.get_running_loop()
+            # patch_stdout must be entered after the event loop is running
+            # so it binds to the correct loop for run_in_terminal calls.
+            with _pt_patch_stdout(raw=True):
+                app_task = asyncio.ensure_future(_pt_app.run_async())
+                # When the app exits for any reason, unblock _input_queue.get()
+                app_task.add_done_callback(lambda _: _input_queue.put_nowait(None))
+                try:
+                    while True:
+                        text = await _input_queue.get()
+                        if text is None:
+                            break
+                        text = text.strip()
+                        if not text:
+                            continue
+                        should_exit = await asyncio.to_thread(lambda t=text: _process_input_sync(t))
+                        if should_exit:
+                            break
+                except (KeyboardInterrupt, EOFError):
+                    pass
+                finally:
+                    try:
+                        _pt_app.exit()
+                    except Exception:
+                        pass  # Application may have already stopped
+                    try:
+                        await app_task
+                    except Exception:
+                        pass
+
+        asyncio.run(_repl_loop_async())
+    else:
+        # Readline / plain fallback loop
+        while True:
+            try:
+                user_input = _read_input().strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not user_input:
+                continue
+            if _process_input_sync(user_input):
+                break

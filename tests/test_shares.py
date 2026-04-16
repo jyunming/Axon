@@ -16,20 +16,27 @@ import pytest
 
 
 def _make_user_dir(tmp_path: Path, username: str) -> Path:
-    """Create a minimal AxonStore user directory for testing."""
+    """Create a minimal AxonStore root directory for testing (new Workspace/ layout).
 
-    user_dir = tmp_path / "AxonStore" / username
+    Each simulated user gets their own AxonStore under tmp_path/{username}/AxonStore/
+    so owner and grantee do not collide.  Returns the AxonStore root (store_dir).
+    Projects live under store_dir/Workspace/, and .shares/ lives at store_dir/.shares/.
+    """
 
-    (user_dir / ".shares").mkdir(parents=True, exist_ok=True)
+    store_dir = tmp_path / username / "AxonStore"
+
+    workspace = store_dir / "Workspace"
+
+    (store_dir / ".shares").mkdir(parents=True, exist_ok=True)
 
     # Create a dummy project so redeem can find it
-    (user_dir / "myproject" / "vector_data").mkdir(parents=True, exist_ok=True)
+    (workspace / "myproject" / "vector_data").mkdir(parents=True, exist_ok=True)
 
-    (user_dir / "myproject" / "meta.json").write_text(
+    (workspace / "myproject" / "meta.json").write_text(
         json.dumps({"name": "myproject", "description": "test"})
     )
 
-    return user_dir
+    return store_dir
 
 
 # ---------------------------------------------------------------------------
@@ -42,8 +49,12 @@ def _make_user_dir(tmp_path: Path, username: str) -> Path:
 
 
 class TestGenerateShareKey:
-    def test_returns_expected_fields(self, tmp_path):
+    def test_returns_expected_fields(self, tmp_path, monkeypatch):
+        import getpass as _gp
+
         from axon import shares
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "alice")
 
         owner_dir = _make_user_dir(tmp_path, "alice")
 
@@ -214,10 +225,12 @@ class TestListShares:
 
 
 class TestHmacTamper:
-    def test_wrong_project_raises_on_redemption(self, tmp_path):
+    def test_wrong_project_raises_on_redemption(self, tmp_path, monkeypatch):
         """A share string tampered to claim a different project should fail HMAC."""
 
         import base64
+
+        import getpass as _gp
 
         from axon import shares
 
@@ -225,13 +238,17 @@ class TestHmacTamper:
 
         # Create another project for the tamper attempt
 
-        (owner_dir / "otherproject" / "vector_data").mkdir(parents=True, exist_ok=True)
+        (owner_dir / "Workspace" / "otherproject" / "vector_data").mkdir(
+            parents=True, exist_ok=True
+        )
 
-        (owner_dir / "otherproject" / "meta.json").write_text(
+        (owner_dir / "Workspace" / "otherproject" / "meta.json").write_text(
             json.dumps({"name": "otherproject", "description": "other"})
         )
 
         grantee_dir = _make_user_dir(tmp_path, "bob")
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "alice")
 
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
 
@@ -246,6 +263,8 @@ class TestHmacTamper:
         parts[3] = "otherproject"  # tamper the project name
 
         tampered = base64.urlsafe_b64encode(":".join(parts).encode()).decode()
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "bob")
 
         with pytest.raises(ValueError):
             shares.redeem_share_key(grantee_dir, tampered)
@@ -322,7 +341,7 @@ class TestRedeemShareKeyPlatformIndependentErrors:
 
         grantee_dir = _make_user_dir(tmp_path, "bob")
 
-        owner_store = str(tmp_path / "AxonStore")
+        owner_store = str(_make_user_dir(tmp_path, "alice"))
 
         raw = f"sk_test:faketoken:alice:nonexistent_project:{owner_store}"
 
@@ -351,7 +370,7 @@ class TestRedeemShareKeyPlatformIndependentErrors:
 
         # Build a share_string pointing to alice's store but with an unknown key_id
 
-        raw = f"sk_unknown:faketoken:alice:myproject:{str(tmp_path / 'AxonStore')}"
+        raw = f"sk_unknown:faketoken:alice:myproject:{str(owner_dir)}"
 
         share_string = base64.urlsafe_b64encode(raw.encode()).decode()
 
@@ -389,7 +408,7 @@ class TestRedeemShareKeyPlatformIndependentErrors:
 
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-        raw = f"{key_id}:faketoken:alice:myproject:{str(tmp_path / 'AxonStore')}"
+        raw = f"{key_id}:faketoken:alice:myproject:{str(owner_dir)}"
 
         share_string = base64.urlsafe_b64encode(raw.encode()).decode()
 
@@ -433,7 +452,7 @@ class TestRedeemShareKeyPlatformIndependentErrors:
 
         keys_path.write_text(json.dumps({"issued": []}), encoding="utf-8")
 
-        raw = f"{key_id}:faketoken:alice:myproject:{str(tmp_path / 'AxonStore')}"
+        raw = f"{key_id}:faketoken:alice:myproject:{str(owner_dir)}"
 
         share_string = base64.urlsafe_b64encode(raw.encode()).decode()
 
@@ -442,7 +461,9 @@ class TestRedeemShareKeyPlatformIndependentErrors:
 
 
 class TestRedeemShareKey:
-    def test_creates_descriptor(self, tmp_path):
+    def test_creates_descriptor(self, tmp_path, monkeypatch):
+        import getpass as _gp
+
         from axon import shares
         from axon.mounts import load_mount_descriptor
 
@@ -450,7 +471,11 @@ class TestRedeemShareKey:
 
         grantee_dir = _make_user_dir(tmp_path, "bob")
 
+        monkeypatch.setattr(_gp, "getuser", lambda: "alice")
+
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "bob")
 
         result = shares.redeem_share_key(grantee_dir, gen["share_string"])
 
@@ -476,23 +501,31 @@ class TestRedeemShareKey:
         with pytest.raises(ValueError, match="Invalid share_string"):
             shares.redeem_share_key(grantee_dir, "not_a_valid_base64_string!!!")
 
-    def test_revoked_key_raises_on_redemption(self, tmp_path):
+    def test_revoked_key_raises_on_redemption(self, tmp_path, monkeypatch):
+        import getpass as _gp
+
         from axon import shares
 
         owner_dir = _make_user_dir(tmp_path, "alice")
 
         grantee_dir = _make_user_dir(tmp_path, "bob")
 
+        monkeypatch.setattr(_gp, "getuser", lambda: "alice")
+
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
 
         shares.revoke_share_key(owner_dir, gen["key_id"])
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "bob")
 
         with pytest.raises(ValueError, match="revoked"):
             shares.redeem_share_key(grantee_dir, gen["share_string"])
 
 
 class TestValidateReceivedShares:
-    def test_removes_stale_descriptor_on_revocation(self, tmp_path):
+    def test_removes_stale_descriptor_on_revocation(self, tmp_path, monkeypatch):
+        import getpass as _gp
+
         from axon import shares
         from axon.mounts import load_mount_descriptor
 
@@ -500,7 +533,11 @@ class TestValidateReceivedShares:
 
         grantee_dir = _make_user_dir(tmp_path, "bob")
 
+        monkeypatch.setattr(_gp, "getuser", lambda: "alice")
+
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "bob")
 
         shares.redeem_share_key(grantee_dir, gen["share_string"])
 
@@ -520,14 +557,20 @@ class TestValidateReceivedShares:
 
         assert load_mount_descriptor(grantee_dir, "alice_myproject") is None
 
-    def test_nothing_removed_if_not_revoked(self, tmp_path):
+    def test_nothing_removed_if_not_revoked(self, tmp_path, monkeypatch):
+        import getpass as _gp
+
         from axon import shares
 
         owner_dir = _make_user_dir(tmp_path, "alice")
 
         grantee_dir = _make_user_dir(tmp_path, "bob")
 
+        monkeypatch.setattr(_gp, "getuser", lambda: "alice")
+
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "bob")
 
         shares.redeem_share_key(grantee_dir, gen["share_string"])
 
@@ -566,17 +609,20 @@ class TestRevokeShareKeyManifestOutOfSync:
 
     """revoke_share_key must still mark the key revoked when manifest is out of sync."""
 
-    def test_tombstone_added_when_key_absent_from_manifest(self, tmp_path):
+    def test_tombstone_added_when_key_absent_from_manifest(self, tmp_path, monkeypatch):
         """If the manifest is missing the key_id record, a tombstone is written so
 
 
         redeem_share_key() will correctly reject the key."""
 
+        import getpass as _gp
         import json as _json
 
         from axon import shares
 
         owner_dir = _make_user_dir(tmp_path, "alice")
+
+        monkeypatch.setattr(_gp, "getuser", lambda: "alice")
 
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
 

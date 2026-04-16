@@ -59,6 +59,7 @@ EXPECTED_MCP_TOOL_NAMES = {
     "graph_status",
     "graph_finalize",
     "graph_data",
+    "graph_backend_status",
     "get_active_leases",
 }
 

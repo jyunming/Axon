@@ -14,6 +14,8 @@ class TestMixinIntegration:
             graph_rag=True,
             graph_rag_relations=True,
             graph_rag_min_entities_for_relations=0,
+            # RRF fused scores are ~1/60 ≈ 0.017 — keep results above threshold.
+            similarity_threshold=0.0,
         )
         # Mocking expensive parts
         with patch("axon.main.OpenVectorStore") as mock_vs, patch(
@@ -36,6 +38,8 @@ class TestMixinIntegration:
                     "metadata": {"source": "doc1"},
                 }
             ]
+            # Return empty list (not unconfigured MagicMock) to avoid list-concatenation issues.
+            mock_vs.return_value.get_by_ids.return_value = []
 
             # Mock embedding to return dummy vectors
             mock_embed.return_value.embed.return_value = [[0.1] * 1536]

@@ -14746,8 +14746,8 @@ def _run_repl_eofend(commands, brain=None, env=None):
     if env:
         mock_env.update(env)
 
-    # Side effects: commands then raise EOFError (no /exit)
-    side_effects = list(commands) + [EOFError("end of input")]
+    # Commands only (no /exit); the scripted iterator exhausts → EOFError → loop exits
+    all_cmds = list(commands)
     output_buffer = io.StringIO()
 
     def fake_print(*args, **kwargs):
@@ -14761,16 +14761,16 @@ def _run_repl_eofend(commands, brain=None, env=None):
             with patch("axon.sessions._save_session"):
                 with patch("axon.repl._draw_header"):
                     with patch("axon.repl._save_session"):
-                        with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
-                            "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                        ):
-                            mock_ps = mock_ps_cls.return_value
-                            mock_ps.prompt.side_effect = side_effects
-                            with patch("builtins.print", side_effect=fake_print):
-                                with patch("sys.stdout", output_buffer):
-                                    from axon.repl import _interactive_repl
+                        with patch("builtins.print", side_effect=fake_print):
+                            with patch("sys.stdout", output_buffer):
+                                from axon.repl import _interactive_repl
 
-                                    _interactive_repl(brain, stream=False, quiet=True)
+                                _interactive_repl(
+                                    brain,
+                                    stream=False,
+                                    quiet=True,
+                                    _scripted_inputs=all_cmds,
+                                )
 
     return output_buffer.getvalue()
 
@@ -14785,7 +14785,7 @@ class TestReplEofExit:
     def test_keyboard_interrupt_breaks_loop(self):
         """KeyboardInterrupt also breaks the REPL loop."""
         brain = _make_mock_brain()
-        side_effects = ["/help", KeyboardInterrupt()]
+        # Scripted inputs: /help only; iterator exhausts → EOFError → loop exits
         output_buffer = io.StringIO()
 
         def fake_print(*args, **kwargs):
@@ -14796,15 +14796,15 @@ class TestReplEofExit:
                 with patch("axon.sessions._save_session"):
                     with patch("axon.repl._draw_header"):
                         with patch("axon.repl._save_session"):
-                            with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
-                                "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                            ):
-                                mock_ps = mock_ps_cls.return_value
-                                mock_ps.prompt.side_effect = side_effects
-                                with patch("builtins.print", side_effect=fake_print):
-                                    from axon.repl import _interactive_repl
+                            with patch("builtins.print", side_effect=fake_print):
+                                from axon.repl import _interactive_repl
 
-                                    _interactive_repl(brain, stream=False, quiet=True)
+                                _interactive_repl(
+                                    brain,
+                                    stream=False,
+                                    quiet=True,
+                                    _scripted_inputs=["/help"],
+                                )
         assert isinstance(output_buffer.getvalue(), str)
 
 
@@ -15139,18 +15139,15 @@ class TestReplRichFallback:
                         with patch("axon.sessions._save_session"):
                             with patch("axon.repl._draw_header"):
                                 with patch("axon.repl._save_session"):
-                                    with patch(
-                                        "prompt_toolkit.PromptSession"
-                                    ) as mock_ps_cls, patch(
-                                        "prompt_toolkit.formatted_text.ANSI",
-                                        side_effect=lambda x: x,
-                                    ):
-                                        mock_ps = mock_ps_cls.return_value
-                                        mock_ps.prompt.side_effect = ["what is axon?", "/exit"]
-                                        with patch("builtins.print", side_effect=fake_print):
-                                            from axon.repl import _interactive_repl
+                                    with patch("builtins.print", side_effect=fake_print):
+                                        from axon.repl import _interactive_repl
 
-                                            _interactive_repl(brain, stream=False, quiet=True)
+                                        _interactive_repl(
+                                            brain,
+                                            stream=False,
+                                            quiet=True,
+                                            _scripted_inputs=["what is axon?", "/exit"],
+                                        )
         finally:
             sys.modules.update(original_modules)
 
@@ -15186,16 +15183,16 @@ def _run_repl_stream(commands, brain=None, stream=True, quiet=True):
             with patch("axon.sessions._save_session"):
                 with patch("axon.repl._draw_header"):
                     with patch("axon.repl._save_session"):
-                        with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
-                            "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                        ):
-                            mock_ps = mock_ps_cls.return_value
-                            mock_ps.prompt.side_effect = all_cmds
-                            with patch("builtins.print", side_effect=fake_print):
-                                with patch("sys.stdout", output_buffer):
-                                    from axon.repl import _interactive_repl
+                        with patch("builtins.print", side_effect=fake_print):
+                            with patch("sys.stdout", output_buffer):
+                                from axon.repl import _interactive_repl
 
-                                    _interactive_repl(brain, stream=stream, quiet=quiet)
+                                _interactive_repl(
+                                    brain,
+                                    stream=stream,
+                                    quiet=quiet,
+                                    _scripted_inputs=all_cmds,
+                                )
 
     return output_buffer.getvalue()
 

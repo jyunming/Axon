@@ -474,46 +474,44 @@ class TestSetProjectsRoot:
 
 class TestEnsureUserNamespace:
     def test_creates_expected_directories(self, tmp_path):
-        """ensure_user_project creates default/, projects/, mounts/, .shares/."""
+        """ensure_user_project creates Workspace/default/, mounts/, .shares/ at store_dir level."""
 
         from axon.projects import ensure_user_project
 
-        user_dir = tmp_path / "AxonStore" / "alice"
+        store_dir = tmp_path / "AxonStore"
 
-        ensure_user_project(user_dir)
+        ensure_user_project(store_dir)
 
-        assert (user_dir / "default").is_dir()
+        assert (store_dir / "Workspace" / "default").is_dir()
 
-        assert (user_dir / "projects").is_dir()
+        assert (store_dir / "mounts").is_dir()
 
-        assert (user_dir / "mounts").is_dir()
-
-        assert (user_dir / ".shares").is_dir()
+        assert (store_dir / ".shares").is_dir()
 
         # Legacy _default and ShareMount/ must NOT be created
 
-        assert not (user_dir / "_default").exists()
+        assert not (store_dir / "_default").exists()
 
-        assert not (user_dir / "ShareMount").exists()
+        assert not (store_dir / "ShareMount").exists()
 
     def test_creates_store_meta_json(self, tmp_path):
-        """ensure_user_project creates store_meta.json with store_id."""
+        """ensure_user_project creates store_meta.json at store_dir level."""
 
         import json
 
         from axon.projects import ensure_user_project
 
-        user_dir = tmp_path / "AxonStore" / "alice"
+        store_dir = tmp_path / "AxonStore"
 
-        ensure_user_project(user_dir)
+        ensure_user_project(store_dir)
 
-        store_meta_path = user_dir / "store_meta.json"
+        store_meta_path = store_dir / "store_meta.json"
 
         assert store_meta_path.exists()
 
         meta = json.loads(store_meta_path.read_text())
 
-        assert meta["store_version"] == 2
+        assert meta["store_version"] == 3
 
         assert meta["store_id"].startswith("store_")
 
@@ -522,24 +520,24 @@ class TestEnsureUserNamespace:
 
         from axon.projects import ensure_user_project
 
-        user_dir = tmp_path / "AxonStore" / "alice"
+        store_dir = tmp_path / "AxonStore"
 
-        ensure_user_project(user_dir)
+        ensure_user_project(store_dir)
 
-        ensure_user_project(user_dir)  # should not raise
+        ensure_user_project(store_dir)  # should not raise
 
     def test_creates_default_meta_json(self, tmp_path):
-        """ensure_user_project creates meta.json in default/ with project_id."""
+        """ensure_user_project creates meta.json in Workspace/default/ with project_id."""
 
         import json
 
         from axon.projects import ensure_user_project
 
-        user_dir = tmp_path / "AxonStore" / "alice"
+        store_dir = tmp_path / "AxonStore"
 
-        ensure_user_project(user_dir)
+        ensure_user_project(store_dir)
 
-        meta_path = user_dir / "default" / "meta.json"
+        meta_path = store_dir / "Workspace" / "default" / "meta.json"
 
         assert meta_path.exists()
 

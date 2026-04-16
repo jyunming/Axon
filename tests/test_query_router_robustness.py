@@ -323,6 +323,10 @@ def _make_full_stub(**config_kwargs) -> RouterStubV2:
     stub._query_cache = OrderedDict()
     stub._cache_lock = Lock()
     stub._last_diagnostics = None
+    # Wire a MagicMock graph backend; retrieve() is never called because
+    # _entity_graph is empty (cfg.graph_rag guard short-circuits first).
+    stub._graph_backend = MagicMock()
+    stub._graph_backend.retrieve.return_value = []
     return stub
 
 
