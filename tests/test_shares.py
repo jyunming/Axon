@@ -229,7 +229,6 @@ class TestHmacTamper:
         """A share string tampered to claim a different project should fail HMAC."""
 
         import base64
-
         import getpass as _gp
 
         from axon import shares
