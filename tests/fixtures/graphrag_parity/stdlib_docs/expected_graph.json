@@ -1,0 +1,20 @@
+{
+  "_comment": "CONCEPT-heavy fixture with few PERSON/ORG entities. Tests that GraphRAG builds a valid graph from pure concept nodes.",
+  "expected_entity_keys": [
+    "asyncio", "Coroutine", "Task", "Future",
+    "asyncio.run", "asyncio.create_task", "TaskGroup", "event loop"
+  ],
+  "expected_entity_types": {
+    "asyncio": "PRODUCT",
+    "Coroutine": "CONCEPT",
+    "Task": "CONCEPT",
+    "Future": "CONCEPT",
+    "TaskGroup": "CONCEPT"
+  },
+  "expected_relation_pairs": [
+    ["Coroutine", "asyncio.create_task"],
+    ["Coroutine", "asyncio.run"],
+    ["Task", "Coroutine"],
+    ["TaskGroup", "asyncio.create_task"]
+  ]
+}

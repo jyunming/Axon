@@ -1,0 +1,20 @@
+{
+  "_comment": "Expected entity keys and relation subjects after ingest.",
+  "expected_entity_keys": [
+    "Keycloak", "FastAPI", "Red Hat", "OAuth2", "OpenID Connect",
+    "JWT", "python-keycloak", "OAuth2AuthorizationCodeBearer", "PKCE"
+  ],
+  "expected_entity_types": {
+    "Keycloak": "PRODUCT",
+    "FastAPI": "PRODUCT",
+    "Red Hat": "ORGANIZATION",
+    "python-keycloak": "PRODUCT"
+  },
+  "expected_relation_pairs": [
+    ["Keycloak", "Red Hat"],
+    ["Keycloak", "OpenID Connect"],
+    ["Keycloak", "OAuth2"],
+    ["FastAPI", "Keycloak"],
+    ["PKCE", "OAuth2"]
+  ]
+}

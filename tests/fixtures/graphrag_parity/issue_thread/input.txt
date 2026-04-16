@@ -1,0 +1,52 @@
+Issue: Keycloak integration for FastAPI authentication (#1428)
+
+Repository: tiangolo/fastapi
+Status: Open
+Labels: question, security
+
+---
+
+Original report (user: andreif):
+
+I need to implement a secure API using Keycloak as the authentication provider.
+How do I obtain a Keycloak token and validate it within FastAPI? OAuth2 is a
+complex topic and I could not find a clear example in the documentation.
+
+Keycloak is an open-source identity and access management solution maintained
+by Red Hat. It supports OpenID Connect, OAuth2, and SAML protocols. In this
+integration, Keycloak acts as the authorization server; FastAPI acts as the
+resource server.
+
+---
+
+Comment (user: BernardZhao):
+
+I got this working using the python-keycloak library. The key steps are:
+1. Retrieve the Keycloak public key from the realm's JWKS endpoint
+2. Decode and verify the JWT token signature
+3. Check the token claims (expiry, audience, issuer)
+
+The OAuth2AuthorizationCodeBearer class in FastAPI handles the frontend flow.
+
+---
+
+Comment (user: art1415926535):
+
+For OAuth2AuthorizationCodeBearer you need two specific endpoint URLs:
+- authorizationUrl: {keycloak_url}/realms/{realm}/protocol/openid-connect/auth
+- tokenUrl: {keycloak_url}/realms/{realm}/protocol/openid-connect/token
+
+These match Keycloak's standard OpenID Connect discovery document structure.
+
+---
+
+Comment (user: pet1330):
+
+Here is a production-ready pattern:
+- Create an auth.py module with a KeycloakTokenVerifier class
+- Use PKCE (Proof Key for Code Exchange) for public clients
+- Apply the verifier as a FastAPI dependency at the router level
+- The dependency raises HTTPException 401 on invalid or expired tokens
+
+PKCE is required by the OAuth2 Security BCP for public clients where the
+client secret cannot be kept confidential, such as single-page applications.
