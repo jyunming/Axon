@@ -309,6 +309,12 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "hybrid_mode",
         "raptor_chunk_group_size",
         "dedup_on_ingest",
+        "graph_backend",
+        "ingest_engine",
+        "bm25_engine",
+        "symbol_index_engine",
+        "rust_fallback_enabled",
+        "rust_batch_size",
     },
     "chunk": {
         "strategy",
@@ -678,6 +684,22 @@ class AxonConfig:
     # Ingest Deduplication
 
     dedup_on_ingest: bool = True
+
+    # Graph backend selector: "graphrag" (default) or "dynamic" (SQLite-WAL temporal graph)
+
+    graph_backend: str = "graphrag"
+
+    # Rust engine selectors (per pipeline stage)
+
+    ingest_engine: str = "python"
+
+    bm25_engine: str = "python"
+
+    symbol_index_engine: str = "python"
+
+    rust_fallback_enabled: bool = True
+
+    rust_batch_size: int = 512
 
     # Offline Mode
 
@@ -1459,6 +1481,12 @@ class AxonConfig:
                 "graph_rag": flat["graph_rag"],
                 "graph_rag_community": flat["graph_rag_community"],
                 "dedup_on_ingest": flat["dedup_on_ingest"],
+                "graph_backend": flat["graph_backend"],
+                "ingest_engine": flat["ingest_engine"],
+                "bm25_engine": flat["bm25_engine"],
+                "symbol_index_engine": flat["symbol_index_engine"],
+                "rust_fallback_enabled": flat["rust_fallback_enabled"],
+                "rust_batch_size": flat["rust_batch_size"],
             },
             "chunk": {
                 "strategy": flat["chunk_strategy"],

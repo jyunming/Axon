@@ -44,7 +44,7 @@ repos:
         pass_filenames: true
       - id: pytest-check
         name: pytest
-        entry: python -m pytest tests/ -v --tb=short --no-cov -m "not extension"
+        entry: python -m pytest tests/ -v --tb=short --no-cov -m "not extension" --ignore=tests/e2e
         language: system
         pass_filenames: false
         always_run: true

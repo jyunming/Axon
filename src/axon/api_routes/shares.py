@@ -196,10 +196,12 @@ async def store_whoami():
     username = getpass.getuser()
 
     if brain:
+        projects_root = Path(brain.config.projects_root)
         return {
             "username": username,
-            "store_path": str(Path(brain.config.projects_root).parent),
-            "user_dir": brain.config.projects_root,
+            "store_path": str(projects_root.parent),
+            "workspace": str(projects_root.parent),
+            "user_dir": str(projects_root),
             "active_project": getattr(brain, "_active_project", "default"),
         }
 

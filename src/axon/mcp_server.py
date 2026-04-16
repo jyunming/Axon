@@ -746,6 +746,23 @@ async def graph_data() -> Any:
 
 
 @mcp.tool()
+async def graph_backend_status() -> Any:
+    """Return the active graph backend's status dict.
+
+    Reports which backend is active (graphrag or dynamic), whether it is
+
+    ready, and backend-specific health metrics (entity count, edge count,
+
+    node counts, etc.).  Use this to distinguish between the GraphRAG
+
+    community-graph backend and the dynamic SQLite-WAL graph backend.
+
+    """
+
+    return await _get("/graph/backend/status")
+
+
+@mcp.tool()
 async def get_active_leases() -> Any:
     """Return active write-lease counts for all projects currently tracked by the server.
 

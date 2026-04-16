@@ -420,7 +420,7 @@ def ensure_project(name: str, description: str = "") -> Path:
     return project_dir(name)
 
 
-def _ensure_single_project(name: str, description: str) -> Path:
+def _ensure_single_project(name: str, description: str, graph_backend: str = "graphrag") -> Path:
     """Create directories and meta.json for exactly one project node.
 
 
@@ -428,6 +428,10 @@ def _ensure_single_project(name: str, description: str) -> Path:
 
 
     a new one is assigned and the file is updated in-place (migration path).
+
+
+    ``graph_backend`` is written to meta.json and is immutable once set —
+    attempting to change it raises ``ValueError``.
 
 
     """
@@ -450,6 +454,7 @@ def _ensure_single_project(name: str, description: str) -> Path:
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "project_id": build_project_id("proj"),
+                    "graph_backend": graph_backend,
                 },
                 indent=2,
             ),
@@ -457,13 +462,26 @@ def _ensure_single_project(name: str, description: str) -> Path:
         )
 
     else:
-        # Backfill missing project_id for existing projects (Phase 1 migration)
-
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
 
+        changed = False
+
+        # Backfill missing project_id for existing projects (Phase 1 migration)
         if "project_id" not in meta:
             meta["project_id"] = build_project_id("proj")
+            changed = True
 
+        # Backfill or enforce graph_backend immutability
+        if "graph_backend" not in meta:
+            meta["graph_backend"] = graph_backend
+            changed = True
+        elif meta["graph_backend"] != graph_backend:
+            raise ValueError(
+                f"graph_backend for project '{name}' is immutable: "
+                f"stored='{meta['graph_backend']}', requested='{graph_backend}'"
+            )
+
+        if changed:
             meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     return root
@@ -495,6 +513,26 @@ def get_project_id(name: str) -> str | None:
 
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def get_project_graph_backend(name: str) -> str:
+    """Return the ``graph_backend`` from a project's ``meta.json``.
+
+    Returns ``"graphrag"`` if the project does not exist, the file is
+    unreadable, or the field is absent (legacy project).
+
+    """
+
+    meta_file = project_dir(name) / "meta.json"
+
+    if not meta_file.exists():
+        return "graphrag"
+
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        return str(meta.get("graph_backend", "graphrag"))
+    except (json.JSONDecodeError, OSError):
+        return "graphrag"
 
 
 def get_store_id(user_dir: Path) -> str | None:

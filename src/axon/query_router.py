@@ -825,10 +825,12 @@ class QueryRouterMixin:
             if r.get("fused_only"):
                 filtered_results.append(r)
                 continue
-            # When hybrid search is active, apply threshold to the fused score so that
-            # docs with strong BM25 scores (e.g. exact-token matches like INC-44721) are
-            # not silently suppressed by a low vector_score alone.
-            if cfg.hybrid_search:
+            # Choose the score to compare against similarity_threshold:
+            # - Dense-only: use vector_score (cosine similarity, 0–1).
+            # - Hybrid weighted: fused score is on the same cosine scale, so use score.
+            # - Hybrid RRF: fused score is 1/(rank+k) ≈ 0.016 max — NOT comparable to
+            #   a cosine threshold.  Use vector_score so the threshold is meaningful.
+            if cfg.hybrid_search and getattr(cfg, "hybrid_mode", "rrf") != "rrf":
                 sig = r.get("score", r.get("vector_score", 0.0))
             else:
                 sig = r.get("vector_score", r.get("score", 0.0))

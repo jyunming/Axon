@@ -1,0 +1,61 @@
+services:
+  alice:
+    build:
+      context: ../..
+      dockerfile: docker/two_user_test/Dockerfile
+    environment:
+      - LOGNAME=alice
+      - AXON_STORE_BASE=/srv/axon-store
+      - AXON_PORT=8000
+    volumes:
+      - ../..:/app:cached
+      - axon_store:/srv/axon-store
+    command: python3 -m axon.api
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  bob:
+    build:
+      context: ../..
+      dockerfile: docker/two_user_test/Dockerfile
+    environment:
+      - LOGNAME=bob
+      - AXON_STORE_BASE=/srv/axon-store
+      - AXON_PORT=8001
+    volumes:
+      - ../..:/app:cached
+      - axon_store:/srv/axon-store
+    command: python3 -m axon.api
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: docker/two_user_test/Dockerfile
+    volumes:
+      - ../..:/app:cached
+      - axon_store:/srv/axon-store
+      - ./output:/output
+    depends_on:
+      alice:
+        condition: service_healthy
+      bob:
+        condition: service_healthy
+    command: bash /app/docker/two_user_test/runner.sh
+
+volumes:
+  axon_store:
+    driver: local

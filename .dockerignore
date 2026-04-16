@@ -33,3 +33,17 @@ ollama_data/
 # Git
 .git/
 .gitignore
+
+# Test temporary directories
+tests/.test_tmp/
+tests/e2e/.test_tmp/
+Qualification/
+tmp*/
+bench_logs*/
+bench_results*/
+_wt_rust/
+_wt_v010/
+tmp_graphiti_research/
+CUsersjyunmAxonStorejyunm/
+MagicMock/
+docker/two_user_test/output/

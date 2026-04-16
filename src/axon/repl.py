@@ -4555,7 +4555,7 @@ def _interactive_repl(
 
             def _rich_render(text: str, indent: str = "", right_margin: int = 0) -> None:
                 _buf = _io.StringIO()
-                _w = max(40, (_console.width or 120) - len(indent) - right_margin)
+                _w = max(40, (int(_console.width or 120)) - len(indent) - right_margin)
                 _cap = _RC(file=_buf, force_terminal=True, width=_w)
                 _cap.print(_make_math_renderable(text))
                 _ansi = _buf.getvalue()

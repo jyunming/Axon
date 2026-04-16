@@ -29,7 +29,7 @@ def test_wizard_quick_mode_minimal():
         "BAAI/bge-small-en-v1.5",  # DIFFERENT EMBEDDING
         "",  # path
         "y",  # config Vector Store
-        "2",  # qdrant (DIFFERENT)
+        "3",  # qdrant (DIFFERENT — turboquantdb=1, lancedb=2, qdrant=3)
         "",  # path
         "http://localhost:6333",  # url
         "",  # key

@@ -300,7 +300,7 @@ class AuditStore:
         with self._lock:
             try:
                 with self._connect() as conn:
-                    cur = conn.execute("DELETE FROM audit_events WHERE timestamp < ?", (cutoff,))
+                    cur = conn.execute("DELETE FROM audit_events WHERE timestamp <= ?", (cutoff,))
                     return cur.rowcount
             except Exception as exc:
                 logger.debug("Governance DB prune failed: %s", exc)

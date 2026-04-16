@@ -283,6 +283,9 @@ class TestSymbolChannelSearch:
             def can_symbol_search(self):
                 return True
 
+            def can_symbol_index(self):
+                return False
+
             def symbol_channel_search(self, corpora, query_tokens, top_k, filters):
                 assert len(corpora) == 1
                 assert "run_query" in query_tokens

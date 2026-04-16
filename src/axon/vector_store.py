@@ -400,9 +400,11 @@ class OpenVectorStore:
                 )
                 # tqdb writes manifest.json on open — no sidecar needed.
 
+            import numpy as np
+
             metas = metadatas if metadatas is not None else [{}] * len(ids)
-            # normalize=True on the engine handles L2 normalisation internally.
-            vecs = embeddings if not isinstance(embeddings, list) else embeddings
+            # TQDB requires a numpy float32 array; convert from list/ndarray uniformly.
+            vecs = np.array(embeddings, dtype=np.float32)
             self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
             self.client.flush()
 
