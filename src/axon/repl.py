@@ -2500,7 +2500,7 @@ def _interactive_repl(
                 key_bindings=merge_key_bindings([load_emacs_bindings(), _kb]),
                 style=_PT_STYLE,
                 mouse_support=False,
-                full_screen=False,
+                full_screen=True,
             )
 
             # Store app reference so background threads can trigger redraws.
@@ -4574,7 +4574,7 @@ def _interactive_repl(
             )
             return str(home_resolved)  # best guess pointing at home even if missing
 
-        at_files = re.findall(r"@(\S+)", user_input)
+        at_files = re.findall(r"(?<!\S)@(\S+)", user_input)
         if at_files:
             at_files_abs = [_resolve_at_path(p) for p in at_files]
             print(f"  Attached: {', '.join(at_files_abs)}")
