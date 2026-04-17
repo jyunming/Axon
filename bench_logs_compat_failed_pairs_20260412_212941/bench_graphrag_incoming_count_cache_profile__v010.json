@@ -1,0 +1,11 @@
+{
+  "count_cache_off": {
+    "seconds_total": 56.88397819997044
+  },
+  "count_cache_on": {
+    "seconds_total": 59.7380796999787
+  },
+  "summary": {
+    "speedup_x": 0.9522230792428824
+  }
+}

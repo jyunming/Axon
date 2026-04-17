@@ -1,0 +1,15 @@
+{
+  "python_heap_topk": {
+    "seconds_total": 2.1625790999969468,
+    "seconds_avg_query": 0.004325158199993894,
+    "total_hits": 5000
+  },
+  "python_numpy_topk": {
+    "seconds_total": 2.736678099958226,
+    "seconds_avg_query": 0.005473356199916452,
+    "total_hits": 5000
+  },
+  "summary": {
+    "speedup_avg_query_x": 0.7902204866659172
+  }
+}

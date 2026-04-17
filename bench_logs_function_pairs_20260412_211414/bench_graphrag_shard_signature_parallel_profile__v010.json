@@ -1,0 +1,14 @@
+{
+  "sequential": {
+    "seconds": 0.012573599989991635,
+    "count": 16
+  },
+  "parallel_4w": {
+    "seconds": 0.01781489996938035,
+    "count": 16
+  },
+  "summary": {
+    "speedup_x": 0.7057912203606372,
+    "same_count": true
+  }
+}

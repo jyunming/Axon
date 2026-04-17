@@ -471,6 +471,27 @@ def main():
     )
 
     parser.add_argument(
+        "--graph-rag-max-hops",
+        type=int,
+        metavar="N",
+        help="Maximum relation-hop depth from a matched entity at query time (0 = direct only)",
+    )
+
+    parser.add_argument(
+        "--graph-rag-hop-decay",
+        type=float,
+        metavar="F",
+        help="Score multiplier per hop (default 0.7; 1-hop = 0.7×, 2-hop = 0.49×)",
+    )
+
+    parser.add_argument(
+        "--no-graph-rag-weighted",
+        action="store_true",
+        default=False,
+        help="Disable Dijkstra weighted traversal; use plain BFS hop count instead",
+    )
+
+    parser.add_argument(
         "--refresh",
         action="store_true",
         help="Re-ingest any tracked files whose content has changed since last ingest, then exit",
@@ -691,10 +712,55 @@ def main():
 
     if sys.stdin.isatty():
         logging.getLogger("httpx").propagate = False
-
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
     config = AxonConfig.load(args.config)
+
+    # Configure logging: always write detailed logs to a rotating file under the Axon store base.
+    try:
+        from datetime import datetime as _dt
+        from logging.handlers import RotatingFileHandler
+        from pathlib import Path as _Path
+
+        # Prefer configured axon_store_base; fall back to the user's ~/.axon
+        log_base = _Path(config.axon_store_base or _Path.home() / ".axon")
+        log_dir = (log_base / "logs").expanduser().resolve()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}.log"
+
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+
+        # File handler (DEBUG+)
+        _already = False
+        for _h in list(root_logger.handlers):
+            try:
+                if getattr(_h, "baseFilename", "") == str(log_file):
+                    _already = True
+                    break
+            except Exception:
+                continue
+        if not _already:
+            fh = RotatingFileHandler(
+                str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+            root_logger.addHandler(fh)
+
+        # Console handler (INFO by default; quieter when --quiet or non-TTY)
+        ch = logging.StreamHandler()
+        console_level = logging.WARNING if (args.quiet or not sys.stdin.isatty()) else logging.INFO
+        ch.setLevel(console_level)
+        ch.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        root_logger.addHandler(ch)
+
+        # Inform the user where logs are stored (non-quiet TTY only)
+        if sys.stdin.isatty() and not args.quiet:
+            print(f"Logging to: {log_file}")
+    except Exception:
+        # Best-effort logging setup; do not fail the CLI if logging init errors
+        pass
 
     if args.provider:
         config.llm_provider = args.provider
@@ -819,6 +885,15 @@ def main():
 
     if args.graph_rag_mode is not None:
         config.graph_rag_mode = args.graph_rag_mode
+
+    if args.graph_rag_max_hops is not None:
+        config.graph_rag_max_hops = args.graph_rag_max_hops
+
+    if args.graph_rag_hop_decay is not None:
+        config.graph_rag_hop_decay = args.graph_rag_hop_decay
+
+    if args.no_graph_rag_weighted:
+        config.graph_rag_distance_weighted = False
 
     if args.list_models:
         print("\n  Supported LLM providers and example models:\n")

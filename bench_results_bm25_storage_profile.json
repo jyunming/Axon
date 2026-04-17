@@ -1,0 +1,22 @@
+{
+  "json": {
+    "save_seconds": 0.009629500040318817,
+    "load_seconds": 0.03263390000211075,
+    "file_bytes_json": 4041281,
+    "file_bytes_zst": 0,
+    "docs_loaded": 15000
+  },
+  "zstd": {
+    "save_seconds": 0.020949199970345944,
+    "load_seconds": 0.022291700006462634,
+    "file_bytes_json": 0,
+    "file_bytes_zst": 32453,
+    "docs_loaded": 15000
+  },
+  "summary": {
+    "compression_available": true,
+    "size_reduction_x": 124.52719317166364,
+    "save_speedup_x": 0.459659559980791,
+    "load_speedup_x": 1.4639484647940617
+  }
+}

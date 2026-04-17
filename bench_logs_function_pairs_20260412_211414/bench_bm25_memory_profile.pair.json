@@ -1,0 +1,39 @@
+{
+  "script": "bench_bm25_memory_profile.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 1,
+    "seconds": 0.581,
+    "output": "Traceback (most recent call last):\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_memory_profile.py\", line 112, in <module>\n    raise SystemExit(main())\n                     ^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_memory_profile.py\", line 69, in main\n    dup_off = _run_case(mode=\"off\", docs=docs_dup_off)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_memory_profile.py\", line 35, in _run_case\n    r = BM25Retriever(storage_path=str(tmp), engine=\"python\")\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: BM25Retriever.__init__() got an unexpected keyword argument 'engine'",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_bm25_memory_profile__v010.json",
+    "summary": {
+      "dataset_docs": 30000,
+      "dup_unique_texts": 300,
+      "unique_unique_texts": 30000,
+      "dup_on_unique_text_memory_reduction_x": 100.0,
+      "dup_auto_unique_text_memory_reduction_x": 100.0,
+      "dup_auto_add_speedup_vs_on_x": 1.0227894861430316,
+      "dup_auto_add_speedup_vs_off_x": 0.06359531856181548,
+      "unique_auto_add_speedup_vs_on_x": 12.051395139685093,
+      "unique_auto_add_speedup_vs_off_x": 0.54638505918688
+    }
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 0,
+    "seconds": 0.943,
+    "output": "{\n  \"duplicate_heavy\": {\n    \"off\": {\n      \"text_intern_mode\": \"off\",\n      \"seconds_add_documents\": 0.00027860002592206,\n      \"corpus_docs\": 30000,\n      \"unique_text_object_count\": 30000,\n      \"logical_text_bytes\": 6508000,\n      \"unique_text_bytes_estimate\": 6508000\n    },\n    \"on\": {\n      \"text_intern_mode\": \"on\",\n      \"seconds_add_documents\": 0.0040142000070773065,\n      \"corpus_docs\": 30000,\n      \"unique_text_object_count\": 300,\n      \"logical_text_bytes\": 6508000,\n      \"unique_text_bytes_estimate\": 65080\n    },\n    \"auto\": {\n      \"text_intern_mode\": \"auto\",\n      \"seconds_add_documents\": 0.004393299983348697,\n      \"corpus_docs\": 30000,\n      \"unique_text_object_count\": 300,\n      \"logical_text_bytes\": 6508000,\n      \"unique_text_bytes_estimate\": 65080\n    }\n  },\n  \"unique_heavy\": {\n    \"off\": {\n      \"text_intern_mode\": \"off\",\n      \"seconds_add_documents\": 0.0003616999601945281,\n      \"corpus_docs\": 30000,\n      \"unique_text_object_count\": 30000,\n      \"logical_text_bytes\": 6569518,\n      \"unique_text_bytes_estimate\": 6569518\n    },\n    \"on\": {\n      \"text_intern_mode\": \"on\",\n      \"seconds_add_documents\": 0.005423300026450306,\n      \"corpus_docs\": 30000,\n      \"unique_text_object_count\": 30000,\n      \"logical_text_bytes\": 6569518,\n      \"unique_text_bytes_estimate\": 6569518\n    },\n    \"auto\": {\n      \"text_intern_mode\": \"auto\",\n      \"seconds_add_documents\": 0.0005520000122487545,\n      \"corpus_docs\": 30000,\n      \"unique_text_object_count\": 30000,\n      \"logical_text_bytes\": 6569518,\n      \"unique_text_bytes_estimate\": 6569518\n    }\n  },\n  \"summary\": {\n    \"dataset_docs\": 30000,\n    \"dup_unique_texts\": 300,\n    \"unique_unique_texts\": 30000,\n    \"dup_on_unique_text_memory_reduction_x\": 100.0,\n    \"dup_auto_unique_text_memory_reduction_x\": 100.0,\n    \"dup_auto_add_speedup_vs_on_x\": 0.9137095172858125,\n    \"dup_auto_add_speedup_vs_off_x\": 0.06341475132087457,\n    \"unique_auto_add_speedup_vs_on_x\": 9.824818670486438,\n    \"unique_auto_add_speedup_vs_off_x\": 0.6552535365371167\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_bm25_memory_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_bm25_memory_profile__current.json",
+    "summary": {
+      "dataset_docs": 30000,
+      "dup_unique_texts": 300,
+      "unique_unique_texts": 30000,
+      "dup_on_unique_text_memory_reduction_x": 100.0,
+      "dup_auto_unique_text_memory_reduction_x": 100.0,
+      "dup_auto_add_speedup_vs_on_x": 0.9137095172858125,
+      "dup_auto_add_speedup_vs_off_x": 0.06341475132087457,
+      "unique_auto_add_speedup_vs_on_x": 9.824818670486438,
+      "unique_auto_add_speedup_vs_off_x": 0.6552535365371167
+    }
+  }
+}

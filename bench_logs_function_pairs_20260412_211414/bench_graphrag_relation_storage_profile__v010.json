@@ -1,0 +1,21 @@
+{
+  "legacy": {
+    "bytes": 3316492,
+    "prepare_seconds": 0.022116599953733385,
+    "write_io_seconds": 0.0031652000034227967,
+    "read_parse_seconds": 0.03590870002517477,
+    "top_keys": 8000
+  },
+  "compact_v2": {
+    "bytes": 1828519,
+    "prepare_seconds": 0.011502099980134517,
+    "write_io_seconds": 0.001652900013141334,
+    "read_parse_seconds": 0.01573749998351559,
+    "top_keys": 2
+  },
+  "summary": {
+    "size_reduction_x": 1.8137585663588949,
+    "prepare_speedup_x": 1.9228314822450996,
+    "read_parse_speedup_x": 2.2817283598276545
+  }
+}

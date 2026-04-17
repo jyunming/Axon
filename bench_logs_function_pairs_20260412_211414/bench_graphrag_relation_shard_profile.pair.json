@@ -1,0 +1,27 @@
+{
+  "script": "bench_graphrag_relation_shard_profile.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 0,
+    "seconds": 0.232,
+    "output": "{\n  \"baseline_monolithic\": {\n    \"initial_write_seconds\": 0.037460200022906065,\n    \"initial_bytes\": 2052795,\n    \"update_write_seconds\": 0.03599519998533651,\n    \"update_bytes\": 2078349\n  },\n  \"sharded_16\": {\n    \"initial_write_seconds\": 0.04183420003391802,\n    \"initial_bytes_total\": 2053797,\n    \"update_write_seconds\": 0.0024676999892108142,\n    \"update_bytes\": 153895\n  },\n  \"summary\": {\n    \"initial_size_overhead_ratio\": 1.0004881149846916,\n    \"incremental_write_size_reduction_x\": 13.504980668637707,\n    \"incremental_write_time_speedup_x\": 14.586538129721353\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_relation_shard_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_graphrag_relation_shard_profile__v010.json",
+    "summary": {
+      "initial_size_overhead_ratio": 1.0004881149846916,
+      "incremental_write_size_reduction_x": 13.504980668637707,
+      "incremental_write_time_speedup_x": 14.586538129721353
+    }
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 0,
+    "seconds": 0.228,
+    "output": "{\n  \"baseline_monolithic\": {\n    \"initial_write_seconds\": 0.03713470004731789,\n    \"initial_bytes\": 2052795,\n    \"update_write_seconds\": 0.03624899999704212,\n    \"update_bytes\": 2078349\n  },\n  \"sharded_16\": {\n    \"initial_write_seconds\": 0.04032029997324571,\n    \"initial_bytes_total\": 2053797,\n    \"update_write_seconds\": 0.002590399992186576,\n    \"update_bytes\": 153895\n  },\n  \"summary\": {\n    \"initial_size_overhead_ratio\": 1.0004881149846916,\n    \"incremental_write_size_reduction_x\": 13.504980668637707,\n    \"incremental_write_time_speedup_x\": 13.99359176435299\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_relation_shard_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_graphrag_relation_shard_profile__current.json",
+    "summary": {
+      "initial_size_overhead_ratio": 1.0004881149846916,
+      "incremental_write_size_reduction_x": 13.504980668637707,
+      "incremental_write_time_speedup_x": 13.99359176435299
+    }
+  }
+}

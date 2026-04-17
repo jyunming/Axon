@@ -1,0 +1,33 @@
+{
+  "script": "bench_bm25_dedup_profile.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 1,
+    "seconds": 0.277,
+    "output": "Traceback (most recent call last):\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_dedup_profile.py\", line 98, in <module>\n    raise SystemExit(main())\n                     ^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_dedup_profile.py\", line 71, in main\n    \"json_plain\": _run_case(dedup=False, compress=False, docs=docs),\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_dedup_profile.py\", line 35, in _run_case\n    r = BM25Retriever(storage_path=str(tmp), engine=\"python\")\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: BM25Retriever.__init__() got an unexpected keyword argument 'engine'",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_bm25_dedup_profile__v010.json",
+    "summary": {
+      "dataset_docs": 20000,
+      "dataset_unique_texts": 200,
+      "json_size_reduction_x": 3.327410815939279,
+      "zstd_size_reduction_x": 1.3641180610175105,
+      "json_load_speedup_x": 0.6177462718830501,
+      "zstd_load_speedup_x": 0.6918332501480512
+    }
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 0,
+    "seconds": 0.556,
+    "output": "2026-04-12 21:14:58,179 - Axon.Retrievers - INFO - \\U0001f4be BM25 corpus saved to C:\\Users\\jyunm\\AppData\\Local\\Temp\\axon_bm25_dedup_ibhe50uv\\bm25_corpus.json\n2026-04-12 21:14:58,198 - Axon.Retrievers - INFO - \\U0001f4c2 Loaded BM25 corpus with 20000 documents\n2026-04-12 21:14:58,215 - Axon.Retrievers - INFO - \\U0001f4be BM25 corpus saved to C:\\Users\\jyunm\\AppData\\Local\\Temp\\axon_bm25_dedup_bsdf55a4\\bm25_corpus.json\n2026-04-12 21:14:58,246 - Axon.Retrievers - INFO - \\U0001f4c2 Loaded BM25 corpus with 20000 documents\n2026-04-12 21:14:58,268 - Axon.Retrievers - INFO - \\U0001f4be BM25 corpus saved to C:\\Users\\jyunm\\AppData\\Local\\Temp\\axon_bm25_dedup_oe98hvyv\\bm25_corpus.json.zst (compressed)\n2026-04-12 21:14:58,292 - Axon.Retrievers - INFO - \\U0001f4c2 Loaded BM25 corpus with 20000 documents (compressed)\n2026-04-12 21:14:58,306 - Axon.Retrievers - INFO - \\U0001f4be BM25 corpus saved to C:\\Users\\jyunm\\AppData\\Local\\Temp\\axon_bm25_dedup_van9h4dj\\bm25_corpus.json.zst (compressed)\n2026-04-12 21:14:58,328 - Axon.Retrievers - INFO - \\U0001f4c2 Loaded BM25 corpus with 20000 documents (compressed)\n{\n  \"cases\": {\n    \"json_plain\": {\n      \"dedup_enabled\": false,\n      \"compress_enabled\": false,\n      \"save_seconds\": 0.014271200052462518,\n      \"load_seconds\": 0.02225079998606816,\n      \"file_bytes_json\": 3507091,\n      \"file_bytes_zst\": 0,\n      \"file_bytes_effective\": 3507091,\n      \"docs_loaded\": 20000,\n      \"docs_loaded_logical\": 20000\n    },\n    \"json_dedup\": {\n      \"dedup_enabled\": true,\n      \"compress_enabled\": false,\n      \"save_seconds\": 0.01112229999853298,\n      \"load_seconds\": 0.03031529998406768,\n      \"file_bytes_json\": 1054000,\n      \"file_bytes_zst\": 0,\n      \"file_bytes_effective\": 1054000,\n      \"docs_loaded\": 0,\n      \"docs_loaded_logical\": 20000\n    },\n    \"zstd_plain\": {\n      \"dedup_enabled\": false,\n      \"compress_enabled\": true,\n      \"save_seconds\": 0.01975300000049174,\n      \"load_seconds\": 0.024104700016323477,\n      \"file_bytes_json\": 0,\n      \"file_bytes_zst\": 32953,\n      \"file_bytes_effective\": 32953,\n      \"docs_loaded\": 20000,\n      \"docs_loaded_logical\": 20000\n    },\n    \"zstd_dedup\": {\n      \"dedup_enabled\": true,\n      \"compress_enabled\": true,\n      \"save_seconds\": 0.012430200004018843,\n      \"load_seconds\": 0.02107129996875301,\n      \"file_bytes_json\": 0,\n      \"file_bytes_zst\": 24157,\n      \"file_bytes_effective\": 24157,\n      \"docs_loaded\": 0,\n      \"docs_loaded_logical\": 20000\n    }\n  },\n  \"summary\": {\n    \"dataset_docs\": 20000,\n    \"dataset_unique_texts\": 200,\n    \"json_size_reduction_x\": 3.327410815939279,\n    \"zstd_size_reduction_x\": 1.3641180610175105,\n    \"json_load_speedup_x\": 0.7339792117433162,\n    \"zstd_load_speedup_x\": 1.1439588469657187\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_bm25_dedup_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_bm25_dedup_profile__current.json",
+    "summary": {
+      "dataset_docs": 20000,
+      "dataset_unique_texts": 200,
+      "json_size_reduction_x": 3.327410815939279,
+      "zstd_size_reduction_x": 1.3641180610175105,
+      "json_load_speedup_x": 0.7339792117433162,
+      "zstd_load_speedup_x": 1.1439588469657187
+    }
+  }
+}

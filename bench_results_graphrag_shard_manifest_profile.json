@@ -1,0 +1,16 @@
+{
+  "json_manifest": {
+    "seconds": 0.0080733000067994,
+    "count": 10000,
+    "bytes": 350054
+  },
+  "list_manifest": {
+    "seconds": 0.00682870001764968,
+    "count": 10000,
+    "bytes": 340000
+  },
+  "summary": {
+    "parse_speedup_x": 1.1822601645895832,
+    "sizes_equal_count": true
+  }
+}

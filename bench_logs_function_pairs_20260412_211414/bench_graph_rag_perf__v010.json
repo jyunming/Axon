@@ -1,0 +1,67 @@
+{
+  "graph_rag_local_context": {
+    "single": {
+      "seconds_total": 0.22656159999314696,
+      "seconds_avg": 0.011328079999657348,
+      "vector_store_calls": 400
+    },
+    "batch": {
+      "seconds_total": 0.012650099990423769,
+      "seconds_avg": 0.0006325049995211885,
+      "vector_store_calls": 20
+    },
+    "speedup_avg": 17.90986633818357
+  },
+  "graph_rag_relation_support_fast": {
+    "fast_off": {
+      "seconds_total": 20.042018000036478,
+      "seconds_avg": 0.250525225000456,
+      "vector_store_calls": 80
+    },
+    "fast_on": {
+      "seconds_total": 0.060744999966118485,
+      "seconds_avg": 0.000759312499576481,
+      "vector_store_calls": 80
+    },
+    "speedup_avg": 329.93691680328
+  },
+  "graph_rag_entity_degree_fast": {
+    "fast_off": {
+      "seconds_total": 0.14199279999593273,
+      "seconds_avg": 0.0011832733332994394,
+      "vector_store_calls": 120
+    },
+    "fast_on": {
+      "seconds_total": 0.1219165000366047,
+      "seconds_avg": 0.0010159708336383725,
+      "vector_store_calls": 120
+    },
+    "speedup_avg": 1.164672541889738
+  },
+  "graph_rag_early_cutoff": {
+    "cutoff_off": {
+      "seconds_total": 0.15271570003824309,
+      "seconds_avg": 0.0012726308336520257,
+      "vector_store_calls": 120
+    },
+    "cutoff_on": {
+      "seconds_total": 0.16270169999916106,
+      "seconds_avg": 0.0013558474999930089,
+      "vector_store_calls": 120
+    },
+    "speedup_avg": 0.9386238744833676
+  },
+  "graph_rag_extraction_cache": {
+    "cache_off": {
+      "seconds_total": 0.01048400002764538,
+      "seconds_avg_pair": 5.24200001382269e-06,
+      "llm_calls": 4000
+    },
+    "cache_on": {
+      "seconds_total": 0.003985300019849092,
+      "seconds_avg_pair": 1.992650009924546e-06,
+      "llm_calls": 2
+    },
+    "speedup_avg_pair": 2.630667697646103
+  }
+}

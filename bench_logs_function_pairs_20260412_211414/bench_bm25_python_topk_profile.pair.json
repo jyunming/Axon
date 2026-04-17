@@ -1,0 +1,23 @@
+{
+  "script": "bench_bm25_python_topk_profile.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 1,
+    "seconds": 0.242,
+    "output": "Traceback (most recent call last):\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_python_topk_profile.py\", line 66, in <module>\n    raise SystemExit(main())\n                     ^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_python_topk_profile.py\", line 48, in main\n    baseline = _run(numpy_topk=False)\n               ^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_bm25_python_topk_profile.py\", line 30, in _run\n    r = BM25Retriever(storage_path=str(tmp), engine=\"python\")\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: BM25Retriever.__init__() got an unexpected keyword argument 'engine'",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_bm25_python_topk_profile__v010.json",
+    "summary": {
+      "speedup_avg_query_x": 1.4334192227587361
+    }
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 0,
+    "seconds": 3.495,
+    "output": "{\n  \"python_heap_topk\": {\n    \"seconds_total\": 1.6170474999817088,\n    \"seconds_avg_query\": 0.0032340949999634175,\n    \"total_hits\": 5000\n  },\n  \"python_numpy_topk\": {\n    \"seconds_total\": 1.440204199985601,\n    \"seconds_avg_query\": 0.002880408399971202,\n    \"total_hits\": 5000\n  },\n  \"summary\": {\n    \"speedup_avg_query_x\": 1.1227904348549156\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_bm25_python_topk_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_bm25_python_topk_profile__current.json",
+    "summary": {
+      "speedup_avg_query_x": 1.1227904348549156
+    }
+  }
+}

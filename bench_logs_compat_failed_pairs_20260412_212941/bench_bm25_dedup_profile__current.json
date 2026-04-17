@@ -1,0 +1,56 @@
+{
+  "cases": {
+    "json_plain": {
+      "dedup_enabled": false,
+      "compress_enabled": false,
+      "save_seconds": 0.011290599999483675,
+      "load_seconds": 0.024601300014182925,
+      "file_bytes_json": 3507091,
+      "file_bytes_zst": 0,
+      "file_bytes_effective": 3507091,
+      "docs_loaded": 20000,
+      "docs_loaded_logical": 20000
+    },
+    "json_dedup": {
+      "dedup_enabled": true,
+      "compress_enabled": false,
+      "save_seconds": 0.012148000008892268,
+      "load_seconds": 0.028161399997770786,
+      "file_bytes_json": 1054000,
+      "file_bytes_zst": 0,
+      "file_bytes_effective": 1054000,
+      "docs_loaded": 0,
+      "docs_loaded_logical": 20000
+    },
+    "zstd_plain": {
+      "dedup_enabled": false,
+      "compress_enabled": true,
+      "save_seconds": 0.019278099993243814,
+      "load_seconds": 0.02311440004268661,
+      "file_bytes_json": 0,
+      "file_bytes_zst": 32953,
+      "file_bytes_effective": 32953,
+      "docs_loaded": 20000,
+      "docs_loaded_logical": 20000
+    },
+    "zstd_dedup": {
+      "dedup_enabled": true,
+      "compress_enabled": true,
+      "save_seconds": 0.015849700022954494,
+      "load_seconds": 0.02754480001749471,
+      "file_bytes_json": 0,
+      "file_bytes_zst": 24157,
+      "file_bytes_effective": 24157,
+      "docs_loaded": 0,
+      "docs_loaded_logical": 20000
+    }
+  },
+  "summary": {
+    "dataset_docs": 20000,
+    "dataset_unique_texts": 200,
+    "json_size_reduction_x": 3.327410815939279,
+    "zstd_size_reduction_x": 1.3641180610175105,
+    "json_load_speedup_x": 0.8735822798628735,
+    "zstd_load_speedup_x": 0.8391565750343373
+  }
+}

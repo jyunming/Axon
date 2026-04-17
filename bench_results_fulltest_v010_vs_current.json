@@ -1,0 +1,58 @@
+{
+  "generated_at": "2026-04-12 20:30:51",
+  "baseline": {
+    "name": "v0.1.0",
+    "path": "C:\\dev\\studio_brain_open\\_wt_v010",
+    "command": "python -m pytest -q --no-cov",
+    "exit_code": 2,
+    "wall_time_seconds": 9.085,
+    "cpu_time_seconds": 5.953,
+    "peak_working_set_bytes": 157040640,
+    "peak_paged_memory_bytes": 680718336,
+    "disk_before_bytes": 49581564,
+    "disk_after_bytes": 57462683,
+    "disk_delta_bytes": 7881119,
+    "pytest": {
+      "passed": 0,
+      "failed": 0,
+      "errors": 1,
+      "skipped": 0,
+      "xfailed": 0,
+      "xpassed": 0,
+      "warnings": 0
+    },
+    "stdout_tail": "testpaths: tests\r\nplugins: anyio-4.13.0, asyncio-0.24.0, cov-6.0.0, mock-3.14.0\r\nasyncio: mode=Mode.STRICT, default_loop_scope=None\r\ncollected 3457 items / 1 error\r\n\r\n=================================== ERRORS ====================================\r\n__________________ ERROR collecting tests/test_webapp_ui.py ___________________\r\nImportError while importing test module 'C:\\dev\\studio_brain_open\\_wt_v010\\tests\\test_webapp_ui.py'.\r\nHint: make sure your test modules/packages have valid Python names.\r\nTraceback:\r\nC:\\Users\\jyunm\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\importlib\\__init__.py:126: in import_module\r\n    return _bootstrap._gcd_import(name[level:], package, level)\r\ntests\\test_webapp_ui.py:6: in <module>\r\n    from streamlit.testing.v1 import AppTest\r\nE   ModuleNotFoundError: No module named 'streamlit'\r\n=========================== short test summary info ===========================\r\nERROR tests/test_webapp_ui.py\r\n!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\r\n============================== 1 error in 8.16s ===============================\r\n",
+    "stderr_tail": "C:\\Users\\jyunm\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\pytest_asyncio\\plugin.py:208: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\r\nThe event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\r\n\r\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\r\n"
+  },
+  "current": {
+    "name": "current_optimized",
+    "path": "C:\\dev\\studio_brain_open\\_wt_rust",
+    "command": "python -m pytest -q --no-cov",
+    "exit_code": 1,
+    "wall_time_seconds": 1348.786,
+    "cpu_time_seconds": 15.484,
+    "peak_working_set_bytes": 159162368,
+    "peak_paged_memory_bytes": 680284160,
+    "disk_before_bytes": 145773273,
+    "disk_after_bytes": 145773273,
+    "disk_delta_bytes": 0,
+    "pytest": {
+      "passed": 0,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 1,
+      "xfailed": 0,
+      "xpassed": 0,
+      "warnings": 0
+    },
+    "stdout_tail": "tests\\test_cli_advanced.py F...                                          [ 11%]\r\ntests\\test_cli_extra.py ....................E.EE..................EEEEEE [ 13%]\r\nEE...................................................................... [ 15%]\r\n..........................E..                                            [ 16%]\r\ntests\\test_code_graph.py EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE              [ 17%]\r\ntests\\test_code_retrieval.py ...........................F............... [ 18%]\r\n..........................                                               [ 19%]\r\ntests\\test_compression.py .....................................EE.E      [ 20%]\r\ntests\\test_config.py .E.EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE [ 21%]\r\nEEEEEEEEEEEEEEEEEEE.......EE.EEEEEE.                                     [ 22%]\r\ntests\\test_config_wizard.py ...                                          [ 22%]\r\ntests\\test_cost_control.py .EE.EEE...E..EEEEEEEEEE                       [ 23%]\r\ntests\\test_crag.py ............................                          [ 24%]\r\ntests\\test_crag_eval.py EEE                                              [ 24%]\r\ntests\\test_deepeval_integration.py sssssssssssssssssssssssssss           [ 25%]\r\ntests\\test_demo.py EEEEEEEEEEEEEEEEE.EE..E.E.EEEE                        [ 26%]\r\ntests\\test_doc_mismatch.py ..                                            [ 26%]\r\ntests\\test_embeddings_providers.py .........................             [ 26%]\r\ntests\\test_eval_smoke.py ...................                             [ 27%]\r\ntests\\test_ext_install.py ...",
+    "stderr_tail": "C:\\Users\\jyunm\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\pytest_asyncio\\plugin.py:208: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\r\nThe event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\r\n\r\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\r\n"
+  },
+  "comparison": {
+    "wall_time_speedup_x": 0.007,
+    "cpu_time_speedup_x": 0.384,
+    "peak_ws_reduction_x": 0.987,
+    "peak_pm_reduction_x": 1.001,
+    "disk_delta_reduction_x": null
+  }
+}

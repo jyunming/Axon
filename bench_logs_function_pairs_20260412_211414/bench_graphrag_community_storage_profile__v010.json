@@ -1,0 +1,17 @@
+{
+  "legacy": {
+    "bytes": 1832661,
+    "dump_seconds": 0.009895799972582608,
+    "parse_seconds": 0.0049570000264793634
+  },
+  "compact_v2": {
+    "bytes": 1650187,
+    "dump_seconds": 0.008505800040438771,
+    "parse_seconds": 0.004018600040581077
+  },
+  "summary": {
+    "size_reduction_x": 1.1105777708829363,
+    "dump_speedup_x": 1.1634178943233344,
+    "parse_speedup_x": 1.2335141532926965
+  }
+}

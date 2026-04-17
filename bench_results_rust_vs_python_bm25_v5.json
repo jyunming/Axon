@@ -1,0 +1,32 @@
+{
+  "python": {
+    "engine": "python",
+    "backend": "python",
+    "docs": 12000,
+    "queries": 300,
+    "top_k": 10,
+    "build_seconds": 0.9218926999601535,
+    "search_total_seconds": 19.347186500031967,
+    "search_avg_ms": 64.49062166677322,
+    "py_peak_build_bytes": 42492400,
+    "py_peak_search_bytes": 651934
+  },
+  "rust": {
+    "engine": "rust",
+    "backend": "rust",
+    "docs": 12000,
+    "queries": 300,
+    "top_k": 10,
+    "build_seconds": 0.2558024000027217,
+    "search_total_seconds": 0.029444899992085993,
+    "search_avg_ms": 0.09814966664028664,
+    "py_peak_build_bytes": 113973,
+    "py_peak_search_bytes": 1624
+  },
+  "speedup_build_x": 3.603925138897621,
+  "speedup_search_x": 657.0640927709715,
+  "python_peak_build_mb": 40.52391052246094,
+  "rust_peak_build_mb": 0.10869312286376953,
+  "python_peak_search_mb": 0.6217327117919922,
+  "rust_peak_search_mb": 0.00154876708984375
+}

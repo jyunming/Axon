@@ -1,0 +1,17 @@
+{
+  "json_merge_load": {
+    "seconds": 0.3606889999937266,
+    "entries": 51200
+  },
+  "pickle_cache_write": {
+    "seconds": 0.14343160000862554,
+    "bytes": 6408106
+  },
+  "pickle_cache_load": {
+    "seconds": 0.17371389997424558,
+    "entries": 51200
+  },
+  "summary": {
+    "reload_speedup_x": 2.0763393145119737
+  }
+}

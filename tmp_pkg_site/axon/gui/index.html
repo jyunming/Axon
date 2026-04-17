@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Axon | Your Knowledge, Answerable.</title>
+    <link rel="stylesheet" href="css/style.css?v=2.1">
+</head>
+<body class="dark-theme">
+    <div id="app" class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon-wrapper">
+                        <i class="fas fa-brain"></i>
+                    </div>
+                    <span class="logo-text">Axon</span>
+                </div>
+            </div>
+
+            <div class="sidebar-nav">
+                <nav>
+                    <ul>
+                        <li class="active" data-view="chat">
+                            <i class="fas fa-comment-alt"></i>
+                            <span>Chat</span>
+                        </li>
+                        <li data-view="graph">
+                            <i class="fas fa-project-diagram"></i>
+                            <span>Graph Explorer</span>
+                        </li>
+                        <li data-view="files">
+                            <i class="fas fa-folder-open"></i>
+                            <span>Knowledge Base</span>
+                        </li>
+                        <li data-view="governance">
+                            <i class="fas fa-history"></i>
+                            <span>Governance</span>
+                        </li>
+                        <li data-view="settings">
+                            <i class="fas fa-cog"></i>
+                            <span>Settings</span>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="dot online"></span>
+                    <span class="status-text">Server: Online</span>
+                </div>
+                <div class="active-project-wrapper">
+                    <label>Active Project:</label>
+                    <select id="project-selector" class="project-dropdown">
+                        <option value="default">default</option>
+                    </select>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <!-- Chat View -->
+            <section id="chat-view" class="view">
+                <header class="view-header">
+                    <div class="header-info">
+                        <h1>New Conversation</h1>
+                        <p class="subtitle">Ask anything about your documents</p>
+                    </div>
+                    <div class="header-actions">
+                        <button id="clear-chat" class="btn btn-icon" title="Clear History">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                </header>
+
+                <div id="chat-messages" class="messages-container">
+                    <div class="welcome-message">
+                        <div class="welcome-icon">
+                            <i class="fas fa-robot"></i>
+                        </div>
+                        <h2>How can I help you today?</h2>
+                        <p>Axon is your local AI partner. Ask a question about your ingested documents or start by uploading a file.</p>
+                        <div class="quick-actions">
+                            <button class="action-btn" data-query="Summarize my project">Summarize project</button>
+                            <button class="action-btn" data-query="What are the key entities?">Identify entities</button>
+                            <button class="action-btn" data-query="Compare recent documents">Compare documents</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-input-wrapper">
+                    <!-- Diagnostic steps panel -->
+                    <div id="diagnostic-panel" class="diagnostic-panel hidden">
+                        <ul id="diagnostic-steps"></ul>
+                    </div>
+
+                    <div class="chat-input-box">
+                        <div class="input-actions-left">
+                            <label for="file-upload" class="btn btn-icon" title="Upload Files">
+                                <i class="fas fa-paperclip"></i>
+                            </label>
+                            <input type="file" id="file-upload" multiple class="hidden">
+                        </div>
+                        <textarea id="user-input" placeholder="Message Axon..." rows="1"></textarea>
+                        <div class="input-actions-right">
+                            <button id="send-btn" class="btn btn-primary">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <p class="input-footer">Axon can make mistakes. Verify important info.</p>
+                </div>
+            </section>
+
+            <!-- Graph View -->
+            <section id="graph-view" class="view hidden">
+                <div id="graph-container"></div>
+                <div class="graph-overlay">
+                    <div class="graph-info-panel glass">
+                        <h3>Knowledge Graph</h3>
+                        <p>Visualizing entity relationships across your knowledge base.</p>
+                        <div class="graph-legend">
+                            <div class="legend-item"><span class="node-color chunk"></span> Chunk</div>
+                            <div class="legend-item"><span class="node-color entity"></span> Entity</div>
+                            <div class="legend-item"><span class="node-color community"></span> Community</div>
+                        </div>
+                        <button id="refresh-graph" class="btn btn-sm btn-outline">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Files/Ingest View -->
+            <section id="files-view" class="view hidden">
+                <header class="view-header">
+                    <h1>Knowledge Base</h1>
+                    <div class="header-actions">
+                        <button id="ingest-url" class="btn btn-secondary">
+                            <i class="fas fa-globe"></i> Ingest URL
+                        </button>
+                    </div>
+                </header>
+                <div class="files-container glass">
+                    <div class="ingest-stats">
+                        <div class="stat-card">
+                            <span class="stat-value" id="total-docs">0</span>
+                            <span class="stat-label">Documents</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-value" id="total-chunks">0</span>
+                            <span class="stat-label">Chunks</span>
+                        </div>
+                    </div>
+                    <div class="file-list-header">
+                        <span>Source</span>
+                        <span>Type</span>
+                        <span>Status</span>
+                        <span>Date</span>
+                    </div>
+                    <div id="file-list" class="file-list">
+                        <!-- File items will be injected here -->
+                        <div class="empty-state">
+                            <i class="far fa-file-alt"></i>
+                            <p>No documents ingested yet.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Governance View -->
+            <section id="governance-view" class="view hidden">
+                <header class="view-header">
+                    <h1>Governance & Audit</h1>
+                </header>
+                <div class="governance-content glass">
+                    <div class="audit-log-header">
+                        <span>Timestamp</span>
+                        <span>Action</span>
+                        <span>User</span>
+                        <span>Project</span>
+                    </div>
+                    <div id="audit-logs" class="audit-logs">
+                        <!-- Logs will be injected here -->
+                        <div class="empty-state">
+                            <i class="fas fa-shield-alt"></i>
+                            <p>No audit logs available.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings View -->
+            <section id="settings-view" class="view hidden">
+                <header class="view-header">
+                    <h1>Settings</h1>
+                </header>
+                <div class="settings-content glass">
+                    <div class="settings-section">
+                        <h3>Model Configuration</h3>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label for="llm-provider">LLM Provider</label>
+                                <select id="llm-provider" class="form-control">
+                                    <option value="ollama">Ollama (Local)</option>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="openai">OpenAI</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="llm-model">LLM Model</label>
+                                <input type="text" id="llm-model" class="form-control" placeholder="e.g. llama3.1:8b">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Retrieval Features</h3>
+                        <div class="toggles-grid">
+                            <div class="toggle-item">
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-hybrid" checked>
+                                    <span class="slider round"></span>
+                                </label>
+                                <span>Hybrid Search</span>
+                            </div>
+                            <div class="toggle-item">
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-graph">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span>GraphRAG</span>
+                            </div>
+                            <div class="toggle-item">
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-hyde">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span>HyDE (Query Transform)</span>
+                            </div>
+                            <div class="toggle-item">
+                                <label class="switch">
+                                    <input type="checkbox" id="toggle-rerank">
+                                    <span class="slider round"></span>
+                                </label>
+                                <span>Reranking</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-actions">
+                        <button id="save-settings" class="btn btn-primary">Save & Apply</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/vendor/three.min.js"></script>
+    <script src="js/vendor/3d-force-graph.min.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

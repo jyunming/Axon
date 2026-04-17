@@ -1,0 +1,19 @@
+{
+  "baseline_monolithic": {
+    "initial_write_seconds": 0.037460200022906065,
+    "initial_bytes": 2052795,
+    "update_write_seconds": 0.03599519998533651,
+    "update_bytes": 2078349
+  },
+  "sharded_16": {
+    "initial_write_seconds": 0.04183420003391802,
+    "initial_bytes_total": 2053797,
+    "update_write_seconds": 0.0024676999892108142,
+    "update_bytes": 153895
+  },
+  "summary": {
+    "initial_size_overhead_ratio": 1.0004881149846916,
+    "incremental_write_size_reduction_x": 13.504980668637707,
+    "incremental_write_time_speedup_x": 14.586538129721353
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "uncached_json_loop_seconds": 0.16651619999902323,
+  "cached_sig_loop_seconds": 0.006293100013863295,
+  "summary": {
+    "speedup_x": 26.46012293340305,
+    "entries": 8000
+  }
+}

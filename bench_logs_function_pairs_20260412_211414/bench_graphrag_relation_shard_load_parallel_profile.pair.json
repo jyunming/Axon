@@ -1,0 +1,15 @@
+{
+  "script": "bench_graphrag_relation_shard_load_parallel_profile.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 0,
+    "seconds": 0.796,
+    "output": "{\n  \"sequential\": {\n    \"seconds\": 0.4529417000012472,\n    \"decoded_entries\": 201600\n  },\n  \"parallel_4w\": {\n    \"seconds\": 0.05061209999257699,\n    \"decoded_entries\": 201600\n  },\n  \"summary\": {\n    \"speedup_x\": 8.949276952896202,\n    \"totals_equal\": true\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_relation_shard_load_parallel_profile.json"
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 0,
+    "seconds": 0.782,
+    "output": "{\n  \"sequential\": {\n    \"seconds\": 0.4464464000193402,\n    \"decoded_entries\": 201600\n  },\n  \"parallel_4w\": {\n    \"seconds\": 0.05138189997524023,\n    \"decoded_entries\": 201600\n  },\n  \"summary\": {\n    \"speedup_x\": 8.688787301257303,\n    \"totals_equal\": true\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_relation_shard_load_parallel_profile.json"
+  }
+}

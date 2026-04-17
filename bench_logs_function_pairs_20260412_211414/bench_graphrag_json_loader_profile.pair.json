@@ -1,0 +1,29 @@
+{
+  "script": "bench_graphrag_json_loader_profile.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 0,
+    "seconds": 0.347,
+    "output": "{\n  \"file_bytes\": 7255989,\n  \"records\": 50000,\n  \"summary\": {\n    \"orjson_available\": true,\n    \"stdlib_parse_seconds\": 0.054828799969982356,\n    \"orjson_parse_seconds\": 0.06647359998896718,\n    \"parse_speedup_x\": 0.8248206803766075\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_json_loader_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_graphrag_json_loader_profile__v010.json",
+    "summary": {
+      "orjson_available": true,
+      "stdlib_parse_seconds": 0.054828799969982356,
+      "orjson_parse_seconds": 0.06647359998896718,
+      "parse_speedup_x": 0.8248206803766075
+    }
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 0,
+    "seconds": 0.335,
+    "output": "{\n  \"file_bytes\": 7255989,\n  \"records\": 50000,\n  \"summary\": {\n    \"orjson_available\": true,\n    \"stdlib_parse_seconds\": 0.05899739998858422,\n    \"orjson_parse_seconds\": 0.06552289996761829,\n    \"parse_speedup_x\": 0.9004088649577628\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_json_loader_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_graphrag_json_loader_profile__current.json",
+    "summary": {
+      "orjson_available": true,
+      "stdlib_parse_seconds": 0.05899739998858422,
+      "orjson_parse_seconds": 0.06552289996761829,
+      "parse_speedup_x": 0.9004088649577628
+    }
+  }
+}

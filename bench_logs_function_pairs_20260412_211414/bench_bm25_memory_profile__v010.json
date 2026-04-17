@@ -1,0 +1,65 @@
+{
+  "duplicate_heavy": {
+    "off": {
+      "text_intern_mode": "off",
+      "seconds_add_documents": 0.000271800032351166,
+      "corpus_docs": 30000,
+      "unique_text_object_count": 30000,
+      "logical_text_bytes": 6508000,
+      "unique_text_bytes_estimate": 6508000
+    },
+    "on": {
+      "text_intern_mode": "on",
+      "seconds_add_documents": 0.004371299990452826,
+      "corpus_docs": 30000,
+      "unique_text_object_count": 300,
+      "logical_text_bytes": 6508000,
+      "unique_text_bytes_estimate": 65080
+    },
+    "auto": {
+      "text_intern_mode": "auto",
+      "seconds_add_documents": 0.004273900005500764,
+      "corpus_docs": 30000,
+      "unique_text_object_count": 300,
+      "logical_text_bytes": 6508000,
+      "unique_text_bytes_estimate": 65080
+    }
+  },
+  "unique_heavy": {
+    "off": {
+      "text_intern_mode": "off",
+      "seconds_add_documents": 0.0002508999896235764,
+      "corpus_docs": 30000,
+      "unique_text_object_count": 30000,
+      "logical_text_bytes": 6569518,
+      "unique_text_bytes_estimate": 6569518
+    },
+    "on": {
+      "text_intern_mode": "on",
+      "seconds_add_documents": 0.0055339999962598085,
+      "corpus_docs": 30000,
+      "unique_text_object_count": 30000,
+      "logical_text_bytes": 6569518,
+      "unique_text_bytes_estimate": 6569518
+    },
+    "auto": {
+      "text_intern_mode": "auto",
+      "seconds_add_documents": 0.0004591999459080398,
+      "corpus_docs": 30000,
+      "unique_text_object_count": 30000,
+      "logical_text_bytes": 6569518,
+      "unique_text_bytes_estimate": 6569518
+    }
+  },
+  "summary": {
+    "dataset_docs": 30000,
+    "dup_unique_texts": 300,
+    "unique_unique_texts": 30000,
+    "dup_on_unique_text_memory_reduction_x": 100.0,
+    "dup_auto_unique_text_memory_reduction_x": 100.0,
+    "dup_auto_add_speedup_vs_on_x": 1.0227894861430316,
+    "dup_auto_add_speedup_vs_off_x": 0.06359531856181548,
+    "unique_auto_add_speedup_vs_on_x": 12.051395139685093,
+    "unique_auto_add_speedup_vs_off_x": 0.54638505918688
+  }
+}

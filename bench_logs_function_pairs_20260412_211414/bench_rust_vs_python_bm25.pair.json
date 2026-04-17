@@ -1,0 +1,15 @@
+{
+  "script": "bench_rust_vs_python_bm25.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 1,
+    "seconds": 0.986,
+    "output": "Traceback (most recent call last):\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_rust_vs_python_bm25.py\", line 128, in <module>\n    main()\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_rust_vs_python_bm25.py\", line 105, in main\n    py = run_once(\"python\", docs, queries, args.top_k, rust_fallback_enabled=True)\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_rust_vs_python_bm25.py\", line 54, in run_once\n    r = BM25Retriever(\n        ^^^^^^^^^^^^^^\nTypeError: BM25Retriever.__init__() got an unexpected keyword argument 'engine'"
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 1,
+    "seconds": 3.67,
+    "output": "Traceback (most recent call last):\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_rust_vs_python_bm25.py\", line 128, in <module>\n    main()\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_rust_vs_python_bm25.py\", line 106, in main\n    rust = run_once(\"rust\", docs, queries, args.top_k, rust_fallback_enabled=False)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\scripts\\\\bench_rust_vs_python_bm25.py\", line 54, in run_once\n    r = BM25Retriever(\n        ^^^^^^^^^^^^^^\n  File \"C:\\dev\\studio_brain_open\\_wt_rust\\src\\axon\\retrievers.py\", line 135, in __init__\n    raise RuntimeError(\nRuntimeError: BM25 engine is set to 'rust' but Rust BM25 capability is unavailable."
+  }
+}

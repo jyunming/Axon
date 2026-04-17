@@ -1,0 +1,25 @@
+{
+  "script": "bench_graphrag_shard_manifest_profile.py",
+  "baseline": {
+    "side": "v010",
+    "exit_code": 0,
+    "seconds": 0.094,
+    "output": "{\n  \"json_manifest\": {\n    \"seconds\": 0.012985699984710664,\n    \"count\": 10000,\n    \"bytes\": 350054\n  },\n  \"list_manifest\": {\n    \"seconds\": 0.011362700024619699,\n    \"count\": 10000,\n    \"bytes\": 340000\n  },\n  \"summary\": {\n    \"parse_speedup_x\": 1.142835765845652,\n    \"sizes_equal_count\": true\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_shard_manifest_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_graphrag_shard_manifest_profile__v010.json",
+    "summary": {
+      "parse_speedup_x": 1.142835765845652,
+      "sizes_equal_count": true
+    }
+  },
+  "current": {
+    "side": "current",
+    "exit_code": 0,
+    "seconds": 0.085,
+    "output": "{\n  \"json_manifest\": {\n    \"seconds\": 0.0080733000067994,\n    \"count\": 10000,\n    \"bytes\": 350054\n  },\n  \"list_manifest\": {\n    \"seconds\": 0.00682870001764968,\n    \"count\": 10000,\n    \"bytes\": 340000\n  },\n  \"summary\": {\n    \"parse_speedup_x\": 1.1822601645895832,\n    \"sizes_equal_count\": true\n  }\n}\nWrote: C:\\dev\\studio_brain_open\\bench_results_graphrag_shard_manifest_profile.json",
+    "json_artifact": "C:\\dev\\studio_brain_open\\bench_logs_function_pairs_20260412_211414\\bench_graphrag_shard_manifest_profile__current.json",
+    "summary": {
+      "parse_speedup_x": 1.1822601645895832,
+      "sizes_equal_count": true
+    }
+  }
+}

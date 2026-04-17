@@ -1,0 +1,14 @@
+{
+  "materialized_merge": {
+    "seconds": 0.9768783000181429,
+    "peak_bytes": 75234816
+  },
+  "stream_merge": {
+    "seconds": 0.762053599988576,
+    "peak_bytes": 70483041
+  },
+  "summary": {
+    "peak_memory_reduction_x": 1.0674172812719587,
+    "speedup_x": 1.2819023491691233
+  }
+}

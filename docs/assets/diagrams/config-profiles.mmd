@@ -1,0 +1,23 @@
+flowchart TB
+    FILE["config.yaml\n━━━━━━━━━━━━━\nllm:\n  provider: ollama\n  model: llama3.1:8b\n\nprofiles:\n  vscode:\n    llm:\n      provider: copilot\n  mcp:\n    llm:\n      provider: copilot\n  api:\n    llm:\n      provider: ollama"]
+
+    ENV{"AXON_PROFILE\nenv var set?"}
+    AUTO{"Auto-detect\nentry point"}
+
+    NONE["No profile active\n→ base config only"]
+    SELECTED["Profile selected\ne.g. vscode"]
+
+    MERGE["Deep-merge\nprofile keys override base\nbase fills in the rest"]
+    CONFIG["✅ AxonConfig\n(merged, active)"]
+
+    FILE --> ENV
+    ENV -->|"yes: use it"| SELECTED
+    ENV -->|"no"| AUTO
+    AUTO -->|"axon-mcp → mcp\naxon-api → api"| SELECTED
+    AUTO -->|"CLI / unknown"| NONE
+    SELECTED --> MERGE
+    NONE --> CONFIG
+    MERGE --> CONFIG
+
+    VSCODE["VS Code Extension\nsets AXON_PROFILE=vscode\nin MCP server process"]
+    VSCODE -.->|injects env var| ENV

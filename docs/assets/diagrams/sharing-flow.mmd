@@ -1,0 +1,31 @@
+sequenceDiagram
+    participant Admin
+    participant Owner as Owner (AxonStore)
+    participant Grantee
+    participant AxonAPI as axon-api
+
+    Note over Admin,AxonAPI: Step 1 — Initialise the store (once)
+    Admin->>AxonAPI: init_store(base_path="/data/axon-store")
+    AxonAPI-->>Admin: {status: "ok"}
+
+    Note over Owner,AxonAPI: Step 2 — Owner creates a project and shares it
+    Owner->>AxonAPI: POST /project/create {name: "research"}
+    Owner->>AxonAPI: POST /shares/create {project: "research", grantee: "alice"}
+    AxonAPI-->>Owner: {share_string: "axon:v1:...", key_id: "k42"}
+
+    Note over Owner,Grantee: Step 3 — Owner sends share string to Grantee (out of band)
+    Owner-->>Grantee: share_string (HMAC-signed, read-only)
+
+    Note over Grantee,AxonAPI: Step 4 — Grantee mounts the shared project
+    Grantee->>AxonAPI: POST /shares/redeem {share_string: "axon:v1:..."}
+    AxonAPI-->>Grantee: {mount: "owner/research", status: "mounted"}
+
+    Note over Grantee,AxonAPI: Step 5 — Grantee queries the shared knowledge
+    Grantee->>AxonAPI: POST /project/switch {name: "@mounts"}
+    Grantee->>AxonAPI: POST /search {query: "..."}
+    AxonAPI-->>Grantee: [chunks from owner/research]
+
+    Note over Owner,AxonAPI: Step 6 — Owner revokes access
+    Owner->>AxonAPI: POST /shares/revoke {key_id: "k42"}
+    AxonAPI-->>Owner: {status: "revoked"}
+    Note over Grantee: Mount becomes inaccessible on next request

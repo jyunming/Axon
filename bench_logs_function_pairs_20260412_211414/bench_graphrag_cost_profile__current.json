@@ -1,0 +1,55 @@
+{
+  "llm_cache_global_map_reduce": {
+    "cache_off": {
+      "seconds_total": 0.014643599977716804,
+      "llm_calls": 40
+    },
+    "cache_on": {
+      "seconds_total": 0.016743200016207993,
+      "llm_calls": 1
+    },
+    "llm_call_reduction_x": 40.0,
+    "speedup": 0.8745998353684658
+  },
+  "global_reduce_skip": {
+    "skip_off": {
+      "seconds_total": 0.011641499993856996,
+      "llm_calls": 80
+    },
+    "skip_on": {
+      "seconds_total": 0.014206699968781322,
+      "llm_calls": 40
+    },
+    "llm_call_reduction_x": 2.0,
+    "speedup": 0.8194373091174407
+  },
+  "global_answer_cache": {
+    "answer_cache_off": {
+      "seconds_total": 0.012249500025063753,
+      "llm_calls": 80
+    },
+    "answer_cache_on": {
+      "seconds_total": 0.0004959999932907522,
+      "llm_calls": 2
+    },
+    "llm_call_reduction_x": 40.0,
+    "speedup": 24.696572965240286
+  },
+  "global_map_cache": {
+    "map_cache_off": {
+      "seconds_total": 0.011772500001825392,
+      "llm_calls": 80
+    },
+    "map_cache_on": {
+      "seconds_total": 0.010738000040873885,
+      "llm_calls": 41
+    },
+    "llm_call_reduction_x": 1.951219512195122,
+    "speedup": 1.0963400965741956
+  },
+  "persist_write_coalescing": {
+    "persist_if_changed_seconds": 0.025891700002830476,
+    "baseline_write_every_time_seconds": 0.045232700009364635,
+    "speedup": 1.7469961417913773
+  }
+}
