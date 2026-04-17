@@ -504,8 +504,11 @@ def main():
 
     parser.add_argument(
         "--graph-export",
-        action="store_true",
-        help="Export the entity graph as an HTML file and print its path, then exit",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Export the entity graph as an HTML file to PATH (default: active project dir/graph.html) and print its path, then exit",
     )
 
     parser.add_argument(
@@ -998,33 +1001,292 @@ def main():
         "httpx",
     ]
 
-    if _entering_repl:
-        print()
+    # Determine whether the requested CLI action requires the heavy AxonBrain
+    # initialization (embedding models, vector stores, LLM clients, etc.).
+    need_brain = bool(
+        args.query
+        or getattr(args, "ingest", None)
+        or args.list
+        or getattr(args, "refresh", False)
+        or getattr(args, "list_stale", False)
+        or getattr(args, "graph_status", False)
+        or getattr(args, "graph_finalize", False)
+        or getattr(args, "graph_export", None) is not None
+        or getattr(args, "delete_doc", None)
+        or getattr(args, "delete_doc_id", None)
+        or getattr(args, "optimize_index", False)
+        or getattr(args, "migrate_vectors", None) is not None
+        or getattr(args, "session_list", False)
+        or getattr(args, "list_models", False)
+        or getattr(args, "pull", None)
+    )
 
-        _init_display = _InitDisplay()
+    # Fast-path: handle lightweight, metadata-only commands without creating AxonBrain
+    if not need_brain:
+        from axon import projects as _proj_mod
 
-        for _n in _INIT_LOGGER_NAMES:
-            _lg = logging.getLogger(_n)
+        if args.project_list:
+            projects = _proj_mod.list_projects()
 
-            _saved_propagate[_n] = _lg.propagate
+            if not projects:
+                print("  No projects yet. Use --project-new <name> to create one.")
 
-            _lg.propagate = False  # suppress default stderr handler
+            else:
+                print()
 
-            _lg.setLevel(logging.INFO)
+                active = _proj_mod.get_active_project()
 
-            _lg.addHandler(_init_display)
+                _print_project_tree(projects, active)
 
-    brain = AxonBrain(config)
+                print(f"\n  Active: {active}")
 
-    if _init_display:
-        _init_display.stop()
+            return
 
-        for _n in _INIT_LOGGER_NAMES:
-            _lg = logging.getLogger(_n)
+        if args.project_delete:
+            proj_name = args.project_delete.lower()
 
-            _lg.removeHandler(_init_display)
+            try:
+                if _proj_mod.get_active_project() == proj_name:
+                    _proj_mod.set_active_project("default")
 
-            _lg.propagate = _saved_propagate.get(_n, True)
+                _proj_mod.delete_project(proj_name)
+
+                print(f"  Deleted project '{proj_name}'.")
+
+            except _proj_mod.ProjectHasChildrenError as e:
+                print(f"  {e}")
+
+                sys.exit(1)
+
+            except ValueError as e:
+                print(f"  {e}")
+
+                sys.exit(1)
+
+            return
+
+        if args.project_new:
+            proj_name = args.project_new.lower()
+
+            _proj_mod.ensure_project(proj_name)
+
+            _proj_mod.set_active_project(proj_name)
+
+            print(f"  Using project '{proj_name}'  ({_proj_mod.project_dir(proj_name)})")
+
+            return
+
+        if args.store_init:
+            import getpass as _gp
+
+            from axon.projects import ensure_user_project
+
+            base = Path(args.store_init).expanduser().resolve()
+
+            username = _gp.getuser()
+
+            store_root = base / "AxonStore"
+
+            user_dir = store_root / username
+
+            try:
+                ensure_user_project(user_dir)
+
+                config.axon_store_base = str(base)
+
+                config.projects_root = str(user_dir)
+
+                config.vector_store_path = str(user_dir / "default" / "vector_store_data")
+
+                config.bm25_path = str(user_dir / "default" / "bm25_index")
+
+                try:
+                    config.save()
+
+                except Exception:
+                    pass
+
+                print(f"  AxonStore initialised at {store_root}")
+
+                print(f"  User directory : {user_dir}")
+
+                print(f"  Username       : {username}")
+
+            except Exception as exc:
+                print(f"  Store init failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        if args.share_list:
+            from axon import shares as _shares_mod
+
+            user_dir = Path(config.projects_root)
+
+            _shares_mod.validate_received_shares(user_dir)
+
+            data = _shares_mod.list_shares(user_dir)
+
+            sharing = data.get("sharing", [])
+
+            shared = data.get("shared", [])
+
+            print("\n  Shares — issued by me:")
+
+            if sharing:
+                for s in sharing:
+                    tag = " [revoked]" if s.get("revoked") else ""
+
+                    print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
+
+            else:
+                print("    (none)")
+
+            print("\n  Shares — received:")
+
+            if shared:
+                for s in shared:
+                    print(f"    {s['owner']}/{s['project']} mounted as {s.get('mount', '')}")
+
+            else:
+                print("    (none)")
+
+            print()
+
+            return
+
+        if args.share_generate:
+            from axon import shares as _shares_mod
+
+            proj, grantee = args.share_generate
+
+            user_dir = Path(config.projects_root)
+
+            _segs = proj.split("/")
+
+            proj_dir = user_dir / _segs[0]
+
+            for _seg in _segs[1:]:
+                proj_dir = proj_dir / "subs" / _seg
+
+            if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
+                print(f"  Project '{proj}' not found.")
+
+                sys.exit(1)
+
+            try:
+                result = _shares_mod.generate_share_key(
+                    owner_user_dir=user_dir, project=proj, grantee=grantee
+                )
+
+                print(f"\n  Share key generated for project '{proj}'")
+
+                print(f"  Grantee:  {grantee}")
+
+                print(f"  Key ID:   {result['key_id']}")
+
+                print(f"\n  Share string:\n\n    {result['share_string']}\n")
+
+                print(f"  Revoke:   axon --share-revoke {result['key_id']}\n")
+
+            except Exception as exc:
+                print(f"  Share generation failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        if args.share_redeem:
+            from axon import shares as _shares_mod
+
+            user_dir = Path(config.projects_root)
+
+            try:
+                result = _shares_mod.redeem_share_key(
+                    grantee_user_dir=user_dir, share_string=args.share_redeem.strip()
+                )
+
+                print("\n  Share redeemed!")
+
+                print(f"  Project '{result['project']}' from {result['owner']}")
+
+                mount = result.get("mount_name", result["owner"] + "_" + result["project"])
+
+                print(f"  Mounted at:  mounts/{mount}")
+
+                print("  Access:      read-only\n")
+
+            except Exception as exc:
+                print(f"  Redeem failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        if args.share_revoke:
+            from axon import shares as _shares_mod
+
+            user_dir = Path(config.projects_root)
+
+            try:
+                result = _shares_mod.revoke_share_key(
+                    owner_user_dir=user_dir, key_id=args.share_revoke.strip()
+                )
+
+                print(f"  Share '{result['key_id']}' revoked.")
+
+            except Exception as exc:
+                print(f"  Revoke failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        if args.session_list:
+            from axon.sessions import _list_sessions, _print_sessions
+
+            sessions = _list_sessions(project=_proj_mod.get_active_project())
+
+            if not sessions:
+                print("  No saved sessions.")
+
+            else:
+                _print_sessions(sessions)
+
+            return
+
+    # Instantiate AxonBrain only when necessary (heavy init)
+    if need_brain:
+        if _entering_repl:
+            print()
+
+            _init_display = _InitDisplay()
+
+            for _n in _INIT_LOGGER_NAMES:
+                _lg = logging.getLogger(_n)
+
+                _saved_propagate[_n] = _lg.propagate
+
+                _lg.propagate = False  # suppress default stderr handler
+
+                _lg.setLevel(logging.INFO)
+
+                _lg.addHandler(_init_display)
+
+        brain = AxonBrain(config)
+
+        if _init_display:
+            _init_display.stop()
+
+            for _n in _INIT_LOGGER_NAMES:
+                _lg = logging.getLogger(_n)
+
+                _lg.removeHandler(_init_display)
+
+                _lg.propagate = _saved_propagate.get(_n, True)
+    else:
+        brain = None
 
     # --- Project CLI handling ---
 
@@ -1293,17 +1555,25 @@ def main():
 
         return
 
-    if getattr(args, "graph_export", False):
+    if getattr(args, "graph_export", None) is not None:
         import tempfile
 
         print("  Exporting graph...")
 
         try:
-            cache_dir = os.path.join(os.path.expanduser("~"), ".axon", "cache")
+            # If user provided a path (non-empty string), use it. Otherwise default
+            # to the active project's directory.
+            if isinstance(args.graph_export, str) and args.graph_export:
+                out_path = os.path.expanduser(args.graph_export)
 
-            os.makedirs(cache_dir, exist_ok=True)
+                os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
-            out_path = os.path.join(cache_dir, "graph.html")
+            else:
+                from axon.projects import project_dir as _project_dir
+
+                active_proj = getattr(brain, "_active_project", "default")
+
+                out_path = os.path.join(str(_project_dir(active_proj)), "graph.html")
 
         except OSError:
             out_path = os.path.join(tempfile.gettempdir(), "axon_graph.html")
