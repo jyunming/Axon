@@ -546,9 +546,39 @@ async def ingest_upload(
                 continue
 
             temp_path = temp_root / candidate_name
-            data = await upload.read()
-            temp_path.write_bytes(data)
-            await upload.close()
+            # Stream upload to disk in chunks to avoid reading entire file into memory.
+            MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB per file cap
+            total_written = 0
+            try:
+                with open(temp_path, "wb") as _out:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)  # 1 MB
+                        if not chunk:
+                            break
+                        _out.write(chunk)
+                        total_written += len(chunk)
+                        if total_written > MAX_UPLOAD_BYTES:
+                            await upload.close()
+                            raise HTTPException(status_code=413, detail=f"File '{candidate_name}' exceeds the allowed size of {MAX_UPLOAD_BYTES} bytes")
+                await upload.close()
+            except HTTPException:
+                # Let the HTTPException bubble up to the client
+                raise
+            except Exception as exc:
+                try:
+                    await upload.close()
+                except Exception:
+                    pass
+                logger.error("Failed to save uploaded file %s: %s", candidate_name, exc)
+                results.append(
+                    {
+                        "filename": candidate_name,
+                        "status": "error",
+                        "error": "failed to save uploaded file",
+                        "chunks": 0,
+                    }
+                )
+                continue
 
             try:
                 docs = await asyncio.to_thread(loader.load, str(temp_path))
