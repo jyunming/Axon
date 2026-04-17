@@ -98,21 +98,44 @@ async def refresh_docs(background_tasks: BackgroundTasks):
         if job is None:
             return
         try:
-            versions = brain.get_doc_versions()
+            versions = brain.get_doc_versions() or {}
             loader = DirectoryLoader()
+
+            # Scope refresh to the active project to avoid touching other projects' sources
+            active_project = getattr(brain, "_active_project", None)
+            try:
+                project_root = (
+                    pathlib.Path(brain.config.projects_root) / active_project
+                ).resolve()
+            except Exception:
+                project_root = None
+
             for source_id, record in versions.items():
-                if not os.path.exists(source_id):
+                # Resolve source path and ensure it belongs to the active project (if set)
+                try:
+                    src_path = pathlib.Path(source_id).expanduser().resolve()
+                except Exception:
+                    job["errors"].append({"source": source_id, "error": "invalid source path"})
+                    continue
+
+                if project_root and not str(src_path).startswith(str(project_root)):
+                    # Skip files that belong to other projects
+                    job["skipped"].append(source_id)
+                    continue
+
+                if not src_path.exists():
                     job["missing"].append(source_id)
                     continue
+
                 try:
-                    suffix = os.path.splitext(source_id)[1].lower()
+                    suffix = os.path.splitext(str(src_path))[1].lower()
                     loader_instance = loader.loaders.get(suffix)
                     if loader_instance is None:
                         job["errors"].append(
                             {"source": source_id, "error": f"no loader for extension '{suffix}'"}
                         )
                         continue
-                    docs = functools.partial(loader_instance.load, source_id)()
+                    docs = functools.partial(loader_instance.load, str(src_path))()
                     if not docs:
                         job["errors"].append(
                             {"source": source_id, "error": "loader returned no documents"}
