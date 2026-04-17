@@ -559,6 +559,12 @@ def main():
         help="Suppress spinners and progress (auto-enabled when stdin is not a TTY)",
     )
 
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Run in headless mode: do not start the interactive REPL (useful for scripts/CI).",
+    )
+
     # ── Document deletion ────────────────────────────────────────────────────
 
     parser.add_argument(
@@ -1059,6 +1065,7 @@ def main():
         and not getattr(args, "session_list", False)
         and not getattr(args, "optimize_index", False)
         and not getattr(args, "migrate_vectors", None)
+        and not getattr(args, "non_interactive", False)
         and sys.stdin.isatty()
     )
 
