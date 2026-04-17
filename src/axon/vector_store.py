@@ -234,6 +234,19 @@ class OpenVectorStore:
         embeddings: list[list[float]],
         metadatas: list[dict] | None = None,
     ):
+        # Validate input lengths to avoid misaligned batches being passed to backends.
+        n_ids = len(ids) if ids is not None else 0
+        n_texts = len(texts) if texts is not None else 0
+        n_embs = len(embeddings) if embeddings is not None else 0
+        if not (n_ids == n_texts == n_embs):
+            raise ValueError(
+                f"ids/texts/embeddings length mismatch: ids={n_ids} texts={n_texts} embeddings={n_embs}"
+            )
+        if metadatas is not None and len(metadatas) != n_ids:
+            raise ValueError(
+                f"metadatas length mismatch: metadatas={len(metadatas)} vs ids={n_ids}"
+            )
+
         if self.provider == "chroma":
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
 
