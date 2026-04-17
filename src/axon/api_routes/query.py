@@ -57,12 +57,27 @@ async def query_brain(request: QueryRequest):
         timeout = request.timeout or float(os.getenv("AXON_QUERY_TIMEOUT", "120"))
 
         if request.dry_run:
+            # Dry-run must never trigger LLM calls. Force-disable all transforms that
+            # cause model invocations (HyDE, multi-query, step-back, decomposition,
+            # compression, Raptor, and GraphRAG).
+            dry_overrides = dict(overrides) if overrides else {}
+            for _k in (
+                "hyde",
+                "multi_query",
+                "step_back",
+                "query_decompose",
+                "compress_context",
+                "raptor",
+                "graph_rag",
+            ):
+                dry_overrides[_k] = False
+
             try:
                 results, diag, _trace = await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
                         lambda: brain.search_raw(
-                            request.query, filters=request.filters, overrides=overrides
+                            request.query, filters=request.filters, overrides=dry_overrides
                         ),
                     ),
                     timeout=timeout,
