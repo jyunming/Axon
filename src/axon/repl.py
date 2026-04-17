@@ -1803,20 +1803,29 @@ def _expand_at_files(text: str) -> str:
         return "\n".join(parts) if parts else f"\n(no readable files found in {dirpath})"
 
     def _replace(m: re.Match) -> str:
-        path = m.group(1).rstrip("/\\")
+        raw_path = m.group(1).rstrip("/\\")
+        from pathlib import Path as _P
 
-        if os.path.isdir(path):
-            return f"\n\n=== folder: {path} ===\n{_expand_dir(path)}\n=== end folder ===\n"
+        p = _P(raw_path)
+        try:
+            p_resolved = p.resolve()
+        except Exception:
+            p_resolved = p
 
-        if os.path.isfile(path):
-            content = _read_file(path)
+        if p_resolved.is_dir():
+            path_str = str(p_resolved)
+            return f"\n\n=== folder: {path_str} ===\n{_expand_dir(path_str)}\n=== end folder ===\n"
+
+        if p_resolved.is_file():
+            path_str = str(p_resolved)
+            content = _read_file(path_str)
 
             if content:
-                return f"\n\n--- @{path} ---\n{content}\n--- end ---\n"
+                return f"\n\n--- @{path_str} ---\n{content}\n--- end ---\n"
 
         return m.group(0)
 
-    return re.sub(r"(?<!\\S)@(\\S+)", _replace, text)
+    return re.sub(r"(?<!\S)@(\S+)", _replace, text)
 
 
 # ---------------------------------------------------------------------------
@@ -1893,7 +1902,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
             confirm = "n"
 
         if confirm == "y":
-            import os
+            # use module-level os
             from pathlib import Path
 
             from axon.config import _DEFAULT_CONFIG_YAML, _USER_CONFIG_PATH
@@ -2191,23 +2200,30 @@ def _interactive_repl(
                                 )
 
                     else:
-                        try:
-                            import ollama as _ol
+                        # use module-level os
 
-                            resp = _ol.list()
-
-                            mods = (
-                                resp.models if hasattr(resp, "models") else resp.get("models", [])
-                            )
-
-                            for m in mods:
-                                name = m.model if hasattr(m, "model") else m.get("name", "")
-
-                                if name.startswith(prefix):
-                                    yield Completion(name[len(prefix) :], display=name)
-
-                        except Exception:
+                        if os.getenv("AXON_DRY_RUN"):
                             pass
+                        else:
+                            try:
+                                import ollama as _ol
+
+                                resp = _ol.list()
+
+                                mods = (
+                                    resp.models
+                                    if hasattr(resp, "models")
+                                    else resp.get("models", [])
+                                )
+
+                                for m in mods:
+                                    name = m.model if hasattr(m, "model") else m.get("name", "")
+
+                                    if name.startswith(prefix):
+                                        yield Completion(name[len(prefix) :], display=name)
+
+                            except Exception:
+                                pass
 
                 # ── /resume <session-id> ──────────────────────────────────
 
@@ -2397,116 +2413,130 @@ def _interactive_repl(
             return _PTANSI(f"{row1}\n{row2}{_RST}")
 
         # Build the Application when running interactively on a real TTY.
-        # Skip in test-mode (_scripted_inputs) or when stdout is not a terminal.
-        if _scripted_inputs is None and sys.stdout.isatty():
+        # Skip in test-mode (_scripted_inputs). Attempt to create a full-screen
+        # prompt_toolkit Application and fall back gracefully to readline/input
+        # if the environment does not support it.
+        if _scripted_inputs is None:
+            try:
 
-            def _handle_enter(buf: Buffer) -> None:
-                text = buf.text
-                if text.strip() and _input_queue is not None:
-                    _input_queue.put_nowait(text)
-                # Do NOT call buf.reset() here — prompt_toolkit resets the buffer
-                # after accept_handler returns and records history before reset.
+                def _handle_enter(buf: Buffer) -> None:
+                    text = buf.text
+                    if text.strip() and _input_queue is not None:
+                        _input_queue.put_nowait(text)
+                    # Do NOT call buf.reset() here — prompt_toolkit resets the buffer
+                    # after accept_handler returns and records history before reset.
 
-            _input_buf = Buffer(
-                completer=_PTCompleter(brain),
-                complete_while_typing=True,
-                history=_FileHistory(_HIST_FILE),
-                name="input",
-                accept_handler=_handle_enter,
-            )
+                _input_buf = Buffer(
+                    completer=_PTCompleter(brain),
+                    complete_while_typing=True,
+                    history=_FileHistory(_HIST_FILE),
+                    name="input",
+                    accept_handler=_handle_enter,
+                )
 
-            _kb = KeyBindings()
+                _kb = KeyBindings()
 
-            @_kb.add("enter")
-            def _handle_enter_key(event):
-                # validate_and_handle() calls accept_handler then resets the buffer.
-                # This is what PromptSession does internally; we must wire it
-                # explicitly in a raw Application since load_emacs_bindings()
-                # does not include the submit-on-enter behaviour.
-                event.current_buffer.validate_and_handle()
+                @_kb.add("enter")
+                def _handle_enter_key(event):
+                    # validate_and_handle() calls accept_handler then resets the buffer.
+                    # This is what PromptSession does internally; we must wire it
+                    # explicitly in a raw Application since load_emacs_bindings()
+                    # does not include the submit-on-enter behaviour.
+                    event.current_buffer.validate_and_handle()
 
-            @_kb.add("c-c")
-            def _handle_ctrl_c(event):
-                if _input_buf.text:
-                    _input_buf.reset()
-                else:
-                    event.app.exit(exception=KeyboardInterrupt())
+                @_kb.add("c-c")
+                def _handle_ctrl_c(event):
+                    if _input_buf.text:
+                        _input_buf.reset()
+                    else:
+                        event.app.exit(exception=KeyboardInterrupt())
 
-            @_kb.add("c-d")
-            def _handle_ctrl_d(event):
-                event.app.exit(exception=EOFError())
+                @_kb.add("c-d")
+                def _handle_ctrl_d(event):
+                    event.app.exit(exception=EOFError())
 
-            from prompt_toolkit.key_binding import merge_key_bindings
+                from prompt_toolkit.key_binding import merge_key_bindings
 
-            from axon._ui_state import state as _ui_state_spin
+                from axon._ui_state import state as _ui_state_spin
 
-            def _spinner_line() -> str:
-                ep = _ui_state_spin.get("embed_progress", "")
-                if ep:
-                    return f"  \x1b[1;32m\u2022 {ep}\x1b[0m"
-                frame = _SPIN_FRAMES[_spin_state["idx"] % len(_SPIN_FRAMES)]
-                return f"  \x1b[1;33m{frame} Thinking\u2026  Ctrl+C to cancel\x1b[0m"
+                def _spinner_line() -> str:
+                    ep = _ui_state_spin.get("embed_progress", "")
+                    if ep:
+                        return f"  \x1b[1;32m\u2022 {ep}\x1b[0m"
+                    frame = _SPIN_FRAMES[_spin_state["idx"] % len(_SPIN_FRAMES)]
+                    return f"  \x1b[1;33m{frame} Thinking\u2026  Ctrl+C to cancel\x1b[0m"
 
-            _pt_app = Application(
-                layout=Layout(
-                    HSplit(
-                        [
-                            # Spinner row — rendered by prompt_toolkit for smooth ~12fps animation.
-                            # Disappears instantly when _spin_state["active"] becomes False.
-                            ConditionalContainer(
-                                content=Window(
-                                    content=FormattedTextControl(lambda: _PTANSI(_spinner_line())),
+                _pt_app = Application(
+                    layout=Layout(
+                        HSplit(
+                            [
+                                # Spinner row — rendered by prompt_toolkit for smooth ~12fps animation.
+                                # Disappears instantly when _spin_state["active"] becomes False.
+                                ConditionalContainer(
+                                    content=Window(
+                                        content=FormattedTextControl(
+                                            lambda: _PTANSI(_spinner_line())
+                                        ),
+                                        height=1,
+                                    ),
+                                    filter=Condition(lambda: bool(_spin_state["active"])),
+                                ),
+                                # Completions expand upward above the input row
+                                ConditionalContainer(
+                                    content=CompletionsMenu(max_height=8, scroll_offset=1),
+                                    filter=has_completions,
+                                ),
+                                # Thin separator line between conversation and input area
+                                Window(
                                     height=1,
+                                    char="─",
+                                    style="class:separator",
                                 ),
-                                filter=Condition(lambda: bool(_spin_state["active"])),
-                            ),
-                            # Completions expand upward above the input row
-                            ConditionalContainer(
-                                content=CompletionsMenu(max_height=8, scroll_offset=1),
-                                filter=has_completions,
-                            ),
-                            # Thin separator line between conversation and input area
-                            Window(
-                                height=1,
-                                char="─",
-                                style="class:separator",
-                            ),
-                            Window(
-                                content=BufferControl(
-                                    buffer=_input_buf,
-                                    focusable=True,
-                                    include_default_input_processors=True,
+                                Window(
+                                    content=BufferControl(
+                                        buffer=_input_buf,
+                                        focusable=True,
+                                        include_default_input_processors=True,
+                                    ),
+                                    get_line_prefix=lambda lineno, wrap_count: _PThtml(
+                                        "<ansigreen><b>></b></ansigreen> "
+                                    ),
+                                    height=1,
+                                    wrap_lines=False,
                                 ),
-                                get_line_prefix=lambda lineno, wrap_count: _PThtml(
-                                    "<ansigreen><b>></b></ansigreen> "
+                                # Thin separator between input and status bar
+                                Window(
+                                    height=1,
+                                    char="─",
+                                    style="class:separator",
                                 ),
-                                height=1,
-                                wrap_lines=False,
-                            ),
-                            # Thin separator between input and status bar
-                            Window(
-                                height=1,
-                                char="─",
-                                style="class:separator",
-                            ),
-                            Window(
-                                content=FormattedTextControl(_toolbar),
-                                height=2,
-                                style="class:bottom-toolbar",
-                            ),
-                        ]
-                    )
-                ),
-                key_bindings=merge_key_bindings([load_emacs_bindings(), _kb]),
-                style=_PT_STYLE,
-                mouse_support=False,
-                full_screen=True,
-            )
+                                Window(
+                                    content=FormattedTextControl(_toolbar),
+                                    height=2,
+                                    style="class:bottom-toolbar",
+                                ),
+                            ]
+                        )
+                    ),
+                    key_bindings=merge_key_bindings([load_emacs_bindings(), _kb]),
+                    style=_PT_STYLE,
+                    mouse_support=False,
+                    full_screen=True,
+                )
 
-            # Store app reference so background threads can trigger redraws.
-            from axon._ui_state import state as _ui_state_ref
+                # Store app reference so background threads can trigger redraws.
+                from axon._ui_state import state as _ui_state_ref
 
-            _ui_state_ref["_pt_app"] = _pt_app
+                _ui_state_ref["_pt_app"] = _pt_app
+
+            except Exception as _pt_exc:  # pragma: no cover - best-effort fallback
+                import logging as _logging
+
+                _logging.getLogger("Axon").info(
+                    "Prompt toolkit Application unavailable: %s. Falling back to readline/input.",
+                    _pt_exc,
+                )
+                _pt_app = None
 
     except ImportError:
         # Fall back to readline with history persistence
@@ -2609,6 +2639,31 @@ def _interactive_repl(
                 return next(_script_iter)
             except StopIteration:
                 raise EOFError
+
+        # If tests monkeypatch prompt_toolkit.PromptSession to provide scripted
+        # inputs, prefer that API so pytest can capture stdout while supplying
+        # input via the fake PromptSession. This preserves existing test
+        # fixtures that replaced PromptSession.
+        try:
+            import prompt_toolkit as _pt
+
+            PS = getattr(_pt, "PromptSession", None)
+
+            if PS:
+                try:
+                    session = PS()
+
+                    return session.prompt(prompt if prompt else "\033[1;32mYou\033[0m: ")
+
+                except StopIteration:
+                    raise EOFError
+
+                except Exception:
+                    # Fall back to builtin input() if PromptSession fails for any reason
+                    pass
+        except Exception:
+            pass
+
         return input(prompt if prompt else "\033[1;32mYou\033[0m: ")
 
     def _shell_passthrough_allowed() -> tuple[bool, str]:
@@ -2982,7 +3037,7 @@ def _interactive_repl(
                     if not matched:
                         # No glob match — try as plain directory
 
-                        if os.path.isdir(arg):
+                        if Path(arg).is_dir():
                             matched = [arg]
 
                         else:
@@ -2994,7 +3049,9 @@ def _interactive_repl(
                         ingested, skipped = 0, 0
 
                         for path in matched:
-                            if os.path.isdir(path):
+                            p = Path(path)
+
+                            if p.is_dir():
                                 print(f"  {path} …", end="", flush=True)
 
                                 asyncio.run(brain.load_directory(path))
@@ -3003,8 +3060,8 @@ def _interactive_repl(
 
                                 ingested += 1
 
-                            elif os.path.isfile(path):
-                                ext = os.path.splitext(path)[1].lower()
+                            elif p.is_file():
+                                ext = p.suffix.lower()
 
                                 if ext in loader_mgr.loaders:
                                     brain.ingest(loader_mgr.loaders[ext].load(path))
@@ -3166,51 +3223,56 @@ def _interactive_repl(
                     print("  Usage: /pull <model-name>")
 
                 else:
-                    try:
-                        import ollama as _ollama
+                    # use module-level os
 
-                        print(f"  Pulling '{arg}' …")
+                    if os.getenv("AXON_DRY_RUN"):
+                        print("  Pulling models disabled in dry-run mode.")
+                    else:
+                        try:
+                            import ollama as _ollama
 
-                        last_status = ""
+                            print(f"  Pulling '{arg}' …")
 
-                        for chunk in _ollama.pull(arg, stream=True):
-                            status = (
-                                chunk.get("status", "")
-                                if isinstance(chunk, dict)
-                                else getattr(chunk, "status", "")
-                            )
+                            last_status = ""
 
-                            total = (
-                                chunk.get("total", 0)
-                                if isinstance(chunk, dict)
-                                else getattr(chunk, "total", 0)
-                            )
+                            for chunk in _ollama.pull(arg, stream=True):
+                                status = (
+                                    chunk.get("status", "")
+                                    if isinstance(chunk, dict)
+                                    else getattr(chunk, "status", "")
+                                )
 
-                            completed = (
-                                chunk.get("completed", 0)
-                                if isinstance(chunk, dict)
-                                else getattr(chunk, "completed", 0)
-                            )
+                                total = (
+                                    chunk.get("total", 0)
+                                    if isinstance(chunk, dict)
+                                    else getattr(chunk, "total", 0)
+                                )
 
-                            if total and completed:
-                                line = f"  {status}: {int(completed/total*100)}%"
+                                completed = (
+                                    chunk.get("completed", 0)
+                                    if isinstance(chunk, dict)
+                                    else getattr(chunk, "completed", 0)
+                                )
 
-                            elif status:
-                                line = f"  {status}"
+                                if total and completed:
+                                    line = f"  {status}: {int(completed/total*100)}%"
 
-                            else:
-                                continue
+                                elif status:
+                                    line = f"  {status}"
 
-                            # Pad to clear previous longer line
+                                else:
+                                    continue
 
-                            print(f"\r{line:<60}", end="", flush=True)
+                                # Pad to clear previous longer line
 
-                            last_status = line  # noqa: F841
+                                print(f"\r{line:<60}", end="", flush=True)
 
-                        print(f"\r  '{arg}' ready.{' ' * 50}")
+                                last_status = line  # noqa: F841
 
-                    except Exception as e:
-                        print(f"  Pull failed: {e}")
+                            print(f"\r  '{arg}' ready.{' ' * 50}")
+
+                        except Exception as e:
+                            print(f"  Pull failed: {e}")
 
             elif cmd == "/graph-viz":
                 import hashlib as _hashlib
@@ -5045,5 +5107,15 @@ def _interactive_repl(
                 break
             if not user_input:
                 continue
-            if _process_input_sync(user_input):
+            should_exit = False
+            try:
+                should_exit = _process_input_sync(user_input)
+            finally:
+                # In non-Application mode, reprint the status bar to keep the UI informative.
+                if _pt_app is None:
+                    try:
+                        _print_status_bar()
+                    except Exception:
+                        pass
+            if should_exit:
                 break

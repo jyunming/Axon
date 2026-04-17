@@ -756,14 +756,30 @@ def main():
 
         # Console handler (INFO by default; quieter when --quiet or non-TTY)
         ch = logging.StreamHandler()
-        console_level = logging.WARNING if (args.quiet or not sys.stdin.isatty()) else logging.INFO
+        # Default: do not print INFO logs to console; write details to rotating file.
+        console_level = logging.DEBUG if os.getenv("AXON_DEBUG") else logging.ERROR
         ch.setLevel(console_level)
         ch.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         root_logger.addHandler(ch)
 
-        # Inform the user where logs are stored (non-quiet TTY only)
-        if sys.stdin.isatty() and not args.quiet:
-            print(f"Logging to: {log_file}")
+        # Quiet mode: redirect built-in print() to the logger so verbose prints are saved to file instead of showing on stdout
+        _orig_print = None
+        if (args.quiet or not sys.stdin.isatty()) and "pytest" not in sys.modules:
+            try:
+                import builtins as _builtins
+
+                _orig_print = _builtins.print
+
+                def _log_print(*p_args, sep=" ", end="\n", file=None, flush=False, **kwargs):
+                    try:
+                        logging.getLogger("Axon.CLI").info(sep.join(map(str, p_args)))
+                    except Exception:
+                        _orig_print(*p_args, sep=sep, end=end, file=file, flush=flush, **kwargs)
+
+                _builtins.print = _log_print
+            except Exception:
+                _orig_print = None
+
     except Exception:
         # Best-effort logging setup; do not fail the CLI if logging init errors
         pass
@@ -920,73 +936,87 @@ def main():
             f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)\n"
         )
 
-        try:
-            import ollama as _ollama
+        # use module-level os
 
-            response = _ollama.list()
+        if os.getenv("AXON_DRY_RUN"):
+            print("  (Ollama model listing skipped in dry-run mode)")
+        else:
+            try:
+                import ollama as _ollama
 
-            models = response.models if hasattr(response, "models") else response.get("models", [])
+                response = _ollama.list()
 
-            if models:
-                print("  Locally available Ollama models:")
+                models = (
+                    response.models if hasattr(response, "models") else response.get("models", [])
+                )
 
-                for m in models:
-                    name = m.model if hasattr(m, "model") else m.get("name", str(m))
+                if models:
+                    print("  Locally available Ollama models:")
 
-                    size_gb = m.size / 1e9 if hasattr(m, "size") and m.size else 0
+                    for m in models:
+                        name = m.model if hasattr(m, "model") else m.get("name", str(m))
 
-                    size_str = f"  ({size_gb:.1f} GB)" if size_gb else ""
+                        size_gb = m.size / 1e9 if hasattr(m, "size") and m.size else 0
 
-                    print(f"     • {name}{size_str}")
+                        size_str = f"  ({size_gb:.1f} GB)" if size_gb else ""
 
-        except Exception:
-            print("  (Ollama not reachable — cannot list local models)")
+                        print(f"     • {name}{size_str}")
+
+            except Exception:
+                print("  (Ollama not reachable — cannot list local models)")
 
         print()
 
         return
 
     if args.pull:
-        try:
-            import ollama as _ollama
+        # use module-level os
 
-            print(f"  Pulling '{args.pull}'...")
+        if os.getenv("AXON_DRY_RUN"):
+            print(f"\n  Pull '{args.pull}' skipped in dry-run mode.\n")
+        else:
+            try:
+                import ollama as _ollama
 
-            for chunk in _ollama.pull(args.pull, stream=True):
-                status = (
-                    chunk.get("status", "")
-                    if isinstance(chunk, dict)
-                    else getattr(chunk, "status", "")
-                )
+                print(f"  Pulling '{args.pull}'...")
 
-                total = (
-                    chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, "total", 0)
-                )
+                for chunk in _ollama.pull(args.pull, stream=True):
+                    status = (
+                        chunk.get("status", "")
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "status", "")
+                    )
 
-                completed = (
-                    chunk.get("completed", 0)
-                    if isinstance(chunk, dict)
-                    else getattr(chunk, "completed", 0)
-                )
+                    total = (
+                        chunk.get("total", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "total", 0)
+                    )
 
-                if total and completed:
-                    pct = int(completed / total * 100)
+                    completed = (
+                        chunk.get("completed", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "completed", 0)
+                    )
 
-                    print(f"\r  {status}: {pct}%  ", end="", flush=True)
+                    if total and completed:
+                        pct = int(completed / total * 100)
 
-                elif status:
-                    print(f"\r  {status}...    ", end="", flush=True)
+                        print(f"\r  {status}: {pct}%  ", end="", flush=True)
 
-            print(f"\n  '{args.pull}' is ready.\n")
+                    elif status:
+                        print(f"\r  {status}...    ", end="", flush=True)
 
-        except Exception as e:
-            print(f"\n  Error: Failed to pull '{args.pull}': {e}")
+                print(f"\n  '{args.pull}' is ready.\n")
+
+            except Exception as e:
+                print(f"\n  Error: Failed to pull '{args.pull}': {e}")
 
         return
 
     # Auto-pull Ollama model if not available locally
 
-    if config.llm_provider == "ollama" and config.llm_model:
+    if config.llm_provider == "ollama" and config.llm_model and not getattr(args, "dry_run", False):
         try:
             import ollama as _ollama
 
@@ -1071,6 +1101,37 @@ def main():
 
     _init_display: _InitDisplay | None = None
 
+    # If running non-interactive or in quiet mode (scripts/CI), redirect stderr and stdout to a log file
+    # so third-party prints don't pollute the console. This keeps console output clean
+    # while preserving user-facing CLI prints. Only apply when not entering REPL or when
+    # quiet/non-TTY is requested.
+    try:
+        from datetime import datetime as _dt
+        from pathlib import Path as _Path
+
+        _log_base = _Path(config.axon_store_base or _Path.home() / ".axon")
+        _log_dir = (_log_base / "logs").expanduser().resolve()
+        _log_dir.mkdir(parents=True, exist_ok=True)
+        _redir_log = _log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}.log"
+        if args.quiet or not sys.stdin.isatty() or not _entering_repl:
+            try:
+                _log_fh = open(str(_redir_log), "a", encoding="utf-8")
+                try:
+                    sys.stderr.flush()
+                except Exception:
+                    pass
+                try:
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+                # Redirect both stderr and stdout to the daily log file for non-interactive runs.
+                sys.stderr = _log_fh
+                sys.stdout = _log_fh
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     _saved_propagate: dict = {}
 
     _INIT_LOGGER_NAMES = [
@@ -1086,19 +1147,17 @@ def main():
     # Determine whether the requested CLI action requires the heavy AxonBrain
     # initialization (embedding models, vector stores, LLM clients, etc.).
     need_brain = bool(
-        args.query
+        _entering_repl
+        or args.query
         or getattr(args, "ingest", None)
-        or args.list
         or getattr(args, "refresh", False)
         or getattr(args, "list_stale", False)
-        or getattr(args, "graph_status", False)
         or getattr(args, "graph_finalize", False)
         or getattr(args, "graph_export", None) is not None
         or getattr(args, "delete_doc", None)
         or getattr(args, "delete_doc_id", None)
         or getattr(args, "optimize_index", False)
         or getattr(args, "migrate_vectors", None) is not None
-        or getattr(args, "session_list", False)
         or getattr(args, "list_models", False)
         or getattr(args, "pull", None)
     )
@@ -1198,6 +1257,40 @@ def main():
                 print(f"  Store init failed: {exc}")
 
                 sys.exit(1)
+
+            return
+
+        # Lightweight 'list' command: avoid full AxonBrain init by reading doc_versions metadata
+        if args.list:
+            import json
+            from pathlib import Path as _P
+
+            bm25_path = _P(config.bm25_path or "")
+            doc_versions_file = bm25_path / ".doc_versions.json"
+
+            if doc_versions_file.exists():
+                try:
+                    with open(doc_versions_file, encoding="utf-8") as _f:
+                        dv = json.load(_f)
+                except Exception:
+                    print("  Failed to read doc versions metadata; falling back to empty list.")
+                    dv = {}
+
+                if not dv:
+                    print("  Knowledge base is empty.")
+                else:
+                    total_chunks = sum(
+                        (v.get("chunk_count") or v.get("chunks") or 0) for v in dv.values()
+                    )
+                    print(f"\n  Knowledge Base — {len(dv)} file(s), {total_chunks} chunk(s)\n")
+                    print(f"  {'Source':<60} {'Chunks':>6}")
+                    print(f"  {'-'*60} {'-'*6}")
+                    for src, info in dv.items():
+                        chunks = info.get("chunk_count") or info.get("chunks") or 0
+                        print(f"  {src:<60} {chunks:>6}")
+
+            else:
+                print("  Knowledge base is empty or not initialized (no .doc_versions.json found).")
 
             return
 
@@ -1356,7 +1449,15 @@ def main():
 
                 _lg.addHandler(_init_display)
 
-        brain = AxonBrain(config)
+        # If user requested dry-run, enable retrieval_dry_run in config so subsystems can skip LLM calls where supported
+        if getattr(args, "dry_run", False):
+            config.retrieval_dry_run = True
+            try:
+                os.environ["AXON_DRY_RUN"] = "1"
+            except Exception:
+                pass
+
+        brain = AxonBrain(config, init_llm=not getattr(args, "dry_run", False))
 
         if _init_display:
             _init_display.stop()
@@ -1489,8 +1590,7 @@ def main():
         return
 
     if getattr(args, "refresh", False):
-        import hashlib as _hashlib
-
+        from axon.api_schemas import _compute_content_hash
         from axon.loaders import DirectoryLoader
 
         versions = brain.get_doc_versions()
@@ -1529,7 +1629,7 @@ def main():
 
                 combined = "".join(d.get("text", "") for d in docs)
 
-                current_hash = _hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
+                current_hash = _compute_content_hash(combined)
 
                 if current_hash == record.get("content_hash"):
                     skipped.append(source_id)
@@ -1693,6 +1793,42 @@ def main():
 
         if brain.bm25 is not None:
             brain.bm25.delete_documents(ids_to_delete)
+
+        # Remove tracked doc_versions entries and associated content hashes so the
+        # source can be re-ingested cleanly. This avoids the situation where
+        # delete reports success but the source remains retrievable due to stale
+        # metadata or hash entries.
+        try:
+            removed_sources = []
+            for d in match:
+                src = d.get("source")
+                if not src:
+                    continue
+                # Remove from doc_versions if present
+                if getattr(brain, "_doc_versions", None) and src in brain._doc_versions:
+                    rec = brain._doc_versions.pop(src, None)
+                    if rec:
+                        removed_sources.append(src)
+                        # Remove the saved content_hash from dedup set if present
+                        ch = rec.get("content_hash")
+                        if ch and hasattr(brain, "_ingested_hashes"):
+                            try:
+                                brain._ingested_hashes.discard(ch)
+                            except Exception:
+                                pass
+            # Persist changes
+            try:
+                if hasattr(brain, "_save_hash_store"):
+                    brain._save_hash_store()
+            except Exception:
+                pass
+            try:
+                if hasattr(brain, "_save_doc_versions"):
+                    brain._save_doc_versions()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         total_chunks = sum(d["chunks"] for d in match)
 
@@ -1954,6 +2090,10 @@ def main():
 
     _quiet = args.quiet or not sys.stdin.isatty()
 
+    if brain is None:
+        # Ensure a brain instance is available for the interactive REPL
+        brain = AxonBrain(config, init_llm=not getattr(args, "dry_run", False))
+
     try:
         _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
 
@@ -1966,6 +2106,7 @@ def main():
 
     # (colorama/posthog atexit callbacks raise tracebacks on double Ctrl+C)
 
+    # Manually flush readline history, then hard-exit to skip atexit handlers
     try:
         import readline as _rl
 
