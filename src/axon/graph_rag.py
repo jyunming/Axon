@@ -303,7 +303,7 @@ class GraphRagMixin:
             if node in allowed_nodes:
                 _append_node(node)
         for edge in raw_edges:
-            if not isinstance(edge, (tuple, list)) or len(edge) < 2:
+            if not isinstance(edge, tuple | list) or len(edge) < 2:
                 continue
             src = str(edge[0] or "").strip()
             tgt = str(edge[1] or "").strip()
@@ -626,6 +626,28 @@ class GraphRagMixin:
         sig = (len(rel), sum(len(v) for v in rel.values()))
         if getattr(self, "_incoming_rel_sig", None) == sig and hasattr(self, "_incoming_rel_index"):
             return self._incoming_rel_index
+        import json as _json_in
+        import pathlib as _pathlib_in
+
+        _incoming_path = _pathlib_in.Path(self.config.bm25_path) / ".relation_graph.incoming.json"
+        # Try loading from disk to avoid the O(N×M) rebuild on startup.
+        if not hasattr(self, "_incoming_rel_index") and _incoming_path.exists():
+            try:
+                _raw = _json_in.loads(_incoming_path.read_text(encoding="utf-8"))
+                if isinstance(_raw, dict):
+                    # Values were stored as list-of-[src, entry] (JSON lists); restore tuples.
+                    self._incoming_rel_index = {
+                        k: [tuple(item) if isinstance(item, list) else item for item in v]
+                        for k, v in _raw.items()
+                    }
+                    self._incoming_rel_sig = sig
+                    logger.debug(
+                        "GraphRAG: incoming relation index loaded from disk (%d entries)",
+                        len(self._incoming_rel_index),
+                    )
+                    return self._incoming_rel_index
+            except Exception as _e:
+                logger.debug("GraphRAG: incoming index disk load failed: %s", _e)
         idx: dict[str, list] = {}
         for src, entries in rel.items():
             for entry in entries:
@@ -636,6 +658,17 @@ class GraphRagMixin:
                 idx.setdefault(tgt, []).append((src, entry))
         self._incoming_rel_sig = sig
         self._incoming_rel_index = idx
+        # Persist for fast reload on next startup.
+        try:
+            import os as _os_in
+
+            _tmp = str(_incoming_path) + ".tmp"
+            with open(_tmp, "w", encoding="utf-8") as _f:
+                _json_in.dump(idx, _f)
+            _os_in.replace(_tmp, str(_incoming_path))
+            logger.debug("GraphRAG: incoming relation index saved (%d entries)", len(idx))
+        except Exception as _e:
+            logger.debug("GraphRAG: could not persist incoming index: %s", _e)
         return idx
 
     def _get_incoming_relation_count_map(self) -> dict[str, int]:
@@ -763,7 +796,7 @@ class GraphRagMixin:
                 continue
             out_entries: list[dict] = []
             for entry in value:
-                if isinstance(entry, (list, tuple)) and len(entry) >= 3:
+                if isinstance(entry, list | tuple) and len(entry) >= 3:
                     tgt, rel, cid = entry[0], entry[1], entry[2]
                     if isinstance(tgt, str) and isinstance(rel, str) and isinstance(cid, str):
                         out_entries.append(
@@ -788,7 +821,7 @@ class GraphRagMixin:
                 }
                 for field in ("subject", "object", "description", "weight", "strength"):
                     value_field = entry.get(field)
-                    if isinstance(value_field, (str, int, float)):
+                    if isinstance(value_field, str | int | float):
                         normalized[field] = value_field
                 out_entries.append(normalized)
             if out_entries:
@@ -970,6 +1003,16 @@ class GraphRagMixin:
 
         path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
         bm25_path = pathlib.Path(self.config.bm25_path)
+        # Invalidate persisted incoming relation index — rebuilt lazily on next access.
+        _inc_cache_path = bm25_path / ".relation_graph.incoming.json"
+        try:
+            _inc_cache_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if hasattr(self, "_incoming_rel_index"):
+            del self._incoming_rel_index
+        if hasattr(self, "_incoming_rel_sig"):
+            del self._incoming_rel_sig
         if bool(getattr(self.config, "graph_rag_relation_shard_persist", False)):
             shard_count = int(getattr(self.config, "graph_rag_relation_shard_count", 16) or 16)
             shard_count = max(1, shard_count)
@@ -2297,6 +2340,82 @@ class GraphRagMixin:
             except Exception:
                 return []
 
+        def _map_community_batch(args_list: list) -> list:
+            """Process N community report chunks in a single LLM call.
+
+            Returns a list of point-lists, one per input chunk (same order).
+            """
+            if not args_list:
+                return []
+            results = [None] * len(args_list)
+            uncached_indices = []
+            uncached_args = []
+            for i, (chunk_id, report_chunk) in enumerate(args_list):
+                if not report_chunk:
+                    results[i] = []
+                    continue
+                _chunk_sig = self._gr_text_hash(report_chunk)
+                _map_key = self._gr_text_hash(f"{query}|{chunk_id}|{_chunk_sig}")
+                _cached = self._gr_cache_get("global_map", _map_key)
+                if isinstance(_cached, list):
+                    results[i] = _cached
+                else:
+                    uncached_indices.append(i)
+                    uncached_args.append((chunk_id, report_chunk))
+            if not uncached_args:
+                return results
+            reports_section = ""
+            for j, (_chunk_id, report_chunk) in enumerate(uncached_args):
+                reports_section += f"\n\n---Report {j}---\n{report_chunk}"
+            batch_prompt = (
+                "---Role---\n"
+                "You are a helpful assistant responding to questions about the dataset.\n\n"
+                "---Goal---\n"
+                f"Analyze {len(uncached_args)} community reports below and, for each, extract "
+                "key points relevant to answering the question. "
+                "If a report is not relevant, return an empty array for it.\n\n"
+                f"---Question---\n{query}\n\n"
+                f"---Community Reports---{reports_section}\n\n"
+                "---Response Format---\n"
+                'Return a JSON object where keys are report indices ("0", "1", ...) '
+                "and values are arrays:\n"
+                '{"0": [{"point": "...", "score": 1-100}, ...], "1": [...], ...}\n'
+                "Higher score = more relevant. Output only valid JSON."
+            )
+            try:
+                raw = self._gr_llm_complete_cached(
+                    "global_map_batch",
+                    batch_prompt,
+                    system_prompt="You are a knowledge graph analysis assistant.",
+                )
+                raw_clean = _re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+                batch_result = _json.loads(raw_clean)
+                if not isinstance(batch_result, dict):
+                    for i in uncached_indices:
+                        results[i] = []
+                    return results
+                for local_j, orig_i in enumerate(uncached_indices):
+                    chunk_id, report_chunk = uncached_args[local_j]
+                    points_raw = batch_result.get(str(local_j), [])
+                    if not isinstance(points_raw, list):
+                        results[orig_i] = []
+                        continue
+                    pts = [
+                        (float(p.get("score", 0)), str(p.get("point", "")))
+                        for p in points_raw
+                        if isinstance(p, dict) and p.get("point")
+                    ]
+                    _chunk_sig = self._gr_text_hash(report_chunk)
+                    _map_key = self._gr_text_hash(f"{query}|{chunk_id}|{_chunk_sig}")
+                    self._gr_cache_put("global_map", _map_key, pts)
+                    results[orig_i] = pts
+            except Exception as _batch_err:
+                logger.debug("GraphRAG: batch map failed: %s", _batch_err)
+                for i in uncached_indices:
+                    if results[i] is None:
+                        results[i] = []
+            return results
+
         # Map phase — parallel over shuffled chunks; use a dedicated pool when
         # graph_rag_map_workers is set, so map-reduce does not starve the shared executor
         # during concurrent ingest.
@@ -2328,19 +2447,43 @@ class GraphRagMixin:
 
             _cpu_cap = max(1, int(_os.cpu_count() or 4))
             _map_workers_effective = min(_map_auto_workers, _cpu_cap, max(1, len(all_chunks)))
+        _map_batch_size = int(getattr(cfg, "graph_rag_map_batch_size", 5) or 5)
         _t0_map = _time.perf_counter()
         try:
-            if _map_workers_effective > 0:
-                from concurrent.futures import ThreadPoolExecutor as _TPE
+            if _map_batch_size > 1:
+                # Batch mode: group chunks, one LLM call per batch (~5× fewer LLM calls).
+                _chunk_groups = [
+                    all_chunks[i : i + _map_batch_size]
+                    for i in range(0, len(all_chunks), _map_batch_size)
+                ]
+                if _map_workers_effective > 0:
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
 
-                with _TPE(max_workers=_map_workers_effective) as _map_pool:
-                    for point_list in _map_pool.map(_map_community, all_chunks):
+                    with _TPE(max_workers=_map_workers_effective) as _map_pool:
+                        for batch_results in _map_pool.map(_map_community_batch, _chunk_groups):
+                            for point_list in batch_results:
+                                if point_list:
+                                    for score, point in point_list:
+                                        _consume_point(score, point)
+                else:
+                    for batch_results in self._executor.map(_map_community_batch, _chunk_groups):
+                        for point_list in batch_results:
+                            if point_list:
+                                for score, point in point_list:
+                                    _consume_point(score, point)
+            else:
+                # Single-chunk mode (batch_size=1 or 0): one LLM call per chunk.
+                if _map_workers_effective > 0:
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
+
+                    with _TPE(max_workers=_map_workers_effective) as _map_pool:
+                        for point_list in _map_pool.map(_map_community, all_chunks):
+                            for score, point in point_list:
+                                _consume_point(score, point)
+                else:
+                    for point_list in self._executor.map(_map_community, all_chunks):
                         for score, point in point_list:
                             _consume_point(score, point)
-            else:
-                for point_list in self._executor.map(_map_community, all_chunks):
-                    for score, point in point_list:
-                        _consume_point(score, point)
         except Exception:
             return ""
         self._gr_log_profile(

@@ -664,6 +664,10 @@ class AxonConfig:
 
     query_decompose: bool = False
 
+    unified_query_transforms: bool = (
+        True  # combine multi_query+step_back+decompose+hyde into 1 LLM call
+    )
+
     discussion_fallback: bool = True
 
     # Context Compression (Epic 3, Stories 3.1--'3.3)
@@ -1067,6 +1071,11 @@ class AxonConfig:
     # from starving the shared executor during concurrent ingest.
 
     graph_rag_map_workers: int = 0
+
+    # Number of community report chunks to send in a single LLM call during the map phase.
+    # Set to 5 (default) for ~5× fewer LLM calls vs per-chunk mode (batch_size=1).
+
+    graph_rag_map_batch_size: int = 5
 
     # Alternative NER backend. "gliner" skips LLM for entity extraction.
 
@@ -1913,7 +1922,9 @@ class AxonConfig:
             home_dir = (
                 os.environ.get("HOME")
                 or os.environ.get("USERPROFILE")
-                or ((os.environ.get("HOMEDRIVE") or "") + (os.environ.get("HOMEPATH") or "")).strip()
+                or (
+                    (os.environ.get("HOMEDRIVE") or "") + (os.environ.get("HOMEPATH") or "")
+                ).strip()
             )
             if not home_dir:
                 try:

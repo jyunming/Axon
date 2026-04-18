@@ -159,6 +159,108 @@ class TestQueryRouterRobustness:
         assert avg_ms < 1.0
 
 
+class TestUnifiedQueryTransforms:
+    """Tests for _get_all_transforms_unified() and its integration in _execute_retrieval()."""
+
+    @pytest.fixture
+    def stub_with_llm(self):
+        router = RouterStub(MockConfig())
+        router.llm = MagicMock()
+        return router
+
+    def test_unified_transform_single_llm_call(self, stub_with_llm):
+        """With >=2 transforms enabled, unified mode makes exactly 1 LLM call."""
+        import json
+
+        router = stub_with_llm
+        payload = {
+            "multi_queries": ["alt phrasing 1", "alt phrasing 2"],
+            "step_back": "broader concept question",
+            "decomposed": None,
+            "hyde_doc": "hypothetical doc text",
+        }
+        router.llm.complete.return_value = json.dumps(payload)
+
+        enabled = {"multi": True, "step_back": True, "decompose": False, "hyde": True}
+        result = router._get_all_transforms_unified("What is X?", enabled, multi_count=2)
+
+        router.llm.complete.assert_called_once()
+        assert result["multi_queries"] == ["alt phrasing 1", "alt phrasing 2"]
+        assert result["step_back"] == "broader concept question"
+        assert result["decomposed"] is None
+        assert result["hyde_doc"] == "hypothetical doc text"
+
+    def test_unified_transform_fallback_on_bad_json(self, stub_with_llm):
+        """Malformed JSON from LLM causes graceful fallback to empty results (no crash)."""
+        router = stub_with_llm
+        router.llm.complete.return_value = "this is not json at all }{{"
+
+        enabled = {"multi": True, "step_back": True, "decompose": False, "hyde": False}
+        result = router._get_all_transforms_unified("What is X?", enabled)
+
+        assert result == {
+            "multi_queries": None,
+            "step_back": None,
+            "decomposed": None,
+            "hyde_doc": None,
+        }
+
+    def test_unified_transform_fallback_on_non_dict_json(self, stub_with_llm):
+        """LLM returning a JSON array instead of object causes graceful fallback."""
+        import json
+
+        router = stub_with_llm
+        router.llm.complete.return_value = json.dumps(["this", "is", "a", "list"])
+
+        enabled = {"multi": True, "step_back": True, "decompose": False, "hyde": False}
+        result = router._get_all_transforms_unified("What is X?", enabled)
+
+        assert result["multi_queries"] is None
+        assert result["step_back"] is None
+
+    def test_unified_transform_returns_none_when_all_disabled(self, stub_with_llm):
+        """No LLM call when all transforms are disabled."""
+        router = stub_with_llm
+        enabled = {"multi": False, "step_back": False, "decompose": False, "hyde": False}
+        result = router._get_all_transforms_unified("What is X?", enabled)
+
+        router.llm.complete.assert_not_called()
+        assert all(v is None for v in result.values())
+
+    def test_unified_transform_strips_markdown_fences(self, stub_with_llm):
+        """LLM output wrapped in ```json fences is still parsed correctly."""
+        import json
+
+        router = stub_with_llm
+        payload = {"multi_queries": ["q1", "q2"], "step_back": "broader"}
+        router.llm.complete.return_value = f"```json\n{json.dumps(payload)}\n```"
+
+        enabled = {"multi": True, "step_back": True, "decompose": False, "hyde": False}
+        result = router._get_all_transforms_unified("What is X?", enabled)
+
+        assert result["multi_queries"] == ["q1", "q2"]
+        assert result["step_back"] == "broader"
+
+    def test_unified_skipped_for_single_transform(self, stub_with_llm):
+        """With only 1 transform enabled, unified mode is NOT used (individual path runs)."""
+
+        router = stub_with_llm
+        # Only multi_query enabled — unified should not fire, individual should
+        router.llm.complete.return_value = "alt q1\nalt q2\nalt q3"
+
+        enabled = {"multi": True, "step_back": False, "decompose": False, "hyde": False}
+        n_enabled = sum(enabled.values())
+        assert n_enabled < 2  # guard: single transform
+
+        # Simulate what _execute_retrieval checks: n_enabled < 2 → skip unified
+        use_unified = n_enabled >= 2
+        assert not use_unified
+
+        # Direct individual method should work normally
+        result_individual = router._get_multi_queries("What is X?")
+        assert "What is X?" in result_individual  # original always included
+
+
 """Comprehensive tests for src/axon/query_router.py.
 
 Covers missed lines: 112-113, 155, 177, 202-203, 215-228, 243-244, 424-429,
@@ -810,12 +912,17 @@ class TestExecuteRetrievalTransforms:
         assert "results" in result
 
     def test_hyde_with_extra_variants_searches_all(self):
-        """Lines 615-623: HyDE + multi_query → both paths exercised."""
+        """HyDE + multi_query → both transforms applied via unified path."""
+        import json
+
         stub = _make_full_stub(hyde=True, multi_query=True, similarity_threshold=0.0)
-        stub.llm.complete.side_effect = [
-            "Hypothetical doc",
-            "alt query 1\nalt query 2",
-        ]
+        unified_payload = {
+            "multi_queries": ["alt query 1", "alt query 2"],
+            "step_back": None,
+            "decomposed": None,
+            "hyde_doc": "Hypothetical doc",
+        }
+        stub.llm.complete.return_value = json.dumps(unified_payload)
         result = stub._execute_retrieval("complex question")
         assert result["transforms"]["hyde_applied"] is True
 

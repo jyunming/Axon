@@ -491,6 +491,90 @@ class QueryRouterMixin:
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
 
+    def _get_all_transforms_unified(
+        self,
+        query: str,
+        enabled: dict[str, bool],
+        multi_count: int = 3,
+    ) -> dict[str, Any]:
+        """Single LLM call that produces all enabled query transforms at once.
+
+        Returns dict with keys: "multi_queries", "step_back", "decomposed", "hyde_doc".
+        Values are None for disabled transforms.
+        """
+        import json as _json
+        import re as _re_mod
+
+        if not any(enabled.values()):
+            return {
+                "multi_queries": None,
+                "step_back": None,
+                "decomposed": None,
+                "hyde_doc": None,
+            }
+
+        sections = []
+        output_format: dict[str, Any] = {}
+
+        if enabled.get("multi"):
+            sections.append(
+                f'1. "multi_queries": Generate {multi_count} alternative phrasings of the query '
+                "that approach it from different angles. Return as a JSON array of strings."
+            )
+            output_format["multi_queries"] = ["alternative phrasing 1", "..."]
+
+        if enabled.get("step_back"):
+            sections.append(
+                '2. "step_back": Generate ONE broader, more general question that the original query '
+                "is a specific instance of. Return as a single string."
+            )
+            output_format["step_back"] = "broader question"
+
+        if enabled.get("decompose"):
+            sections.append(
+                '3. "decomposed": Break the query into 2-4 simpler sub-questions that together '
+                "would answer the original. Return as a JSON array of strings."
+            )
+            output_format["decomposed"] = ["sub-question 1", "..."]
+
+        if enabled.get("hyde"):
+            sections.append(
+                '4. "hyde_doc": Write a short (2-3 sentence) hypothetical document that would '
+                "directly answer the query if it existed. Return as a single string."
+            )
+            output_format["hyde_doc"] = "hypothetical answer text"
+
+        task_list = "\n".join(sections)
+        format_example = _json.dumps(output_format, indent=2)
+
+        prompt = (
+            f"Query: {query}\n\n"
+            f"Complete ALL of the following tasks for the query above:\n{task_list}\n\n"
+            f"Return ONLY valid JSON in this exact format:\n{format_example}\n"
+            "Output only valid JSON, no explanations."
+        )
+
+        try:
+            raw = self.llm.complete(prompt, system_prompt="You are a query analysis assistant.")
+            raw_clean = _re_mod.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+            parsed = _json.loads(raw_clean)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM did not return a JSON object")
+            return {
+                "multi_queries": parsed.get("multi_queries") if enabled.get("multi") else None,
+                "step_back": parsed.get("step_back") if enabled.get("step_back") else None,
+                "decomposed": parsed.get("decomposed") if enabled.get("decompose") else None,
+                "hyde_doc": parsed.get("hyde_doc") if enabled.get("hyde") else None,
+            }
+        except Exception as _e:
+            logger.debug("Unified query transform failed, falling back: %s", _e)
+            return {
+                "multi_queries": None,
+                "step_back": None,
+                "decomposed": None,
+                "hyde_doc": None,
+            }
+
     def _mmr_deduplicate(self, results: list[dict], cfg) -> list[dict]:
         """Reorder and deduplicate results using Maximal Marginal Relevance (Jaccard similarity).
 
@@ -630,40 +714,80 @@ class QueryRouterMixin:
         }
 
         # --- Phase 1: Parallel Query Transformation ---
-        future_to_task = {}
-        if cfg.multi_query:
-            future_to_task[self._executor.submit(self._get_multi_queries, query)] = "multi"
-        if cfg.step_back:
-            future_to_task[self._executor.submit(self._get_step_back_query, query)] = "step_back"
-        if cfg.query_decompose:
-            future_to_task[self._executor.submit(self._decompose_query, query)] = "decompose"
-        if cfg.hyde:
-            future_to_task[self._executor.submit(self._get_hyde_document, query)] = "hyde"
+        _enabled_transforms = {
+            "multi": bool(cfg.multi_query),
+            "step_back": bool(cfg.step_back),
+            "decompose": bool(cfg.query_decompose),
+            "hyde": bool(cfg.hyde),
+        }
+        _n_enabled = sum(_enabled_transforms.values())
+        _use_unified = (
+            _n_enabled >= 2
+            and getattr(cfg, "unified_query_transforms", True)
+            and getattr(self, "llm", None) is not None
+        )
 
         search_queries = [query]
         vector_query = query
 
-        from concurrent.futures import as_completed
+        if _use_unified:
+            _all_transforms = self._get_all_transforms_unified(
+                query,
+                _enabled_transforms,
+                multi_count=3,
+            )
+            _multi_queries = _all_transforms.get("multi_queries") or []
+            _step_back_q = _all_transforms.get("step_back") or ""
+            _decomposed_qs = _all_transforms.get("decomposed") or []
+            _hyde_doc = _all_transforms.get("hyde_doc") or ""
 
-        for future in as_completed(future_to_task):
-            task = future_to_task[future]
-            try:
-                res = future.result()
-                if task == "multi":
-                    search_queries.extend([q for q in res if q not in search_queries])
-                    transforms["multi_query_applied"] = True
-                elif task == "step_back":
-                    if res not in search_queries:
-                        search_queries.append(res)
-                    transforms["step_back_applied"] = True
-                elif task == "decompose":
-                    search_queries.extend([q for q in res if q not in search_queries])
-                    transforms["decompose_applied"] = True
-                elif task == "hyde":
-                    vector_query = res
-                    transforms["hyde_applied"] = True
-            except Exception as e:
-                logger.warning(f"Retrieval transformation '{task}' failed: {e}")
+            if _enabled_transforms["multi"] and _multi_queries:
+                search_queries.extend([q for q in _multi_queries if q not in search_queries])
+                transforms["multi_query_applied"] = True
+            if _enabled_transforms["step_back"] and _step_back_q:
+                if _step_back_q not in search_queries:
+                    search_queries.append(_step_back_q)
+                transforms["step_back_applied"] = True
+            if _enabled_transforms["decompose"] and _decomposed_qs:
+                search_queries.extend([q for q in _decomposed_qs if q not in search_queries])
+                transforms["decompose_applied"] = True
+            if _enabled_transforms["hyde"] and _hyde_doc:
+                vector_query = _hyde_doc
+                transforms["hyde_applied"] = True
+        else:
+            future_to_task = {}
+            if cfg.multi_query:
+                future_to_task[self._executor.submit(self._get_multi_queries, query)] = "multi"
+            if cfg.step_back:
+                future_to_task[
+                    self._executor.submit(self._get_step_back_query, query)
+                ] = "step_back"
+            if cfg.query_decompose:
+                future_to_task[self._executor.submit(self._decompose_query, query)] = "decompose"
+            if cfg.hyde:
+                future_to_task[self._executor.submit(self._get_hyde_document, query)] = "hyde"
+
+            from concurrent.futures import as_completed
+
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    res = future.result()
+                    if task == "multi":
+                        search_queries.extend([q for q in res if q not in search_queries])
+                        transforms["multi_query_applied"] = True
+                    elif task == "step_back":
+                        if res not in search_queries:
+                            search_queries.append(res)
+                        transforms["step_back_applied"] = True
+                    elif task == "decompose":
+                        search_queries.extend([q for q in res if q not in search_queries])
+                        transforms["decompose_applied"] = True
+                    elif task == "hyde":
+                        vector_query = res
+                        transforms["hyde_applied"] = True
+                except Exception as e:
+                    logger.warning(f"Retrieval transformation '{task}' failed: {e}")
 
         transforms["queries"] = search_queries
 

@@ -5,12 +5,14 @@ from typing import Any
 
 logger = logging.getLogger("Axon.Splitters")
 
+_SENTENCE_SPLIT_RE = re.compile(r"([.!?]+)\s+")
+
 
 def _split_sentences(text: str) -> list[str]:
     """Split text into sentences using a regex, re-joining common abbreviations."""
-    # Split on period, exclamation, or question mark followed by whitespace and an uppercase letter.
-    # We capture the punctuation and space to preserve it, then clean up.
-    parts = re.split(r"([.!?]+)\s+", text.strip())
+    # Split on period, exclamation, or question mark followed by whitespace.
+    # We capture the punctuation to preserve it, then clean up.
+    parts = _SENTENCE_SPLIT_RE.split(text.strip())
 
     sentences = []
     current_sentence = ""
@@ -134,15 +136,17 @@ class SemanticTextSplitter:
                 chunks.append(" ".join([s for s, _ in current_chunk_sentences]))
 
                 # Handle overlap: take sentences from the end of the current chunk
-                # until we hit the overlap limit
-                overlap_sentences: list[tuple[str, int]] = []
+                # until we hit the overlap limit. Build in reverse then flip to
+                # avoid O(n) list.insert(0, ...) per iteration.
+                overlap_temp: list[tuple[str, int]] = []
                 overlap_length = 0
                 for s, s_len in reversed(current_chunk_sentences):
                     if overlap_length + s_len <= self.chunk_overlap:
-                        overlap_sentences.insert(0, (s, s_len))
+                        overlap_temp.append((s, s_len))
                         overlap_length += s_len
                     else:
                         break
+                overlap_sentences = list(reversed(overlap_temp))
 
                 current_chunk_sentences = overlap_sentences + [(sentence, sentence_len)]
                 current_length = overlap_length + sentence_len

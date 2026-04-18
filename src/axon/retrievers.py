@@ -51,6 +51,8 @@ class BM25Retriever:
     becomes a requirement.
     """
 
+    _JSONL_COMPACTION_THRESHOLD: int = 1000
+
     def __init__(
         self,
         storage_path: str = "./bm25_index",
@@ -62,6 +64,7 @@ class BM25Retriever:
         self.corpus_file_zst = os.path.join(storage_path, "bm25_corpus.json.zst")
         self.corpus_file_msgpack = os.path.join(storage_path, "bm25_corpus.msgpack")
         self.corpus_file_msgpack_zst = os.path.join(storage_path, "bm25_corpus.msgpack.zst")
+        self.corpus_file_log = os.path.join(storage_path, ".bm25_log.jsonl")
         self._compress_enabled = os.getenv("AXON_BM25_COMPRESS", "").strip().lower() in {
             "1",
             "true",
@@ -133,6 +136,7 @@ class BM25Retriever:
         self.corpus: list[
             dict[str, Any]
         ] = []  # List of dicts: {'id': id, 'text': text, 'metadata': meta}
+        self._pending_log_entries: list[dict] = []
 
         if engine == "rust":
             if self._rust.can_bm25():
@@ -179,6 +183,7 @@ class BM25Retriever:
         if self._text_intern_mode != "off":
             self._intern_document_texts(documents)
         self.corpus.extend(documents)
+        self._pending_log_entries.extend(documents)
         self._dirty = True  # index will be rebuilt lazily on next search()
         if not save_deferred:
             self.save()
@@ -254,8 +259,39 @@ class BM25Retriever:
         self._dirty = False
 
     def flush(self) -> None:
-        """Explicitly save corpus — call after deferred batch ingest session."""
+        """Explicitly save corpus — call after deferred batch ingest session.
+
+        If pending log entries are below the compaction threshold, appends them
+        to the JSONL delta log instead of rewriting the full corpus file.
+        Falls back to a full ``save()`` when the threshold is reached or when
+        no incremental entries are pending.
+        """
+        use_log = (
+            bool(self._pending_log_entries)
+            and len(self._pending_log_entries) < self._JSONL_COMPACTION_THRESHOLD
+        )
+        if use_log:
+            try:
+                with open(self.corpus_file_log, "a", encoding="utf-8") as lf:
+                    for entry in self._pending_log_entries:
+                        lf.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                logger.info(
+                    "💾 BM25 log appended %d docs to %s",
+                    len(self._pending_log_entries),
+                    self.corpus_file_log,
+                )
+                self._pending_log_entries.clear()
+                return
+            except Exception as e:
+                logger.warning("BM25 log append failed; falling back to full save: %s", e)
+        # Full save: no pending entries, threshold exceeded, or log write failed
         self.save()
+        try:
+            if os.path.exists(self.corpus_file_log):
+                os.remove(self.corpus_file_log)
+        except OSError:
+            pass
+        self._pending_log_entries.clear()
 
     def search(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
         """Search the BM25 index, rebuilding it first if the corpus was modified."""
@@ -335,6 +371,13 @@ class BM25Retriever:
         self.corpus = [doc for doc in self.corpus if doc["id"] not in doc_ids]
         if len(self.corpus) < original_count:
             self._dirty = True  # rebuild deferred to next search()
+            # Log is now stale after deletion — force a full rewrite on next save
+            try:
+                if os.path.exists(self.corpus_file_log):
+                    os.remove(self.corpus_file_log)
+            except OSError:
+                pass
+            self._pending_log_entries.clear()
             self.save()
 
     def save(self):
@@ -541,6 +584,47 @@ class BM25Retriever:
         result = self._rust.decode_corpus_msgpack(raw_mp)
         return result
 
+    def _replay_jsonl_log(self) -> None:
+        """Replay the JSONL delta log into self.corpus if it exists.
+
+        Called at the end of every successful :meth:`load` branch so that
+        incremental entries written by :meth:`flush` are merged back into the
+        corpus.  Compacts automatically when the log exceeds
+        ``_JSONL_COMPACTION_THRESHOLD``.
+        """
+        log_path = self.corpus_file_log
+        if not os.path.exists(log_path):
+            return
+        try:
+            # Ensure lazy-loaded dedup payload is fully materialised first so
+            # appended log docs are not overwritten by a later materialisation.
+            self._ensure_corpus_materialized()
+            replayed = 0
+            with open(log_path, encoding="utf-8") as lf:
+                for line in lf:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        doc = json.loads(line)
+                        if isinstance(doc, dict) and doc.get("id"):
+                            self.corpus.append(doc)
+                            replayed += 1
+                    except Exception:
+                        pass  # skip corrupted lines
+            if replayed > 0:
+                logger.info("BM25 log: replayed %d incremental docs from %s", replayed, log_path)
+                self._dirty = True
+                if replayed >= self._JSONL_COMPACTION_THRESHOLD:
+                    logger.info("BM25 log: compacting (replayed >= threshold)")
+                    self.save()
+                    try:
+                        os.remove(log_path)
+                    except OSError:
+                        pass
+        except Exception as e:
+            logger.warning("BM25 log replay failed: %s", e)
+
     def load(self):
         """Load corpus from msgpack.zst (preferred), then json.zst, msgpack, or json."""
         try:
@@ -567,6 +651,7 @@ class BM25Retriever:
                             "📂 Loaded BM25 corpus with %d documents (msgpack+zst)",
                             len(self.corpus),
                         )
+                        self._replay_jsonl_log()
                         return
                 except ImportError:
                     pass
@@ -598,6 +683,7 @@ class BM25Retriever:
                                 "📂 Loaded BM25 corpus with %d documents (rust json+zst)",
                                 len(self.corpus),
                             )
+                            self._replay_jsonl_log()
                             return
                     payload = self._json_loads(raw_json)
                     if (
@@ -622,6 +708,7 @@ class BM25Retriever:
                         "📂 Loaded BM25 corpus with %d documents (compressed)",
                         len(self.corpus) if self._dedup_doc_count == 0 else self._dedup_doc_count,
                     )
+                    self._replay_jsonl_log()
                     return
                 except Exception as e:
                     logger.warning("Failed to load compressed BM25 corpus: %s", e)
@@ -645,6 +732,7 @@ class BM25Retriever:
                             "📂 Loaded BM25 corpus with %d documents (msgpack)",
                             len(self.corpus),
                         )
+                        self._replay_jsonl_log()
                         return
                 except Exception as e:
                     logger.warning("Failed to load msgpack BM25 corpus: %s", e)
@@ -668,6 +756,7 @@ class BM25Retriever:
                         logger.info(
                             "📂 Loaded BM25 corpus with %d documents (rust json)", len(self.corpus)
                         )
+                        self._replay_jsonl_log()
                         return
                 payload = self._json_loads(raw_bytes)
                 if (
@@ -690,6 +779,7 @@ class BM25Retriever:
                     self._intern_document_texts(self.corpus)
                 n_docs = len(self.corpus) if self._dedup_doc_count == 0 else self._dedup_doc_count
                 logger.info(f"📂 Loaded BM25 corpus with {n_docs} documents")
+                self._replay_jsonl_log()
         except Exception as e:
             logger.error(f"Failed to load BM25 corpus: {e}")
             self.corpus = []

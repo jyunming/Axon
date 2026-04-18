@@ -1208,6 +1208,7 @@ class TestQueryDecomposeAndCompress:
             MockBM25,
             multi_query=True,
             query_decompose=True,
+            unified_query_transforms=False,  # test individual-method paths explicitly
         )
         brain._get_multi_queries = MagicMock(return_value=["q", "alt1", "alt2"])
         brain._decompose_query = MagicMock(return_value=["q", "sub1"])
@@ -3821,6 +3822,8 @@ class TestGraphRAGCommunity:
 
             graph_rag_community_level = 0
 
+            graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
+
         result = brain._global_search_map_reduce("AI trends", _Cfg())
 
         assert "AI growth" in result
@@ -4111,6 +4114,8 @@ class TestGraphRAGRealImplementation:
             graph_rag_community_level = 0
 
             graph_rag_global_reduce_max_tokens = 8000
+
+            graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
 
         result = brain._global_search_map_reduce("test query", _Cfg())
 

@@ -122,7 +122,9 @@ class TestDemo_BasicIngestRetrieve:
             {"id": "hist", "text": "The Battle of Hastings took place in 1066 AD.", "metadata": {}},
         ]
         brain.ingest(docs)
-        results = brain._execute_retrieval("Which algorithm here has O(n log n) merge sort complexity?")
+        results = brain._execute_retrieval(
+            "Which algorithm here has O(n log n) merge sort complexity?"
+        )
         top_id = results["results"][0]["id"]
         assert top_id.startswith("cs"), f"Expected id starting with 'cs', got '{top_id}'"
 

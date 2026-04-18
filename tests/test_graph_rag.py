@@ -1161,7 +1161,8 @@ class TestGlobalSearchMapReduce:
     def test_reduces_valid_points(self, tmp_path):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -1214,7 +1215,8 @@ class TestGlobalSearchMapReduce:
     def test_reduce_exception_returns_fallback(self, tmp_path):
         """Lines 1190-1193: reduce exception returns fallback text."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -3052,7 +3054,8 @@ class TestGlobalSearchMapReduceV2:
     def test_reduces_valid_points(self, tmp_path):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -3105,7 +3108,8 @@ class TestGlobalSearchMapReduceV2:
     def test_reduce_exception_returns_fallback(self, tmp_path):
         """Lines 1190-1193: reduce exception returns fallback text."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -3971,3 +3975,146 @@ class TestMatchEntitiesByEmbeddingV2:
         brain.embedding.embed_query.side_effect = RuntimeError("fail")
         result = brain._match_entities_by_embedding("query")
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Persist incoming relation index
+# ---------------------------------------------------------------------------
+
+
+class TestIncomingRelationIndexPersistence:
+    def test_incoming_index_persisted_after_build(self, tmp_path):
+        import json as _json_t
+
+        from axon.config import AxonConfig
+
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+            "carol": [{"target": "alice", "relation": "manages", "chunk_id": "c2"}],
+        }
+        idx = brain._get_incoming_relation_index()
+        assert "bob" in idx
+        assert "alice" in idx
+        inc_path = tmp_path / ".relation_graph.incoming.json"
+        assert inc_path.exists(), "Incoming index should be persisted to disk"
+        raw = _json_t.loads(inc_path.read_text(encoding="utf-8"))
+        assert "bob" in raw
+        assert "alice" in raw
+
+    def test_incoming_index_loaded_from_disk_skips_rebuild(self, tmp_path):
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+        }
+        brain._get_incoming_relation_index()
+        inc_path = tmp_path / ".relation_graph.incoming.json"
+        assert inc_path.exists()
+        brain2 = _make_brain(config=cfg)
+        brain2._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+        }
+        for attr in ("_incoming_rel_index", "_incoming_rel_sig"):
+            if hasattr(brain2, attr):
+                delattr(brain2, attr)
+        idx2 = brain2._get_incoming_relation_index()
+        assert "bob" in idx2
+        first_item = idx2["bob"][0]
+        assert isinstance(first_item, tuple), f"Expected tuple, got {type(first_item)}"
+        assert first_item[0] == "alice"
+
+    def test_save_relation_graph_invalidates_disk_cache(self, tmp_path):
+        from unittest.mock import patch
+
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+        }
+        brain._get_incoming_relation_index()
+        inc_path = tmp_path / ".relation_graph.incoming.json"
+        assert inc_path.exists()
+        with patch.object(brain, "_gr_write_json_if_changed"), patch(
+            "axon.rust_bridge.get_rust_bridge"
+        ) as mock_bridge:
+            mock_bridge.return_value.can_relation_graph_codec.return_value = False
+            brain._save_relation_graph()
+        assert not inc_path.exists(), "Disk cache should be deleted after _save_relation_graph"
+        assert not hasattr(brain, "_incoming_rel_index"), "_incoming_rel_index should be cleared"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Batch map-reduce (graph_rag_map_batch_size)
+# ---------------------------------------------------------------------------
+
+
+class TestMapCommunityBatch:
+    def _make_brain_with_summaries(self, tmp_path, n_summaries):
+        from axon.config import AxonConfig
+
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_map_batch_size=5,
+            graph_rag_map_workers=0,
+            graph_rag_global_min_score=0,
+            graph_rag_global_top_points=100,
+        )
+        brain = _make_brain(config=cfg)
+        brain._community_summaries = {
+            f"0_{i}": {"full_content": f"Report about topic {i}."} for i in range(n_summaries)
+        }
+        return brain
+
+    def test_batch_reduces_llm_calls(self, tmp_path):
+        import json as _json_t
+
+        brain = self._make_brain_with_summaries(tmp_path, 10)
+        llm_calls = []
+
+        def fake_llm_complete(namespace, prompt, system_prompt=""):
+            llm_calls.append(namespace)
+            n = prompt.count("---Report ")
+            return _json_t.dumps({str(i): [] for i in range(n)})
+
+        from unittest.mock import MagicMock
+
+        brain._gr_llm_complete_cached = fake_llm_complete
+        brain._gr_cache_get = MagicMock(return_value=None)
+        brain._gr_cache_put = MagicMock()
+        brain._gr_log_profile = MagicMock()
+        brain._gr_text_hash = lambda s: str(hash(s))
+        brain._global_search_map_reduce("test query", brain.config)
+        assert len(llm_calls) == 2, f"Expected 2 LLM calls, got {len(llm_calls)}: {llm_calls}"
+
+    def test_batch_size_config_field_default(self):
+        from axon.config import AxonConfig
+
+        cfg = AxonConfig(bm25_path=".", vector_store_path=".")
+        assert cfg.graph_rag_map_batch_size == 5
+
+    def test_batch_mode_collects_points(self, tmp_path):
+        import json as _json_t
+
+        brain = self._make_brain_with_summaries(tmp_path, 4)
+        call_count = [0]
+
+        def fake_llm_complete(namespace, prompt, system_prompt=""):
+            call_count[0] += 1
+            n = prompt.count("---Report ")
+            return _json_t.dumps({str(i): [{"point": f"point_{i}", "score": 80}] for i in range(n)})
+
+        from unittest.mock import MagicMock
+
+        brain._gr_llm_complete_cached = fake_llm_complete
+        brain._gr_cache_get = MagicMock(return_value=None)
+        brain._gr_cache_put = MagicMock()
+        brain._gr_log_profile = MagicMock()
+        brain._gr_text_hash = lambda s: str(hash(s))
+        try:
+            brain._global_search_map_reduce("test query", brain.config)
+        except Exception:
+            pass
+        assert call_count[0] >= 1

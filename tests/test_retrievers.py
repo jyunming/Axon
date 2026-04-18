@@ -473,6 +473,98 @@ class TestBM25BatchAdd:
             mock_save.assert_called_once()
 
 
+class TestBM25JsonlLog:
+    """Tests for the JSONL delta log optimization (BM25 incremental append)."""
+
+    def test_bm25_jsonl_log_written_on_flush(self, tmp_path):
+        """After add_documents(save_deferred=True) + flush(), the JSONL log file
+        must exist and contain exactly the right number of lines."""
+        import json as _json
+
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [
+            {"id": "a1", "text": "alpha one", "metadata": {}},
+            {"id": "a2", "text": "alpha two", "metadata": {}},
+            {"id": "a3", "text": "alpha three", "metadata": {}},
+        ]
+        r.add_documents(docs, save_deferred=True)
+        r.flush()
+
+        log_path = r.corpus_file_log
+        assert os.path.exists(log_path), "JSONL log file should exist after flush()"
+
+        with open(log_path, encoding="utf-8") as f:
+            lines = [ln for ln in f if ln.strip()]
+        assert len(lines) == 3, f"Expected 3 log lines, got {len(lines)}"
+
+        ids = {_json.loads(ln)["id"] for ln in lines}
+        assert ids == {"a1", "a2", "a3"}
+
+    def test_bm25_jsonl_log_replayed_on_load(self, tmp_path):
+        """Docs appended only to the JSONL log (no full save) must be recovered
+        when the retriever is reloaded from disk."""
+        r1 = BM25Retriever(storage_path=str(tmp_path))
+        base_docs = [
+            {"id": "base1", "text": "base document one", "metadata": {}},
+            {"id": "base2", "text": "base document two", "metadata": {}},
+        ]
+        r1.add_documents(base_docs)
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        log_docs = [{"id": "log1", "text": "log document one", "metadata": {}}]
+        r2.add_documents(log_docs, save_deferred=True)
+        r2.flush()
+
+        assert os.path.exists(r2.corpus_file_log), "Log file should exist"
+
+        r3 = BM25Retriever(storage_path=str(tmp_path))
+        ids = {d["id"] for d in r3.corpus}
+        assert "base1" in ids
+        assert "base2" in ids
+        assert "log1" in ids
+
+    def test_bm25_jsonl_compaction_threshold(self, tmp_path):
+        """When pending entries reach the threshold, flush() must compact."""
+        r = BM25Retriever(storage_path=str(tmp_path))
+        threshold = BM25Retriever._JSONL_COMPACTION_THRESHOLD
+
+        r.add_documents([{"id": "base", "text": "base doc", "metadata": {}}])
+
+        big_batch = [
+            {"id": f"big{i}", "text": f"word{i} content", "metadata": {}} for i in range(threshold)
+        ]
+        r.add_documents(big_batch, save_deferred=True)
+        r.flush()
+
+        assert not os.path.exists(r.corpus_file_log), "Log should be removed after compaction"
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        ids = {d["id"] for d in r2.corpus}
+        assert "base" in ids
+        assert f"big{threshold - 1}" in ids
+        assert len(r2.corpus) == threshold + 1
+
+    def test_bm25_delete_clears_log(self, tmp_path):
+        """delete_documents() must remove the JSONL log file."""
+        r = BM25Retriever(storage_path=str(tmp_path))
+        docs = [
+            {"id": "keep", "text": "keep this doc", "metadata": {}},
+            {"id": "remove", "text": "remove this doc", "metadata": {}},
+        ]
+        r.add_documents(docs, save_deferred=True)
+        r.flush()
+        assert os.path.exists(r.corpus_file_log), "Log should exist before delete"
+
+        r.delete_documents(["remove"])
+
+        assert not os.path.exists(r.corpus_file_log), "Log should be removed after delete"
+
+        r2 = BM25Retriever(storage_path=str(tmp_path))
+        ids = {d["id"] for d in r2.corpus}
+        assert "keep" in ids
+        assert "remove" not in ids
+
+
 """Tests for OpenReranker providers in axon.rerank."""
 from unittest.mock import MagicMock
 

@@ -1746,3 +1746,39 @@ class TestCodeAwareSplitterTransformDocuments:
         chunks = self.splitter.transform_documents(docs)
         for chunk in chunks:
             assert chunk["metadata"]["subdoc_locator"] == "root"
+
+
+class TestPerfOptimizations:
+    """Regression tests for the Task 1 & 2 performance optimizations."""
+
+    def test_split_sentences_regex_consistency(self):
+        """_split_sentences() must return identical output on every call (module-level regex)."""
+        from axon.splitters import _split_sentences
+
+        text = (
+            "Dr. Smith went to Washington. He bought a 1.5 L bottle! "
+            "Was it e.g. a soda? Yes, it was."
+        )
+        reference = _split_sentences(text)
+        for _ in range(99):
+            assert _split_sentences(text) == reference
+
+    def test_overlap_output_unchanged(self):
+        """The O(1) overlap fix must not change the chunks produced."""
+        splitter = SemanticTextSplitter(chunk_size=12, chunk_overlap=4)
+        text = (
+            "Sentence one. Sentence two. Sentence three. "
+            "Sentence four. Sentence five. Sentence six."
+        )
+        chunks = splitter.split(text)
+        # Overlap means 'Sentence four.' appears in at least two consecutive chunks.
+        found_overlap = any(
+            chunks[i].endswith(chunks[i + 1].split(".")[0] + ".")
+            or chunks[i + 1].split(".")[0].strip() in chunks[i]
+            for i in range(len(chunks) - 1)
+        )
+        assert found_overlap, "Expected overlap sentence to appear in adjacent chunks"
+        # All sentences must be present in the joined output.
+        joined = " ".join(chunks)
+        for sent in ["one", "two", "three", "four", "five", "six"]:
+            assert sent in joined
