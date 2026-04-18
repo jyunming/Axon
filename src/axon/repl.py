@@ -2365,7 +2365,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
 
     else:
         print(
-            f"  Unknown sub-command '{subcmd}'. "
+            f"    Unknown sub-command '{subcmd}'. "
             "Usage: /config [show|validate|wizard|reset|set <key> <value>]"
         )
 
@@ -2529,7 +2529,7 @@ def _interactive_repl(
                 "completion-menu.meta.completion.current": "bg:#363a4f #89b4fa italic",
                 "completion-menu.border": "#494d64",
                 # Input area
-                "bottom-toolbar": "noinherit bg:default fg:#6d8fa6",
+                "bottom-toolbar": "noinherit bg:default fg:#87ceeb",
                 "separator": "#334466",
             }
         )
@@ -3133,7 +3133,7 @@ def _interactive_repl(
 
                 if not allowed:
                     print(
-                        "  Shell passthrough blocked by policy "
+                        "    Shell passthrough blocked by policy "
                         f"(repl.shell_passthrough={policy})."
                     )
 
@@ -3205,111 +3205,111 @@ def _interactive_repl(
                     # Per-command detail
 
                     _detail = {
-                        "model": "  /model <model>              keep current provider\n"
-                        "  /model <provider>/<model>   switch provider + model\n"
-                        "  providers: ollama, gemini, openai, ollama_cloud, vllm, github_copilot\n"
-                        "  e.g.  /model gemini/gemini-2.0-flash\n"
-                        "        /model ollama/gemma:2b\n"
-                        "        /model openai/gpt-4o\n"
-                        "        /model vllm/meta-llama/Llama-3.1-8B-Instruct",
-                        "embed": "  /embed <model>              keep current provider\n"
-                        "  /embed <provider>/<model>   switch provider + model\n"
-                        "  /embed /path/to/local        local HuggingFace folder\n"
-                        "  providers: sentence_transformers, ollama, fastembed, openai\n"
-                        "  !  Re-ingest after changing embedding model.",
-                        "ingest": "  /ingest <path>              ingest a directory\n"
-                        "  /ingest ./src/*.py           glob pattern\n"
-                        "  /ingest ./notes/**/*.md      recursive glob",
-                        "llm": "  /llm                         show LLM settings (provider, model, temperature)\n"
-                        "  /llm temperature <0.0–2.0>   set generation temperature\n"
-                        "  Lower temperature = more deterministic; higher = more creative.",
-                        "rag": "  /rag                         show all RAG settings\n"
-                        "  /rag topk <n>                results to retrieve (1–20)\n"
-                        "  /rag threshold <0.0–1.0>     min similarity score\n"
-                        "  /rag hybrid                  toggle hybrid BM25+vector\n"
-                        "  /rag rerank                  toggle cross-encoder reranker\n"
-                        "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
-                        "  /rag hyde                    toggle HyDE query expansion\n"
-                        "  /rag multi                   toggle multi-query expansion\n"
-                        "  /rag step-back               toggle step-back prompting\n"
-                        "  /rag decompose               toggle query decomposition\n"
-                        "  /rag compress                toggle LLM context compression\n"
-                        "  /rag cite                    toggle inline [Document N] citations\n"
-                        "  /rag raptor                  toggle RAPTOR hierarchical indexing\n"
-                        "  /rag graph-rag               toggle GraphRAG entity retrieval",
-                        "sessions": "  /sessions                    list recent saved sessions\n"
-                        "  /resume <id>                 load a session by ID\n"
-                        "  Sessions auto-save after each turn.",
-                        "keys": "  /keys                        show API key status for all providers\n"
-                        "  /keys set <provider>         interactively set an API key\n"
-                        "  providers: gemini, openai, brave, ollama_cloud\n"
-                        "  Keys are saved to ~/.axon/.env and loaded at startup.",
-                        "project": "  /project                               show active project + list all\n"
-                        "  /project list                          list all projects and mounted shares\n"
-                        "  /project new <name>                    create a new project and switch to it\n"
-                        "  /project new <name> <desc>             create with description\n"
-                        "  /project new <parent>/<child>          create a sub-project (up to 5 levels)\n"
-                        "  /project switch <name>                 switch to an existing local project\n"
-                        "  /project switch <parent>/<child>       switch to a sub-project\n"
-                        "  /project switch default                return to the global knowledge base\n"
-                        "  /project switch @projects              merged view of all local projects\n"
-                        "  /project switch @mounts                merged view of all mounted shares\n"
-                        "  /project switch @store                 merged view of entire AxonStore\n"
-                        "  /project switch mounts/<name>          switch to a mounted share\n"
-                        "  /project delete <name>                 delete a leaf project and its data\n"
-                        "  /project folder                        open the active project folder\n"
+                        "model": "    /model <model>              keep current provider\n"
+                        "    /model <provider>/<model>   switch provider + model\n"
+                        "    providers: ollama, gemini, openai, ollama_cloud, vllm, github_copilot\n"
+                        "    e.g.  /model gemini/gemini-2.0-flash\n"
+                        "          /model ollama/gemma:2b\n"
+                        "          /model openai/gpt-4o\n"
+                        "          /model vllm/meta-llama/Llama-3.1-8B-Instruct",
+                        "embed": "    /embed <model>              keep current provider\n"
+                        "    /embed <provider>/<model>   switch provider + model\n"
+                        "    /embed /path/to/local        local HuggingFace folder\n"
+                        "    providers: sentence_transformers, ollama, fastembed, openai\n"
+                        "    !  Re-ingest after changing embedding model.",
+                        "ingest": "    /ingest <path>              ingest a directory\n"
+                        "    /ingest ./src/*.py           glob pattern\n"
+                        "    /ingest ./notes/**/*.md      recursive glob",
+                        "llm": "    /llm                         show LLM settings (provider, model, temperature)\n"
+                        "    /llm temperature <0.0–2.0>   set generation temperature\n"
+                        "    Lower temperature = more deterministic; higher = more creative.",
+                        "rag": "    /rag                         show all RAG settings\n"
+                        "    /rag topk <n>                results to retrieve (1–20)\n"
+                        "    /rag threshold <0.0–1.0>     min similarity score\n"
+                        "    /rag hybrid                  toggle hybrid BM25+vector\n"
+                        "    /rag rerank                  toggle cross-encoder reranker\n"
+                        "    /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
+                        "    /rag hyde                    toggle HyDE query expansion\n"
+                        "    /rag multi                   toggle multi-query expansion\n"
+                        "    /rag step-back               toggle step-back prompting\n"
+                        "    /rag decompose               toggle query decomposition\n"
+                        "    /rag compress                toggle LLM context compression\n"
+                        "    /rag cite                    toggle inline [Document N] citations\n"
+                        "    /rag raptor                  toggle RAPTOR hierarchical indexing\n"
+                        "    /rag graph-rag               toggle GraphRAG entity retrieval",
+                        "sessions": "    /sessions                    list recent saved sessions\n"
+                        "    /resume <id>                 load a session by ID\n"
+                        "    Sessions auto-save after each turn.",
+                        "keys": "    /keys                        show API key status for all providers\n"
+                        "    /keys set <provider>         interactively set an API key\n"
+                        "    providers: gemini, openai, brave, ollama_cloud\n"
+                        "    Keys are saved to ~/.axon/.env and loaded at startup.",
+                        "project": "    /project                               show active project + list all\n"
+                        "    /project list                          list all projects and mounted shares\n"
+                        "    /project new <name>                    create a new project and switch to it\n"
+                        "    /project new <name> <desc>             create with description\n"
+                        "    /project new <parent>/<child>          create a sub-project (up to 5 levels)\n"
+                        "    /project switch <name>                 switch to an existing local project\n"
+                        "    /project switch <parent>/<child>       switch to a sub-project\n"
+                        "    /project switch default                return to the global knowledge base\n"
+                        "    /project switch @projects              merged view of all local projects\n"
+                        "    /project switch @mounts                merged view of all mounted shares\n"
+                        "    /project switch @store                 merged view of entire AxonStore\n"
+                        "    /project switch mounts/<name>          switch to a mounted share\n"
+                        "    /project delete <name>                 delete a leaf project and its data\n"
+                        "    /project folder                        open the active project folder\n"
                         "\n"
-                        "  Projects are stored in ~/.axon/projects/<name>/\n"
-                        "  Sub-projects use nested subs/ directories (max depth: 5).\n"
-                        "  Switching to a parent project shows merged data across all sub-projects.\n"
-                        "  Use /ingest after switching to add documents to the current project.",
-                        "share": "  /share list                              list all issued and received shares\n"
-                        "  /share generate <project> <grantee>      generate a read-only share key\n"
-                        "  /share redeem <share_string>              mount a shared project\n"
-                        "  /share revoke <key_id>                   revoke a previously issued share\n"
+                        "    Projects are stored in ~/.axon/projects/<name>/\n"
+                        "    Sub-projects use nested subs/ directories (max depth: 5).\n"
+                        "    Switching to a parent project shows merged data across all sub-projects.\n"
+                        "    Use /ingest after switching to add documents to the current project.",
+                        "share": "    /share list                              list all issued and received shares\n"
+                        "    /share generate <project> <grantee>      generate a read-only share key\n"
+                        "    /share redeem <share_string>              mount a shared project\n"
+                        "    /share revoke <key_id>                   revoke a previously issued share\n"
                         "\n"
-                        "  Share strings are base64-encoded payloads; send them out-of-band.\n"
-                        "  Mounted shares appear under mounts/ in your project list and can be\n"
-                        "  switched to with /project switch mounts/<name>.",
-                        "store": "  /store whoami                  show store identity and active project\n"
-                        "  /store init <base_path>        change the store base path (e.g. to a shared drive)\n"
+                        "    Share strings are base64-encoded payloads; send them out-of-band.\n"
+                        "    Mounted shares appear under mounts/ in your project list and can be\n"
+                        "    switched to with /project switch mounts/<name>.",
+                        "store": "    /store whoami                  show store identity and active project\n"
+                        "    /store init <base_path>        change the store base path (e.g. to a shared drive)\n"
                         "\n"
-                        "  Example: /store init ~/axon_data\n"
-                        "  Moves data to: <base_path>/AxonStore/<username>/\n"
-                        "  Config is updated and persisted to ~/.config/axon/config.yaml.",
-                        "graph": "  /graph status                  show entity count, edges, community summaries\n"
-                        "  /graph finalize                trigger community detection rebuild\n"
-                        "  /graph viz [path]              export graph as HTML (opens in browser)\n"
+                        "    Example: /store init ~/axon_data\n"
+                        "    Moves data to: <base_path>/AxonStore/<username>/\n"
+                        "    Config is updated and persisted to ~/.config/axon/config.yaml.",
+                        "graph": "    /graph status                  show entity count, edges, community summaries\n"
+                        "    /graph finalize                trigger community detection rebuild\n"
+                        "    /graph viz [path]              export graph as HTML (opens in browser)\n"
                         "\n"
-                        "  GraphRAG must be enabled: /rag graph-rag\n"
-                        "  Finalize is useful after batch ingest with community summarisation deferred.",
-                        "refresh": "  /refresh                       re-ingest files whose content has changed\n"
+                        "    GraphRAG must be enabled: /rag graph-rag\n"
+                        "    Finalize is useful after batch ingest with community summarisation deferred.",
+                        "refresh": "    /refresh                       re-ingest files whose content has changed\n"
                         "\n"
-                        "  Computes current content hash for each tracked file and compares\n"
-                        "  to the stored hash from the last ingest. Only changed files are re-ingested.\n"
-                        "  Use /stale to preview which files are old before refreshing.",
-                        "stale": "  /stale                         list documents older than 7 days\n"
-                        "  /stale <days>                  list documents older than N days\n"
+                        "    Computes current content hash for each tracked file and compares\n"
+                        "    to the stored hash from the last ingest. Only changed files are re-ingested.\n"
+                        "    Use /stale to preview which files are old before refreshing.",
+                        "stale": "    /stale                         list documents older than 7 days\n"
+                        "    /stale <days>                  list documents older than N days\n"
                         "\n"
-                        "  Reports age based on the last ingest timestamp for each source.\n"
-                        "  Use /refresh to re-ingest any changed files.",
-                        "config": "  /config                        show current config as a table\n"
-                        "  /config show                   same as /config\n"
-                        "  /config validate               validate config.yaml and list issues\n"
-                        "  /config wizard                 interactive setup wizard\n"
-                        "  /config reset                  overwrite config.yaml with defaults\n"
-                        "  /config set <key> <value>      set a dot-notation config key\n"
+                        "    Reports age based on the last ingest timestamp for each source.\n"
+                        "    Use /refresh to re-ingest any changed files.",
+                        "config": "    /config                        show current config as a table\n"
+                        "    /config show                   same as /config\n"
+                        "    /config validate               validate config.yaml and list issues\n"
+                        "    /config wizard                 interactive setup wizard\n"
+                        "    /config reset                  overwrite config.yaml with defaults\n"
+                        "    /config set <key> <value>      set a dot-notation config key\n"
                         "\n"
-                        "  Example: /config set chunk.strategy markdown\n"
-                        "           /config set rag.top_k 15\n"
-                        "           /config set llm.model gemma3:4b",
-                        "theme": "  /theme                         show current markdown code-block theme\n"
-                        "  /theme list                    list popular theme names\n"
-                        "  /theme <name>                  switch to a Pygments theme by name\n"
+                        "    Example: /config set chunk.strategy markdown\n"
+                        "             /config set rag.top_k 15\n"
+                        "             /config set llm.model gemma3:4b",
+                        "theme": "    /theme                         show current markdown code-block theme\n"
+                        "    /theme list                    list popular theme names\n"
+                        "    /theme <name>                  switch to a Pygments theme by name\n"
                         "\n"
-                        "  Choice is saved to ~/.axon/prefs.json and restored on next launch.\n"
-                        "  Any valid Pygments style name is accepted (e.g. dracula, nord, vs).\n"
-                        "  Default: monokai",
+                        "    Choice is saved to ~/.axon/prefs.json and restored on next launch.\n"
+                        "    Any valid Pygments style name is accepted (e.g. dracula, nord, vs).\n"
+                        "    Default: monokai",
                     }
 
                     key = arg.lstrip("/")
@@ -3323,40 +3323,40 @@ def _interactive_repl(
                 else:
                     print(
                         "\n"
-                        "  /agent          toggle agent mode (LLM can call Axon tools directly)\n"
-                        "  /clear          clear knowledge base for current project\n"
-                        "  /compact        summarise conversation to free context\n"
-                        "  /config [sub]   show, validate, or edit config (validate, wizard, set, reset)\n"
-                        "  /context        show current conversation context size\n"
-                        "  /discuss        toggle discussion fallback (general knowledge)\n"
-                        "  /embed [model]  show or switch embedding model\n"
-                        "  /graph [sub]    GraphRAG status, finalize communities, or viz export\n"
-                        "  /help [cmd]     show this help or details for a command\n"
-                        "  /ingest <path>  ingest a file, directory, or glob\n"
-                        "  /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
-                        "  /list           list ingested documents\n"
-                        "  /llm [opt val]  show or set LLM settings (temperature)\n"
-                        "  /model [model]  show or switch LLM model\n"
-                        "  /project [sub]  manage projects (list, new, switch, delete, folder)\n"
-                        "  /pull <name>    pull an Ollama model\n"
-                        "  /quit           exit Axon\n"
-                        "  /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
-                        "  /refresh        re-ingest documents whose content has changed\n"
-                        "  /resume <id>    load a saved session\n"
-                        "  /retry          retry the last query\n"
-                        "  /search         toggle Brave web search fallback\n"
-                        "  /sessions       list recent saved sessions\n"
-                        "  /share [sub]    share projects (generate, redeem, revoke, list)\n"
-                        "  /stale [days]   list documents not refreshed in N days (default: 7)\n"
-                        "  /store [sub]    AxonStore multi-user mode (init, whoami)\n"
-                        "  /theme [name]   show or switch markdown code-block highlight theme\n"
-                        "  /vllm-url <url> set the vLLM server base URL\n"
+                        "    /agent          toggle agent mode (LLM can call Axon tools directly)\n"
+                        "    /clear          clear knowledge base for current project\n"
+                        "    /compact        summarise conversation to free context\n"
+                        "    /config [sub]   show, validate, or edit config (validate, wizard, set, reset)\n"
+                        "    /context        show current conversation context size\n"
+                        "    /discuss        toggle discussion fallback (general knowledge)\n"
+                        "    /embed [model]  show or switch embedding model\n"
+                        "    /graph [sub]    GraphRAG status, finalize communities, or viz export\n"
+                        "    /help [cmd]     show this help or details for a command\n"
+                        "    /ingest <path>  ingest a file, directory, or glob\n"
+                        "    /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
+                        "    /list           list ingested documents\n"
+                        "    /llm [opt val]  show or set LLM settings (temperature)\n"
+                        "    /model [model]  show or switch LLM model\n"
+                        "    /project [sub]  manage projects (list, new, switch, delete, folder)\n"
+                        "    /pull <name>    pull an Ollama model\n"
+                        "    /quit           exit Axon\n"
+                        "    /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
+                        "    /refresh        re-ingest documents whose content has changed\n"
+                        "    /resume <id>    load a saved session\n"
+                        "    /retry          retry the last query\n"
+                        "    /search         toggle Brave web search fallback\n"
+                        "    /sessions       list recent saved sessions\n"
+                        "    /share [sub]    share projects (generate, redeem, revoke, list)\n"
+                        "    /stale [days]   list documents not refreshed in N days (default: 7)\n"
+                        "    /store [sub]    AxonStore multi-user mode (init, whoami)\n"
+                        "    /theme [name]   show or switch markdown code-block highlight theme\n"
+                        "    /vllm-url <url> set the vLLM server base URL\n"
                         "\n"
-                        "  Shell:   !<cmd>  run a shell command (local-only default)\n"
-                        "  Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
+                        "    Shell:   !<cmd>  run a shell command (local-only default)\n"
+                        "    Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
                         "\n"
-                        "  /help <cmd>  for details  ·  e.g.  /help rag   /help share   /help project\n"
-                        "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
+                        "    /help <cmd>  for details  ·  e.g.  /help rag   /help share   /help project\n"
+                        "    Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
                     )
 
             elif cmd == "/list":
@@ -3387,19 +3387,19 @@ def _interactive_repl(
                     if brain.should_recommend_project():
                         try:
                             print(
-                                "\n  \033[1mNote\033[0m: You are about to ingest into the 'default' project."
+                                "\n    \033[1mNote\033[0m: You are about to ingest into the 'default' project."
                             )
 
                             print(
-                                "  It is recommended to create a dedicated project to keep your data organized."
+                                "    It is recommended to create a dedicated project to keep your data organized."
                             )
 
                             confirm = (
-                                _read_input("  Create a new project now? [y/N]: ").strip().lower()
+                                _read_input("    Create a new project now? [y/N]: ").strip().lower()
                             )
 
                             if confirm == "y":
-                                new_name = _read_input("  New project name: ").strip().lower()
+                                new_name = _read_input("    New project name: ").strip().lower()
 
                                 if new_name:
                                     try:
@@ -3480,7 +3480,7 @@ def _interactive_repl(
                     print(f"    LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
 
                     print(
-                        f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                        f"    Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}"
                     )
 
                     print("    Usage:   /model <model>              (auto-detect provider)")
@@ -3490,7 +3490,7 @@ def _interactive_repl(
                     print(f"    Providers: {', '.join(_PROVIDERS)}")
 
                     print(
-                        f"  vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
+                        f"    vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
                     )
 
                 elif "/" in arg:
@@ -3498,7 +3498,7 @@ def _interactive_repl(
 
                     if provider not in _PROVIDERS:
                         print(
-                            f"  Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
+                            f"    Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
                         )
 
                     else:
@@ -3549,7 +3549,7 @@ def _interactive_repl(
 
                 if not arg:
                     print(
-                        f"  Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                        f"    Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}"
                     )
 
                     print("    Usage:   /embed <model>              (keep current provider)")
@@ -3601,7 +3601,7 @@ def _interactive_repl(
                         brain.embedding = OpenEmbedding(brain.config)
 
                         print(
-                            f"\r  Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                            f"\r    Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
                         )
 
                         print("    Re-ingest your documents so they use the new embedding model.")
@@ -3709,7 +3709,7 @@ def _interactive_repl(
 
             elif cmd == "/clear":
                 _confirm = (
-                    _read_input("  Clear knowledge base for the current project? [y/N]: ")
+                    _read_input("    Clear knowledge base for the current project? [y/N]: ")
                     .strip()
                     .lower()
                 )
@@ -3762,7 +3762,7 @@ def _interactive_repl(
                         brain.config.truth_grounding = True
 
                         print(
-                            "  Web search ON — Brave Search will be used as fallback when local knowledge is insufficient."
+                            "    Web search ON — Brave Search will be used as fallback when local knowledge is insufficient."
                         )
 
             elif cmd == "/discuss":
@@ -3777,24 +3777,24 @@ def _interactive_repl(
                     _grag_mode = getattr(brain.config, "graph_rag_mode", "local")
 
                     print(
-                        f"\n  top-k           · {brain.config.top_k}\n"
-                        f"  threshold       · {brain.config.similarity_threshold}\n"
-                        f"  hybrid          · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
-                        f"  rerank          · {'ON' if brain.config.rerank else 'OFF'}"
+                        f"\n    top-k           · {brain.config.top_k}\n"
+                        f"    threshold       · {brain.config.similarity_threshold}\n"
+                        f"    hybrid          · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
+                        f"    rerank          · {'ON' if brain.config.rerank else 'OFF'}"
                         + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "")
                         + "\n"
-                        f"  hyde            · {'ON' if brain.config.hyde else 'OFF'}\n"
-                        f"  multi-query     · {'ON' if brain.config.multi_query else 'OFF'}\n"
-                        f"  step-back       · {'ON' if brain.config.step_back else 'OFF'}\n"
-                        f"  decompose       · {'ON' if brain.config.query_decompose else 'OFF'}\n"
-                        f"  compress        · {'ON' if brain.config.compress_context else 'OFF'}\n"
-                        f"  sentence-window · {'ON' if getattr(brain.config, 'sentence_window', False) else 'OFF'}\n"
-                        f"  crag-lite       · {'ON' if getattr(brain.config, 'crag_lite', False) else 'OFF'}\n"
-                        f"  code-graph      · {'ON' if getattr(brain.config, 'code_graph', False) else 'OFF'}\n"
-                        f"  raptor          · {'ON' if brain.config.raptor else 'OFF'}\n"
-                        f"  graph-rag       · {'ON' if brain.config.graph_rag else 'OFF'}\n"
-                        f"  graph-rag-mode  · {_grag_mode}\n"
-                        f"\n  /help rag   for usage details\n"
+                        f"    hyde            · {'ON' if brain.config.hyde else 'OFF'}\n"
+                        f"    multi-query     · {'ON' if brain.config.multi_query else 'OFF'}\n"
+                        f"    step-back       · {'ON' if brain.config.step_back else 'OFF'}\n"
+                        f"    decompose       · {'ON' if brain.config.query_decompose else 'OFF'}\n"
+                        f"    compress        · {'ON' if brain.config.compress_context else 'OFF'}\n"
+                        f"    sentence-window · {'ON' if getattr(brain.config, 'sentence_window', False) else 'OFF'}\n"
+                        f"    crag-lite       · {'ON' if getattr(brain.config, 'crag_lite', False) else 'OFF'}\n"
+                        f"    code-graph      · {'ON' if getattr(brain.config, 'code_graph', False) else 'OFF'}\n"
+                        f"    raptor          · {'ON' if brain.config.raptor else 'OFF'}\n"
+                        f"    graph-rag       · {'ON' if brain.config.graph_rag else 'OFF'}\n"
+                        f"    graph-rag-mode  · {_grag_mode}\n"
+                        f"\n    /help rag   for usage details\n"
                     )
 
                 else:
@@ -3861,14 +3861,14 @@ def _interactive_repl(
                         brain.config.query_decompose = not brain.config.query_decompose
 
                         print(
-                            f"  Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}"
+                            f"    Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}"
                         )
 
                     elif rag_opt == "compress":
                         brain.config.compress_context = not brain.config.compress_context
 
                         print(
-                            f"  Context compression {'ON' if brain.config.compress_context else 'OFF'}"
+                            f"    Context compression {'ON' if brain.config.compress_context else 'OFF'}"
                         )
 
                     elif rag_opt == "cite":
@@ -3880,14 +3880,14 @@ def _interactive_repl(
                         brain.config.raptor = not brain.config.raptor
 
                         print(
-                            f"  RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}"
+                            f"    RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}"
                         )
 
                     elif rag_opt in ("graph-rag", "graph_rag", "graphrag"):
                         brain.config.graph_rag = not brain.config.graph_rag
 
                         print(
-                            f"  GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
+                            f"    GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
                         )
 
                     elif rag_opt in ("sentence-window", "sentence_window"):
@@ -4052,7 +4052,7 @@ def _interactive_repl(
 
                     else:
                         print(
-                            f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, "
+                            f"    Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, "
                             f"hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag, "
                             f"sentence-window, sentence-window-size, crag-lite, code-graph, graph-rag-mode, "
                             f"max-hops, hop-decay, distance-weighted"
@@ -4061,10 +4061,10 @@ def _interactive_repl(
             elif cmd == "/llm":
                 if not arg:
                     print(
-                        f"\n  temperature  · {brain.config.llm_temperature}\n"
-                        f"  provider     · {brain.config.llm_provider}\n"
-                        f"  model        · {brain.config.llm_model}\n"
-                        f"\n  /llm temperature <0.0–2.0>   set generation temperature\n"
+                        f"\n    temperature  · {brain.config.llm_temperature}\n"
+                        f"    provider     · {brain.config.llm_provider}\n"
+                        f"    model        · {brain.config.llm_model}\n"
+                        f"\n    /llm temperature <0.0–2.0>   set generation temperature\n"
                     )
 
                 else:
@@ -4214,7 +4214,7 @@ def _interactive_repl(
                                     count = brain.vector_store.collection.count()
 
                                     print(
-                                        f"  Switched to project '{proj_name}'  ({count} chunks)\n"
+                                        f"    Switched to project '{proj_name}'  ({count} chunks)\n"
                                     )
 
                                 else:
@@ -4225,7 +4225,7 @@ def _interactive_repl(
 
                         else:
                             print(
-                                f"  Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
+                                f"    Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
                             )
 
                 elif sub == "delete":
@@ -4238,7 +4238,7 @@ def _interactive_repl(
                         try:
                             confirm = (
                                 _read_input(
-                                    f"  !  Delete project '{proj_name}' and ALL its data? [y/N]: "
+                                    f"    !  Delete project '{proj_name}' and ALL its data? [y/N]: "
                                 )
                                 .strip()
                                 .lower()
@@ -4514,7 +4514,7 @@ def _interactive_repl(
 
                         if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
                             print(
-                                f"  Project '{proj}' not found. Use /project list to see projects."
+                                f"    Project '{proj}' not found. Use /project list to see projects."
                             )
 
                         else:
@@ -4562,7 +4562,7 @@ def _interactive_repl(
                             print(f"    Project '{result['project']}' from {result['owner']}")
 
                             print(
-                                f"  Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
+                                f"    Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
                             )
 
                             print("    Access:      read-only\n")
@@ -4600,7 +4600,7 @@ def _interactive_repl(
                     print(f"    Unknown sub-command '{sub}'.")
 
                     print(
-                        "  Usage: /share list | generate <project> <grantee> [--write] | redeem <string> | revoke <key_id>"
+                        "    Usage: /share list | generate <project> <grantee> [--write] | redeem <string> | revoke <key_id>"
                     )
 
             elif cmd == "/store":
@@ -4939,7 +4939,7 @@ def _interactive_repl(
 
                         except Exception:
                             print(
-                                "  Open the file in your browser to explore the entity–relation graph."
+                                "    Open the file in your browser to explore the entity–relation graph."
                             )
 
                     except Exception as e:
@@ -4998,9 +4998,9 @@ def _interactive_repl(
                 _agent_mode = not _agent_mode
                 state = "ON" if _agent_mode else "OFF"
                 print(
-                    f"  Agent mode {state}. LLM can now call Axon tools directly."
+                    f"    Agent mode {state}. LLM can now call Axon tools directly."
                     if _agent_mode
-                    else "  Agent mode OFF. Back to Q&A mode."
+                    else "    Agent mode OFF. Back to Q&A mode."
                 )
 
             elif cmd == "/debug":
