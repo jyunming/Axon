@@ -2,6 +2,14 @@
 from fastapi import HTTPException
 
 
+def _enforce_write_access(brain, operation: str) -> None:
+    """Translate AxonBrain write-access denials into HTTP 403 responses."""
+    try:
+        brain._assert_write_allowed(operation)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
 def enforce_project(requested: str | None, brain) -> None:
     """Raise 409 if the caller requested a project that is not the active one.
 

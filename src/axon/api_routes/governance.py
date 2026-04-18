@@ -210,7 +210,7 @@ async def governance_graph_rebuild(req: Request):
     """Audited operator wrapper: trigger graph community rebuild."""
     from axon import api as _api
     from axon import governance as gov
-    from axon.api_routes.ingest import _enforce_write_access
+    from axon.api_routes import _enforce_write_access
 
     brain = _api.brain
     if not brain:

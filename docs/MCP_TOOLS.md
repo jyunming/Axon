@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **30 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **31 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -10,7 +10,7 @@ Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **30 tools*
 
 ---
 
-## Ingestion (5)
+## Ingestion (6)
 
 ### `ingest_text`
 
@@ -57,9 +57,19 @@ Walk and ingest a local file or directory (always async). Path must be within `R
 
 **Returns:** `{"job_id": "..."}` — poll with `get_job_status`.
 
+### `refresh_ingest`
+
+Re-ingest all tracked sources that have changed on disk since they were last indexed. Skips files whose content hash has not changed. Always async.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | `null` | Project to refresh; defaults to the active project |
+
+**Returns:** `{"job_id": "..."}` — poll with `get_job_status`.
+
 ### `get_job_status`
 
-Poll the status of an async ingest job started by `ingest_path`.
+Poll the status of an async ingest job started by `ingest_path` or `refresh_ingest`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -240,7 +250,7 @@ Retrieve a full session transcript by ID.
 
 ---
 
-## AxonStore & Sharing (5)
+## AxonStore & Sharing (6)
 
 ### `get_store_status`
 
@@ -294,9 +304,19 @@ List outgoing shares (projects this user has shared, with revocation status) and
 
 **Returns:** `{"sharing": [...], "shared": [...]}`
 
+### `revoke_share`
+
+Revoke a previously generated share key, cutting off the grantee's access immediately.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `key_id` | string | required | Key ID from the `share_string` or `list_shares` output |
+
+**Returns:** `{"status": "revoked", "key_id": "..."}`
+
 ---
 
-## Graph (3)
+## Graph (4)
 
 ### `graph_status`
 
@@ -316,11 +336,17 @@ Return the full entity/relation graph as JSON for inspection, export, or custom 
 
 **Returns:** `{"nodes": [...], "links": [...]}`
 
+### `graph_backend_status`
+
+Return the active graph backend's type and health metrics. Distinguishes between the GraphRAG community-graph backend, the dynamic SQLite-WAL graph backend, and no backend. No parameters.
+
+**Returns:** `{"backend": "graphrag"|"dynamic"|"none", "ready": true|false, ...}`
+
 ---
 
 ## Usage Notes
 
-- All tools operate on the **active project**. Most ingest, search, and query tools accept an optional `project` parameter validated against the active project (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`. Use `switch_project` to change the active project.
+- All tools operate on the **active project**. Most ingest, search, and query tools accept an optional `project` parameter validated against the active project (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `revoke_share`, `graph_backend_status`. Use `switch_project` to change the active project.
 
 - `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
 

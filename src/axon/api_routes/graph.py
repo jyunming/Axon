@@ -8,8 +8,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
+from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
-from axon.api_routes.ingest import _enforce_write_access
 from axon.api_schemas import QueryVisualizeRequest, SearchVisualizeRequest
 
 logger = logging.getLogger("AxonAPI")

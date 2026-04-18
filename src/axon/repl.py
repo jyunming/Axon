@@ -419,11 +419,12 @@ def _mathify(text: str) -> str:
         text = pat.sub(sym, text)
     text = re.sub(r"(\w+)\^\{([^}]+)\}", _brace_sup, text)
     text = re.sub(r"(\w+)\^(\d+|\w)", _simple_sup, text)
+    # Multiplication dot BEFORE subscript: I_0 * cos still has digit [0-9] before *
+    text = re.sub(r"(?<=[a-zA-Z0-9]) \* (?=[a-zA-Z0-9])", " · ", text)
+    text = re.sub(r"(?<=[a-zA-Z0-9])\*(?=[a-zA-Z0-9])", "·", text)
     text = re.sub(r"(\w)_(\d)", lambda m: m.group(1) + _SUB_MAP.get(m.group(2), m.group(2)), text)
     text = text.replace(">=", "≥").replace("<=", "≤").replace("!=", "≠")
     text = re.sub(r"\binfinity\b", "∞", text)
-    text = re.sub(r"(?<=[a-zA-Z0-9]) \* (?=[a-zA-Z0-9])", " · ", text)
-    text = re.sub(r"(?<=[a-zA-Z0-9])\*(?=[a-zA-Z0-9])", "·", text)
     return text
 
 

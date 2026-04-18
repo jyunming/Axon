@@ -564,7 +564,7 @@
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-primary">🧠</div>
                 <h3>Graph Intelligence</h3>
-                <p>RAPTOR hierarchies, GraphRAG entity mapping, and rich AST Code Graphs.</p>
+                <p>RAPTOR hierarchies, GraphRAG (local / global / hybrid) with community detection, and Code Graph with file→symbol→caller link traversal via <code style="font-size:0.8rem;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;">code_graph_bridge</code>.</p>
             </div>
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-secondary">📥</div>
@@ -574,22 +574,22 @@
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-tertiary">🔒</div>
                 <h3>Air-Gapped Privacy</h3>
-                <p>Zero telemetry. Complete offline support via Ollama. Your data stays entirely yours.</p>
+                <p>Zero telemetry, zero egress. <code style="font-size:0.8rem;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;">local_assets_only</code> mode runs a model preflight audit at startup — aborts if any active model would reach the network.</p>
             </div>
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-secondary">🔍</div>
                 <h3>Advanced Retrieval</h3>
-                <p>Hybrid semantic search with BGE rerankers, HyDE, and dynamic context windows.</p>
+                <p>Hybrid BM25 + dense search, BGE reranker, HyDE, and sentence-window context. Auto query router (<code style="font-size:0.8rem;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;">heuristic</code> / <code style="font-size:0.8rem;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;">llm</code>) picks the right strategy — zero manual tuning.</p>
             </div>
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-tertiary">🛡️</div>
                 <h3>AxonStore &amp; Gov</h3>
-                <p>Mount read-only graphs. Console tracks query audits and smoothly manages maintenance.</p>
+                <p>HMAC-signed, instantly revocable read-only share keys. Federated queries via <code style="font-size:0.8rem;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;">@store</code>. Governance audit trail with graceful <code style="font-size:0.8rem;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;">normal→draining→readonly→offline</code> states.</p>
             </div>
             <div class="glass-card reveal">
                 <div class="icon-wrapper ic-primary">🔌</div>
                 <h3>MCP &amp; VS Code</h3>
-                <p>Interactive 3D native VS Code graphs. 30+ MCP tools bridging Axon to AI coders.</p>
+                <p>31 MCP tools for Claude Code, Codex, Gemini, Cursor &amp; Copilot. 32 LM tools in the VS Code extension. Interactive 3D graph panel with source-line deep-links.</p>
             </div>
         </div>
     </section>
@@ -619,10 +619,10 @@
         <div class="showcase-row reveal">
             <div class="showcase-content">
                 <h3 style="font-size: 2rem; margin-bottom: 16px; background: linear-gradient(90deg, #fff, #9ca3af); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Knowledge Graph Integration</h3>
-                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">The native VS Code extension opens an interactive 3D webview of your code relationships and retrieved sources. Visualize multi-hop RAG paths in real-time, right next to your editor.</p>
+                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">The native VS Code extension opens an interactive 3D webview of your code relationships and retrieved sources. <strong style="color: var(--text-main);">32 LM tools</strong> expose every Axon capability directly in Copilot Chat — search, ingest, share, govern, and visualise without leaving the editor.</p>
                 <ul class="check-list">
                     <li><span class="check">✓</span> Install with <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">axon-ext</code> — no Marketplace needed</li>
-                    <li><span class="check">✓</span> <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">@axon</code> in Copilot Chat</li>
+                    <li><span class="check">✓</span> <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">@axon</code> in Copilot Chat — 32 LM tools in the agent hammer menu</li>
                 </ul>
             </div>
             <div class="showcase-visual">
@@ -647,11 +647,11 @@
         <div class="showcase-row reveal">
             <div class="showcase-content">
                 <h3 style="font-size: 2rem; margin-bottom: 16px; background: linear-gradient(90deg, #fff, #9ca3af); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Project Isolation &amp; AxonStore</h3>
-                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Maintain strict boundaries between different knowledge bases. Axon supports isolated projects with nesting natively. Share read-only graphs with your team using cryptographically signed access leases, or federate queries across multiple mounted projects simultaneously.</p>
+                <p style="color: var(--text-muted); font-size: 1.125rem; margin-bottom: 24px;">Maintain strict boundaries between different knowledge bases. Axon supports <strong style="color: var(--text-main);">up to 5 levels of nested projects</strong> — searching a parent automatically fans out to all descendants. Share read-only access with cryptographically signed, instantly revocable HMAC keys, or federate queries across all mounted projects via <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">@store</code>.</p>
                 <ul class="check-list">
-                    <li><span class="check-pink">✓</span> Cryptographically signed read-only shares</li>
-                    <li><span class="check-pink">✓</span> Zero external infrastructure needed</li>
-                    <li><span class="check-pink">✓</span> Admin maintenance safely drains active processes</li>
+                    <li><span class="check-pink">✓</span> Hierarchical projects — parent search fans out to all children</li>
+                    <li><span class="check-pink">✓</span> HMAC-signed read-only shares with instant revocation</li>
+                    <li><span class="check-pink">✓</span> Graceful maintenance: <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">normal → draining → readonly → offline</code></li>
                     <li><span class="check-pink">✓</span> Full governance audit trail</li>
                 </ul>
             </div>

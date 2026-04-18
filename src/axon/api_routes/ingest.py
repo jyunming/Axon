@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 
+from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import (
     BatchTextIngestRequest,
@@ -34,14 +35,6 @@ _PATH_ENRICHMENT_EXCLUDED_TYPES = frozenset(
         "code",
     }
 )
-
-
-def _enforce_write_access(brain, operation: str) -> None:
-    """Translate AxonBrain write-access denials into HTTP 403 responses."""
-    try:
-        brain._assert_write_allowed(operation)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
 
 
 def _normalise_uploaded_filename(filename: str | None, index: int) -> str:
@@ -101,24 +94,11 @@ async def refresh_docs(background_tasks: BackgroundTasks):
             versions = brain.get_doc_versions() or {}
             loader = DirectoryLoader()
 
-            # Scope refresh to the active project to avoid touching other projects' sources
-            active_project = getattr(brain, "_active_project", None)
-            try:
-                project_root = (pathlib.Path(brain.config.projects_root) / active_project).resolve()
-            except Exception:
-                project_root = None
-
             for source_id, record in versions.items():
-                # Resolve source path and ensure it belongs to the active project (if set)
                 try:
                     src_path = pathlib.Path(source_id).expanduser().resolve()
                 except Exception:
                     job["errors"].append({"source": source_id, "error": "invalid source path"})
-                    continue
-
-                if project_root and not str(src_path).startswith(str(project_root)):
-                    # Skip files that belong to other projects
-                    job["skipped"].append(source_id)
                     continue
 
                 if not src_path.exists():

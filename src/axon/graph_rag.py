@@ -267,7 +267,10 @@ class GraphRagMixin:
         bridge = get_rust_bridge()
         raw_nodes = None
         raw_edges = None
-        if bool(getattr(self.config, "graph_rag_rust_build_edges", False)) and bridge.can_build_graph_edges():
+        if (
+            bool(getattr(self.config, "graph_rag_rust_build_edges", False))
+            and bridge.can_build_graph_edges()
+        ):
             built = bridge.build_graph_edges(self._entity_graph, self._relation_graph)
             if built is not None and len(built) == 2:
                 raw_nodes, raw_edges = built

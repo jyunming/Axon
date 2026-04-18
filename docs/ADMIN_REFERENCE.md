@@ -32,7 +32,7 @@ axon-api --config /path/to/config.yaml  # explicit config file
 
 ## 2. REST API — Full Endpoint Reference
 
-**54 endpoints** across 8 route files. Base URL: `http://localhost:8000` (default).
+**55 endpoints** across 8 route files. Base URL: `http://localhost:8000` (default).
 
 Interactive docs: `/docs` (Swagger), `/redoc`.
 
@@ -164,6 +164,7 @@ When `include_diagnostics: true`, adds `"diagnostics": { "confidence": 0.82, "fa
 | `GET` | `/graph/data` | Full entity/relation graph as JSON (`nodes` + `links`) |
 | `GET` | `/code-graph/data` | Structural code graph as JSON (file/class/function nodes) |
 | `GET` | `/graph/visualize` | Interactive 3D graph as HTML — opens in browser. Click a node to see its description and source evidence. (VS Code extension uses the embedded webview which also supports opening files in the editor.) |
+| `GET` | `/graph/backend/status` | Active graph backend type and health metrics — distinguishes graphrag vs dynamic backend |
 | `POST` | `/query/visualize` | Run a query and return a self-contained HTML page with LLM answer, citations, and highlighted graph — nodes matched by the query are golden; first-degree neighbours are orange. |
 | `POST` | `/search/visualize` | Same as `/query/visualize` but skips LLM generation — shows raw retrieved chunks instead of an answer. Useful for inspecting retrieval quality without spending LLM tokens. |
 

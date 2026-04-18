@@ -10,20 +10,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import QueryRequest, SearchRequest, SearchResult
 from axon.collection_ops import clear_active_project
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
-
-
-def _enforce_write_access(brain, operation: str) -> None:
-    """Translate AxonBrain write-access denials into HTTP 403 responses."""
-    try:
-        brain._assert_write_allowed(operation)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.post("/query")
