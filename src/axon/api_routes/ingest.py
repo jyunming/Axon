@@ -104,9 +104,7 @@ async def refresh_docs(background_tasks: BackgroundTasks):
             # Scope refresh to the active project to avoid touching other projects' sources
             active_project = getattr(brain, "_active_project", None)
             try:
-                project_root = (
-                    pathlib.Path(brain.config.projects_root) / active_project
-                ).resolve()
+                project_root = (pathlib.Path(brain.config.projects_root) / active_project).resolve()
             except Exception:
                 project_root = None
 
@@ -582,7 +580,10 @@ async def ingest_upload(
                         total_written += len(chunk)
                         if total_written > MAX_UPLOAD_BYTES:
                             await upload.close()
-                            raise HTTPException(status_code=413, detail=f"File '{candidate_name}' exceeds the allowed size of {MAX_UPLOAD_BYTES} bytes")
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"File '{candidate_name}' exceeds the allowed size of {MAX_UPLOAD_BYTES} bytes",
+                            )
                 await upload.close()
             except HTTPException:
                 # Let the HTTPException bubble up to the client

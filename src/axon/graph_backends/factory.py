@@ -63,4 +63,4 @@ def get_graph_backend(brain: Any) -> GraphBackend:
         valid = sorted(reg)
         raise ValueError(f"Unknown graph_backend '{backend_id}'. Valid options: {valid}")
 
-    return cls(brain)  # type: ignore[call-arg]
+    return cls(brain)

@@ -1614,6 +1614,18 @@ class TestAxonCompleter:
         displays = [str(c.display) for c in completions]
         assert any("help" in d.lower() for d in displays)
 
+    def test_completer_slash_root_shows_commands(self):
+        completer = self._make_completer()
+        if completer is None:
+            pytest.skip("Could not extract completer")
+        from prompt_toolkit.document import Document
+
+        doc = Document("/", cursor_position=1)
+        completions = list(completer.get_completions(doc, None))
+        displays = [str(c.display) for c in completions]
+        assert any("help" in d.lower() for d in displays)
+        assert any("project" in d.lower() for d in displays)
+
     def test_completer_ingest_path(self, tmp_path):
         completer = self._make_completer()
         if completer is None:

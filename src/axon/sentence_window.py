@@ -79,6 +79,14 @@ def segment_text(text: str) -> list[str]:
     if not text or not text.strip():
         return []
 
+    from axon.rust_bridge import get_rust_bridge
+
+    bridge = get_rust_bridge()
+    if bridge.can_segment_text():
+        result = bridge.segment_text(text, _MIN_SENTENCE_CHARS)
+        if result is not None:
+            return result
+
     raw = _SENTENCE_BOUNDARY.split(text.strip())
     sentences: list[str] = []
     for part in raw:
@@ -233,9 +241,23 @@ class SentenceWindowIndex:
     # ------------------------------------------------------------------
 
     def save(self, directory: Path) -> None:
-        """Save the index to *directory*/.sentence_index.json."""
+        """Save the index to *directory*/.sentence_index.msgpack (or .json fallback)."""
+        from axon.rust_bridge import get_rust_bridge
+
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
+        bridge = get_rust_bridge()
+        if bridge.can_sentence_codec():
+            raw = bridge.encode_sentence_index(self._records, self._chunk_to_sentences)
+            if raw is not None:
+                try:
+                    (directory / ".sentence_index.msgpack").write_bytes(raw)
+                    old = directory / _INDEX_FILENAME
+                    if old.exists():
+                        old.unlink(missing_ok=True)
+                    return
+                except Exception as exc:
+                    logger.warning("SentenceWindowIndex: msgpack save failed: %s", exc)
         path = directory / _INDEX_FILENAME
         data = {
             "records": self._records,
@@ -247,7 +269,19 @@ class SentenceWindowIndex:
             logger.warning("SentenceWindowIndex: save failed: %s", exc)
 
     def load(self, directory: Path) -> None:
-        """Load the index from *directory*/.sentence_index.json if present."""
+        """Load the index from *directory*/.sentence_index.msgpack (or .json fallback)."""
+        from axon.rust_bridge import get_rust_bridge
+
+        bridge = get_rust_bridge()
+        mp_path = Path(directory) / ".sentence_index.msgpack"
+        if mp_path.exists() and bridge.can_sentence_codec():
+            try:
+                result = bridge.decode_sentence_index(mp_path.read_bytes())
+                if result is not None:
+                    self._records, self._chunk_to_sentences = result
+                    return
+            except Exception as exc:
+                logger.warning("SentenceWindowIndex: msgpack load failed: %s", exc)
         path = Path(directory) / _INDEX_FILENAME
         if not path.exists():
             return
@@ -370,12 +404,24 @@ class SentenceVectorStore:
 
     def save(self) -> None:
         """Persist the embedding matrix and metadata list to disk."""
+        from axon.rust_bridge import get_rust_bridge
+
         self._directory.mkdir(parents=True, exist_ok=True)
         try:
             import numpy as np
 
             if self._vecs is not None and len(self._ids) > 0:
                 np.save(str(self._directory / _VECS_FILENAME), self._vecs)
+
+            bridge = get_rust_bridge()
+            if bridge.can_sentence_codec():
+                raw = bridge.encode_sentence_meta(self._ids, self._meta)
+                if raw is not None:
+                    (self._directory / ".sentence_meta.msgpack").write_bytes(raw)
+                    old = self._directory / _META_FILENAME
+                    if old.exists():
+                        old.unlink(missing_ok=True)
+                    return
             meta_path = self._directory / _META_FILENAME
             meta_path.write_text(
                 json.dumps({"ids": self._ids, "meta": self._meta}, ensure_ascii=False),
@@ -386,8 +432,26 @@ class SentenceVectorStore:
 
     def load(self) -> None:
         """Load the embedding matrix and metadata list from disk if present."""
-        meta_path = self._directory / _META_FILENAME
+        from axon.rust_bridge import get_rust_bridge
+
+        bridge = get_rust_bridge()
+        mp_path = self._directory / ".sentence_meta.msgpack"
         vecs_path = self._directory / _VECS_FILENAME
+        if mp_path.exists() and bridge.can_sentence_codec():
+            try:
+                import numpy as np
+
+                result = bridge.decode_sentence_meta(mp_path.read_bytes())
+                if result is not None:
+                    self._ids, self._meta = result
+                    if vecs_path.exists() and self._ids:
+                        self._vecs = np.load(str(vecs_path), allow_pickle=False)
+                    else:
+                        self._vecs = None
+                    return
+            except Exception as exc:
+                logger.warning("SentenceVectorStore: msgpack load failed: %s", exc)
+        meta_path = self._directory / _META_FILENAME
         if not meta_path.exists():
             return
         try:

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from axon.vector_store import OpenVectorStore
+import pytest
+
 from axon.config import AxonConfig
+from axon.vector_store import OpenVectorStore
 
 
 def test_add_unbalanced_inputs_raises():

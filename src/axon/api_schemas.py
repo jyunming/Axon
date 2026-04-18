@@ -83,7 +83,13 @@ def _validate_ingest_path(path: str) -> str:
 
 def _compute_content_hash(text: str) -> str:
     """Return a SHA-256 hex digest of the normalised text content."""
+    from axon.rust_bridge import get_rust_bridge
 
+    bridge = get_rust_bridge()
+    if bridge.can_sha256():
+        result = bridge.compute_sha256(text)
+        if result is not None:
+            return result
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 

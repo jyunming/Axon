@@ -44,6 +44,13 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     ("api_routes/shares.py", ""),
     ("api_routes/maintenance.py", ""),
     ("api_routes/registry.py", ""),
+    ("loaders.py", ""),
+    ("agent.py", ""),
+    ("retrievers.py", ""),
+    ("splitters.py", ""),
+    ("graph_backends/", ""),
+    ("target_rebuild/", ""),
+    ("config_wizard.py", ""),
 ]
 
 

@@ -664,6 +664,22 @@ class OpenLLM:
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
 
+    def complete_with_tools(
+        self,
+        prompt: str,
+        tools: list[dict] | None = None,
+        system_prompt: str = None,
+        chat_history: list[dict[str, str]] = None,
+    ):
+        """Return a tool-call plan or a plain text response.
+
+        For providers without native tool-calling support wired into Axon yet,
+        fall back to a normal text completion so agent mode degrades gracefully
+        instead of crashing.
+        """
+
+        return self.complete(prompt, system_prompt=system_prompt, chat_history=chat_history)
+
     def stream(
         self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None
     ):

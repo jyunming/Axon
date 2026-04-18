@@ -54,8 +54,26 @@ def _bind_gr_cache_methods(brain):
     brain._graph_rag_cache = {}
     brain._gr_cache_get = AxonBrain._gr_cache_get.__get__(brain, AxonBrain)
     brain._gr_cache_put = AxonBrain._gr_cache_put.__get__(brain, AxonBrain)
+    brain._gr_cache_store = AxonBrain._gr_cache_store.__get__(brain, AxonBrain)
     brain._gr_text_hash = AxonBrain._gr_text_hash.__get__(brain, AxonBrain)
     brain._gr_llm_complete_cached = AxonBrain._gr_llm_complete_cached.__get__(brain, AxonBrain)
+    brain._parse_extracted_entities = AxonBrain._parse_extracted_entities.__get__(brain, AxonBrain)
+    brain._parse_extracted_relations = AxonBrain._parse_extracted_relations.__get__(
+        brain, AxonBrain
+    )
+    brain._load_graph_rag_extraction_cache = AxonBrain._load_graph_rag_extraction_cache.__get__(
+        brain, AxonBrain
+    )
+    brain._save_graph_rag_extraction_cache = AxonBrain._save_graph_rag_extraction_cache.__get__(
+        brain, AxonBrain
+    )
+    brain._extract_graph_llm_batches = AxonBrain._extract_graph_llm_batches.__get__(
+        brain, AxonBrain
+    )
+    brain._build_graph_edge_payload = AxonBrain._build_graph_edge_payload.__get__(brain, AxonBrain)
+    brain._build_networkx_graph_from_edges = AxonBrain._build_networkx_graph_from_edges
+    brain._graph_connected_components = AxonBrain._graph_connected_components
+    brain._build_synthetic_community_hierarchy = AxonBrain._build_synthetic_community_hierarchy
     brain._get_incoming_relation_index = AxonBrain._get_incoming_relation_index.__get__(
         brain, AxonBrain
     )
@@ -3844,7 +3862,13 @@ class TestGraphRAGCommunity:
 
             return [set(nodes[:1]), set(nodes[1:])] if len(nodes) > 1 else [set(nodes)]
 
-        with patch("networkx.algorithms.community.louvain_communities", _fake_louvain):
+        fake_bridge = MagicMock()
+        fake_bridge.can_build_graph_edges.return_value = False
+        fake_bridge.can_run_louvain.return_value = False
+
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=fake_bridge), patch(
+            "networkx.algorithms.community.louvain_communities", _fake_louvain
+        ):
             result = brain._run_hierarchical_community_detection()
 
         # result is now (community_levels, community_hierarchy, community_children)
@@ -4277,7 +4301,13 @@ class TestGraphRAGRealImplementation:
 
             return [set(nodes[:mid]), set(nodes[mid:])] if mid > 0 else [set(nodes)]
 
-        with patch("networkx.algorithms.community.louvain_communities", _fake_louvain):
+        fake_bridge = MagicMock()
+        fake_bridge.can_build_graph_edges.return_value = False
+        fake_bridge.can_run_louvain.return_value = False
+
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=fake_bridge), patch(
+            "networkx.algorithms.community.louvain_communities", _fake_louvain
+        ):
             result = brain._run_hierarchical_community_detection()
 
         assert isinstance(result, tuple) and len(result) == 3
@@ -10639,15 +10669,28 @@ class TestHashStore:
         bm25_dir = tmp_path / "bm25_save"
         bm25_dir.mkdir(parents=True)
         brain.config.bm25_path = str(bm25_dir)
-        brain._ingested_hashes = {"h1", "h2"}
+        # Use valid 32-char MD5 hex strings so the Rust binary store accepts them
+        h1 = "5d41402abc4b2a76b9719d911017c592"
+        h2 = "acbd18db4cc2f85cedef654fccc4a4d8"
+        brain._ingested_hashes = {h1, h2}
 
         brain._save_hash_store()
 
-        hash_file = bm25_dir / ".content_hashes"
-        assert hash_file.exists()
-        content = hash_file.read_text()
-        assert "h1" in content
-        assert "h2" in content
+        bin_file = bm25_dir / ".content_hashes.bin"
+        txt_file = bm25_dir / ".content_hashes"
+        # Either binary (preferred when Rust available) or text file must exist
+        assert bin_file.exists() or txt_file.exists()
+        if bin_file.exists():
+            from axon.rust_bridge import get_rust_bridge
+
+            loaded = get_rust_bridge().load_hash_store_binary(str(bin_file))
+            assert loaded is not None
+            assert h1 in loaded
+            assert h2 in loaded
+        else:
+            content = txt_file.read_text()
+            assert h1 in content
+            assert h2 in content
 
 
 # ===========================================================================

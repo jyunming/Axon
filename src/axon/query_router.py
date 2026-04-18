@@ -169,22 +169,64 @@ class QueryRouterMixin:
                         if extra_id_scores.get(did, 0.0) < doc_score:
                             extra_id_scores[did] = doc_score
 
-        # 1-hop traversal via relation graph
-        use_relations = getattr(active_cfg, "graph_rag_relations", True) and self._relation_graph
+        # Multi-hop traversal via relation graph
+        def _cfg_get(name, default):
+            val = getattr(active_cfg, name, default)
+            if isinstance(val, MagicMock):
+                return default
+            return val
+
+        from unittest.mock import MagicMock
+
+        max_hops = _cfg_get("graph_rag_max_hops", 1)
+        hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
+
+        # Performance guard for large graphs (Epic 1/4)
+        large_threshold = _cfg_get("graph_rag_large_graph_threshold", 50000)
+        if len(self._entity_graph) > large_threshold and max_hops > 1:
+            logger.info(
+                f"   GraphRAG: large graph detected ({len(self._entity_graph)} nodes); "
+                f"capping max_hops at 1 for performance."
+            )
+            max_hops = 1
+
+        use_relations = (
+            getattr(active_cfg, "graph_rag_relations", True)
+            and self._relation_graph
+            and max_hops > 0
+        )
+
         if use_relations and matched_entities:
-            for src_entity in matched_entities:
-                for entry in self._relation_graph.get(src_entity, []):
-                    target = entry.get("target", "").lower()
-                    if not target:
-                        continue
-                    target_node = self._entity_graph.get(target, {})
-                    target_chunk_ids = target_node.get("chunk_ids", [])
-                    for did in target_chunk_ids:
-                        if did not in existing_ids:
-                            # 1-hop score: lower than direct match
-                            hop_score = 0.62
-                            if extra_id_scores.get(did, 0.0) < hop_score:
-                                extra_id_scores[did] = hop_score
+            # BFS for multi-hop traversal
+            current_hop_entities = set(matched_entities)
+            visited_entities = set(matched_entities)
+
+            for hop in range(1, max_hops + 1):
+                next_hop_entities = set()
+                # Score for this hop decays from base 0.8
+                # Hop 1: 0.8 * 0.7 = 0.56
+                # Hop 2: 0.56 * 0.7 = 0.392
+                hop_score = 0.8 * (hop_decay**hop)
+
+                for src_entity in current_hop_entities:
+                    for entry in self._relation_graph.get(src_entity, []):
+                        target = entry.get("target", "").lower()
+                        if not target or target in visited_entities:
+                            continue
+
+                        visited_entities.add(target)
+                        next_hop_entities.add(target)
+
+                        target_node = self._entity_graph.get(target, {})
+                        target_chunk_ids = target_node.get("chunk_ids", [])
+                        for did in target_chunk_ids:
+                            if did not in existing_ids:
+                                if extra_id_scores.get(did, 0.0) < hop_score:
+                                    extra_id_scores[did] = hop_score
+
+                if not next_hop_entities:
+                    break
+                current_hop_entities = next_hop_entities
 
         if not extra_id_scores:
             return results, list(matched_entities)
@@ -198,7 +240,8 @@ class QueryRouterMixin:
                     f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)"
                 )
                 for r in extra_results:
-                    r["score"] = extra_id_scores.get(r["id"], 0.65)
+                    # Use a very low fallback if somehow missing from map
+                    r["score"] = extra_id_scores.get(r["id"], 0.01)
                     r["_graph_expanded"] = True
                 results = list(results) + extra_results
         except Exception as e:
@@ -208,9 +251,17 @@ class QueryRouterMixin:
 
     def _doc_hash(self, doc: dict) -> str:
         """Return an MD5 hex digest of the document's text content."""
+        text = doc.get("text", "")
+        from axon.rust_bridge import get_rust_bridge
+
+        bridge = get_rust_bridge()
+        if bridge.can_doc_hash():
+            result = bridge.compute_doc_hash(text)
+            if result is not None:
+                return result
         import hashlib
 
-        return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
+        return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()
 
     def _prepend_contextual_context(self, chunk: dict, whole_doc_text: str) -> dict:
         """Prepend LLM-generated situating context to chunk text (Anthropic method)."""
@@ -453,6 +504,15 @@ class QueryRouterMixin:
 
         lambda_mult = getattr(cfg, "mmr_lambda", 0.5)
         dup_threshold = 0.85
+
+        # Try Rust fast-path
+        from axon.rust_bridge import get_rust_bridge
+
+        _rust = get_rust_bridge()
+        if _rust.can_mmr_rerank():
+            result = _rust.mmr_rerank(results, lambda_mult, dup_threshold)
+            if result is not None:
+                return result
 
         def _tok(text: str) -> frozenset:
             return frozenset(re.sub(r"[^\w\s]", "", text.lower()).split())

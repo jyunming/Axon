@@ -40,6 +40,14 @@ def _extract_code_query_tokens(query: str) -> frozenset[str]:
     - Qualified names (foo.bar → "foo", "bar", "foo.bar")
     - All identifiers of length >= 4
     """
+    from axon.rust_bridge import get_rust_bridge
+
+    bridge = get_rust_bridge()
+    if bridge.can_extract_code_tokens():
+        result = bridge.extract_code_query_tokens(query)
+        if result is not None:
+            return result
+
     tokens: set[str] = set()
 
     # Basename references: strip known code extensions
@@ -412,6 +420,17 @@ class CodeRetrievalMixin:
                 if len(stem) >= 4:
                     sym_lookup[stem] = node_id
 
+        # Try Rust fast-path
+        from axon.rust_bridge import get_rust_bridge
+
+        _rust = get_rust_bridge()
+        if _rust.can_code_doc_bridge():
+            existing_tuples = list(existing_edges)
+            new_edges = _rust.build_code_doc_bridge_edges(sym_lookup, prose_chunks, existing_tuples)
+            if new_edges is not None:
+                edges_list.extend(new_edges)
+                return
+
         for chunk in prose_chunks:
             text = chunk.get("text", "")
             chunk_id = chunk.get("id", "")
@@ -487,73 +506,91 @@ class CodeRetrievalMixin:
 
         long_tokens = frozenset(t for t in query_tokens if len(t) >= 4)
 
+        # Try Rust acceleration for the score-computation kernel.
+        # Falls back to Python when the compiled extension is unavailable or raises.
+        _rust_scores: list[float] | None = None
+        _rust_max_lex: float = 0.0
+        from axon.rust_bridge import get_rust_bridge
+
+        _bridge = get_rust_bridge()
+        if _bridge.can_code_lexical_scores():
+            _rust_result = _bridge.code_lexical_scores(results, list(query_tokens))
+            if _rust_result is not None:
+                _rust_scores, _rust_max_lex = _rust_result
+
         lex_scores: list[float] = []
         score_signals: list[dict] = []  # per-result signal breakdown for trace
-        for r in results:
-            meta = r.get("metadata", {})
-            if meta.get("source_class") != "code":
-                lex_scores.append(0.0)
-                score_signals.append({})
-                continue
+        if _rust_scores is not None:
+            lex_scores = _rust_scores
+            # Diagnostics/trace signal breakdown not available on the Rust path
+            score_signals = [{} for _ in results]
+            max_lex = _rust_max_lex
+        else:
+            for r in results:
+                meta = r.get("metadata", {})
+                if meta.get("source_class") != "code":
+                    lex_scores.append(0.0)
+                    score_signals.append({})
+                    continue
 
-            score = 0.0
-            signals: dict = {}
-            sym_name = (meta.get("symbol_name") or "").lower()
-            sym_type = (meta.get("symbol_type") or "").lower()
-            file_path = meta.get("file_path") or meta.get("source") or ""
-            basename = os.path.splitext(os.path.basename(file_path))[0].lower()
-            qualified = f"{basename}.{sym_name}" if sym_name and basename else ""
-            text_lower = r.get("text", "").lower()
+                score = 0.0
+                signals: dict = {}
+                sym_name = (meta.get("symbol_name") or "").lower()
+                sym_type = (meta.get("symbol_type") or "").lower()
+                file_path = meta.get("file_path") or meta.get("source") or ""
+                basename = os.path.splitext(os.path.basename(file_path))[0].lower()
+                qualified = f"{basename}.{sym_name}" if sym_name and basename else ""
+                text_lower = r.get("text", "").lower()
 
-            # Exact symbol name match
-            if sym_name and sym_name in query_tokens:
-                score += 1.0
-                signals["symbol_hit"] = "exact"
-            # Partial symbol name match
-            elif sym_name:
-                for tok in long_tokens:
-                    if tok in sym_name:
-                        score += 0.5
-                        signals["symbol_hit"] = "partial"
-                        break
+                # Exact symbol name match
+                if sym_name and sym_name in query_tokens:
+                    score += 1.0
+                    signals["symbol_hit"] = "exact"
+                # Partial symbol name match
+                elif sym_name:
+                    for tok in long_tokens:
+                        if tok in sym_name:
+                            score += 0.5
+                            signals["symbol_hit"] = "partial"
+                            break
 
-            # Basename match
-            if basename and basename in query_tokens:
-                score += 0.4
-                signals["file_hit"] = True
+                # Basename match
+                if basename and basename in query_tokens:
+                    score += 0.4
+                    signals["file_hit"] = True
 
-            # Qualified name match
-            if qualified and qualified in query_tokens:
-                score += 1.0
-                signals["qualified_hit"] = True
+                # Qualified name match
+                if qualified and qualified in query_tokens:
+                    score += 1.0
+                    signals["qualified_hit"] = True
 
-            # Token-in-text hits (capped)
-            text_hits = sum(1 for tok in long_tokens if tok in text_lower)
-            score += min(text_hits * 0.08, 0.32)
-            if text_hits:
-                signals["text_hits"] = text_hits
+                # Token-in-text hits (capped)
+                text_hits = sum(1 for tok in long_tokens if tok in text_lower)
+                score += min(text_hits * 0.08, 0.32)
+                if text_hits:
+                    signals["text_hits"] = text_hits
 
-            # Multiplier for function/method results that matched anything
-            if score > 0.0 and sym_type in {"function", "method"}:
-                score *= 1.1
-                signals["sym_type_boost"] = True
+                # Multiplier for function/method results that matched anything
+                if score > 0.0 and sym_type in {"function", "method"}:
+                    score *= 1.1
+                    signals["sym_type_boost"] = True
 
-            # Line-range tightness tie-breaker: reward narrowly scoped chunks.
-            # +0.05 for ≤30 lines, +0.02 for ≤80 lines (secondary signal only).
-            start_line = meta.get("start_line")
-            end_line = meta.get("end_line")
-            if start_line is not None and end_line is not None:
-                span = max(int(end_line) - int(start_line), 1)
-                if span <= 30:
-                    score += 0.05
-                    signals["line_range_tight"] = span
-                elif span <= 80:
-                    score += 0.02
+                # Line-range tightness tie-breaker: reward narrowly scoped chunks.
+                # +0.05 for ≤30 lines, +0.02 for ≤80 lines (secondary signal only).
+                start_line = meta.get("start_line")
+                end_line = meta.get("end_line")
+                if start_line is not None and end_line is not None:
+                    span = max(int(end_line) - int(start_line), 1)
+                    if span <= 30:
+                        score += 0.05
+                        signals["line_range_tight"] = span
+                    elif span <= 80:
+                        score += 0.02
 
-            lex_scores.append(score)
-            score_signals.append(signals)
+                lex_scores.append(score)
+                score_signals.append(signals)
 
-        max_lex = max(lex_scores) if lex_scores else 0.0
+            max_lex = max(lex_scores) if lex_scores else 0.0
         if max_lex == 0.0:
             # No matches — skip re-scoring entirely
             return results

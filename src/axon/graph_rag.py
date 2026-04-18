@@ -42,6 +42,7 @@ class GraphRagMixin:
     _shared_rebel_pipelines: dict[tuple[str, bool], object] = {}
     _shared_gliner_lock = threading.Lock()
     _shared_rebel_lock = threading.Lock()
+    _GR_PERSISTABLE_CACHE_BUCKETS = ("entities", "relations")
     _GR_CS_KEY_COMPACT = {
         "title": "t",
         "summary": "s",
@@ -70,11 +71,129 @@ class GraphRagMixin:
             f" {suffix}" if suffix else "",
         )
 
-    def _gr_cache_get(self, bucket: str, key: str):
+    def _gr_cache_store(self) -> dict:
         store = getattr(self, "_graph_rag_cache", None)
-        if not isinstance(store, dict):
-            store = {}
-            self._graph_rag_cache = store
+        if isinstance(store, dict):
+            return store
+        store = self._load_graph_rag_extraction_cache()
+        self._graph_rag_cache = store
+        self._graph_rag_cache_dirty = False
+        return store
+
+    def _gr_trim_bucket(self, bucket: str, bucket_map: dict) -> None:
+        if bucket == "global_answer":
+            cap = int(getattr(self.config, "graph_rag_global_answer_cache_size", 500))
+        elif bucket == "global_map":
+            cap = int(getattr(self.config, "graph_rag_global_map_cache_size", 2000))
+        elif bucket.startswith("llm:"):
+            cap = int(getattr(self.config, "graph_rag_llm_cache_size", 2000))
+        else:
+            cap = int(getattr(self.config, "graph_rag_extraction_cache_size", 5000))
+        if cap <= 0:
+            bucket_map.clear()
+            return
+        while len(bucket_map) > cap:
+            oldest = next(iter(bucket_map))
+            bucket_map.pop(oldest, None)
+
+    def _gr_extraction_cache_path(self):
+        import pathlib
+
+        return pathlib.Path(self.config.bm25_path) / ".graph_rag_extraction_cache.msgpack"
+
+    def _gr_extraction_cache_json_path(self):
+        import pathlib
+
+        return pathlib.Path(self.config.bm25_path) / ".graph_rag_extraction_cache.json"
+
+    def _normalize_graph_rag_extraction_cache(self, raw: dict) -> dict:
+        if not isinstance(raw, dict):
+            return {}
+        if raw.get("format") == "gr_ex_cache_v1":
+            raw = raw.get("buckets", {})
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, dict] = {}
+        for bucket in self._GR_PERSISTABLE_CACHE_BUCKETS:
+            bucket_raw = raw.get(bucket, {})
+            if not isinstance(bucket_raw, dict):
+                continue
+            cleaned: dict = {}
+            for key, value in bucket_raw.items():
+                if isinstance(key, str) and isinstance(value, list):
+                    cleaned[key] = value
+            if cleaned:
+                self._gr_trim_bucket(bucket, cleaned)
+                if cleaned:
+                    out[bucket] = cleaned
+        return out
+
+    def _load_graph_rag_extraction_cache(self) -> dict:
+        import json
+
+        from axon.rust_bridge import get_rust_bridge
+
+        mp_path = self._gr_extraction_cache_path()
+        json_path = self._gr_extraction_cache_json_path()
+        bridge = get_rust_bridge()
+        if mp_path.exists() and bridge.can_entity_graph_codec():
+            try:
+                raw = bridge.decode_entity_graph(mp_path.read_bytes())
+                if isinstance(raw, dict):
+                    return self._normalize_graph_rag_extraction_cache(raw)
+            except Exception:
+                pass
+        if json_path.exists():
+            try:
+                raw = json.loads(json_path.read_text(encoding="utf-8"))
+                return self._normalize_graph_rag_extraction_cache(raw)
+            except Exception:
+                pass
+        return {}
+
+    def _save_graph_rag_extraction_cache(self) -> None:
+        import os
+
+        from axon.rust_bridge import get_rust_bridge
+
+        if not getattr(self.config, "graph_rag_extraction_cache", True):
+            self._graph_rag_cache_dirty = False
+            return
+        store = self._gr_cache_store()
+        payload = {
+            "format": "gr_ex_cache_v1",
+            "buckets": {
+                bucket: dict(store.get(bucket, {}))
+                for bucket in self._GR_PERSISTABLE_CACHE_BUCKETS
+                if store.get(bucket)
+            },
+        }
+        mp_path = self._gr_extraction_cache_path()
+        json_path = self._gr_extraction_cache_json_path()
+        mp_path.parent.mkdir(parents=True, exist_ok=True)
+        bridge = get_rust_bridge()
+        if bridge.can_entity_graph_codec():
+            raw = bridge.encode_entity_graph(payload)
+            if raw is not None:
+                tmp = mp_path.with_suffix(mp_path.suffix + ".tmp")
+                try:
+                    tmp.write_bytes(raw)
+                    os.replace(tmp, mp_path)
+                    if json_path.exists():
+                        json_path.unlink(missing_ok=True)
+                    self._graph_rag_cache_dirty = False
+                    return
+                except Exception as e:
+                    logger.debug("graph_rag extraction cache msgpack save failed: %s", e)
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        self._gr_write_json_if_changed(json_path, payload, sort_keys=True)
+        self._graph_rag_cache_dirty = False
+
+    def _gr_cache_get(self, bucket: str, key: str):
+        store = self._gr_cache_store()
         return store.get(bucket, {}).get(key)
 
     def _gr_cache_put(self, bucket: str, key: str, value) -> None:
@@ -103,21 +222,282 @@ class GraphRagMixin:
             cap = int(getattr(self.config, "graph_rag_extraction_cache_size", 5000))
         if cap <= 0:
             return
-        store = getattr(self, "_graph_rag_cache", None)
-        if not isinstance(store, dict):
-            store = {}
-            self._graph_rag_cache = store
+        store = self._gr_cache_store()
         bucket_map = store.setdefault(bucket, {})
         bucket_map[key] = value
-        if len(bucket_map) > cap:
-            # dict is insertion ordered; pop oldest inserted
-            oldest = next(iter(bucket_map))
-            bucket_map.pop(oldest, None)
+        self._gr_trim_bucket(bucket, bucket_map)
+        if bucket in self._GR_PERSISTABLE_CACHE_BUCKETS:
+            self._graph_rag_cache_dirty = True
 
     def _gr_text_hash(self, text: str) -> str:
         import hashlib as _hashlib
 
         return _hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
+
+    @staticmethod
+    def _graph_connected_components(
+        nodes: list[str], edges: list[tuple[str, str, float]]
+    ) -> list[set]:
+        adjacency: dict[str, set[str]] = {node: set() for node in nodes}
+        for src, tgt, _weight in edges:
+            adjacency.setdefault(src, set()).add(tgt)
+            adjacency.setdefault(tgt, set()).add(src)
+        components: list[set] = []
+        seen: set[str] = set()
+        for node in adjacency:
+            if node in seen:
+                continue
+            stack = [node]
+            component = {node}
+            seen.add(node)
+            while stack:
+                current = stack.pop()
+                for neighbor in adjacency.get(current, ()):
+                    if neighbor in seen:
+                        continue
+                    seen.add(neighbor)
+                    component.add(neighbor)
+                    stack.append(neighbor)
+            components.append(component)
+        return components
+
+    def _build_graph_edge_payload(self) -> tuple[list[str], list[tuple[str, str, float]]]:
+        from axon.rust_bridge import get_rust_bridge
+
+        bridge = get_rust_bridge()
+        raw_nodes = None
+        raw_edges = None
+        if bool(getattr(self.config, "graph_rag_rust_build_edges", False)) and bridge.can_build_graph_edges():
+            built = bridge.build_graph_edges(self._entity_graph, self._relation_graph)
+            if built is not None and len(built) == 2:
+                raw_nodes, raw_edges = built
+        if raw_nodes is None or raw_edges is None:
+            raw_nodes = list(self._entity_graph.keys())
+            raw_edges = []
+            for src, entries in self._relation_graph.items():
+                for entry in entries:
+                    tgt = entry.get("target", "")
+                    if src and tgt:
+                        raw_edges.append((src, tgt, float(entry.get("weight", 1) or 1)))
+
+        min_freq_raw = getattr(self.config, "graph_rag_entity_min_frequency", 1)
+        min_freq = int(min_freq_raw) if isinstance(min_freq_raw, int | float) else 1
+        allowed_nodes = {
+            entity
+            for entity, node in self._entity_graph.items()
+            if not isinstance(node, dict) or node.get("frequency", 1) >= min_freq
+        }
+        seen: set[str] = set()
+        nodes: list[str] = []
+        edges: list[tuple[str, str, float]] = []
+
+        def _append_node(node: str) -> None:
+            if node and node not in seen:
+                seen.add(node)
+                nodes.append(node)
+
+        for node in raw_nodes:
+            if node in allowed_nodes:
+                _append_node(node)
+        for edge in raw_edges:
+            if not isinstance(edge, (tuple, list)) or len(edge) < 2:
+                continue
+            src = str(edge[0] or "").strip()
+            tgt = str(edge[1] or "").strip()
+            if not src or not tgt:
+                continue
+            try:
+                weight = float(edge[2]) if len(edge) >= 3 else 1.0
+            except (TypeError, ValueError):
+                weight = 1.0
+            _append_node(src)
+            _append_node(tgt)
+            edges.append((src, tgt, weight))
+        return nodes, edges
+
+    @staticmethod
+    def _build_networkx_graph_from_edges(nodes: list[str], edges: list[tuple[str, str, float]]):
+        import networkx as nx
+
+        G = nx.Graph()
+        for node in nodes:
+            G.add_node(node)
+        for src, tgt, weight in edges:
+            if G.has_edge(src, tgt):
+                G[src][tgt]["weight"] += weight
+            else:
+                G.add_edge(src, tgt, weight=weight)
+
+        # Post-process to add distance for Dijkstra (Epic 1/4)
+        for _u, _v, d in G.edges(data=True):
+            w = d.get("weight", 1.0)
+            d["distance"] = 1.0 / (w + 1e-6)
+
+        return G
+
+    def _graph_rag_entity_cache_key(self, text: str) -> str:
+        depth = getattr(self.config, "graph_rag_depth", "standard")
+        ner_backend = getattr(self.config, "graph_rag_ner_backend", "llm")
+        return f"{depth}|{ner_backend}|{self._gr_text_hash(text[:3000])}"
+
+    def _graph_rag_relation_cache_key(self, text: str) -> str:
+        depth = getattr(self.config, "graph_rag_depth", "standard")
+        rel_backend = getattr(self.config, "graph_rag_relation_backend", "llm")
+        return f"{depth}|{rel_backend}|{self._gr_text_hash(text[:3000])}"
+
+    def _extract_graph_llm_batches(
+        self,
+        chunks_to_process: list[dict],
+        *,
+        relations_enabled: bool,
+        min_entities_for_relations: int,
+        relation_budget: int,
+    ) -> tuple[list[tuple[str, list[dict]]], list[tuple[str, list[dict]]], list[dict], bool]:
+        if not chunks_to_process:
+            return [], [], [], False
+
+        cache_enabled = bool(getattr(self.config, "graph_rag_extraction_cache", True))
+        entity_by_doc: dict[str, list[dict]] = {}
+        relation_by_doc: dict[str, list[dict]] = {}
+        uncached_entity_docs: list[dict] = []
+        rel_selected_ids: set[str] = set()
+
+        def _proc_entities(doc):
+            return doc["id"], self._extract_entities(doc["text"])
+
+        def _proc_rel(doc):
+            return doc["id"], self._extract_relations(doc["text"])
+
+        def _maybe_cached_entities(doc: dict) -> list[dict] | None:
+            if not cache_enabled:
+                return None
+            return self._gr_cache_get("entities", self._graph_rag_entity_cache_key(doc["text"]))
+
+        def _maybe_cached_relations(doc: dict) -> list[dict] | None:
+            if not cache_enabled:
+                return None
+            return self._gr_cache_get("relations", self._graph_rag_relation_cache_key(doc["text"]))
+
+        def _maybe_stage_relations(
+            doc: dict, entities: list[dict], rel_futures: dict | None = None
+        ) -> None:
+            if len(entities) < min_entities_for_relations:
+                return
+            doc_id = doc["id"]
+            rel_selected_ids.add(doc_id)
+            cached_rel = _maybe_cached_relations(doc)
+            if cached_rel is not None:
+                relation_by_doc[doc_id] = cached_rel
+                return
+            if rel_futures is not None:
+                rel_futures[self._executor.submit(self._extract_relations, doc["text"])] = doc_id
+
+        for doc in chunks_to_process:
+            cached_entities = _maybe_cached_entities(doc)
+            if cached_entities is not None:
+                entity_by_doc[doc["id"]] = cached_entities
+            else:
+                uncached_entity_docs.append(doc)
+
+        if not relations_enabled:
+            if uncached_entity_docs:
+                for doc_id, entities in self._executor.map(_proc_entities, uncached_entity_docs):
+                    entity_by_doc[doc_id] = entities
+            entity_results = [
+                (doc["id"], entity_by_doc.get(doc["id"], [])) for doc in chunks_to_process
+            ]
+            return entity_results, [], [], False
+
+        pipeline_relations = relation_budget <= 0 or len(chunks_to_process) <= relation_budget
+        if not pipeline_relations:
+            if uncached_entity_docs:
+                for doc_id, entities in self._executor.map(_proc_entities, uncached_entity_docs):
+                    entity_by_doc[doc_id] = entities
+            entity_results = [
+                (doc["id"], entity_by_doc.get(doc["id"], [])) for doc in chunks_to_process
+            ]
+            entity_count_by_doc = {doc_id: len(ents) for doc_id, ents in entity_results}
+            if min_entities_for_relations > 0:
+                rel_chunks = [
+                    doc
+                    for doc in chunks_to_process
+                    if entity_count_by_doc.get(doc["id"], 0) >= min_entities_for_relations
+                ]
+            else:
+                rel_chunks = chunks_to_process
+            if relation_budget > 0 and len(rel_chunks) > relation_budget:
+                import heapq as _heapq
+
+                rel_chunks = _heapq.nlargest(
+                    relation_budget,
+                    rel_chunks,
+                    key=lambda d: entity_count_by_doc.get(d["id"], 0)
+                    / max(len(d.get("text", "")), 1),
+                )
+            uncached_rel_docs: list[dict] = []
+            for doc in rel_chunks:
+                rel_selected_ids.add(doc["id"])
+                cached_rel = _maybe_cached_relations(doc)
+                if cached_rel is not None:
+                    relation_by_doc[doc["id"]] = cached_rel
+                else:
+                    uncached_rel_docs.append(doc)
+            if uncached_rel_docs:
+                for doc_id, relations in self._executor.map(_proc_rel, uncached_rel_docs):
+                    relation_by_doc[doc_id] = relations
+            rel_results = [(doc["id"], relation_by_doc.get(doc["id"], [])) for doc in rel_chunks]
+            return entity_results, rel_results, rel_chunks, False
+
+        from concurrent.futures import as_completed
+
+        use_fused_extraction = (
+            bool(getattr(self.config, "graph_rag_llm_fused_extraction", True))
+            and getattr(self.config, "graph_rag_depth", "standard") != "light"
+            and getattr(self.config, "graph_rag_ner_backend", "llm") == "llm"
+            and getattr(self.config, "graph_rag_relation_backend", "llm") == "llm"
+        )
+        rel_futures = {}
+        for doc in chunks_to_process:
+            cached_entities = entity_by_doc.get(doc["id"])
+            if cached_entities is not None:
+                _maybe_stage_relations(doc, cached_entities, rel_futures)
+
+        entity_futures = {}
+        bundled_futures = {}
+        for doc in uncached_entity_docs:
+            if use_fused_extraction and _maybe_cached_relations(doc) is None:
+                bundled_futures[
+                    self._executor.submit(
+                        self._extract_entities_and_relations_combined, doc["text"]
+                    )
+                ] = doc
+            else:
+                entity_futures[self._executor.submit(self._extract_entities, doc["text"])] = doc
+
+        for future in as_completed(bundled_futures):
+            doc = bundled_futures[future]
+            doc_id = doc["id"]
+            entities, relations = future.result()
+            entity_by_doc[doc_id] = entities
+            if len(entities) >= min_entities_for_relations:
+                rel_selected_ids.add(doc_id)
+                relation_by_doc[doc_id] = relations
+        for future in as_completed(entity_futures):
+            doc = entity_futures[future]
+            doc_id = doc["id"]
+            entities = future.result()
+            entity_by_doc[doc_id] = entities
+            _maybe_stage_relations(doc, entities, rel_futures)
+
+        for future in as_completed(rel_futures):
+            relation_by_doc[rel_futures[future]] = future.result()
+
+        entity_results = [
+            (doc["id"], entity_by_doc.get(doc["id"], [])) for doc in chunks_to_process
+        ]
+        rel_chunks = [doc for doc in chunks_to_process if doc["id"] in rel_selected_ids]
+        rel_results = [(doc["id"], relation_by_doc.get(doc["id"], [])) for doc in rel_chunks]
+        return entity_results, rel_results, rel_chunks, True
 
     def _gr_llm_complete_cached(
         self,
@@ -173,6 +553,36 @@ class GraphRagMixin:
                 pass
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(text, encoding="utf-8")
+        _os.replace(tmp, p)
+        cache[p_key] = digest
+        return True
+
+    def _gr_write_bytes_if_changed(self, path, payload: bytes) -> bool:
+        """Atomically write bytes only when content changed. Returns True if written."""
+        import hashlib as _hashlib
+        import os as _os
+        import pathlib as _pathlib
+
+        p = _pathlib.Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        digest = _hashlib.sha1(payload).hexdigest()
+        cache = getattr(self, "_gr_persist_hashes", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._gr_persist_hashes = cache
+        p_key = str(p)
+        if cache.get(p_key) == digest and p.exists():
+            return False
+        if p.exists() and cache.get(p_key) is None:
+            try:
+                existing_digest = _hashlib.sha1(p.read_bytes()).hexdigest()
+                cache[p_key] = existing_digest
+                if existing_digest == digest:
+                    return False
+            except Exception:
+                pass
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_bytes(payload)
         _os.replace(tmp, p)
         cache[p_key] = digest
         return True
@@ -244,6 +654,21 @@ class GraphRagMixin:
         self._incoming_count_map = cmap
         return cmap
 
+    @staticmethod
+    def _normalize_entity_graph(raw: dict) -> dict:
+        """Apply default fields to entity graph nodes and drop malformed entries."""
+        cleaned: dict = {}
+        for key, value in raw.items():
+            if not isinstance(key, str):
+                continue
+            if isinstance(value, dict) and "chunk_ids" in value:
+                node = value
+                node.setdefault("type", "UNKNOWN")
+                node.setdefault("frequency", len(node.get("chunk_ids", [])))
+                node.setdefault("degree", 0)
+                cleaned[key] = node
+        return cleaned
+
     def _load_entity_graph(self) -> dict:
         """Load persisted entity→doc_id graph from disk.
 
@@ -251,33 +676,52 @@ class GraphRagMixin:
         """
         import pathlib
 
-        path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
+        from axon.rust_bridge import get_rust_bridge
+
+        bm25_path = pathlib.Path(self.config.bm25_path)
+        mp_path = bm25_path / ".entity_graph.msgpack"
+        bridge = get_rust_bridge()
+        if mp_path.exists() and bridge.can_entity_graph_codec():
+            try:
+                raw_dict = bridge.decode_entity_graph(mp_path.read_bytes())
+                if isinstance(raw_dict, dict) and raw_dict:
+                    return self._normalize_entity_graph(raw_dict)
+            except Exception:
+                pass
+
+        path = bm25_path / ".entity_graph.json"
         if path.exists():
             try:
                 raw = self._gr_json_load_path(path)
                 if not isinstance(raw, dict):
                     return {}
-                cleaned: dict = {}
-                for key, value in raw.items():
-                    if not isinstance(key, str):
-                        continue
-                    if isinstance(value, dict) and "chunk_ids" in value:
-                        node = value
-                        node.setdefault("type", "UNKNOWN")
-                        node.setdefault("frequency", len(node.get("chunk_ids", [])))
-                        node.setdefault("degree", 0)
-                        cleaned[key] = node
-                    # Otherwise skip malformed entries
-                return cleaned
+                return self._normalize_entity_graph(raw)
             except Exception:
                 pass
         return {}
 
     def _save_entity_graph(self) -> None:
         """Persist entity graph to disk."""
+        self._nx_graph_dirty = True
         import pathlib
 
-        path = pathlib.Path(self.config.bm25_path) / ".entity_graph.json"
+        from axon.rust_bridge import get_rust_bridge
+
+        bm25_path = pathlib.Path(self.config.bm25_path)
+        bridge = get_rust_bridge()
+        if bridge.can_entity_graph_codec():
+            raw = bridge.encode_entity_graph(self._entity_graph)
+            if raw is not None:
+                mp_path = bm25_path / ".entity_graph.msgpack"
+                try:
+                    mp_path.write_bytes(raw)
+                    old = bm25_path / ".entity_graph.json"
+                    if old.exists():
+                        old.unlink(missing_ok=True)
+                    return
+                except Exception as e:
+                    logger.debug("entity_graph msgpack save failed: %s", e)
+        path = bm25_path / ".entity_graph.json"
         self._gr_write_json_if_changed(path, self._entity_graph)
 
     def _load_code_graph(self) -> dict:
@@ -302,6 +746,52 @@ class GraphRagMixin:
         path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
         self._gr_write_json_if_changed(path, self._code_graph)
 
+    @staticmethod
+    def _normalize_relation_graph(raw: dict) -> dict:
+        """Apply relation-graph shape defaults and drop malformed entries."""
+        if not isinstance(raw, dict):
+            return {}
+        graph_raw = raw
+        if raw.get("format") == "rg_rel_v2" and isinstance(raw.get("g"), dict):
+            graph_raw = raw["g"]
+        cleaned: dict = {}
+        for key, value in graph_raw.items():
+            if not isinstance(key, str) or not isinstance(value, list):
+                continue
+            out_entries: list[dict] = []
+            for entry in value:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 3:
+                    tgt, rel, cid = entry[0], entry[1], entry[2]
+                    if isinstance(tgt, str) and isinstance(rel, str) and isinstance(cid, str):
+                        out_entries.append(
+                            {
+                                "target": tgt,
+                                "relation": rel,
+                                "chunk_id": cid,
+                            }
+                        )
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                tgt = entry.get("target")
+                rel = entry.get("relation")
+                cid = entry.get("chunk_id")
+                if not isinstance(tgt, str) or not isinstance(rel, str) or not isinstance(cid, str):
+                    continue
+                normalized = {
+                    "target": tgt,
+                    "relation": rel,
+                    "chunk_id": cid,
+                }
+                for field in ("subject", "object", "description", "weight", "strength"):
+                    value_field = entry.get(field)
+                    if isinstance(value_field, (str, int, float)):
+                        normalized[field] = value_field
+                out_entries.append(normalized)
+            if out_entries:
+                cleaned[key] = out_entries
+        return cleaned
+
     def _load_relation_graph(self) -> dict:
         """Load persisted relation graph from disk.
 
@@ -309,7 +799,10 @@ class GraphRagMixin:
         """
         import pathlib
 
+        from axon.rust_bridge import get_rust_bridge
+
         path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
+        mp_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.msgpack"
         shards_manifest = pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.json"
         shards_list_manifest = pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.lst"
         shard_state_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.shard_state.json"
@@ -317,6 +810,18 @@ class GraphRagMixin:
         shard_cache_meta_path = (
             pathlib.Path(self.config.bm25_path) / ".relation_graph.cache.meta.json"
         )
+        bridge = get_rust_bridge()
+        if (
+            bool(getattr(self.config, "graph_rag_relation_msgpack_persist", True))
+            and mp_path.exists()
+            and bridge.can_relation_graph_codec()
+        ):
+            try:
+                raw_dict = bridge.decode_relation_graph(mp_path.read_bytes())
+                if isinstance(raw_dict, dict):
+                    return self._normalize_relation_graph(raw_dict)
+            except Exception:
+                pass
         if shards_manifest.exists():
             try:
                 cache_key = None
@@ -389,48 +894,7 @@ class GraphRagMixin:
                         if not shard_path.exists():
                             return {}
                         shard_raw = self._gr_json_load_path(shard_path)
-                        if not isinstance(shard_raw, dict):
-                            return {}
-                        out: dict = {}
-                        if shard_raw.get("format") == "rg_rel_v2" and isinstance(
-                            shard_raw.get("g"), dict
-                        ):
-                            for key, value in shard_raw["g"].items():
-                                if not isinstance(key, str) or not isinstance(value, list):
-                                    continue
-                                out_entries = []
-                                for entry in value:
-                                    if (
-                                        isinstance(entry, list | tuple)
-                                        and len(entry) >= 3
-                                        and isinstance(entry[0], str)
-                                        and isinstance(entry[1], str)
-                                        and isinstance(entry[2], str)
-                                    ):
-                                        out_entries.append(
-                                            {
-                                                "target": entry[0],
-                                                "relation": entry[1],
-                                                "chunk_id": entry[2],
-                                            }
-                                        )
-                                if out_entries:
-                                    out.setdefault(key, []).extend(out_entries)
-                        else:
-                            for key, value in shard_raw.items():
-                                if not isinstance(key, str) or not isinstance(value, list):
-                                    continue
-                                out_entries = [
-                                    entry
-                                    for entry in value
-                                    if isinstance(entry, dict)
-                                    and "target" in entry
-                                    and "relation" in entry
-                                    and "chunk_id" in entry
-                                ]
-                                if out_entries:
-                                    out.setdefault(key, []).extend(out_entries)
-                        return out
+                        return self._normalize_relation_graph(shard_raw)
 
                     use_parallel = (
                         bool(getattr(self.config, "graph_rag_relation_shard_parallel_load", True))
@@ -487,58 +951,22 @@ class GraphRagMixin:
         if path.exists():
             try:
                 raw = self._gr_json_load_path(path)
-                if not isinstance(raw, dict):
-                    return {}
-                # Compact format: {"format":"rg_rel_v2","g": {src:[[tgt,rel,cid],...]}}
-                if raw.get("format") == "rg_rel_v2" and isinstance(raw.get("g"), dict):
-                    graph_raw = raw.get("g", {})
-                    cleaned_v2: dict = {}
-                    for key, value in graph_raw.items():
-                        if not isinstance(key, str) or not isinstance(value, list):
-                            continue
-                        out_entries = []
-                        for entry in value:
-                            if (
-                                isinstance(entry, list | tuple)
-                                and len(entry) >= 3
-                                and isinstance(entry[0], str)
-                                and isinstance(entry[1], str)
-                                and isinstance(entry[2], str)
-                            ):
-                                out_entries.append(
-                                    {
-                                        "target": entry[0],
-                                        "relation": entry[1],
-                                        "chunk_id": entry[2],
-                                    }
-                                )
-                        if out_entries:
-                            cleaned_v2[key] = out_entries
-                    return cleaned_v2
-                cleaned: dict = {}
-                for key, value in raw.items():
-                    if not isinstance(key, str) or not isinstance(value, list):
-                        continue
-                    cleaned[key] = [
-                        entry
-                        for entry in value
-                        if isinstance(entry, dict)
-                        and "target" in entry
-                        and "relation" in entry
-                        and "chunk_id" in entry
-                    ]
-                return cleaned
+                return self._normalize_relation_graph(raw)
             except Exception:
                 pass
         return {}
 
     def _save_relation_graph(self) -> None:
         """Persist relation graph to disk."""
+        self._nx_graph_dirty = True
         import hashlib
         import os
         import pathlib
 
+        from axon.rust_bridge import get_rust_bridge
+
         path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
+        bm25_path = pathlib.Path(self.config.bm25_path)
         if bool(getattr(self.config, "graph_rag_relation_shard_persist", False)):
             shard_count = int(getattr(self.config, "graph_rag_relation_shard_count", 16) or 16)
             shard_count = max(1, shard_count)
@@ -693,6 +1121,36 @@ class GraphRagMixin:
             except OSError:
                 pass
             return
+        bridge = get_rust_bridge()
+        if (
+            bool(getattr(self.config, "graph_rag_relation_msgpack_persist", True))
+            and bridge.can_relation_graph_codec()
+        ):
+            try:
+                raw = bridge.encode_relation_graph(self._relation_graph)
+                if raw is not None:
+                    mp_path = bm25_path / ".relation_graph.msgpack"
+                    self._gr_write_bytes_if_changed(mp_path, raw)
+                    for legacy in (
+                        path,
+                        bm25_path / ".relation_graph.shards.json",
+                        bm25_path / ".relation_graph.shards.lst",
+                        bm25_path / ".relation_graph.shard_state.json",
+                        bm25_path / ".relation_graph.cache.pkl",
+                        bm25_path / ".relation_graph.cache.meta.json",
+                    ):
+                        try:
+                            legacy.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    for shard_path in bm25_path.glob(".relation_graph.shard.*.json"):
+                        try:
+                            shard_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    return
+            except Exception as e:
+                logger.debug("relation_graph msgpack save failed: %s", e)
         if bool(getattr(self.config, "graph_rag_relation_compact_persist", True)):
             compact_graph = {}
             for src, entries in self._relation_graph.items():
@@ -842,7 +1300,20 @@ class GraphRagMixin:
         import json
         import pathlib
 
-        path = pathlib.Path(self.config.bm25_path) / ".entity_embeddings.json"
+        from axon.rust_bridge import get_rust_bridge
+
+        bm25_path = pathlib.Path(self.config.bm25_path)
+        mp_path = bm25_path / ".entity_embeddings.msgpack"
+        bridge = get_rust_bridge()
+        if mp_path.exists() and bridge.can_entity_embeddings_codec():
+            try:
+                raw_dict = bridge.decode_entity_embeddings(mp_path.read_bytes())
+                if isinstance(raw_dict, dict):
+                    return raw_dict
+            except Exception:
+                pass
+
+        path = bm25_path / ".entity_embeddings.json"
         try:
             if path.exists():
                 raw = json.loads(path.read_text(encoding="utf-8"))
@@ -856,7 +1327,23 @@ class GraphRagMixin:
         """Persist entity embeddings to disk."""
         import pathlib
 
-        path = pathlib.Path(self.config.bm25_path) / ".entity_embeddings.json"
+        from axon.rust_bridge import get_rust_bridge
+
+        bm25_path = pathlib.Path(self.config.bm25_path)
+        bridge = get_rust_bridge()
+        if bridge.can_entity_embeddings_codec():
+            raw = bridge.encode_entity_embeddings(self._entity_embeddings)
+            if raw is not None:
+                mp_path = bm25_path / ".entity_embeddings.msgpack"
+                try:
+                    mp_path.write_bytes(raw)
+                    old = bm25_path / ".entity_embeddings.json"
+                    if old.exists():
+                        old.unlink(missing_ok=True)
+                    return
+                except Exception as e:
+                    logger.debug("entity_embeddings msgpack save failed: %s", e)
+        path = bm25_path / ".entity_embeddings.json"
         try:
             self._gr_write_json_if_changed(path, self._entity_embeddings)
         except Exception as e:
@@ -892,39 +1379,77 @@ class GraphRagMixin:
         except Exception as e:
             logger.debug(f"Could not save claims graph: {e}")
 
+    @staticmethod
+    def _build_synthetic_community_hierarchy(community_levels: dict) -> tuple[dict, dict]:
+        community_hierarchy: dict = {}
+        community_children: dict = {}
+
+        if len(community_levels) > 1:
+            levels_sorted = sorted(community_levels.keys())
+            for i in range(1, len(levels_sorted)):
+                fine_level = levels_sorted[i]
+                coarse_level = levels_sorted[i - 1]
+                fine_map = community_levels[fine_level]
+                coarse_map = community_levels[coarse_level]
+
+                for fine_cid in set(fine_map.values()):
+                    fine_key = f"{fine_level}_{fine_cid}"
+                    fine_members = [n for n, c in fine_map.items() if c == fine_cid]
+                    coarse_votes: dict = {}
+                    for member in fine_members:
+                        parent_cid = coarse_map.get(member)
+                        if parent_cid is not None:
+                            coarse_votes[parent_cid] = coarse_votes.get(parent_cid, 0) + 1
+                    parent_cid = max(coarse_votes, key=coarse_votes.get) if coarse_votes else None
+                    parent_key = f"{coarse_level}_{parent_cid}" if parent_cid is not None else None
+                    community_hierarchy[fine_key] = parent_key
+                    if parent_key is not None:
+                        community_children.setdefault(parent_key, [])
+                        if fine_key not in community_children[parent_key]:
+                            community_children[parent_key].append(fine_key)
+
+            for cid in set(community_levels[levels_sorted[0]].values()):
+                root_key = f"{levels_sorted[0]}_{cid}"
+                community_hierarchy.setdefault(root_key, None)
+        else:
+            for cid in set(community_levels[0].values()):
+                community_hierarchy[f"0_{cid}"] = None
+
+        return community_hierarchy, community_children
+
     def _build_networkx_graph(self):
         """Build a NetworkX undirected graph from entity and relation data."""
-        import networkx as nx
+        if not hasattr(self, "_nx_graph_dirty"):
+            self._nx_graph_dirty = True
+            self._nx_graph = None
 
-        _min_freq_raw = getattr(self.config, "graph_rag_entity_min_frequency", 1)
-        _min_freq = int(_min_freq_raw) if isinstance(_min_freq_raw, int | float) else 1
-        G = nx.Graph()
-        for entity, node in self._entity_graph.items():
-            if isinstance(node, dict) and node.get("frequency", 1) < _min_freq:
-                continue
-            desc = node.get("description", "") if isinstance(node, dict) else ""
-            G.add_node(entity, description=desc)
-        for src, entries in self._relation_graph.items():
-            for entry in entries:
-                tgt = entry.get("target", "")
-                if src and tgt:
-                    edge_weight = entry.get("weight", 1)
-                    if G.has_edge(src, tgt):
-                        G[src][tgt]["weight"] += edge_weight
-                    else:
-                        G.add_edge(
-                            src,
-                            tgt,
-                            weight=edge_weight,
-                            relation=entry.get("relation", ""),
-                            description=entry.get("description", ""),
-                        )
-        return G
+        if not self._nx_graph_dirty and self._nx_graph is not None:
+            return self._nx_graph
+
+        nodes, edges = self._build_graph_edge_payload()
+        self._nx_graph = self._build_networkx_graph_from_edges(nodes, edges)
+        self._nx_graph_dirty = False
+        return self._nx_graph
+
+    def _build_nx_graph(self):
+        """Alias for _build_networkx_graph (used in tests)."""
+        return self._build_networkx_graph()
 
     def _run_community_detection(self) -> dict:
         """Run Louvain community detection. Returns {entity_lower: community_id}."""
+        from axon.rust_bridge import get_rust_bridge
+
+        nodes, edges = self._build_graph_edge_payload()
+        if len(nodes) < 2:
+            return dict.fromkeys(nodes, 0)
+
+        bridge = get_rust_bridge()
+        if bridge.can_run_louvain():
+            mapping = bridge.run_louvain(nodes, edges, resolution=1.0)
+            if isinstance(mapping, dict):
+                return mapping
+
         try:
-            import networkx as nx  # noqa: F401 — ensures ImportError fires when networkx is absent
             import networkx.algorithms.community as nx_comm
         except ImportError:
             logger.warning(
@@ -932,19 +1457,18 @@ class GraphRagMixin:
                 "Install with: pip install networkx"
             )
             return {}
-        G = self._build_networkx_graph()
-        if len(G.nodes) < 2:
-            return dict.fromkeys(G.nodes, 0)
+
+        G = self._build_networkx_graph_from_edges(nodes, edges)
         try:
             communities = nx_comm.louvain_communities(G, seed=42)
-            mapping = {}
-            for cid, members in enumerate(communities):
-                for entity in members:
-                    mapping[entity] = cid
-            return mapping
         except Exception as e:
             logger.warning(f"Community detection failed: {e}")
             return {}
+        mapping = {}
+        for cid, members in enumerate(communities):
+            for entity in members:
+                mapping[entity] = cid
+        return mapping
 
     def _run_hierarchical_community_detection(self) -> tuple:
         """Run hierarchical community detection.
@@ -955,45 +1479,45 @@ class GraphRagMixin:
             - community_hierarchy: {cluster_id: parent_cluster_id}  (None for root)
             - community_children: {cluster_id: [child_cluster_ids]}
         """
-        try:
-            import networkx as nx
-        except ImportError:
-            logger.warning(
-                "GraphRAG community detection requires networkx. "
-                "Install with: pip install networkx"
-            )
-            return {}, {}, {}
+        from axon.rust_bridge import get_rust_bridge
 
-        G = self._build_networkx_graph()
-        if G.number_of_nodes() < 2:
-            nodes = list(G.nodes())
+        nodes, edges = self._build_graph_edge_payload()
+        if len(nodes) < 2:
             return {0: dict.fromkeys(nodes, 0)}, {0: None}, {0: []}
 
         n_levels = max(1, getattr(self.config, "graph_rag_community_levels", 2))
         max_cluster_size = getattr(self.config, "graph_rag_community_max_cluster_size", 10)
         seed = getattr(self.config, "graph_rag_leiden_seed", 42)
         use_lcc = getattr(self.config, "graph_rag_community_use_lcc", True)
-
-        components = list(nx.connected_components(G))
+        working_nodes = list(nodes)
+        working_edges = list(edges)
+        components = self._graph_connected_components(working_nodes, working_edges)
         if use_lcc and components:
             try:
                 lcc_nodes = max(components, key=len)
-                dropped = G.number_of_nodes() - len(lcc_nodes)
+                dropped = len(working_nodes) - len(lcc_nodes)
                 if dropped > 0:
                     logger.info(
                         f"GraphRAG: use_lcc=True — clustering {len(lcc_nodes)} nodes, "
                         f"dropping {dropped} nodes in {len(components) - 1} smaller components"
                     )
-                G = G.subgraph(lcc_nodes).copy()
+                lcc_node_set = set(lcc_nodes)
+                working_nodes = [node for node in working_nodes if node in lcc_node_set]
+                working_edges = [
+                    (src, tgt, weight)
+                    for src, tgt, weight in working_edges
+                    if src in lcc_node_set and tgt in lcc_node_set
+                ]
             except Exception:
                 pass
         elif not use_lcc and len(components) > 1:
             logger.debug(
                 f"GraphRAG: clustering all {len(components)} connected components "
-                f"({G.number_of_nodes()} total nodes)"
+                f"({len(working_nodes)} total nodes)"
             )
 
         _backend = getattr(self.config, "graph_rag_community_backend", "louvain")
+        G = None
 
         # Tier-1: graspologic hierarchical Leiden — only attempted when backend="auto"
         # The import is probed inside a thread with a 10-second timeout to avoid hanging the
@@ -1025,6 +1549,7 @@ class GraphRagMixin:
                     "pip install graspologic  (or set graph_rag_community_backend: leidenalg)"
                 )
             else:
+                G = self._build_networkx_graph_from_edges(working_nodes, working_edges)
                 from graspologic.partition import hierarchical_leiden
 
                 partitions = hierarchical_leiden(
@@ -1096,6 +1621,8 @@ class GraphRagMixin:
                     step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
                     resolutions = [0.5 + i * step for i in range(n_levels)]
 
+                if G is None:
+                    G = self._build_networkx_graph_from_edges(working_nodes, working_edges)
                 _G_ig = _ig.Graph.from_networkx(G)
                 community_levels: dict = {}
                 for level_idx, resolution in enumerate(resolutions):
@@ -1159,17 +1686,11 @@ class GraphRagMixin:
                     return community_levels, community_hierarchy, community_children
             except ImportError:
                 logger.warning(
-                    "GraphRAG: leidenalg/igraph not available — falling back to networkx Louvain. "
+                    "GraphRAG: leidenalg/igraph not available — falling back to Louvain. "
                     "pip install axon[graphrag]"
                 )
         else:
             logger.debug("GraphRAG: community backend='%s' — skipping leidenalg.", _backend)
-
-        # Tier-3: NetworkX Louvain — always available; used when backend="louvain" or as final fallback
-        try:
-            import networkx.algorithms.community as nx_comm
-        except ImportError:
-            return {0: dict.fromkeys(G.nodes(), 0)}, {0: None}, {0: []}
 
         try:
             import numpy as np
@@ -1180,59 +1701,34 @@ class GraphRagMixin:
             resolutions = [0.5 + i * step for i in range(n_levels)]
 
         community_levels = {}
+        bridge = get_rust_bridge()
 
         for level_idx, resolution in enumerate(resolutions):
+            if bridge.can_run_louvain():
+                mapping = bridge.run_louvain(working_nodes, working_edges, resolution=resolution)
+                if isinstance(mapping, dict) and mapping:
+                    community_levels[level_idx] = mapping
+                    continue
             try:
+                import networkx.algorithms.community as nx_comm
+
+                if G is None:
+                    G = self._build_networkx_graph_from_edges(working_nodes, working_edges)
                 partition = nx_comm.louvain_communities(G, seed=seed, resolution=resolution)
                 cmap = {}
-                for cid, nodes in enumerate(partition):
-                    for node in nodes:
+                for cid, members in enumerate(partition):
+                    for node in members:
                         cmap[node] = cid
                 community_levels[level_idx] = cmap
             except Exception as e:
                 logger.debug(f"Louvain at resolution {resolution} failed: {e}")
 
         if not community_levels:
-            return {0: dict.fromkeys(G.nodes(), 0)}, {0: None}, {0: []}
+            return {0: dict.fromkeys(working_nodes, 0)}, {0: None}, {0: []}
 
-        # Synthetic parent mapping — use level-qualified keys to avoid cross-level collisions
-        community_hierarchy = {}
-        community_children = {}
-
-        if len(community_levels) > 1:
-            levels_sorted = sorted(community_levels.keys())
-            for i in range(1, len(levels_sorted)):
-                fine_level = levels_sorted[i]
-                coarse_level = levels_sorted[i - 1]
-                fine_map = community_levels[fine_level]
-                coarse_map = community_levels[coarse_level]
-
-                fine_clusters = set(fine_map.values())
-                for fine_cid in fine_clusters:
-                    fine_key = f"{fine_level}_{fine_cid}"
-                    fine_members = [n for n, c in fine_map.items() if c == fine_cid]
-                    coarse_votes: dict = {}
-                    for m in fine_members:
-                        parent_cid = coarse_map.get(m)
-                        if parent_cid is not None:
-                            coarse_votes[parent_cid] = coarse_votes.get(parent_cid, 0) + 1
-                    parent_cid = max(coarse_votes, key=coarse_votes.get) if coarse_votes else None
-                    parent_key = f"{coarse_level}_{parent_cid}" if parent_cid is not None else None
-                    community_hierarchy[fine_key] = parent_key
-                    if parent_key is not None:
-                        if parent_key not in community_children:
-                            community_children[parent_key] = []
-                        if fine_key not in community_children[parent_key]:
-                            community_children[parent_key].append(fine_key)
-
-            for cid in set(community_levels[levels_sorted[0]].values()):
-                root_key = f"{levels_sorted[0]}_{cid}"
-                if root_key not in community_hierarchy:
-                    community_hierarchy[root_key] = None
-        else:
-            for cid in set(community_levels[0].values()):
-                community_hierarchy[f"0_{cid}"] = None
-
+        community_hierarchy, community_children = self._build_synthetic_community_hierarchy(
+            community_levels
+        )
         return community_levels, community_hierarchy, community_children
 
     def _rebuild_communities(self) -> None:
@@ -2650,6 +3146,240 @@ class GraphRagMixin:
                 break
         return entities
 
+    def _parse_extracted_entities(self, raw: str) -> list[dict]:
+        """Parse legacy line-oriented entity extraction output."""
+        entities: list[dict] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                ent_type = parts[1].upper()
+                if ent_type not in self._VALID_ENTITY_TYPES:
+                    ent_type = "CONCEPT"
+                entities.append(
+                    {
+                        "name": parts[0],
+                        "type": ent_type,
+                        "description": parts[2],
+                    }
+                )
+            elif len(parts) == 2:
+                entities.append(
+                    {
+                        "name": parts[0],
+                        "type": "UNKNOWN",
+                        "description": parts[1],
+                    }
+                )
+            elif len(parts) == 1 and parts[0]:
+                entities.append(
+                    {
+                        "name": parts[0],
+                        "type": "UNKNOWN",
+                        "description": "",
+                    }
+                )
+        return entities[:20]
+
+    def _normalize_extracted_entities_payload(self, payload) -> list[dict]:
+        """Normalize structured entity payloads from fused LLM extraction."""
+        if isinstance(payload, str):
+            return self._parse_extracted_entities(payload)
+        if not isinstance(payload, list):
+            return []
+        entities: list[dict] = []
+        for item in payload:
+            if isinstance(item, str):
+                name = item.strip()
+                if name:
+                    entities.append({"name": name, "type": "UNKNOWN", "description": ""})
+                continue
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", item.get("entity", ""))
+            if not isinstance(name, str) or not name.strip():
+                continue
+            ent_type = item.get("type", "UNKNOWN")
+            ent_type = ent_type.upper() if isinstance(ent_type, str) else "UNKNOWN"
+            if ent_type not in self._VALID_ENTITY_TYPES:
+                ent_type = "CONCEPT"
+            description = item.get("description", "")
+            entities.append(
+                {
+                    "name": name.strip(),
+                    "type": ent_type,
+                    "description": description if isinstance(description, str) else "",
+                }
+            )
+        return entities[:20]
+
+    def _parse_extracted_relations(self, raw: str) -> list[dict]:
+        """Parse legacy line-oriented relation extraction output."""
+        triples: list[dict] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 5:
+                try:
+                    strength = max(1, min(10, int(parts[4])))
+                except (TypeError, ValueError):
+                    strength = 5
+                triples.append(
+                    {
+                        "subject": parts[0],
+                        "relation": parts[1],
+                        "object": parts[2],
+                        "description": parts[3],
+                        "strength": strength,
+                    }
+                )
+            elif len(parts) >= 4:
+                triples.append(
+                    {
+                        "subject": parts[0],
+                        "relation": parts[1],
+                        "object": parts[2],
+                        "description": parts[3],
+                        "strength": 5,
+                    }
+                )
+            elif len(parts) == 3 and all(parts):
+                triples.append(
+                    {
+                        "subject": parts[0],
+                        "relation": parts[1],
+                        "object": parts[2],
+                        "description": "",
+                        "strength": 5,
+                    }
+                )
+        return triples[:15]
+
+    def _normalize_extracted_relations_payload(self, payload) -> list[dict]:
+        """Normalize structured relation payloads from fused LLM extraction."""
+        if isinstance(payload, str):
+            return self._parse_extracted_relations(payload)
+        if not isinstance(payload, list):
+            return []
+        triples: list[dict] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            subject = item.get("subject", item.get("source", ""))
+            relation = item.get("relation", item.get("predicate", ""))
+            obj = item.get("object", item.get("target", ""))
+            if not all(isinstance(v, str) and v.strip() for v in (subject, relation, obj)):
+                continue
+            description = item.get("description", "")
+            strength = item.get("strength", 5)
+            try:
+                strength = max(1, min(10, int(strength)))
+            except (TypeError, ValueError):
+                strength = 5
+            triples.append(
+                {
+                    "subject": subject.strip(),
+                    "relation": relation.strip(),
+                    "object": obj.strip(),
+                    "description": description if isinstance(description, str) else "",
+                    "strength": strength,
+                }
+            )
+        return triples[:15]
+
+    def _extract_entities_and_relations_combined(self, text: str) -> tuple[list[dict], list[dict]]:
+        """Extract entities and relations together when both backends are LLM-based."""
+        import json as _json
+        import time as _time
+
+        _t0 = _time.perf_counter()
+        _depth = getattr(self.config, "graph_rag_depth", "standard")
+        _ner_backend = getattr(self.config, "graph_rag_ner_backend", "llm")
+        _rel_backend = getattr(self.config, "graph_rag_relation_backend", "llm")
+        _cache_enabled = bool(getattr(self.config, "graph_rag_extraction_cache", True))
+        _entity_key = self._graph_rag_entity_cache_key(text)
+        _relation_key = self._graph_rag_relation_cache_key(text)
+        _cached_entities = self._gr_cache_get("entities", _entity_key) if _cache_enabled else None
+        _cached_relations = (
+            self._gr_cache_get("relations", _relation_key) if _cache_enabled else None
+        )
+        if _cached_entities is not None and _cached_relations is not None:
+            self._gr_log_profile("extract_graph_bundle(cache_hit)", _time.perf_counter() - _t0)
+            return _cached_entities, _cached_relations
+        if _depth == "light" or _ner_backend != "llm" or _rel_backend != "llm":
+            entities = (
+                _cached_entities if _cached_entities is not None else self._extract_entities(text)
+            )
+            relations = (
+                _cached_relations
+                if _cached_relations is not None
+                else self._extract_relations(text)
+            )
+            self._gr_log_profile(
+                "extract_graph_bundle(fallback_backend)", _time.perf_counter() - _t0
+            )
+            return entities, relations
+
+        prompt = (
+            "Extract a knowledge graph bundle from the following text.\n"
+            'Return strict JSON with exactly two top-level keys: "entities" and "relations".\n'
+            '"entities" must be a list of objects with keys name, type, description.\n'
+            "Entity type must be one of: PERSON, ORGANIZATION, GEO, EVENT, CONCEPT, PRODUCT.\n"
+            '"relations" must be a list of objects with keys subject, relation, object, '
+            "description, strength.\n"
+            "Strength must be an integer from 1 to 10.\n"
+            "Do not include markdown, comments, or any extra keys outside the JSON object. "
+            "Use empty lists when nothing is found.\n\n" + text[:3000]
+        )
+        try:
+            raw = self._gr_llm_complete_cached(
+                "extract_graph_bundle_llm",
+                prompt,
+                system_prompt="You are a knowledge graph extraction specialist.",
+            )
+            try:
+                payload = _json.loads(raw)
+            except Exception:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start == -1 or end == -1 or end <= start:
+                    raise
+                payload = _json.loads(raw[start : end + 1])
+            if not isinstance(payload, dict):
+                raise ValueError("Combined extraction returned non-object payload")
+            entities = (
+                _cached_entities
+                if _cached_entities is not None
+                else self._normalize_extracted_entities_payload(payload.get("entities", []))
+            )
+            relations = (
+                _cached_relations
+                if _cached_relations is not None
+                else self._normalize_extracted_relations_payload(payload.get("relations", []))
+            )
+            if _cache_enabled:
+                if _cached_entities is None:
+                    self._gr_cache_put("entities", _entity_key, entities)
+                if _cached_relations is None:
+                    self._gr_cache_put("relations", _relation_key, relations)
+            self._gr_log_profile("extract_graph_bundle(llm)", _time.perf_counter() - _t0)
+            return entities, relations
+        except Exception:
+            entities = (
+                _cached_entities if _cached_entities is not None else self._extract_entities(text)
+            )
+            relations = (
+                _cached_relations
+                if _cached_relations is not None
+                else self._extract_relations(text)
+            )
+            self._gr_log_profile("extract_graph_bundle(fallback_error)", _time.perf_counter() - _t0)
+            return entities, relations
+
     def _extract_entities(self, text: str) -> list[dict]:
         """Extract named entities from text using the LLM.
 
@@ -2662,7 +3392,7 @@ class GraphRagMixin:
         _t0 = _time.perf_counter()
         _depth = getattr(self.config, "graph_rag_depth", "standard")
         _ner_backend = getattr(self.config, "graph_rag_ner_backend", "llm")
-        _cache_key = f"{_depth}|{_ner_backend}|{self._gr_text_hash(text[:3000])}"
+        _cache_key = self._graph_rag_entity_cache_key(text)
         if getattr(self.config, "graph_rag_extraction_cache", True):
             _cached = self._gr_cache_get("entities", _cache_key)
             if _cached is not None:
@@ -2697,41 +3427,7 @@ class GraphRagMixin:
                 prompt,
                 system_prompt="You are a named entity extraction specialist.",
             )
-            entities = []
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 3:
-                    ent_type = parts[1].upper()
-                    if ent_type not in self._VALID_ENTITY_TYPES:
-                        ent_type = "CONCEPT"
-                    entities.append(
-                        {
-                            "name": parts[0],
-                            "type": ent_type,
-                            "description": parts[2],
-                        }
-                    )
-                elif len(parts) == 2:
-                    # Old 2-column format — no type
-                    entities.append(
-                        {
-                            "name": parts[0],
-                            "type": "UNKNOWN",
-                            "description": parts[1],
-                        }
-                    )
-                else:
-                    entities.append(
-                        {
-                            "name": parts[0],
-                            "type": "UNKNOWN",
-                            "description": "",
-                        }
-                    )
-            _out = entities[:20]
+            _out = self._parse_extracted_entities(raw)
             self._gr_cache_put("entities", _cache_key, _out)
             self._gr_log_profile("extract_entities(llm)", _time.perf_counter() - _t0)
             return _out
@@ -2751,7 +3447,7 @@ class GraphRagMixin:
         _t0 = _time.perf_counter()
         _depth = getattr(self.config, "graph_rag_depth", "standard")
         _rel_backend = getattr(self.config, "graph_rag_relation_backend", "llm")
-        _cache_key = f"{_depth}|{_rel_backend}|{self._gr_text_hash(text[:3000])}"
+        _cache_key = self._graph_rag_relation_cache_key(text)
         if getattr(self.config, "graph_rag_extraction_cache", True):
             _cached = self._gr_cache_get("relations", _cache_key)
             if _cached is not None:
@@ -2784,47 +3480,7 @@ class GraphRagMixin:
                 prompt,
                 system_prompt="You are a knowledge graph extraction specialist.",
             )
-            triples = []
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 5:
-                    try:
-                        strength = max(1, min(10, int(parts[4])))
-                    except (ValueError, IndexError):
-                        strength = 5
-                    triples.append(
-                        {
-                            "subject": parts[0],
-                            "relation": parts[1],
-                            "object": parts[2],
-                            "description": parts[3],
-                            "strength": strength,
-                        }
-                    )
-                elif len(parts) >= 4:
-                    triples.append(
-                        {
-                            "subject": parts[0],
-                            "relation": parts[1],
-                            "object": parts[2],
-                            "description": parts[3],
-                            "strength": 5,
-                        }
-                    )
-                elif len(parts) == 3 and all(parts):
-                    triples.append(
-                        {
-                            "subject": parts[0],
-                            "relation": parts[1],
-                            "object": parts[2],
-                            "description": "",
-                            "strength": 5,
-                        }
-                    )
-            _out = triples[:15]
+            _out = self._parse_extracted_relations(raw)
             self._gr_cache_put("relations", _cache_key, _out)
             self._gr_log_profile("extract_relations(llm)", _time.perf_counter() - _t0)
             return _out
@@ -2952,10 +3608,11 @@ class GraphRagMixin:
 
         Returns the number of alias nodes merged (0 if nothing to merge).
         """
-        import numpy as np
-
         threshold = getattr(self.config, "graph_rag_entity_resolve_threshold", 0.92)
         max_entities = getattr(self.config, "graph_rag_entity_resolve_max", 5000)
+        backend = str(
+            getattr(self.config, "graph_rag_entity_resolve_backend", "rust") or "rust"
+        ).lower()
 
         keys = [k for k, v in self._entity_graph.items() if isinstance(v, dict)]
         n = len(keys)
@@ -2977,41 +3634,62 @@ class GraphRagMixin:
             logger.warning("GraphRAG entity resolution: embedding failed (%s). Skipping.", exc)
             return 0
 
-        emb = np.array(raw_emb, dtype=np.float32)
-        norms = np.linalg.norm(emb, axis=1, keepdims=True)
-        norms = np.where(norms == 0, 1.0, norms)
-        emb = emb / norms  # unit-normalise for cosine via dot product
+        groups: list[list[int]] = []
+        if backend == "rust":
+            try:
+                from axon.rust_bridge import get_rust_bridge
 
-        # Union-Find for grouping similar entities
-        parent = list(range(n))
+                bridge = get_rust_bridge()
+                if bridge.can_resolve_entity_alias_groups():
+                    resolved = bridge.resolve_entity_alias_groups(raw_emb, float(threshold))
+                    if isinstance(resolved, list):
+                        for group in resolved:
+                            if not isinstance(group, list):
+                                continue
+                            clean_group = sorted(
+                                {int(idx) for idx in group if isinstance(idx, int) and 0 <= idx < n}
+                            )
+                            if len(clean_group) >= 2:
+                                groups.append(clean_group)
+            except Exception as exc:
+                logger.debug("GraphRAG entity resolution: Rust backend unavailable (%s).", exc)
 
-        def _find(x: int) -> int:
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
+        if not groups:
+            import numpy as np
 
-        def _union(a: int, b: int) -> None:
-            ra, rb = _find(a), _find(b)
-            if ra != rb:
-                parent[rb] = ra
+            emb = np.array(raw_emb, dtype=np.float32)
+            norms = np.linalg.norm(emb, axis=1, keepdims=True)
+            norms = np.where(norms == 0, 1.0, norms)
+            emb = emb / norms  # unit-normalise for cosine via dot product
 
-        # O(n²) pairwise similarity — acceptable for n ≤ max_entities (default 5 000)
-        sim = emb @ emb.T  # shape (n, n)
-        for i in range(n):
-            for j in range(i + 1, n):
-                if sim[i, j] >= threshold:
-                    _union(i, j)
+            # Union-Find for grouping similar entities
+            parent = list(range(n))
 
-        # Collect groups
-        groups: dict[int, list[int]] = {}
-        for i in range(n):
-            groups.setdefault(_find(i), []).append(i)
+            def _find(x: int) -> int:
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+
+            def _union(a: int, b: int) -> None:
+                ra, rb = _find(a), _find(b)
+                if ra != rb:
+                    parent[rb] = ra
+
+            # O(n²) pairwise similarity — acceptable for n ≤ max_entities (default 5 000)
+            sim = emb @ emb.T  # shape (n, n)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if sim[i, j] >= threshold:
+                        _union(i, j)
+
+            groups_by_root: dict[int, list[int]] = {}
+            for i in range(n):
+                groups_by_root.setdefault(_find(i), []).append(i)
+            groups = [members for members in groups_by_root.values() if len(members) >= 2]
 
         merged = 0
-        for members in groups.values():
-            if len(members) < 2:
-                continue
+        for members in groups:
             # Canonical = entity with most chunk_ids (highest coverage)
             canon_idx = max(
                 members,

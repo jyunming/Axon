@@ -613,6 +613,19 @@ class ImageLoader(BaseLoader):
         if self._pil is None or self.ollama is None:
             return []
 
+        if os.getenv("AXON_DRY_RUN"):
+            logger.info(f"🖼️ [DRY RUN] Skipping image processing: {path}")
+            return [
+                {
+                    "text": f"Image at {path} (Dry Run - No Caption)",
+                    "metadata": {
+                        "source": path,
+                        "file_type": Path(path).suffix.lstrip(".").lower(),
+                        "dry_run": True,
+                    },
+                }
+            ]
+
         logger.info(f"🖼️ Processing image: {path} with {self.ollama_model}...")
 
         try:
@@ -652,6 +665,32 @@ class ImageLoader(BaseLoader):
 
 # Backward-compatible alias kept for existing code that imports BMPLoader directly.
 BMPLoader = ImageLoader
+
+
+class CustomImageLoader(BaseLoader):
+    """Loader for images using a custom vision function."""
+
+    def __init__(self, vision_fn: Any):
+        self.vision_fn = vision_fn
+
+    def load(self, path: str) -> list[dict[str, Any]]:
+        logger.info(f"🖼️ Processing image: {path} with custom vision_fn...")
+        try:
+            description = self.vision_fn(path)
+            return [
+                {
+                    "id": _stable_file_id(path, "image"),
+                    "text": f"Image Description: {description}",
+                    "metadata": {
+                        "source": path,
+                        "type": "image",
+                        "format": Path(path).suffix.lstrip(".").lower(),
+                    },
+                }
+            ]
+        except Exception as e:
+            logger.error(f"Error processing image {path} with custom vision_fn: {e}")
+            return []
 
 
 class PDFLoader(BaseLoader):
@@ -1237,8 +1276,12 @@ class LaTeXLoader(BaseLoader):
 class DirectoryLoader:
     """Loader that crawls a directory and uses appropriate loaders for each file."""
 
-    def __init__(self, vlm_model: str = "llava"):
-        _image_loader = ImageLoader(ollama_model=vlm_model)
+    def __init__(self, vlm_model: str = "llava", vision_fn: Any | None = None):
+        if vision_fn is not None:
+            _image_loader = CustomImageLoader(vision_fn=vision_fn)
+        else:
+            _image_loader = ImageLoader(ollama_model=vlm_model)
+
         _excel_loader = ExcelLoader()
         _code_loader = CodeFileLoader()
         self.loaders = {

@@ -60,6 +60,8 @@ class BM25Retriever:
         self.storage_path = storage_path
         self.corpus_file = os.path.join(storage_path, "bm25_corpus.json")
         self.corpus_file_zst = os.path.join(storage_path, "bm25_corpus.json.zst")
+        self.corpus_file_msgpack = os.path.join(storage_path, "bm25_corpus.msgpack")
+        self.corpus_file_msgpack_zst = os.path.join(storage_path, "bm25_corpus.msgpack.zst")
         self._compress_enabled = os.getenv("AXON_BM25_COMPRESS", "").strip().lower() in {
             "1",
             "true",
@@ -336,13 +338,57 @@ class BM25Retriever:
             self.save()
 
     def save(self):
-        """Save corpus to disk (JSON or optional Zstandard-compressed JSON)."""
+        """Save corpus to disk (msgpack.zst preferred, then JSON or JSON.zst)."""
         self._ensure_corpus_materialized()
-        payload_obj: Any
-        if self._corpus_dedup_enabled:
+
+        # Fast-path: msgpack encode + optional zstd compress
+        if self._corpus_dedup_enabled and self._rust.can_corpus_msgpack():
             payload_obj = self._build_dedup_corpus_payload()
-        else:
-            payload_obj = self.corpus
+            raw_mp = self._rust.encode_corpus_msgpack(payload_obj["texts"], payload_obj["docs"])
+            if raw_mp is not None:
+                try:
+                    import zstandard as zstd
+
+                    cctx = zstd.ZstdCompressor(level=self._compress_level)
+                    tmp = self.corpus_file_msgpack_zst + ".tmp"
+                    with open(tmp, "wb") as f:
+                        f.write(cctx.compress(raw_mp))
+                    os.replace(tmp, self.corpus_file_msgpack_zst)
+                    # Clean up other corpus files
+                    for old in (
+                        self.corpus_file_msgpack,
+                        self.corpus_file_zst,
+                        self.corpus_file,
+                    ):
+                        try:
+                            if os.path.exists(old):
+                                os.remove(old)
+                        except OSError:
+                            pass
+                    logger.info(
+                        "💾 BM25 corpus saved to %s (msgpack+zst)", self.corpus_file_msgpack_zst
+                    )
+                    return
+                except ImportError:
+                    # zstd not available — save uncompressed msgpack
+                    tmp = self.corpus_file_msgpack + ".tmp"
+                    with open(tmp, "wb") as f:
+                        f.write(raw_mp)
+                    os.replace(tmp, self.corpus_file_msgpack)
+                    for old in (self.corpus_file_zst, self.corpus_file):
+                        try:
+                            if os.path.exists(old):
+                                os.remove(old)
+                        except OSError:
+                            pass
+                    logger.info("💾 BM25 corpus saved to %s (msgpack)", self.corpus_file_msgpack)
+                    return
+                except Exception as e:
+                    logger.warning("BM25 msgpack save failed; falling back to JSON: %s", e)
+
+        payload_obj = (
+            self._build_dedup_corpus_payload() if self._corpus_dedup_enabled else self.corpus
+        )
         payload_bytes = self._json_dumps_bytes(payload_obj)
 
         use_zst = self._compress_enabled and len(payload_bytes) >= max(0, self._compress_min_bytes)
@@ -404,6 +450,12 @@ class BM25Retriever:
 
     def _build_dedup_corpus_payload(self) -> dict[str, Any]:
         """Build a compact JSON payload that deduplicates repeated text bodies."""
+        # Try Rust fast-path first
+        if self._rust.can_dedup_corpus_payload():
+            result = self._rust.build_dedup_corpus_payload(self.corpus)
+            if result is not None:
+                texts, docs = result
+                return {"format": "dedup_v1", "texts": texts, "docs": docs}
         texts: list[str] = []
         text_to_idx: dict[str, int] = {}
         docs: list[dict[str, Any]] = []
@@ -484,9 +536,44 @@ class BM25Retriever:
         except Exception:
             return self._decode_loaded_corpus(payload)
 
+    def _load_msgpack_corpus(self, raw_mp: bytes) -> list[dict] | None:
+        """Decode msgpack bytes to corpus list via Rust bridge."""
+        result = self._rust.decode_corpus_msgpack(raw_mp)
+        return result
+
     def load(self):
-        """Load corpus from compressed JSON (preferred) or plain JSON."""
+        """Load corpus from msgpack.zst (preferred), then json.zst, msgpack, or json."""
         try:
+            # Priority 1: msgpack.zst (fastest)
+            if os.path.exists(self.corpus_file_msgpack_zst):
+                try:
+                    import zstandard as zstd
+
+                    with open(self.corpus_file_msgpack_zst, "rb") as f:
+                        raw = f.read()
+                    dctx = zstd.ZstdDecompressor()
+                    raw_mp = dctx.decompress(raw)
+                    corpus = self._load_msgpack_corpus(raw_mp)
+                    if corpus is not None:
+                        self.corpus = corpus
+                        self.bm25 = None
+                        self._rust_index = None
+                        self._dirty = bool(self.corpus)
+                        self._dedup_payload = None
+                        self._dedup_doc_count = 0
+                        if self._text_intern_mode != "off" and self.corpus:
+                            self._intern_document_texts(self.corpus)
+                        logger.info(
+                            "📂 Loaded BM25 corpus with %d documents (msgpack+zst)",
+                            len(self.corpus),
+                        )
+                        return
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("Failed to load msgpack.zst BM25 corpus: %s", e)
+
+            # Priority 2: json.zst
             if os.path.exists(self.corpus_file_zst):
                 try:
                     import zstandard as zstd
@@ -495,6 +582,23 @@ class BM25Retriever:
                         raw = f.read()
                     dctx = zstd.ZstdDecompressor()
                     raw_json = dctx.decompress(raw)
+                    # Try Rust JSON decode first
+                    if self._rust.can_decode_corpus_json():
+                        rust_corpus = self._rust.decode_corpus_json(raw_json)
+                        if rust_corpus is not None:
+                            self.corpus = rust_corpus
+                            self.bm25 = None
+                            self._rust_index = None
+                            self._dirty = bool(self.corpus)
+                            self._dedup_payload = None
+                            self._dedup_doc_count = 0
+                            if self._text_intern_mode != "off" and self.corpus:
+                                self._intern_document_texts(self.corpus)
+                            logger.info(
+                                "📂 Loaded BM25 corpus with %d documents (rust json+zst)",
+                                len(self.corpus),
+                            )
+                            return
                     payload = self._json_loads(raw_json)
                     if (
                         self._corpus_dedup_lazy_load_enabled
@@ -521,9 +625,51 @@ class BM25Retriever:
                     return
                 except Exception as e:
                     logger.warning("Failed to load compressed BM25 corpus: %s", e)
+
+            # Priority 3: uncompressed msgpack
+            if os.path.exists(self.corpus_file_msgpack):
+                try:
+                    with open(self.corpus_file_msgpack, "rb") as f:
+                        raw_mp = f.read()
+                    corpus = self._load_msgpack_corpus(raw_mp)
+                    if corpus is not None:
+                        self.corpus = corpus
+                        self.bm25 = None
+                        self._rust_index = None
+                        self._dirty = bool(self.corpus)
+                        self._dedup_payload = None
+                        self._dedup_doc_count = 0
+                        if self._text_intern_mode != "off" and self.corpus:
+                            self._intern_document_texts(self.corpus)
+                        logger.info(
+                            "📂 Loaded BM25 corpus with %d documents (msgpack)",
+                            len(self.corpus),
+                        )
+                        return
+                except Exception as e:
+                    logger.warning("Failed to load msgpack BM25 corpus: %s", e)
+
+            # Priority 4: plain JSON (with Rust fast-path)
             if os.path.exists(self.corpus_file):
                 with open(self.corpus_file, "rb") as f:
-                    payload = self._json_loads(f.read())
+                    raw_bytes = f.read()
+                # Try Rust JSON decode first (5–10× faster than Python for large corpora)
+                if self._rust.can_decode_corpus_json():
+                    rust_corpus = self._rust.decode_corpus_json(raw_bytes)
+                    if rust_corpus is not None:
+                        self.corpus = rust_corpus
+                        self.bm25 = None
+                        self._rust_index = None
+                        self._dirty = bool(self.corpus)
+                        self._dedup_payload = None
+                        self._dedup_doc_count = 0
+                        if self._text_intern_mode != "off" and self.corpus:
+                            self._intern_document_texts(self.corpus)
+                        logger.info(
+                            "📂 Loaded BM25 corpus with %d documents (rust json)", len(self.corpus)
+                        )
+                        return
+                payload = self._json_loads(raw_bytes)
                 if (
                     self._corpus_dedup_lazy_load_enabled
                     and isinstance(payload, dict)
@@ -571,6 +717,13 @@ def weighted_score_fusion(
 
     weight: 1.0 = Pure Semantic, 0.0 = Pure Lexical.
     """
+    # Try Rust fast-path
+    _rust = get_rust_bridge()
+    if _rust.can_score_fusion():
+        result = _rust.score_fusion_weighted(vector_results, bm25_results, weight)
+        if result is not None:
+            return result
+
     all_docs = {}
 
     # 1. Extract and normalize Vector scores
@@ -617,6 +770,13 @@ def reciprocal_rank_fusion(
     ``vector_score`` field so the UI can display a meaningful relevance value.
     The RRF-fused score (used only for ranking) is stored in ``score``.
     """
+    # Try Rust fast-path
+    _rust = get_rust_bridge()
+    if _rust.can_score_fusion():
+        result = _rust.score_fusion_rrf(vector_results, bm25_results, k)
+        if result is not None:
+            return result
+
     fused_scores: dict[str, float] = {}
 
     # Preserve original cosine scores keyed by doc_id

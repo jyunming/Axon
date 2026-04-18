@@ -300,6 +300,15 @@ class TestMainNoArgs:
         run_cli()
         brain.query.assert_not_called()
 
+    def test_no_args_constructs_brain_without_legacy_kwargs(self, mock_config, brain):
+        with (
+            patch("axon.main.AxonBrain", return_value=brain) as brain_ctor,
+            patch("os._exit") as hard_exit,
+        ):
+            run_cli()
+        brain_ctor.assert_called_once_with(mock_config)
+        hard_exit.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 4.  main() --project-list

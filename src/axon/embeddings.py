@@ -5,6 +5,7 @@ OpenEmbedding client extracted from main.py for Phase 2 of the Axon refactor.
 """
 
 import logging
+import os
 from typing import Any
 
 from axon.config import AxonConfig
@@ -119,6 +120,9 @@ class OpenEmbedding:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if os.getenv("AXON_DRY_RUN"):
+            return [[0.0] * self.dimension for _ in texts]
+
         if self.provider == "sentence_transformers":
             embeddings = self.model.encode(texts, show_progress_bar=False)
             if hasattr(embeddings, "tolist"):

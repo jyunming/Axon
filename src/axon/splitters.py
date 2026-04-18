@@ -385,6 +385,13 @@ class CosineSemanticSplitter:
         return len(text) // 4
 
     def _cosine(self, a: list[float], b: list[float]) -> float:
+        from axon.rust_bridge import get_rust_bridge
+
+        bridge = get_rust_bridge()
+        if bridge.can_cosine_similarity():
+            result = bridge.cosine_similarity(a, b)
+            if result is not None:
+                return result
         import math
 
         dot = sum(x * y for x, y in zip(a, b))

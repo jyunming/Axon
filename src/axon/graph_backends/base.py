@@ -37,6 +37,10 @@ class GraphContext:
     # Used by query_router to build GraphRAG local-search context headers.
     matched_entity_names: list[str] = field(default_factory=list)
 
+    # Multi-hop diagnostics (Epic 1/4)
+    hop_count: int = 0
+    path: list[tuple[str, str, str]] = field(default_factory=list)
+
 
 @dataclass
 class IngestResult:

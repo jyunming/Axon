@@ -975,6 +975,12 @@ class AxonConfig:
 
     graph_rag_relation_budget: int = 30
 
+    # Multi-hop graph retrieval settings (Epic 1/4)
+    graph_rag_max_hops: int = 2
+    graph_rag_hop_decay: float = 0.7
+    graph_rag_distance_weighted: bool = True
+    graph_rag_large_graph_threshold: int = 50000
+
     # Community detection backend preference.
 
     # "louvain"   = networkx Louvain only (default --' safe on all environments, fast for <10k nodes)
@@ -1053,6 +1059,11 @@ class AxonConfig:
 
     graph_rag_depth: Literal["light", "standard", "deep"] = "standard"
 
+    # When both entity and relation extraction use the LLM and relations are enabled
+    # for all processed chunks, issue one fused extraction prompt per chunk instead of
+    # separate entity and relation prompts.
+    graph_rag_llm_fused_extraction: bool = True
+
     # Token-level compression of community reports before map-reduce LLM calls.
 
     # Uses LLMLingua-2. pip install axon[llmlingua]
@@ -1095,6 +1106,12 @@ class AxonConfig:
 
     graph_rag_entity_resolve: bool = False
 
+    # Alias-resolution backend. "rust" avoids materializing the full NxN similarity
+    # matrix in Python and computes grouping in the Rust module when available.
+    graph_rag_entity_resolve_backend: Literal["numpy", "rust"] = "rust"
+    graph_rag_rust_build_edges: bool = False
+    graph_rag_rust_merge_entities: bool = False
+
     graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0--'1)
 
     graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
@@ -1108,6 +1125,10 @@ class AxonConfig:
     # pip install axon[rebel]
 
     graph_rag_relation_backend: Literal["llm", "rebel"] = "llm"
+
+    # Persist relation graphs to a compact msgpack file when shard persistence is not
+    # explicitly enabled. Falls back to JSON automatically when Rust support is missing.
+    graph_rag_relation_msgpack_persist: bool = False
 
     graph_rag_rebel_model: str = "Babelscape/rebel-large"
 

@@ -20,8 +20,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -170,6 +172,8 @@ class DynamicGraphBackend:
         self._db_path = _base / ".dynamic_graph.db"
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection = self._init_db()
+        self._cached_nx_graph: Any = None
+        self._cached_nx_time: float = 0.0
 
     # ------------------------------------------------------------------
     # Init
@@ -423,7 +427,8 @@ class DynamicGraphBackend:
         Steps:
         1. Extract query entities (via LLM or simple tokenization).
         2. Find active facts where subject or object matches a query entity.
-        3. Return as GraphContext objects (each fact = one context).
+        3. Perform multi-hop BFS traversal to find linked facts (Epic 1/4).
+        4. Return as GraphContext objects (each fact = one context).
         """
         top_k = (cfg.top_k if cfg else None) or 10
 
@@ -433,20 +438,113 @@ class DynamicGraphBackend:
         if not query_terms:
             return []
 
-        # Step 2: find active facts matching query terms
+        # Step 2: find active facts matching query terms (direct hits)
         placeholders = ",".join("?" for _ in query_terms)
         rows = self._execute(
             f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
             f"FROM facts "
             f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders})) "
-            f"ORDER BY valid_at DESC LIMIT ?",
+            f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
             (*query_terms, *query_terms, top_k),
         )
 
-        # Step 3: convert to GraphContext
-        _existing_ids = {r.get("id") for r in (existing_results or []) if r.get("id")}
-        contexts: list[GraphContext] = []
+        # Step 3: Perform multi-hop BFS if requested (Epic 1/4)
+        max_hops = 1
+        if cfg and hasattr(cfg, "graph_rag_max_hops"):
+            max_hops = int(cfg.graph_rag_max_hops)
+        else:
+            max_hops = int(os.getenv("AXON_GRAPH_RAG_MAX_HOPS", "1"))
+
+        hop_decay = 0.7
+        if cfg and hasattr(cfg, "graph_rag_hop_decay"):
+            hop_decay = float(cfg.graph_rag_hop_decay)
+        else:
+            hop_decay = float(os.getenv("AXON_GRAPH_RAG_HOP_DECAY", "0.7"))
+
+        # Map to track best score/path for each fact
+        fact_map: dict[str, dict] = {}
         for rank, row in enumerate(rows):
+            fact_id = row["fact_id"]
+            if fact_id not in fact_map:
+                fact_map[fact_id] = {
+                    "row": row,
+                    "score": float(row["confidence"]),
+                    "rank": rank,
+                    "hop": 0,
+                    "path": [],
+                    "matched": {row["subject"], row["object"]},
+                }
+
+        if max_hops > 0:
+            current_fringe = set(query_terms)
+            visited_nodes = set(query_terms)
+            # node -> path from seed to that node
+            node_paths: dict[str, list[tuple[str, str, str]]] = {n: [] for n in query_terms}
+            # node -> hop count
+            node_hops: dict[str, int] = dict.fromkeys(query_terms, 0)
+
+            for _hop in range(1, max_hops + 1):
+                if not current_fringe:
+                    break
+
+                # Score for facts DISCOVERED at this hop level.
+                # A fact is discovered at hop H if it contains a node reached at hop H-1.
+                # Wait, if node X is at hop 0 (seed), facts containing X are hop 0.
+                # If node Y is reached from X, Y is hop 1. Facts containing Y are hop 1.
+                # So fact_hop = node_hop.
+
+                placeholders = ",".join("?" for _ in current_fringe)
+                linked_rows = self._execute(
+                    f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
+                    f"FROM facts "
+                    f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders}))",
+                    (*current_fringe, *current_fringe),
+                )
+
+                next_fringe = set()
+                for row in linked_rows:
+                    fact_id = row["fact_id"]
+                    s_orig, r, o_orig = row["subject"], row["relation"], row["object"]
+                    subj, obj = s_orig.lower(), o_orig.lower()
+
+                    # The fact is reached via source_node which is in current_fringe
+                    source_node = subj if subj in current_fringe else obj
+                    fact_hop = node_hops[source_node]
+
+                    # Update fact score/path
+                    score = float(row["confidence"]) * (hop_decay**fact_hop)
+                    if fact_id not in fact_map or score > fact_map[fact_id]["score"]:
+                        fact_map[fact_id] = {
+                            "row": row,
+                            "score": score,
+                            "rank": 999,
+                            "hop": fact_hop,
+                            "path": node_paths[source_node],
+                            "matched": {s_orig, o_orig},
+                        }
+
+                    # Find new nodes reached via this fact
+                    target_node = obj if subj == source_node else subj
+                    if target_node not in visited_nodes:
+                        visited_nodes.add(target_node)
+                        next_fringe.add(target_node)
+                        node_hops[target_node] = fact_hop + 1
+                        node_paths[target_node] = node_paths[source_node] + [(s_orig, r, o_orig)]
+
+                current_fringe = next_fringe
+
+        _existing_ids = {r.get("id") for r in (existing_results or []) if r.get("id")}
+        sorted_facts = sorted(
+            fact_map.values(), key=lambda x: (x["score"], x["row"]["valid_at"]), reverse=True
+        )[:top_k]
+
+        # Step 4: convert to GraphContext
+        contexts: list[GraphContext] = []
+        for rank, item in enumerate(sorted_facts):
+            row = item["row"]
+            if row["fact_id"] in _existing_ids:
+                continue
+
             text = f"{row['subject']} {row['relation'].replace('_', ' ').lower()} {row['object']}"
             meta = json.loads(row["metadata"] or "{}")
             desc = meta.get("description", "")
@@ -457,18 +555,49 @@ class DynamicGraphBackend:
                 context_id=row["fact_id"],
                 context_type="fact",
                 text=text,
-                score=float(row["confidence"]),
+                score=item["score"],
                 rank=rank,
                 backend_id=BACKEND_ID,
                 source_chunk_id="",
                 metadata={"valid_at": row["valid_at"], **meta},
                 valid_at=_parse_dt(row["valid_at"]),
-                matched_entity_names=[row["subject"], row["object"]],
+                matched_entity_names=list(item["matched"]),
+                hop_count=item["hop"],
+                path=item["path"],
             )
-            if ctx.context_id not in _existing_ids:
-                contexts.append(ctx)
+            contexts.append(ctx)
 
         return contexts
+
+    def _build_nx_graph_from_db(self):
+        """Build a NetworkX graph from all active facts in the database (used in tests)."""
+        now = time.time()
+        ttl = float(os.getenv("AXON_GRAPH_CACHE_TTL", "300"))
+        if self._cached_nx_graph and (now - self._cached_nx_time) < ttl:
+            return self._cached_nx_graph
+
+        import networkx as nx
+
+        rows = self._execute(
+            "SELECT subject, object, confidence FROM facts WHERE status = 'active'"
+        )
+        G = nx.Graph()
+        for row in rows:
+            u, v = row["subject"], row["object"]
+            conf = float(row["confidence"])
+            if G.has_edge(u, v):
+                G[u][v]["weight"] += conf
+            else:
+                G.add_edge(u, v, weight=conf)
+
+        # Post-process for distance
+        for _u, _v, d in G.edges(data=True):
+            w = d.get("weight", 1.0)
+            d["distance"] = 1.0 / (w + 1e-6)
+
+        self._cached_nx_graph = G
+        self._cached_nx_time = now
+        return G
 
     def finalize(self, force: bool = False) -> FinalizationResult:
         """No-op — dynamic graph is episodic; no community detection step."""
@@ -514,13 +643,22 @@ class DynamicGraphBackend:
             "(SELECT COUNT(*) FROM facts WHERE status = 'active') AS active_facts, "
             "(SELECT COUNT(*) FROM facts WHERE status = 'superseded') AS superseded_facts"
         )
-        row = rows[0] if rows else {}
+        if not rows:
+            return {
+                "backend": BACKEND_ID,
+                "episodes": 0,
+                "entities": 0,
+                "active_facts": 0,
+                "superseded_facts": 0,
+            }
+
+        row = rows[0]
         return {
             "backend": BACKEND_ID,
-            "episodes": row["episodes"] if row else 0,
-            "entities": row["entities"] if row else 0,
-            "active_facts": row["active_facts"] if row else 0,
-            "superseded_facts": row["superseded_facts"] if row else 0,
+            "episodes": row["episodes"],
+            "entities": row["entities"],
+            "active_facts": row["active_facts"],
+            "superseded_facts": row["superseded_facts"],
         }
 
     def graph_data(self, filters: GraphDataFilters | None = None) -> GraphPayload:
