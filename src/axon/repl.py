@@ -1479,7 +1479,7 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 
-_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
+_HINT = "    Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
 
 
 def _box_width() -> int:
@@ -2496,7 +2496,7 @@ def _interactive_repl(
         from prompt_toolkit.application import Application
         from prompt_toolkit.buffer import Buffer
         from prompt_toolkit.completion import Completer, Completion
-        from prompt_toolkit.filters import Condition, has_completions
+        from prompt_toolkit.filters import has_completions
         from prompt_toolkit.formatted_text import ANSI as _PTANSI
         from prompt_toolkit.formatted_text import HTML as _PThtml
         from prompt_toolkit.formatted_text import FormattedText as _PTFT  # noqa: F401
@@ -2725,8 +2725,8 @@ def _interactive_repl(
                 _RST = "\x1b[0m"
                 m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
                 emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
-                row1 = f"  {_BON}LLM\x1b[22m  {m}    {_BON}Embed\x1b[22m  {emb}"
-                return _PTANSI(f"{row1}\n  \x1b[1;32m{_embed_prog_fast}\x1b[0m{_RST}")
+                row1 = f"    {_BON}LLM\x1b[22m  {m}    {_BON}Embed\x1b[22m  {emb}"
+                return _PTANSI(f"{row1}\n    \x1b[1;32m{_embed_prog_fast}\x1b[0m{_RST}")
 
             def _t(s: str, w: int) -> str:
                 return s if len(s) <= w else s[: w - 1] + "…"
@@ -2786,13 +2786,17 @@ def _interactive_repl(
             h_state = "ON" if brain.config.hybrid_search else "off"
 
             row1 = (
-                f"  {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
+                f"    {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
                 f"{_lbl('Embed')}  {_t(emb, W2):{W2}}{sep}"
                 f"{_lbl('Docs')}  {doc_s}"
             )
 
+            if _spin_state.get("active"):
+                frame = _SPIN_FRAMES[_spin_state["idx"] % len(_SPIN_FRAMES)]
+                return _PTANSI(f"{row1}\n    \x1b[1;33m{frame} Thinking\u2026  Ctrl+C to cancel\x1b[0m{_RST}")
+
             row2 = (
-                f"  {_lbl('search')}:{s_state}{_pad('search', s_state, C1)}{sep}"
+                f"    {_lbl('search')}:{s_state}{_pad('search', s_state, C1)}{sep}"
                 f"{_lbl('discuss')}:{d_state}{_pad('discuss', d_state, C2)}{sep}"
                 f"{_lbl('hybrid')}:{h_state}  "
                 f"{_lbl('top-k')}:{brain.config.top_k}  "
@@ -2847,32 +2851,12 @@ def _interactive_repl(
 
                 from prompt_toolkit.key_binding import merge_key_bindings
 
-                from axon._ui_state import state as _ui_state_spin
-
                 _SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-                def _spinner_line() -> str:
-                    ep = _ui_state_spin.get("embed_progress", "")
-                    if ep:
-                        return f"  \x1b[1;32m\u2022 {ep}\x1b[0m"
-                    frame = _SPIN_FRAMES[_spin_state["idx"] % len(_SPIN_FRAMES)]
-                    return f"  \x1b[1;33m{frame} Thinking\u2026  Ctrl+C to cancel\x1b[0m"
 
                 _pt_app = Application(
                     layout=Layout(
                         HSplit(
                             [
-                                # Spinner row — rendered by prompt_toolkit for smooth ~12fps animation.
-                                # Disappears instantly when _spin_state["active"] becomes False.
-                                ConditionalContainer(
-                                    content=Window(
-                                        content=FormattedTextControl(
-                                            lambda: _PTANSI(_spinner_line())
-                                        ),
-                                        height=1,
-                                    ),
-                                    filter=Condition(lambda: bool(_spin_state["active"])),
-                                ),
                                 # Completions expand upward above the input row
                                 ConditionalContainer(
                                     content=CompletionsMenu(max_height=8, scroll_offset=1),
@@ -2891,7 +2875,7 @@ def _interactive_repl(
                                         include_default_input_processors=True,
                                     ),
                                     get_line_prefix=lambda lineno, wrap_count: _PThtml(
-                                        "<ansigreen><b>></b></ansigreen> "
+                                        "    <ansigreen><b>></b></ansigreen> "
                                     ),
                                     height=1,
                                     wrap_lines=False,
@@ -5188,7 +5172,8 @@ def _interactive_repl(
 
                     if not quiet:
                         # Echo user message then show thinking indicator in conversation area.
-                        _rich_print(f"\n[bold white on grey15] > {user_input} [/bold white on grey15]\n")
+                        _rich_print(f"\n    [bold white on grey15] > {user_input} [/bold white on grey15]\n")
+                        _spin_state["active"] = True
                         _spin_state["idx"] = 0
                         _ast = threading.Thread(target=_animate_spinner, daemon=True)
                         _ast.start()
@@ -5199,11 +5184,11 @@ def _interactive_repl(
                         _agent_thread.join()
 
                     if _agent_err:
-                        _rich_print(f"[bold red]✦[/bold red] ⚠️  {_agent_err[0]}\n")
+                        _rich_print(f"    [bold red]✦[/bold red] ⚠️  {_agent_err[0]}\n")
                         response_parts = []
                     else:
                         _agent_response = _agent_result[0] if _agent_result else ""
-                        _rich_print("[bold yellow]✦[/bold yellow]")
+                        _rich_print("    [bold yellow]✦[/bold yellow]")
                         _YEL = "\x1b[33m"
                         _GRN = "\x1b[1;32m"
                         _RED = "\x1b[1;31m"
@@ -5223,21 +5208,21 @@ def _interactive_repl(
                             _tlines = _tresult.strip().splitlines()
                             _first = _tlines[0] if _tlines else "(no output)"
                             _rest = _tlines[1:]
-                            print(f"  {_DIM}↳ {_tname}{_RST}  " f"{_clr}{_icon}{_RST}  {_first}")
+                            print(f"    {_DIM}↳ {_tname}{_RST}  " f"{_clr}{_icon}{_RST}  {_first}")
                             if _is_err:
                                 for _ln in _rest[:3]:
-                                    print(f"       {_ln}")
+                                    print(f"           {_ln}")
                             elif _tname in _SUMMARY_ONLY_TOOLS:
                                 if _rest:
-                                    print(f"       {_DIM}({len(_rest)} line(s) collapsed){_RST}")
+                                    print(f"           {_DIM}({len(_rest)} line(s) collapsed){_RST}")
                             else:
                                 for _ln in _rest[:3]:
-                                    print(f"       {_ln}")
+                                    print(f"           {_ln}")
                                 if len(_rest) > 3:
-                                    print(f"       {_DIM}… +{len(_rest) - 3} more{_RST}")
+                                    print(f"           {_DIM}… +{len(_rest) - 3} more{_RST}")
                         if _tool_steps:
                             print()
-                        _rich_render(_agent_response, indent="  ", right_margin=6)
+                        _rich_render(_agent_response, indent="    ", right_margin=4)
                         print()
                         response_parts = [_agent_response]
 
@@ -5276,13 +5261,13 @@ def _interactive_repl(
                                 changes.append(val)
 
                         if changes:
-                            _rich_print(f"[dim]  {'  │  '.join(changes)}[/dim]")
+                            _rich_print(f"[dim]    {'  │  '.join(changes)}[/dim]")
 
                         _last_config_snapshot = _snap
 
                     # Echo user message then show thinking indicator in conversation area.
                     if not quiet:
-                        _rich_print(f"\n[bold white on grey15] > {user_input} [/bold white on grey15]\n")
+                        _rich_print(f"\n    [bold white on grey15] > {user_input} [/bold white on grey15]\n")
 
                     # Collect all streaming tokens while spinner shows.
                     # Writing token-by-token conflicts with prompt_toolkit's
@@ -5309,23 +5294,20 @@ def _interactive_repl(
                     finally:
                         _spin_state["active"] = False
                         _st.join(timeout=0.3)
-                        # Let the final Application invalidate (spinner row removal)
-                        # be processed by the event loop before we write anything.
-                        time.sleep(0.12)
 
                     _accumulated = "".join(response_parts)
 
                     if _stream_error is not None:
-                        _rich_print(f"[bold red]✦[/bold red] ⚠️  {_stream_error}\n")
+                        _rich_print(f"    [bold red]✦[/bold red] ⚠️  {_stream_error}\n")
                     elif _accumulated:
-                        _rich_print("[bold yellow]✦[/bold yellow]")
-                        _rich_render(_accumulated)
+                        _rich_print("    [bold yellow]✦[/bold yellow]")
+                        _rich_render(_accumulated, indent="    ", right_margin=4)
                         print()
                     else:
-                        _rich_print("[bold yellow]✦[/bold yellow] (no response)\n")
+                        _rich_print("    [bold yellow]✦[/bold yellow] (no response)\n")
 
                     if _cancelled:
-                        _rich_print("  ⚠  Cancelled.\n")
+                        _rich_print("    ⚠  Cancelled.\n")
 
             else:
                 # Non-streaming: spinner while brain.query() blocks
@@ -5361,7 +5343,7 @@ def _interactive_repl(
                                 changes.append(val)
 
                         if changes:
-                            _rich_print(f"[dim]  {'  │  '.join(changes)}[/dim]")
+                            _rich_print(f"[dim]    {'  │  '.join(changes)}[/dim]")
 
                         _last_config_snapshot = _snap
 
@@ -5381,7 +5363,7 @@ def _interactive_repl(
 
                 if not quiet:
                     # Echo user message then show thinking indicator in conversation area.
-                    _rich_print(f"\n[bold white on grey15] > {user_input} [/bold white on grey15]\n")
+                    _rich_print(f"\n    [bold white on grey15] > {user_input} [/bold white on grey15]\n")
                     _spin_state["active"] = True
                     _spin_state["idx"] = 0
                     _st2 = threading.Thread(target=_animate_spinner, daemon=True)
@@ -5398,9 +5380,9 @@ def _interactive_repl(
 
                 response = _result[0] if _result else ""
 
-                _rich_print("[bold yellow]✦[/bold yellow]")
+                _rich_print("    [bold yellow]✦[/bold yellow]")
 
-                _rich_render(response)
+                _rich_render(response, indent="    ", right_margin=4)
 
                 print()  # blank line after Brain response, before next You:
 
