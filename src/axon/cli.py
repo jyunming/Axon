@@ -1449,6 +1449,13 @@ def main():
 
                 _lg.addHandler(_init_display)
 
+            # Silence noisy HTTP debug loggers that aren't routed through the
+            # spinner — they would otherwise leak to the root logger's handler.
+            for _noisy in ("httpcore", "httpcore.http11", "hpack", "urllib3"):
+                _nlg = logging.getLogger(_noisy)
+                _nlg.setLevel(logging.WARNING)
+                _nlg.propagate = False
+
         # If user requested dry-run, enable retrieval_dry_run in config so subsystems can skip LLM calls where supported
         if getattr(args, "dry_run", False):
             config.retrieval_dry_run = True

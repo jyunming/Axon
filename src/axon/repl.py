@@ -2867,6 +2867,9 @@ def _interactive_repl(
                     layout=Layout(
                         HSplit(
                             [
+                                # Expanding spacer — pushes input/toolbar to the bottom of the
+                                # screen so output printed via patch_stdout scrolls above them.
+                                Window(),
                                 # Spinner row — rendered by prompt_toolkit for smooth ~12fps animation.
                                 # Disappears instantly when _spin_state["active"] becomes False.
                                 ConditionalContainer(
