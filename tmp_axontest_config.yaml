@@ -1,0 +1,18 @@
+# Minimal config for local, isolated usability testing (dry-run friendly).
+#
+# This file intentionally overrides the default store base so tests do not
+# touch the user's real ~/.axon / AxonStore directories.
+#
+# Use with:
+#   AXON_DRY_RUN=1 python -c "from axon.cli import main; main()" --config tmp_axontest_config.yaml ...
+
+store:
+  base: ./tmp_axontest_store
+
+vector_store:
+  provider: lancedb
+
+llm:
+  provider: ollama
+  model: llama3
+

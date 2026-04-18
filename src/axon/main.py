@@ -30,7 +30,9 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
 
+import hashlib  # noqa: E402
 import logging  # noqa: E402
+import math  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -100,6 +102,67 @@ from axon.vector_store import (  # noqa: E402,F401
 )
 
 # GraphRAG reduce-phase system prompt (GAP 1)
+
+
+# ---------------------------------------------------------------------------
+
+
+class _BloomHashStore:
+    """Memory-efficient probabilistic hash store (bloom filter).
+
+    False positive rate ~0.1% at capacity. A false positive means a chunk that
+    was never ingested is treated as already-ingested (silently skipped).
+    Acceptable trade-off for RAM-constrained deployments. Default: disabled.
+    """
+
+    def __init__(self, capacity: int = 500_000, fp_rate: float = 0.001):
+        m_bits = math.ceil(-(capacity * math.log(fp_rate)) / (math.log(2) ** 2))
+        self._k = max(1, round((m_bits / capacity) * math.log(2)))
+        self._n_bytes = math.ceil(m_bits / 8)
+        self._bits = bytearray(self._n_bytes)
+        self._count = 0
+        # Tracks only hashes added via add() this session (not loaded from disk).
+        # Kept small so disk persistence remains possible without reading the full
+        # bloom filter back out (bloom filters are write-only / non-enumerable).
+        self._session_hashes: set[str] = set()
+
+    def _hashes(self, item: str):
+        h1 = int(hashlib.md5(item.encode()).hexdigest(), 16)
+        h2 = int(hashlib.sha1(item.encode()).hexdigest(), 16)
+        for i in range(self._k):
+            yield (h1 + i * h2) % (self._n_bytes * 8)
+
+    def _load_item(self, item: str) -> None:
+        """Set bloom bits for *item* without recording it in session_hashes.
+
+        Used during startup to replay persisted hashes from disk so they are
+        recognised as already-ingested without inflating the session delta that
+        will be written back to disk on the next save.
+        """
+        for bit in self._hashes(item):
+            self._bits[bit >> 3] |= 1 << (bit & 7)
+        self._count += 1
+
+    def add(self, item: str) -> None:
+        for bit in self._hashes(item):
+            self._bits[bit >> 3] |= 1 << (bit & 7)
+        self._session_hashes.add(item)
+        self._count += 1
+
+    def update(self, items) -> None:
+        for item in items:
+            self.add(item)
+
+    def __contains__(self, item: str) -> bool:
+        return all(self._bits[bit >> 3] >> (bit & 7) & 1 for bit in self._hashes(item))
+
+    def __len__(self) -> int:
+        return self._count
+
+    def discard(self, item: str) -> None:
+        # Bloom filter bits cannot be cleared; remove from session set so the
+        # hash is not re-persisted to disk on the next save.
+        self._session_hashes.discard(item)
 
 
 # ---------------------------------------------------------------------------
@@ -1270,100 +1333,120 @@ Your primary goal is to help the user by answering questions based on the provid
         if descendants:
             import pathlib
 
-            for desc in descendants:
-                desc_bm25_path = project_bm25_path(desc)
+            from axon.rust_bridge import get_rust_bridge
 
-                desc_base = pathlib.Path(desc_bm25_path)
+            bridge = get_rust_bridge()
+            with self._graph_lock:
+                for desc in descendants:
+                    desc_bm25_path = project_bm25_path(desc)
 
-                # --- entity graph ---
+                    desc_base = pathlib.Path(desc_bm25_path)
 
-                desc_graph_path = desc_base / ".entity_graph.json"
+                    # --- entity graph ---
 
-                if desc_graph_path.exists():
-                    try:
-                        import json as _json
+                    desc_graph_path = desc_base / ".entity_graph.json"
 
-                        raw = _json.loads(desc_graph_path.read_text(encoding="utf-8"))
+                    desc_mp_path = desc_base / ".entity_graph.msgpack"
 
-                        if isinstance(raw, dict):
-                            for entity, node in raw.items():
-                                if not isinstance(entity, str):
-                                    continue
+                    raw = None
 
-                                if not isinstance(node, dict):
-                                    continue
+                    if desc_mp_path.exists() and bridge.can_entity_graph_codec():
+                        try:
+                            raw = bridge.decode_entity_graph(desc_mp_path.read_bytes())
+                        except Exception:
+                            raw = None
 
-                                doc_ids = node.get("chunk_ids", [])
+                    if raw is None and desc_graph_path.exists():
+                        try:
+                            import json as _json
 
-                                if not doc_ids:
-                                    continue
+                            raw = _json.loads(desc_graph_path.read_text(encoding="utf-8"))
+                        except Exception:
+                            raw = None
 
-                                existing = self._entity_graph.get(entity)
+                    if isinstance(raw, dict):
+                        for entity, node in raw.items():
+                            if not isinstance(entity, str):
+                                continue
 
-                                if existing is None:
-                                    self._entity_graph[entity] = {
-                                        "description": node.get("description", ""),
-                                        "type": node.get("type", "UNKNOWN"),
-                                        "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
-                                        "frequency": len(
-                                            [d for d in doc_ids if isinstance(d, str)]
-                                        ),
-                                        "degree": node.get("degree", 0),
-                                    }
+                            if not isinstance(node, dict):
+                                continue
 
-                                elif isinstance(existing, dict):
-                                    existing_ids = set(existing.get("chunk_ids", []))
+                            doc_ids = node.get("chunk_ids", [])
 
-                                    new_ids = [
-                                        d
-                                        for d in doc_ids
-                                        if isinstance(d, str) and d not in existing_ids
-                                    ]
+                            if not doc_ids:
+                                continue
 
-                                    if new_ids:
-                                        existing.setdefault("chunk_ids", []).extend(new_ids)
+                            existing = self._entity_graph.get(entity)
 
-                                        existing["frequency"] = len(existing["chunk_ids"])
+                            if existing is None:
+                                self._entity_graph[entity] = {
+                                    "description": node.get("description", ""),
+                                    "type": node.get("type", "UNKNOWN"),
+                                    "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
+                                    "frequency": len([d for d in doc_ids if isinstance(d, str)]),
+                                    "degree": node.get("degree", 0),
+                                }
 
-                    except Exception as e:
-                        logger.warning(f"Could not merge entity graph for '{desc}': {e}")
+                            elif isinstance(existing, dict):
+                                existing_ids = set(existing.get("chunk_ids", []))
 
-                # --- relation graph ---
+                                new_ids = [
+                                    d
+                                    for d in doc_ids
+                                    if isinstance(d, str) and d not in existing_ids
+                                ]
 
-                desc_rel_path = desc_base / ".relation_graph.json"
+                                if new_ids:
+                                    existing.setdefault("chunk_ids", []).extend(new_ids)
 
-                if desc_rel_path.exists():
-                    try:
-                        import json as _json
+                                    existing["frequency"] = len(existing["chunk_ids"])
 
-                        raw = _json.loads(desc_rel_path.read_text(encoding="utf-8"))
+                    # --- relation graph ---
 
-                        if isinstance(raw, dict):
-                            for src, entries in raw.items():
-                                if isinstance(src, str) and isinstance(entries, list):
-                                    if src not in self._relation_graph:
-                                        self._relation_graph[src] = []
+                    desc_rel_path = desc_base / ".relation_graph.json"
 
-                                    existing = {
-                                        (e.get("target"), e.get("relation"), e.get("chunk_id"))
-                                        for e in self._relation_graph[src]
-                                    }
+                    desc_rel_mp_path = desc_base / ".relation_graph.msgpack"
 
-                                    for entry in entries:
-                                        if isinstance(entry, dict):
-                                            key = (
-                                                entry.get("target"),
-                                                entry.get("relation"),
-                                                entry.get("chunk_id"),
-                                            )
+                    raw_rel = None
 
-                                            if key not in existing:
-                                                self._relation_graph[src].append(entry)
+                    if desc_rel_mp_path.exists() and bridge.can_relation_graph_codec():
+                        try:
+                            raw_rel = bridge.decode_relation_graph(desc_rel_mp_path.read_bytes())
+                        except Exception:
+                            raw_rel = None
 
-                                                existing.add(key)
+                    if raw_rel is None and desc_rel_path.exists():
+                        try:
+                            import json as _json
 
-                    except Exception as e:
-                        logger.warning(f"Could not merge relation graph for '{desc}': {e}")
+                            raw_rel = _json.loads(desc_rel_path.read_text(encoding="utf-8"))
+                        except Exception:
+                            raw_rel = None
+
+                    if isinstance(raw_rel, dict):
+                        for src, entries in raw_rel.items():
+                            if isinstance(src, str) and isinstance(entries, list):
+                                if src not in self._relation_graph:
+                                    self._relation_graph[src] = []
+
+                                existing_keys = {
+                                    (e.get("target"), e.get("relation"), e.get("chunk_id"))
+                                    for e in self._relation_graph[src]
+                                }
+
+                                for entry in entries:
+                                    if isinstance(entry, dict):
+                                        key = (
+                                            entry.get("target"),
+                                            entry.get("relation"),
+                                            entry.get("chunk_id"),
+                                        )
+
+                                        if key not in existing_keys:
+                                            self._relation_graph[src].append(entry)
+
+                                            existing_keys.add(key)
 
                 # --- entity embeddings ---
 
@@ -3070,144 +3153,150 @@ Your primary goal is to help the user by answering questions based on the provid
 
             # Track entity keys extracted this run for embedding (Item 5)
 
-            entities_extracted_this_run: list = []
-
-            total_entities = 0
-            _touched_entity_keys: set[str] = set()
-
-            # Build a lookup from doc_id to doc for metadata writing (Item 7)
-
-            doc_by_id = {doc["id"]: doc for doc in chunks_to_process}
-
             from axon.rust_bridge import get_rust_bridge
 
             _rust_bridge = get_rust_bridge()
-            _entity_graph_changed = False
-            _use_rust_entity_merge = (
-                bool(results)
-                and bool(getattr(self.config, "graph_rag_rust_merge_entities", False))
-                and _rust_bridge.can_merge_entities_into_graph()
-            )
+            with self._graph_lock:
+                entities_extracted_this_run: list = []
+                total_entities = 0
+                _touched_entity_keys: set[str] = set()
 
-            for doc_id, entities in results:
-                total_entities += len(entities)
-                for ent in entities:
-                    if not isinstance(ent, dict) or not ent.get("name"):
-                        continue
-                    entities_extracted_this_run.append(ent)
-                    key = ent["name"].lower().strip()
-                    if not key:
-                        continue
-                    _touched_entity_keys.add(key)
-                    existing = self._entity_graph.get(key)
-                    if existing is None:
-                        _entity_graph_changed = True
-                    elif isinstance(existing, dict):
-                        chunk_ids = existing.get("chunk_ids", [])
-                        if doc_id not in chunk_ids:
-                            _entity_graph_changed = True
-                    else:
-                        _use_rust_entity_merge = False
-                        if doc_id not in existing:
-                            _entity_graph_changed = True
+                # Build a lookup from doc_id to doc for metadata writing (Item 7)
 
-            _merged_entities_in_rust = False
-            if _use_rust_entity_merge:
-                _merged_entities_in_rust = (
-                    _rust_bridge.merge_entities_into_graph(self._entity_graph, results) is not None
+                doc_by_id = {doc["id"]: doc for doc in chunks_to_process}
+                _entity_graph_changed = False
+                _use_rust_entity_merge = (
+                    bool(results)
+                    and bool(getattr(self.config, "graph_rag_rust_merge_entities", False))
+                    and _rust_bridge.can_merge_entities_into_graph()
                 )
-            if _merged_entities_in_rust and _entity_graph_changed:
-                updated = True
-                self._community_graph_dirty = True
 
-            for doc_id, entities in results:
-                for ent in entities:  # ent is now {"name": ..., "type": ..., "description": ...}
-                    key = ent["name"].lower().strip() if isinstance(ent, dict) else ent.lower()
+                for doc_id, entities in results:
+                    total_entities += len(entities)
+                    for ent in entities:
+                        if not isinstance(ent, dict) or not ent.get("name"):
+                            continue
+                        entities_extracted_this_run.append(ent)
+                        key = ent["name"].lower().strip()
+                        if not key:
+                            continue
+                        _touched_entity_keys.add(key)
+                        existing = self._entity_graph.get(key)
+                        if existing is None:
+                            _entity_graph_changed = True
+                        elif isinstance(existing, dict):
+                            chunk_ids = existing.get("chunk_ids", [])
+                            if doc_id not in chunk_ids:
+                                _entity_graph_changed = True
+                        else:
+                            _use_rust_entity_merge = False
+                            if doc_id not in existing:
+                                _entity_graph_changed = True
 
-                    if not key:
-                        continue
+                _merged_entities_in_rust = False
+                if _use_rust_entity_merge:
+                    _merged_entities_in_rust = (
+                        _rust_bridge.merge_entities_into_graph(self._entity_graph, results)
+                        is not None
+                    )
+                if _merged_entities_in_rust and _entity_graph_changed:
+                    updated = True
+                    self._community_graph_dirty = True
 
-                    if not _merged_entities_in_rust:
-                        if key not in self._entity_graph:
-                            desc = ent.get("description", "") if isinstance(ent, dict) else ""
+                for doc_id, entities in results:
+                    for (
+                        ent
+                    ) in entities:  # ent is now {"name": ..., "type": ..., "description": ...}
+                        key = ent["name"].lower().strip() if isinstance(ent, dict) else ent.lower()
 
-                            ent_type = (
-                                ent.get("type", "UNKNOWN") if isinstance(ent, dict) else "UNKNOWN"
-                            )
+                        if not key:
+                            continue
 
-                            self._entity_graph[key] = {
-                                "description": desc,
-                                "type": ent_type,
-                                "chunk_ids": [],
-                                "frequency": 0,
-                                "degree": 0,
-                            }
+                        if not _merged_entities_in_rust:
+                            if key not in self._entity_graph:
+                                desc = ent.get("description", "") if isinstance(ent, dict) else ""
 
-                        elif isinstance(self._entity_graph[key], dict):
-                            # Update type if not yet set
-
-                            if (
-                                not self._entity_graph[key].get("type")
-                                or self._entity_graph[key].get("type") == "UNKNOWN"
-                            ):
-                                new_type = (
+                                ent_type = (
                                     ent.get("type", "UNKNOWN")
                                     if isinstance(ent, dict)
                                     else "UNKNOWN"
                                 )
 
-                                if new_type and new_type != "UNKNOWN":
-                                    self._entity_graph[key]["type"] = new_type
+                                self._entity_graph[key] = {
+                                    "description": desc,
+                                    "type": ent_type,
+                                    "chunk_ids": [],
+                                    "frequency": 0,
+                                    "degree": 0,
+                                }
 
-                        if isinstance(self._entity_graph[key], dict):
-                            self._entity_graph[key].setdefault("chunk_ids", [])
+                            elif isinstance(self._entity_graph[key], dict):
+                                # Update type if not yet set
 
-                            if doc_id not in self._entity_graph[key]["chunk_ids"]:
-                                self._entity_graph[key]["chunk_ids"].append(doc_id)
+                                if (
+                                    not self._entity_graph[key].get("type")
+                                    or self._entity_graph[key].get("type") == "UNKNOWN"
+                                ):
+                                    new_type = (
+                                        ent.get("type", "UNKNOWN")
+                                        if isinstance(ent, dict)
+                                        else "UNKNOWN"
+                                    )
 
-                                updated = True
+                                    if new_type and new_type != "UNKNOWN":
+                                        self._entity_graph[key]["type"] = new_type
 
-                                self._community_graph_dirty = True
+                            if isinstance(self._entity_graph[key], dict):
+                                self._entity_graph[key].setdefault("chunk_ids", [])
 
-                        else:
-                            # Legacy list format — migrate on the fly
+                                if doc_id not in self._entity_graph[key]["chunk_ids"]:
+                                    self._entity_graph[key]["chunk_ids"].append(doc_id)
 
-                            if doc_id not in self._entity_graph[key]:
-                                self._entity_graph[key].append(doc_id)
+                                    updated = True
 
-                                updated = True
+                                    self._community_graph_dirty = True
 
-                                self._community_graph_dirty = True
+                            else:
+                                # Legacy list format — migrate on the fly
 
-                    if isinstance(self._entity_graph.get(key), dict):
-                        # Item 10: collect descriptions for canonicalization
+                                if doc_id not in self._entity_graph[key]:
+                                    self._entity_graph[key].append(doc_id)
 
-                        if isinstance(ent, dict) and ent.get("description"):
-                            desc_buf = self._entity_description_buffer.setdefault(key, [])
+                                    updated = True
 
-                            desc_buf.append(ent["description"])
+                                    self._community_graph_dirty = True
 
-                        if (
-                            not self._entity_graph[key].get("description")
-                            and isinstance(ent, dict)
-                            and ent.get("description")
-                        ):
-                            self._entity_graph[key]["description"] = ent["description"]
+                        if isinstance(self._entity_graph.get(key), dict):
+                            # Item 10: collect descriptions for canonicalization
 
-                # Item 7: Write entity IDs back into chunk metadata for text-unit linkage
+                            if isinstance(ent, dict) and ent.get("description"):
+                                desc_buf = self._entity_description_buffer.setdefault(key, [])
 
-                doc = doc_by_id.get(doc_id)
+                                desc_buf.append(ent["description"])
 
-                if doc is not None and entities and doc.get("metadata") is not None:
-                    doc["metadata"]["entity_ids"] = [
-                        e["name"].lower() for e in entities if isinstance(e, dict) and e.get("name")
+                            if (
+                                not self._entity_graph[key].get("description")
+                                and isinstance(ent, dict)
+                                and ent.get("description")
+                            ):
+                                self._entity_graph[key]["description"] = ent["description"]
+
+                    # Item 7: Write entity IDs back into chunk metadata for text-unit linkage
+
+                    doc = doc_by_id.get(doc_id)
+
+                    if doc is not None and entities and doc.get("metadata") is not None:
+                        doc["metadata"]["entity_ids"] = [
+                            e["name"].lower()
+                            for e in entities
+                            if isinstance(e, dict) and e.get("name")
+                        ]
+
+                    # GAP 9: Update text_unit_entity_map
+
+                    self._text_unit_entity_map[doc_id] = [
+                        e["name"] for e in entities if isinstance(e, dict) and e.get("name")
                     ]
-
-                # GAP 9: Update text_unit_entity_map
-
-                self._text_unit_entity_map[doc_id] = [
-                    e["name"] for e in entities if isinstance(e, dict) and e.get("name")
-                ]
 
             # Item 2: Update frequency only for entities touched in this ingest run
 
@@ -3483,20 +3572,21 @@ Your primary goal is to help the user by answering questions based on the provid
 
                 claim_results = list(self._executor.map(_proc_claims, chunks_to_process))
 
-                for doc_id, claims in claim_results:
-                    if claims:
-                        # GAP 5: set text_unit_id on each claim
+                with self._graph_lock:
+                    for doc_id, claims in claim_results:
+                        if claims:
+                            # GAP 5: set text_unit_id on each claim
 
-                        for claim in claims:
-                            if isinstance(claim, dict):
-                                claim["text_unit_id"] = doc_id
+                            for claim in claims:
+                                if isinstance(claim, dict):
+                                    claim["text_unit_id"] = doc_id
 
-                        self._claims_graph[doc_id] = claims
+                            self._claims_graph[doc_id] = claims
 
-                        claims_changed = True
+                            claims_changed = True
 
-                if claims_changed and not _defer_saves:
-                    self._save_claims_graph()
+                    if claims_changed and not _defer_saves:
+                        self._save_claims_graph()
 
             if self.config.graph_rag_community and self._community_graph_dirty:
                 if getattr(self.config, "graph_rag_community_defer", True):

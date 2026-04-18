@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +61,12 @@ _ROUTE_PROFILES: dict = {
 
 
 class QueryRouterMixin:
+    @property
+    def _graph_lock(self) -> threading.RLock:
+        if not hasattr(self, "_graph_lock_internal"):
+            self._graph_lock_internal = threading.RLock()
+        return self._graph_lock_internal
+
     def _classify_query_route(self, query: str, cfg: AxonConfig) -> str:
         """Return one of: factual | synthesis | table_lookup | entity_relation | corpus_exploration."""
         if cfg.query_router == "llm":
@@ -150,83 +157,86 @@ class QueryRouterMixin:
 
         matched_entities: set[str] = set()
 
-        for query_entity in query_entities:
-            # Support both new dict-node format and legacy list format
-            q_name = query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
-            if not q_name:
-                continue
-            for eid, node in self._entity_graph.items():
-                score = self._entity_matches(q_name, eid)
-                if score <= 0.0:
+        with self._graph_lock:
+            for query_entity in query_entities:
+                # Support both new dict-node format and legacy list format
+                q_name = (
+                    query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
+                )
+                if not q_name:
                     continue
-                matched_entities.add(eid)
-                # Scale matched score into [0.5, 0.8) range so it is clearly below
-                # a direct vector-match score but still meaningfully ranked.
-                doc_score = 0.5 + score * 0.3
-                doc_ids = node.get("chunk_ids", [])
-                for did in doc_ids:
-                    if did not in existing_ids:
-                        if extra_id_scores.get(did, 0.0) < doc_score:
-                            extra_id_scores[did] = doc_score
+                for eid, node in self._entity_graph.items():
+                    score = self._entity_matches(q_name, eid)
+                    if score <= 0.0:
+                        continue
+                    matched_entities.add(eid)
+                    # Scale matched score into [0.5, 0.8) range so it is clearly below
+                    # a direct vector-match score but still meaningfully ranked.
+                    doc_score = 0.5 + score * 0.3
+                    doc_ids = node.get("chunk_ids", [])
+                    for did in doc_ids:
+                        if did not in existing_ids:
+                            if extra_id_scores.get(did, 0.0) < doc_score:
+                                extra_id_scores[did] = doc_score
 
-        # Multi-hop traversal via relation graph
-        def _cfg_get(name, default):
-            val = getattr(active_cfg, name, default)
-            if isinstance(val, MagicMock):
-                return default
-            return val
+            # Multi-hop traversal via relation graph
+            def _cfg_get(name, default):
+                val = getattr(active_cfg, name, default)
+                if isinstance(val, MagicMock):
+                    return default
+                return val
 
-        from unittest.mock import MagicMock
+            from unittest.mock import MagicMock
 
-        max_hops = _cfg_get("graph_rag_max_hops", 1)
-        hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
+            max_hops = _cfg_get("graph_rag_max_hops", 1)
+            hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
 
-        # Performance guard for large graphs (Epic 1/4)
-        large_threshold = _cfg_get("graph_rag_large_graph_threshold", 50000)
-        if len(self._entity_graph) > large_threshold and max_hops > 1:
-            logger.info(
-                f"   GraphRAG: large graph detected ({len(self._entity_graph)} nodes); "
-                f"capping max_hops at 1 for performance."
+            # Performance guard for large graphs (Epic 1/4)
+            large_threshold = _cfg_get("graph_rag_large_graph_threshold", 50000)
+            if len(self._entity_graph) > large_threshold and max_hops > 1:
+                logger.info(
+                    f"   GraphRAG: large graph detected ({len(self._entity_graph)} nodes); "
+                    f"capping max_hops at 1 for performance."
+                )
+                max_hops = 1
+
+            use_relations = (
+                getattr(active_cfg, "graph_rag_relations", True)
+                and self._relation_graph
+                and max_hops > 0
             )
-            max_hops = 1
 
-        use_relations = (
-            getattr(active_cfg, "graph_rag_relations", True)
-            and self._relation_graph
-            and max_hops > 0
-        )
+            if use_relations and matched_entities:
+                # BFS for multi-hop traversal
+                current_hop_entities = set(matched_entities)
+                visited_entities = set(matched_entities)
 
-        if use_relations and matched_entities:
-            # BFS for multi-hop traversal
-            current_hop_entities = set(matched_entities)
-            visited_entities = set(matched_entities)
+                for hop in range(1, max_hops + 1):
+                    next_hop_entities = set()
+                    # Score for this hop decays from base 0.8
+                    # Hop 1: 0.8 * 0.7 = 0.56
+                    # Hop 2: 0.56 * 0.7 = 0.392
+                    hop_score = 0.8 * (hop_decay**hop)
 
-            for hop in range(1, max_hops + 1):
-                next_hop_entities = set()
-                # Score for this hop decays from base 0.8
-                # Hop 1: 0.8 * 0.7 = 0.56
-                # Hop 2: 0.56 * 0.7 = 0.392
-                hop_score = 0.8 * (hop_decay**hop)
+                    for src_entity in current_hop_entities:
+                        for entry in self._relation_graph.get(src_entity, []):
+                            target = entry.get("target", "").lower()
+                            if not target or target in visited_entities:
+                                continue
 
-                for src_entity in current_hop_entities:
-                    for entry in self._relation_graph.get(src_entity, []):
-                        target = entry.get("target", "").lower()
-                        if not target or target in visited_entities:
-                            continue
+                            visited_entities.add(target)
+                            next_hop_entities.add(target)
 
-                        visited_entities.add(target)
-                        next_hop_entities.add(target)
+                            target_node = self._entity_graph.get(target, {})
+                            target_chunk_ids = target_node.get("chunk_ids", [])
+                            for did in target_chunk_ids:
+                                if did not in existing_ids:
+                                    if extra_id_scores.get(did, 0.0) < hop_score:
+                                        extra_id_scores[did] = hop_score
 
-                        target_node = self._entity_graph.get(target, {})
-                        target_chunk_ids = target_node.get("chunk_ids", [])
-                        for did in target_chunk_ids:
-                            if did not in existing_ids:
-                                if extra_id_scores.get(did, 0.0) < hop_score:
-                                    extra_id_scores[did] = hop_score
-
-                if not next_hop_entities:
-                    break
-                current_hop_entities = next_hop_entities
+                    if not next_hop_entities:
+                        break
+                    current_hop_entities = next_hop_entities
 
         if not extra_id_scores:
             return results, list(matched_entities)

@@ -47,9 +47,16 @@ class RustBridge:
         except TypeError:
             try:
                 return fn(*args)
+            except (ValueError, RuntimeError) as exc:
+                # Specific data-integrity or runtime errors from Rust should be logged loudly
+                logger.error("Rust %s critical failure: %s", name, exc)
+                return None
             except Exception as exc:
                 logger.warning("Rust %s failed; fallback to Python: %s", name, exc)
                 return None
+        except (ValueError, RuntimeError) as exc:
+            logger.error("Rust %s critical failure: %s", name, exc)
+            return None
         except Exception as exc:
             logger.warning("Rust %s failed; fallback to Python: %s", name, exc)
             return None

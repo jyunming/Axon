@@ -714,6 +714,11 @@ class AxonConfig:
 
     dedup_on_ingest: bool = True
 
+    # Use a probabilistic bloom filter instead of a set for in-memory hash tracking.
+    # Saves ~6 MB RAM at 100k docs at the cost of a ~0.1% false-positive rate
+    # (a chunk that was never ingested may be silently skipped). Opt-in; disabled by default.
+    bloom_filter_hash_store: bool = False
+
     # Graph backend selector: "graphrag" (default) or "dynamic" (SQLite-WAL temporal graph)
 
     graph_backend: str = "graphrag"

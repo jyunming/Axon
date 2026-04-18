@@ -170,7 +170,7 @@ class DynamicGraphBackend:
         self._brain = brain
         _base = Path(getattr(brain.config, "bm25_path", "."))
         self._db_path = _base / ".dynamic_graph.db"
-        self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._conn: sqlite3.Connection = self._init_db()
         self._cached_nx_graph: Any = None
         self._cached_nx_time: float = 0.0
@@ -190,17 +190,18 @@ class DynamicGraphBackend:
         return conn
 
     def _execute(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-        with self._lock:
-            cur = self._conn.execute(sql, params)
-            return cur.fetchall()
+        # SELECT queries are thread-safe in WAL mode without explicit locking
+        # when using check_same_thread=False.
+        cur = self._conn.execute(sql, params)
+        return cur.fetchall()
 
     def _executemany(self, sql: str, params_seq: list[tuple]) -> None:
-        with self._lock:
+        with self._write_lock:
             self._conn.executemany(sql, params_seq)
             self._conn.commit()
 
     def _write(self, sql: str, params: tuple = ()) -> None:
-        with self._lock:
+        with self._write_lock:
             self._conn.execute(sql, params)
             self._conn.commit()
 
@@ -282,7 +283,7 @@ class DynamicGraphBackend:
         """Insert or update an entity; return canonical_name."""
         canon = _norm(name)
         entity_id = _sha8(canon)
-        with self._lock:
+        with self._write_lock:
             existing = self._conn.execute(
                 "SELECT entity_id FROM entities WHERE canonical_name = ?", (canon,)
             ).fetchone()
@@ -322,7 +323,7 @@ class DynamicGraphBackend:
 
         fact_id = _sha8(f"{subj_norm}|{rel_upper}|{obj_norm}|{now}")
 
-        with self._lock:
+        with self._write_lock:
             # Supersede existing active facts with the same scope_key (exclusive families)
             if scope_key is not None:
                 self._conn.execute(
@@ -375,7 +376,7 @@ class DynamicGraphBackend:
             episode_id = _sha8(f"ep|{chunk_id}|{now}")
 
             # Persist episode
-            with self._lock:
+            with self._write_lock:
                 self._conn.execute(
                     "INSERT OR IGNORE INTO episodes (episode_id, chunk_id, content, reference_time, metadata) VALUES (?, ?, ?, ?, ?)",
                     (
@@ -493,13 +494,21 @@ class DynamicGraphBackend:
                 # If node Y is reached from X, Y is hop 1. Facts containing Y are hop 1.
                 # So fact_hop = node_hop.
 
-                placeholders = ",".join("?" for _ in current_fringe)
-                linked_rows = self._execute(
-                    f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
-                    f"FROM facts "
-                    f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders}))",
-                    (*current_fringe, *current_fringe),
-                )
+                linked_rows = []
+                fringe_list = list(current_fringe)
+                # SQLITE_MAX_VARIABLE_NUMBER safe limit (Epic 1/4 Phase 2.2)
+                CHUNK_SIZE = 500
+                for i in range(0, len(fringe_list), CHUNK_SIZE):
+                    chunk = fringe_list[i : i + CHUNK_SIZE]
+                    placeholders = ",".join("?" for _ in chunk)
+                    linked_rows.extend(
+                        self._execute(
+                            f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
+                            f"FROM facts "
+                            f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders}))",
+                            (*chunk, *chunk),
+                        )
+                    )
 
                 next_fringe = set()
                 for row in linked_rows:
@@ -584,7 +593,12 @@ class DynamicGraphBackend:
         G = nx.Graph()
         for row in rows:
             u, v = row["subject"], row["object"]
-            conf = float(row["confidence"])
+            try:
+                conf = float(row["confidence"])
+            except (ValueError, TypeError):
+                logger.warning(f"Malformed confidence value in fact DB: {row['confidence']!r}")
+                conf = 1.0
+
             if G.has_edge(u, v):
                 G[u][v]["weight"] += conf
             else:
@@ -605,7 +619,7 @@ class DynamicGraphBackend:
 
     def clear(self) -> None:
         """Delete all rows from all tables."""
-        with self._lock:
+        with self._write_lock:
             self._conn.executescript(
                 "DELETE FROM fact_evidence; DELETE FROM facts; DELETE FROM entities; DELETE FROM episodes;"
             )
@@ -616,7 +630,7 @@ class DynamicGraphBackend:
         if not chunk_ids:
             return
         placeholders = ",".join("?" for _ in chunk_ids)
-        with self._lock:
+        with self._write_lock:
             # Mark covered facts as superseded if all evidence is removed
             self._conn.execute(
                 f"DELETE FROM fact_evidence WHERE chunk_id IN ({placeholders})",

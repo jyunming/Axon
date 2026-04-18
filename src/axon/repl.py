@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -5098,6 +5099,17 @@ def _interactive_repl(
                 sys.stdout.write(_ansi)
                 sys.stdout.flush()
 
+            def _format_user_label(text: str, tc: int) -> str:
+                """Wrap user input so every line gets the full-width grey15 highlight."""
+                prefix = "    > "
+                cont = "      "  # same width, no marker
+                avail = max(tc - len(prefix), 20)
+                lines = textwrap.wrap(text, width=avail) or [""]
+                parts = [f"{prefix}{lines[0]}".ljust(tc)]
+                for ln in lines[1:]:
+                    parts.append(f"{cont}{ln}".ljust(tc))
+                return "\n".join(parts)
+
             def _rich_render(text: str, indent: str = "", right_margin: int = 0) -> None:
                 _buf = _io.StringIO()
                 _w = max(40, (int(_console.width or 120)) - len(indent) - right_margin)
@@ -5203,10 +5215,8 @@ def _interactive_repl(
                     if not quiet:
                         # Echo user message with full-width highlight.
                         _tc_ag = shutil.get_terminal_size().columns
-                        _label_ag = f"    > {user_input}"
-                        _padded_ag = _label_ag.ljust(_tc_ag)
                         _rich_print(
-                            f"\n[bold white on grey15]{_padded_ag}[/bold white on grey15]\n"
+                            f"\n[bold white on grey15]{_format_user_label(user_input, _tc_ag)}[/bold white on grey15]\n"
                         )
                         _spin_state["active"] = True
                         _spin_state["idx"] = 0
@@ -5310,10 +5320,8 @@ def _interactive_repl(
                     # Echo user message then show thinking indicator in conversation area.
                     if not quiet:
                         _tc_in = shutil.get_terminal_size().columns
-                        _label_in = f"    > {user_input}"
-                        _padded_in = _label_in.ljust(_tc_in)
                         _rich_print(
-                            f"\n[bold white on grey15]{_padded_in}[/bold white on grey15]\n"
+                            f"\n[bold white on grey15]{_format_user_label(user_input, _tc_in)}[/bold white on grey15]\n"
                         )
 
                     # Collect all streaming tokens while spinner shows.
@@ -5416,9 +5424,9 @@ def _interactive_repl(
                 if not quiet:
                     # Echo user message with full-width highlight.
                     _tc_in2 = shutil.get_terminal_size().columns
-                    _label_in2 = f"    > {user_input}"
-                    _padded_in2 = _label_in2.ljust(_tc_in2)
-                    _rich_print(f"\n[bold white on grey15]{_padded_in2}[/bold white on grey15]\n")
+                    _rich_print(
+                        f"\n[bold white on grey15]{_format_user_label(user_input, _tc_in2)}[/bold white on grey15]\n"
+                    )
                     _spin_state["active"] = True
                     _spin_state["idx"] = 0
                     _st2 = threading.Thread(target=_animate_spinner, daemon=True)
