@@ -1451,7 +1451,14 @@ def main():
 
             # Silence noisy HTTP debug loggers that aren't routed through the
             # spinner — they would otherwise leak to the root logger's handler.
-            for _noisy in ("httpcore", "httpcore.http11", "hpack", "urllib3"):
+            for _noisy in (
+                "httpcore",
+                "httpcore.http11",
+                "hpack",
+                "urllib3",
+                "markdown_it",
+                "asyncio",
+            ):
                 _nlg = logging.getLogger(_noisy)
                 _nlg.setLevel(logging.WARNING)
                 _nlg.propagate = False

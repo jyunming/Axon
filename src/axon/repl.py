@@ -40,6 +40,7 @@ _SLASH_COMMANDS = [
     "/compact",
     "/config ",
     "/context",
+    "/debug",
     "/discuss",
     "/embed ",
     "/exit",
@@ -73,6 +74,7 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/compact": "Summarize and compact chat history",
     "/config": "Show current configuration",
     "/context": "Show or clear attached context files",
+    "/debug": "Toggle verbose debug logging on/off",
     "/discuss": "Toggle discussion fallback mode",
     "/embed": "Switch embedding model",
     "/exit": "Exit Axon",
@@ -4984,6 +4986,28 @@ def _interactive_repl(
                     if _agent_mode
                     else "  Agent mode OFF. Back to Q&A mode."
                 )
+
+            elif cmd == "/debug":
+                import logging as _logging
+
+                _NOISY_LOGGERS = (
+                    "httpcore",
+                    "httpcore.http11",
+                    "hpack",
+                    "urllib3",
+                    "markdown_it",
+                    "asyncio",
+                )
+                # Determine current state from the first logger's level
+                _first = _logging.getLogger(_NOISY_LOGGERS[0])
+                _debug_on = _first.level != _logging.DEBUG
+                _new_level = _logging.DEBUG if _debug_on else _logging.WARNING
+                for _nl in _NOISY_LOGGERS:
+                    _logging.getLogger(_nl).setLevel(_new_level)
+                if _debug_on:
+                    print("  Debug logging ON — verbose library logs enabled.")
+                else:
+                    print("  Debug logging OFF.")
 
             else:
                 print(f"  Unknown command: {cmd}. Type /help for options.")
