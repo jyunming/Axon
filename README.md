@@ -99,7 +99,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 - **Governance Console** — full audit trail of every query
 - Graceful maintenance states: `normal → draining → readonly → offline`
 - **REST API** — 54 endpoints with Swagger docs at `/docs`
-- **MCP server** — 30 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- **MCP server** — 31 tools for Claude Code, Codex, Gemini, Cursor, Copilot
 - **`@axon`** VS Code chat participant with Graph and Governance panels
 
 </td>
@@ -151,7 +151,7 @@ Extensions panel  →  "..."  →  Install from VSIX...
 →  run `axon-ext`  (or install from VSIX manually)
 ```
 
-Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 30 tools appear in the agent hammer menu automatically.
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 31 tools appear in the agent hammer menu automatically.
 
 **[Full setup guide →](https://github.com/jyunming/studio_brain_open/blob/main/docs/SETUP.md)**
 

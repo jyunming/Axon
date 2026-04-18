@@ -280,6 +280,7 @@ rag:
   graph_rag_community: true
   graph_rag_community_backend: leidenalg    # recommended for Python 3.13; default code value is "louvain" (use "auto" for graspologic → leidenalg → louvain fallback chain)
   query_router: heuristic                   # replaces graph_rag_auto_route; heuristic | llm | off
+  bloom_filter_hash_store: false            # use bloom filter for dedup hash store (saves ~6MB RAM/100k docs)
   graph_rag_mode: hybrid
   graph_rag_global_top_communities: 20       # lazy mode: generate LLM summaries for top-20 query-relevant communities only
   # Extraction depth — light/standard/deep:

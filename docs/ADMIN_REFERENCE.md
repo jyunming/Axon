@@ -389,7 +389,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 
 ## 5. MCP Tools — Full Reference
 
-30 tools are registered when running `axon-mcp`.
+31 tools are registered when running `axon-mcp`.
 
 ### Ingestion (6)
 
@@ -585,6 +585,7 @@ All flags are `false` in the shipped `config.yaml`. All can be set in config, as
 | `graph_rag_entity_min_frequency` | int | 2 | Prune entities appearing fewer than N times |
 | `raptor_max_levels` | int | 1 | Summary tree depth |
 | `raptor_min_source_size_mb` | float | 5.0 | Skip RAPTOR for sources smaller than this |
+| `bloom_filter_hash_store` | bool | false | Use a bloom filter for dedup hash membership testing (saves ~6MB RAM per 100k docs; opt-in) |
 
 ### 6.5 Web Search / CRAG-Lite
 
