@@ -226,6 +226,9 @@ def _fence_unfenced_code(text: str) -> str:
             code_run.clear()
             return
         lang = _detect_lang(code_run)
+        # Ensure a blank line before the opening fence for proper markdown rendering.
+        if result and result[-1].strip():
+            result.append("")
         result.append(f"```{lang}")
         result.extend(code_run)
         result.append("```")
@@ -566,6 +569,8 @@ def _preprocess_markdown(text: str) -> str:
         return f"> {prefix}\n"
 
     text = _CALLOUT_RE.sub(_callout_sub, text)
+    text = _normalize_bullets(text)
+    text = _fence_unfenced_code(text)
     return text
 
 
@@ -1474,7 +1479,7 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 
-_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  Mouse wheel or PgUp/PgDn to scroll  ·  Click+drag to select  ·  @file or @folder/ to attach context"
+_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
 
 
 def _box_width() -> int:
@@ -5183,8 +5188,7 @@ def _interactive_repl(
 
                     if not quiet:
                         # Echo user message then show thinking indicator in conversation area.
-                        _rich_print(f"\n[bold cyan]>[/bold cyan] {user_input}\n")
-                        _spin_state["active"] = True
+                        _rich_print(f"\n[bold white on grey15] > {user_input} [/bold white on grey15]\n")
                         _spin_state["idx"] = 0
                         _ast = threading.Thread(target=_animate_spinner, daemon=True)
                         _ast.start()
@@ -5195,12 +5199,11 @@ def _interactive_repl(
                         _agent_thread.join()
 
                     if _agent_err:
-                        _rich_print(f"[bold red]Axon:[/bold red] ⚠️  {_agent_err[0]}\n")
+                        _rich_print(f"[bold red]✦[/bold red] ⚠️  {_agent_err[0]}\n")
                         response_parts = []
                     else:
                         _agent_response = _agent_result[0] if _agent_result else ""
-                        _rich_print("[bold yellow]Axon:[/bold yellow]")
-                        # Render buffered tool steps inside the response block.
+                        _rich_print("[bold yellow]✦[/bold yellow]")
                         _YEL = "\x1b[33m"
                         _GRN = "\x1b[1;32m"
                         _RED = "\x1b[1;31m"
@@ -5279,7 +5282,7 @@ def _interactive_repl(
 
                     # Echo user message then show thinking indicator in conversation area.
                     if not quiet:
-                        _rich_print(f"\n[bold cyan]>[/bold cyan] {user_input}\n")
+                        _rich_print(f"\n[bold white on grey15] > {user_input} [/bold white on grey15]\n")
 
                     # Collect all streaming tokens while spinner shows.
                     # Writing token-by-token conflicts with prompt_toolkit's
@@ -5313,13 +5316,13 @@ def _interactive_repl(
                     _accumulated = "".join(response_parts)
 
                     if _stream_error is not None:
-                        _rich_print(f"[bold red]Axon:[/bold red] ⚠️  {_stream_error}\n")
+                        _rich_print(f"[bold red]✦[/bold red] ⚠️  {_stream_error}\n")
                     elif _accumulated:
-                        _rich_print("[bold yellow]Axon:[/bold yellow]")
+                        _rich_print("[bold yellow]✦[/bold yellow]")
                         _rich_render(_accumulated)
                         print()
                     else:
-                        _rich_print("[bold yellow]Axon:[/bold yellow] (no response)\n")
+                        _rich_print("[bold yellow]✦[/bold yellow] (no response)\n")
 
                     if _cancelled:
                         _rich_print("  ⚠  Cancelled.\n")
@@ -5378,7 +5381,7 @@ def _interactive_repl(
 
                 if not quiet:
                     # Echo user message then show thinking indicator in conversation area.
-                    _rich_print(f"\n[bold cyan]>[/bold cyan] {user_input}\n")
+                    _rich_print(f"\n[bold white on grey15] > {user_input} [/bold white on grey15]\n")
                     _spin_state["active"] = True
                     _spin_state["idx"] = 0
                     _st2 = threading.Thread(target=_animate_spinner, daemon=True)
@@ -5395,7 +5398,7 @@ def _interactive_repl(
 
                 response = _result[0] if _result else ""
 
-                _rich_print("[bold yellow]Axon:[/bold yellow]")
+                _rich_print("[bold yellow]✦[/bold yellow]")
 
                 _rich_render(response)
 
@@ -5416,7 +5419,7 @@ def _interactive_repl(
                 while not _spin_stop.wait(0.1):
                     f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
 
-                    sys.stdout.write(f"\r  Axon: {f} thinking…")
+                    sys.stdout.write(f"\r  ✦ {f} thinking…")
 
                     sys.stdout.flush()
 
@@ -5434,7 +5437,7 @@ def _interactive_repl(
             if not quiet:
                 _spin_stop.set()
 
-            print(f"\n\033[1;33mAxon:\033[0m {response}\n")
+            print(f"\n\033[1;33m✦\033[0m {response}\n")
 
             response_parts = [response]
 
