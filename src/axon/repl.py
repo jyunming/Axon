@@ -570,6 +570,8 @@ def _preprocess_markdown(text: str) -> str:
 
     text = _CALLOUT_RE.sub(_callout_sub, text)
     text = _normalize_bullets(text)
+    text = _fence_math_formulas(text)
+    text = _inline_math_symbols(text)
     text = _fence_unfenced_code(text)
     return text
 
