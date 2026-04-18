@@ -2529,7 +2529,7 @@ def _interactive_repl(
                 "completion-menu.meta.completion.current": "bg:#363a4f #89b4fa italic",
                 "completion-menu.border": "#494d64",
                 # Input area
-                "bottom-toolbar": "bg:#0a2a5e #c8d8f0",
+                "bottom-toolbar": "#6d8fa6",
                 "separator": "#334466",
             }
         )
@@ -2793,12 +2793,6 @@ def _interactive_repl(
                 f"{_lbl('Docs')}  {doc_s}"
             )
 
-            if _spin_state.get("active"):
-                frame = _SPIN_FRAMES[_spin_state["idx"] % len(_SPIN_FRAMES)]
-                return _PTANSI(
-                    f"{row1}\n    \x1b[1;33m{frame} Thinking\u2026  Ctrl+C to cancel\x1b[0m{_RST}"
-                )
-
             row2 = (
                 f"    {_lbl('search')}:{s_state}{_pad('search', s_state, C1)}{sep}"
                 f"{_lbl('discuss')}:{d_state}{_pad('discuss', d_state, C2)}{sep}"
@@ -2869,7 +2863,10 @@ def _interactive_repl(
                                 # Thin separator line between conversation and input area
                                 Window(
                                     height=1,
-                                    char="─",
+                                    content=FormattedTextControl(
+                                        lambda: "    "
+                                        + "─" * max(1, shutil.get_terminal_size().columns - 8)
+                                    ),
                                     style="class:separator",
                                 ),
                                 Window(
@@ -2887,7 +2884,10 @@ def _interactive_repl(
                                 # Thin separator between input and status bar
                                 Window(
                                     height=1,
-                                    char="─",
+                                    content=FormattedTextControl(
+                                        lambda: "    "
+                                        + "─" * max(1, shutil.get_terminal_size().columns - 8)
+                                    ),
                                     style="class:separator",
                                 ),
                                 Window(
@@ -5195,6 +5195,10 @@ def _interactive_repl(
                         _rich_print(
                             f"\n    [bold white on grey15] > {user_input} [/bold white on grey15]\n"
                         )
+                        sys.stdout.write(
+                            "    \x1b[1;33m✦\x1b[0m \x1b[2m⠋ Thinking\u2026  Ctrl+C to cancel\x1b[0m"
+                        )
+                        sys.stdout.flush()
                         _spin_state["active"] = True
                         _spin_state["idx"] = 0
                         _ast = threading.Thread(target=_animate_spinner, daemon=True)
@@ -5202,11 +5206,15 @@ def _interactive_repl(
                         _agent_spin_stop.wait()
                         _spin_state["active"] = False
                         _ast.join(timeout=0.5)
+                        sys.stdout.write("\r\033[2K")
+                        sys.stdout.flush()
                     else:
                         _agent_thread.join()
 
+                    _sep_ag = shutil.get_terminal_size().columns
                     if _agent_err:
                         _rich_print(f"    [bold red]✦[/bold red] ⚠️  {_agent_err[0]}\n")
+                        print("    " + "─" * max(1, _sep_ag - 8))
                         response_parts = []
                     else:
                         _agent_response = _agent_result[0] if _agent_result else ""
@@ -5247,7 +5255,7 @@ def _interactive_repl(
                         if _tool_steps:
                             print()
                         _rich_render(_agent_response, indent="    ", right_margin=4)
-                        print()
+                        print("    " + "─" * max(1, _sep_ag - 8))
                         response_parts = [_agent_response]
 
                     response = "".join(response_parts)
@@ -5300,6 +5308,10 @@ def _interactive_repl(
                     # Application redraws (invalidate races run_in_terminal),
                     # causing truncated output. Collect first, render once after
                     # spinner fully stops. Rich markdown is also restored this way.
+                    sys.stdout.write(
+                        "    \x1b[1;33m✦\x1b[0m \x1b[2m⠋ Thinking\u2026  Ctrl+C to cancel\x1b[0m"
+                    )
+                    sys.stdout.flush()
                     _spin_state["active"] = True
                     _spin_state["idx"] = 0
                     _st = threading.Thread(target=_animate_spinner, daemon=True)
@@ -5320,17 +5332,22 @@ def _interactive_repl(
                     finally:
                         _spin_state["active"] = False
                         _st.join(timeout=0.3)
+                        sys.stdout.write("\r\033[2K")
+                        sys.stdout.flush()
 
                     _accumulated = "".join(response_parts)
+                    _sep_tc = shutil.get_terminal_size().columns
 
                     if _stream_error is not None:
                         _rich_print(f"    [bold red]✦[/bold red] ⚠️  {_stream_error}\n")
+                        print("    " + "─" * max(1, _sep_tc - 8))
                     elif _accumulated:
                         _rich_print("    [bold yellow]✦[/bold yellow]")
                         _rich_render(_accumulated, indent="    ", right_margin=4)
-                        print()
+                        print("    " + "─" * max(1, _sep_tc - 8))
                     else:
                         _rich_print("    [bold yellow]✦[/bold yellow] (no response)\n")
+                        print("    " + "─" * max(1, _sep_tc - 8))
 
                     if _cancelled:
                         _rich_print("    ⚠  Cancelled.\n")
@@ -5392,6 +5409,10 @@ def _interactive_repl(
                     _rich_print(
                         f"\n    [bold white on grey15] > {user_input} [/bold white on grey15]\n"
                     )
+                    sys.stdout.write(
+                        "    \x1b[1;33m✦\x1b[0m \x1b[2m⠋ Thinking\u2026  Ctrl+C to cancel\x1b[0m"
+                    )
+                    sys.stdout.flush()
                     _spin_state["active"] = True
                     _spin_state["idx"] = 0
                     _st2 = threading.Thread(target=_animate_spinner, daemon=True)
@@ -5399,6 +5420,8 @@ def _interactive_repl(
                     _spin_stop2.wait()
                     _spin_state["active"] = False
                     _st2.join(timeout=0.5)
+                    sys.stdout.write("\r\033[2K")
+                    sys.stdout.flush()
 
                 else:
                     _qt.join()
@@ -5412,7 +5435,8 @@ def _interactive_repl(
 
                 _rich_render(response, indent="    ", right_margin=4)
 
-                print()  # blank line after Brain response, before next You:
+                _sep_tc2 = shutil.get_terminal_size().columns
+                print("    " + "─" * max(1, _sep_tc2 - 8))
 
                 response_parts = [response]
 
@@ -5471,15 +5495,16 @@ def _interactive_repl(
     # Always define _animate_spinner so _process_input_sync can reference it
     # whether running in Application mode or readline fallback.
     def _animate_spinner() -> None:
-        """Drive the Application's spinner row via invalidate() at ~12fps."""
+        """Animate the ✦ spinner in the conversation area (stdout) at ~12fps."""
+        _frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         while _spin_state["active"]:
             _spin_state["idx"] += 1
-            if _pt_app is not None:
-                _pt_app.invalidate()
+            frame = _frames[_spin_state["idx"] % len(_frames)]
+            sys.stdout.write(
+                f"\r    \x1b[1;33m✦\x1b[0m \x1b[2m{frame} Thinking\u2026  Ctrl+C to cancel\x1b[0m"
+            )
+            sys.stdout.flush()
             time.sleep(0.08)
-        # One final invalidate to remove the spinner row from the layout.
-        if _pt_app is not None:
-            _pt_app.invalidate()
 
     if _pt_app is not None and _scripted_inputs is None:
         # Application loop: runs continuously so toolbar+input are always
