@@ -341,6 +341,14 @@ class TestMainProjectList:
             run_cli("--project-list")
         assert "work" in capsys.readouterr().out
 
+    def test_project_list_does_not_auto_pull_ollama_model(self):
+        with (
+            patch("axon.projects.list_projects", return_value=[]),
+            patch("ollama.pull") as pull_mock,
+        ):
+            run_cli("--project-list")
+        pull_mock.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 5.  main() --project-delete
@@ -355,10 +363,13 @@ class TestMainProjectDelete:
         _del.assert_called_once_with("myproject")
 
     def test_delete_active_project_switches_to_default_first(self, brain):
-        brain._active_project = "myproject"
-        with patch("axon.projects.delete_project"):
+        with (
+            patch("axon.projects.get_active_project", return_value="myproject"),
+            patch("axon.projects.set_active_project") as set_active,
+            patch("axon.projects.delete_project"),
+        ):
             run_cli("--project-delete", "myproject")
-        brain.switch_project.assert_called_with("default")
+        set_active.assert_called_once_with("default")
 
     def test_delete_lowercases_name(self, brain):
         brain._active_project = "other"

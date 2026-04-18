@@ -123,8 +123,7 @@ class TestCRAGEvaluation:
                 assert (mock_web.call_count > 0) == case["fallback"], f"Failed case {case['name']}"
 
         print(f"[CRAG-Eval] Benchmark stats: {stats}")
-        output_path = Path("Qualification/GeminiQual/crag_eval_results.json")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = tmp_path / "crag_eval_results.json"
         output_path.write_text(json.dumps(stats, indent=2))
 
 

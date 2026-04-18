@@ -302,6 +302,12 @@ class RustBridge:
     def decode_sentence_index(self, raw: bytes):
         return self._call("decode_sentence_index", raw)
 
+    def encode_sentence_meta(self, ids: list[str], meta: list[dict]):
+        return self._call("encode_sentence_meta", ids, meta, ids=ids, meta=meta)
+
+    def decode_sentence_meta(self, raw: bytes):
+        return self._call("decode_sentence_meta", raw, raw=raw)
+
     def can_segment_text(self) -> bool:
         return self._has("segment_text")
 

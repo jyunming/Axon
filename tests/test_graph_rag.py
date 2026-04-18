@@ -147,6 +147,7 @@ class TestGraphRagExtractionBatching:
             bm25_path=str(tmp_path),
             vector_store_path=str(tmp_path),
             graph_rag_relation_budget=0,
+            graph_rag_llm_fused_extraction=False,
         )
         brain = _make_brain(config=cfg)
         submitted: list[str] = []

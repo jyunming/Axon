@@ -1014,64 +1014,6 @@ def main():
 
         return
 
-    # Auto-pull Ollama model if not available locally
-
-    if config.llm_provider == "ollama" and config.llm_model and not getattr(args, "dry_run", False):
-        try:
-            import ollama as _ollama
-
-            response = _ollama.list()
-
-            models = response.models if hasattr(response, "models") else response.get("models", [])
-
-            local_names = set()
-
-            for m in models:
-                name = m.model if hasattr(m, "model") else m.get("name", "")
-
-                local_names.add(name)
-
-                local_names.add(name.split(":")[0])  # also match without tag
-
-            model_tag = (
-                config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
-            )
-
-            if model_tag not in local_names and config.llm_model not in local_names:
-                print(f"  Model '{config.llm_model}' not found locally — pulling from Ollama...")
-
-                for chunk in _ollama.pull(config.llm_model, stream=True):
-                    status = (
-                        chunk.get("status", "")
-                        if isinstance(chunk, dict)
-                        else getattr(chunk, "status", "")
-                    )
-
-                    total = (
-                        chunk.get("total", 0)
-                        if isinstance(chunk, dict)
-                        else getattr(chunk, "total", 0)
-                    )
-
-                    completed = (
-                        chunk.get("completed", 0)
-                        if isinstance(chunk, dict)
-                        else getattr(chunk, "completed", 0)
-                    )
-
-                    if total and completed:
-                        pct = int(completed / total * 100)
-
-                        print(f"\r  {status}: {pct}%", end="", flush=True)
-
-                    elif status:
-                        print(f"\r  {status}...", end="", flush=True)
-
-                print(f"\n  Model '{config.llm_model}' ready.\n")
-
-        except Exception as e:
-            logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
-
     # Animated init display — only when entering interactive REPL
 
     _entering_repl = (
@@ -1099,12 +1041,78 @@ def main():
         and sys.stdin.isatty()
     )
 
+    # Auto-pull only for CLI paths that will actually hit the chat model.
+    _should_auto_pull_ollama_model = bool(
+        config.llm_provider == "ollama"
+        and config.llm_model
+        and not getattr(args, "dry_run", False)
+        and (args.query or _entering_repl or getattr(args, "graph_finalize", False))
+    )
+
+    if _should_auto_pull_ollama_model:
+        try:
+            import ollama as _ollama
+
+            response = _ollama.list()
+
+            models = response.models if hasattr(response, "models") else response.get("models", [])
+
+            local_names = set()
+
+            for m in models:
+                name = m.model if hasattr(m, "model") else m.get("name", "")
+
+                local_names.add(name)
+
+                local_names.add(name.split(":")[0])  # also match without tag
+
+            model_tag = (
+                config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
+            )
+
+            if model_tag not in local_names and config.llm_model not in local_names:
+                print(
+                    f"  Model '{config.llm_model}' not found locally — pulling from Ollama...",
+                    file=sys.stderr,
+                )
+
+                for chunk in _ollama.pull(config.llm_model, stream=True):
+                    status = (
+                        chunk.get("status", "")
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "status", "")
+                    )
+
+                    total = (
+                        chunk.get("total", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "total", 0)
+                    )
+
+                    completed = (
+                        chunk.get("completed", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "completed", 0)
+                    )
+
+                    if total and completed:
+                        pct = int(completed / total * 100)
+
+                        print(f"\r  {status}: {pct}%", end="", flush=True, file=sys.stderr)
+
+                    elif status:
+                        print(f"\r  {status}...", end="", flush=True, file=sys.stderr)
+
+                print(f"\n  Model '{config.llm_model}' ready.\n", file=sys.stderr)
+
+        except Exception as e:
+            logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
+
     _init_display: _InitDisplay | None = None
 
-    # If running non-interactive or in quiet mode (scripts/CI), redirect stderr and stdout to a log file
-    # so third-party prints don't pollute the console. This keeps console output clean
-    # while preserving user-facing CLI prints. Only apply when not entering REPL or when
-    # quiet/non-TTY is requested.
+    # If running non-interactive or in quiet mode (scripts/CI), redirect stderr to a log file
+    # so third-party noise does not pollute the console. Keep stdout attached so user-facing
+    # CLI output still reaches the caller.
     try:
         from datetime import datetime as _dt
         from pathlib import Path as _Path
@@ -1124,9 +1132,7 @@ def main():
                     sys.stdout.flush()
                 except Exception:
                     pass
-                # Redirect both stderr and stdout to the daily log file for non-interactive runs.
                 sys.stderr = _log_fh
-                sys.stdout = _log_fh
             except Exception:
                 pass
     except Exception:
@@ -1144,11 +1150,18 @@ def main():
         "httpx",
     ]
 
+    _list_doc_versions_file: Path | None = None
+    _list_fast_path_available = False
+    if args.list:
+        _list_doc_versions_file = Path(config.bm25_path or "") / ".doc_versions.json"
+        _list_fast_path_available = _list_doc_versions_file.exists()
+
     # Determine whether the requested CLI action requires the heavy AxonBrain
     # initialization (embedding models, vector stores, LLM clients, etc.).
     need_brain = bool(
         _entering_repl
         or args.query
+        or (args.list and not _list_fast_path_available)
         or getattr(args, "ingest", None)
         or getattr(args, "refresh", False)
         or getattr(args, "list_stale", False)
@@ -1261,14 +1274,12 @@ def main():
             return
 
         # Lightweight 'list' command: avoid full AxonBrain init by reading doc_versions metadata
-        if args.list:
+        if args.list and _list_fast_path_available:
             import json
-            from pathlib import Path as _P
 
-            bm25_path = _P(config.bm25_path or "")
-            doc_versions_file = bm25_path / ".doc_versions.json"
+            doc_versions_file = _list_doc_versions_file
 
-            if doc_versions_file.exists():
+            if doc_versions_file is not None and doc_versions_file.exists():
                 try:
                     with open(doc_versions_file, encoding="utf-8") as _f:
                         dv = json.load(_f)
@@ -1288,9 +1299,6 @@ def main():
                     for src, info in dv.items():
                         chunks = info.get("chunk_count") or info.get("chunks") or 0
                         print(f"  {src:<60} {chunks:>6}")
-
-            else:
-                print("  Knowledge base is empty or not initialized (no .doc_versions.json found).")
 
             return
 
@@ -2131,4 +2139,7 @@ def main():
     except Exception:
         pass
 
-    os._exit(0)
+    if sys.stdin.isatty():
+        os._exit(0)
+
+    return

@@ -52,12 +52,7 @@ def test_repl_at_expansion_email_collision(tmp_path, monkeypatch):
 
 
 def test_vector_store_add_unbalanced_inputs(tmp_path):
-    """Verify OpenVectorStore.add is called with mismatched slices when inputs are unbalanced.
-
-    We avoid importing heavy backends by stubbing _init_store. The test asserts that
-    the underlying collection.add() is invoked with arguments whose lengths are inconsistent,
-    which demonstrates the vulnerability (silently accepting or misaligning inputs).
-    """
+    """Verify OpenVectorStore.add rejects unbalanced input batches before backend writes."""
     OpenVectorStore = try_get("axon.vector_store", "OpenVectorStore")
     if OpenVectorStore is None:
         pytest.skip("OpenVectorStore not available")
@@ -78,23 +73,10 @@ def test_vector_store_add_unbalanced_inputs(tmp_path):
         # Provide a mocked collection to observe calls
         store.collection = MagicMock()
 
-        # Call add with mismatched lengths
-        store.add(["id1", "id2"], ["text1"], [[0.1]])
+        with pytest.raises(ValueError, match="length mismatch"):
+            store.add(["id1", "id2"], ["text1"], [[0.1]])
 
-        # collection.add should have been invoked by the chroma branch
-        assert store.collection.add.called, "collection.add was not called"
-
-        # Inspect the kwargs passed to collection.add
-        call_args = store.collection.add.call_args
-        assert call_args is not None
-        _args, _kwargs = call_args
-        ids = _kwargs.get("ids") if _kwargs else (_args[0] if _args else None)
-        docs = _kwargs.get("documents") if _kwargs else (_args[1] if len(_args) > 1 else None)
-        embs = _kwargs.get("embeddings") if _kwargs else (_args[2] if len(_args) > 2 else None)
-
-        assert ids is not None and docs is not None and embs is not None
-        # Demonstrate mismatch: lengths should not all be equal
-        assert len(ids) != len(docs) or len(ids) != len(embs)
+        store.collection.add.assert_not_called()
 
 
 def test_projects_delete_race_condition(tmp_path):

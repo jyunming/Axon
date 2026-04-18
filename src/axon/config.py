@@ -527,13 +527,38 @@ class AxonConfig:
             self.axon_store_base = env_store_base
 
         if not self.axon_store_base:
-            self.axon_store_base = os.path.join(os.path.expanduser("~"), ".axon")
+            home_dir = (
+                os.environ.get("HOME")
+                or os.environ.get("USERPROFILE")
+                or (
+                    (os.environ.get("HOMEDRIVE") or "") + (os.environ.get("HOMEPATH") or "")
+                ).strip()
+            )
+            if not home_dir:
+                try:
+                    home_dir = str(Path.home())
+                except Exception:
+                    home_dir = os.getcwd()
+            self.axon_store_base = os.path.join(home_dir, ".axon")
 
         import getpass
 
-        username = getpass.getuser()
+        try:
+            username = getpass.getuser()
+        except Exception:
+            username = (
+                os.environ.get("AXON_USERNAME")
+                or os.environ.get("USERNAME")
+                or os.environ.get("USER")
+                or "default"
+            )
 
-        store_root = Path(self.axon_store_base).expanduser().resolve() / "AxonStore"
+        try:
+            store_base = Path(self.axon_store_base).expanduser().resolve()
+        except Exception:
+            store_base = Path(os.path.abspath(self.axon_store_base))
+
+        store_root = store_base / "AxonStore"
 
         user_dir = store_root / username
 
@@ -1882,8 +1907,20 @@ class AxonConfig:
             config_store_base = raw["store"].get("base", "")
 
         # Effective base: env wins, then config, then default
-
-        effective_base = env_store_base or config_store_base or str(Path.home() / ".axon")
+        if env_store_base or config_store_base:
+            effective_base = env_store_base or config_store_base
+        else:
+            home_dir = (
+                os.environ.get("HOME")
+                or os.environ.get("USERPROFILE")
+                or ((os.environ.get("HOMEDRIVE") or "") + (os.environ.get("HOMEPATH") or "")).strip()
+            )
+            if not home_dir:
+                try:
+                    home_dir = str(Path.home())
+                except Exception:
+                    home_dir = os.getcwd()
+            effective_base = str(Path(home_dir) / ".axon")
 
         if env_store_base and config_store_base and env_store_base != config_store_base:
             issues.append(
@@ -1899,7 +1936,10 @@ class AxonConfig:
                 )
             )
 
-        base_path = Path(effective_base).expanduser()
+        try:
+            base_path = Path(effective_base).expanduser()
+        except Exception:
+            base_path = Path(effective_base)
 
         # Only warn when the user has explicitly set a custom base that doesn't exist
 
@@ -1915,7 +1955,15 @@ class AxonConfig:
             )
 
         elif base_path.exists():
-            username = getpass.getuser()
+            try:
+                username = getpass.getuser()
+            except Exception:
+                username = (
+                    os.environ.get("AXON_USERNAME")
+                    or os.environ.get("USERNAME")
+                    or os.environ.get("USER")
+                    or "default"
+                )
 
             store_meta = base_path / "AxonStore" / username / "store_meta.json"
 
