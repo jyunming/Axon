@@ -1472,7 +1472,7 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 
-_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  PgUp/PgDn to scroll  ·  F9: toggle scroll↔select  ·  @file or @folder/ to attach context"
+_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  Mouse wheel or PgUp/PgDn to scroll  ·  Click+drag to select  ·  @file or @folder/ to attach context"
 
 
 def _box_width() -> int:
@@ -2482,10 +2482,6 @@ def _interactive_repl(
     _input_queue = None
     _repl_event_loop = None  # captured inside _repl_loop_async for thread-safe run_in_terminal
     _spin_state: dict = {"active": False, "idx": 0}
-    _SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    # F9 toggles between scroll mode (mouse_support=True → wheel scrolls, no native selection)
-    # and select mode (mouse_support=False → native click-drag selection, wheel = arrow keys).
-    _mouse_enabled: list = [True]
 
     try:
         import glob as _pglob
@@ -2782,8 +2778,6 @@ def _interactive_repl(
 
             h_state = "ON" if brain.config.hybrid_search else "off"
 
-            m_state = "SCROLL" if _mouse_enabled[0] else "SEL"
-
             row1 = (
                 f"  {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
                 f"{_lbl('Embed')}  {_t(emb, W2):{W2}}{sep}"
@@ -2795,8 +2789,7 @@ def _interactive_repl(
                 f"{_lbl('discuss')}:{d_state}{_pad('discuss', d_state, C2)}{sep}"
                 f"{_lbl('hybrid')}:{h_state}  "
                 f"{_lbl('top-k')}:{brain.config.top_k}  "
-                f"{_lbl('thr')}:{brain.config.similarity_threshold}  "
-                f"{_lbl('mouse')}:{m_state}"
+                f"{_lbl('thr')}:{brain.config.similarity_threshold}"
                 f"{proj_s}"
             )
 
@@ -2845,16 +2838,11 @@ def _interactive_repl(
                 def _handle_ctrl_d(event):
                     event.app.exit(exception=EOFError())
 
-                @_kb.add("f9")
-                def _handle_toggle_mouse(event):
-                    _mouse_enabled[0] = not _mouse_enabled[0]
-                    mode = "scroll" if _mouse_enabled[0] else "select"
-                    _ui_state_spin["_mouse_mode_msg"] = f"Mouse: {mode} mode"
-                    event.app.invalidate()
-
                 from prompt_toolkit.key_binding import merge_key_bindings
 
                 from axon._ui_state import state as _ui_state_spin
+
+                _SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
                 def _spinner_line() -> str:
                     ep = _ui_state_spin.get("embed_progress", "")
@@ -2867,9 +2855,6 @@ def _interactive_repl(
                     layout=Layout(
                         HSplit(
                             [
-                                # Expanding spacer — pushes input/toolbar to the bottom of the
-                                # screen so output printed via patch_stdout scrolls above them.
-                                Window(),
                                 # Spinner row — rendered by prompt_toolkit for smooth ~12fps animation.
                                 # Disappears instantly when _spin_state["active"] becomes False.
                                 ConditionalContainer(
@@ -2920,8 +2905,8 @@ def _interactive_repl(
                     ),
                     key_bindings=merge_key_bindings([load_emacs_bindings(), _kb]),
                     style=_PT_STYLE,
-                    mouse_support=Condition(lambda: bool(_mouse_enabled[0])),
-                    full_screen=True,
+                    mouse_support=False,
+                    full_screen=False,
                 )
 
                 # Store app reference so background threads can trigger redraws.
