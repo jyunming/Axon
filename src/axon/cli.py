@@ -1457,7 +1457,7 @@ def main():
             except Exception:
                 pass
 
-        brain = AxonBrain(config, init_llm=not getattr(args, "dry_run", False))
+        brain = AxonBrain(config)
 
         if _init_display:
             _init_display.stop()
@@ -2092,7 +2092,7 @@ def main():
 
     if brain is None:
         # Ensure a brain instance is available for the interactive REPL
-        brain = AxonBrain(config, init_llm=not getattr(args, "dry_run", False))
+        brain = AxonBrain(config)
 
     try:
         _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)

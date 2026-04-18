@@ -151,6 +151,390 @@ _TASK_LIST_RE = re.compile(r"^([ \t]*[-*+] )\[([ xX])\] ", re.MULTILINE)
 _STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~", re.DOTALL)
 
 
+def _fence_unfenced_code(text: str) -> str:
+    """Wrap runs of code-like lines not already inside ``` fences.
+
+    Detects consecutive lines that look like source code and wraps them in
+    triple-backtick fences with auto-detected language tags.
+    """
+    if not text:
+        return text
+
+    _LANG_SIGNALS: list[tuple[str, re.Pattern]] = [
+        ("python", re.compile(r"^(def |class |import |from |if __name__|@|#!/|async def )")),
+        ("javascript", re.compile(r"^(function |const |let |var |export |module\.)")),
+        ("typescript", re.compile(r"^(interface |type |export (type|interface|class|function))")),
+        ("rust", re.compile(r"^(fn |pub |use |impl |struct |enum |mod |let mut )")),
+        ("go", re.compile(r"^(package |func |import \(|var |type .+ struct)")),
+        (
+            "sql",
+            re.compile(r"^(SELECT |INSERT |UPDATE |DELETE |CREATE |DROP |ALTER )", re.IGNORECASE),
+        ),
+        ("bash", re.compile(r"^(#!/|if \[|for |while |echo |export |source )")),
+        ("java", re.compile(r"^(public |private |protected |class |interface |import java)")),
+        ("c", re.compile(r"^(#include|int main|void |typedef )")),
+    ]
+    _SQL_CONT = re.compile(
+        r"^(FROM|WHERE|AND|OR|JOIN|ORDER BY|GROUP BY|LIMIT|VALUES|SET)\b", re.IGNORECASE
+    )
+
+    def _detect_lang(lines: list) -> str:
+        for line in lines[:3]:
+            stripped = line.lstrip()
+            for lang, pat in _LANG_SIGNALS:
+                if pat.match(stripped):
+                    return lang
+        return ""
+
+    def _is_code_start(line: str) -> bool:
+        # 4-space-indented lines with code-like content are code starts
+        if line.startswith("    ") or line.startswith("\t"):
+            stripped = line.strip()
+            if re.search(r"[=()\[\]{}]", stripped):
+                return True
+        stripped = line.lstrip()
+        return any(pat.match(stripped) for _, pat in _LANG_SIGNALS)
+
+    def _is_code_continuation(line: str) -> bool:
+        if not line.strip():
+            return True
+        if line.startswith("    ") or line.startswith("\t"):
+            return True
+        stripped = line.strip()
+        if stripped.startswith(
+            ("#", "//", "/*", "*", "return ", "print(", "println!", "assert", "console.")
+        ):
+            return True
+        if re.search(r"[{}()\[\];]", stripped):
+            return True
+        if _SQL_CONT.match(stripped):
+            return True
+        return False
+
+    lines = text.split("\n")
+    result: list = []
+    in_fence = False
+    code_run: list = []
+
+    def flush_run() -> None:
+        while code_run and not code_run[-1].strip():
+            code_run.pop()
+        if len(code_run) < 2:
+            result.extend(code_run)
+            code_run.clear()
+            return
+        lang = _detect_lang(code_run)
+        result.append(f"```{lang}")
+        result.extend(code_run)
+        result.append("```")
+        code_run.clear()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            if code_run:
+                flush_run()
+            in_fence = not in_fence
+            result.append(line)
+            i += 1
+            continue
+        if in_fence:
+            result.append(line)
+            i += 1
+            continue
+        if _is_code_start(line):
+            code_run.append(line)
+            i += 1
+            while i < len(lines):
+                next_line = lines[i]
+                if next_line.lstrip().startswith("```"):
+                    break
+                if (
+                    next_line.strip()
+                    and not _is_code_continuation(next_line)
+                    and not _is_code_start(next_line)
+                ):
+                    break
+                code_run.append(next_line)
+                i += 1
+            flush_run()
+        else:
+            if code_run:
+                flush_run()
+            result.append(line)
+            i += 1
+
+    if code_run:
+        flush_run()
+
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
+# Bullet normalization
+# ---------------------------------------------------------------------------
+
+_BULLET_CHAR_RE = re.compile(r"^([ \t]*)•\s*", re.MULTILINE)
+
+
+def _normalize_bullets(text: str) -> str:
+    """Replace • bullet characters with markdown - list syntax."""
+    return _BULLET_CHAR_RE.sub(lambda m: m.group(1) + "- ", text)
+
+
+# ---------------------------------------------------------------------------
+# Math ASCII → Unicode converter
+# ---------------------------------------------------------------------------
+
+_SUP_MAP: dict = {
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+    "a": "ᵃ",
+    "b": "ᵇ",
+    "c": "ᶜ",
+    "d": "ᵈ",
+    "e": "ᵉ",
+    "f": "ᶠ",
+    "g": "ᵍ",
+    "h": "ʰ",
+    "i": "ⁱ",
+    "j": "ʲ",
+    "k": "ᵏ",
+    "l": "ˡ",
+    "m": "ᵐ",
+    "n": "ⁿ",
+    "o": "ᵒ",
+    "p": "ᵖ",
+    "r": "ʳ",
+    "s": "ˢ",
+    "t": "ᵗ",
+    "u": "ᵘ",
+    "v": "ᵛ",
+    "w": "ʷ",
+    "x": "ˣ",
+    "y": "ʸ",
+    "z": "ᶻ",
+    "+": "⁺",
+    "-": "⁻",
+    "(": "⁽",
+    ")": "⁾",
+}
+_SUB_MAP: dict = {str(i): c for i, c in enumerate("₀₁₂₃₄₅₆₇₈₉")}
+
+_GREEK_WORDS: list = [
+    ("alpha", "α"),
+    ("beta", "β"),
+    ("gamma", "γ"),
+    ("delta", "δ"),
+    ("epsilon", "ε"),
+    ("zeta", "ζ"),
+    ("eta", "η"),
+    ("theta", "θ"),
+    ("iota", "ι"),
+    ("kappa", "κ"),
+    ("lambda", "λ"),
+    ("mu", "μ"),
+    ("nu", "ν"),
+    ("xi", "ξ"),
+    ("pi", "π"),
+    ("rho", "ρ"),
+    ("sigma", "σ"),
+    ("tau", "τ"),
+    ("upsilon", "υ"),
+    ("phi", "φ"),
+    ("chi", "χ"),
+    ("psi", "ψ"),
+    ("omega", "ω"),
+    ("Alpha", "Α"),
+    ("Beta", "Β"),
+    ("Gamma", "Γ"),
+    ("Delta", "Δ"),
+    ("Epsilon", "Ε"),
+    ("Zeta", "Ζ"),
+    ("Eta", "Η"),
+    ("Theta", "Θ"),
+    ("Iota", "Ι"),
+    ("Kappa", "Κ"),
+    ("Lambda", "Λ"),
+    ("Mu", "Μ"),
+    ("Nu", "Ν"),
+    ("Xi", "Ξ"),
+    ("Pi", "Π"),
+    ("Rho", "Ρ"),
+    ("Sigma", "Σ"),
+    ("Tau", "Τ"),
+    ("Upsilon", "Υ"),
+    ("Phi", "Φ"),
+    ("Chi", "Χ"),
+    ("Psi", "Ψ"),
+    ("Omega", "Ω"),
+]
+_GREEK_PATTERNS = [(re.compile(r"\b" + word + r"\b"), sym) for word, sym in _GREEK_WORDS]
+
+
+def _mathify(text: str) -> str:
+    """Convert ASCII math notation to Unicode scientific symbols.
+
+    Handles superscripts, subscripts, Greek words, multiplication dots,
+    comparison operators, and infinity keyword.
+    """
+
+    def _to_sup(chars: str) -> str:
+        out = ""
+        for c in chars:
+            if c in _SUP_MAP:
+                out += _SUP_MAP[c]
+            else:
+                return ""
+        return out
+
+    def _brace_sup(m: re.Match) -> str:
+        converted = _to_sup(m.group(2))
+        if converted:
+            return m.group(1) + converted
+        return m.group(0)
+
+    def _simple_sup(m: re.Match) -> str:
+        converted = _to_sup(m.group(2))
+        if converted:
+            return m.group(1) + converted
+        return m.group(0)
+
+    # Greek words first so that pi^2 → π^2 → π² (not pi² with unreplaced pi)
+    for pat, sym in _GREEK_PATTERNS:
+        text = pat.sub(sym, text)
+    text = re.sub(r"(\w+)\^\{([^}]+)\}", _brace_sup, text)
+    text = re.sub(r"(\w+)\^(\d+|\w)", _simple_sup, text)
+    text = re.sub(r"(\w)_(\d)", lambda m: m.group(1) + _SUB_MAP.get(m.group(2), m.group(2)), text)
+    text = text.replace(">=", "≥").replace("<=", "≤").replace("!=", "≠")
+    text = re.sub(r"\binfinity\b", "∞", text)
+    text = re.sub(r"(?<=[a-zA-Z0-9]) \* (?=[a-zA-Z0-9])", " · ", text)
+    text = re.sub(r"(?<=[a-zA-Z0-9])\*(?=[a-zA-Z0-9])", "·", text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Math formula detection and fencing
+# ---------------------------------------------------------------------------
+
+_MATH_OP_RE = re.compile(
+    r"[\^]"
+    r"|(?<=[a-zA-Z0-9]) \* (?=[a-zA-Z0-9])"
+    r"|(?<=[a-zA-Z0-9])\*(?=[a-zA-Z0-9])"
+    r"|sqrt\(|sin\(|cos\(|tan\(|log\(|exp\("
+)
+_LIST_ITEM_START_RE = re.compile(r"^[ \t]*[-*•][ \t]")
+
+
+def _is_formula_line(line: str) -> bool:
+    """Return True if line looks like a standalone math formula."""
+    stripped = line.strip()
+    if "=" not in stripped:
+        return False
+    if _LIST_ITEM_START_RE.match(line):
+        return False
+    if not _MATH_OP_RE.search(stripped):
+        return False
+    words = re.findall(r"[a-zA-Z]{3,}", stripped)
+    _ENGLISH = {
+        "the",
+        "and",
+        "for",
+        "are",
+        "was",
+        "that",
+        "this",
+        "with",
+        "from",
+        "have",
+        "will",
+        "can",
+        "all",
+        "not",
+        "but",
+        "out",
+        "more",
+        "result",
+        "value",
+        "where",
+        "which",
+        "also",
+    }
+    if words:
+        eng_count = sum(1 for w in words if w.lower() in _ENGLISH)
+        if eng_count / len(words) > 0.4:
+            return False
+    return True
+
+
+def _fence_math_formulas(text: str) -> str:
+    """Wrap standalone math formula lines in code blocks with Unicode conversion."""
+    lines = text.split("\n")
+    result: list = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+            i += 1
+            continue
+        if in_fence:
+            result.append(line)
+            i += 1
+            continue
+        if _is_formula_line(line):
+            formula_run = [_mathify(line)]
+            i += 1
+            while i < len(lines) and _is_formula_line(lines[i]):
+                formula_run.append(_mathify(lines[i]))
+                i += 1
+            result.append("```")
+            result.extend(formula_run)
+            result.append("```")
+        else:
+            result.append(line)
+            i += 1
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
+# Inline math symbols for prose lines
+# ---------------------------------------------------------------------------
+
+
+def _inline_math_symbols(text: str) -> str:
+    """Apply Greek letter and subscript conversions to prose text outside fences."""
+    lines = text.split("\n")
+    result = []
+    in_fence = False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+            continue
+        if in_fence:
+            result.append(line)
+            continue
+        for pat, sym in _GREEK_PATTERNS:
+            line = pat.sub(sym, line)
+        line = re.sub(
+            r"(\w)_(\d)", lambda m: m.group(1) + _SUB_MAP.get(m.group(2), m.group(2)), line
+        )
+        result.append(line)
+    return "\n".join(result)
+
+
 def _preprocess_markdown(text: str) -> str:
     """Apply terminal-friendly substitutions before passing text to Rich Markdown.
 
@@ -1088,7 +1472,7 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 
-_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
+_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  PgUp/PgDn to scroll  ·  F9: toggle scroll↔select  ·  @file or @folder/ to attach context"
 
 
 def _box_width() -> int:
@@ -2099,6 +2483,9 @@ def _interactive_repl(
     _repl_event_loop = None  # captured inside _repl_loop_async for thread-safe run_in_terminal
     _spin_state: dict = {"active": False, "idx": 0}
     _SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    # F9 toggles between scroll mode (mouse_support=True → wheel scrolls, no native selection)
+    # and select mode (mouse_support=False → native click-drag selection, wheel = arrow keys).
+    _mouse_enabled: list = [True]
 
     try:
         import glob as _pglob
@@ -2395,6 +2782,8 @@ def _interactive_repl(
 
             h_state = "ON" if brain.config.hybrid_search else "off"
 
+            m_state = "SCROLL" if _mouse_enabled[0] else "SEL"
+
             row1 = (
                 f"  {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
                 f"{_lbl('Embed')}  {_t(emb, W2):{W2}}{sep}"
@@ -2406,7 +2795,8 @@ def _interactive_repl(
                 f"{_lbl('discuss')}:{d_state}{_pad('discuss', d_state, C2)}{sep}"
                 f"{_lbl('hybrid')}:{h_state}  "
                 f"{_lbl('top-k')}:{brain.config.top_k}  "
-                f"{_lbl('thr')}:{brain.config.similarity_threshold}"
+                f"{_lbl('thr')}:{brain.config.similarity_threshold}  "
+                f"{_lbl('mouse')}:{m_state}"
                 f"{proj_s}"
             )
 
@@ -2454,6 +2844,13 @@ def _interactive_repl(
                 @_kb.add("c-d")
                 def _handle_ctrl_d(event):
                     event.app.exit(exception=EOFError())
+
+                @_kb.add("f9")
+                def _handle_toggle_mouse(event):
+                    _mouse_enabled[0] = not _mouse_enabled[0]
+                    mode = "scroll" if _mouse_enabled[0] else "select"
+                    _ui_state_spin["_mouse_mode_msg"] = f"Mouse: {mode} mode"
+                    event.app.invalidate()
 
                 from prompt_toolkit.key_binding import merge_key_bindings
 
@@ -2520,7 +2917,7 @@ def _interactive_repl(
                     ),
                     key_bindings=merge_key_bindings([load_emacs_bindings(), _kb]),
                     style=_PT_STYLE,
-                    mouse_support=False,
+                    mouse_support=Condition(lambda: bool(_mouse_enabled[0])),
                     full_screen=True,
                 )
 
@@ -5072,8 +5469,16 @@ def _interactive_repl(
             # so it binds to the correct loop for run_in_terminal calls.
             with _pt_patch_stdout(raw=True):
                 app_task = asyncio.ensure_future(_pt_app.run_async())
-                # When the app exits for any reason, unblock _input_queue.get()
-                app_task.add_done_callback(lambda _: _input_queue.put_nowait(None))
+
+                def _on_app_done(fut: asyncio.Future) -> None:
+                    exc = fut.exception() if not fut.cancelled() else None
+                    if exc and not isinstance(exc, KeyboardInterrupt | EOFError | SystemExit):
+                        import logging as _lg2
+
+                        _lg2.getLogger("Axon").warning("REPL Application exited with: %s", exc)
+                    _input_queue.put_nowait(None)
+
+                app_task.add_done_callback(_on_app_done)
                 try:
                     while True:
                         text = await _input_queue.get()
