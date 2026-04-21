@@ -13,6 +13,8 @@ from axon.api_schemas import (
     _VALID_PROJECT_NAME_RE,
     ConfigUpdateRequest,
     ProjectCreateRequest,
+    ProjectRotateKeysRequest,
+    ProjectSealRequest,
     ProjectSwitchRequest,
 )
 
@@ -20,6 +22,20 @@ logger = logging.getLogger("AxonAPI")
 
 
 router = APIRouter()
+
+
+def _require_local_turboquantdb(brain, action: str = "This action") -> None:
+    """Raise HTTPException 400 if brain is not using local turboquantdb."""
+    if getattr(brain.config, "vector_store", "turboquantdb") != "turboquantdb":
+        raise HTTPException(
+            status_code=400,
+            detail=f"{action} requires turboquantdb as the vector store.",
+        )
+    if getattr(brain.config, "qdrant_url", ""):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{action} cannot be used with a remote qdrant_url.",
+        )
 
 
 @router.get("/health")
@@ -134,6 +150,7 @@ async def get_projects():
     """List all projects known to the Axon system."""
 
     from axon import api as _api
+    from axon import security as _security
     from axon import shares as _shares
 
     brain = _api.brain
@@ -141,14 +158,20 @@ async def get_projects():
     from axon.projects import is_reserved_top_level_name as _is_reserved_top_level_name
     from axon.projects import list_projects as _list_projects
 
+    user_dir: Path | None = None
     if brain:
+        user_dir = Path(brain.config.projects_root)
         try:
-            user_dir = Path(brain.config.projects_root)
-
             _shares.validate_received_shares(user_dir)
 
         except Exception as exc:
             logger.warning(f"Could not validate received shares: {exc}")
+
+        try:
+            _security.validate_received_sealed_shares(user_dir)
+
+        except Exception as exc:
+            logger.warning(f"Could not validate received sealed shares: {exc}")
 
     try:
         on_disk = _list_projects()
@@ -174,8 +197,6 @@ async def get_projects():
         try:
             from axon.projects import list_share_mounts
 
-            user_dir = Path(brain.config.projects_root)
-
             mounts = list_share_mounts(user_dir)
 
             shared_mounts = [
@@ -193,18 +214,33 @@ async def get_projects():
         except Exception as exc:
             logger.warning(f"Could not enumerate share mounts: {exc}")
 
-    return {
+    result: dict = {
         "projects": on_disk,
         "memory_only": memory_only,
         "shared_mounts": shared_mounts,
         "total": len(on_disk) + len(memory_only) + len(shared_mounts),
     }
 
+    # Merge security-store status into the response.
+    if user_dir is not None:
+        try:
+            sec_status = _security.store_status(user_dir)
+            unlocked = sec_status.get("unlocked", False)
+            result["locked"] = not unlocked
+            result["sealed_hidden_count"] = sec_status.get("sealed_hidden_count", 0)
+            result["public_key_fingerprint"] = sec_status.get("public_key_fingerprint", "")
+            result["cipher_suite"] = sec_status.get("cipher_suite", "")
+        except Exception as exc:
+            logger.warning(f"Could not retrieve security store status: {exc}")
+
+    return result
+
 
 @router.post("/project/new")
 async def create_project(request: ProjectCreateRequest):
     """Create a new project directory and metadata."""
 
+    from axon import api as _api
     from axon.projects import ensure_project
 
     if not request.name or not _VALID_PROJECT_NAME_RE.match(request.name):
@@ -217,10 +253,22 @@ async def create_project(request: ProjectCreateRequest):
             ),
         )
 
-    try:
-        ensure_project(request.name, description=request.description)
+    if request.security_mode == "sealed_v1":
+        brain = _api.brain
+        if brain is not None:
+            _require_local_turboquantdb(brain, "Sealed projects")
 
-        return {"status": "success", "project": request.name}
+    try:
+        ensure_project(
+            request.name,
+            description=request.description,
+            security_mode=request.security_mode,
+        )
+
+        result: dict = {"status": "success", "project": request.name}
+        if request.security_mode is not None:
+            result["security_mode"] = request.security_mode
+        return result
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -352,6 +400,77 @@ async def delete_project_endpoint(name: str):
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/project/rotate-keys")
+async def rotate_project_keys(request: ProjectRotateKeysRequest):
+    """Rotate the cryptographic keys for a sealed project."""
+
+    from axon import api as _api
+    from axon import security as _security
+
+    brain = _api.brain
+
+    if brain is None:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    user_dir = Path(brain.config.projects_root).expanduser().resolve()
+
+    try:
+        project_root = _security.resolve_owned_sealed_project_path(request.project_name, user_dir)
+    except _security.SecurityError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        result = _security.project_rotate_keys(project_root)
+        return result
+    except _security.SecurityError as exc:
+        message = str(exc)
+        status = 409 if "pending" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message)
+
+
+@router.post("/project/seal")
+async def seal_project(request: ProjectSealRequest):
+    """Convert an existing open project to sealed_v1 mode."""
+
+    from axon import api as _api
+    from axon import security as _security
+
+    brain = _api.brain
+
+    if brain is None:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    _require_local_turboquantdb(brain, "Sealing a project")
+
+    user_dir = Path(brain.config.projects_root).expanduser().resolve()
+
+    previously_active = getattr(brain, "_active_project", None)
+    needs_switch_back = previously_active == request.project_name
+    if needs_switch_back:
+        brain.switch_project("default")
+
+    try:
+        _security.project_seal(
+            request.project_name,
+            user_dir,
+            migration_mode=request.migration_mode,
+            config=brain.config,
+            embedding=brain.embedding,
+        )
+    except _security.SecurityError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        if needs_switch_back:
+            brain.switch_project(previously_active)
+
+    return {
+        "status": "success",
+        "project": request.project_name,
+        "security_mode": "sealed_v1",
+        "migration_mode": request.migration_mode,
+    }
 
 
 @router.get("/sessions")

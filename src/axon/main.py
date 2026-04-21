@@ -3148,9 +3148,7 @@ Your primary goal is to help the user by answering questions based on the provid
                 ]
                 _skipped = _before - len(chunks_to_process)
                 if _skipped:
-                    logger.info(
-                        "   GraphRAG: skipping %d already-extracted chunk(s).", _skipped
-                    )
+                    logger.info("   GraphRAG: skipping %d already-extracted chunk(s).", _skipped)
 
             if not chunks_to_process:
                 logger.info("   GraphRAG: all chunks already extracted — nothing to do.")

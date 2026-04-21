@@ -296,6 +296,11 @@ class ProjectCreateRequest(BaseModel):
 
     description: str = Field("", description="Optional description for the project")
 
+    security_mode: str | None = Field(
+        None,
+        description="Optional security mode for the project (e.g. 'sealed_v1')",
+    )
+
 
 class SearchResult(BaseModel):
     id: str
@@ -440,3 +445,25 @@ class MaintenanceStateRequest(BaseModel):
         ...,
         description="Maintenance state: 'normal', 'draining', 'readonly', or 'offline'.",
     )
+
+
+class SecurityBootstrapRequest(BaseModel):
+    passphrase: str = Field(..., description="Passphrase to bootstrap the security store with.")
+
+
+class SecurityUnlockRequest(BaseModel):
+    passphrase: str = Field(..., description="Passphrase to unlock the security store.")
+
+
+class SecurityChangePassphraseRequest(BaseModel):
+    old_passphrase: str = Field(..., description="Current passphrase.")
+    new_passphrase: str = Field(..., description="New passphrase to set.")
+
+
+class ProjectRotateKeysRequest(BaseModel):
+    project_name: str = Field(..., description="Name of the sealed project to rotate keys for.")
+
+
+class ProjectSealRequest(BaseModel):
+    project_name: str = Field(..., description="Name of the open project to seal.")
+    migration_mode: str = Field("snapshot", description="Migration mode: 'snapshot' or 'live'.")

@@ -24,7 +24,7 @@ logger = logging.getLogger("Axon")
 # ToolCall — returned by OpenLLM.complete_with_tools()
 # ---------------------------------------------------------------------------
 
-ToolCall = namedtuple("ToolCall", ["name", "args"])
+ToolCall = namedtuple("ToolCall", ["name", "args", "thought_signature"], defaults=[None])
 
 # ---------------------------------------------------------------------------
 # Tool schemas (OpenAI / Ollama function-calling format)
@@ -1584,6 +1584,7 @@ def run_agent_loop(
 
         # result is a list of ToolCall namedtuples
         tool_results: list[str] = []
+        tool_calls_raw: list[tuple] = []
         for tc in result:
             # Build a signature for this call to detect identical retries
             import json as _json
@@ -1609,6 +1610,9 @@ def run_agent_loop(
 
             tool_result = dispatch_tool(brain, tc.name, tc.args, confirm_cb=confirm_cb)
             logger.debug("Agent tool %s(%s) → %s", tc.name, tc.args, tool_result[:100])
+            tool_calls_raw.append(
+                (tc.name, tc.args, tool_result, getattr(tc, "thought_signature", None))
+            )
             tool_results.append(f"[{tc.name}]: {tool_result}")
             if step_cb is not None:
                 try:
@@ -1616,11 +1620,17 @@ def run_agent_loop(
                 except Exception:
                     pass
 
-        # Feed tool results back; keep original user intent visible (B8)
+        # Feed tool results back; keep original user intent visible.
+        # __tool_calls__ stores raw (name, args, result) for providers (e.g. Gemini) that
+        # need native function_call / function_response parts in their conversation history.
         tool_summary = "\n".join(tool_results)
         messages = messages + [
             {"role": "user", "content": original_prompt},
-            {"role": "assistant", "content": f"<tool_results>\n{tool_summary}\n</tool_results>"},
+            {
+                "role": "assistant",
+                "content": f"<tool_results>\n{tool_summary}\n</tool_results>",
+                "__tool_calls__": tool_calls_raw,
+            },
         ]
         current_prompt = (
             f"The tool calls above completed. Original request: {original_prompt}\n\n"

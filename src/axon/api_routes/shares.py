@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
+import base64
 import getpass
+import json
 import logging
 import secrets
-import base64
-import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -316,7 +316,9 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
     surface = getattr(req.state, "surface", "api")
 
     try:
-        payload = json.loads(base64.urlsafe_b64decode(request.share_string.encode("ascii")).decode("utf-8"))
+        payload = json.loads(
+            base64.urlsafe_b64decode(request.share_string.encode("ascii")).decode("utf-8")
+        )
     except Exception:
         payload = None
 

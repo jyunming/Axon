@@ -933,13 +933,18 @@ class QueryRouterMixin:
                     diagnostics.channels_activated.append("sentence_window")
                     trace.channel_raw_counts["sentence_window"] = len(sw_window_results)
                     if _rust.can_result_postprocess():
-                        vector_results = _rust.dedupe_best_by_id(vector_results + sw_window_results) or []
+                        vector_results = (
+                            _rust.dedupe_best_by_id(vector_results + sw_window_results) or []
+                        )
                     else:
                         dedup_vector = {item["id"]: item for item in vector_results}
                         # Merge into dense dedup dict — best score wins per chunk
                         for sw_r in sw_window_results:
                             cid = sw_r["id"]
-                            if cid not in dedup_vector or sw_r["score"] > dedup_vector[cid]["score"]:
+                            if (
+                                cid not in dedup_vector
+                                or sw_r["score"] > dedup_vector[cid]["score"]
+                            ):
                                 dedup_vector[cid] = sw_r
                         vector_results = list(dedup_vector.values())
                     vector_count = len(vector_results)
@@ -1024,7 +1029,9 @@ class QueryRouterMixin:
 
         # Web Search Fallback (if enabled and local results are insufficient)
         _threshold_score_field = (
-            "score" if cfg.hybrid_search and getattr(cfg, "hybrid_mode", "rrf") != "rrf" else "vector_score"
+            "score"
+            if cfg.hybrid_search and getattr(cfg, "hybrid_mode", "rrf") != "rrf"
+            else "vector_score"
         )
         if _rust.can_result_postprocess():
             filtered_results = (

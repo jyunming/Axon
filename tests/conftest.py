@@ -54,6 +54,22 @@ def tmp_path():
 # Axon logger state isolation
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
+def clear_dry_run_env():
+    """Remove AXON_DRY_RUN between tests.
+
+    cli.py sets os.environ["AXON_DRY_RUN"] = "1" unconditionally when --dry-run
+    is passed.  Tests that call the CLI with --dry-run would otherwise poison
+    every subsequent test that checks os.getenv("AXON_DRY_RUN").
+    """
+    original = os.environ.pop("AXON_DRY_RUN", None)
+    yield
+    if "AXON_DRY_RUN" in os.environ:
+        del os.environ["AXON_DRY_RUN"]
+    if original is not None:
+        os.environ["AXON_DRY_RUN"] = original
+
+
+@pytest.fixture(autouse=True)
 def reset_axon_logger():
     """Restore Axon logger state after each test.
 

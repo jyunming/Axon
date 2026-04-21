@@ -66,7 +66,7 @@ def _patch_loaded_module(module: ModuleType) -> ModuleType:
     native_run_louvain = getattr(module, "run_louvain", None)
     if callable(native_run_louvain):
         try:
-            setattr(module, "_native_run_louvain", native_run_louvain)
+            module._native_run_louvain = native_run_louvain
         except Exception:
             pass
 
@@ -78,7 +78,7 @@ def _patch_loaded_module(module: ModuleType) -> ModuleType:
             _run_louvain.__doc__ = native_run_louvain.__doc__
         except Exception:
             pass
-        setattr(module, "run_louvain", _run_louvain)
+        module.run_louvain = _run_louvain
     return module
 
 

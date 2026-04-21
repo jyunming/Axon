@@ -330,6 +330,7 @@ from axon.api_routes.maintenance import router as _maintenance_router  # noqa: E
 from axon.api_routes.projects import router as _projects_router  # noqa: E402
 from axon.api_routes.query import router as _query_router  # noqa: E402
 from axon.api_routes.registry import router as _registry_router  # noqa: E402
+from axon.api_routes.security_routes import router as _security_router  # noqa: E402
 from axon.api_routes.shares import router as _shares_router  # noqa: E402
 
 _ROUTERS = (
@@ -342,6 +343,7 @@ _ROUTERS = (
     _maintenance_router,
     _registry_router,
     _governance_router,
+    _security_router,
 )
 
 for _router in _ROUTERS:

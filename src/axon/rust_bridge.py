@@ -82,7 +82,7 @@ class RustBridge:
             if isinstance(item, dict):
                 idx = item.get("index", item.get("doc_index"))
                 score = item.get("score", 0.0)
-            elif isinstance(item, (tuple, list)) and len(item) >= 2:
+            elif isinstance(item, tuple | list) and len(item) >= 2:
                 idx, score = item[0], item[1]
             else:
                 continue
@@ -155,7 +155,7 @@ class RustBridge:
                 idx = item.get("index", item.get("doc_index"))
                 score = item.get("score", 0.0)
                 channel = item.get("channel", "symbol_name")
-            elif isinstance(item, (tuple, list)) and len(item) >= 3:
+            elif isinstance(item, tuple | list) and len(item) >= 3:
                 idx, score, channel = item[0], item[1], item[2]
             else:
                 continue
@@ -200,10 +200,10 @@ class RustBridge:
     ) -> tuple[list[float], float] | None:
         out = self._call("code_lexical_scores", results, query_tokens)
         if (
-            isinstance(out, (tuple, list))
+            isinstance(out, tuple | list)
             and len(out) == 2
             and isinstance(out[0], list)
-            and isinstance(out[1], (int, float))
+            and isinstance(out[1], int | float)
         ):
             return [float(x) for x in out[0]], float(out[1])
         if not query_tokens:
@@ -277,9 +277,14 @@ class RustBridge:
         return (self._has("save_hash_store_binary") and self._has("load_hash_store_binary")) or True
 
     def save_hash_store_binary(self, path: str, hashes) -> bool:
-        out = self._call("save_hash_store_binary", path, list(hashes))
-        if isinstance(out, bool):
-            return out
+        mod = self._load()
+        fn = getattr(mod, "save_hash_store_binary", None) if mod else None
+        if callable(fn):
+            try:
+                fn(path, list(hashes))
+                return True  # Rust returns unit — success means no exception
+            except Exception as exc:
+                logger.debug("save_hash_store_binary Rust failed: %s", exc)
         try:
             Path(path).write_bytes("\n".join(sorted({str(x) for x in hashes})).encode("utf-8"))
             return True
@@ -287,18 +292,19 @@ class RustBridge:
             return False
 
     def load_hash_store_binary(self, path: str) -> set[str] | None:
-        out = self._call("load_hash_store_binary", path)
+        mod = self._load()
+        fn = getattr(mod, "load_hash_store_binary", None) if mod else None
+        if not callable(fn):
+            return None
+        try:
+            out = fn(path)
+        except Exception as exc:
+            # Old-format binary files fail on schema upgrades — expected, rebuild at next ingest
+            logger.debug("load_hash_store_binary: %s (file will be rebuilt)", exc)
+            return None
         if isinstance(out, list):
             return {str(x) for x in out if isinstance(x, str)}
-        try:
-            p = Path(path)
-            if not p.exists():
-                return None
-            return {
-                line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip()
-            }
-        except Exception:
-            return None
+        return None
 
     def can_sentence_codec(self) -> bool:
         return self._has("encode_sentence_index") and self._has("decode_sentence_index")
@@ -326,7 +332,7 @@ class RustBridge:
 
     def cosine_similarity(self, a: list[float], b: list[float]):
         out = self._call("cosine_similarity", a, b)
-        return float(out) if isinstance(out, (int, float)) else None
+        return float(out) if isinstance(out, int | float) else None
 
     def can_score_fusion(self) -> bool:
         return self._has("score_fusion_weighted") and self._has("score_fusion_rrf")
@@ -455,7 +461,7 @@ class RustBridge:
             entity_graph=entity_graph,
             relation_graph=relation_graph,
         )
-        if isinstance(out, (tuple, list)) and len(out) == 2:
+        if isinstance(out, tuple | list) and len(out) == 2:
             nodes = out[0] if isinstance(out[0], list) else []
             edges = out[1] if isinstance(out[1], list) else []
             return nodes, edges
@@ -524,6 +530,22 @@ class RustBridge:
                     node["chunk_ids"].append(doc_id)
                 node["frequency"] = len(node.get("chunk_ids", []))
         return inserted
+
+    def can_entity_merge(self) -> bool:
+        return self._has("merge_entities_into_graph")
+
+    def can_relation_merge(self) -> bool:
+        return self._has("merge_relations_into_graph")
+
+    def merge_relations_into_graph(self, relation_graph: dict, results: list) -> int | None:
+        out = self._call(
+            "merge_relations_into_graph",
+            relation_graph,
+            results,
+            relation_graph=relation_graph,
+            results=results,
+        )
+        return int(out) if isinstance(out, int) else None
 
     def can_resolve_entity_alias_groups(self) -> bool:
         return self._has("resolve_entity_alias_groups")

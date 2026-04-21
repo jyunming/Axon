@@ -2125,6 +2125,7 @@ fn build_graph_edges(
 /// Isolated nodes each get their own community.
 /// Returns empty dict for an empty graph.
 #[pyfunction]
+#[pyo3(signature = (nodes, edges, resolution = 1.0))]
 fn run_louvain(
     py: Python<'_>,
     nodes: &Bound<'_, PyList>,
@@ -2404,6 +2405,14 @@ fn merge_chunk_entities(
                         existing.set_item("chunk_ids", cids)?;
                     }
                 }
+                // Update frequency = current chunk_ids length
+                let freq = existing
+                    .get_item("chunk_ids")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.downcast::<PyList>().ok().map(|l| l.len()))
+                    .unwrap_or(1);
+                existing.set_item("frequency", freq)?;
             }
             None => {
                 // New entity
@@ -3177,10 +3186,10 @@ mod extra_rust_tests {
             meta1.set_item("qualified_name", "myapp.MyClass").unwrap();
             let doc1 = PyDict::new(py);
             doc1.set_item("metadata", meta1).unwrap();
-            
+
             let corpus = PyList::new(py, vec![doc1]).unwrap();
             let corpora = PyList::new(py, vec![corpus]).unwrap();
-            
+
             let query_tokens = PyList::new(py, vec!["myclass"]).unwrap();
             let results = symbol_channel_search(py, &corpora, &query_tokens, 10, None).unwrap();
             let res_list = results.bind(py);
@@ -3241,7 +3250,7 @@ mod extra_rust_tests {
             doc1.set_item("text", "hello world").unwrap();
             let results = PyList::new(py, vec![doc1]).unwrap();
             let query_tokens = PyList::new(py, vec!["hello"]).unwrap();
-            
+
             let (scores, max_score) = code_lexical_scores(&results, &query_tokens).unwrap();
             assert_eq!(scores.len(), 1);
             assert!(max_score >= 0.0);
@@ -3351,7 +3360,7 @@ mod extra_graph_merge_tests {
         Python::with_gil(|py| {
             let graph = PyDict::new(py);
             let results = PyList::empty(py);
-            
+
             let e1 = PyDict::new(py);
             e1.set_item("name", "Alice").unwrap();
             e1.set_item("description", "Person").unwrap();
@@ -3369,13 +3378,13 @@ mod extra_graph_merge_tests {
         Python::with_gil(|py| {
             let graph = PyDict::new(py);
             let results = PyList::empty(py);
-            
+
             let r1 = PyDict::new(py);
             r1.set_item("subject", "Alice").unwrap();
             r1.set_item("relation", "knows").unwrap();
             r1.set_item("object", "Bob").unwrap();
             r1.set_item("description", "Friends").unwrap();
-            
+
             let pair = PyTuple::new(py, vec!["doc1".into_pyobject(py).unwrap().into_any(), PyList::new(py, vec![r1]).unwrap().into_any()]).unwrap();
             results.append(pair).unwrap();
 
@@ -3390,13 +3399,13 @@ mod extra_graph_merge_tests {
         Python::with_gil(|py| {
             let sym_lookup = PyDict::new(py);
             sym_lookup.set_item("MyFunc", "node1").unwrap();
-            
+
             let chunks = PyList::empty(py);
             let c1 = PyDict::new(py);
             c1.set_item("id", "chunk1").unwrap();
             c1.set_item("text", "This code calls MyFunc here.").unwrap();
             chunks.append(c1).unwrap();
-            
+
             let existing = PyList::empty(py);
             let new_edges = build_code_doc_bridge_edges(py, &sym_lookup, &chunks, &existing).unwrap();
             let edges_bind = new_edges.bind(py);
@@ -3419,10 +3428,10 @@ mod extra_io_tests {
             let doc = PyDict::new(py);
             doc.set_item("t", 0).unwrap();
             let docs = PyList::new(py, vec![doc]).unwrap();
-            
+
             let encoded = encode_corpus_msgpack(py, &texts, &docs).unwrap();
             let data = encoded.bind(py).as_bytes();
-            
+
             let decoded = decode_corpus_msgpack(py, data).unwrap().unwrap();
             let decoded_list = decoded.bind(py);
             assert_eq!(decoded_list.len(), 1);
@@ -3436,10 +3445,10 @@ mod extra_io_tests {
             let e1 = PyDict::new(py);
             e1.set_item("description", "test").unwrap();
             graph.set_item("alice", e1).unwrap();
-            
+
             let encoded = encode_entity_graph(&graph).unwrap();
             let data = encoded.bind(py).as_bytes();
-            
+
             let decoded = decode_entity_graph(py, data).unwrap().unwrap();
             let decoded_dict = decoded.bind(py);
             assert!(decoded_dict.contains("alice").unwrap());
@@ -3455,7 +3464,7 @@ mod extra_io_tests {
             assert_eq!(decoded_list.len(), 1);
         });
     }
-    
+
     #[test]
     fn test_sentence_index_io() {
         Python::with_gil(|py| {
@@ -3463,10 +3472,10 @@ mod extra_io_tests {
             records.set_item("sent1", vec![1, 2, 3]).unwrap();
             let c2s = PyDict::new(py);
             c2s.set_item("chunk1", vec![0]).unwrap();
-            
+
             let encoded = encode_sentence_index(&records, &c2s).unwrap();
             let data = encoded.bind(py).as_bytes();
-            
+
             let (dec_rec, dec_c2s) = decode_sentence_index(py, data).unwrap().unwrap();
             assert!(dec_rec.bind(py).contains("sent1").unwrap());
             assert!(dec_c2s.bind(py).contains("chunk1").unwrap());
@@ -3493,13 +3502,13 @@ mod extra_edge_tests {
         let path_str = path.to_str().unwrap();
         let hash = "5d41402abc4b2a76b9719d911017c592";
         save_hash_store_binary(path_str, vec![hash.to_string()]).unwrap();
-        
+
         let found = probe_hash_store(path_str, hash).unwrap().unwrap();
         assert!(found);
-        
+
         let not_found = probe_hash_store(path_str, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap().unwrap();
         assert!(!not_found);
-        
+
         let _ = std::fs::remove_file(path);
     }
 
@@ -3508,10 +3517,10 @@ mod extra_edge_tests {
         Python::with_gil(|py| {
             let ids = PyList::new(py, vec!["doc1"]).unwrap();
             let meta = PyList::new(py, vec![vec![10, 20]]).unwrap();
-            
+
             let encoded = encode_sentence_meta(&ids, &meta).unwrap();
             let data = encoded.bind(py).as_bytes();
-            
+
             let (dec_ids, dec_meta) = decode_sentence_meta(py, data).unwrap().unwrap();
             assert_eq!(dec_ids.bind(py).len(), 1);
             assert_eq!(dec_meta.bind(py).len(), 1);
@@ -3541,10 +3550,10 @@ mod extra_error_tests {
             let data = b"not a msgpack";
             let res = decode_corpus_msgpack(py, data).unwrap();
             assert!(res.is_none());
-            
+
             let res_eg = decode_entity_graph(py, data).unwrap();
             assert!(res_eg.is_none());
-            
+
             let res_ee = decode_entity_embeddings(py, data).unwrap();
             assert!(res_ee.is_none());
         });
@@ -3585,17 +3594,17 @@ mod extra_type_conv_tests {
             let b = true.into_pyobject(py).unwrap();
             let rv = pyobject_to_rmpv(b.as_any()).unwrap();
             assert!(rv.is_bool());
-            
+
             // Test integer
             let i = 42_i64.into_pyobject(py).unwrap();
             let rv = pyobject_to_rmpv(i.as_any()).unwrap();
             assert!(rv.is_i64() || rv.is_u64());
-            
+
             // Test float
             let f = 3.14_f64.into_pyobject(py).unwrap();
             let rv = pyobject_to_rmpv(f.as_any()).unwrap();
             assert!(rv.is_f64());
-            
+
             // Test dict
             let d = PyDict::new(py);
             d.set_item("k", "v").unwrap();
@@ -3611,7 +3620,7 @@ mod extra_type_conv_tests {
             let rv = rmpv::Value::Nil;
             let obj = rmpv_to_pyobject(py, &rv).unwrap();
             assert!(obj.is_none(py));
-            
+
             // Test array
             let rv = rmpv::Value::Array(vec![rmpv::Value::from(1)]);
             let obj = rmpv_to_pyobject(py, &rv).unwrap();
@@ -3637,7 +3646,7 @@ mod extra_json_rmpv_tests {
             let list = decoded.bind(py);
             let item_bound = list.get_item(0).unwrap();
             let item = item_bound.downcast::<PyDict>().unwrap();
-            
+
             let text = item.get_item("text").unwrap().unwrap().extract::<String>().unwrap();
             assert_eq!(text, "hello");
         });
@@ -3652,7 +3661,7 @@ mod extra_json_rmpv_tests {
             let obj = rmpv_to_pyobject(py, &rv).unwrap();
             let dict = obj.bind(py).downcast::<PyDict>().unwrap();
             assert!(dict.contains("k").unwrap());
-            
+
             let back = pyobject_to_rmpv(dict.as_any()).unwrap();
             assert!(back.is_map());
         });
@@ -3671,7 +3680,7 @@ mod extra_graph_helper_tests {
             let tup = PyTuple::new(py, vec!["id1".into_pyobject(py).unwrap().into_any(), PyList::empty(py).into_any()]).unwrap();
             let res = extract_result_pair(tup.as_any()).unwrap();
             assert_eq!(res.0, "id1");
-            
+
             // Test list
             let lst = PyList::new(py, vec!["id2".into_pyobject(py).unwrap().into_any(), PyList::empty(py).into_any()]).unwrap();
             let res = extract_result_pair(lst.as_any()).unwrap();
@@ -3690,7 +3699,7 @@ mod extra_graph_helper_tests {
             let res = parse_triple_obj(d1.as_any()).unwrap();
             assert_eq!(res.0, "S1");
             assert_eq!(res.2, "O1");
-            
+
             // Test tuple
             let tup = PyTuple::new(py, vec!["S2", "R2", "O2"]).unwrap();
             let res = parse_triple_obj(tup.as_any()).unwrap();
@@ -3710,15 +3719,15 @@ mod extra_graph_error_tests {
         Python::with_gil(|py| {
             let entities = PyDict::new(py);
             let rels = PyDict::new(py);
-            
+
             // Invalid entry (not a dict)
             let bad_rels = PyList::new(py, vec!["not-a-dict"]).unwrap();
             rels.set_item("A", bad_rels).unwrap();
-            
+
             // Entry missing target
             let bad_rels2 = PyList::new(py, vec![PyDict::new(py)]).unwrap();
             rels.set_item("B", bad_rels2).unwrap();
-            
+
             let (nodes, edges) = build_graph_edges(py, &entities, &rels).unwrap();
             assert_eq!(edges.bind(py).len(), 0);
         });
@@ -3736,7 +3745,7 @@ mod extra_graph_update_tests {
     fn test_merge_entities_update() {
         Python::with_gil(|py| {
             let graph = PyDict::new(py);
-            
+
             // Initial entity
             let e1 = PyDict::new(py);
             e1.set_item("name", "Alice").unwrap();
@@ -3745,7 +3754,7 @@ mod extra_graph_update_tests {
             let pair = PyList::new(py, vec!["doc1".into_pyobject(py).unwrap().into_any(), PyList::new(py, vec![e1]).unwrap().into_any()]).unwrap();
             results.append(pair).unwrap();
             merge_entities_into_graph(py, &graph, &results).unwrap();
-            
+
             // Update entity type
             let e2 = PyDict::new(py);
             e2.set_item("name", "Alice").unwrap();
@@ -3754,7 +3763,7 @@ mod extra_graph_update_tests {
             let pair2 = PyList::new(py, vec!["doc2".into_pyobject(py).unwrap().into_any(), PyList::new(py, vec![e2]).unwrap().into_any()]).unwrap();
             results2.append(pair2).unwrap();
             merge_entities_into_graph(py, &graph, &results2).unwrap();
-            
+
             let alice_obj = graph.get_item("alice").unwrap().unwrap();
             let alice = alice_obj.downcast::<PyDict>().unwrap();
             assert_eq!(alice.get_item("type").unwrap().unwrap().extract::<String>().unwrap(), "PERSON");

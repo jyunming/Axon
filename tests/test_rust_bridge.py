@@ -1215,3 +1215,140 @@ class TestDedupCorpusPayload:
         texts, docs = result
         assert len(texts) == 2
         assert len(docs) == 3
+
+
+class TestBuildGraphEdges:
+    ENTITY_GRAPH = {"alice": {}, "bob": {}, "carol": {}}
+    RELATION_GRAPH = {
+        "alice": [{"target": "bob", "relation": "knows", "weight": 1.0}],
+        "bob": [{"target": "carol", "relation": "knows", "weight": 0.5}],
+    }
+
+    def test_returns_tuple(self):
+        nodes, edges = axon_rust.build_graph_edges(self.ENTITY_GRAPH, self.RELATION_GRAPH)
+        assert isinstance(nodes, list)
+        assert isinstance(edges, list)
+
+    def test_nodes_match_entity_graph(self):
+        nodes, _ = axon_rust.build_graph_edges(self.ENTITY_GRAPH, self.RELATION_GRAPH)
+        assert set(nodes) == set(self.ENTITY_GRAPH.keys())
+
+    def test_edge_count_matches_relations(self):
+        _, edges = axon_rust.build_graph_edges(self.ENTITY_GRAPH, self.RELATION_GRAPH)
+        assert len(edges) == 2
+
+    def test_edge_structure(self):
+        _, edges = axon_rust.build_graph_edges(self.ENTITY_GRAPH, self.RELATION_GRAPH)
+        for edge in edges:
+            assert len(edge) >= 2
+
+    def test_empty_graphs(self):
+        nodes, edges = axon_rust.build_graph_edges({}, {})
+        assert nodes == []
+        assert edges == []
+
+
+class TestLouvain:
+    NODES = ["a", "b", "c", "d"]
+    EDGES = [("a", "b", 1.0), ("b", "c", 1.0), ("c", "d", 0.5)]
+
+    def test_returns_dict(self):
+        result = axon_rust.run_louvain(self.NODES, self.EDGES)
+        assert isinstance(result, dict)
+
+    def test_all_nodes_assigned(self):
+        result = axon_rust.run_louvain(self.NODES, self.EDGES)
+        for node in self.NODES:
+            assert node in result
+
+    def test_community_ids_are_ints(self):
+        result = axon_rust.run_louvain(self.NODES, self.EDGES)
+        for v in result.values():
+            assert isinstance(v, int)
+
+    def test_optional_resolution(self):
+        r1 = axon_rust.run_louvain(self.NODES, self.EDGES)
+        r2 = axon_rust.run_louvain(self.NODES, self.EDGES, resolution=1.0)
+        assert r1 == r2
+
+
+class TestEntityMerge:
+    def _make_results(self):
+        return [
+            ("doc1", [{"name": "Alice", "type": "PERSON", "description": "a person"}]),
+            ("doc2", [{"name": "Alice", "type": "PERSON", "description": "same person"}]),
+            ("doc3", [{"name": "Bob", "type": "PERSON", "description": "another"}]),
+        ]
+
+    def test_returns_int(self):
+        graph = {}
+        count = axon_rust.merge_entities_into_graph(graph, self._make_results())
+        assert isinstance(count, int)
+
+    def test_new_entity_count(self):
+        graph = {}
+        count = axon_rust.merge_entities_into_graph(graph, self._make_results())
+        assert count == 2  # alice + bob
+
+    def test_existing_entity_deduplication(self):
+        graph = {}
+        axon_rust.merge_entities_into_graph(graph, self._make_results())
+        alice_key = "alice"
+        assert alice_key in graph
+        assert len(graph[alice_key]["chunk_ids"]) == 2
+
+    def test_frequency_updated_on_merge(self):
+        graph = {}
+        axon_rust.merge_entities_into_graph(graph, self._make_results())
+        assert graph["alice"]["frequency"] == 2
+
+    def test_bridge_can_entity_merge(self):
+        bridge = get_rust_bridge()
+        assert bridge.can_entity_merge()
+
+    def test_bridge_merge_entities(self):
+        bridge = get_rust_bridge()
+        graph = {}
+        count = bridge.merge_entities_into_graph(graph, self._make_results())
+        assert isinstance(count, int)
+        assert count == 2
+
+
+class TestRelationMerge:
+    def _make_results(self):
+        return [
+            (
+                "doc1",
+                [{"subject": "Alice", "relation": "knows", "object": "Bob", "description": ""}],
+            ),
+            (
+                "doc2",
+                [{"subject": "Alice", "relation": "knows", "object": "Bob", "description": ""}],
+            ),
+            (
+                "doc3",
+                [{"subject": "Bob", "relation": "works_at", "object": "Corp", "description": ""}],
+            ),
+        ]
+
+    def test_returns_int(self):
+        graph = {}
+        count = axon_rust.merge_relations_into_graph(graph, self._make_results())
+        assert isinstance(count, int)
+
+    def test_new_relation_count(self):
+        graph = {}
+        count = axon_rust.merge_relations_into_graph(graph, self._make_results())
+        assert count == 2  # alice->bob + bob->corp
+
+    def test_duplicate_increments_support(self):
+        graph = {}
+        axon_rust.merge_relations_into_graph(graph, self._make_results())
+        alice_rels = graph.get("alice", [])
+        knows_rel = next((r for r in alice_rels if r.get("relation") == "knows"), None)
+        assert knows_rel is not None
+        assert knows_rel.get("support_count", 1) >= 2
+
+    def test_bridge_can_relation_merge(self):
+        bridge = get_rust_bridge()
+        assert bridge.can_relation_merge()

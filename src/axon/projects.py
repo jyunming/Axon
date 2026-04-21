@@ -376,7 +376,7 @@ def project_sessions_path(name: str) -> str:
     return str(project_dir(name) / "sessions")
 
 
-def ensure_project(name: str, description: str = "") -> Path:
+def ensure_project(name: str, description: str = "", security_mode: str | None = None) -> Path:
     """Create project directory structure and meta.json if they don't exist.
 
 
