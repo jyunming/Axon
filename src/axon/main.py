@@ -1589,6 +1589,11 @@ Your primary goal is to help the user by answering questions based on the provid
             result = bridge.load_hash_store_binary(str(bin_path))
             if result is not None:
                 return result
+            # Corrupt binary — delete so it gets recreated cleanly on next save
+            logger.warning(
+                "Corrupt hash store binary deleted: %s (will rebuild on next ingest)", bin_path
+            )
+            bin_path.unlink(missing_ok=True)
 
         if path.exists():
             return set(path.read_text(encoding="utf-8").splitlines())
@@ -3134,7 +3139,25 @@ Your primary goal is to help the user by answering questions based on the provid
 
                 chunks_to_process = _grag_ok_list
 
-            logger.info(f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks...")
+            # Skip chunks already present in the entity graph (cross-restart dedup)
+            _already_extracted = self._build_extracted_chunk_ids()
+            if _already_extracted:
+                _before = len(chunks_to_process)
+                chunks_to_process = [
+                    c for c in chunks_to_process if c["id"] not in _already_extracted
+                ]
+                _skipped = _before - len(chunks_to_process)
+                if _skipped:
+                    logger.info(
+                        "   GraphRAG: skipping %d already-extracted chunk(s).", _skipped
+                    )
+
+            if not chunks_to_process:
+                logger.info("   GraphRAG: all chunks already extracted — nothing to do.")
+            else:
+                logger.info(
+                    f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks..."
+                )
 
             _relations_enabled = bool(self.config.graph_rag_relations)
             _min_ent = getattr(self.config, "graph_rag_min_entities_for_relations", 3)
@@ -3348,101 +3371,126 @@ Your primary goal is to help the user by answering questions based on the provid
 
                 rg_updated = False
 
-                for doc_id, triples in rel_results:
-                    for triple in triples:
-                        # triple is now a dict: {subject, relation, object, description}
-
-                        if isinstance(triple, dict):
-                            subject = triple.get("subject", "")
-
-                            relation = triple.get("relation", "")
-
-                            obj = triple.get("object", "")
-
+                # Rust fast-path for relation graph merge
+                if rel_results and _rust_bridge.can_relation_merge():
+                    _added = _rust_bridge.merge_relations_into_graph(
+                        self._relation_graph, rel_results
+                    )
+                    if _added > 0:
+                        rg_updated = True
+                        self._community_graph_dirty = True
+                    # Still run Python loop for _relation_description_buffer (side-effect only)
+                    for _doc_id, triples in rel_results:
+                        for triple in triples:
+                            if not isinstance(triple, dict):
+                                continue
                             description = triple.get("description", "")
+                            if not description:
+                                continue
+                            src_lower = triple.get("subject", "").lower().strip()
+                            tgt_lower = triple.get("object", "").lower().strip()
+                            if src_lower:
+                                pair = (src_lower, tgt_lower)
+                                if pair not in self._relation_description_buffer:
+                                    self._relation_description_buffer[pair] = []
+                                self._relation_description_buffer[pair].append(description)
+                else:
+                    for doc_id, triples in rel_results:
+                        for triple in triples:
+                            # triple is now a dict: {subject, relation, object, description}
 
-                        else:
-                            # Legacy tuple format fallback
+                            if isinstance(triple, dict):
+                                subject = triple.get("subject", "")
 
-                            subject, relation, obj = triple
+                                relation = triple.get("relation", "")
 
-                            description = ""
+                                obj = triple.get("object", "")
 
-                        src_lower = subject.lower().strip()
+                                description = triple.get("description", "")
 
-                        if not src_lower:
-                            continue
+                            else:
+                                # Legacy tuple format fallback
 
-                        entry = {
-                            "target": obj.lower().strip(),
-                            "relation": relation.strip(),
-                            "chunk_id": doc_id,
-                            "description": description,
-                            "strength": triple.get("strength", 5)
-                            if isinstance(triple, dict)
-                            else 5,
-                            "support_count": 1,
-                        }
+                                subject, relation, obj = triple
 
-                        if src_lower not in self._relation_graph:
-                            self._relation_graph[src_lower] = []
+                                description = ""
 
-                        # Item 8: weight tracking — increment weight for same (target, relation) pair
+                            src_lower = subject.lower().strip()
 
-                        rel_tgt = entry["target"]
+                            if not src_lower:
+                                continue
 
-                        rel_relation = entry["relation"]
+                            entry = {
+                                "target": obj.lower().strip(),
+                                "relation": relation.strip(),
+                                "chunk_id": doc_id,
+                                "description": description,
+                                "strength": triple.get("strength", 5)
+                                if isinstance(triple, dict)
+                                else 5,
+                                "support_count": 1,
+                            }
 
-                        existing_entry = next(
-                            (
-                                e
-                                for e in self._relation_graph[src_lower]
-                                if e.get("target") == rel_tgt and e.get("relation") == rel_relation
-                            ),
-                            None,
-                        )
+                            if src_lower not in self._relation_graph:
+                                self._relation_graph[src_lower] = []
 
-                        if existing_entry:
-                            # Accumulate strength-based weight (sum of LM-derived strengths)
+                            # Item 8: weight tracking — increment weight for same (target, relation) pair
 
-                            existing_entry["weight"] = existing_entry.get("weight", 1) + entry.get(
-                                "strength", 1
+                            rel_tgt = entry["target"]
+
+                            rel_relation = entry["relation"]
+
+                            existing_entry = next(
+                                (
+                                    e
+                                    for e in self._relation_graph[src_lower]
+                                    if e.get("target") == rel_tgt
+                                    and e.get("relation") == rel_relation
+                                ),
+                                None,
                             )
 
-                            existing_entry["support_count"] = (
-                                existing_entry.get("support_count", 1) + 1
-                            )
+                            if existing_entry:
+                                # Accumulate strength-based weight (sum of LM-derived strengths)
 
-                            # GAP 7: accumulate text_unit_ids
+                                existing_entry["weight"] = existing_entry.get(
+                                    "weight", 1
+                                ) + entry.get("strength", 1)
 
-                            if "text_unit_ids" not in existing_entry:
-                                existing_entry["text_unit_ids"] = [
-                                    existing_entry.get("chunk_id", "")
-                                ]
+                                existing_entry["support_count"] = (
+                                    existing_entry.get("support_count", 1) + 1
+                                )
 
-                            if doc_id not in existing_entry["text_unit_ids"]:
-                                existing_entry["text_unit_ids"].append(doc_id)
+                                # GAP 7: accumulate text_unit_ids
 
-                            rg_updated = True
+                                if "text_unit_ids" not in existing_entry:
+                                    existing_entry["text_unit_ids"] = [
+                                        existing_entry.get("chunk_id", "")
+                                    ]
 
-                        else:
-                            entry["weight"] = entry.get("strength", 1)
+                                if doc_id not in existing_entry["text_unit_ids"]:
+                                    existing_entry["text_unit_ids"].append(doc_id)
 
-                            entry["text_unit_ids"] = [doc_id]
+                                rg_updated = True
 
-                            self._relation_graph[src_lower].append(entry)
+                            else:
+                                entry["weight"] = entry.get("strength", 1)
 
-                            rg_updated = True
+                                entry["text_unit_ids"] = [doc_id]
 
-                        # GAP 3b: update relation description buffer
+                                self._relation_graph[src_lower].append(entry)
 
-                        if description:
-                            pair = (src_lower, rel_tgt)
+                                rg_updated = True
 
-                            if pair not in self._relation_description_buffer:
-                                self._relation_description_buffer[pair] = []
+                            # GAP 3b: update relation description buffer
 
-                            self._relation_description_buffer[pair].append(description)
+                            if description:
+                                pair = (src_lower, rel_tgt)
+
+                                if pair not in self._relation_description_buffer:
+                                    self._relation_description_buffer[pair] = []
+
+                                self._relation_description_buffer[pair].append(description)
 
                 if rg_updated and not _defer_saves:
                     self._save_relation_graph()

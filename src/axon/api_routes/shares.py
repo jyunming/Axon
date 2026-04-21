@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import getpass
 import logging
+import secrets
+import base64
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -214,6 +217,7 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
 
     from axon import api as _api
     from axon import governance as gov
+    from axon import security as _security
     from axon import shares as _shares
 
     if not _VALID_PROJECT_NAME_RE.match(request.project):
@@ -223,6 +227,43 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
         )
 
     user_dir = _api._get_user_dir()
+
+    sealed = _security.get_sealed_project_record(request.project, user_dir)
+    if sealed is not None:
+        if not _security.is_unlocked(user_dir):
+            raise HTTPException(
+                status_code=409,
+                detail="Sealed-store security must be unlocked before generating sealed shares.",
+            )
+        key_id = f"ssk_{secrets.token_hex(4)}"
+        try:
+            result = _security.generate_sealed_share(
+                owner_user_dir=user_dir,
+                project=request.project,
+                grantee=request.grantee,
+                key_id=key_id,
+            )
+        except _security.SecurityError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        result = {
+            **result,
+            "key_id": key_id,
+            "security_mode": "sealed_v1",
+        }
+
+        rid = getattr(req.state, "request_id", "")
+        surface = getattr(req.state, "surface", "api")
+        gov.emit(
+            "share_generated",
+            "share",
+            key_id,
+            project=request.project,
+            details={"grantee": request.grantee, "security_mode": "sealed_v1"},
+            surface=surface,
+            request_id=rid,
+        )
+        return result
 
     # Resolve nested projects via subs/ layout (e.g. research/papers → research/subs/papers)
 
@@ -265,6 +306,7 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
 
     from axon import api as _api
     from axon import governance as gov
+    from axon import security as _security
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
@@ -272,6 +314,28 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
     rid = getattr(req.state, "request_id", "")
 
     surface = getattr(req.state, "surface", "api")
+
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(request.share_string.encode("ascii")).decode("utf-8"))
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict) and payload.get("security_mode") == "sealed_v1":
+        try:
+            result = _security.redeem_sealed_share(user_dir, request.share_string)
+        except _security.SecurityError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        gov.emit(
+            "share_redeemed",
+            "share",
+            result.get("key_id", ""),
+            project=result.get("project", ""),
+            details={"owner": result.get("owner", ""), "security_mode": "sealed_v1"},
+            surface=surface,
+            request_id=rid,
+        )
+        return result
 
     try:
         result = _shares.redeem_share_key(
@@ -332,14 +396,28 @@ async def share_list():
     """List shares for the current user: both issued (sharing) and received (shared)."""
 
     from axon import api as _api
+    from axon import security as _security
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
 
-    removed = _shares.validate_received_shares(user_dir)
+    removed_open = _shares.validate_received_shares(user_dir)
+    removed_sealed = _security.validate_received_sealed_shares(user_dir)
 
-    result = _shares.list_shares(user_dir)
+    open_result = _shares.list_shares(user_dir)
+    sealed_result = _security.list_sealed_shares(user_dir)
 
+    def _tag(records: list[dict], security_mode: str) -> list[dict]:
+        return [{**record, "security_mode": security_mode} for record in records]
+
+    result = {
+        "sharing": _tag(open_result.get("sharing", []), "open")
+        + _tag(sealed_result.get("sharing", []), "sealed_v1"),
+        "shared": _tag(open_result.get("shared", []), "open")
+        + _tag(sealed_result.get("shared", []), "sealed_v1"),
+    }
+
+    removed = [*removed_open, *removed_sealed]
     if removed:
         result["removed_stale"] = removed
 

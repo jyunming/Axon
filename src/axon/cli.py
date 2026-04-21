@@ -1466,6 +1466,8 @@ def main():
                 "urllib3",
                 "markdown_it",
                 "asyncio",
+                "google_genai",
+                "google.genai",
             ):
                 _nlg = logging.getLogger(_noisy)
                 _nlg.setLevel(logging.WARNING)

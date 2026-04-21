@@ -1121,6 +1121,7 @@ def _tool_create_project(brain, args: dict) -> str:
         return "No project name provided."
     description = args.get("description", "").strip()
     ensure_project(name, description=description)
+    brain.switch_project(name)
     return f"Project '{name}' created." + (f" Description: {description}" if description else "")
 
 
@@ -1574,12 +1575,11 @@ def run_agent_loop(
         )
 
         if isinstance(result, str):
-            # Plain text response — strip any leaked XML tool-call syntax and return
+            # Plain text response — strip any leaked XML or JSON tool-call syntax and return
             import re as _re
 
-            result = _re.sub(
-                r"<tool_calls?>.*?</tool_calls?>", "", result, flags=_re.DOTALL
-            ).strip()
+            result = _re.sub(r"<tool_calls?>.*?</tool_calls?>", "", result, flags=_re.DOTALL)
+            result = _re.sub(r'\{[\s]*"tool_calls"\s*:.*\}', "", result, flags=_re.DOTALL).strip()
             return result
 
         # result is a list of ToolCall namedtuples

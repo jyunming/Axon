@@ -1175,3 +1175,209 @@ class TestDedupCorpusPayload:
         texts, docs = result
         assert len(texts) == 2
         assert len(docs) == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: GraphRAG acceleration
+# ---------------------------------------------------------------------------
+
+
+class TestBuildGraphEdges:
+    ENTITY_GRAPH = {
+        "alice": {"chunk_ids": ["c1"], "type": "PERSON", "frequency": 1, "degree": 1},
+        "bob": {"chunk_ids": ["c1"], "type": "PERSON", "frequency": 1, "degree": 1},
+        "carol": {"chunk_ids": ["c2"], "type": "PERSON", "frequency": 1, "degree": 0},
+    }
+    RELATION_GRAPH = {
+        "alice": [{"target": "bob", "relation": "knows", "weight": 2.0, "chunk_id": "c1"}],
+        "bob": [{"target": "carol", "relation": "knows", "weight": 1.0, "chunk_id": "c1"}],
+    }
+
+    def test_basic_edges(self):
+        nodes, edges = axon_rust.build_graph_edges(self.ENTITY_GRAPH, self.RELATION_GRAPH)
+        assert set(nodes) == {"alice", "bob", "carol"}
+        assert len(edges) == 2
+        edge_pairs = {(e[0], e[1]) for e in edges}
+        assert ("alice", "bob") in edge_pairs
+        assert ("bob", "carol") in edge_pairs
+
+    def test_edge_weights(self):
+        nodes, edges = axon_rust.build_graph_edges(self.ENTITY_GRAPH, self.RELATION_GRAPH)
+        alice_bob = next(e for e in edges if e[0] == "alice" and e[1] == "bob")
+        assert abs(alice_bob[2] - 2.0) < 1e-9
+
+    def test_empty_graphs(self):
+        nodes, edges = axon_rust.build_graph_edges({}, {})
+        assert nodes == []
+        assert edges == []
+
+    def test_bridge_can_graph_community(self):
+        bridge = get_rust_bridge()
+        assert bridge.can_graph_community()
+
+    def test_bridge_build_graph_edges(self):
+        bridge = get_rust_bridge()
+        result = bridge.build_graph_edges(self.ENTITY_GRAPH, self.RELATION_GRAPH)
+        assert result is not None
+        nodes, edges = result
+        assert len(nodes) == 3
+        assert len(edges) == 2
+
+
+class TestLouvain:
+    def _two_clique_graph(self):
+        nodes = ["a", "b", "c", "d", "e", "f"]
+        edges = [
+            ("a", "b", 1.0), ("b", "c", 1.0), ("a", "c", 1.0),
+            ("d", "e", 1.0), ("e", "f", 1.0), ("d", "f", 1.0),
+            ("c", "d", 0.05),
+        ]
+        return nodes, edges
+
+    def test_trivial_community(self):
+        nodes = ["alice", "bob"]
+        edges = [("alice", "bob", 1.0)]
+        result = axon_rust.run_louvain(nodes, edges)
+        assert isinstance(result, dict)
+        assert len(result) == 2
+        assert result["alice"] == result["bob"]
+
+    def test_empty_input(self):
+        result = axon_rust.run_louvain([], [])
+        assert result == {}
+
+    def test_two_clusters(self):
+        nodes, edges = self._two_clique_graph()
+        result = axon_rust.run_louvain(nodes, edges)
+        assert isinstance(result, dict)
+        assert len(result) == 6
+        # Nodes within each clique should share a community
+        clique1 = {result["a"], result["b"], result["c"]}
+        clique2 = {result["d"], result["e"], result["f"]}
+        assert len(clique1) == 1, "clique 1 should be one community"
+        assert len(clique2) == 1, "clique 2 should be one community"
+
+    def test_bridge_run_louvain(self):
+        bridge = get_rust_bridge()
+        nodes = ["x", "y"]
+        edges = [("x", "y", 1.0)]
+        result = bridge.run_louvain(nodes, edges)
+        assert isinstance(result, dict)
+        assert result["x"] == result["y"]
+
+
+class TestEntityMerge:
+    def _make_graph(self):
+        return {
+            "alice": {
+                "description": "A person",
+                "type": "PERSON",
+                "chunk_ids": ["c1"],
+                "frequency": 1,
+                "degree": 0,
+            }
+        }
+
+    def test_new_entity_inserted(self):
+        graph = self._make_graph()
+        results = [("c2", [{"name": "Bob", "type": "PERSON", "description": "Another person"}])]
+        count = axon_rust.merge_entities_into_graph(graph, results)
+        assert count == 1
+        assert "bob" in graph
+        assert graph["bob"]["frequency"] == 1
+        assert "c2" in graph["bob"]["chunk_ids"]
+
+    def test_existing_entity_updated(self):
+        graph = self._make_graph()
+        results = [("c2", [{"name": "Alice", "type": "PERSON", "description": "Alice again"}])]
+        count = axon_rust.merge_entities_into_graph(graph, results)
+        assert count == 0  # no new entity
+        assert "c2" in graph["alice"]["chunk_ids"]
+
+    def test_case_normalization(self):
+        graph = {}
+        results = [
+            ("c1", [{"name": "Alice", "type": "PERSON", "description": ""}]),
+            ("c2", [{"name": "alice", "type": "PERSON", "description": ""}]),
+        ]
+        axon_rust.merge_entities_into_graph(graph, results)
+        assert "alice" in graph
+        assert len(graph) == 1
+        assert set(graph["alice"]["chunk_ids"]) == {"c1", "c2"}
+
+    def test_empty_batch(self):
+        graph = self._make_graph()
+        count = axon_rust.merge_entities_into_graph(graph, [])
+        assert count == 0
+        assert len(graph) == 1
+
+    def test_bridge_can_entity_merge(self):
+        bridge = get_rust_bridge()
+        assert bridge.can_entity_merge()
+
+    def test_bridge_merge_entities(self):
+        bridge = get_rust_bridge()
+        graph = {}
+        results = [("c1", [{"name": "TestEnt", "type": "ORG", "description": "test"}])]
+        count = bridge.merge_entities_into_graph(graph, results)
+        assert isinstance(count, int)
+        assert "testent" in graph
+
+
+class TestRelationMerge:
+    def _make_graph(self):
+        return {
+            "alice": [
+                {
+                    "target": "bob",
+                    "relation": "knows",
+                    "chunk_id": "c1",
+                    "description": "they know each other",
+                    "weight": 1.0,
+                    "strength": 5,
+                    "support_count": 1,
+                    "text_unit_ids": ["c1"],
+                }
+            ]
+        }
+
+    def test_new_relation(self):
+        graph = {}
+        results = [
+            (
+                "c1",
+                [{"subject": "Alice", "relation": "knows", "object": "Bob", "description": "", "strength": 5}],
+            )
+        ]
+        count = axon_rust.merge_relations_into_graph(graph, results)
+        assert count == 1
+        assert "alice" in graph
+        assert graph["alice"][0]["target"] == "bob"
+
+    def test_existing_relation_weight_incremented(self):
+        graph = self._make_graph()
+        results = [
+            (
+                "c2",
+                [{"subject": "Alice", "relation": "knows", "object": "Bob", "description": "", "strength": 3}],
+            )
+        ]
+        count = axon_rust.merge_relations_into_graph(graph, results)
+        assert count == 0  # no new relation
+        assert graph["alice"][0]["support_count"] == 2
+        assert graph["alice"][0]["weight"] == pytest.approx(4.0, abs=0.01)
+        assert "c2" in graph["alice"][0].get("text_unit_ids", [])
+
+    def test_bridge_can_relation_merge(self):
+        bridge = get_rust_bridge()
+        assert bridge.can_relation_merge()
+
+    def test_bridge_merge_relations(self):
+        bridge = get_rust_bridge()
+        graph = {}
+        results = [
+            ("c1", [{"subject": "X", "relation": "links", "object": "Y", "description": "", "strength": 5}])
+        ]
+        count = bridge.merge_relations_into_graph(graph, results)
+        assert isinstance(count, int)
+        assert "x" in graph

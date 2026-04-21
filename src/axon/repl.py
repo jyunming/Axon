@@ -2482,6 +2482,8 @@ def _interactive_repl(
         "sentence_transformers",
         "chromadb",
         "httpcore",
+        "google_genai",
+        "google.genai",
     ):
         _lg = _logging.getLogger(_log)
 
@@ -5017,6 +5019,8 @@ def _interactive_repl(
                     "urllib3",
                     "markdown_it",
                     "asyncio",
+                    "google_genai",
+                    "google.genai",
                 )
                 # Determine current state from the first logger's level
                 _first = _logging.getLogger(_NOISY_LOGGERS[0])

@@ -714,6 +714,66 @@ class GraphRagMixin:
                 cleaned[key] = node
         return cleaned
 
+    def _build_extracted_chunk_ids(self) -> set[str]:
+        """Return the set of chunk IDs already present in the entity graph."""
+        seen: set[str] = set()
+        for entity_data in self._entity_graph.values():
+            if isinstance(entity_data, dict):
+                seen.update(entity_data.get("chunk_ids", []))
+        return seen
+
+    _GR_CACHE_FILE = ".gr_cache.msgpack"
+
+    def _save_gr_cache(self) -> None:
+        """Persist entity extraction buckets of _graph_rag_cache to disk for cross-restart skip."""
+        import json
+        import pathlib
+
+        from axon.rust_bridge import get_rust_bridge
+
+        cache = getattr(self, "_graph_rag_cache", {})
+        entities_bucket = cache.get("entities", {})
+        if not entities_bucket:
+            return
+        path = pathlib.Path(self.config.bm25_path) / self._GR_CACHE_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        bridge = get_rust_bridge()
+        if bridge.can_entity_graph_codec():
+            raw = bridge.encode_entity_graph(entities_bucket)
+            if raw is not None:
+                path.write_bytes(raw)
+                return
+        try:
+            path.write_text(json.dumps({"entities": entities_bucket}), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("_save_gr_cache failed: %s", exc)
+
+    def _load_gr_cache(self) -> dict:
+        """Load the persisted extraction cache; merges into _graph_rag_cache on brain open."""
+        import json
+        import pathlib
+
+        from axon.rust_bridge import get_rust_bridge
+
+        path = pathlib.Path(self.config.bm25_path) / self._GR_CACHE_FILE
+        if not path.exists():
+            return {}
+        bridge = get_rust_bridge()
+        if bridge.can_entity_graph_codec():
+            try:
+                result = bridge.decode_entity_graph(path.read_bytes())
+                if isinstance(result, dict):
+                    return {"entities": result}
+            except Exception:
+                pass
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
     def _load_entity_graph(self) -> dict:
         """Load persisted entity→doc_id graph from disk.
 
