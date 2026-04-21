@@ -1387,6 +1387,13 @@ fn get_score_from_dict(d: &Bound<'_, pyo3::types::PyDict>) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn get_optional_f64_from_dict(d: &Bound<'_, pyo3::types::PyDict>, key: &str) -> Option<f64> {
+    d.get_item(key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<f64>().ok())
+}
+
 /// Extract a String value from a PyDict by key.
 fn get_str_from_dict(d: &Bound<'_, pyo3::types::PyDict>, key: &str) -> String {
     d.get_item(key)
@@ -1654,6 +1661,85 @@ fn score_fusion_rrf(
         let vs = vector_scores.get(&doc_id).copied().unwrap_or(0.0);
         new_dict.bind(py).set_item("vector_score", vs)?;
         out.append(new_dict.bind(py))?;
+    }
+    Ok(out.unbind())
+}
+
+#[pyfunction]
+fn dedupe_best_by_id(
+    py: Python<'_>,
+    results: &Bound<'_, pyo3::types::PyList>,
+) -> PyResult<Py<pyo3::types::PyList>> {
+    use pyo3::types::{PyDict, PyList};
+    use std::collections::HashMap;
+
+    let mut order: Vec<String> = Vec::new();
+    let mut best_docs: HashMap<String, (f64, Py<PyDict>)> = HashMap::new();
+
+    for item in results.iter() {
+        let src = item.downcast::<PyDict>()?;
+        let doc_id = get_str_from_dict(src, "id");
+        if doc_id.is_empty() {
+            continue;
+        }
+        let score = get_score_from_dict(src);
+        let new_dict = copy_pydict(py, src)?.unbind();
+        match best_docs.get_mut(&doc_id) {
+            Some((best_score, best_dict)) => {
+                if score > *best_score {
+                    *best_score = score;
+                    *best_dict = new_dict;
+                }
+            }
+            None => {
+                order.push(doc_id.clone());
+                best_docs.insert(doc_id, (score, new_dict));
+            }
+        }
+    }
+
+    let out = PyList::empty(py);
+    for doc_id in order {
+        if let Some((_, doc)) = best_docs.remove(&doc_id) {
+            out.append(doc.bind(py))?;
+        }
+    }
+    Ok(out.unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (results, threshold, score_field="vector_score"))]
+fn filter_results_by_threshold(
+    py: Python<'_>,
+    results: &Bound<'_, pyo3::types::PyList>,
+    threshold: f64,
+    score_field: &str,
+) -> PyResult<Py<pyo3::types::PyList>> {
+    use pyo3::types::{PyDict, PyList};
+
+    let fallback_field = if score_field == "score" {
+        "vector_score"
+    } else {
+        "score"
+    };
+
+    let out = PyList::empty(py);
+    for item in results.iter() {
+        let src = item.downcast::<PyDict>()?;
+        let keep = match src.get_item("fused_only").ok().flatten() {
+            Some(value) => value.extract::<bool>().ok().unwrap_or(false),
+            None => false,
+        };
+        if keep {
+            out.append(copy_pydict(py, src)?)?;
+            continue;
+        }
+        let signal = get_optional_f64_from_dict(src, score_field)
+            .or_else(|| get_optional_f64_from_dict(src, fallback_field))
+            .unwrap_or(0.0);
+        if signal >= threshold {
+            out.append(copy_pydict(py, src)?)?;
+        }
     }
     Ok(out.unbind())
 }
@@ -2571,6 +2657,8 @@ fn axon_rust(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Phase 3
     m.add_function(wrap_pyfunction!(score_fusion_weighted, m)?)?;
     m.add_function(wrap_pyfunction!(score_fusion_rrf, m)?)?;
+    m.add_function(wrap_pyfunction!(dedupe_best_by_id, m)?)?;
+    m.add_function(wrap_pyfunction!(filter_results_by_threshold, m)?)?;
     m.add_function(wrap_pyfunction!(mmr_rerank, m)?)?;
     m.add_function(wrap_pyfunction!(build_code_doc_bridge_edges, m)?)?;
     m.add_function(wrap_pyfunction!(encode_entity_graph, m)?)?;

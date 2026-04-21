@@ -369,6 +369,30 @@ class RustBridge:
             diversity_bias=diversity_bias,
         )
 
+    def can_result_postprocess(self) -> bool:
+        return self._has("dedupe_best_by_id") and self._has("filter_results_by_threshold")
+
+    def dedupe_best_by_id(self, results: list[dict]) -> list[dict[str, Any]] | None:
+        out = self._call("dedupe_best_by_id", results, results=results)
+        return out if isinstance(out, list) else None
+
+    def filter_results_by_threshold(
+        self,
+        results: list[dict],
+        threshold: float,
+        score_field: str = "vector_score",
+    ) -> list[dict[str, Any]] | None:
+        out = self._call(
+            "filter_results_by_threshold",
+            results,
+            threshold,
+            score_field,
+            results=results,
+            threshold=threshold,
+            score_field=score_field,
+        )
+        return out if isinstance(out, list) else None
+
     def can_code_doc_bridge(self) -> bool:
         return self._has("build_code_doc_bridge_edges")
 

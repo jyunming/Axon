@@ -712,6 +712,9 @@ class QueryRouterMixin:
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
         self._check_mount_revocation()
+        from axon.rust_bridge import get_rust_bridge
+
+        _rust = get_rust_bridge()
         if cfg is None:
             cfg = self.config
         transforms = {
@@ -876,11 +879,14 @@ class QueryRouterMixin:
                     )
 
         # Dedupe vector store results based on ID
-        dedup_vector = {}
-        for r in all_vector_results:
-            if r["id"] not in dedup_vector or r["score"] > dedup_vector[r["id"]]["score"]:
-                dedup_vector[r["id"]] = r
-        vector_results = list(dedup_vector.values())
+        if _rust.can_result_postprocess():
+            vector_results = _rust.dedupe_best_by_id(all_vector_results) or []
+        else:
+            dedup_vector = {}
+            for r in all_vector_results:
+                if r["id"] not in dedup_vector or r["score"] > dedup_vector[r["id"]]["score"]:
+                    dedup_vector[r["id"]] = r
+            vector_results = list(dedup_vector.values())
         vector_count = len(vector_results)
         diagnostics.channels_activated.append("dense")
         trace.channel_raw_counts["dense"] = vector_count
@@ -926,12 +932,16 @@ class QueryRouterMixin:
                     diagnostics.sentence_window_used = True
                     diagnostics.channels_activated.append("sentence_window")
                     trace.channel_raw_counts["sentence_window"] = len(sw_window_results)
-                    # Merge into dense dedup dict — best score wins per chunk
-                    for sw_r in sw_window_results:
-                        cid = sw_r["id"]
-                        if cid not in dedup_vector or sw_r["score"] > dedup_vector[cid]["score"]:
-                            dedup_vector[cid] = sw_r
-                    vector_results = list(dedup_vector.values())
+                    if _rust.can_result_postprocess():
+                        vector_results = _rust.dedupe_best_by_id(vector_results + sw_window_results) or []
+                    else:
+                        dedup_vector = {item["id"]: item for item in vector_results}
+                        # Merge into dense dedup dict — best score wins per chunk
+                        for sw_r in sw_window_results:
+                            cid = sw_r["id"]
+                            if cid not in dedup_vector or sw_r["score"] > dedup_vector[cid]["score"]:
+                                dedup_vector[cid] = sw_r
+                        vector_results = list(dedup_vector.values())
                     vector_count = len(vector_results)
                     logger.debug(
                         "sentence_window: %d sentence hits → %d window results merged",
@@ -962,12 +972,8 @@ class QueryRouterMixin:
             for b_list in all_bm25_lists:
                 all_bm25_results.extend(b_list)
 
-            dedup_bm25 = {}
-            for r in all_bm25_results:
-                if r["id"] not in dedup_bm25 or r["score"] > dedup_bm25[r["id"]]["score"]:
-                    dedup_bm25[r["id"]] = r
-
             # --- Symbol channel injection (code mode only) ---
+            sym_hits = []
             if _code_mode and _code_query_tokens:
                 sym_hits = self._symbol_channel_search(
                     _code_query_tokens, top_k=fetch_k, filters=filters
@@ -982,13 +988,18 @@ class QueryRouterMixin:
                         trace.channel_raw_counts[ch] = sum(
                             1 for r in sym_hits if r.get("metadata", {}).get("channel") == ch
                         )
-                    # Merge into BM25 dedup (best score wins)
-                    for sr in sym_hits:
-                        sid = sr["id"]
-                        if sid not in dedup_bm25 or sr["score"] > dedup_bm25[sid]["score"]:
-                            dedup_bm25[sid] = sr
-
-            bm25_results = list(dedup_bm25.values())
+            if _rust.can_result_postprocess():
+                bm25_results = _rust.dedupe_best_by_id(all_bm25_results + sym_hits) or []
+            else:
+                dedup_bm25 = {}
+                for r in all_bm25_results:
+                    if r["id"] not in dedup_bm25 or r["score"] > dedup_bm25[r["id"]]["score"]:
+                        dedup_bm25[r["id"]] = r
+                for sr in sym_hits:
+                    sid = sr["id"]
+                    if sid not in dedup_bm25 or sr["score"] > dedup_bm25[sid]["score"]:
+                        dedup_bm25[sid] = sr
+                bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
             diagnostics.channels_activated.append("bm25")
             trace.channel_raw_counts["bm25"] = bm25_count
@@ -1012,24 +1023,37 @@ class QueryRouterMixin:
             results = vector_results
 
         # Web Search Fallback (if enabled and local results are insufficient)
-        filtered_results = []
-        for r in results:
-            # BM25-only hits (fused_only=True) have no meaningful vector_score;
-            # skip threshold for them so lexical-exact matches always surface.
-            if r.get("fused_only"):
-                filtered_results.append(r)
-                continue
-            # Choose the score to compare against similarity_threshold:
-            # - Dense-only: use vector_score (cosine similarity, 0–1).
-            # - Hybrid weighted: fused score is on the same cosine scale, so use score.
-            # - Hybrid RRF: fused score is 1/(rank+k) ≈ 0.016 max — NOT comparable to
-            #   a cosine threshold.  Use vector_score so the threshold is meaningful.
-            if cfg.hybrid_search and getattr(cfg, "hybrid_mode", "rrf") != "rrf":
-                sig = r.get("score", r.get("vector_score", 0.0))
-            else:
-                sig = r.get("vector_score", r.get("score", 0.0))
-            if sig >= cfg.similarity_threshold:
-                filtered_results.append(r)
+        _threshold_score_field = (
+            "score" if cfg.hybrid_search and getattr(cfg, "hybrid_mode", "rrf") != "rrf" else "vector_score"
+        )
+        if _rust.can_result_postprocess():
+            filtered_results = (
+                _rust.filter_results_by_threshold(
+                    results,
+                    cfg.similarity_threshold,
+                    _threshold_score_field,
+                )
+                or []
+            )
+        else:
+            filtered_results = []
+            for r in results:
+                # BM25-only hits (fused_only=True) have no meaningful vector_score;
+                # skip threshold for them so lexical-exact matches always surface.
+                if r.get("fused_only"):
+                    filtered_results.append(r)
+                    continue
+                # Choose the score to compare against similarity_threshold:
+                # - Dense-only: use vector_score (cosine similarity, 0–1).
+                # - Hybrid weighted: fused score is on the same cosine scale, so use score.
+                # - Hybrid RRF: fused score is 1/(rank+k) ≈ 0.016 max — NOT comparable to
+                #   a cosine threshold.  Use vector_score so the threshold is meaningful.
+                if _threshold_score_field == "score":
+                    sig = r.get("score", r.get("vector_score", 0.0))
+                else:
+                    sig = r.get("vector_score", r.get("score", 0.0))
+                if sig >= cfg.similarity_threshold:
+                    filtered_results.append(r)
 
         # CRAG-Lite correction policy (Epic 2, Stories 2.2–2.3)
         _crag_lite_enabled = getattr(cfg, "crag_lite", False)

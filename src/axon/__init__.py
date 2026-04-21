@@ -13,6 +13,12 @@ Uses sentence-transformers, Ollama, and LanceDB/ChromaDB/Qdrant.
 """
 
 
+from pathlib import Path
+
+from ._rust_loader import bootstrap_dev_rust_module
+
+bootstrap_dev_rust_module(__name__, Path(__file__).resolve().parent)
+
 from .config import AxonConfig
 from .embeddings import OpenEmbedding
 from .llm import OpenLLM
