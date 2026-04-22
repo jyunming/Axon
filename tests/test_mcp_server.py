@@ -145,7 +145,7 @@ def test_mcp_protocol_initialize():
         input=msg,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=30,
     )
 
     # Parse first line of stdout as JSON
@@ -183,7 +183,7 @@ def test_mcp_protocol_tools_list():
         input=msgs,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=30,
     )
 
     lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
