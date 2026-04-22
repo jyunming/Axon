@@ -9,11 +9,13 @@ from types import ModuleType
 
 logger = logging.getLogger("Axon.RustLoader")
 
-_DEV_ARTIFACT_NAMES = (
-    "axon_rust.dll",
-    "libaxon_rust.so",
-    "libaxon_rust.dylib",
-)
+
+def _platform_dev_artifact_name() -> str:
+    if sys.platform == "win32":
+        return "axon_rust.dll"
+    if sys.platform == "darwin":
+        return "libaxon_rust.dylib"
+    return "libaxon_rust.so"
 
 
 def _is_extension_artifact(path: Path) -> bool:
@@ -33,20 +35,17 @@ def _bundled_extension_artifacts(package_dir: Path) -> list[Path]:
 
 
 def _preferred_dev_artifact(package_dir: Path) -> Path | None:
-    target_dir = package_dir / "target" / "release"
-    dev_candidates = [target_dir / name for name in _DEV_ARTIFACT_NAMES]
-    dev_existing = [path for path in dev_candidates if path.is_file()]
-    if not dev_existing:
+    artifact = package_dir / "target" / "release" / _platform_dev_artifact_name()
+    if not artifact.is_file():
         return None
-    newest_dev = max(dev_existing, key=lambda item: item.stat().st_mtime)
 
     bundled = _bundled_extension_artifacts(package_dir)
     if not bundled:
-        return newest_dev
+        return artifact
 
     newest_bundled_mtime = max(path.stat().st_mtime for path in bundled)
-    if newest_dev.stat().st_mtime >= newest_bundled_mtime:
-        return newest_dev
+    if artifact.stat().st_mtime >= newest_bundled_mtime:
+        return artifact
     return None
 
 

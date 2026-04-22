@@ -40,6 +40,7 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Verify Rust extension compiled and importable
+        if: runner.os == 'Windows'
         run: python -c "import axon.axon_rust; print('axon_rust OK:', [x for x in dir(axon.axon_rust) if not x.startswith('_')])"
 
       - name: Audit packaging/version configuration

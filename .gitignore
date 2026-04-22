@@ -195,7 +195,8 @@ scripts/memory_audit.py
 tests/e2e/*.md
 !tests/e2e/test_vscode_extension_copilot_attended*.md
 
-# Rust git worktrees
+# Rust git worktrees and temporary research dirs
 _wt_rust/
 _wt_*/
+tmp_graphiti_research/
 
