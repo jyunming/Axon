@@ -55,12 +55,13 @@ def main() -> int:
     graph = _make_relation_graph()
     legacy = graph
     compact = _to_compact(graph)
-    tmp = Path(tempfile.mkdtemp(prefix="axon_rel_store_"))
-    legacy_path = tmp / "relation_graph_legacy.json"
-    compact_path = tmp / "relation_graph_compact.json"
+    with tempfile.TemporaryDirectory(prefix="axon_rel_store_") as tmp_str:
+        tmp = Path(tmp_str)
+        legacy_path = tmp / "relation_graph_legacy.json"
+        compact_path = tmp / "relation_graph_compact.json"
 
-    m_legacy = _bench_write_read(legacy, legacy_path)
-    m_compact = _bench_write_read(compact, compact_path)
+        m_legacy = _bench_write_read(legacy, legacy_path)
+        m_compact = _bench_write_read(compact, compact_path)
 
     result = {
         "legacy": m_legacy,

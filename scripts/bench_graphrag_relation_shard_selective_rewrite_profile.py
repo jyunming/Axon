@@ -94,14 +94,18 @@ def _save_once(
 
 def main() -> int:
     g = _make_graph()
-    root_off = Path(tempfile.mkdtemp(prefix="axon_rel_sel_off_"))
-    root_on = Path(tempfile.mkdtemp(prefix="axon_rel_sel_on_"))
+    with (
+        tempfile.TemporaryDirectory(prefix="axon_rel_sel_off_") as off_str,
+        tempfile.TemporaryDirectory(prefix="axon_rel_sel_on_") as on_str,
+    ):
+        root_off = Path(off_str)
+        root_on = Path(on_str)
 
-    off_first_dt, off_first_bytes, off_sigs = _save_once(root_off, g, False, None)
-    off_second_dt, off_second_bytes, _ = _save_once(root_off, g, False, off_sigs)
+        off_first_dt, off_first_bytes, off_sigs = _save_once(root_off, g, False, None)
+        off_second_dt, off_second_bytes, _ = _save_once(root_off, g, False, off_sigs)
 
-    on_first_dt, on_first_bytes, on_sigs = _save_once(root_on, g, True, None)
-    on_second_dt, on_second_bytes, _ = _save_once(root_on, g, True, on_sigs)
+        on_first_dt, on_first_bytes, on_sigs = _save_once(root_on, g, True, None)
+        on_second_dt, on_second_bytes, _ = _save_once(root_on, g, True, on_sigs)
 
     result = {
         "selective_off": {

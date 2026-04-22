@@ -26,24 +26,25 @@ def _load_uncached(j: Path, l: Path, use_list: bool) -> list[str]:
 
 
 def main() -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="axon_manifest_cache_"))
-    j, l = _make_manifest(tmp)
+    with tempfile.TemporaryDirectory(prefix="axon_manifest_cache_") as tmp_str:
+        tmp = Path(tmp_str)
+        j, l = _make_manifest(tmp)
 
-    t0 = time.perf_counter()
-    for _ in range(200):
-        _ = _load_uncached(j, l, use_list=False)
-    uncached_dt = time.perf_counter() - t0
-
-    sig = (j.stat().st_mtime_ns, l.stat().st_mtime_ns)
-    cached_names = _load_uncached(j, l, use_list=False)
-    t1 = time.perf_counter()
-    for _ in range(200):
-        cur_sig = (j.stat().st_mtime_ns, l.stat().st_mtime_ns)
-        if cur_sig == sig:
-            _ = cached_names
-        else:
+        t0 = time.perf_counter()
+        for _ in range(200):
             _ = _load_uncached(j, l, use_list=False)
-    cached_dt = time.perf_counter() - t1
+        uncached_dt = time.perf_counter() - t0
+
+        sig = (j.stat().st_mtime_ns, l.stat().st_mtime_ns)
+        cached_names = _load_uncached(j, l, use_list=False)
+        t1 = time.perf_counter()
+        for _ in range(200):
+            cur_sig = (j.stat().st_mtime_ns, l.stat().st_mtime_ns)
+            if cur_sig == sig:
+                _ = cached_names
+            else:
+                _ = _load_uncached(j, l, use_list=False)
+        cached_dt = time.perf_counter() - t1
 
     result = {
         "uncached_json_loop_seconds": uncached_dt,

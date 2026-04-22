@@ -31,32 +31,33 @@ def _make_docs(n_docs: int = 30000, n_unique_texts: int = 300) -> list[dict]:
 
 def _run_case(*, mode: str, docs: list[dict]) -> dict:
     os.environ["AXON_BM25_TEXT_INTERN"] = mode
-    tmp = Path(tempfile.mkdtemp(prefix="axon_bm25_mem_"))
-    r = BM25Retriever(storage_path=str(tmp), engine="python")
-    r.corpus = []
-    r._dirty = False
+    with tempfile.TemporaryDirectory(prefix="axon_bm25_mem_") as tmp_str:
+        tmp = Path(tmp_str)
+        r = BM25Retriever(storage_path=str(tmp), engine="python")
+        r.corpus = []
+        r._dirty = False
 
-    gc.collect()
-    t0 = time.perf_counter()
-    r.add_documents(docs, save_deferred=True)
-    dt = time.perf_counter() - t0
-    text_objs = [d.get("text", "") for d in r.corpus if isinstance(d, dict)]
-    unique_obj_ids = {id(t) for t in text_objs if isinstance(t, str)}
-    # Map back ids to one representative object to estimate unique text storage.
-    id_to_text = {}
-    for t in text_objs:
-        if isinstance(t, str):
-            id_to_text.setdefault(id(t), t)
-    unique_text_bytes = sum(sys.getsizeof(t) for t in id_to_text.values())
-    logical_text_bytes = sum(sys.getsizeof(t) for t in text_objs if isinstance(t, str))
-    return {
-        "text_intern_mode": mode,
-        "seconds_add_documents": dt,
-        "corpus_docs": len(r.corpus),
-        "unique_text_object_count": len(unique_obj_ids),
-        "logical_text_bytes": int(logical_text_bytes),
-        "unique_text_bytes_estimate": int(unique_text_bytes),
-    }
+        gc.collect()
+        t0 = time.perf_counter()
+        r.add_documents(docs, save_deferred=True)
+        dt = time.perf_counter() - t0
+        text_objs = [d.get("text", "") for d in r.corpus if isinstance(d, dict)]
+        unique_obj_ids = {id(t) for t in text_objs if isinstance(t, str)}
+        # Map back ids to one representative object to estimate unique text storage.
+        id_to_text = {}
+        for t in text_objs:
+            if isinstance(t, str):
+                id_to_text.setdefault(id(t), t)
+        unique_text_bytes = sum(sys.getsizeof(t) for t in id_to_text.values())
+        logical_text_bytes = sum(sys.getsizeof(t) for t in text_objs if isinstance(t, str))
+        return {
+            "text_intern_mode": mode,
+            "seconds_add_documents": dt,
+            "corpus_docs": len(r.corpus),
+            "unique_text_object_count": len(unique_obj_ids),
+            "logical_text_bytes": int(logical_text_bytes),
+            "unique_text_bytes_estimate": int(unique_text_bytes),
+        }
 
 
 def main() -> int:

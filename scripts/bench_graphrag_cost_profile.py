@@ -94,24 +94,25 @@ def _make_brain(cfg: AxonConfig) -> _Brain:
 def bench_llm_cache_global() -> dict:
     out = {}
     for enabled in (False, True):
-        tmp = Path(tempfile.mkdtemp(prefix="axon_cost_"))
-        cfg = _make_cfg(
-            tmp,
-            graph_rag_llm_cache=enabled,
-            graph_rag_llm_cache_size=2000,
-            graph_rag_global_max_map_chunks=8,
-            graph_rag_global_answer_cache=False,
-            graph_rag_global_map_cache=False,
-        )
-        brain = _make_brain(cfg)
-        t0 = time.perf_counter()
-        for _ in range(40):
-            _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
-        dt = time.perf_counter() - t0
-        out["cache_on" if enabled else "cache_off"] = {
-            "seconds_total": dt,
-            "llm_calls": brain.llm.calls,
-        }
+        with tempfile.TemporaryDirectory(prefix="axon_cost_") as tmp_str:
+            tmp = Path(tmp_str)
+            cfg = _make_cfg(
+                tmp,
+                graph_rag_llm_cache=enabled,
+                graph_rag_llm_cache_size=2000,
+                graph_rag_global_max_map_chunks=8,
+                graph_rag_global_answer_cache=False,
+                graph_rag_global_map_cache=False,
+            )
+            brain = _make_brain(cfg)
+            t0 = time.perf_counter()
+            for _ in range(40):
+                _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
+            dt = time.perf_counter() - t0
+            out["cache_on" if enabled else "cache_off"] = {
+                "seconds_total": dt,
+                "llm_calls": brain.llm.calls,
+            }
     out["llm_call_reduction_x"] = out["cache_off"]["llm_calls"] / max(
         out["cache_on"]["llm_calls"], 1
     )
@@ -124,25 +125,26 @@ def bench_llm_cache_global() -> dict:
 def bench_reduce_skip() -> dict:
     out = {}
     for enabled in (False, True):
-        tmp = Path(tempfile.mkdtemp(prefix="axon_cost_"))
-        cfg = _make_cfg(
-            tmp,
-            graph_rag_llm_cache=False,
-            graph_rag_global_answer_cache=False,
-            graph_rag_global_map_cache=False,
-            graph_rag_global_reduce_skip_if_top_points_le=(1 if enabled else 0),
-            graph_rag_global_reduce_skip_if_top_score_gte=95.0,
-            graph_rag_global_max_map_chunks=4,
-        )
-        brain = _make_brain(cfg)
-        t0 = time.perf_counter()
-        for _ in range(40):
-            _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
-        dt = time.perf_counter() - t0
-        out["skip_on" if enabled else "skip_off"] = {
-            "seconds_total": dt,
-            "llm_calls": brain.llm.calls,
-        }
+        with tempfile.TemporaryDirectory(prefix="axon_cost_") as tmp_str:
+            tmp = Path(tmp_str)
+            cfg = _make_cfg(
+                tmp,
+                graph_rag_llm_cache=False,
+                graph_rag_global_answer_cache=False,
+                graph_rag_global_map_cache=False,
+                graph_rag_global_reduce_skip_if_top_points_le=(1 if enabled else 0),
+                graph_rag_global_reduce_skip_if_top_score_gte=95.0,
+                graph_rag_global_max_map_chunks=4,
+            )
+            brain = _make_brain(cfg)
+            t0 = time.perf_counter()
+            for _ in range(40):
+                _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
+            dt = time.perf_counter() - t0
+            out["skip_on" if enabled else "skip_off"] = {
+                "seconds_total": dt,
+                "llm_calls": brain.llm.calls,
+            }
     out["llm_call_reduction_x"] = out["skip_off"]["llm_calls"] / max(out["skip_on"]["llm_calls"], 1)
     out["speedup"] = out["skip_off"]["seconds_total"] / max(out["skip_on"]["seconds_total"], 1e-12)
     return out
@@ -151,25 +153,26 @@ def bench_reduce_skip() -> dict:
 def bench_global_answer_cache() -> dict:
     out = {}
     for enabled in (False, True):
-        tmp = Path(tempfile.mkdtemp(prefix="axon_cost_"))
-        cfg = _make_cfg(
-            tmp,
-            graph_rag_llm_cache=False,
-            graph_rag_global_answer_cache=enabled,
-            graph_rag_global_answer_cache_size=500,
-            graph_rag_global_map_cache=False,
-            graph_rag_global_max_map_chunks=8,
-            graph_rag_global_reduce_skip_if_top_points_le=0,
-        )
-        brain = _make_brain(cfg)
-        t0 = time.perf_counter()
-        for _ in range(40):
-            _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
-        dt = time.perf_counter() - t0
-        out["answer_cache_on" if enabled else "answer_cache_off"] = {
-            "seconds_total": dt,
-            "llm_calls": brain.llm.calls,
-        }
+        with tempfile.TemporaryDirectory(prefix="axon_cost_") as tmp_str:
+            tmp = Path(tmp_str)
+            cfg = _make_cfg(
+                tmp,
+                graph_rag_llm_cache=False,
+                graph_rag_global_answer_cache=enabled,
+                graph_rag_global_answer_cache_size=500,
+                graph_rag_global_map_cache=False,
+                graph_rag_global_max_map_chunks=8,
+                graph_rag_global_reduce_skip_if_top_points_le=0,
+            )
+            brain = _make_brain(cfg)
+            t0 = time.perf_counter()
+            for _ in range(40):
+                _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
+            dt = time.perf_counter() - t0
+            out["answer_cache_on" if enabled else "answer_cache_off"] = {
+                "seconds_total": dt,
+                "llm_calls": brain.llm.calls,
+            }
     out["llm_call_reduction_x"] = out["answer_cache_off"]["llm_calls"] / max(
         out["answer_cache_on"]["llm_calls"], 1
     )
@@ -180,55 +183,57 @@ def bench_global_answer_cache() -> dict:
 
 
 def bench_persist_if_changed() -> dict:
-    tmp = Path(tempfile.mkdtemp(prefix="axon_cost_"))
-    cfg = _make_cfg(tmp)
-    brain = _make_brain(cfg)
-    # warm write
-    brain._save_entity_graph()
-    t0 = time.perf_counter()
-    for _ in range(300):
+    with tempfile.TemporaryDirectory(prefix="axon_cost_") as tmp_str:
+        tmp = Path(tmp_str)
+        cfg = _make_cfg(tmp)
+        brain = _make_brain(cfg)
+        # warm write
         brain._save_entity_graph()
-    dt_cached = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        for _ in range(300):
+            brain._save_entity_graph()
+        dt_cached = time.perf_counter() - t0
 
-    # baseline direct-write simulation for comparison
-    import json as _json
+        # baseline direct-write simulation for comparison
+        import json as _json
 
-    p = Path(cfg.bm25_path) / ".entity_graph_baseline.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    t1 = time.perf_counter()
-    for _ in range(300):
-        p.write_text(_json.dumps(brain._entity_graph), encoding="utf-8")
-    dt_baseline = time.perf_counter() - t1
+        p = Path(cfg.bm25_path) / ".entity_graph_baseline.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        t1 = time.perf_counter()
+        for _ in range(300):
+            p.write_text(_json.dumps(brain._entity_graph), encoding="utf-8")
+        dt_baseline = time.perf_counter() - t1
 
-    return {
-        "persist_if_changed_seconds": dt_cached,
-        "baseline_write_every_time_seconds": dt_baseline,
-        "speedup": dt_baseline / max(dt_cached, 1e-12),
-    }
+        return {
+            "persist_if_changed_seconds": dt_cached,
+            "baseline_write_every_time_seconds": dt_baseline,
+            "speedup": dt_baseline / max(dt_cached, 1e-12),
+        }
 
 
 def bench_global_map_cache() -> dict:
     out = {}
     for enabled in (False, True):
-        tmp = Path(tempfile.mkdtemp(prefix="axon_cost_"))
-        cfg = _make_cfg(
-            tmp,
-            graph_rag_llm_cache=False,
-            graph_rag_global_answer_cache=False,
-            graph_rag_global_map_cache=enabled,
-            graph_rag_global_map_cache_size=2000,
-            graph_rag_global_max_map_chunks=8,
-            graph_rag_global_reduce_skip_if_top_points_le=0,
-        )
-        brain = _make_brain(cfg)
-        t0 = time.perf_counter()
-        for _ in range(40):
-            _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
-        dt = time.perf_counter() - t0
-        out["map_cache_on" if enabled else "map_cache_off"] = {
-            "seconds_total": dt,
-            "llm_calls": brain.llm.calls,
-        }
+        with tempfile.TemporaryDirectory(prefix="axon_cost_") as tmp_str:
+            tmp = Path(tmp_str)
+            cfg = _make_cfg(
+                tmp,
+                graph_rag_llm_cache=False,
+                graph_rag_global_answer_cache=False,
+                graph_rag_global_map_cache=enabled,
+                graph_rag_global_map_cache_size=2000,
+                graph_rag_global_max_map_chunks=8,
+                graph_rag_global_reduce_skip_if_top_points_le=0,
+            )
+            brain = _make_brain(cfg)
+            t0 = time.perf_counter()
+            for _ in range(40):
+                _ = brain._global_search_map_reduce("What are the key graph findings?", cfg)
+            dt = time.perf_counter() - t0
+            out["map_cache_on" if enabled else "map_cache_off"] = {
+                "seconds_total": dt,
+                "llm_calls": brain.llm.calls,
+            }
     out["llm_call_reduction_x"] = out["map_cache_off"]["llm_calls"] / max(
         out["map_cache_on"]["llm_calls"], 1
     )

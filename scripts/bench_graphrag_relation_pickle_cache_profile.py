@@ -38,30 +38,31 @@ def _load_json_merge(paths: list[Path]) -> dict:
 
 
 def main() -> int:
-    root = Path(tempfile.mkdtemp(prefix="axon_rel_pickle_cache_"))
-    paths = _make_shards(root)
+    with tempfile.TemporaryDirectory(prefix="axon_rel_pickle_cache_") as tmp_str:
+        root = Path(tmp_str)
+        paths = _make_shards(root)
 
-    t0 = time.perf_counter()
-    merged = _load_json_merge(paths)
-    json_load_dt = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        merged = _load_json_merge(paths)
+        json_load_dt = time.perf_counter() - t0
 
-    cache_path = root / ".relation_graph.cache.pkl"
-    t1 = time.perf_counter()
-    with open(cache_path, "wb") as f:
-        pickle.dump(merged, f, protocol=4)
-    pickle_write_dt = time.perf_counter() - t1
+        cache_path = root / ".relation_graph.cache.pkl"
+        t1 = time.perf_counter()
+        with open(cache_path, "wb") as f:
+            pickle.dump(merged, f, protocol=4)
+        pickle_write_dt = time.perf_counter() - t1
 
-    t2 = time.perf_counter()
-    with open(cache_path, "rb") as f:
-        cached = pickle.load(f)
-    pickle_load_dt = time.perf_counter() - t2
+        t2 = time.perf_counter()
+        with open(cache_path, "rb") as f:
+            cached = pickle.load(f)
+        pickle_load_dt = time.perf_counter() - t2
 
-    result = {
-        "json_merge_load": {"seconds": json_load_dt, "entries": len(merged)},
-        "pickle_cache_write": {"seconds": pickle_write_dt, "bytes": cache_path.stat().st_size},
-        "pickle_cache_load": {"seconds": pickle_load_dt, "entries": len(cached)},
-        "summary": {"reload_speedup_x": json_load_dt / max(pickle_load_dt, 1e-12)},
-    }
+        result = {
+            "json_merge_load": {"seconds": json_load_dt, "entries": len(merged)},
+            "pickle_cache_write": {"seconds": pickle_write_dt, "bytes": cache_path.stat().st_size},
+            "pickle_cache_load": {"seconds": pickle_load_dt, "entries": len(cached)},
+            "summary": {"reload_speedup_x": json_load_dt / max(pickle_load_dt, 1e-12)},
+        }
     out = Path("C:/dev/studio_brain_open/bench_results_graphrag_relation_pickle_cache_profile.json")
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))

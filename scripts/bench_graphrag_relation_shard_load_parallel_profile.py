@@ -45,19 +45,20 @@ def _decode_shard(path: Path) -> int:
 
 
 def main() -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="axon_rel_load_parallel_"))
-    shard_paths = _write_shards(tmp, n=16)
+    with tempfile.TemporaryDirectory(prefix="axon_rel_load_parallel_") as tmp_str:
+        tmp = Path(tmp_str)
+        shard_paths = _write_shards(tmp, n=16)
 
-    t0 = time.perf_counter()
-    seq_total = 0
-    for p in shard_paths:
-        seq_total += _decode_shard(p)
-    seq_dt = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        seq_total = 0
+        for p in shard_paths:
+            seq_total += _decode_shard(p)
+        seq_dt = time.perf_counter() - t0
 
-    t1 = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        par_total = sum(ex.map(_decode_shard, shard_paths))
-    par_dt = time.perf_counter() - t1
+        t1 = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            par_total = sum(ex.map(_decode_shard, shard_paths))
+        par_dt = time.perf_counter() - t1
 
     result = {
         "sequential": {"seconds": seq_dt, "decoded_entries": seq_total},

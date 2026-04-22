@@ -31,38 +31,39 @@ def _run_case(*, dedup: bool, compress: bool, docs: list[dict]) -> dict:
     os.environ["AXON_BM25_COMPRESS_MIN_BYTES"] = "1"
     os.environ["AXON_BM25_COMPRESS_LEVEL"] = "6"
 
-    tmp = Path(tempfile.mkdtemp(prefix="axon_bm25_dedup_"))
-    r = BM25Retriever(storage_path=str(tmp), engine="python")
-    r.corpus = docs
+    with tempfile.TemporaryDirectory(prefix="axon_bm25_dedup_") as tmp_str:
+        tmp = Path(tmp_str)
+        r = BM25Retriever(storage_path=str(tmp), engine="python")
+        r.corpus = docs
 
-    t0 = time.perf_counter()
-    r.save()
-    save_dt = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        r.save()
+        save_dt = time.perf_counter() - t0
 
-    json_path = tmp / "bm25_corpus.json"
-    zst_path = tmp / "bm25_corpus.json.zst"
-    bytes_json = _size(json_path)
-    bytes_zst = _size(zst_path)
-    on_disk = bytes_zst if bytes_zst > 0 else bytes_json
+        json_path = tmp / "bm25_corpus.json"
+        zst_path = tmp / "bm25_corpus.json.zst"
+        bytes_json = _size(json_path)
+        bytes_zst = _size(zst_path)
+        on_disk = bytes_zst if bytes_zst > 0 else bytes_json
 
-    t1 = time.perf_counter()
-    r2 = BM25Retriever(storage_path=str(tmp), engine="python")
-    load_dt = time.perf_counter() - t1
-    docs_loaded = len(r2.corpus)
-    dedup_lazy_docs = int(getattr(r2, "_dedup_doc_count", 0) or 0)
-    docs_logical = docs_loaded + dedup_lazy_docs
+        t1 = time.perf_counter()
+        r2 = BM25Retriever(storage_path=str(tmp), engine="python")
+        load_dt = time.perf_counter() - t1
+        docs_loaded = len(r2.corpus)
+        dedup_lazy_docs = int(getattr(r2, "_dedup_doc_count", 0) or 0)
+        docs_logical = docs_loaded + dedup_lazy_docs
 
-    return {
-        "dedup_enabled": dedup,
-        "compress_enabled": compress,
-        "save_seconds": save_dt,
-        "load_seconds": load_dt,
-        "file_bytes_json": bytes_json,
-        "file_bytes_zst": bytes_zst,
-        "file_bytes_effective": on_disk,
-        "docs_loaded": docs_loaded,
-        "docs_loaded_logical": docs_logical,
-    }
+        return {
+            "dedup_enabled": dedup,
+            "compress_enabled": compress,
+            "save_seconds": save_dt,
+            "load_seconds": load_dt,
+            "file_bytes_json": bytes_json,
+            "file_bytes_zst": bytes_zst,
+            "file_bytes_effective": on_disk,
+            "docs_loaded": docs_loaded,
+            "docs_loaded_logical": docs_logical,
+        }
 
 
 def main() -> int:

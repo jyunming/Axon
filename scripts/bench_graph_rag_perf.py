@@ -43,8 +43,7 @@ class _BenchBrain(GraphRagMixin):
     pass
 
 
-def _make_cfg(**kwargs) -> AxonConfig:
-    tmp = Path(tempfile.mkdtemp(prefix="axon_bench_"))
+def _make_cfg(base_dir: Path, **kwargs) -> AxonConfig:
     defaults = {
         "graph_rag": True,
         "graph_rag_mode": "local",
@@ -52,8 +51,8 @@ def _make_cfg(**kwargs) -> AxonConfig:
     }
     defaults.update(kwargs)
     return AxonConfig(
-        bm25_path=str(tmp / "bm25"),
-        vector_store_path=str(tmp / "vs"),
+        bm25_path=str(base_dir / "bm25"),
+        vector_store_path=str(base_dir / "vs"),
         **defaults,
     )
 
@@ -154,139 +153,152 @@ def _wire_dense_relations(
 
 
 def _bench_local_context(iterations: int = 20) -> dict:
-    cfg = _make_cfg(graph_rag_local_max_context_tokens=8000)
-    out = {}
-    for batch_fetch in (False, True):
-        cfg.graph_rag_local_batch_fetch = batch_fetch
-        brain = _make_brain(cfg, n_chunks=2500)
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            _ = brain._local_search_context("who is alice?", ["alice"], cfg)
-        dt = time.perf_counter() - t0
-        out["batch" if batch_fetch else "single"] = {
-            "seconds_total": dt,
-            "seconds_avg": dt / iterations,
-            "vector_store_calls": brain.vector_store.calls,
-        }
-    out["speedup_avg"] = out["single"]["seconds_avg"] / max(out["batch"]["seconds_avg"], 1e-12)
-    return out
+    with tempfile.TemporaryDirectory(prefix="axon_bench_") as tmp_str:
+        cfg = _make_cfg(Path(tmp_str), graph_rag_local_max_context_tokens=8000)
+        out = {}
+        for batch_fetch in (False, True):
+            cfg.graph_rag_local_batch_fetch = batch_fetch
+            brain = _make_brain(cfg, n_chunks=2500)
+            t0 = time.perf_counter()
+            for _ in range(iterations):
+                _ = brain._local_search_context("who is alice?", ["alice"], cfg)
+            dt = time.perf_counter() - t0
+            out["batch" if batch_fetch else "single"] = {
+                "seconds_total": dt,
+                "seconds_avg": dt / iterations,
+                "vector_store_calls": brain.vector_store.calls,
+            }
+        out["speedup_avg"] = out["single"]["seconds_avg"] / max(out["batch"]["seconds_avg"], 1e-12)
+        return out
 
 
 def _bench_relation_support_fast(iterations: int = 80) -> dict:
-    cfg = _make_cfg(
-        graph_rag_local_max_context_tokens=12000,
-        graph_rag_local_top_k_entities=30,
-        graph_rag_local_top_k_relationships=40,
-        graph_rag_local_batch_fetch=True,
-    )
-    out = {}
-    for enabled in (False, True):
-        cfg.graph_rag_local_relation_support_fast = enabled
-        brain = _make_brain(cfg, n_chunks=50)
-        matched = _wire_dense_relations(brain, n_entities=45, edges_per_entity=70)
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            _ = brain._local_search_context("dense relation query", matched, cfg)
-        dt = time.perf_counter() - t0
-        out["fast_on" if enabled else "fast_off"] = {
-            "seconds_total": dt,
-            "seconds_avg": dt / iterations,
-            "vector_store_calls": brain.vector_store.calls,
-        }
-    out["speedup_avg"] = out["fast_off"]["seconds_avg"] / max(out["fast_on"]["seconds_avg"], 1e-12)
-    return out
+    with tempfile.TemporaryDirectory(prefix="axon_bench_") as tmp_str:
+        cfg = _make_cfg(
+            Path(tmp_str),
+            graph_rag_local_max_context_tokens=12000,
+            graph_rag_local_top_k_entities=30,
+            graph_rag_local_top_k_relationships=40,
+            graph_rag_local_batch_fetch=True,
+        )
+        out = {}
+        for enabled in (False, True):
+            cfg.graph_rag_local_relation_support_fast = enabled
+            brain = _make_brain(cfg, n_chunks=50)
+            matched = _wire_dense_relations(brain, n_entities=45, edges_per_entity=70)
+            t0 = time.perf_counter()
+            for _ in range(iterations):
+                _ = brain._local_search_context("dense relation query", matched, cfg)
+            dt = time.perf_counter() - t0
+            out["fast_on" if enabled else "fast_off"] = {
+                "seconds_total": dt,
+                "seconds_avg": dt / iterations,
+                "vector_store_calls": brain.vector_store.calls,
+            }
+        out["speedup_avg"] = out["fast_off"]["seconds_avg"] / max(
+            out["fast_on"]["seconds_avg"], 1e-12
+        )
+        return out
 
 
 def _bench_entity_degree_fast(iterations: int = 120) -> dict:
-    cfg = _make_cfg(
-        graph_rag_local_max_context_tokens=12000,
-        graph_rag_local_top_k_entities=35,
-        graph_rag_local_top_k_relationships=40,
-        graph_rag_local_batch_fetch=True,
-        graph_rag_local_relation_support_fast=True,
-    )
-    out = {}
-    for enabled in (False, True):
-        cfg.graph_rag_local_entity_degree_fast = enabled
-        brain = _make_brain(cfg, n_chunks=50)
-        matched = _wire_dense_relations(brain, n_entities=60, edges_per_entity=80)
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            _ = brain._local_search_context("entity degree benchmark", matched, cfg)
-        dt = time.perf_counter() - t0
-        out["fast_on" if enabled else "fast_off"] = {
-            "seconds_total": dt,
-            "seconds_avg": dt / iterations,
-            "vector_store_calls": brain.vector_store.calls,
-        }
-    out["speedup_avg"] = out["fast_off"]["seconds_avg"] / max(out["fast_on"]["seconds_avg"], 1e-12)
-    return out
+    with tempfile.TemporaryDirectory(prefix="axon_bench_") as tmp_str:
+        cfg = _make_cfg(
+            Path(tmp_str),
+            graph_rag_local_max_context_tokens=12000,
+            graph_rag_local_top_k_entities=35,
+            graph_rag_local_top_k_relationships=40,
+            graph_rag_local_batch_fetch=True,
+            graph_rag_local_relation_support_fast=True,
+        )
+        out = {}
+        for enabled in (False, True):
+            cfg.graph_rag_local_entity_degree_fast = enabled
+            brain = _make_brain(cfg, n_chunks=50)
+            matched = _wire_dense_relations(brain, n_entities=60, edges_per_entity=80)
+            t0 = time.perf_counter()
+            for _ in range(iterations):
+                _ = brain._local_search_context("entity degree benchmark", matched, cfg)
+            dt = time.perf_counter() - t0
+            out["fast_on" if enabled else "fast_off"] = {
+                "seconds_total": dt,
+                "seconds_avg": dt / iterations,
+                "vector_store_calls": brain.vector_store.calls,
+            }
+        out["speedup_avg"] = out["fast_off"]["seconds_avg"] / max(
+            out["fast_on"]["seconds_avg"], 1e-12
+        )
+        return out
 
 
 def _bench_early_cutoff(iterations: int = 120) -> dict:
-    cfg = _make_cfg(
-        graph_rag_local_max_context_tokens=2200,
-        graph_rag_local_top_k_entities=40,
-        graph_rag_local_top_k_relationships=60,
-        graph_rag_local_batch_fetch=True,
-        graph_rag_local_relation_support_fast=True,
-        graph_rag_local_entity_degree_fast=True,
-    )
-    out = {}
-    for enabled in (False, True):
-        cfg.graph_rag_local_early_cutoff = enabled
-        cfg.graph_rag_local_early_cutoff_factor = 0.2
-        brain = _make_brain(cfg, n_chunks=50)
-        matched = _wire_dense_relations(brain, n_entities=70, edges_per_entity=90)
-        # add richer communities so non-text-unit candidates can saturate budget
-        brain._community_levels = {0: {e: i % 8 for i, e in enumerate(matched)}}
-        brain._community_summaries = {
-            f"0_{i}": {
-                "title": f"Community {i}",
-                "summary": "Dense graph neighborhood with multiple strong shared relations and entities. "
-                "Supports context without requiring many raw text units.",
-                "rank": float(10 - i),
-                "level": 0,
+    with tempfile.TemporaryDirectory(prefix="axon_bench_") as tmp_str:
+        cfg = _make_cfg(
+            Path(tmp_str),
+            graph_rag_local_max_context_tokens=2200,
+            graph_rag_local_top_k_entities=40,
+            graph_rag_local_top_k_relationships=60,
+            graph_rag_local_batch_fetch=True,
+            graph_rag_local_relation_support_fast=True,
+            graph_rag_local_entity_degree_fast=True,
+        )
+        out = {}
+        for enabled in (False, True):
+            cfg.graph_rag_local_early_cutoff = enabled
+            cfg.graph_rag_local_early_cutoff_factor = 0.2
+            brain = _make_brain(cfg, n_chunks=50)
+            matched = _wire_dense_relations(brain, n_entities=70, edges_per_entity=90)
+            # add richer communities so non-text-unit candidates can saturate budget
+            brain._community_levels = {0: {e: i % 8 for i, e in enumerate(matched)}}
+            brain._community_summaries = {
+                f"0_{i}": {
+                    "title": f"Community {i}",
+                    "summary": "Dense graph neighborhood with multiple strong shared relations and entities. "
+                    "Supports context without requiring many raw text units.",
+                    "rank": float(10 - i),
+                    "level": 0,
+                }
+                for i in range(8)
             }
-            for i in range(8)
-        }
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            _ = brain._local_search_context("early cutoff benchmark", matched, cfg)
-        dt = time.perf_counter() - t0
-        out["cutoff_on" if enabled else "cutoff_off"] = {
-            "seconds_total": dt,
-            "seconds_avg": dt / iterations,
-            "vector_store_calls": brain.vector_store.calls,
-        }
-    out["speedup_avg"] = out["cutoff_off"]["seconds_avg"] / max(
-        out["cutoff_on"]["seconds_avg"], 1e-12
-    )
-    return out
+            t0 = time.perf_counter()
+            for _ in range(iterations):
+                _ = brain._local_search_context("early cutoff benchmark", matched, cfg)
+            dt = time.perf_counter() - t0
+            out["cutoff_on" if enabled else "cutoff_off"] = {
+                "seconds_total": dt,
+                "seconds_avg": dt / iterations,
+                "vector_store_calls": brain.vector_store.calls,
+            }
+        out["speedup_avg"] = out["cutoff_off"]["seconds_avg"] / max(
+            out["cutoff_on"]["seconds_avg"], 1e-12
+        )
+        return out
 
 
 def _bench_extraction_cache(iterations: int = 2000) -> dict:
     out = {}
     sample_text = "Alice leads graph retrieval and optimization."
     for enabled in (False, True):
-        cfg = _make_cfg(
-            graph_rag_extraction_cache=enabled,
-            graph_rag_extraction_cache_size=5000,
-            graph_rag_depth="standard",
-            graph_rag_llm_cache=False,
-        )
-        brain = _make_brain(cfg, n_chunks=50)
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            _ = brain._extract_entities(sample_text)
-            _ = brain._extract_relations(sample_text)
-        dt = time.perf_counter() - t0
-        key = "cache_on" if enabled else "cache_off"
-        out[key] = {
-            "seconds_total": dt,
-            "seconds_avg_pair": dt / iterations,
-            "llm_calls": brain.llm.calls,
-        }
+        with tempfile.TemporaryDirectory(prefix="axon_bench_") as tmp_str:
+            cfg = _make_cfg(
+                Path(tmp_str),
+                graph_rag_extraction_cache=enabled,
+                graph_rag_extraction_cache_size=5000,
+                graph_rag_depth="standard",
+                graph_rag_llm_cache=False,
+            )
+            brain = _make_brain(cfg, n_chunks=50)
+            t0 = time.perf_counter()
+            for _ in range(iterations):
+                _ = brain._extract_entities(sample_text)
+                _ = brain._extract_relations(sample_text)
+            dt = time.perf_counter() - t0
+            key = "cache_on" if enabled else "cache_off"
+            out[key] = {
+                "seconds_total": dt,
+                "seconds_avg_pair": dt / iterations,
+                "llm_calls": brain.llm.calls,
+            }
     out["speedup_avg_pair"] = out["cache_off"]["seconds_avg_pair"] / max(
         out["cache_on"]["seconds_avg_pair"], 1e-12
     )

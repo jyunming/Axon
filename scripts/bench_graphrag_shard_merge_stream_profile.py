@@ -63,10 +63,11 @@ def _merge_stream(paths: list[Path]) -> tuple[float, int]:
 
 
 def main() -> int:
-    root = Path(tempfile.mkdtemp(prefix="axon_shard_merge_stream_"))
-    paths = _write_shards(root)
-    mat_dt, mat_peak = _merge_materialized(paths)
-    str_dt, str_peak = _merge_stream(paths)
+    with tempfile.TemporaryDirectory(prefix="axon_shard_merge_stream_") as tmp_str:
+        root = Path(tmp_str)
+        paths = _write_shards(root)
+        mat_dt, mat_peak = _merge_materialized(paths)
+        str_dt, str_peak = _merge_stream(paths)
     result = {
         "materialized_merge": {"seconds": mat_dt, "peak_bytes": mat_peak},
         "stream_merge": {"seconds": str_dt, "peak_bytes": str_peak},

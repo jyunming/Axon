@@ -31,33 +31,34 @@ def bench() -> dict:
     out = {}
 
     for mode in ("json", "zstd"):
-        tmp = Path(tempfile.mkdtemp(prefix="axon_bm25_store_"))
-        if mode == "zstd":
-            os.environ["AXON_BM25_COMPRESS"] = "1"
-            os.environ["AXON_BM25_COMPRESS_MIN_BYTES"] = "1"
-            os.environ["AXON_BM25_COMPRESS_LEVEL"] = "6"
-        else:
-            os.environ["AXON_BM25_COMPRESS"] = "0"
-        r = BM25Retriever(storage_path=str(tmp), engine="python")
-        r.corpus = docs
-        t0 = time.perf_counter()
-        r.save()
-        save_dt = time.perf_counter() - t0
-        json_path = tmp / "bm25_corpus.json"
-        zst_path = tmp / "bm25_corpus.json.zst"
-        size_json = _size(json_path)
-        size_zst = _size(zst_path)
+        with tempfile.TemporaryDirectory(prefix="axon_bm25_store_") as tmp_str:
+            tmp = Path(tmp_str)
+            if mode == "zstd":
+                os.environ["AXON_BM25_COMPRESS"] = "1"
+                os.environ["AXON_BM25_COMPRESS_MIN_BYTES"] = "1"
+                os.environ["AXON_BM25_COMPRESS_LEVEL"] = "6"
+            else:
+                os.environ["AXON_BM25_COMPRESS"] = "0"
+            r = BM25Retriever(storage_path=str(tmp), engine="python")
+            r.corpus = docs
+            t0 = time.perf_counter()
+            r.save()
+            save_dt = time.perf_counter() - t0
+            json_path = tmp / "bm25_corpus.json"
+            zst_path = tmp / "bm25_corpus.json.zst"
+            size_json = _size(json_path)
+            size_zst = _size(zst_path)
 
-        t1 = time.perf_counter()
-        r2 = BM25Retriever(storage_path=str(tmp), engine="python")
-        load_dt = time.perf_counter() - t1
-        out[mode] = {
-            "save_seconds": save_dt,
-            "load_seconds": load_dt,
-            "file_bytes_json": size_json,
-            "file_bytes_zst": size_zst,
-            "docs_loaded": len(r2.corpus),
-        }
+            t1 = time.perf_counter()
+            r2 = BM25Retriever(storage_path=str(tmp), engine="python")
+            load_dt = time.perf_counter() - t1
+            out[mode] = {
+                "save_seconds": save_dt,
+                "load_seconds": load_dt,
+                "file_bytes_json": size_json,
+                "file_bytes_zst": size_zst,
+                "docs_loaded": len(r2.corpus),
+            }
 
     json_bytes = out["json"]["file_bytes_json"] or 1
     zstd_bytes = out["zstd"]["file_bytes_zst"]

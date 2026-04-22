@@ -57,27 +57,28 @@ def _make_brain(cfg: AxonConfig, ent: dict, rel: dict):
 
 
 def _run(enabled: bool) -> dict:
-    tmp = Path(tempfile.mkdtemp(prefix="axon_incoming_count_"))
-    cfg = AxonConfig(
-        bm25_path=str(tmp / "bm25"),
-        vector_store_path=str(tmp / "vs"),
-        graph_rag=True,
-        graph_rag_mode="local",
-        graph_rag_local_entity_degree_fast=True,
-        graph_rag_local_cached_incoming=True,
-        graph_rag_local_cached_incoming_counts=enabled,
-        graph_rag_local_top_k_entities=25,
-        graph_rag_local_top_k_relationships=25,
-    )
-    ent, rel = _make_graph()
-    b = _make_brain(cfg, ent, rel)
-    matched = [f"e{i}" for i in range(120)]
-    q = "entity relation impact"
-    t0 = time.perf_counter()
-    for _ in range(80):
-        _ = b._local_search_context(q, matched, cfg)
-    dt = time.perf_counter() - t0
-    return {"seconds_total": dt}
+    with tempfile.TemporaryDirectory(prefix="axon_incoming_count_") as tmp_str:
+        tmp = Path(tmp_str)
+        cfg = AxonConfig(
+            bm25_path=str(tmp / "bm25"),
+            vector_store_path=str(tmp / "vs"),
+            graph_rag=True,
+            graph_rag_mode="local",
+            graph_rag_local_entity_degree_fast=True,
+            graph_rag_local_cached_incoming=True,
+            graph_rag_local_cached_incoming_counts=enabled,
+            graph_rag_local_top_k_entities=25,
+            graph_rag_local_top_k_relationships=25,
+        )
+        ent, rel = _make_graph()
+        b = _make_brain(cfg, ent, rel)
+        matched = [f"e{i}" for i in range(120)]
+        q = "entity relation impact"
+        t0 = time.perf_counter()
+        for _ in range(80):
+            _ = b._local_search_context(q, matched, cfg)
+        dt = time.perf_counter() - t0
+        return {"seconds_total": dt}
 
 
 def main() -> int:

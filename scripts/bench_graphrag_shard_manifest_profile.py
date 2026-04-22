@@ -12,24 +12,25 @@ def _make_names(n: int = 10000) -> list[str]:
 
 def main() -> int:
     names = _make_names()
-    tmp = Path(tempfile.mkdtemp(prefix="axon_manifest_bench_"))
-    json_path = tmp / ".relation_graph.shards.json"
-    lst_path = tmp / ".relation_graph.shards.lst"
+    with tempfile.TemporaryDirectory(prefix="axon_manifest_bench_") as tmp_str:
+        tmp = Path(tmp_str)
+        json_path = tmp / ".relation_graph.shards.json"
+        lst_path = tmp / ".relation_graph.shards.lst"
 
-    manifest = {"format": "rg_rel_shard_v1", "compact": True, "shards": names}
-    json_path.write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
-    lst_path.write_text("\n".join(names) + "\n", encoding="utf-8")
+        manifest = {"format": "rg_rel_shard_v1", "compact": True, "shards": names}
+        json_path.write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
+        lst_path.write_text("\n".join(names) + "\n", encoding="utf-8")
 
-    t0 = time.perf_counter()
-    raw = json.loads(json_path.read_text(encoding="utf-8"))
-    _json_names = [x for x in raw.get("shards", []) if isinstance(x, str)]
-    json_dt = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        raw = json.loads(json_path.read_text(encoding="utf-8"))
+        _json_names = [x for x in raw.get("shards", []) if isinstance(x, str)]
+        json_dt = time.perf_counter() - t0
 
-    t1 = time.perf_counter()
-    _lst_names = [
-        ln.strip() for ln in lst_path.read_text(encoding="utf-8").splitlines() if ln.strip()
-    ]
-    lst_dt = time.perf_counter() - t1
+        t1 = time.perf_counter()
+        _lst_names = [
+            ln.strip() for ln in lst_path.read_text(encoding="utf-8").splitlines() if ln.strip()
+        ]
+        lst_dt = time.perf_counter() - t1
 
     result = {
         "json_manifest": {

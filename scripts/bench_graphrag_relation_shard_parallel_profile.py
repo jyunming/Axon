@@ -30,20 +30,21 @@ def _write(path: Path, payload: dict) -> int:
 
 def main() -> int:
     shards = _make_shards()
-    tmp = Path(tempfile.mkdtemp(prefix="axon_rel_shard_parallel_"))
-    paths = [tmp / f".relation_graph.shard.{i:03d}.json" for i in range(len(shards))]
+    with tempfile.TemporaryDirectory(prefix="axon_rel_shard_parallel_") as tmp_str:
+        tmp = Path(tmp_str)
+        paths = [tmp / f".relation_graph.shard.{i:03d}.json" for i in range(len(shards))]
 
-    t0 = time.perf_counter()
-    seq_bytes = 0
-    for p, payload in zip(paths, shards):
-        seq_bytes += _write(p, payload)
-    seq_dt = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        seq_bytes = 0
+        for p, payload in zip(paths, shards):
+            seq_bytes += _write(p, payload)
+        seq_dt = time.perf_counter() - t0
 
-    t1 = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        sizes = list(ex.map(lambda pair: _write(pair[0], pair[1]), zip(paths, shards)))
-    par_dt = time.perf_counter() - t1
-    par_bytes = sum(sizes)
+        t1 = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            sizes = list(ex.map(lambda pair: _write(pair[0], pair[1]), zip(paths, shards)))
+        par_dt = time.perf_counter() - t1
+        par_bytes = sum(sizes)
 
     result = {
         "sequential": {"seconds": seq_dt, "bytes": seq_bytes},
