@@ -1,6 +1,7 @@
 """GraphRAG entity/community graph management and retrieval (GraphRagMixin)."""
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 import threading
@@ -42,6 +43,98 @@ class GraphRagMixin:
         if not hasattr(self, "_graph_lock_internal"):
             self._graph_lock_internal = threading.RLock()
         return self._graph_lock_internal
+
+    # Entity token index (inverted index: token -> set of entity names)
+    # Not persisted; rebuilt from _entity_graph after load.
+
+    @property
+    def _entity_token_index(self) -> dict:
+        """Lazy-initialised inverted token -> entity-name index."""
+        if not hasattr(self, "_entity_token_index_internal"):
+            self._entity_token_index_internal: dict[str, set[str]] = {}
+        return self._entity_token_index_internal
+
+    def _rebuild_entity_token_index(self) -> None:
+        """Build (or rebuild) the token index from the current _entity_graph.
+
+        Called once after loading the entity graph from disk so that subsequent
+        queries can do token-based candidate lookups instead of O(|V|) full scans.
+        """
+        idx: dict[str, set[str]] = {}
+        for eid in self._entity_graph:
+            if not eid:
+                continue
+            for token in eid.split():
+                idx.setdefault(token, set()).add(eid)
+        self._entity_token_index_internal = idx
+
+    def _token_index_add(self, eid: str) -> None:
+        """Insert *eid* into the token index.  Call under _graph_lock."""
+        if not eid:
+            return
+        idx = self._entity_token_index
+        for token in eid.split():
+            idx.setdefault(token, set()).add(eid)
+
+    def _token_index_remove(self, eid: str) -> None:
+        """Remove *eid* from the token index.  Call under _graph_lock."""
+        if not eid:
+            return
+        idx = self._entity_token_index
+        for token in eid.split():
+            bucket = idx.get(token)
+            if bucket is not None:
+                bucket.discard(eid)
+                if not bucket:
+                    del idx[token]
+
+    def _track_persist_future(self, future: concurrent.futures.Future) -> None:
+        """Append *future* to the pending list, pruning already-done entries."""
+        if not hasattr(self, "_pending_persist_futures_internal"):
+            self._pending_persist_futures_internal: list[concurrent.futures.Future] = []
+        lst = self._pending_persist_futures_internal
+        lst[:] = [f for f in lst if not f.done()]
+        lst.append(future)
+
+    def _flush_pending_saves(self) -> None:
+        """Block until all background graph-persist operations have completed.
+
+        Must be called before any operation that reads persisted files (e.g.
+        reload) and before brain shutdown so that data is not lost.
+        """
+        futures = getattr(self, "_pending_persist_futures_internal", None)
+        if not futures:
+            return
+        done, not_done = concurrent.futures.wait(futures, timeout=30)
+        if not_done:
+            logger.warning(
+                "Graph persist flush timed out; %d operations still pending", len(not_done)
+            )
+        for f in done:
+            if not f.cancelled():
+                exc = f.exception()
+                if exc is not None:
+                    logger.warning("Background graph persist raised: %s", exc)
+        futures[:] = list(not_done)
+
+    @property
+    def _persist_executor(self) -> concurrent.futures.ThreadPoolExecutor:
+        """Single-worker executor dedicated to background graph persistence I/O.
+
+        Reuses ``self._executor`` when available (set by AxonBrain.__init__) to
+        avoid spawning an extra thread pool.  Falls back to a private
+        single-worker pool so the mixin works standalone in tests.
+        """
+        if hasattr(self, "_executor") and self._executor is not None:
+            return self._executor  # type: ignore[return-value]
+        if (
+            not hasattr(self, "_persist_executor_internal")
+            or self._persist_executor_internal is None
+        ):
+            self._persist_executor_internal = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="axon-persist"
+            )
+        return self._persist_executor_internal
 
     # Share heavyweight local model instances across threads and brain instances.
     _shared_gliner_models: dict[tuple[str, bool], object] = {}
@@ -779,6 +872,7 @@ class GraphRagMixin:
 
         Shape: {entity_lower: {"description": str, "chunk_ids": list[str]}}
         """
+        self._flush_pending_saves()
         import pathlib
 
         from axon.rust_bridge import get_rust_bridge
@@ -810,29 +904,42 @@ class GraphRagMixin:
         return {}
 
     def _save_entity_graph(self) -> None:
-        """Persist entity graph to disk."""
+        """Persist entity graph to disk (write offloaded to background thread)."""
         self._nx_graph_dirty = True
         with self._graph_lock:
-            import pathlib
+            snapshot = dict(self._entity_graph)
+        bm25_path_str = self.config.bm25_path
+        future = self._persist_executor.submit(self._do_save_entity_graph, snapshot, bm25_path_str)
+        self._track_persist_future(future)
+        # Invalidate BFS traversal cache after _graph_lock is released.
+        # Lock order: _graph_lock before _traversal_cache_lock — never reverse.
+        _tc = getattr(self, "_traversal_cache", None)
+        if _tc is not None:
+            with self._traversal_cache_lock:
+                _tc.clear()
 
-            from axon.rust_bridge import get_rust_bridge
+    def _do_save_entity_graph(self, snapshot: dict, bm25_path_str: str) -> None:
+        """Background worker: write entity-graph snapshot to disk."""
+        import pathlib
 
-            bm25_path = pathlib.Path(self.config.bm25_path)
-            bridge = get_rust_bridge()
-            if bridge.can_entity_graph_codec():
-                raw = bridge.encode_entity_graph(self._entity_graph)
-                if raw is not None:
-                    mp_path = bm25_path / ".entity_graph.msgpack"
-                    try:
-                        mp_path.write_bytes(raw)
-                        old = bm25_path / ".entity_graph.json"
-                        if old.exists():
-                            old.unlink(missing_ok=True)
-                        return
-                    except Exception as e:
-                        logger.debug("entity_graph msgpack save failed: %s", e)
-            path = bm25_path / ".entity_graph.json"
-            self._gr_write_json_if_changed(path, self._entity_graph)
+        from axon.rust_bridge import get_rust_bridge
+
+        bm25_path = pathlib.Path(bm25_path_str)
+        bridge = get_rust_bridge()
+        if bridge.can_entity_graph_codec():
+            raw = bridge.encode_entity_graph(snapshot)
+            if raw is not None:
+                mp_path = bm25_path / ".entity_graph.msgpack"
+                try:
+                    mp_path.write_bytes(raw)
+                    old = bm25_path / ".entity_graph.json"
+                    if old.exists():
+                        old.unlink(missing_ok=True)
+                    return
+                except Exception as e:
+                    logger.debug("entity_graph msgpack save failed: %s", e)
+        path = bm25_path / ".entity_graph.json"
+        self._gr_write_json_if_changed(path, snapshot)
 
     def _load_code_graph(self) -> dict:
         """Load code graph from disk. Returns empty graph if not found."""
@@ -907,6 +1014,7 @@ class GraphRagMixin:
 
         Shape: {source_entity_lower: [{target: str, relation: str, chunk_id: str}]}
         """
+        self._flush_pending_saves()
         import pathlib
 
         from axon.rust_bridge import get_rust_bridge
@@ -1070,16 +1178,18 @@ class GraphRagMixin:
         return {}
 
     def _save_relation_graph(self) -> None:
-        """Persist relation graph to disk."""
+        """Persist relation graph to disk (write offloaded to background thread)."""
         self._nx_graph_dirty = True
+        # Invalidate BFS traversal cache before acquiring _graph_lock so the two
+        # locks are never held simultaneously (prevents deadlock with the read
+        # path which acquires _graph_lock then _traversal_cache_lock).
+        _tc = getattr(self, "_traversal_cache", None)
+        if _tc is not None:
+            with self._traversal_cache_lock:
+                _tc.clear()
         with self._graph_lock:
-            import hashlib
-            import os
             import pathlib
 
-            from axon.rust_bridge import get_rust_bridge
-
-            path = pathlib.Path(self.config.bm25_path) / ".relation_graph.json"
             bm25_path = pathlib.Path(self.config.bm25_path)
             # Invalidate persisted incoming relation index — rebuilt lazily on next access.
             _inc_cache_path = bm25_path / ".relation_graph.incoming.json"
@@ -1091,219 +1201,230 @@ class GraphRagMixin:
                 del self._incoming_rel_index
             if hasattr(self, "_incoming_rel_sig"):
                 del self._incoming_rel_sig
-            if bool(getattr(self.config, "graph_rag_relation_shard_persist", False)):
-                shard_count = int(getattr(self.config, "graph_rag_relation_shard_count", 16) or 16)
-                shard_count = max(1, shard_count)
-                src_keys = sorted(k for k in self._relation_graph.keys() if isinstance(k, str))
-                buckets: list[dict] = [{} for _ in range(shard_count)]
-                for i, src in enumerate(src_keys):
-                    buckets[i % shard_count][src] = self._relation_graph[src]
-                state_path = (
-                    pathlib.Path(self.config.bm25_path) / ".relation_graph.shard_state.json"
-                )
+            self._incoming_rel_dirty = True
+            snapshot = dict(self._relation_graph)
+        cfg = self.config
+        rg_cfg = {
+            "bm25_path": cfg.bm25_path,
+            "shard_persist": bool(getattr(cfg, "graph_rag_relation_shard_persist", False)),
+            "shard_count": int(getattr(cfg, "graph_rag_relation_shard_count", 16) or 16),
+            "compact_persist": bool(getattr(cfg, "graph_rag_relation_compact_persist", True)),
+            "shard_selective_rewrite": bool(
+                getattr(cfg, "graph_rag_relation_shard_selective_rewrite", True)
+            ),
+            "shard_parallel_signatures": bool(
+                getattr(cfg, "graph_rag_relation_shard_parallel_signatures", True)
+            ),
+            "shard_signature_workers": int(
+                getattr(cfg, "graph_rag_relation_shard_signature_workers", 4) or 4
+            ),
+            "shard_parallel_writes": bool(
+                getattr(cfg, "graph_rag_relation_shard_parallel_writes", True)
+            ),
+            "shard_write_workers": int(
+                getattr(cfg, "graph_rag_relation_shard_write_workers", 4) or 4
+            ),
+            "shard_list_manifest": bool(
+                getattr(cfg, "graph_rag_relation_shard_list_manifest", True)
+            ),
+            "msgpack_persist": bool(getattr(cfg, "graph_rag_relation_msgpack_persist", True)),
+        }
+        future = self._persist_executor.submit(self._do_save_relation_graph, snapshot, rg_cfg)
+        self._track_persist_future(future)
+
+    def _do_save_relation_graph(self, snapshot: dict, rg_cfg: dict) -> None:
+        """Background worker: write relation-graph snapshot to disk."""
+        import hashlib
+        import os
+        import pathlib
+
+        from axon.rust_bridge import get_rust_bridge
+
+        bm25_path = pathlib.Path(rg_cfg["bm25_path"])
+        path = bm25_path / ".relation_graph.json"
+
+        if rg_cfg["shard_persist"]:
+            shard_count = max(1, rg_cfg["shard_count"])
+            src_keys = sorted(k for k in snapshot.keys() if isinstance(k, str))
+            buckets: list[dict] = [{} for _ in range(shard_count)]
+            for i, src in enumerate(src_keys):
+                buckets[i % shard_count][src] = snapshot[src]
+            state_path = bm25_path / ".relation_graph.shard_state.json"
+            prev_state = {}
+            try:
+                if state_path.exists():
+                    _raw_state = self._gr_json_load_path(state_path)
+                    if isinstance(_raw_state, dict):
+                        prev_state = _raw_state
+            except Exception:
                 prev_state = {}
-                try:
-                    if state_path.exists():
-                        _raw_state = self._gr_json_load_path(state_path)
-                        if isinstance(_raw_state, dict):
-                            prev_state = _raw_state
-                except Exception:
-                    prev_state = {}
-                prev_sigs = prev_state.get("signatures", []) if isinstance(prev_state, dict) else []
-                prev_compact = (
-                    bool(prev_state.get("compact", False))
-                    if isinstance(prev_state, dict)
-                    else False
-                )
-                prev_shard_count = (
-                    int(prev_state.get("shard_count", 0)) if isinstance(prev_state, dict) else 0
-                )
-                compact_mode = bool(
-                    getattr(self.config, "graph_rag_relation_compact_persist", True)
-                )
-                selective = bool(
-                    getattr(self.config, "graph_rag_relation_shard_selective_rewrite", True)
-                )
+            prev_sigs = prev_state.get("signatures", []) if isinstance(prev_state, dict) else []
+            prev_compact = (
+                bool(prev_state.get("compact", False)) if isinstance(prev_state, dict) else False
+            )
+            prev_shard_count = (
+                int(prev_state.get("shard_count", 0)) if isinstance(prev_state, dict) else 0
+            )
+            compact_mode = rg_cfg["compact_persist"]
+            selective = rg_cfg["shard_selective_rewrite"]
 
-                def _bucket_sig(bucket: dict) -> str:
-                    h = hashlib.sha1()
-                    for src in sorted(bucket.keys()):
-                        h.update(src.encode("utf-8", errors="replace"))
-                        entries = bucket.get(src, [])
-                        h.update(str(len(entries)).encode("utf-8"))
-                        for e in entries:
-                            if not isinstance(e, dict):
-                                continue
-                            h.update(str(e.get("target", "")).encode("utf-8", errors="replace"))
-                            h.update(str(e.get("relation", "")).encode("utf-8", errors="replace"))
-                            h.update(str(e.get("chunk_id", "")).encode("utf-8", errors="replace"))
-                    return h.hexdigest()
-
-                if (
-                    bool(getattr(self.config, "graph_rag_relation_shard_parallel_signatures", True))
-                    and len(buckets) > 1
-                ):
-                    from concurrent.futures import ThreadPoolExecutor
-
-                    workers = min(
-                        int(
-                            getattr(self.config, "graph_rag_relation_shard_signature_workers", 4)
-                            or 4
-                        ),
-                        len(buckets),
-                    )
-                    workers = max(1, workers)
-                    with ThreadPoolExecutor(max_workers=workers) as ex:
-                        curr_sigs = list(ex.map(_bucket_sig, buckets))
-                else:
-                    curr_sigs = [_bucket_sig(b) for b in buckets]
-                shard_names: list[str] = []
-                shard_tasks: list[tuple[str, object]] = []
-                for i, bucket in enumerate(buckets):
-                    shard_name = f".relation_graph.shard.{i:03d}.json"
-                    shard_path = pathlib.Path(self.config.bm25_path) / shard_name
-                    shard_names.append(shard_name)
-                    if (
-                        selective
-                        and isinstance(prev_sigs, list)
-                        and i < len(prev_sigs)
-                        and prev_sigs[i] == curr_sigs[i]
-                        and prev_compact == compact_mode
-                        and prev_shard_count == shard_count
-                        and shard_path.exists()
-                    ):
-                        continue
-                    if compact_mode:
-                        compact_graph = {}
-                        for src, entries in bucket.items():
-                            compact_entries = []
-                            for e in entries:
-                                if not isinstance(e, dict):
-                                    continue
-                                tgt = e.get("target")
-                                rel = e.get("relation")
-                                cid = e.get("chunk_id")
-                                if (
-                                    isinstance(tgt, str)
-                                    and isinstance(rel, str)
-                                    and isinstance(cid, str)
-                                ):
-                                    compact_entries.append([tgt, rel, cid])
-                            if compact_entries:
-                                compact_graph[src] = compact_entries
-                        payload = {"format": "rg_rel_v2", "g": compact_graph}
-                    else:
-                        payload = bucket
-                    shard_tasks.append((str(shard_path), payload))
-                if (
-                    bool(getattr(self.config, "graph_rag_relation_shard_parallel_writes", True))
-                    and len(shard_tasks) > 1
-                ):
-                    from concurrent.futures import ThreadPoolExecutor
-
-                    workers = min(
-                        int(getattr(self.config, "graph_rag_relation_shard_write_workers", 4) or 4),
-                        len(shard_tasks),
-                    )
-                    workers = max(1, workers)
-
-                    def _write_task(task):
-                        p, pl = task
-                        self._gr_write_json_if_changed(p, pl)
-
-                    with ThreadPoolExecutor(max_workers=workers) as ex:
-                        list(ex.map(_write_task, shard_tasks))
-                else:
-                    for p, pl in shard_tasks:
-                        self._gr_write_json_if_changed(p, pl)
-                manifest = {
-                    "format": "rg_rel_shard_v1",
-                    "compact": compact_mode,
-                    "shards": shard_names,
-                }
-                manifest_path = pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.json"
-                self._gr_write_json_if_changed(manifest_path, manifest, sort_keys=True)
-                if bool(getattr(self.config, "graph_rag_relation_shard_list_manifest", True)):
-                    list_manifest_path = (
-                        pathlib.Path(self.config.bm25_path) / ".relation_graph.shards.lst"
-                    )
-                    list_payload = "\n".join(shard_names) + ("\n" if shard_names else "")
-                    try:
-                        existing = (
-                            list_manifest_path.read_text(encoding="utf-8")
-                            if list_manifest_path.exists()
-                            else None
-                        )
-                        if existing != list_payload:
-                            tmp = list_manifest_path.with_suffix(list_manifest_path.suffix + ".tmp")
-                            tmp.write_text(list_payload, encoding="utf-8")
-                            os.replace(tmp, list_manifest_path)
-                    except Exception:
-                        pass
-                state_payload = {
-                    "format": "rg_rel_shard_state_v1",
-                    "compact": compact_mode,
-                    "shard_count": shard_count,
-                    "signatures": curr_sigs,
-                }
-                self._gr_write_json_if_changed(state_path, state_payload, sort_keys=True)
-                # Best effort cleanup of monolithic file to avoid duplicate storage.
-                try:
-                    if path.exists():
-                        os.remove(path)
-                except OSError:
-                    pass
-                return
-            bridge = get_rust_bridge()
-            if (
-                bool(getattr(self.config, "graph_rag_relation_msgpack_persist", True))
-                and bridge.can_relation_graph_codec()
-            ):
-                try:
-                    raw = bridge.encode_relation_graph(self._relation_graph)
-                    if raw is not None:
-                        mp_path = bm25_path / ".relation_graph.msgpack"
-                        self._gr_write_bytes_if_changed(mp_path, raw)
-                        for legacy in (
-                            path,
-                            bm25_path / ".relation_graph.shards.json",
-                            bm25_path / ".relation_graph.shards.lst",
-                            bm25_path / ".relation_graph.shard_state.json",
-                            bm25_path / ".relation_graph.cache.pkl",
-                            bm25_path / ".relation_graph.cache.meta.json",
-                        ):
-                            try:
-                                legacy.unlink(missing_ok=True)
-                            except Exception:
-                                pass
-                        for shard_path in bm25_path.glob(".relation_graph.shard.*.json"):
-                            try:
-                                shard_path.unlink(missing_ok=True)
-                            except Exception:
-                                pass
-                        return
-                except Exception as e:
-                    logger.debug("relation_graph msgpack save failed: %s", e)
-            if bool(getattr(self.config, "graph_rag_relation_compact_persist", True)):
-                compact_graph = {}
-                for src, entries in self._relation_graph.items():
-                    if not isinstance(src, str) or not isinstance(entries, list):
-                        continue
-                    compact_entries = []
+            def _bucket_sig(bucket: dict) -> str:
+                h = hashlib.sha1()
+                for src in sorted(bucket.keys()):
+                    h.update(src.encode("utf-8", errors="replace"))
+                    entries = bucket.get(src, [])
+                    h.update(str(len(entries)).encode("utf-8"))
                     for e in entries:
                         if not isinstance(e, dict):
                             continue
-                        tgt = e.get("target")
-                        rel = e.get("relation")
-                        cid = e.get("chunk_id")
-                        if isinstance(tgt, str) and isinstance(rel, str) and isinstance(cid, str):
-                            compact_entries.append([tgt, rel, cid])
-                    if compact_entries:
-                        compact_graph[src] = compact_entries
-                payload = {"format": "rg_rel_v2", "g": compact_graph}
-                self._gr_write_json_if_changed(path, payload)
+                        h.update(str(e.get("target", "")).encode("utf-8", errors="replace"))
+                        h.update(str(e.get("relation", "")).encode("utf-8", errors="replace"))
+                        h.update(str(e.get("chunk_id", "")).encode("utf-8", errors="replace"))
+                return h.hexdigest()
+
+            if rg_cfg["shard_parallel_signatures"] and len(buckets) > 1:
+                from concurrent.futures import ThreadPoolExecutor
+
+                workers = max(1, min(rg_cfg["shard_signature_workers"], len(buckets)))
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    curr_sigs = list(ex.map(_bucket_sig, buckets))
             else:
-                self._gr_write_json_if_changed(path, self._relation_graph)
+                curr_sigs = [_bucket_sig(b) for b in buckets]
+            shard_names: list[str] = []
+            shard_tasks: list[tuple[str, object]] = []
+            for i, bucket in enumerate(buckets):
+                shard_name = f".relation_graph.shard.{i:03d}.json"
+                shard_path = bm25_path / shard_name
+                shard_names.append(shard_name)
+                if (
+                    selective
+                    and isinstance(prev_sigs, list)
+                    and i < len(prev_sigs)
+                    and prev_sigs[i] == curr_sigs[i]
+                    and prev_compact == compact_mode
+                    and prev_shard_count == shard_count
+                    and shard_path.exists()
+                ):
+                    continue
+                if compact_mode:
+                    compact_graph = {}
+                    for src, entries in bucket.items():
+                        compact_entries = []
+                        for e in entries:
+                            if not isinstance(e, dict):
+                                continue
+                            tgt = e.get("target")
+                            rel = e.get("relation")
+                            cid = e.get("chunk_id")
+                            if (
+                                isinstance(tgt, str)
+                                and isinstance(rel, str)
+                                and isinstance(cid, str)
+                            ):
+                                compact_entries.append([tgt, rel, cid])
+                        if compact_entries:
+                            compact_graph[src] = compact_entries
+                    payload = {"format": "rg_rel_v2", "g": compact_graph}
+                else:
+                    payload = bucket
+                shard_tasks.append((str(shard_path), payload))
+            if rg_cfg["shard_parallel_writes"] and len(shard_tasks) > 1:
+                from concurrent.futures import ThreadPoolExecutor
+
+                workers = max(1, min(rg_cfg["shard_write_workers"], len(shard_tasks)))
+
+                def _write_task(task):
+                    p, pl = task
+                    self._gr_write_json_if_changed(p, pl)
+
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    list(ex.map(_write_task, shard_tasks))
+            else:
+                for p, pl in shard_tasks:
+                    self._gr_write_json_if_changed(p, pl)
+            manifest = {
+                "format": "rg_rel_shard_v1",
+                "compact": compact_mode,
+                "shards": shard_names,
+            }
+            manifest_path = bm25_path / ".relation_graph.shards.json"
+            self._gr_write_json_if_changed(manifest_path, manifest, sort_keys=True)
+            if rg_cfg["shard_list_manifest"]:
+                list_manifest_path = bm25_path / ".relation_graph.shards.lst"
+                list_payload = "\n".join(shard_names) + ("\n" if shard_names else "")
+                try:
+                    existing = (
+                        list_manifest_path.read_text(encoding="utf-8")
+                        if list_manifest_path.exists()
+                        else None
+                    )
+                    if existing != list_payload:
+                        tmp = list_manifest_path.with_suffix(list_manifest_path.suffix + ".tmp")
+                        tmp.write_text(list_payload, encoding="utf-8")
+                        os.replace(tmp, list_manifest_path)
+                except Exception:
+                    pass
+            state_payload = {
+                "format": "rg_rel_shard_state_v1",
+                "compact": compact_mode,
+                "shard_count": shard_count,
+                "signatures": curr_sigs,
+            }
+            self._gr_write_json_if_changed(state_path, state_payload, sort_keys=True)
+            # Best effort cleanup of monolithic file to avoid duplicate storage.
+            try:
+                if path.exists():
+                    os.remove(path)
+            except OSError:
+                pass
+            return
+        bridge = get_rust_bridge()
+        if rg_cfg["msgpack_persist"] and bridge.can_relation_graph_codec():
+            try:
+                raw = bridge.encode_relation_graph(snapshot)
+                if raw is not None:
+                    mp_path = bm25_path / ".relation_graph.msgpack"
+                    self._gr_write_bytes_if_changed(mp_path, raw)
+                    for legacy in (
+                        path,
+                        bm25_path / ".relation_graph.shards.json",
+                        bm25_path / ".relation_graph.shards.lst",
+                        bm25_path / ".relation_graph.shard_state.json",
+                        bm25_path / ".relation_graph.cache.pkl",
+                        bm25_path / ".relation_graph.cache.meta.json",
+                    ):
+                        try:
+                            legacy.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    for shard_p in bm25_path.glob(".relation_graph.shard.*.json"):
+                        try:
+                            shard_p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    return
+            except Exception as e:
+                logger.debug("relation_graph msgpack save failed: %s", e)
+        if rg_cfg["compact_persist"]:
+            compact_graph = {}
+            for src, entries in snapshot.items():
+                if not isinstance(src, str) or not isinstance(entries, list):
+                    continue
+                compact_entries = []
+                for e in entries:
+                    if not isinstance(e, dict):
+                        continue
+                    tgt = e.get("target")
+                    rel = e.get("relation")
+                    cid = e.get("chunk_id")
+                    if isinstance(tgt, str) and isinstance(rel, str) and isinstance(cid, str):
+                        compact_entries.append([tgt, rel, cid])
+                if compact_entries:
+                    compact_graph[src] = compact_entries
+            payload = {"format": "rg_rel_v2", "g": compact_graph}
+            self._gr_write_json_if_changed(path, payload)
+        else:
+            self._gr_write_json_if_changed(path, snapshot)
 
     def _load_community_levels(self) -> dict:
         """Load persisted hierarchical community levels from disk.
@@ -3969,6 +4090,7 @@ class GraphRagMixin:
                                 if rel.get("object", "").lower() == alias_key:
                                     rel["object"] = canon_key
 
+                    self._token_index_remove(alias_key)
                     del self._entity_graph[alias_key]
                     merged += 1
 
@@ -4098,6 +4220,7 @@ class GraphRagMixin:
                         # Recompute frequency after pruning
                         self._entity_graph[entity]["frequency"] = len(after)
                     else:
+                        self._token_index_remove(entity)
                         del self._entity_graph[entity]
             if eg_changed:
                 self._save_entity_graph()

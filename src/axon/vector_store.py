@@ -32,6 +32,16 @@ def _escape_sql_str(s: str) -> str:
     return s.replace("'", "''")
 
 
+def _build_chroma_where(filter_dict: dict | None) -> dict | None:
+    """Convert a flat filter_dict into a ChromaDB ``where`` clause."""
+    if not filter_dict:
+        return None
+    if len(filter_dict) == 1:
+        key, val = next(iter(filter_dict.items()))
+        return {key: {"$eq": val}}
+    return {"$and": [{k: {"$eq": v}} for k, v in filter_dict.items()]}
+
+
 class OpenVectorStore:
     """Unified interface over ChromaDB, Qdrant, and LanceDB vector stores.
 
@@ -539,21 +549,11 @@ class OpenVectorStore:
         filter_dict: dict | None = None,
     ) -> list[dict]:
         if self.provider == "chroma":
-            where = None
-
-            if filter_dict:
-                if len(filter_dict) == 1:
-                    key, val = next(iter(filter_dict.items()))
-
-                    where = {key: {"$eq": val}}
-
-                else:
-                    where = {"$and": [{k: {"$eq": v}} for k, v in filter_dict.items()]}
-
             results = self.collection.query(
-                query_embeddings=[query_embedding], n_results=top_k, where=where
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                where=_build_chroma_where(filter_dict),
             )
-
             return [
                 {
                     "id": results["ids"][0][i],
@@ -619,6 +619,47 @@ class OpenVectorStore:
                 }
                 for r in results
             ]
+
+    def batch_search(
+        self,
+        query_embeddings: list[list[float]],
+        top_k: int = 10,
+        filter_dict: dict | None = None,
+    ) -> list[list[dict]]:
+        """Search with multiple query embeddings in a single call where possible.
+
+        Returns one result list per input embedding.  ChromaDB supports a true
+        batch query in a single round-trip; all other backends run searches in
+        parallel via a thread pool.
+        """
+        if not query_embeddings:
+            return []
+
+        if self.provider == "chroma":
+            results = self.collection.query(
+                query_embeddings=query_embeddings,
+                n_results=top_k,
+                where=_build_chroma_where(filter_dict),
+            )
+            return [
+                [
+                    {
+                        "id": results["ids"][q][i],
+                        "text": results["documents"][q][i],
+                        "score": 1 - results["distances"][q][i],
+                        "metadata": results["metadatas"][q][i] if results["metadatas"] else {},
+                    }
+                    for i in range(len(results["ids"][q]))
+                ]
+                for q in range(len(query_embeddings))
+            ]
+
+        # All other backends: run searches in parallel via thread pool.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(query_embeddings))) as ex:
+            futures = [ex.submit(self.search, emb, top_k, filter_dict) for emb in query_embeddings]
+            return [fut.result() for fut in futures]
 
     def get_by_ids(self, ids: list[str]) -> list[dict]:
         """Fetch stored documents by their IDs (used by GraphRAG expansion).
@@ -894,6 +935,44 @@ class MultiVectorStore:
                     logger.warning("MultiVectorStore: sub-store search failed, skipping: %s", e)
 
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
+
+    def batch_search(
+        self,
+        query_embeddings: list[list[float]],
+        top_k: int = 10,
+        filter_dict: dict | None = None,
+    ) -> list[list[dict]]:
+        """Batch search across all child stores, merging results per query index."""
+        if not query_embeddings:
+            return []
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(4, len(self._stores))) as ex:
+            store_futures = [
+                ex.submit(store.batch_search, query_embeddings, top_k, filter_dict)
+                for store in self._stores
+            ]
+            per_store: list[list[list[dict]]] = []
+            for fut in store_futures:
+                try:
+                    per_store.append(fut.result())
+                except Exception as e:
+                    logger.warning(
+                        "MultiVectorStore.batch_search: sub-store failed, skipping: %s", e
+                    )
+
+        merged: list[list[dict]] = []
+        for q in range(len(query_embeddings)):
+            seen: dict[str, dict] = {}
+            for store_results in per_store:
+                if q < len(store_results):
+                    for doc in store_results[q]:
+                        doc_id = doc["id"]
+                        if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                            seen[doc_id] = doc
+            merged.append(sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k])
+        return merged
 
     def add(self, *args, **kwargs):
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)

@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "axon-rag"
 dynamic = ["version"]
 description = "General-purpose open-source RAG engine with multi-LLM, hybrid retrieval, GraphRAG, and MCP support"
-readme = "PYPI_README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 license-files = ["LICENSE"]
