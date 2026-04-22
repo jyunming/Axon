@@ -22,7 +22,8 @@ def test_preferred_dev_artifact_uses_newer_release_build(tmp_path):
 
     bundled = package_dir / "axon_rust.cp311-win_amd64.pyd"
     bundled.write_bytes(b"bundled")
-    dev = target_dir / "axon_rust.dll"
+    dev_name = _rust_loader._platform_dev_artifact_name()
+    dev = target_dir / dev_name
     dev.write_bytes(b"dev")
     dev.touch()
 
@@ -33,7 +34,8 @@ def test_bootstrap_dev_rust_module_registers_loaded_module(tmp_path, monkeypatch
     package_dir = tmp_path / "axon"
     target_dir = package_dir / "target" / "release"
     target_dir.mkdir(parents=True)
-    (target_dir / "axon_rust.dll").write_bytes(b"dev")
+    dev_name = _rust_loader._platform_dev_artifact_name()
+    (target_dir / dev_name).write_bytes(b"dev")
 
     loaded: dict[str, Path] = {}
     module_name = "axon_test_pkg.axon_rust"
@@ -50,7 +52,7 @@ def test_bootstrap_dev_rust_module_registers_loaded_module(tmp_path, monkeypatch
     try:
         assert _rust_loader.bootstrap_dev_rust_module("axon_test_pkg", package_dir) is True
         assert loaded["name"] == module_name
-        assert loaded["path"] == target_dir / "axon_rust.dll"
+        assert loaded["path"] == target_dir / dev_name
         assert module_name in sys.modules
     finally:
         sys.modules.pop(module_name, None)
