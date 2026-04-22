@@ -152,6 +152,13 @@ include = [
     { path = "src/axon/extensions/*.vsix", format = "wheel" },
     { path = "src/axon/extensions/*.vsix", format = "sdist" },
 ]
+exclude = [
+    { path = "src/axon/target/**/*", format = "wheel" },
+    { path = "src/axon/target_rebuild/**/*", format = "wheel" },
+    { path = "src/axon/__pycache__/**/*", format = "wheel" },
+    { path = "**/__pycache__/**/*", format = "wheel" },
+    { path = "**/*.pyc", format = "wheel" },
+]
 
 [tool.black]
 line-length = 100

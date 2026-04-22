@@ -1,5 +1,9 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+# Rust build artifacts (never ship or commit these)
+/src/axon/target/
+/src/axon/target_rebuild/
+target/
 *.py[cod]
 *$py.class
 

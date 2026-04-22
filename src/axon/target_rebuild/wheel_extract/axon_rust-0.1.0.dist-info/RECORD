@@ -1,6 +1,0 @@
-axon_rust/__init__.py,sha256=dqSdlzmW-n_-hMgoALrwlqMg5YU3LdcZpW4NOoZk7fs,119
-axon_rust/axon_rust.cp311-win_amd64.pyd,sha256=vAiZPEhdrS07vJFYAP1xE0opTXT7dr_Py3vXXJpUnSg,2343936
-axon_rust-0.1.0.dist-info/METADATA,sha256=cfcQDt_Pl7BjBcdew9azBTSkL4xjecgk28RAAe4c4iw,53
-axon_rust-0.1.0.dist-info/WHEEL,sha256=62Knr737EXEvBceaC7In0Zv1IoMbB1YIEU0vVqd_BR8,97
-axon_rust-0.1.0.dist-info/sboms/axon_rust.cyclonedx.json,sha256=R3imFZbavs9M1RGgtayH3TiGJToijlAe_Y7ibQMCQg0,60846
-axon_rust-0.1.0.dist-info/RECORD,,
