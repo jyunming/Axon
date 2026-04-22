@@ -11,22 +11,19 @@ import axon.sessions as sessions_module
 pytestmark = [pytest.mark.e2e, pytest.mark.integration]
 
 
-def _run_repl_transcript(monkeypatch, home_dir, commands: Iterable[str]):
-    prompt_toolkit = pytest.importorskip("prompt_toolkit")
-    scripted = iter(commands)
+def _run_repl_transcript(monkeypatch, home_dir, commands: Iterable[str]) -> list[str]:
+    """Set up env/monkeypatches for a scripted REPL transcript and return the commands list.
 
-    class _FakePromptSession:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def prompt(self, *args, **kwargs):
-            return next(scripted)
-
+    The returned list is passed as ``_scripted_inputs`` to ``_interactive_repl`` so the
+    REPL uses the headless readline fallback rather than launching the prompt_toolkit
+    Application (which requires a real TTY and whose stdout is captured differently).
+    """
+    pytest.importorskip("prompt_toolkit")
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setenv("USERPROFILE", str(home_dir))
     monkeypatch.setattr(repl_module, "_draw_header", lambda *args, **kwargs: None)
     monkeypatch.setattr(sessions_module, "_SESSIONS_DIR", str(home_dir / ".axon" / "sessions"))
-    monkeypatch.setattr(prompt_toolkit, "PromptSession", _FakePromptSession)
+    return list(commands)
 
 
 def test_repl_transcript_ingest_query_list_and_sessions(
@@ -34,7 +31,7 @@ def test_repl_transcript_ingest_query_list_and_sessions(
 ):
     brain = make_brain()
     monkeypatch.setattr(brain, "should_recommend_project", lambda: False)
-    _run_repl_transcript(
+    scripted = _run_repl_transcript(
         monkeypatch,
         tmp_path,
         [
@@ -46,7 +43,7 @@ def test_repl_transcript_ingest_query_list_and_sessions(
         ],
     )
 
-    main_module._interactive_repl(brain, stream=False, quiet=True)
+    main_module._interactive_repl(brain, stream=False, quiet=True, _scripted_inputs=scripted)
     output = capsys.readouterr().out
     sessions = main_module._list_sessions(project="default")
 
@@ -61,7 +58,7 @@ def test_repl_transcript_ingest_query_list_and_sessions(
 
 def test_repl_transcript_project_and_runtime_controls(make_brain, monkeypatch, tmp_path, capsys):
     brain = make_brain()
-    _run_repl_transcript(
+    scripted = _run_repl_transcript(
         monkeypatch,
         tmp_path,
         [
@@ -77,7 +74,7 @@ def test_repl_transcript_project_and_runtime_controls(make_brain, monkeypatch, t
         ],
     )
 
-    main_module._interactive_repl(brain, stream=False, quiet=True)
+    main_module._interactive_repl(brain, stream=False, quiet=True, _scripted_inputs=scripted)
     output = capsys.readouterr().out
 
     assert "Created and switched to project 'research'" in output

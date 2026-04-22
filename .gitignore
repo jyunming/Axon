@@ -194,3 +194,8 @@ scripts/memory_audit.py
 # Attended test notes (markdown, not runnable test files)
 tests/e2e/*.md
 !tests/e2e/test_vscode_extension_copilot_attended*.md
+
+# Rust git worktrees
+_wt_rust/
+_wt_*/
+
