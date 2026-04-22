@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import copy
 import logging
 import os
 import threading
@@ -907,7 +908,9 @@ class GraphRagMixin:
         """Persist entity graph to disk (write offloaded to background thread)."""
         self._nx_graph_dirty = True
         with self._graph_lock:
-            snapshot = dict(self._entity_graph)
+            # Deep copy under the lock so the background writer sees an immutable
+            # snapshot even if callers mutate nested dicts/lists concurrently.
+            snapshot = copy.deepcopy(self._entity_graph)
         bm25_path_str = self.config.bm25_path
         future = self._persist_executor.submit(self._do_save_entity_graph, snapshot, bm25_path_str)
         self._track_persist_future(future)
@@ -1202,7 +1205,9 @@ class GraphRagMixin:
             if hasattr(self, "_incoming_rel_sig"):
                 del self._incoming_rel_sig
             self._incoming_rel_dirty = True
-            snapshot = dict(self._relation_graph)
+            # Deep copy under the lock so the background writer sees an immutable
+            # snapshot even if callers mutate nested list values concurrently.
+            snapshot = copy.deepcopy(self._relation_graph)
         cfg = self.config
         rg_cfg = {
             "bm25_path": cfg.bm25_path,
