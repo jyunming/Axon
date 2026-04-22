@@ -33,10 +33,6 @@ jobs:
           - os: macos-latest
             maturin-target: aarch64-apple-darwin
             maturin-manylinux: ""
-          # macOS x86_64 — Intel Mac
-          - os: macos-13
-            maturin-target: x86_64-apple-darwin
-            maturin-manylinux: ""
           # Windows x86_64
           - os: windows-latest
             maturin-target: x86_64
