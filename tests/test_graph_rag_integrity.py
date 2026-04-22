@@ -33,6 +33,7 @@ class TestGraphRagIntegrity:
         }
         brain_stub._entity_graph = graph
         brain_stub._save_entity_graph()
+        brain_stub._flush_pending_saves()
 
         # Check file existence (msgpack preferred, json fallback)
         assert (temp_bm25_dir / ".entity_graph.json").exists() or (

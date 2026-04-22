@@ -628,6 +628,17 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._cache_lock = threading.Lock()
 
+        # BFS traversal cache for GraphRAG multi-hop expansion (LRU + TTL).
+        # Keyed by (frozenset(matched_entities), max_hops, hop_decay); stores
+        # {chunk_id: hop_score} dicts discovered by BFS.  Invalidated whenever
+        # _entity_graph or _relation_graph are mutated.
+
+        self._traversal_cache: OrderedDict = OrderedDict()
+
+        self._traversal_cache_maxsize: int = 512
+
+        self._traversal_cache_ttl: float = 900.0  # 15 minutes
+
         self._last_diagnostics: CodeRetrievalDiagnostics = CodeRetrievalDiagnostics()
 
         self._last_provenance: dict = {}
@@ -647,6 +658,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
 
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
+        self._rebuild_entity_token_index()
 
         # Persisted GraphRAG extraction cache (entities/relations keyed by chunk hash)
 
@@ -767,6 +779,13 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._save_graph_rag_extraction_cache()
             except Exception as e:
                 logger.debug("Could not flush graph_rag extraction cache on close: %s", e)
+
+        # Flush any in-flight background graph persist operations before shutting
+        # down the executor so that data is not silently dropped on close.
+        try:
+            self._flush_pending_saves()
+        except Exception as e:
+            logger.debug("Could not flush pending graph saves on close: %s", e)
 
         if hasattr(self, "_executor") and self._executor:
             self._executor.shutdown(wait=False)
@@ -1010,9 +1029,13 @@ Your primary goal is to help the user by answering questions based on the provid
         with self._cache_lock:
             self._query_cache = OrderedDict()
 
+        with self._traversal_cache_lock:
+            self._traversal_cache.clear()
+
         self._ingested_hashes = set()
 
         self._entity_graph = {}
+        self._rebuild_entity_token_index()
 
         self._relation_graph = {}
 
@@ -1278,6 +1301,9 @@ Your primary goal is to help the user by answering questions based on the provid
         with self._cache_lock:
             self._query_cache = OrderedDict()
 
+        with self._traversal_cache_lock:
+            self._traversal_cache.clear()
+
         self._ingested_hashes = self._load_hash_store()
 
         self._graph_rag_cache = self._load_graph_rag_extraction_cache()
@@ -1287,6 +1313,7 @@ Your primary goal is to help the user by answering questions based on the provid
         self._code_graph = self._load_code_graph()
 
         self._entity_graph = self._load_entity_graph()
+        self._rebuild_entity_token_index()
 
         self._relation_graph = self._load_relation_graph()
 
@@ -1387,6 +1414,7 @@ Your primary goal is to help the user by answering questions based on the provid
                                     "frequency": len([d for d in doc_ids if isinstance(d, str)]),
                                     "degree": node.get("degree", 0),
                                 }
+                                self._token_index_add(entity)
 
                             elif isinstance(existing, dict):
                                 existing_ids = set(existing.get("chunk_ids", []))
@@ -3252,6 +3280,7 @@ Your primary goal is to help the user by answering questions based on the provid
                                     "frequency": 0,
                                     "degree": 0,
                                 }
+                                self._token_index_add(key)
 
                             elif isinstance(self._entity_graph[key], dict):
                                 # Update type if not yet set
@@ -3533,7 +3562,7 @@ Your primary goal is to help the user by answering questions based on the provid
                                     "frequency": 0,
                                     "degree": 0,
                                 }
-
+                                self._token_index_add(_tgt)
                                 _stub_added = True
 
                             # Ensure the relation's source chunk is in the target's chunk_ids
