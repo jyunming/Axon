@@ -50,12 +50,21 @@ jobs:
         run: |
           python scripts/audit_packaging.py --expected-version "${GITHUB_REF_NAME#v}"
 
-      - name: Build wheels
+      - name: Build wheels (Linux)
+        if: runner.os == 'Linux'
         uses: PyO3/maturin-action@v1
         with:
           command: build
           target: ${{ matrix.maturin-target }}
-          manylinux: ${{ matrix.maturin-manylinux != '' && matrix.maturin-manylinux || 'off' }}
+          manylinux: ${{ matrix.maturin-manylinux }}
+          args: --release --out dist --interpreter 3.10 3.11 3.12 3.13
+
+      - name: Build wheels (non-Linux)
+        if: runner.os != 'Linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.maturin-target }}
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13
 
       - name: Upload wheel artifacts

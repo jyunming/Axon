@@ -115,6 +115,14 @@ poetry.lock
 tmp/
 temp/
 *.tmp
+.tmp_manual_merge/
+
+# HuggingFace model cache (large, should not be committed)
+.hf_cache/
+
+# Generated benchmark outputs (use CI artifacts instead)
+bench_results*.json
+bench_logs_*/
 list_gemini_models.py
 
 # Root-level ad-hoc test scripts (not part of test suite)
