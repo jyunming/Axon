@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+import axon.repl as _repl_mod
 from axon.cli import main
 
 
@@ -20,23 +21,23 @@ class TestReplE2E:
 
     def test_repl_basic_flow_in_process(self, mock_env, tmp_path):
         """Test a basic REPL session by mocking input/output in-process."""
+        _orig_repl = _repl_mod._interactive_repl
+
+        def _scripted_repl(brain, **kwargs):
+            kwargs["_scripted_inputs"] = ["/help", "/exit"]
+            return _orig_repl(brain, **kwargs)
+
         with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
             "axon.main.OpenEmbedding"
         ), patch("axon.main.OpenLLM") as mock_llm_cls, patch("axon.main.OpenReranker"), patch(
             "axon.projects.ensure_project"
         ), patch(
             "axon.projects.ensure_user_project"
-        ), patch(
-            "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-        ), patch(
-            "prompt_toolkit.PromptSession"
-        ) as mock_ps_cls:
+        ), patch.object(
+            _repl_mod, "_interactive_repl", side_effect=_scripted_repl
+        ):
             mock_llm = mock_llm_cls.return_value
             mock_llm.complete.return_value = "Mocked response"
-
-            mock_ps = mock_ps_cls.return_value
-            # Inputs: /help, then /exit
-            mock_ps.prompt.side_effect = ["/help", "/exit"]
 
             output_buffer = io.StringIO()
 
@@ -53,7 +54,6 @@ class TestReplE2E:
                                 main()
 
             output = output_buffer.getvalue()
-            # print(output) # For debugging if needed
 
             assert "/clear" in output or "/compact" in output or "help" in output
             assert "Bye" in output

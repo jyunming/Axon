@@ -207,6 +207,7 @@ embedding:
 
 
   model: all-MiniLM-L6-v2             # fast, lightweight; upgrade to BAAI/bge-large for better recall
+  # dim: 0                            # 0 = auto-detect; set explicitly if dimension mismatches occur
 
 
 

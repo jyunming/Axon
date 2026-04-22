@@ -2504,8 +2504,8 @@ class TestUnknownProvider:
         with pytest.raises(ValueError, match="Unknown LLM provider"):
             llm.complete("hello")
 
-    def test_stream_unknown_provider_yields_nothing(self):
-        """stream() has no else-raise for unknown providers — it simply yields nothing."""
+    def test_stream_unknown_provider_raises(self):
+        """stream() raises ValueError for unknown providers."""
 
         from axon.llm import OpenLLM
 
@@ -2515,9 +2515,8 @@ class TestUnknownProvider:
 
         llm.config.llm_provider = "totally_unknown_provider"
 
-        result = list(llm.stream("hello"))
-
-        assert result == []
+        with pytest.raises(ValueError, match="Unknown LLM provider"):
+            list(llm.stream("hello"))
 
 
 # ===========================================================================

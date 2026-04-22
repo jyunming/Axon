@@ -54,7 +54,7 @@ async def copilot_agent_handler(
                 else:
                     content = "### Search Results\n\n"
                     for i, r in enumerate(results[:5]):
-                        content += f"**{i+1}. {os.path.basename(r['metadata'].get('source', 'unknown'))}** (Score: {r['score']:.2f})\n"
+                        content += f"**{i+1}. {os.path.basename((r.get('metadata') or {}).get('source', 'unknown'))}** (Score: {r['score']:.2f})\n"
                         content += f"> {r['text'][:200]}...\n\n"
                 yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
 
@@ -85,6 +85,8 @@ async def copilot_agent_handler(
                         {"role": m.role, "content": m.content} for m in body.messages[:-1]
                     ],
                 )
+                if isinstance(answer, dict):
+                    answer = answer.get("response", answer.get("answer", str(answer)))
                 yield f"data: {json.dumps({'type': 'text', 'content': answer})}\n\n"
 
         except Exception as e:

@@ -226,12 +226,10 @@ async def refresh_ingest(project: str | None = None) -> Any:
 
     """
 
-    body: dict = {}
-
     if project:
-        body["project"] = project
+        await _post("/project/switch", {"project_name": project})
 
-    return await _post("/ingest/refresh", body)
+    return await _post("/ingest/refresh", {})
 
 
 @mcp.tool()
@@ -494,6 +492,7 @@ async def update_settings(
     code_graph: bool | None = None,
     graph_rag_mode: str | None = None,
     cite: bool | None = None,
+    persist: bool = False,
 ) -> Any:
     """Update global Axon RAG and retrieval settings for the current session.
 
@@ -536,6 +535,9 @@ async def update_settings(
         graph_rag_mode: GraphRAG query mode — "local", "global", or "hybrid".
 
         cite: Include inline source citations in generated answers.
+
+        persist: Save these settings to config.yaml so they survive restarts.
+            Defaults to False (session-only changes).
 
     """
 
@@ -743,6 +745,23 @@ async def graph_data() -> Any:
     """
 
     return await _get("/graph/data")
+
+
+@mcp.tool()
+async def graph_backend_status() -> Any:
+    """Return the active graph backend's status dict.
+
+    Reports which backend is active (graphrag or dynamic), whether it is
+
+    ready, and backend-specific health metrics (entity count, edge count,
+
+    node counts, etc.).  Use this to distinguish between the GraphRAG
+
+    community-graph backend and the dynamic SQLite-WAL graph backend.
+
+    """
+
+    return await _get("/graph/backend/status")
 
 
 @mcp.tool()

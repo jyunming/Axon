@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import uuid
@@ -120,6 +121,12 @@ class AuditStore:
 
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Restrict permissions to owner-only (fixes legacy files too; no-op on Windows)
+        try:
+            self._db_path.touch(exist_ok=True)
+            os.chmod(self._db_path, 0o600)
+        except OSError:
+            pass
         with self._connect() as conn:
             conn.execute(
                 """
@@ -300,7 +307,7 @@ class AuditStore:
         with self._lock:
             try:
                 with self._connect() as conn:
-                    cur = conn.execute("DELETE FROM audit_events WHERE timestamp < ?", (cutoff,))
+                    cur = conn.execute("DELETE FROM audit_events WHERE timestamp <= ?", (cutoff,))
                     return cur.rowcount
             except Exception as exc:
                 logger.debug("Governance DB prune failed: %s", exc)

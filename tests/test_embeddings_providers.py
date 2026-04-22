@@ -124,7 +124,8 @@ class TestOpenEmbeddingOllama:
         emb = OpenEmbedding(cfg)
 
         mock_client = MagicMock()
-        mock_client.embeddings.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        # New batch API: client.embed(model=..., input=texts) -> {"embeddings": [...]}
+        mock_client.embed.return_value = {"embeddings": [[0.1, 0.2, 0.3]]}
         mock_ollama = MagicMock(Client=MagicMock(return_value=mock_client))
 
         with patch.dict("sys.modules", {"ollama": mock_ollama}):
@@ -138,10 +139,8 @@ class TestOpenEmbeddingOllama:
         emb = OpenEmbedding(cfg)
 
         mock_client = MagicMock()
-        mock_client.embeddings.side_effect = [
-            {"embedding": [0.1]},
-            {"embedding": [0.2]},
-        ]
+        # New batch API: single call returns all embeddings
+        mock_client.embed.return_value = {"embeddings": [[0.1], [0.2]]}
         mock_ollama = MagicMock(Client=MagicMock(return_value=mock_client))
 
         with patch.dict("sys.modules", {"ollama": mock_ollama}):

@@ -83,17 +83,16 @@ def _run_repl_with_commands(commands, brain=None, env=None):
             with patch("axon.sessions._save_session"):
                 with patch("axon.repl._draw_header"):
                     with patch("axon.repl._save_session"):
-                        with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
-                            "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                        ):
-                            mock_ps = mock_ps_cls.return_value
-                            mock_ps.prompt.side_effect = all_cmds
+                        with patch("builtins.print", side_effect=fake_print):
+                            with patch("sys.stdout", output_buffer):
+                                from axon.repl import _interactive_repl
 
-                            with patch("builtins.print", side_effect=fake_print):
-                                with patch("sys.stdout", output_buffer):
-                                    from axon.repl import _interactive_repl
-
-                                    _interactive_repl(brain, stream=False, quiet=True)
+                                _interactive_repl(
+                                    brain,
+                                    stream=False,
+                                    quiet=True,
+                                    _scripted_inputs=all_cmds,
+                                )
 
     return output_buffer.getvalue()
 
@@ -117,12 +116,25 @@ class TestReplHelp:
 
 
 class TestShellPassthrough:
-    def test_shell_passthrough_runs_in_local_mode(self):
+    def test_shell_passthrough_runs_in_local_mode_no_bash(self):
+        """When no bash is available, falls back to shell=True."""
         brain = _make_mock_brain(repl_shell_passthrough="local_only")
         brain._active_project_kind = "local"
-        with patch("subprocess.run") as mock_run:
-            _run_repl_with_commands(["!echo hello"], brain=brain)
+        with patch("axon.repl._resolve_bash", return_value=None):
+            with patch("subprocess.run") as mock_run:
+                _run_repl_with_commands(["!echo hello"], brain=brain)
         mock_run.assert_called_once_with("echo hello", shell=True)
+
+    def test_shell_passthrough_runs_via_bash_when_available(self):
+        """When bash is available, routes through ['bash', '-c', cmd]."""
+        brain = _make_mock_brain(repl_shell_passthrough="local_only")
+        brain._active_project_kind = "local"
+        with patch("axon.repl._resolve_bash", return_value=["bash", "-c"]):
+            with patch("subprocess.run") as mock_run:
+                _run_repl_with_commands(["!echo hello"], brain=brain)
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["bash", "-c", "echo hello"]
+        assert "cwd" in kwargs
 
     def test_shell_passthrough_blocked_in_scope_mode(self):
         brain = _make_mock_brain(repl_shell_passthrough="local_only")
@@ -133,10 +145,12 @@ class TestShellPassthrough:
         assert "shell passthrough blocked by policy" in output.lower()
 
     def test_shell_passthrough_always_overrides_scope(self):
+        """With policy='always', passthrough is allowed even in scope mode."""
         brain = _make_mock_brain(repl_shell_passthrough="always")
         brain._active_project_kind = "scope"
-        with patch("subprocess.run") as mock_run:
-            _run_repl_with_commands(["!echo hello"], brain=brain)
+        with patch("axon.repl._resolve_bash", return_value=None):
+            with patch("subprocess.run") as mock_run:
+                _run_repl_with_commands(["!echo hello"], brain=brain)
         mock_run.assert_called_once_with("echo hello", shell=True)
 
 
@@ -1544,28 +1558,26 @@ class TestReplIngestCommand:
 
 class TestAxonCompleter:
     def _make_completer(self):
-        """Build the AxonCompleter class using the REPL module."""
-        mock_rl = MagicMock()
-        with patch.dict(sys.modules, {"readline": mock_rl}):
-            from axon.repl import _interactive_repl  # ensure module imported
+        """Build the AxonCompleter class using the REPL module.
 
-        # Access the completer class defined inside _interactive_repl scope via the module
-        # We create it by patching out PromptSession and capturing the completer arg
+        With the Application-based input, the completer is passed to Buffer().
+        Patch prompt_toolkit.buffer.Buffer to capture the completer argument.
+        """
         brain = _make_mock_brain()
         completer_ref = []
 
         import io
-        import os
 
         mock_env = {**os.environ, "AXON_HOME": "/tmp/.axon_test", "OPENAI_API_KEY": "sk-mock"}
 
-        def fake_ps_cls(*args, **kwargs):
+        _real_buffer_cls = None
+
+        def fake_buffer_cls(*args, **kwargs):
             comp = kwargs.get("completer")
             if comp is not None:
                 completer_ref.append(comp)
-            ps = MagicMock()
-            ps.prompt.side_effect = ["/exit"]
-            return ps
+            # Fall through to real Buffer so the REPL setup doesn't crash.
+            return _real_buffer_cls(*args, **kwargs)
 
         output_buf = io.StringIO()
         with patch.dict(os.environ, mock_env, clear=True):
@@ -1573,13 +1585,20 @@ class TestAxonCompleter:
                 with patch("axon.sessions._save_session"):
                     with patch("axon.repl._draw_header"):
                         with patch("axon.repl._save_session"):
-                            with patch("prompt_toolkit.PromptSession", side_effect=fake_ps_cls):
-                                with patch(
-                                    "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                                ):
-                                    with patch("builtins.print"):
-                                        with patch("sys.stdout", output_buf):
-                                            _interactive_repl(brain, stream=False, quiet=True)
+                            import prompt_toolkit.buffer as _pt_buf_mod
+
+                            _real_buffer_cls = _pt_buf_mod.Buffer
+                            with patch.object(_pt_buf_mod, "Buffer", side_effect=fake_buffer_cls):
+                                with patch("builtins.print"):
+                                    with patch("sys.stdout", output_buf):
+                                        from axon.repl import _interactive_repl
+
+                                        _interactive_repl(
+                                            brain,
+                                            stream=False,
+                                            quiet=True,
+                                            _scripted_inputs=["/exit"],
+                                        )
 
         return completer_ref[0] if completer_ref else None
 
@@ -1594,6 +1613,18 @@ class TestAxonCompleter:
         # display is FormattedText; convert to string for assertion
         displays = [str(c.display) for c in completions]
         assert any("help" in d.lower() for d in displays)
+
+    def test_completer_slash_root_shows_commands(self):
+        completer = self._make_completer()
+        if completer is None:
+            pytest.skip("Could not extract completer")
+        from prompt_toolkit.document import Document
+
+        doc = Document("/", cursor_position=1)
+        completions = list(completer.get_completions(doc, None))
+        displays = [str(c.display) for c in completions]
+        assert any("help" in d.lower() for d in displays)
+        assert any("project" in d.lower() for d in displays)
 
     def test_completer_ingest_path(self, tmp_path):
         completer = self._make_completer()

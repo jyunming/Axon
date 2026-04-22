@@ -10,20 +10,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import QueryRequest, SearchRequest, SearchResult
 from axon.collection_ops import clear_active_project
 
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
-
-
-def _enforce_write_access(brain, operation: str) -> None:
-    """Translate AxonBrain write-access denials into HTTP 403 responses."""
-    try:
-        brain._assert_write_allowed(operation)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @router.post("/query")
@@ -57,12 +50,27 @@ async def query_brain(request: QueryRequest):
         timeout = request.timeout or float(os.getenv("AXON_QUERY_TIMEOUT", "120"))
 
         if request.dry_run:
+            # Dry-run must never trigger LLM calls. Force-disable all transforms that
+            # cause model invocations (HyDE, multi-query, step-back, decomposition,
+            # compression, Raptor, and GraphRAG).
+            dry_overrides = dict(overrides) if overrides else {}
+            for _k in (
+                "hyde",
+                "multi_query",
+                "step_back",
+                "query_decompose",
+                "compress_context",
+                "raptor",
+                "graph_rag",
+            ):
+                dry_overrides[_k] = False
+
             try:
                 results, diag, _trace = await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
                         lambda: brain.search_raw(
-                            request.query, filters=request.filters, overrides=overrides
+                            request.query, filters=request.filters, overrides=dry_overrides
                         ),
                     ),
                     timeout=timeout,
@@ -143,17 +151,27 @@ async def query_brain_stream(request: QueryRequest):
         "llm_temperature": request.temperature,
     }
 
-    def generate():
+    async def generate():
         try:
-            for chunk in brain.query_stream(
-                request.query, filters=request.filters, overrides=overrides
-            ):
+            chunks = await asyncio.to_thread(
+                lambda: list(
+                    brain.query_stream(request.query, filters=request.filters, overrides=overrides)
+                )
+            )
+            for chunk in chunks:
                 if isinstance(chunk, dict):
+                    # Add type field if not present to help frontend dispatching
+                    if "type" not in chunk:
+                        chunk["type"] = "sources"
                     yield f"data: {json.dumps(chunk)}\n\n"
                 else:
+                    if isinstance(chunk, str) and chunk.startswith("[ERROR]"):
+                        content = chunk.replace("[ERROR]", "", 1).strip()
+                        yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
+                        return
                     yield f"data: {chunk}\n\n"
         except Exception as e:
-            yield f"data: [ERROR] {str(e)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

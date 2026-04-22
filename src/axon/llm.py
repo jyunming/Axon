@@ -30,6 +30,44 @@ from axon.config import AxonConfig
 logger = logging.getLogger("Axon")
 
 
+def _openai_tool_to_gemini_declaration(tool_dict: dict, genai_types) -> object:
+    """Convert an OpenAI-format tool schema dict to a Gemini FunctionDeclaration."""
+    fn = tool_dict.get("function", {})
+
+    def _schema(s: dict) -> object:
+        if not isinstance(s, dict):
+            return genai_types.Schema(type=genai_types.Type.STRING)
+        _type_map = {
+            "string": genai_types.Type.STRING,
+            "integer": genai_types.Type.INTEGER,
+            "number": genai_types.Type.NUMBER,
+            "boolean": genai_types.Type.BOOLEAN,
+            "array": genai_types.Type.ARRAY,
+            "object": genai_types.Type.OBJECT,
+        }
+        t = _type_map.get((s.get("type") or "string").lower(), genai_types.Type.STRING)
+        kwargs: dict = {"type": t}
+        if s.get("description"):
+            kwargs["description"] = s["description"]
+        if s.get("enum"):
+            kwargs["enum"] = list(s["enum"])
+        if s.get("properties"):
+            kwargs["properties"] = {k: _schema(v) for k, v in s["properties"].items()}
+        if s.get("items"):
+            kwargs["items"] = _schema(s["items"])
+        if s.get("required"):
+            kwargs["required"] = list(s["required"])
+        return genai_types.Schema(**kwargs)
+
+    params = fn.get("parameters", {})
+    param_schema = _schema(params) if params else None
+    return genai_types.FunctionDeclaration(
+        name=fn.get("name", ""),
+        description=fn.get("description", ""),
+        parameters=param_schema,
+    )
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -325,23 +363,57 @@ class OpenLLM:
         """Build Gemini conversation payload from history + prompt."""
 
         contents: list[dict] = []
+        last_was_fn_response = False
 
         for msg in history:
             role = msg.get("role")
-
             if role not in ("user", "assistant"):
                 continue
 
-            mapped = "model" if role == "assistant" else "user"
+            # Tool-call rounds stored by run_agent_loop — convert to native Gemini parts.
+            # After adding function_response the model responds automatically; adding another
+            # user-text turn here would create two consecutive "user" messages which Gemini rejects.
+            if "__tool_calls__" in msg:
+                calls = msg["__tool_calls__"]  # list of (name, args, result[, thought_sig])
+                fc_parts = []
+                for call in calls:
+                    n, a = call[0], call[1]
+                    thought_sig = call[3] if len(call) > 3 else None
+                    part: dict = {"function_call": {"name": n, "args": a}}
+                    if thought_sig is not None:
+                        # Gemini thinking models require the original thought_signature to be
+                        # echoed back verbatim in the function_call history part.
+                        part["thought_signature"] = thought_sig
+                    fc_parts.append(part)
+                contents.append({"role": "model", "parts": fc_parts})
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "function_response": {
+                                    "name": call[0],
+                                    "response": {"result": call[2]},
+                                }
+                            }
+                            for call in calls
+                        ],
+                    }
+                )
+                last_was_fn_response = True
+                continue
 
+            last_was_fn_response = False
+            mapped = "model" if role == "assistant" else "user"
             contents.append({"role": mapped, "parts": [{"text": msg.get("content", "")}]})
 
-        user_text = prompt
-
-        if system_prompt and is_gemma:
-            user_text = f"{system_prompt}\n\n{prompt}"
-
-        contents.append({"role": "user", "parts": [{"text": user_text}]})
+        # When the last history entry was a function_response, Gemini responds to it automatically.
+        # Adding another user message would produce invalid consecutive user turns.
+        if not last_was_fn_response:
+            user_text = prompt
+            if system_prompt and is_gemma:
+                user_text = f"{system_prompt}\n\n{prompt}"
+            contents.append({"role": "user", "parts": [{"text": user_text}]})
 
         return contents
 
@@ -664,6 +736,151 @@ class OpenLLM:
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
 
+    def complete_with_tools(
+        self,
+        prompt: str,
+        tools: list[dict] | None = None,
+        system_prompt: str = None,
+        chat_history: list[dict[str, str]] = None,
+    ):
+        """Return a list of ToolCall namedtuples or a plain text string.
+
+        Implements native function calling for Gemini, Ollama, and OpenAI-compatible
+        providers (openai, vllm, github_copilot, grok).  Falls back to plain text
+        completion for providers that do not support function calling.
+        """
+        from axon.agent import ToolCall  # local import to avoid circular
+
+        provider = self.config.llm_provider
+
+        # ------------------------------------------------------------------ Gemini
+        if provider == "gemini":
+            genai, genai_types = self._get_gemini_sdk()
+            is_gemma = "gemma" in self.config.llm_model.lower()
+            history = chat_history or []
+            contents = self._build_gemini_contents(prompt, system_prompt, history, is_gemma)
+            client = self._get_gemini_client(genai)
+            cfg_kwargs: dict = {
+                "temperature": self.config.llm_temperature,
+                "max_output_tokens": self.config.llm_max_tokens,
+            }
+            if system_prompt and not is_gemma:
+                cfg_kwargs["system_instruction"] = system_prompt
+            # Register tools with the Gemini API so it follows the function-calling protocol
+            if tools and not is_gemma:
+                try:
+                    decls = [_openai_tool_to_gemini_declaration(t, genai_types) for t in tools]
+                    cfg_kwargs["tools"] = [genai_types.Tool(function_declarations=decls)]
+                except Exception:
+                    pass
+            response = client.models.generate_content(
+                model=self.config.llm_model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(**cfg_kwargs),
+            )
+            # Extract function_call parts before touching .text (which raises SDK warning)
+            try:
+                parts = response.candidates[0].content.parts
+                calls = [p for p in parts if hasattr(p, "function_call") and p.function_call]
+                if calls:
+                    result: list[ToolCall] = []
+                    for part in calls:
+                        fc = part.function_call
+                        args = dict(fc.args) if hasattr(fc, "args") and fc.args else {}
+                        # thought_signature is required for Gemini thinking models when
+                        # replaying function_call parts in the conversation history.
+                        thought_sig = getattr(part, "thought_signature", None)
+                        result.append(
+                            ToolCall(name=fc.name, args=args, thought_signature=thought_sig)
+                        )
+                    return result
+            except Exception:
+                pass
+            return getattr(response, "text", "") or ""
+
+        # ------------------------------------------------------------------ Ollama
+        if provider == "ollama":
+            from ollama import Client
+
+            client = Client(host=self.config.ollama_base_url)
+            messages: list[dict] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in chat_history or []:
+                if "__tool_calls__" in msg:
+                    for _name, _args, result_str in msg["__tool_calls__"]:
+                        messages.append({"role": "tool", "content": result_str})
+                    continue
+                if msg.get("role") in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg.get("content", "")})
+            messages.append({"role": "user", "content": prompt})
+            kwargs: dict = {
+                "model": self.config.llm_model,
+                "messages": messages,
+                "options": {"temperature": self.config.llm_temperature, "num_ctx": 8192},
+            }
+            if tools:
+                kwargs["tools"] = tools
+            response = client.chat(**kwargs)
+            msg_obj = response["message"]
+            if msg_obj.get("tool_calls"):
+                return [
+                    ToolCall(
+                        name=tc["function"]["name"],
+                        args=tc["function"].get("arguments") or {},
+                    )
+                    for tc in msg_obj["tool_calls"]
+                ]
+            return msg_obj.get("content", "") or ""
+
+        # ------------------------------------------------------------------ OpenAI-compatible
+        if provider in ("openai", "vllm", "github_copilot", "grok"):
+            import json as _json
+
+            _client = {
+                "openai": lambda: self._get_openai_client(),
+                "vllm": lambda: self._get_openai_client(base_url=self.config.vllm_base_url),
+                "github_copilot": lambda: self._get_copilot_client(),
+                "grok": lambda: self._get_grok_client(),
+            }[provider]()
+            messages: list[dict] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            for msg in chat_history or []:
+                if "__tool_calls__" in msg:
+                    for _name, _args, result_str in msg["__tool_calls__"]:
+                        messages.append(
+                            {"role": "tool", "tool_call_id": "0", "content": result_str}
+                        )
+                    continue
+                if msg.get("role") in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg.get("content", "")})
+            messages.append({"role": "user", "content": prompt})
+            kwargs: dict = {
+                "model": self.config.llm_model,
+                "messages": messages,
+                "temperature": self.config.llm_temperature,
+                "max_tokens": self.config.llm_max_tokens,
+                "timeout": self.config.llm_timeout,
+            }
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+            response = _client.chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            if choice.message.tool_calls:
+                return [
+                    ToolCall(
+                        name=tc.function.name,
+                        args=_json.loads(tc.function.arguments or "{}"),
+                    )
+                    for tc in choice.message.tool_calls
+                ]
+            return choice.message.content or ""
+
+        # ------------------------------------------------------------------ Fallback
+        return self.complete(prompt, system_prompt=system_prompt, chat_history=chat_history)
+
     def stream(
         self, prompt: str, system_prompt: str = None, chat_history: list[dict[str, str]] = None
     ):
@@ -888,3 +1105,6 @@ class OpenLLM:
             # True streaming via the bridge would require a more complex WebSocket setup.
 
             yield self.complete(prompt, system_prompt, chat_history)
+
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider!r}")

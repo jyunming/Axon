@@ -46,6 +46,15 @@ _DOT_TO_FLAT: dict[str, str] = {
     "vector_store.path": "vector_store_path",
     "qdrant.url": "qdrant_url",
     "qdrant.api_key": "qdrant_api_key",
+    "vector_store.tqdb_bits": "tqdb_bits",
+    "vector_store.tqdb_fast_mode": "tqdb_fast_mode",
+    "vector_store.tqdb_rerank": "tqdb_rerank",
+    "vector_store.tqdb_rerank_precision": "tqdb_rerank_precision",
+    "vector_store.tqdb_ef_construction": "tqdb_ef_construction",
+    "vector_store.tqdb_max_degree": "tqdb_max_degree",
+    "vector_store.tqdb_search_list_size": "tqdb_search_list_size",
+    "vector_store.tqdb_alpha": "tqdb_alpha",
+    "vector_store.tqdb_n_refinements": "tqdb_n_refinements",
     # Chunking
     "chunk.strategy": "chunk_strategy",
     "chunk.size": "chunk_size",
@@ -142,6 +151,25 @@ class ConfigSetRequest(BaseModel):
     persist: bool = True
 
 
+def _reinitialize_runtime_components(brain, changed_keys: set[str]) -> None:
+    """Apply runtime side effects for config changes that affect live services."""
+
+    if changed_keys & {"llm_provider", "llm_model"}:
+        from axon.llm import OpenLLM
+
+        brain.llm = OpenLLM(brain.config)
+
+    if changed_keys & {"embedding_provider", "embedding_model"}:
+        from axon.embeddings import OpenEmbedding
+
+        brain.embedding = OpenEmbedding(brain.config)
+
+    if changed_keys & {"rerank", "reranker_model"} and getattr(brain.config, "rerank", False):
+        from axon.rerank import OpenReranker
+
+        brain.reranker = OpenReranker(brain.config)
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -235,7 +263,10 @@ async def set_config_field(request: ConfigSetRequest):
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
-    flat_key = _DOT_TO_FLAT.get(request.key, request.key)
+    flat_key = _DOT_TO_FLAT.get(request.key)
+
+    if flat_key is None:
+        raise HTTPException(status_code=400, detail=f"Unknown config key: {request.key!r}")
 
     if not hasattr(brain.config, flat_key):
         raise HTTPException(
@@ -250,10 +281,13 @@ async def set_config_field(request: ConfigSetRequest):
 
     setattr(brain.config, flat_key, request.value)
 
+    _reinitialize_runtime_components(brain, {flat_key})
+
     if request.persist:
         brain.config.save()
 
     return {
+        "status": "success",
         "key": request.key,
         "flat_key": flat_key,
         "old_value": old_value,

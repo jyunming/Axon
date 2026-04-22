@@ -90,7 +90,7 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
     # Resolve the source chroma path
 
     if chroma_path_arg == "auto":
-        # Auto-detect: replace 'lancedb_data' with 'chroma_data' in the current path
+        # Auto-detect: replace 'vector_store_data' with 'chroma_data' in the current path
 
         lance_path = Path(brain.config.vector_store_path)
 
@@ -471,6 +471,27 @@ def main():
     )
 
     parser.add_argument(
+        "--graph-rag-max-hops",
+        type=int,
+        metavar="N",
+        help="Maximum relation-hop depth from a matched entity at query time (0 = direct only)",
+    )
+
+    parser.add_argument(
+        "--graph-rag-hop-decay",
+        type=float,
+        metavar="F",
+        help="Score multiplier per hop (default 0.7; 1-hop = 0.7×, 2-hop = 0.49×)",
+    )
+
+    parser.add_argument(
+        "--no-graph-rag-weighted",
+        action="store_true",
+        default=False,
+        help="Disable Dijkstra weighted traversal; use plain BFS hop count instead",
+    )
+
+    parser.add_argument(
         "--refresh",
         action="store_true",
         help="Re-ingest any tracked files whose content has changed since last ingest, then exit",
@@ -504,8 +525,11 @@ def main():
 
     parser.add_argument(
         "--graph-export",
-        action="store_true",
-        help="Export the entity graph as an HTML file and print its path, then exit",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Export the entity graph as an HTML file to PATH (default: active project dir/graph.html) and print its path, then exit",
     )
 
     parser.add_argument(
@@ -533,6 +557,12 @@ def main():
         "-q",
         action="store_true",
         help="Suppress spinners and progress (auto-enabled when stdin is not a TTY)",
+    )
+
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Run in headless mode: do not start the interactive REPL (useful for scripts/CI).",
     )
 
     # ── Document deletion ────────────────────────────────────────────────────
@@ -688,10 +718,71 @@ def main():
 
     if sys.stdin.isatty():
         logging.getLogger("httpx").propagate = False
-
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
     config = AxonConfig.load(args.config)
+
+    # Configure logging: always write detailed logs to a rotating file under the Axon store base.
+    try:
+        from datetime import datetime as _dt
+        from logging.handlers import RotatingFileHandler
+        from pathlib import Path as _Path
+
+        # Prefer configured axon_store_base; fall back to the user's ~/.axon
+        log_base = _Path(config.axon_store_base or _Path.home() / ".axon")
+        log_dir = (log_base / "logs").expanduser().resolve()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}.log"
+
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+
+        # File handler (DEBUG+)
+        _already = False
+        for _h in list(root_logger.handlers):
+            try:
+                if getattr(_h, "baseFilename", "") == str(log_file):
+                    _already = True
+                    break
+            except Exception:
+                continue
+        if not _already:
+            fh = RotatingFileHandler(
+                str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+            root_logger.addHandler(fh)
+
+        # Console handler (INFO by default; quieter when --quiet or non-TTY)
+        ch = logging.StreamHandler()
+        # Default: do not print INFO logs to console; write details to rotating file.
+        console_level = logging.DEBUG if os.getenv("AXON_DEBUG") else logging.ERROR
+        ch.setLevel(console_level)
+        ch.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        root_logger.addHandler(ch)
+
+        # Quiet mode: redirect built-in print() to the logger so verbose prints are saved to file instead of showing on stdout
+        _orig_print = None
+        if (args.quiet or not sys.stdin.isatty()) and "pytest" not in sys.modules:
+            try:
+                import builtins as _builtins
+
+                _orig_print = _builtins.print
+
+                def _log_print(*p_args, sep=" ", end="\n", file=None, flush=False, **kwargs):
+                    try:
+                        logging.getLogger("Axon.CLI").info(sep.join(map(str, p_args)))
+                    except Exception:
+                        _orig_print(*p_args, sep=sep, end=end, file=file, flush=flush, **kwargs)
+
+                _builtins.print = _log_print
+            except Exception:
+                _orig_print = None
+
+    except Exception:
+        # Best-effort logging setup; do not fail the CLI if logging init errors
+        pass
 
     if args.provider:
         config.llm_provider = args.provider
@@ -817,6 +908,15 @@ def main():
     if args.graph_rag_mode is not None:
         config.graph_rag_mode = args.graph_rag_mode
 
+    if args.graph_rag_max_hops is not None:
+        config.graph_rag_max_hops = args.graph_rag_max_hops
+
+    if args.graph_rag_hop_decay is not None:
+        config.graph_rag_hop_decay = args.graph_rag_hop_decay
+
+    if args.no_graph_rag_weighted:
+        config.graph_rag_distance_weighted = False
+
     if args.list_models:
         print("\n  Supported LLM providers and example models:\n")
 
@@ -836,97 +936,51 @@ def main():
             f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)\n"
         )
 
-        try:
-            import ollama as _ollama
+        # use module-level os
 
-            response = _ollama.list()
+        if os.getenv("AXON_DRY_RUN"):
+            print("  (Ollama model listing skipped in dry-run mode)")
+        else:
+            try:
+                import ollama as _ollama
 
-            models = response.models if hasattr(response, "models") else response.get("models", [])
+                response = _ollama.list()
 
-            if models:
-                print("  Locally available Ollama models:")
+                models = (
+                    response.models if hasattr(response, "models") else response.get("models", [])
+                )
 
-                for m in models:
-                    name = m.model if hasattr(m, "model") else m.get("name", str(m))
+                if models:
+                    print("  Locally available Ollama models:")
 
-                    size_gb = m.size / 1e9 if hasattr(m, "size") and m.size else 0
+                    for m in models:
+                        name = m.model if hasattr(m, "model") else m.get("name", str(m))
 
-                    size_str = f"  ({size_gb:.1f} GB)" if size_gb else ""
+                        size_gb = m.size / 1e9 if hasattr(m, "size") and m.size else 0
 
-                    print(f"     • {name}{size_str}")
+                        size_str = f"  ({size_gb:.1f} GB)" if size_gb else ""
 
-        except Exception:
-            print("  (Ollama not reachable — cannot list local models)")
+                        print(f"     • {name}{size_str}")
+
+            except Exception:
+                print("  (Ollama not reachable — cannot list local models)")
 
         print()
 
         return
 
     if args.pull:
-        try:
-            import ollama as _ollama
+        # use module-level os
 
-            print(f"  Pulling '{args.pull}'...")
+        if os.getenv("AXON_DRY_RUN"):
+            print(f"\n  Pull '{args.pull}' skipped in dry-run mode.\n")
+        else:
+            try:
+                import ollama as _ollama
 
-            for chunk in _ollama.pull(args.pull, stream=True):
-                status = (
-                    chunk.get("status", "")
-                    if isinstance(chunk, dict)
-                    else getattr(chunk, "status", "")
-                )
+                print(f"  Pulling '{args.pull}'...")
 
-                total = (
-                    chunk.get("total", 0) if isinstance(chunk, dict) else getattr(chunk, "total", 0)
-                )
-
-                completed = (
-                    chunk.get("completed", 0)
-                    if isinstance(chunk, dict)
-                    else getattr(chunk, "completed", 0)
-                )
-
-                if total and completed:
-                    pct = int(completed / total * 100)
-
-                    print(f"\r  {status}: {pct}%  ", end="", flush=True)
-
-                elif status:
-                    print(f"\r  {status}...    ", end="", flush=True)
-
-            print(f"\n  '{args.pull}' is ready.\n")
-
-        except Exception as e:
-            print(f"\n  Error: Failed to pull '{args.pull}': {e}")
-
-        return
-
-    # Auto-pull Ollama model if not available locally
-
-    if config.llm_provider == "ollama" and config.llm_model:
-        try:
-            import ollama as _ollama
-
-            response = _ollama.list()
-
-            models = response.models if hasattr(response, "models") else response.get("models", [])
-
-            local_names = set()
-
-            for m in models:
-                name = m.model if hasattr(m, "model") else m.get("name", "")
-
-                local_names.add(name)
-
-                local_names.add(name.split(":")[0])  # also match without tag
-
-            model_tag = (
-                config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
-            )
-
-            if model_tag not in local_names and config.llm_model not in local_names:
-                print(f"  Model '{config.llm_model}' not found locally — pulling from Ollama...")
-
-                for chunk in _ollama.pull(config.llm_model, stream=True):
+                for chunk in _ollama.pull(args.pull, stream=True):
                     status = (
                         chunk.get("status", "")
                         if isinstance(chunk, dict)
@@ -948,15 +1002,17 @@ def main():
                     if total and completed:
                         pct = int(completed / total * 100)
 
-                        print(f"\r  {status}: {pct}%", end="", flush=True)
+                        print(f"\r  {status}: {pct}%  ", end="", flush=True)
 
                     elif status:
-                        print(f"\r  {status}...", end="", flush=True)
+                        print(f"\r  {status}...    ", end="", flush=True)
 
-                print(f"\n  Model '{config.llm_model}' ready.\n")
+                print(f"\n  '{args.pull}' is ready.\n")
 
-        except Exception as e:
-            logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
+            except Exception as e:
+                print(f"\n  Error: Failed to pull '{args.pull}': {e}")
+
+        return
 
     # Animated init display — only when entering interactive REPL
 
@@ -981,10 +1037,106 @@ def main():
         and not getattr(args, "session_list", False)
         and not getattr(args, "optimize_index", False)
         and not getattr(args, "migrate_vectors", None)
+        and not getattr(args, "non_interactive", False)
         and sys.stdin.isatty()
     )
 
+    # Auto-pull only for CLI paths that will actually hit the chat model.
+    _should_auto_pull_ollama_model = bool(
+        config.llm_provider == "ollama"
+        and config.llm_model
+        and not getattr(args, "dry_run", False)
+        and (args.query or _entering_repl or getattr(args, "graph_finalize", False))
+    )
+
+    if _should_auto_pull_ollama_model:
+        try:
+            import ollama as _ollama
+
+            response = _ollama.list()
+
+            models = response.models if hasattr(response, "models") else response.get("models", [])
+
+            local_names = set()
+
+            for m in models:
+                name = m.model if hasattr(m, "model") else m.get("name", "")
+
+                local_names.add(name)
+
+                local_names.add(name.split(":")[0])  # also match without tag
+
+            model_tag = (
+                config.llm_model if ":" in config.llm_model else f"{config.llm_model}:latest"
+            )
+
+            if model_tag not in local_names and config.llm_model not in local_names:
+                print(
+                    f"  Model '{config.llm_model}' not found locally — pulling from Ollama...",
+                    file=sys.stderr,
+                )
+
+                for chunk in _ollama.pull(config.llm_model, stream=True):
+                    status = (
+                        chunk.get("status", "")
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "status", "")
+                    )
+
+                    total = (
+                        chunk.get("total", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "total", 0)
+                    )
+
+                    completed = (
+                        chunk.get("completed", 0)
+                        if isinstance(chunk, dict)
+                        else getattr(chunk, "completed", 0)
+                    )
+
+                    if total and completed:
+                        pct = int(completed / total * 100)
+
+                        print(f"\r  {status}: {pct}%", end="", flush=True, file=sys.stderr)
+
+                    elif status:
+                        print(f"\r  {status}...", end="", flush=True, file=sys.stderr)
+
+                print(f"\n  Model '{config.llm_model}' ready.\n", file=sys.stderr)
+
+        except Exception as e:
+            logger.warning(f"Could not auto-pull model '{config.llm_model}': {e}")
+
     _init_display: _InitDisplay | None = None
+
+    # If running non-interactive or in quiet mode (scripts/CI), redirect stderr to a log file
+    # so third-party noise does not pollute the console. Keep stdout attached so user-facing
+    # CLI output still reaches the caller.
+    try:
+        from datetime import datetime as _dt
+        from pathlib import Path as _Path
+
+        _log_base = _Path(config.axon_store_base or _Path.home() / ".axon")
+        _log_dir = (_log_base / "logs").expanduser().resolve()
+        _log_dir.mkdir(parents=True, exist_ok=True)
+        _redir_log = _log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}.log"
+        if args.quiet or not sys.stdin.isatty() or not _entering_repl:
+            try:
+                _log_fh = open(str(_redir_log), "a", encoding="utf-8")
+                try:
+                    sys.stderr.flush()
+                except Exception:
+                    pass
+                try:
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+                sys.stderr = _log_fh
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     _saved_propagate: dict = {}
 
@@ -998,33 +1150,350 @@ def main():
         "httpx",
     ]
 
-    if _entering_repl:
-        print()
+    _list_doc_versions_file: Path | None = None
+    _list_fast_path_available = False
+    if args.list:
+        _list_doc_versions_file = Path(config.bm25_path or "") / ".doc_versions.json"
+        _list_fast_path_available = _list_doc_versions_file.exists()
 
-        _init_display = _InitDisplay()
+    # Determine whether the requested CLI action requires the heavy AxonBrain
+    # initialization (embedding models, vector stores, LLM clients, etc.).
+    need_brain = bool(
+        _entering_repl
+        or args.query
+        or (args.list and not _list_fast_path_available)
+        or getattr(args, "ingest", None)
+        or getattr(args, "refresh", False)
+        or getattr(args, "list_stale", False)
+        or getattr(args, "graph_finalize", False)
+        or getattr(args, "graph_export", None) is not None
+        or getattr(args, "delete_doc", None)
+        or getattr(args, "delete_doc_id", None)
+        or getattr(args, "optimize_index", False)
+        or getattr(args, "migrate_vectors", None) is not None
+        or getattr(args, "list_models", False)
+        or getattr(args, "pull", None)
+    )
 
-        for _n in _INIT_LOGGER_NAMES:
-            _lg = logging.getLogger(_n)
+    # Fast-path: handle lightweight, metadata-only commands without creating AxonBrain
+    if not need_brain:
+        from axon import projects as _proj_mod
 
-            _saved_propagate[_n] = _lg.propagate
+        if args.project_list:
+            projects = _proj_mod.list_projects()
 
-            _lg.propagate = False  # suppress default stderr handler
+            if not projects:
+                print("  No projects yet. Use --project-new <name> to create one.")
 
-            _lg.setLevel(logging.INFO)
+            else:
+                print()
 
-            _lg.addHandler(_init_display)
+                active = _proj_mod.get_active_project()
 
-    brain = AxonBrain(config)
+                _print_project_tree(projects, active)
 
-    if _init_display:
-        _init_display.stop()
+                print(f"\n  Active: {active}")
 
-        for _n in _INIT_LOGGER_NAMES:
-            _lg = logging.getLogger(_n)
+            return
 
-            _lg.removeHandler(_init_display)
+        if args.project_delete:
+            proj_name = args.project_delete.lower()
 
-            _lg.propagate = _saved_propagate.get(_n, True)
+            try:
+                if _proj_mod.get_active_project() == proj_name:
+                    _proj_mod.set_active_project("default")
+
+                _proj_mod.delete_project(proj_name)
+
+                print(f"  Deleted project '{proj_name}'.")
+
+            except _proj_mod.ProjectHasChildrenError as e:
+                print(f"  {e}")
+
+                sys.exit(1)
+
+            except ValueError as e:
+                print(f"  {e}")
+
+                sys.exit(1)
+
+            return
+
+        if args.project_new:
+            proj_name = args.project_new.lower()
+
+            _proj_mod.ensure_project(proj_name)
+
+            _proj_mod.set_active_project(proj_name)
+
+            print(f"  Using project '{proj_name}'  ({_proj_mod.project_dir(proj_name)})")
+
+            return
+
+        if args.store_init:
+            import getpass as _gp
+
+            from axon.projects import ensure_user_project
+
+            base = Path(args.store_init).expanduser().resolve()
+
+            username = _gp.getuser()
+
+            store_root = base / "AxonStore"
+
+            user_dir = store_root / username
+
+            try:
+                ensure_user_project(user_dir)
+
+                config.axon_store_base = str(base)
+
+                config.projects_root = str(user_dir)
+
+                config.vector_store_path = str(user_dir / "default" / "vector_store_data")
+
+                config.bm25_path = str(user_dir / "default" / "bm25_index")
+
+                try:
+                    config.save()
+
+                except Exception:
+                    pass
+
+                print(f"  AxonStore initialised at {store_root}")
+
+                print(f"  User directory : {user_dir}")
+
+                print(f"  Username       : {username}")
+
+            except Exception as exc:
+                print(f"  Store init failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        # Lightweight 'list' command: avoid full AxonBrain init by reading doc_versions metadata
+        if args.list and _list_fast_path_available:
+            import json
+
+            doc_versions_file = _list_doc_versions_file
+
+            if doc_versions_file is not None and doc_versions_file.exists():
+                try:
+                    with open(doc_versions_file, encoding="utf-8") as _f:
+                        dv = json.load(_f)
+                except Exception:
+                    print("  Failed to read doc versions metadata; falling back to empty list.")
+                    dv = {}
+
+                if not dv:
+                    print("  Knowledge base is empty.")
+                else:
+                    total_chunks = sum(
+                        (v.get("chunk_count") or v.get("chunks") or 0) for v in dv.values()
+                    )
+                    print(f"\n  Knowledge Base — {len(dv)} file(s), {total_chunks} chunk(s)\n")
+                    print(f"  {'Source':<60} {'Chunks':>6}")
+                    print(f"  {'-'*60} {'-'*6}")
+                    for src, info in dv.items():
+                        chunks = info.get("chunk_count") or info.get("chunks") or 0
+                        print(f"  {src:<60} {chunks:>6}")
+
+            return
+
+        if args.share_list:
+            from axon import shares as _shares_mod
+
+            user_dir = Path(config.projects_root)
+
+            _shares_mod.validate_received_shares(user_dir)
+
+            data = _shares_mod.list_shares(user_dir)
+
+            sharing = data.get("sharing", [])
+
+            shared = data.get("shared", [])
+
+            print("\n  Shares — issued by me:")
+
+            if sharing:
+                for s in sharing:
+                    tag = " [revoked]" if s.get("revoked") else ""
+
+                    print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
+
+            else:
+                print("    (none)")
+
+            print("\n  Shares — received:")
+
+            if shared:
+                for s in shared:
+                    print(f"    {s['owner']}/{s['project']} mounted as {s.get('mount', '')}")
+
+            else:
+                print("    (none)")
+
+            print()
+
+            return
+
+        if args.share_generate:
+            from axon import shares as _shares_mod
+
+            proj, grantee = args.share_generate
+
+            user_dir = Path(config.projects_root)
+
+            _segs = proj.split("/")
+
+            proj_dir = user_dir / _segs[0]
+
+            for _seg in _segs[1:]:
+                proj_dir = proj_dir / "subs" / _seg
+
+            if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
+                print(f"  Project '{proj}' not found.")
+
+                sys.exit(1)
+
+            try:
+                result = _shares_mod.generate_share_key(
+                    owner_user_dir=user_dir, project=proj, grantee=grantee
+                )
+
+                print(f"\n  Share key generated for project '{proj}'")
+
+                print(f"  Grantee:  {grantee}")
+
+                print(f"  Key ID:   {result['key_id']}")
+
+                print(f"\n  Share string:\n\n    {result['share_string']}\n")
+
+                print(f"  Revoke:   axon --share-revoke {result['key_id']}\n")
+
+            except Exception as exc:
+                print(f"  Share generation failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        if args.share_redeem:
+            from axon import shares as _shares_mod
+
+            user_dir = Path(config.projects_root)
+
+            try:
+                result = _shares_mod.redeem_share_key(
+                    grantee_user_dir=user_dir, share_string=args.share_redeem.strip()
+                )
+
+                print("\n  Share redeemed!")
+
+                print(f"  Project '{result['project']}' from {result['owner']}")
+
+                mount = result.get("mount_name", result["owner"] + "_" + result["project"])
+
+                print(f"  Mounted at:  mounts/{mount}")
+
+                print("  Access:      read-only\n")
+
+            except Exception as exc:
+                print(f"  Redeem failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        if args.share_revoke:
+            from axon import shares as _shares_mod
+
+            user_dir = Path(config.projects_root)
+
+            try:
+                result = _shares_mod.revoke_share_key(
+                    owner_user_dir=user_dir, key_id=args.share_revoke.strip()
+                )
+
+                print(f"  Share '{result['key_id']}' revoked.")
+
+            except Exception as exc:
+                print(f"  Revoke failed: {exc}")
+
+                sys.exit(1)
+
+            return
+
+        if args.session_list:
+            from axon.sessions import _list_sessions, _print_sessions
+
+            sessions = _list_sessions(project=_proj_mod.get_active_project())
+
+            if not sessions:
+                print("  No saved sessions.")
+
+            else:
+                _print_sessions(sessions)
+
+            return
+
+    # Instantiate AxonBrain only when necessary (heavy init)
+    if need_brain:
+        if _entering_repl:
+            print()
+
+            _init_display = _InitDisplay()
+
+            for _n in _INIT_LOGGER_NAMES:
+                _lg = logging.getLogger(_n)
+
+                _saved_propagate[_n] = _lg.propagate
+
+                _lg.propagate = False  # suppress default stderr handler
+
+                _lg.setLevel(logging.INFO)
+
+                _lg.addHandler(_init_display)
+
+            # Silence noisy HTTP debug loggers that aren't routed through the
+            # spinner — they would otherwise leak to the root logger's handler.
+            for _noisy in (
+                "httpcore",
+                "httpcore.http11",
+                "hpack",
+                "urllib3",
+                "markdown_it",
+                "asyncio",
+                "google_genai",
+                "google.genai",
+            ):
+                _nlg = logging.getLogger(_noisy)
+                _nlg.setLevel(logging.WARNING)
+                _nlg.propagate = False
+
+        # If user requested dry-run, enable retrieval_dry_run in config so subsystems can skip LLM calls where supported
+        if getattr(args, "dry_run", False):
+            config.retrieval_dry_run = True
+            try:
+                os.environ["AXON_DRY_RUN"] = "1"
+            except Exception:
+                pass
+
+        brain = AxonBrain(config)
+
+        if _init_display:
+            _init_display.stop()
+
+            for _n in _INIT_LOGGER_NAMES:
+                _lg = logging.getLogger(_n)
+
+                _lg.removeHandler(_init_display)
+
+                _lg.propagate = _saved_propagate.get(_n, True)
+    else:
+        brain = None
 
     # --- Project CLI handling ---
 
@@ -1145,8 +1614,7 @@ def main():
         return
 
     if getattr(args, "refresh", False):
-        import hashlib as _hashlib
-
+        from axon.api_schemas import _compute_content_hash
         from axon.loaders import DirectoryLoader
 
         versions = brain.get_doc_versions()
@@ -1185,7 +1653,7 @@ def main():
 
                 combined = "".join(d.get("text", "") for d in docs)
 
-                current_hash = _hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
+                current_hash = _compute_content_hash(combined)
 
                 if current_hash == record.get("content_hash"):
                     skipped.append(source_id)
@@ -1293,17 +1761,25 @@ def main():
 
         return
 
-    if getattr(args, "graph_export", False):
+    if getattr(args, "graph_export", None) is not None:
         import tempfile
 
         print("  Exporting graph...")
 
         try:
-            cache_dir = os.path.join(os.path.expanduser("~"), ".axon", "cache")
+            # If user provided a path (non-empty string), use it. Otherwise default
+            # to the active project's directory.
+            if isinstance(args.graph_export, str) and args.graph_export:
+                out_path = os.path.expanduser(args.graph_export)
 
-            os.makedirs(cache_dir, exist_ok=True)
+                os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
-            out_path = os.path.join(cache_dir, "graph.html")
+            else:
+                from axon.projects import project_dir as _project_dir
+
+                active_proj = getattr(brain, "_active_project", "default")
+
+                out_path = os.path.join(str(_project_dir(active_proj)), "graph.html")
 
         except OSError:
             out_path = os.path.join(tempfile.gettempdir(), "axon_graph.html")
@@ -1341,6 +1817,42 @@ def main():
 
         if brain.bm25 is not None:
             brain.bm25.delete_documents(ids_to_delete)
+
+        # Remove tracked doc_versions entries and associated content hashes so the
+        # source can be re-ingested cleanly. This avoids the situation where
+        # delete reports success but the source remains retrievable due to stale
+        # metadata or hash entries.
+        try:
+            removed_sources = []
+            for d in match:
+                src = d.get("source")
+                if not src:
+                    continue
+                # Remove from doc_versions if present
+                if getattr(brain, "_doc_versions", None) and src in brain._doc_versions:
+                    rec = brain._doc_versions.pop(src, None)
+                    if rec:
+                        removed_sources.append(src)
+                        # Remove the saved content_hash from dedup set if present
+                        ch = rec.get("content_hash")
+                        if ch and hasattr(brain, "_ingested_hashes"):
+                            try:
+                                brain._ingested_hashes.discard(ch)
+                            except Exception:
+                                pass
+            # Persist changes
+            try:
+                if hasattr(brain, "_save_hash_store"):
+                    brain._save_hash_store()
+            except Exception:
+                pass
+            try:
+                if hasattr(brain, "_save_doc_versions"):
+                    brain._save_doc_versions()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         total_chunks = sum(d["chunks"] for d in match)
 
@@ -1387,7 +1899,7 @@ def main():
 
             brain.config.projects_root = str(user_dir)
 
-            brain.config.vector_store_path = str(user_dir / "default" / "lancedb_data")
+            brain.config.vector_store_path = str(user_dir / "default" / "vector_store_data")
 
             brain.config.bm25_path = str(user_dir / "default" / "bm25_index")
 
@@ -1602,6 +2114,10 @@ def main():
 
     _quiet = args.quiet or not sys.stdin.isatty()
 
+    if brain is None:
+        # Ensure a brain instance is available for the interactive REPL
+        brain = AxonBrain(config)
+
     try:
         _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
 
@@ -1614,6 +2130,7 @@ def main():
 
     # (colorama/posthog atexit callbacks raise tracebacks on double Ctrl+C)
 
+    # Manually flush readline history, then hard-exit to skip atexit handlers
     try:
         import readline as _rl
 
@@ -1624,4 +2141,7 @@ def main():
     except Exception:
         pass
 
-    os._exit(0)
+    if sys.stdin.isatty():
+        os._exit(0)
+
+    return

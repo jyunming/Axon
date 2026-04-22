@@ -34,9 +34,10 @@ class TestGraphRagIntegrity:
         brain_stub._entity_graph = graph
         brain_stub._save_entity_graph()
 
-        # Check file existence
-        path = temp_bm25_dir / ".entity_graph.json"
-        assert path.exists()
+        # Check file existence (msgpack preferred, json fallback)
+        assert (temp_bm25_dir / ".entity_graph.json").exists() or (
+            temp_bm25_dir / ".entity_graph.msgpack"
+        ).exists()
 
         # Load into a new brain instance
         new_brain = GraphRagMixin()

@@ -14,9 +14,11 @@ For interactive API docs, start `axon-api` and open `http://localhost:8000/docs`
 | Command | Starts | Default Port | Best For |
 |---------|--------|-------------|---------|
 | `axon` | Interactive REPL | — | Day-to-day exploration, power users |
-| `axon-api` | FastAPI REST server | `8000` | Agents, scripts, CI pipelines |
+| `axon-api` | FastAPI REST server + WebGUI | `8000` | Agents, scripts, CI pipelines, browser UI |
 | `axon-mcp` | MCP stdio server | — | GitHub Copilot agent mode, Claude Code |
-| `axon-ui` | Streamlit web UI | `8501` | Browser-based exploration |
+| `axon-ui` | Streamlit web UI | `8501` | Alternative browser-based exploration |
+
+When `axon-api` is running, the built-in WebGUI is available at `http://localhost:8000/gui/` — no separate command needed. It provides chat, document management, and graph exploration in a single-page app.
 
 Start flags:
 
@@ -30,7 +32,7 @@ axon-api --config /path/to/config.yaml  # explicit config file
 
 ## 2. REST API — Full Endpoint Reference
 
-**54 endpoints** across 8 route files. Base URL: `http://localhost:8000` (default).
+**55 endpoints** across 8 route files. Base URL: `http://localhost:8000` (default).
 
 Interactive docs: `/docs` (Swagger), `/redoc`.
 
@@ -162,6 +164,7 @@ When `include_diagnostics: true`, adds `"diagnostics": { "confidence": 0.82, "fa
 | `GET` | `/graph/data` | Full entity/relation graph as JSON (`nodes` + `links`) |
 | `GET` | `/code-graph/data` | Structural code graph as JSON (file/class/function nodes) |
 | `GET` | `/graph/visualize` | Interactive 3D graph as HTML — opens in browser. Click a node to see its description and source evidence. (VS Code extension uses the embedded webview which also supports opening files in the editor.) |
+| `GET` | `/graph/backend/status` | Active graph backend type and health metrics — distinguishes graphrag vs dynamic backend |
 | `POST` | `/query/visualize` | Run a query and return a self-contained HTML page with LLM answer, citations, and highlighted graph — nodes matched by the query are golden; first-degree neighbours are orange. |
 | `POST` | `/search/visualize` | Same as `/query/visualize` but skips LLM generation — shows raw retrieved chunks instead of an answer. Useful for inspecting retrieval quality without spending LLM tokens. |
 
@@ -386,7 +389,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 
 ## 5. MCP Tools — Full Reference
 
-30 tools are registered when running `axon-mcp`.
+31 tools are registered when running `axon-mcp`.
 
 ### Ingestion (6)
 
@@ -526,9 +529,24 @@ Set `vector_store.provider` in `config.yaml`:
 
 | Provider value | Description | Install |
 |---------------|-------------|---------|
-| `lancedb` | Embedded columnar store (default) | Bundled |
+| `turboquantdb` | Quantized embedded store — fastest ingest, smallest disk *(default)* | Bundled (`tqdb` on PyPI) |
+| `lancedb` | Embedded columnar store | Bundled |
 | `chroma` | Local persistent store | Bundled |
 | `qdrant` | Local or remote Qdrant | `pip install 'axon[qdrant]'` |
+
+**TurboQuantDB config fields** (only used when `provider: turboquantdb`):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tqdb_bits` | int | `4` | Quantization bits per coordinate (`2`, `4`, or `8`) |
+| `tqdb_fast_mode` | bool | `false` | Trade index build CPU for faster queries; slightly lowers recall |
+| `tqdb_rerank` | bool | `true` | Enable internal ANN rerank pass; improves recall at small CPU cost |
+| `tqdb_rerank_precision` | str\|null | `null` | Rerank precision: `null` = dequant, `"f16"` or `"f32"` = exact (uses more disk) |
+| `tqdb_ef_construction` | int | `200` | HNSW build quality — higher = better recall, slower build |
+| `tqdb_max_degree` | int | `32` | HNSW graph degree — higher = better recall, larger index |
+| `tqdb_search_list_size` | int | `128` | ANN candidate list size (ef_construction alias for build; ef_search at query time) |
+| `tqdb_alpha` | float\|null | `null` | HNSW pruning aggressiveness (`null` = TQDB default 1.2) |
+| `tqdb_n_refinements` | int\|null | `null` | HNSW refinement passes during build (`null` = TQDB default 5) |
 
 ### 6.4 RAG Flags — Complete List
 
@@ -567,6 +585,7 @@ All flags are `false` in the shipped `config.yaml`. All can be set in config, as
 | `graph_rag_entity_min_frequency` | int | 2 | Prune entities appearing fewer than N times |
 | `raptor_max_levels` | int | 1 | Summary tree depth |
 | `raptor_min_source_size_mb` | float | 5.0 | Skip RAPTOR for sources smaller than this |
+| `bloom_filter_hash_store` | bool | false | Use a bloom filter for dedup hash membership testing (saves ~6MB RAM per 100k docs; opt-in) |
 
 ### 6.5 Web Search / CRAG-Lite
 

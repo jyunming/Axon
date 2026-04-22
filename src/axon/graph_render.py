@@ -152,6 +152,7 @@ class GraphRenderMixin:
                     "color": self._VIZ_TYPE_COLORS.get(node.get("type") or "UNKNOWN", "#aec7e8"),
                     "val": 4 + min(chunk_count, 18),
                     "chunk_count": chunk_count,
+                    "chunk_ids": node.get("chunk_ids", []),
                     "degree": node.get("degree", 0),
                     "community": community,
                     "description": (node.get("description") or "")[:220],
@@ -415,7 +416,7 @@ class GraphRenderMixin:
 
       .nodeOpacity(0.95)
 
-      .linkLabel(link => `<div><b>${{link.relation || 'relation'}}</b><br>${{link.description || ''}}</div>`)
+      .linkLabel(link => `<div><b>${{esc(link.relation || 'relation')}}</b><br>${{esc(link.description || '')}}</div>`)
 
       .linkWidth(link => link.width || 1)
 
@@ -435,13 +436,23 @@ class GraphRenderMixin:
 
       const distance = 120;
 
-      const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+      const x = Number.isFinite(node.x) ? node.x : 0;
+
+      const y = Number.isFinite(node.y) ? node.y : 0;
+
+      const z = Number.isFinite(node.z) ? node.z : 0;
+
+      const radius = Math.hypot(x, y, z);
+
+      const safeRadius = radius > 0 ? radius : 1;
+
+      const distRatio = 1 + distance / safeRadius;
 
       Graph.cameraPosition(
 
-        {{ x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio }},
+        {{ x: x * distRatio, y: y * distRatio, z: z * distRatio }},
 
-        node, 1400
+        {{ x, y, z }}, 1400
 
       );
 
@@ -791,16 +802,16 @@ class GraphRenderMixin:
 
         cg_json = _json.dumps(cg, ensure_ascii=False).replace("</script>", "<\\/script>")
 
+        import html as _html_mod
+
         sources_html = "".join(
             f'<div style="padding:5px 10px;border-bottom:1px solid #333;font-size:11px">'
             f'<span style="color:#4ec9b0">[{i+1}] '
-            f'{(s.get("metadata") or {}).get("source", "") or s.get("source", "")}'
+            f'{_html_mod.escape((s.get("metadata") or {}).get("source", "") or s.get("source", ""))}'
             f'</span><div style="color:#888;margin-top:2px">'
-            f'{(s.get("text","") or "")[:120]}…</div></div>'
+            f'{_html_mod.escape((s.get("text","") or "")[:120])}…</div></div>'
             for i, s in enumerate(sources)
         )
-
-        import html as _html_mod
 
         answer_esc = _html_mod.escape(answer or "*(no answer)*")
 

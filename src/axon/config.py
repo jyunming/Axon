@@ -9,12 +9,11 @@ AxonConfig dataclass extracted from main.py for Phase 2 of the Axon refactor.
 
 """
 
-
 import difflib
 import getpass
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -88,17 +87,18 @@ llm:
 
 vector_store:
 
+  provider: turboquantdb    # turboquantdb (default) | lancedb | chroma | qdrant
 
-  # Persistent vector store for embeddings.
+  path: ~/.axon/projects/default/vector_store_data
 
-
-  # lancedb (default) requires no extra service; qdrant supports remote mode.
-
-
-  provider: lancedb
-
-
-  path: ~/.axon/projects/default/lancedb_data
+  # TurboQuantDB tuning (only used when provider: turboquantdb)
+  # Default preset — b=4 + rerank=True — best recall/size tradeoff for most workloads.
+  # tqdb_bits: 4            # 2 | 4 | 8  — lower = smaller disk/RAM, lower recall
+  # tqdb_rerank: true       # rerank pass after ANN (~0.5 ms overhead, improves recall)
+  # tqdb_fast_mode: false   # true = faster index build; recall unchanged with rerank=true
+  # tqdb_ef_construction: 200   # HNSW build quality (higher = better recall, slower build)
+  # tqdb_max_degree: 32         # HNSW graph degree
+  # tqdb_search_list_size: 128  # ANN candidate list size at query time
 
 
 bm25:
@@ -250,7 +250,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "ollama_cloud_key",
         "ollama_cloud_url",
     },
-    "embedding": {"provider", "model", "model_path"},
+    "embedding": {"provider", "model", "model_path", "dim"},
     "vector_store": {
         "provider",
         "path",
@@ -259,6 +259,14 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "qdrant_collection",
         "lancedb_path",
         "tqdb_bits",
+        "tqdb_fast_mode",
+        "tqdb_rerank",
+        "tqdb_rerank_precision",
+        "tqdb_ef_construction",
+        "tqdb_max_degree",
+        "tqdb_search_list_size",
+        "tqdb_alpha",
+        "tqdb_n_refinements",
     },
     "rag": {
         "hybrid_search",
@@ -301,6 +309,12 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "hybrid_mode",
         "raptor_chunk_group_size",
         "dedup_on_ingest",
+        "graph_backend",
+        "ingest_engine",
+        "bm25_engine",
+        "symbol_index_engine",
+        "rust_fallback_enabled",
+        "rust_batch_size",
     },
     "chunk": {
         "strategy",
@@ -338,7 +352,6 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
 
 @dataclass
 class ConfigIssue:
-
     """A single validation finding for a config.yaml field."""
 
     level: Literal["error", "warn", "info"]
@@ -363,7 +376,6 @@ class ConfigIssue:
 
 @dataclass
 class AxonConfig:
-
     """Configuration for Axon."""
 
     # Internal tracking
@@ -390,6 +402,9 @@ class AxonConfig:
 
     embedding_model_path: str = ""
 
+    # Override the embedding vector dimension.  0 = auto-detect from the model.
+    embedding_dim: int = 0
+
     ollama_base_url: str = "http://localhost:11434"
 
     # Local directory where Ollama stores its model blobs.
@@ -415,6 +430,10 @@ class AxonConfig:
     llm_max_tokens: int = 2048
 
     api_key: str = ""  # legacy alias -- prefer openai_api_key
+
+    # CORS origins allowed by the REST API server (maps from api.allow_origins in config.yaml).
+    # Example: ["http://localhost:3000", "https://my.app"]
+    api_allow_origins: list = field(default_factory=list)
 
     openai_api_key: str = ""
 
@@ -450,11 +469,19 @@ class AxonConfig:
 
     # Vector Store
 
-    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "lancedb"
+    vector_store: Literal["chroma", "qdrant", "lancedb", "turboquantdb"] = "turboquantdb"
 
     vector_store_path: str = ""
 
-    tqdb_bits: int = 8
+    tqdb_bits: int = 4
+    tqdb_fast_mode: bool = False
+    tqdb_rerank: bool = True
+    tqdb_rerank_precision: str | None = None  # None | "f16" | "f32"
+    tqdb_ef_construction: int = 200
+    tqdb_max_degree: int = 32
+    tqdb_search_list_size: int = 128
+    tqdb_alpha: float | None = None  # HNSW pruning aggressiveness (None = TQDB default 1.2)
+    tqdb_n_refinements: int | None = None  # HNSW refinement passes (None = TQDB default 5)
 
     # BM25 Settings
 
@@ -507,13 +534,38 @@ class AxonConfig:
             self.axon_store_base = env_store_base
 
         if not self.axon_store_base:
-            self.axon_store_base = os.path.join(os.path.expanduser("~"), ".axon")
+            home_dir = (
+                os.environ.get("HOME")
+                or os.environ.get("USERPROFILE")
+                or (
+                    (os.environ.get("HOMEDRIVE") or "") + (os.environ.get("HOMEPATH") or "")
+                ).strip()
+            )
+            if not home_dir:
+                try:
+                    home_dir = str(Path.home())
+                except Exception:
+                    home_dir = os.getcwd()
+            self.axon_store_base = os.path.join(home_dir, ".axon")
 
         import getpass
 
-        username = getpass.getuser()
+        try:
+            username = getpass.getuser()
+        except Exception:
+            username = (
+                os.environ.get("AXON_USERNAME")
+                or os.environ.get("USERNAME")
+                or os.environ.get("USER")
+                or "default"
+            )
 
-        store_root = Path(self.axon_store_base).expanduser().resolve() / "AxonStore"
+        try:
+            store_base = Path(self.axon_store_base).expanduser().resolve()
+        except Exception:
+            store_base = Path(os.path.abspath(self.axon_store_base))
+
+        store_root = store_base / "AxonStore"
 
         user_dir = store_root / username
 
@@ -522,7 +574,7 @@ class AxonConfig:
         # Respect explicitly-provided absolute paths (e.g. in tests) — only set defaults.
 
         if not self.vector_store_path or not os.path.isabs(self.vector_store_path):
-            self.vector_store_path = str(user_dir / "default" / "lancedb_data")
+            self.vector_store_path = str(user_dir / "default" / "vector_store_data")
 
         if not self.bm25_path or not os.path.isabs(self.bm25_path):
             self.bm25_path = str(user_dir / "default" / "bm25_index")
@@ -597,6 +649,9 @@ class AxonConfig:
 
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+    # Maximum number of results to return after re-ranking (maps from rerank.top_k in config.yaml).
+    rerank_top_k: int = 5
+
     # Parent-Document / Small-to-Big Retrieval
 
     # Child chunks (chunk_size tokens) are indexed for precise retrieval;
@@ -618,6 +673,10 @@ class AxonConfig:
     step_back: bool = False
 
     query_decompose: bool = False
+
+    unified_query_transforms: bool = (
+        True  # combine multi_query+step_back+decompose+hyde into 1 LLM call
+    )
 
     discussion_fallback: bool = True
 
@@ -655,6 +714,9 @@ class AxonConfig:
 
     brave_api_key: str = ""
 
+    # Number of web search results to fetch per query (maps from web_search.num_results).
+    web_search_num_results: int = 10
+
     # Query Result Caching
 
     query_cache: bool = False
@@ -664,6 +726,27 @@ class AxonConfig:
     # Ingest Deduplication
 
     dedup_on_ingest: bool = True
+
+    # Use a probabilistic bloom filter instead of a set for in-memory hash tracking.
+    # Saves ~6 MB RAM at 100k docs at the cost of a ~0.1% false-positive rate
+    # (a chunk that was never ingested may be silently skipped). Opt-in; disabled by default.
+    bloom_filter_hash_store: bool = False
+
+    # Graph backend selector: "graphrag" (default) or "dynamic" (SQLite-WAL temporal graph)
+
+    graph_backend: str = "graphrag"
+
+    # Rust engine selectors (per pipeline stage)
+
+    ingest_engine: str = "python"
+
+    bm25_engine: str = "python"
+
+    symbol_index_engine: str = "python"
+
+    rust_fallback_enabled: bool = True
+
+    rust_batch_size: int = 512
 
     # Offline Mode
 
@@ -939,6 +1022,12 @@ class AxonConfig:
 
     graph_rag_relation_budget: int = 30
 
+    # Multi-hop graph retrieval settings (Epic 1/4)
+    graph_rag_max_hops: int = 2
+    graph_rag_hop_decay: float = 0.7
+    graph_rag_distance_weighted: bool = True
+    graph_rag_large_graph_threshold: int = 50000
+
     # Community detection backend preference.
 
     # "louvain"   = networkx Louvain only (default --' safe on all environments, fast for <10k nodes)
@@ -1001,6 +1090,11 @@ class AxonConfig:
 
     graph_rag_map_workers: int = 0
 
+    # Number of community report chunks to send in a single LLM call during the map phase.
+    # Set to 5 (default) for ~5× fewer LLM calls vs per-chunk mode (batch_size=1).
+
+    graph_rag_map_batch_size: int = 5
+
     # Alternative NER backend. "gliner" skips LLM for entity extraction.
 
     # Relations and claims still use LLM. pip install axon[gliner]
@@ -1016,6 +1110,11 @@ class AxonConfig:
     # "deep" = standard + claims + canonicalize
 
     graph_rag_depth: Literal["light", "standard", "deep"] = "standard"
+
+    # When both entity and relation extraction use the LLM and relations are enabled
+    # for all processed chunks, issue one fused extraction prompt per chunk instead of
+    # separate entity and relation prompts.
+    graph_rag_llm_fused_extraction: bool = True
 
     # Token-level compression of community reports before map-reduce LLM calls.
 
@@ -1059,6 +1158,12 @@ class AxonConfig:
 
     graph_rag_entity_resolve: bool = False
 
+    # Alias-resolution backend. "rust" avoids materializing the full NxN similarity
+    # matrix in Python and computes grouping in the Rust module when available.
+    graph_rag_entity_resolve_backend: Literal["numpy", "rust"] = "rust"
+    graph_rag_rust_build_edges: bool = False
+    graph_rag_rust_merge_entities: bool = False
+
     graph_rag_entity_resolve_threshold: float = 0.92  # cosine similarity threshold (0--'1)
 
     graph_rag_entity_resolve_max: int = 5000  # skip if entity count exceeds this (perf guard)
@@ -1072,6 +1177,10 @@ class AxonConfig:
     # pip install axon[rebel]
 
     graph_rag_relation_backend: Literal["llm", "rebel"] = "llm"
+
+    # Persist relation graphs to a compact msgpack file when shard persistence is not
+    # explicitly enabled. Falls back to JSON automatically when Rust support is missing.
+    graph_rag_relation_msgpack_persist: bool = False
 
     graph_rag_rebel_model: str = "Babelscape/rebel-large"
 
@@ -1206,6 +1315,24 @@ class AxonConfig:
 
             if "tqdb_bits" in vs:
                 config_dict["tqdb_bits"] = int(vs["tqdb_bits"])
+            if "tqdb_fast_mode" in vs:
+                config_dict["tqdb_fast_mode"] = bool(vs["tqdb_fast_mode"])
+            if "tqdb_rerank" in vs:
+                config_dict["tqdb_rerank"] = bool(vs["tqdb_rerank"])
+            if "tqdb_ef_construction" in vs:
+                config_dict["tqdb_ef_construction"] = int(vs["tqdb_ef_construction"])
+            if "tqdb_max_degree" in vs:
+                config_dict["tqdb_max_degree"] = int(vs["tqdb_max_degree"])
+            if "tqdb_search_list_size" in vs:
+                config_dict["tqdb_search_list_size"] = int(vs["tqdb_search_list_size"])
+            if "tqdb_rerank_precision" in vs:
+                config_dict["tqdb_rerank_precision"] = vs["tqdb_rerank_precision"] or None
+            if "tqdb_alpha" in vs:
+                raw = vs["tqdb_alpha"]
+                config_dict["tqdb_alpha"] = float(raw) if raw is not None else None
+            if "tqdb_n_refinements" in vs:
+                raw = vs["tqdb_n_refinements"]
+                config_dict["tqdb_n_refinements"] = int(raw) if raw is not None else None
 
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
@@ -1239,6 +1366,9 @@ class AxonConfig:
             if "model" in data["rerank"]:
                 config_dict["reranker_model"] = data["rerank"]["model"]
 
+            if "top_k" in data["rerank"]:
+                config_dict["rerank_top_k"] = int(data["rerank"]["top_k"])
+
         if "query_transformations" in data:
             for key in (
                 "multi_query",
@@ -1256,6 +1386,12 @@ class AxonConfig:
 
         if "context_compression" in data:
             config_dict["compress_context"] = data["context_compression"].get("enabled", False)
+            if "strategy" in data["context_compression"]:
+                config_dict["compression_strategy"] = data["context_compression"]["strategy"]
+            if "token_budget" in data["context_compression"]:
+                config_dict["compression_token_budget"] = int(
+                    data["context_compression"]["token_budget"]
+                )
 
         if "web_search" in data:
             ws = data["web_search"]
@@ -1264,6 +1400,9 @@ class AxonConfig:
 
             if ws.get("brave_api_key"):
                 config_dict["brave_api_key"] = ws["brave_api_key"]
+
+            if "num_results" in ws:
+                config_dict["web_search_num_results"] = int(ws["num_results"])
 
         if "offline" in data:
             ol = data["offline"]
@@ -1344,6 +1483,13 @@ class AxonConfig:
         if "repl_shell_passthrough" in data:
             config_dict["repl_shell_passthrough"] = data["repl_shell_passthrough"]
 
+        if "api" in data and isinstance(data["api"], dict):
+            api_section = data["api"]
+            if api_section.get("key"):
+                config_dict["api_key"] = api_section["key"]
+            if "allow_origins" in api_section:
+                config_dict["api_allow_origins"] = api_section["allow_origins"] or []
+
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
 
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
@@ -1404,6 +1550,14 @@ class AxonConfig:
                 "provider": flat["vector_store"],
                 "path": flat["vector_store_path"],
                 "tqdb_bits": flat["tqdb_bits"],
+                "tqdb_fast_mode": flat["tqdb_fast_mode"],
+                "tqdb_rerank": flat["tqdb_rerank"],
+                "tqdb_rerank_precision": flat["tqdb_rerank_precision"],
+                "tqdb_ef_construction": flat["tqdb_ef_construction"],
+                "tqdb_max_degree": flat["tqdb_max_degree"],
+                "tqdb_search_list_size": flat["tqdb_search_list_size"],
+                "tqdb_alpha": flat["tqdb_alpha"],
+                "tqdb_n_refinements": flat["tqdb_n_refinements"],
             },
             "bm25": {
                 "path": flat["bm25_path"],
@@ -1419,6 +1573,12 @@ class AxonConfig:
                 "graph_rag": flat["graph_rag"],
                 "graph_rag_community": flat["graph_rag_community"],
                 "dedup_on_ingest": flat["dedup_on_ingest"],
+                "graph_backend": flat["graph_backend"],
+                "ingest_engine": flat["ingest_engine"],
+                "bm25_engine": flat["bm25_engine"],
+                "symbol_index_engine": flat["symbol_index_engine"],
+                "rust_fallback_enabled": flat["rust_fallback_enabled"],
+                "rust_batch_size": flat["rust_batch_size"],
             },
             "chunk": {
                 "strategy": flat["chunk_strategy"],
@@ -1429,6 +1589,7 @@ class AxonConfig:
                 "enabled": flat["rerank"],
                 "provider": flat["reranker_provider"],
                 "model": flat["reranker_model"],
+                "top_k": flat["rerank_top_k"],
             },
             "query_transformations": {
                 "multi_query": flat["multi_query"],
@@ -1442,10 +1603,13 @@ class AxonConfig:
             },
             "context_compression": {
                 "enabled": flat["compress_context"],
+                "strategy": flat["compression_strategy"],
+                "token_budget": flat["compression_token_budget"],
             },
             "web_search": {
                 "enabled": flat["truth_grounding"],
                 "brave_api_key": flat["brave_api_key"],
+                "num_results": flat["web_search_num_results"],
             },
             "offline": {
                 "enabled": flat["offline_mode"],
@@ -1454,6 +1618,10 @@ class AxonConfig:
                 "embedding_models_dir": flat["embedding_models_dir"],
                 "hf_models_dir": flat["hf_models_dir"],
                 "tokenizer_cache_dir": flat["tokenizer_cache_dir"],
+            },
+            "api": {
+                "key": flat["api_key"],
+                "allow_origins": flat["api_allow_origins"],
             },
             "projects_root": flat["projects_root"],
         }
@@ -1502,7 +1670,16 @@ class AxonConfig:
 
         _tmp_root = os.path.realpath(_tempfile.gettempdir())
 
-        if os.path.commonpath([os.path.realpath(_resolved_target), _tmp_root]) == _tmp_root:
+        try:
+            _in_tmp = (
+                os.path.commonpath([os.path.realpath(_resolved_target), _tmp_root]) == _tmp_root
+            )
+        except ValueError:
+            # Windows raises ValueError when paths are on different drives;
+            # different drives means the target cannot be inside the tmp root.
+            _in_tmp = False
+
+        if _in_tmp:
             logger.warning(
                 "AxonConfig.save() blocked: target path '%s' is inside the system temp "
                 "directory. This usually means a test run is trying to overwrite your live "
@@ -1793,8 +1970,22 @@ class AxonConfig:
             config_store_base = raw["store"].get("base", "")
 
         # Effective base: env wins, then config, then default
-
-        effective_base = env_store_base or config_store_base or str(Path.home() / ".axon")
+        if env_store_base or config_store_base:
+            effective_base = env_store_base or config_store_base
+        else:
+            home_dir = (
+                os.environ.get("HOME")
+                or os.environ.get("USERPROFILE")
+                or (
+                    (os.environ.get("HOMEDRIVE") or "") + (os.environ.get("HOMEPATH") or "")
+                ).strip()
+            )
+            if not home_dir:
+                try:
+                    home_dir = str(Path.home())
+                except Exception:
+                    home_dir = os.getcwd()
+            effective_base = str(Path(home_dir) / ".axon")
 
         if env_store_base and config_store_base and env_store_base != config_store_base:
             issues.append(
@@ -1810,7 +2001,10 @@ class AxonConfig:
                 )
             )
 
-        base_path = Path(effective_base).expanduser()
+        try:
+            base_path = Path(effective_base).expanduser()
+        except Exception:
+            base_path = Path(effective_base)
 
         # Only warn when the user has explicitly set a custom base that doesn't exist
 
@@ -1826,7 +2020,15 @@ class AxonConfig:
             )
 
         elif base_path.exists():
-            username = getpass.getuser()
+            try:
+                username = getpass.getuser()
+            except Exception:
+                username = (
+                    os.environ.get("AXON_USERNAME")
+                    or os.environ.get("USERNAME")
+                    or os.environ.get("USER")
+                    or "default"
+                )
 
             store_meta = base_path / "AxonStore" / username / "store_meta.json"
 

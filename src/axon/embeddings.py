@@ -5,6 +5,7 @@ OpenEmbedding client extracted from main.py for Phase 2 of the Axon refactor.
 """
 
 import logging
+import os
 from typing import Any
 
 from axon.config import AxonConfig
@@ -51,17 +52,24 @@ class OpenEmbedding:
             _src = _model_path or self.config.embedding_model
             logger.info(f"Loading Sentence Transformers: {_src}")
             self.model = SentenceTransformer(_src)
-            self.dimension = self.model.get_sentence_embedding_dimension()
+            self.dimension = (
+                getattr(self.config, "embedding_dim", 0)
+                or self.model.get_sentence_embedding_dimension()
+            )
 
         elif self.provider == "ollama":
             logger.info(f"Using Ollama Embedding: {self.config.embedding_model}")
-            if self.config.embedding_model not in _KNOWN_DIMS:
-                logger.warning(
-                    "Ollama embedding model '%s' is not in the dimension registry; "
-                    "defaulting to 768-dim.  If this is wrong, set embedding_dim in config.",
-                    self.config.embedding_model,
-                )
-            self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 768)
+            _cfg_dim = getattr(self.config, "embedding_dim", 0)
+            if _cfg_dim:
+                self.dimension = _cfg_dim
+            else:
+                if self.config.embedding_model not in _KNOWN_DIMS:
+                    logger.warning(
+                        "Ollama embedding model '%s' is not in the dimension registry; "
+                        "defaulting to 768-dim.  If this is wrong, set embedding_dim in config.",
+                        self.config.embedding_model,
+                    )
+                self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 768)
 
         elif self.provider == "fastembed":
             try:
@@ -79,7 +87,10 @@ class OpenEmbedding:
                 + (f" (cache_dir={_model_path})" if _model_path else "")
             )
             self.model = TextEmbedding(**_kwargs)
-            if self.config.embedding_model in _KNOWN_DIMS:
+            _cfg_dim = getattr(self.config, "embedding_dim", 0)
+            if _cfg_dim:
+                self.dimension = _cfg_dim
+            elif self.config.embedding_model in _KNOWN_DIMS:
                 self.dimension = _KNOWN_DIMS[self.config.embedding_model]
             else:
                 # Auto-detect dimension by probing the model with a short sentinel string.
@@ -107,18 +118,25 @@ class OpenEmbedding:
             ):
                 kwargs["base_url"] = self.config.ollama_base_url
             self.model = OpenAI(**kwargs)
-            if self.config.embedding_model not in _KNOWN_DIMS:
-                logger.warning(
-                    "OpenAI embedding model '%s' is not in the dimension registry; "
-                    "defaulting to 1536-dim. Add it to _KNOWN_DIMS if this is wrong.",
-                    self.config.embedding_model,
-                )
-            self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 1536)
+            _cfg_dim = getattr(self.config, "embedding_dim", 0)
+            if _cfg_dim:
+                self.dimension = _cfg_dim
+            else:
+                if self.config.embedding_model not in _KNOWN_DIMS:
+                    logger.warning(
+                        "OpenAI embedding model '%s' is not in the dimension registry; "
+                        "defaulting to 1536-dim. Add it to _KNOWN_DIMS if this is wrong.",
+                        self.config.embedding_model,
+                    )
+                self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 1536)
 
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if os.getenv("AXON_DRY_RUN"):
+            return [[0.0] * self.dimension for _ in texts]
+
         if self.provider == "sentence_transformers":
             embeddings = self.model.encode(texts, show_progress_bar=False)
             if hasattr(embeddings, "tolist"):
@@ -129,11 +147,17 @@ class OpenEmbedding:
             from ollama import Client
 
             client = Client(host=self.config.ollama_base_url)
-            embeddings = []
-            for text in texts:
-                response = client.embeddings(model=self.config.embedding_model, prompt=text)
-                embeddings.append(response["embedding"])
-            return embeddings
+            try:
+                # Batch API (ollama-python >= 0.4): single round-trip for all texts.
+                response = client.embed(model=self.config.embedding_model, input=texts)
+                return response["embeddings"]
+            except (AttributeError, TypeError):
+                # Older client without batch embed — fall back to sequential calls.
+                embeddings = []
+                for text in texts:
+                    response = client.embeddings(model=self.config.embedding_model, prompt=text)
+                    embeddings.append(response["embedding"])
+                return embeddings
 
         elif self.provider == "fastembed":
             embeddings = list(self.model.embed(texts))

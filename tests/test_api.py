@@ -36,6 +36,17 @@ def _make_brain(provider="chroma"):
     # _apply_overrides returns a copy of config with overrides applied
     brain._apply_overrides.return_value = brain.config
     brain._community_build_in_progress = False
+    # Graph backend mock — graph_data() returns a payload whose to_dict() is a valid dict
+    _mock_payload = MagicMock()
+    _mock_payload.to_dict.return_value = {"nodes": [], "links": []}
+    brain._graph_backend.graph_data.return_value = _mock_payload
+    brain._graph_backend.status.return_value = {
+        "backend": "graphrag",
+        "entities": 0,
+        "relations": 0,
+        "communities": 0,
+        "community_summaries": 0,
+    }
     return brain
 
 
@@ -401,7 +412,19 @@ def test_query_stream_error_yields_error_chunk():
     resp = client.post("/query/stream", json={"query": "test"})
     # StreamingResponse always returns 200; error appears in body
     assert resp.status_code == 200
-    assert "[ERROR]" in resp.text
+    assert '"type": "error"' in resp.text
+    assert "llm down" in resp.text
+
+
+def test_query_stream_normalizes_raw_error_chunk():
+    api_module.brain = _make_brain()
+    api_module.brain.query_stream = MagicMock(
+        return_value=iter(["[ERROR] 404 NOT_FOUND. {'error': {'code': 404}}"])
+    )
+    resp = client.post("/query/stream", json={"query": "test"})
+    assert resp.status_code == 200
+    assert '"type": "error"' in resp.text
+    assert "[ERROR]" not in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -999,6 +1022,74 @@ def test_ingest_url_dedup_skips_second_identical_url():
 
 
 # ---------------------------------------------------------------------------
+# /ingest/upload
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_upload_503_no_brain():
+    resp = client.post(
+        "/ingest/upload",
+        files=[("files", ("note.txt", b"hello world", "text/plain"))],
+    )
+    assert resp.status_code == 503
+
+
+def test_ingest_upload_text_file_success():
+    api_module.brain = _make_brain()
+    api_module.brain.ingest.return_value = None
+    api_module.brain._active_project = "default"
+
+    resp = client.post(
+        "/ingest/upload",
+        data={"project": "default"},
+        files=[("files", ("note.txt", b"hello from upload", "text/plain"))],
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "success"
+    assert payload["ingested_files"] == 1
+    assert payload["ingested_chunks"] == 1
+    assert payload["files"][0]["filename"] == "note.txt"
+    assert payload["files"][0]["status"] == "ingested"
+
+    ingested_docs = api_module.brain.ingest.call_args[0][0]
+    assert len(ingested_docs) == 1
+    assert ingested_docs[0]["metadata"]["source"] == "note.txt"
+    assert ingested_docs[0]["text"].startswith("[File Path: note.txt]\n")
+
+
+def test_ingest_upload_unsupported_file_is_reported():
+    api_module.brain = _make_brain()
+
+    resp = client.post(
+        "/ingest/upload",
+        files=[("files", ("archive.xyz", b"not supported", "application/octet-stream"))],
+    )
+
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert "supported" in payload["detail"].lower()
+    api_module.brain.ingest.assert_not_called()
+
+
+def test_ingest_upload_permission_error_returns_403():
+    api_module.brain = _make_brain()
+    api_module.brain._assert_write_allowed.side_effect = PermissionError(
+        "Cannot ingest: project 'alpha' is in 'readonly' maintenance state."
+    )
+
+    resp = client.post(
+        "/ingest/upload",
+        files=[("files", ("note.txt", b"hello world", "text/plain"))],
+    )
+
+    assert resp.status_code == 403
+    assert "readonly" in resp.json()["detail"]
+    api_module.brain.ingest.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # P1-C — job status tracking
 # ---------------------------------------------------------------------------
 
@@ -1258,10 +1349,9 @@ def test_store_whoami_returns_store_paths():
     resp = client.get("/store/whoami")
     assert resp.status_code == 200
     data = resp.json()
-    assert "user_dir" in data
+    assert "workspace" in data
     assert "username" in data
     assert data.get("active_project") == "research"
-    assert data["store_path"].replace("\\", "/") == "/data/AxonStore"
     assert data["active_project"] == "research"  # must use _active_project, not config.project
 
 
@@ -1321,12 +1411,14 @@ def test_share_generate_success(tmp_path):
     """/share/generate returns share string when project exists."""
     mock_brain = _make_brain()
     mock_brain.config.axon_store_mode = True
-    mock_brain.config.projects_root = str(tmp_path)
+    # axon_store_dir = tmp_path; projects_root = tmp_path/Workspace
+    mock_brain.config.axon_store_dir = str(tmp_path)
+    mock_brain.config.projects_root = str(tmp_path / "Workspace")
     api_module.brain = mock_brain
 
-    # Create a real project dir so the endpoint can find it
-    proj = tmp_path / "myproject"
-    proj.mkdir()
+    # Create a real project dir under Workspace/ so the endpoint can find it
+    proj = tmp_path / "Workspace" / "myproject"
+    proj.mkdir(parents=True)
     (proj / "meta.json").write_text('{"name": "myproject"}')
 
     fake_result = {
@@ -1679,7 +1771,6 @@ def test_graph_visualize_no_browser_open():
 def test_graph_data_returns_nodes_and_links():
     """GET /graph/data returns {"nodes": list, "links": list}."""
     brain = _make_brain()
-    brain.build_graph_payload.return_value = {"nodes": [], "links": []}
     api_module.brain = brain
 
     resp = client.get("/graph/data")
@@ -1696,6 +1787,17 @@ def test_graph_data_returns_503_no_brain():
     api_module.brain = None
     resp = client.get("/graph/data")
     assert resp.status_code == 503
+
+
+def test_graph_data_rejects_mismatched_project():
+    """GET /graph/data returns 409 when the requested project is not active."""
+    brain = _make_brain()
+    brain._active_project = "default"
+    api_module.brain = brain
+
+    resp = client.get("/graph/data?project=research")
+    assert resp.status_code == 409
+    assert "Use POST /project/switch" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -2867,6 +2969,17 @@ def _make_brain(provider="chroma"):
     brain._active_project = "default"
     brain._entity_graph = {}
     brain._embedding_meta_path = "/tmp/axon_meta.json"
+    # Graph backend mock — graph_data() returns a valid payload dict; status() returns stats
+    _mock_payload = MagicMock()
+    _mock_payload.to_dict.return_value = {"nodes": [], "links": []}
+    brain._graph_backend.graph_data.return_value = _mock_payload
+    brain._graph_backend.status.return_value = {
+        "backend": "graphrag",
+        "entities": 0,
+        "relations": 0,
+        "communities": 0,
+        "community_summaries": 0,
+    }
     return brain
 
 
@@ -2990,22 +3103,61 @@ class TestGraphData:
 
     def test_returns_payload_when_dict(self):
         brain = _make_brain()
-        brain.build_graph_payload.return_value = {"nodes": [{"id": "n1"}], "links": []}
+        _payload = MagicMock()
+        _payload.to_dict.return_value = {"nodes": [{"id": "n1"}], "links": []}
+        brain._graph_backend.graph_data.return_value = _payload
         api_module.brain = brain
         resp = client.get("/graph/data")
         assert resp.status_code == 200
         data = resp.json()
         assert "nodes" in data
+        assert data["nodes"][0]["id"] == "n1"
 
     def test_fallback_when_not_dict(self):
-        """graph.py line 77 — non-dict payload → fallback empty nodes/links."""
+        """Non-dict to_dict() result → fallback empty nodes/links."""
         brain = _make_brain()
-        brain.build_graph_payload.return_value = None
+        _payload = MagicMock()
+        _payload.to_dict.return_value = None  # simulate malformed payload
+        brain._graph_backend.graph_data.return_value = _payload
         api_module.brain = brain
         resp = client.get("/graph/data")
         assert resp.status_code == 200
         data = resp.json()
         assert data == {"nodes": [], "links": []}
+
+
+class TestGraphBackendStatus:
+    def test_503_when_no_brain(self):
+        api_module.brain = None
+        resp = client.get("/graph/backend/status")
+        assert resp.status_code == 503
+
+    def test_returns_status_dict(self):
+        brain = _make_brain()
+        api_module.brain = brain
+        resp = client.get("/graph/backend/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["backend"] == "graphrag"
+        assert "entities" in data
+        assert "relations" in data
+
+    def test_status_reflects_backend_mock(self):
+        brain = _make_brain()
+        brain._graph_backend.status.return_value = {
+            "backend": "graphrag",
+            "entities": 7,
+            "relations": 14,
+            "communities": 2,
+            "community_summaries": 2,
+        }
+        api_module.brain = brain
+        resp = client.get("/graph/backend/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["entities"] == 7
+        assert data["relations"] == 14
+        assert data["communities"] == 2
 
 
 class TestCodeGraphData:
@@ -3901,8 +4053,10 @@ class TestShareGenerate:
         with patch("axon.api._get_user_dir") as mock_user_dir:
             user_dir = MagicMock()
             mock_user_dir.return_value = user_dir
+            workspace = MagicMock()
+            user_dir.__truediv__.return_value = workspace  # store_dir / "Workspace"
             project_dir = MagicMock()
-            user_dir.__truediv__.return_value = project_dir
+            workspace.__truediv__.return_value = project_dir  # workspace / project
             project_dir.exists.return_value = False
 
             resp = client.post(
@@ -3917,12 +4071,15 @@ class TestShareGenerate:
             user_dir = MagicMock()
             mock_user_dir.return_value = user_dir
 
+            workspace = MagicMock()
+            user_dir.__truediv__.return_value = workspace  # store_dir / "Workspace"
+
             project_dir = MagicMock()
             project_dir.exists.return_value = True
             meta_json = MagicMock()
             meta_json.exists.return_value = True
             project_dir.__truediv__.return_value = meta_json
-            user_dir.__truediv__.return_value = project_dir
+            workspace.__truediv__.return_value = project_dir  # workspace / project
 
             with patch(
                 "axon.shares.generate_share_key",

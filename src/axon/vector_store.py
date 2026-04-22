@@ -12,7 +12,6 @@ for Phase 2 of the Axon refactor.
 
 """
 
-
 import json
 import logging
 import os
@@ -28,8 +27,12 @@ _MERGED_VIEW_WRITE_ERROR = (
 )
 
 
-class OpenVectorStore:
+def _escape_sql_str(s: str) -> str:
+    """Escape single quotes in a string for safe SQL interpolation."""
+    return s.replace("'", "''")
 
+
+class OpenVectorStore:
     """Unified interface over ChromaDB, Qdrant, and LanceDB vector stores.
 
 
@@ -124,27 +127,29 @@ class OpenVectorStore:
                 self.collection = None  # created lazily on first add()
 
         elif self.provider == "turboquantdb":
-            # Lazy open: dimension is not known until first add(). If tqdb_meta.json
-            # exists (from a prior session), open immediately.
-            self._tqdb_meta_path = os.path.join(self.config.vector_store_path, "tqdb_meta.json")
-            self._tqdb_doc_index_path = os.path.join(
-                self.config.vector_store_path, "tqdb_doc_index.json"
-            )
+            # Lazy open: dimension is not known until first add(). If tqdb's own
+            # manifest.json exists (from a prior session), open immediately.
             os.makedirs(self.config.vector_store_path, exist_ok=True)
-            if os.path.exists(self._tqdb_meta_path):
-                with open(self._tqdb_meta_path) as f:
-                    meta = json.load(f)
-                import turboquantdb
+            manifest_path = os.path.join(self.config.vector_store_path, "manifest.json")
+            if os.path.exists(manifest_path):
+                with open(manifest_path) as f:
+                    mf = json.load(f)
+                dim, bits = mf["d"], mf["b"]
+                import tqdb
 
                 logger.info(
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
-                    f"(dim={meta['dimension']}, bits={meta['bits']})"
+                    f"(dim={dim}, bits={bits})"
                 )
-                self.client = turboquantdb.Database.open(
+                self.client = tqdb.Database.open(
                     self.config.vector_store_path,
-                    dimension=meta["dimension"],
-                    bits=meta["bits"],
-                    metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                    dimension=dim,
+                    bits=bits,
+                    metric="ip",
+                    normalize=True,  # engine normalises internally; IP ≡ cosine
+                    rerank=getattr(self.config, "tqdb_rerank", True),
+                    fast_mode=getattr(self.config, "tqdb_fast_mode", False),
+                    rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
                 )
             else:
                 self.client = None  # opened lazily on first add()
@@ -234,6 +239,19 @@ class OpenVectorStore:
         embeddings: list[list[float]],
         metadatas: list[dict] | None = None,
     ):
+        # Validate input lengths to avoid misaligned batches being passed to backends.
+        n_ids = len(ids) if ids is not None else 0
+        n_texts = len(texts) if texts is not None else 0
+        n_embs = len(embeddings) if embeddings is not None else 0
+        if not (n_ids == n_texts == n_embs):
+            raise ValueError(
+                f"ids/texts/embeddings length mismatch: ids={n_ids} texts={n_texts} embeddings={n_embs}"
+            )
+        if metadatas is not None and len(metadatas) != n_ids:
+            raise ValueError(
+                f"metadatas length mismatch: metadatas={len(metadatas)} vs ids={n_ids}"
+            )
+
         if self.provider == "chroma":
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
 
@@ -380,56 +398,47 @@ class OpenVectorStore:
 
             # Lazy open on first add() — detect dimension from the first embedding batch.
             if self.client is None:
-                import turboquantdb
+                import tqdb
 
                 dim = len(embeddings[0])
-                bits = getattr(self.config, "tqdb_bits", 8)
-                meta = {"dimension": dim, "bits": bits}
-                with open(self._tqdb_meta_path, "w") as f:
-                    json.dump(meta, f)
+                bits = getattr(self.config, "tqdb_bits", 4)
                 logger.info(
                     f"Initializing TurboQuantDB: {self.config.vector_store_path} "
                     f"(dim={dim}, bits={bits})"
                 )
-                self.client = turboquantdb.Database.open(
+                self.client = tqdb.Database.open(
                     self.config.vector_store_path,
                     dimension=dim,
                     bits=bits,
-                    metric="ip",  # cosine metric has 50x perf regression; IP=cosine for unit vectors
+                    metric="ip",
+                    normalize=True,  # engine normalises internally; IP ≡ cosine
+                    rerank=getattr(self.config, "tqdb_rerank", True),
+                    fast_mode=getattr(self.config, "tqdb_fast_mode", False),
+                    rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
                 )
+                # tqdb writes manifest.json on open — no sidecar needed.
 
-            # L2-normalize so IP = cosine similarity (handles models that don't output unit vectors)
             import numpy as np
 
-            vecs = np.array(embeddings, dtype=np.float32)
-            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-            vecs = np.divide(vecs, norms, where=norms > 0)
             metas = metadatas if metadatas is not None else [{}] * len(ids)
+            # TQDB requires a numpy float32 array; convert from list/ndarray uniformly.
+            vecs = np.array(embeddings, dtype=np.float32)
             self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
+            self.client.flush()
 
-            # Update sidecar doc index: source → [chunk_ids]
-            doc_index: dict[str, list[str]] = {}
-            if os.path.exists(self._tqdb_doc_index_path):
-                try:
-                    with open(self._tqdb_doc_index_path) as f:
-                        doc_index = json.load(f)
-                except (OSError, json.JSONDecodeError):
-                    doc_index = {}
-            for chunk_id, meta in zip(ids, metas):
-                source = (meta or {}).get("source", "unknown")
-                doc_index.setdefault(source, [])
-                if chunk_id not in doc_index[source]:
-                    doc_index[source].append(chunk_id)
-            tmp_path = self._tqdb_doc_index_path + ".tmp"
-            with open(tmp_path, "w") as f:
-                json.dump(doc_index, f)
-            os.replace(tmp_path, self._tqdb_doc_index_path)
-
-            # Auto-build ANN index once corpus is large enough (≥1000 vectors).
+            # Auto-build ANN index once corpus reaches 1000 vectors — but only once.
+            # Phase 1 (hybrid dark-vector fix, tqdb ≥0.2.1) ensures post-index inserts
+            # are found via the brute-force dark-slot scan, so a one-time build is correct.
             try:
                 n = len(self.client)
-                if n >= 1000:
-                    self.client.create_index()
+                if n >= 1000 and not self.client.stats().get("has_index", False):
+                    self.client.create_index(
+                        max_degree=getattr(self.config, "tqdb_max_degree", 32),
+                        ef_construction=getattr(self.config, "tqdb_ef_construction", 200),
+                        search_list_size=getattr(self.config, "tqdb_search_list_size", 128),
+                        alpha=getattr(self.config, "tqdb_alpha", None),
+                        n_refinements=getattr(self.config, "tqdb_n_refinements", None),
+                    )
                     logger.debug(f"TurboQuantDB: ANN index built on {n} vectors")
             except Exception as e:
                 logger.debug(f"TurboQuantDB: auto index build skipped — {e}")
@@ -506,20 +515,20 @@ class OpenVectorStore:
             return sorted(sources.values(), key=lambda x: x["source"])
 
         elif self.provider == "turboquantdb":
-            if not os.path.exists(self._tqdb_doc_index_path):
+            if self.client is None:
                 return []
             try:
-                with open(self._tqdb_doc_index_path) as f:
-                    doc_index: dict[str, list[str]] = json.load(f)
-            except (OSError, json.JSONDecodeError):
+                counts = self.client.list_metadata_values("source")
+                return sorted(
+                    [
+                        {"source": src, "chunks": count, "doc_ids": []}
+                        for src, count in counts.items()
+                    ],
+                    key=lambda x: x["source"],
+                )
+            except Exception as e:
+                logger.debug(f"TurboQuantDB list_documents failed: {e}")
                 return []
-            return sorted(
-                [
-                    {"source": src, "chunks": len(chunk_ids), "doc_ids": chunk_ids}
-                    for src, chunk_ids in doc_index.items()
-                ],
-                key=lambda x: x["source"],
-            )
 
         return []
 
@@ -592,11 +601,15 @@ class OpenVectorStore:
             import numpy as np
 
             q = np.array(query_embedding, dtype=np.float32)
-            q_norm = np.linalg.norm(q)
-            if q_norm > 0:
-                q = q / q_norm
+            # normalize=True on the engine handles query normalisation internally.
             tqdb_filter = filter_dict if filter_dict else None
-            results = self.client.search(q, top_k=top_k, filter=tqdb_filter, _use_ann=True)
+            results = self.client.search(
+                q,
+                top_k=top_k,
+                filter=tqdb_filter,
+                _use_ann=True,
+                ann_search_list_size=getattr(self.config, "tqdb_search_list_size", None),
+            )
             return [
                 {
                     "id": r["id"],
@@ -678,7 +691,7 @@ class OpenVectorStore:
                 return []
 
             try:
-                id_str = ", ".join(f"'{i}'" for i in ids)
+                id_str = ", ".join(f"'{_escape_sql_str(i)}'" for i in ids)
 
                 rows = self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
 
@@ -814,7 +827,7 @@ class OpenVectorStore:
             if self.collection is None:
                 return
 
-            id_str = ", ".join(f"'{i}'" for i in ids)
+            id_str = ", ".join(f"'{_escape_sql_str(i)}'" for i in ids)
 
             self.collection.delete(f"id IN ({id_str})")
 
@@ -827,21 +840,8 @@ class OpenVectorStore:
                 except Exception as e:
                     logger.debug(f"TurboQuantDB delete {chunk_id} failed: {e}")
 
-            # Prune sidecar doc index
-            if os.path.exists(self._tqdb_doc_index_path):
-                with open(self._tqdb_doc_index_path) as f:
-                    doc_index: dict[str, list[str]] = json.load(f)
-                id_set = set(ids)
-                for source in list(doc_index.keys()):
-                    doc_index[source] = [i for i in doc_index[source] if i not in id_set]
-                    if not doc_index[source]:
-                        del doc_index[source]
-                with open(self._tqdb_doc_index_path, "w") as f:
-                    json.dump(doc_index, f)
-
 
 class MultiVectorStore:
-
     """Read-only fan-out wrapper over multiple OpenVectorStore instances.
 
 
@@ -884,11 +884,14 @@ class MultiVectorStore:
             ]
 
             for fut in futures:
-                for doc in fut.result():
-                    doc_id = doc["id"]
+                try:
+                    for doc in fut.result():
+                        doc_id = doc["id"]
 
-                    if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
-                        seen[doc_id] = doc
+                        if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                            seen[doc_id] = doc
+                except Exception as e:
+                    logger.warning("MultiVectorStore: sub-store search failed, skipping: %s", e)
 
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
@@ -908,7 +911,7 @@ class MultiVectorStore:
                 else:
                     seen[src]["chunks"] += doc["chunks"]
 
-                    seen[src]["doc_ids"].extend(doc["doc_ids"])
+                    seen[src]["doc_ids"].extend(doc.get("doc_ids", []))
 
         return sorted(seen.values(), key=lambda x: x["source"])
 
@@ -929,7 +932,6 @@ class MultiVectorStore:
 
 
 class MultiBM25Retriever:
-
     """Read-only fan-out wrapper over multiple BM25Retriever instances.
 
 
@@ -958,11 +960,16 @@ class MultiBM25Retriever:
             futures = [ex.submit(r.search, query, top_k) for r in self._retrievers]
 
             for fut in futures:
-                for doc in fut.result():
-                    doc_id = doc["id"]
+                try:
+                    for doc in fut.result():
+                        doc_id = doc["id"]
 
-                    if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
-                        seen[doc_id] = doc
+                        if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                            seen[doc_id] = doc
+                except Exception as e:
+                    logger.warning(
+                        "MultiBM25Retriever: sub-retriever search failed, skipping: %s", e
+                    )
 
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 

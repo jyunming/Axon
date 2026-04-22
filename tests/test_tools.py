@@ -7,6 +7,7 @@ Unit tests for the agent tool schema definitions in axon.tools.
 from axon.tools import get_rag_tool_definition
 
 EXPECTED_TOOL_NAMES = {
+    # Original tools
     "query_knowledge_base",
     "search_documents",
     "add_knowledge",
@@ -19,6 +20,33 @@ EXPECTED_TOOL_NAMES = {
     "get_job_status",
     "list_projects",
     "get_stale_docs",
+    # Project CRUD
+    "switch_project",
+    "create_project",
+    "delete_project",
+    # Collection management
+    "clear_knowledge",
+    "refresh_ingest",
+    # Config
+    "get_current_settings",
+    "update_settings",
+    # Sessions
+    "list_sessions",
+    "get_session",
+    # Share / Store
+    "get_store_status",
+    "init_store",
+    "share_project",
+    "redeem_share",
+    "revoke_share",
+    "list_shares",
+    # Graph
+    "graph_status",
+    "graph_finalize",
+    "graph_data",
+    "graph_backend_status",
+    # Governance
+    "get_active_leases",
 }
 
 
@@ -49,7 +77,23 @@ def test_each_tool_has_required_schema_fields():
 
 def test_each_tool_has_at_least_one_required_parameter():
     # Tools that are intentionally zero-argument (no required params) are excluded.
-    zero_arg_tools = {"list_knowledge_base", "list_projects", "get_stale_docs"}
+    zero_arg_tools = {
+        "list_knowledge_base",
+        "list_projects",
+        "get_stale_docs",
+        "clear_knowledge",
+        "get_current_settings",
+        "update_settings",
+        "list_sessions",
+        "list_shares",
+        "get_store_status",
+        "graph_status",
+        "graph_finalize",
+        "graph_data",
+        "graph_backend_status",
+        "get_active_leases",
+        "refresh_ingest",
+    }
     tools = get_rag_tool_definition()
     for tool in tools:
         fn = tool["function"]

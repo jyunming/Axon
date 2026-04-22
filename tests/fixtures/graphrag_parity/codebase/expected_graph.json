@@ -1,0 +1,18 @@
+{
+  "_comment": "Code entity fixture. Tests that GraphRAG handles PRODUCT-heavy graphs with implementation dependency relations.",
+  "expected_entity_keys": [
+    "BM25Retriever", "BM25Okapi", "rank_bm25",
+    "QueryRouterMixin", "ThreadPoolExecutor", "bm25_corpus.json"
+  ],
+  "expected_entity_types": {
+    "BM25Retriever": "PRODUCT",
+    "BM25Okapi": "PRODUCT",
+    "rank_bm25": "PRODUCT",
+    "QueryRouterMixin": "PRODUCT"
+  },
+  "expected_relation_pairs": [
+    ["BM25Retriever", "BM25Okapi"],
+    ["BM25Retriever", "rank_bm25"],
+    ["QueryRouterMixin", "BM25Retriever"]
+  ]
+}

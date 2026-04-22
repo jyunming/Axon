@@ -13,11 +13,17 @@ Uses sentence-transformers, Ollama, and LanceDB/ChromaDB/Qdrant.
 """
 
 
-from .config import AxonConfig
-from .embeddings import OpenEmbedding
-from .llm import OpenLLM
-from .main import AxonBrain
-from .vector_store import OpenVectorStore
+from pathlib import Path
+
+from ._rust_loader import bootstrap_dev_rust_module
+
+bootstrap_dev_rust_module(__name__, Path(__file__).resolve().parent)
+
+from .config import AxonConfig  # noqa: E402
+from .embeddings import OpenEmbedding  # noqa: E402
+from .llm import OpenLLM  # noqa: E402
+from .main import AxonBrain  # noqa: E402
+from .vector_store import OpenVectorStore  # noqa: E402
 
 try:
     from importlib.metadata import PackageNotFoundError, version

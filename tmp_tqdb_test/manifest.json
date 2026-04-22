@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "d": 3,
+  "b": 8,
+  "seed": 42,
+  "vector_count": 1,
+  "storage_uri": "tmp_tqdb_test",
+  "metric": "cosine",
+  "index_state": null,
+  "fast_mode": false,
+  "rerank_enabled": true,
+  "rerank_precision": "disabled",
+  "normalize": false,
+  "quantizer_type": "dense"
+}

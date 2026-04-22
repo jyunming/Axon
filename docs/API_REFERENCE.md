@@ -262,6 +262,7 @@ Changes are scoped to the current server session by default (`persist: false`). 
 | `GET` | `/graph/data` | Full knowledge graph payload as JSON (nodes + links) |
 | `GET` | `/graph/visualize` | Render the knowledge graph as a self-contained HTML page |
 | `GET` | `/code-graph/data` | Code structure graph payload for the VS Code code-graph panel |
+| `GET` | `/graph/backend/status` | Active graph backend type and health (distinguishes graphrag vs dynamic backend) |
 
 `/graph/status` response: `{"community_build_in_progress": false, "community_summary_count": 12, "entity_count": 340, "code_node_count": 0, "graph_ready": true}`. `graph_ready` is `true` once the entity graph or code graph has nodes — use this to know whether graph queries will return data before the full ingest job completes.
 

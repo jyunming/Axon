@@ -59,6 +59,7 @@ EXPECTED_MCP_TOOL_NAMES = {
     "graph_status",
     "graph_finalize",
     "graph_data",
+    "graph_backend_status",
     "get_active_leases",
 }
 
@@ -173,6 +174,7 @@ def test_mcp_protocol_tools_list():
         '{"jsonrpc":"2.0","id":1,"method":"initialize",'
         '"params":{"protocolVersion":"2024-11-05","capabilities":{},'
         '"clientInfo":{"name":"test","version":"1"}}}\n'
+        '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n'
     )
 

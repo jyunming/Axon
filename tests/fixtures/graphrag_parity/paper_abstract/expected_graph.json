@@ -1,0 +1,22 @@
+{
+  "_comment": "Expected entity keys and relation subjects after ingest.",
+  "expected_entity_keys": [
+    "RAG", "Patrick Lewis", "Facebook AI Research",
+    "University College London", "New York University",
+    "Wikipedia", "seq2seq", "RAG-Sequence", "RAG-Token", "open-domain QA"
+  ],
+  "expected_entity_types": {
+    "Patrick Lewis": "PERSON",
+    "Facebook AI Research": "ORGANIZATION",
+    "University College London": "ORGANIZATION",
+    "New York University": "ORGANIZATION",
+    "Wikipedia": "PRODUCT"
+  },
+  "expected_relation_pairs": [
+    ["RAG", "seq2seq"],
+    ["RAG", "Wikipedia"],
+    ["Patrick Lewis", "Facebook AI Research"],
+    ["RAG-Sequence", "RAG"],
+    ["RAG-Token", "RAG"]
+  ]
+}

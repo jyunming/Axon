@@ -1,0 +1,20 @@
+{
+  "_comment": "Expected entity keys and relation subjects after ingest. Used to assert graph was built correctly post-refactor. Exact description text is not asserted — only presence and type.",
+  "expected_entity_keys": [
+    "FastAPI", "Starlette", "Pydantic", "Depends",
+    "Tom Christie", "Samuel Colvin", "Dependency Injection", "ASGI"
+  ],
+  "expected_entity_types": {
+    "FastAPI": "PRODUCT",
+    "Starlette": "PRODUCT",
+    "Pydantic": "PRODUCT",
+    "Tom Christie": "PERSON",
+    "Samuel Colvin": "PERSON"
+  },
+  "expected_relation_pairs": [
+    ["FastAPI", "Starlette"],
+    ["FastAPI", "Pydantic"],
+    ["Starlette", "Tom Christie"],
+    ["Pydantic", "Samuel Colvin"]
+  ]
+}

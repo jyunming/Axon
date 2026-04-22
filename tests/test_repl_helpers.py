@@ -159,7 +159,7 @@ class TestBrow:
         from axon.repl import _brow
 
         result = _brow("hello")
-        assert result.startswith("  ┃")
+        assert result.startswith("    ┃")
         assert result.endswith("┃")
 
     def test_truncates_long_content(self):

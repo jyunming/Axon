@@ -10,7 +10,7 @@ Each project gets its own isolated vector store and BM25 index under:
     ~/.axon/projects/<name>/
 
 
-        lancedb_data/  — LanceDB vector store
+        vector_store_data/  — vector store data (tqdb, lancedb, chroma, qdrant)
 
 
         bm25_index/    — BM25 JSON corpus
@@ -359,9 +359,9 @@ def project_dir(name: str) -> Path:
 
 
 def project_vector_path(name: str) -> str:
-    """Return the absolute path to the project's vector store directory (``lancedb_data/``)."""
+    """Return the absolute path to the project's vector store directory (``vector_store_data/``)."""
 
-    return str(project_dir(name) / "lancedb_data")
+    return str(project_dir(name) / "vector_store_data")
 
 
 def project_bm25_path(name: str) -> str:
@@ -376,7 +376,7 @@ def project_sessions_path(name: str) -> str:
     return str(project_dir(name) / "sessions")
 
 
-def ensure_project(name: str, description: str = "") -> Path:
+def ensure_project(name: str, description: str = "", security_mode: str | None = None) -> Path:
     """Create project directory structure and meta.json if they don't exist.
 
 
@@ -420,7 +420,7 @@ def ensure_project(name: str, description: str = "") -> Path:
     return project_dir(name)
 
 
-def _ensure_single_project(name: str, description: str) -> Path:
+def _ensure_single_project(name: str, description: str, graph_backend: str = "graphrag") -> Path:
     """Create directories and meta.json for exactly one project node.
 
 
@@ -430,11 +430,15 @@ def _ensure_single_project(name: str, description: str) -> Path:
     a new one is assigned and the file is updated in-place (migration path).
 
 
+    ``graph_backend`` is written to meta.json and is immutable once set —
+    attempting to change it raises ``ValueError``.
+
+
     """
 
     root = project_dir(name)
 
-    (root / "lancedb_data").mkdir(parents=True, exist_ok=True)
+    (root / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
 
@@ -450,6 +454,7 @@ def _ensure_single_project(name: str, description: str) -> Path:
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "project_id": build_project_id("proj"),
+                    "graph_backend": graph_backend,
                 },
                 indent=2,
             ),
@@ -457,13 +462,26 @@ def _ensure_single_project(name: str, description: str) -> Path:
         )
 
     else:
-        # Backfill missing project_id for existing projects (Phase 1 migration)
-
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
 
+        changed = False
+
+        # Backfill missing project_id for existing projects (Phase 1 migration)
         if "project_id" not in meta:
             meta["project_id"] = build_project_id("proj")
+            changed = True
 
+        # Backfill or enforce graph_backend immutability
+        if "graph_backend" not in meta:
+            meta["graph_backend"] = graph_backend
+            changed = True
+        elif meta["graph_backend"] != graph_backend:
+            raise ValueError(
+                f"graph_backend for project '{name}' is immutable: "
+                f"stored='{meta['graph_backend']}', requested='{graph_backend}'"
+            )
+
+        if changed:
             meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     return root
@@ -495,6 +513,26 @@ def get_project_id(name: str) -> str | None:
 
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def get_project_graph_backend(name: str) -> str:
+    """Return the ``graph_backend`` from a project's ``meta.json``.
+
+    Returns ``"graphrag"`` if the project does not exist, the file is
+    unreadable, or the field is absent (legacy project).
+
+    """
+
+    meta_file = project_dir(name) / "meta.json"
+
+    if not meta_file.exists():
+        return "graphrag"
+
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        return str(meta.get("graph_backend", "graphrag"))
+    except (json.JSONDecodeError, OSError):
+        return "graphrag"
 
 
 def get_store_id(user_dir: Path) -> str | None:
@@ -873,14 +911,14 @@ def delete_project(name: str) -> None:
     for attempt in range(3):
         try:
             shutil.rmtree(root)
-
             break
-
         except PermissionError:
             if attempt == 2:
                 raise
-
             time.sleep(0.5)
+        except FileNotFoundError:
+            # Another process deleted it concurrently — treat as success
+            break
 
     # If this was the active project, reset to default
 
@@ -948,7 +986,7 @@ def _ensure_single_project_at(root: Path, name: str, description: str) -> Path:
 
     """
 
-    (root / "lancedb_data").mkdir(parents=True, exist_ok=True)
+    (root / "vector_store_data").mkdir(parents=True, exist_ok=True)
 
     (root / "bm25_index").mkdir(parents=True, exist_ok=True)
 

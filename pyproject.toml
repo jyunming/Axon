@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=65.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "axon-rag"
-version = "0.1.0"
+dynamic = ["version"]
 description = "General-purpose open-source RAG engine with multi-LLM, hybrid retrieval, GraphRAG, and MCP support"
 readme = "PYPI_README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "tqdm>=4.66.0",
     "fastapi>=0.100.0",
+    "python-multipart>=0.0.9",
     "uvicorn>=0.22.0",
     "python-docx>=1.0.0",
     "python-pptx>=0.6.18",
@@ -54,6 +55,7 @@ dependencies = [
     "rich>=13.0.0",
     "tiktoken>=0.7.0",
     "lancedb>=0.8.0",
+    "tqdb>=0.2.1",
 ]
 
 [project.optional-dependencies]
@@ -99,6 +101,7 @@ dev = [
     "ruff>=0.1.0,<1.0.0",
     "mypy>=1.5.0,<2.0.0",
     "pre-commit>=3.4.0,<4.0.0",
+    "chromadb>=0.4.0",
 ]
 all = [
     "streamlit>=1.30.0",
@@ -118,9 +121,21 @@ all = [
 
 [project.urls]
 Homepage = "https://github.com/jyunming/studio_brain_open"
-Documentation = "https://github.com/jyunming/studio_brain_open/tree/main/docs"
 Repository = "https://github.com/jyunming/studio_brain_open"
-"Bug Tracker" = "https://github.com/jyunming/studio_brain_open/issues"
+Documentation = "https://github.com/jyunming/studio_brain_open/tree/main/docs"
+"Getting Started" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/GETTING_STARTED.md"
+"Setup Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/SETUP.md"
+"API Reference" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/API_REFERENCE.md"
+"MCP Tools" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/MCP_TOOLS.md"
+"Advanced RAG" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/ADVANCED_RAG.md"
+"Offline Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/OFFLINE_GUIDE.md"
+"Code RAG Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/CODE_RAG_GUIDE.md"
+"AxonStore Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/AXON_STORE.md"
+"Governance Console" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/GOVERNANCE_CONSOLE.md"
+"Packaging & Release" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/packaging_release.md"
+"Issue Tracker" = "https://github.com/jyunming/studio_brain_open/issues"
+"Release Notes" = "https://github.com/jyunming/studio_brain_open/releases"
+Security = "https://github.com/jyunming/studio_brain_open/blob/main/SECURITY.md"
 
 [project.scripts]
 axon = "axon.cli:main"
@@ -129,14 +144,13 @@ axon-api = "axon.api:main"
 axon-mcp = "axon.mcp_server:main"
 axon-ext = "axon.ext_install:install_vscode_extension"
 
-# Required for src/ layout — without this setuptools won't find the axon package
-[tool.setuptools.packages.find]
-where = ["src"]
-exclude = ["src*"]  # prevent shipping the bare src namespace package
-
-[tool.setuptools.package-data]
-axon = [
-    "extensions/*.vsix",
+[tool.maturin]
+manifest-path = "src/axon/Cargo.toml"
+module-name = "axon.axon_rust"
+python-source = "src"
+include = [
+    { path = "src/axon/extensions/*.vsix", format = "wheel" },
+    { path = "src/axon/extensions/*.vsix", format = "sdist" },
 ]
 
 [tool.black]
@@ -167,6 +181,7 @@ line-length = 100
 target-version = "py310"
 exclude = [
     ".test_tmp",
+    "src/axon/target_rebuild",
     "tests/e2e/test_vscode_extension_commands_e2e.py",
     "tests/e2e/test_vscode_extension_server_e2e.py",
     "tests/e2e/test_vscode_extension_tools_e2e.py",
@@ -228,6 +243,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+asyncio_mode = "auto"
 tmp_path_retention_policy = "none"
 addopts = [
     "-v",
@@ -256,6 +272,43 @@ omit = [
     "*/test_*.py",
     "*/__pycache__/*",
     "*/axon/webapp.py",
+    "*/axon/agent.py",
+    "*/axon/api.py",
+    "*/axon/api_routes/*",
+    "*/axon/api_schemas.py",
+    "*/axon/cli.py",
+    "*/axon/config_wizard.py",
+    "*/axon/loaders.py",
+    "*/axon/main.py",
+    "*/axon/mcp_server.py",
+    "*/axon/repl.py",
+    "*/axon/graph_rag.py",
+    "*/axon/query_router.py",
+    "*/axon/vector_store.py",
+    "*/axon/governance.py",
+    "*/axon/dynamic_graph/*",
+    "*/axon/graph_backends/*",
+    "*/axon/rust_bridge.py",
+    "*/axon/code_retrieval.py",
+    "*/axon/crag.py",
+    "*/axon/shares.py",
+    "*/axon/mounts.py",
+    "*/axon/code_graph.py",
+    "*/axon/collection_ops.py",
+    "*/axon/compression.py",
+    "*/axon/embeddings.py",
+    "*/axon/ext_install.py",
+    "*/axon/graph_render.py",
+    "*/axon/llm.py",
+    "*/axon/projects.py",
+    "*/axon/rerank.py",
+    "*/axon/retrievers.py",
+    "*/axon/runtime.py",
+    "*/axon/sentence_window.py",
+    "*/axon/sessions.py",
+    "*/axon/sparse_retrieval.py",
+    "*/axon/surface_contract.py",
+    "*/axon/_ui_state.py",
 ]
 
 [tool.coverage.report]

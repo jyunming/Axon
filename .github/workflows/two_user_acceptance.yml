@@ -1,0 +1,27 @@
+name: Two-user acceptance test
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  two_user_acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure Docker and Compose plugin
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends docker.io docker-compose-plugin
+
+      - name: Build and run docker-compose harness
+        run: |
+          docker compose -f docker/two_user_test/docker-compose.yml up --build --abort-on-container-exit --remove-orphans
+        timeout-minutes: 20
+
+      - name: Upload acceptance outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: two-user-acceptance-output
+          path: docker/two_user_test/output/**

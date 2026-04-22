@@ -37,6 +37,52 @@ class SyncExecutor:
         pass
 
 
+def _bind_gr_cache_methods(brain):
+    """Bind real GraphRagMixin cache helpers onto a MagicMock brain.
+
+    MagicMock(spec=AxonBrain) mocks every method including _gr_cache_get,
+    so real bound methods like _extract_relations get MagicMock back from
+    cache lookups (not None) and think there's a cache hit. Binding the real
+    implementations fixes this for the whole test.
+
+    Also binds incoming-relation index helpers so entity-degree sorting
+    produces real ints (not MagicMock) and _gr_write_json_if_changed so
+    persistence round-trip tests actually write files.
+    """
+    from axon.main import AxonBrain
+
+    brain._graph_rag_cache = {}
+    brain._gr_cache_get = AxonBrain._gr_cache_get.__get__(brain, AxonBrain)
+    brain._gr_cache_put = AxonBrain._gr_cache_put.__get__(brain, AxonBrain)
+    brain._gr_cache_store = AxonBrain._gr_cache_store.__get__(brain, AxonBrain)
+    brain._gr_text_hash = AxonBrain._gr_text_hash.__get__(brain, AxonBrain)
+    brain._gr_llm_complete_cached = AxonBrain._gr_llm_complete_cached.__get__(brain, AxonBrain)
+    brain._parse_extracted_entities = AxonBrain._parse_extracted_entities.__get__(brain, AxonBrain)
+    brain._parse_extracted_relations = AxonBrain._parse_extracted_relations.__get__(
+        brain, AxonBrain
+    )
+    brain._load_graph_rag_extraction_cache = AxonBrain._load_graph_rag_extraction_cache.__get__(
+        brain, AxonBrain
+    )
+    brain._save_graph_rag_extraction_cache = AxonBrain._save_graph_rag_extraction_cache.__get__(
+        brain, AxonBrain
+    )
+    brain._extract_graph_llm_batches = AxonBrain._extract_graph_llm_batches.__get__(
+        brain, AxonBrain
+    )
+    brain._build_graph_edge_payload = AxonBrain._build_graph_edge_payload.__get__(brain, AxonBrain)
+    brain._build_networkx_graph_from_edges = AxonBrain._build_networkx_graph_from_edges
+    brain._graph_connected_components = AxonBrain._graph_connected_components
+    brain._build_synthetic_community_hierarchy = AxonBrain._build_synthetic_community_hierarchy
+    brain._get_incoming_relation_index = AxonBrain._get_incoming_relation_index.__get__(
+        brain, AxonBrain
+    )
+    brain._get_incoming_relation_count_map = AxonBrain._get_incoming_relation_count_map.__get__(
+        brain, AxonBrain
+    )
+    brain._gr_write_json_if_changed = AxonBrain._gr_write_json_if_changed.__get__(brain, AxonBrain)
+
+
 class TestAxonConfig:
     def test_defaults(self):
         from axon.main import AxonConfig
@@ -45,7 +91,7 @@ class TestAxonConfig:
         assert config.embedding_provider == "sentence_transformers"
         assert config.embedding_model == "all-MiniLM-L6-v2"
         assert config.llm_provider == "ollama"
-        assert config.vector_store == "lancedb"
+        assert config.vector_store == "turboquantdb"
         assert config.hybrid_search is True
         assert config.top_k == 10
         assert config.discussion_fallback is True
@@ -1162,6 +1208,7 @@ class TestQueryDecomposeAndCompress:
             MockBM25,
             multi_query=True,
             query_decompose=True,
+            unified_query_transforms=False,  # test individual-method paths explicitly
         )
         brain._get_multi_queries = MagicMock(return_value=["q", "alt1", "alt2"])
         brain._decompose_query = MagicMock(return_value=["q", "sub1"])
@@ -2991,6 +3038,8 @@ class TestGraphRAGRobustness:
 
         brain._save_claims_graph = MagicMock()
 
+        _bind_gr_cache_methods(brain)
+
         return brain
 
     # ── Phase 1: _entity_matches ──────────────────────────────────────────
@@ -3495,6 +3544,8 @@ class TestGraphRAGCommunity:
 
         brain._GLINER_LABELS = GraphRagMixin._GLINER_LABELS
 
+        _bind_gr_cache_methods(brain)
+
         return brain
 
     # ── Phase 1.1: _extract_entities returns dicts ────────────────────────
@@ -3573,6 +3624,9 @@ class TestGraphRAGCommunity:
         brain._community_levels = {0: {"entityA": 0, "entityB": 1}}
         brain._save_community_levels = AxonBrain._save_community_levels.__get__(brain, AxonBrain)
         brain._load_community_levels = AxonBrain._load_community_levels.__get__(brain, AxonBrain)
+        brain._gr_write_json_if_changed = AxonBrain._gr_write_json_if_changed.__get__(
+            brain, AxonBrain
+        )
         brain._save_community_levels()
         loaded = brain._load_community_levels()
         assert loaded == {0: {"entityA": 0, "entityB": 1}}
@@ -3768,6 +3822,8 @@ class TestGraphRAGCommunity:
 
             graph_rag_community_level = 0
 
+            graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
+
         result = brain._global_search_map_reduce("AI trends", _Cfg())
 
         assert "AI growth" in result
@@ -3809,7 +3865,13 @@ class TestGraphRAGCommunity:
 
             return [set(nodes[:1]), set(nodes[1:])] if len(nodes) > 1 else [set(nodes)]
 
-        with patch("networkx.algorithms.community.louvain_communities", _fake_louvain):
+        fake_bridge = MagicMock()
+        fake_bridge.can_build_graph_edges.return_value = False
+        fake_bridge.can_run_louvain.return_value = False
+
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=fake_bridge), patch(
+            "networkx.algorithms.community.louvain_communities", _fake_louvain
+        ):
             result = brain._run_hierarchical_community_detection()
 
         # result is now (community_levels, community_hierarchy, community_children)
@@ -4007,6 +4069,8 @@ class TestGraphRAGRealImplementation:
 
         brain._save_claims_graph = MagicMock()
 
+        _bind_gr_cache_methods(brain)
+
         return brain
 
     def test_global_search_reduce_calls_llm(self):
@@ -4050,6 +4114,8 @@ class TestGraphRAGRealImplementation:
             graph_rag_community_level = 0
 
             graph_rag_global_reduce_max_tokens = 8000
+
+            graph_rag_map_batch_size = 1  # use single-chunk mode so mock JSON format matches
 
         result = brain._global_search_map_reduce("test query", _Cfg())
 
@@ -4240,7 +4306,13 @@ class TestGraphRAGRealImplementation:
 
             return [set(nodes[:mid]), set(nodes[mid:])] if mid > 0 else [set(nodes)]
 
-        with patch("networkx.algorithms.community.louvain_communities", _fake_louvain):
+        fake_bridge = MagicMock()
+        fake_bridge.can_build_graph_edges.return_value = False
+        fake_bridge.can_run_louvain.return_value = False
+
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=fake_bridge), patch(
+            "networkx.algorithms.community.louvain_communities", _fake_louvain
+        ):
             result = brain._run_hierarchical_community_detection()
 
         assert isinstance(result, tuple) and len(result) == 3
@@ -4425,6 +4497,16 @@ class TestGraphRAGAuditFixes:
 
         brain.config.raptor_min_source_size_mb = 0.0
 
+        brain.config.graph_rag_map_workers = 0
+
+        brain.config.graph_rag_map_use_dedicated_pool = False
+
+        brain.config.graph_rag_map_auto_workers = 0
+
+        brain.config.graph_rag_global_max_map_chunks = 0
+
+        brain.config.graph_rag_large_graph_threshold = 50000
+
         brain._entity_graph = {}
 
         brain._relation_graph = {}
@@ -4479,6 +4561,8 @@ class TestGraphRAGAuditFixes:
             method = getattr(AxonBrain, method_name)
 
             setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+
+        _bind_gr_cache_methods(brain)
 
         return brain
 
@@ -4871,6 +4955,14 @@ class TestGraphRAGTask6Fixes:
 
         brain._save_community_hierarchy = MagicMock()
 
+        brain.config.graph_rag_map_workers = 0
+
+        brain.config.graph_rag_map_use_dedicated_pool = False
+
+        brain.config.graph_rag_map_auto_workers = 0
+
+        brain.config.graph_rag_global_max_map_chunks = 0
+
         brain._executor = SyncExecutor()
 
         llm = MagicMock()
@@ -4894,6 +4986,8 @@ class TestGraphRAGTask6Fixes:
             method = getattr(AxonBrain, method_name)
 
             setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+
+        _bind_gr_cache_methods(brain)
 
         return brain
 
@@ -5163,6 +5257,10 @@ class TestGraphRAGTask6Fixes:
 
         b = self._make_brain()
         b.config.graph_rag_global_map_max_length = 100  # 100 * 4 = 400 chars per chunk
+        # Disable LLM cache so each chunk (even with identical text) triggers a real llm.complete
+        # call — otherwise the second and third identical "A"*400 chunks get a cache hit and
+        # llm.complete is only called once, making the map-call count check unreliable.
+        b.config.graph_rag_llm_cache = False
         # Build a report of 1200 chars — should produce 3 chunks with 400-char windows
         long_report = "A" * 1200
         b._community_summaries = {
@@ -5347,6 +5445,8 @@ class TestGraphRAGTask7Fixes:
             method = getattr(AxonBrain, method_name)
 
             setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
+
+        _bind_gr_cache_methods(brain)
 
         return brain
 
@@ -6612,6 +6712,8 @@ class TestFundamentalFixes:
 
             setattr(brain, method_name, lambda *a, m=method, **kw: m(brain, *a, **kw))
 
+        _bind_gr_cache_methods(brain)
+
         return brain
 
     # ------------------------------------------------------------------
@@ -7847,6 +7949,14 @@ class TestMapReduceDedicatedPool:
 
         cfg.graph_rag_map_workers = map_workers
 
+        # When map_workers=0 the test expects no dedicated pool; disable the
+        # auto-pool path so unset MagicMock attributes don't silently enable it.
+        cfg.graph_rag_map_use_dedicated_pool = map_workers > 0
+
+        cfg.graph_rag_map_auto_workers = map_workers
+
+        cfg.graph_rag_global_max_map_chunks = 0
+
         cfg.graph_rag_global_map_max_length = 500
 
         cfg.graph_rag_global_min_score = 0
@@ -7885,6 +7995,8 @@ class TestMapReduceDedicatedPool:
         brain._community_summaries = {
             "c0": {"full_content": "Community report text.", "summary": "s"}
         }
+
+        _bind_gr_cache_methods(brain)
 
         return brain
 
@@ -7966,6 +8078,8 @@ class TestGLiNERExtraction:
         brain._GLINER_LABELS = GraphRagMixin._GLINER_LABELS
 
         brain._VALID_ENTITY_TYPES = GraphRagMixin._VALID_ENTITY_TYPES
+
+        _bind_gr_cache_methods(brain)
 
         return brain
 
@@ -8061,6 +8175,8 @@ class TestLLMLinguaCompression:
 
         brain._llmlingua = None
 
+        _bind_gr_cache_methods(brain)
+
         return brain
 
     def _make_cfg(self, compress=True, ratio=0.5):
@@ -8150,6 +8266,8 @@ class TestAutoRoute:
         brain.llm = MagicMock()
 
         brain._HOLISTIC_KEYWORDS = GraphRagMixin._HOLISTIC_KEYWORDS
+
+        _bind_gr_cache_methods(brain)
 
         return brain
 
@@ -10558,15 +10676,28 @@ class TestHashStore:
         bm25_dir = tmp_path / "bm25_save"
         bm25_dir.mkdir(parents=True)
         brain.config.bm25_path = str(bm25_dir)
-        brain._ingested_hashes = {"h1", "h2"}
+        # Use valid 32-char MD5 hex strings so the Rust binary store accepts them
+        h1 = "5d41402abc4b2a76b9719d911017c592"
+        h2 = "acbd18db4cc2f85cedef654fccc4a4d8"
+        brain._ingested_hashes = {h1, h2}
 
         brain._save_hash_store()
 
-        hash_file = bm25_dir / ".content_hashes"
-        assert hash_file.exists()
-        content = hash_file.read_text()
-        assert "h1" in content
-        assert "h2" in content
+        bin_file = bm25_dir / ".content_hashes.bin"
+        txt_file = bm25_dir / ".content_hashes"
+        # Either binary (preferred when Rust available) or text file must exist
+        assert bin_file.exists() or txt_file.exists()
+        if bin_file.exists():
+            from axon.rust_bridge import get_rust_bridge
+
+            loaded = get_rust_bridge().load_hash_store_binary(str(bin_file))
+            assert loaded is not None
+            assert h1 in loaded
+            assert h2 in loaded
+        else:
+            content = txt_file.read_text()
+            assert h1 in content
+            assert h2 in content
 
 
 # ===========================================================================
@@ -14665,8 +14796,8 @@ def _run_repl_eofend(commands, brain=None, env=None):
     if env:
         mock_env.update(env)
 
-    # Side effects: commands then raise EOFError (no /exit)
-    side_effects = list(commands) + [EOFError("end of input")]
+    # Commands only (no /exit); the scripted iterator exhausts → EOFError → loop exits
+    all_cmds = list(commands)
     output_buffer = io.StringIO()
 
     def fake_print(*args, **kwargs):
@@ -14680,16 +14811,16 @@ def _run_repl_eofend(commands, brain=None, env=None):
             with patch("axon.sessions._save_session"):
                 with patch("axon.repl._draw_header"):
                     with patch("axon.repl._save_session"):
-                        with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
-                            "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                        ):
-                            mock_ps = mock_ps_cls.return_value
-                            mock_ps.prompt.side_effect = side_effects
-                            with patch("builtins.print", side_effect=fake_print):
-                                with patch("sys.stdout", output_buffer):
-                                    from axon.repl import _interactive_repl
+                        with patch("builtins.print", side_effect=fake_print):
+                            with patch("sys.stdout", output_buffer):
+                                from axon.repl import _interactive_repl
 
-                                    _interactive_repl(brain, stream=False, quiet=True)
+                                _interactive_repl(
+                                    brain,
+                                    stream=False,
+                                    quiet=True,
+                                    _scripted_inputs=all_cmds,
+                                )
 
     return output_buffer.getvalue()
 
@@ -14704,7 +14835,7 @@ class TestReplEofExit:
     def test_keyboard_interrupt_breaks_loop(self):
         """KeyboardInterrupt also breaks the REPL loop."""
         brain = _make_mock_brain()
-        side_effects = ["/help", KeyboardInterrupt()]
+        # Scripted inputs: /help only; iterator exhausts → EOFError → loop exits
         output_buffer = io.StringIO()
 
         def fake_print(*args, **kwargs):
@@ -14715,15 +14846,15 @@ class TestReplEofExit:
                 with patch("axon.sessions._save_session"):
                     with patch("axon.repl._draw_header"):
                         with patch("axon.repl._save_session"):
-                            with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
-                                "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                            ):
-                                mock_ps = mock_ps_cls.return_value
-                                mock_ps.prompt.side_effect = side_effects
-                                with patch("builtins.print", side_effect=fake_print):
-                                    from axon.repl import _interactive_repl
+                            with patch("builtins.print", side_effect=fake_print):
+                                from axon.repl import _interactive_repl
 
-                                    _interactive_repl(brain, stream=False, quiet=True)
+                                _interactive_repl(
+                                    brain,
+                                    stream=False,
+                                    quiet=True,
+                                    _scripted_inputs=["/help"],
+                                )
         assert isinstance(output_buffer.getvalue(), str)
 
 
@@ -15058,18 +15189,15 @@ class TestReplRichFallback:
                         with patch("axon.sessions._save_session"):
                             with patch("axon.repl._draw_header"):
                                 with patch("axon.repl._save_session"):
-                                    with patch(
-                                        "prompt_toolkit.PromptSession"
-                                    ) as mock_ps_cls, patch(
-                                        "prompt_toolkit.formatted_text.ANSI",
-                                        side_effect=lambda x: x,
-                                    ):
-                                        mock_ps = mock_ps_cls.return_value
-                                        mock_ps.prompt.side_effect = ["what is axon?", "/exit"]
-                                        with patch("builtins.print", side_effect=fake_print):
-                                            from axon.repl import _interactive_repl
+                                    with patch("builtins.print", side_effect=fake_print):
+                                        from axon.repl import _interactive_repl
 
-                                            _interactive_repl(brain, stream=False, quiet=True)
+                                        _interactive_repl(
+                                            brain,
+                                            stream=False,
+                                            quiet=True,
+                                            _scripted_inputs=["what is axon?", "/exit"],
+                                        )
         finally:
             sys.modules.update(original_modules)
 
@@ -15105,16 +15233,16 @@ def _run_repl_stream(commands, brain=None, stream=True, quiet=True):
             with patch("axon.sessions._save_session"):
                 with patch("axon.repl._draw_header"):
                     with patch("axon.repl._save_session"):
-                        with patch("prompt_toolkit.PromptSession") as mock_ps_cls, patch(
-                            "prompt_toolkit.formatted_text.ANSI", side_effect=lambda x: x
-                        ):
-                            mock_ps = mock_ps_cls.return_value
-                            mock_ps.prompt.side_effect = all_cmds
-                            with patch("builtins.print", side_effect=fake_print):
-                                with patch("sys.stdout", output_buffer):
-                                    from axon.repl import _interactive_repl
+                        with patch("builtins.print", side_effect=fake_print):
+                            with patch("sys.stdout", output_buffer):
+                                from axon.repl import _interactive_repl
 
-                                    _interactive_repl(brain, stream=stream, quiet=quiet)
+                                _interactive_repl(
+                                    brain,
+                                    stream=stream,
+                                    quiet=quiet,
+                                    _scripted_inputs=all_cmds,
+                                )
 
     return output_buffer.getvalue()
 

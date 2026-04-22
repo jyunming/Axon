@@ -783,6 +783,7 @@ class TestURLLoader:
         text="<html><body>Hello world</body></html>",
         status=200,
         content_type="text/html; charset=utf-8",
+        url="https://example.com",
     ):
         """Build a minimal mock httpx.Response."""
 
@@ -793,6 +794,8 @@ class TestURLLoader:
         resp.headers = {"content-type": content_type}
 
         resp.text = text
+
+        resp.url = url
 
         return resp
 
@@ -864,6 +867,7 @@ class TestURLLoader:
             mock_http.get.return_value = self._make_response(
                 text="<html><head><title>T</title></head><body><p>Hello world</p></body></html>",
                 content_type="text/html; charset=utf-8",
+                url="https://example.com",
             )
 
             docs = loader.load("https://example.com")
@@ -891,6 +895,7 @@ class TestURLLoader:
             mock_http.get.return_value = self._make_response(
                 text="raw text content",
                 content_type="text/plain",
+                url="https://example.com/readme.txt",
             )
 
             docs = loader.load("https://example.com/readme.txt")
@@ -905,7 +910,9 @@ class TestURLLoader:
         with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
             mock_http = mock_client_cls.return_value.__enter__.return_value
 
-            mock_http.get.return_value = self._make_response(status=404)
+            mock_http.get.return_value = self._make_response(
+                status=404, url="https://example.com/missing"
+            )
 
             with pytest.raises(ValueError, match="HTTP 404"):
                 loader.load("https://example.com/missing")
@@ -916,7 +923,9 @@ class TestURLLoader:
         with patch("axon.loaders.URLLoader._check_ssrf"), patch("httpx.Client") as mock_client_cls:
             mock_http = mock_client_cls.return_value.__enter__.return_value
 
-            mock_http.get.return_value = self._make_response(content_type="application/pdf")
+            mock_http.get.return_value = self._make_response(
+                content_type="application/pdf", url="https://example.com/file.pdf"
+            )
 
             with pytest.raises(ValueError, match="Non-text content type"):
                 loader.load("https://example.com/file.pdf")
@@ -1059,6 +1068,8 @@ class TestRewriteGithubUrl:
         mock_resp.headers = {"content-type": "text/plain"}
 
         mock_resp.text = "# Hello World"
+
+        mock_resp.url = raw_url
 
         with patch(
             "axon.loaders.socket.getaddrinfo", return_value=[("", "", "", "", ("1.2.3.4", 0))]

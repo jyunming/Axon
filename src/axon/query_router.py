@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +61,12 @@ _ROUTE_PROFILES: dict = {
 
 
 class QueryRouterMixin:
+    @property
+    def _graph_lock(self) -> threading.RLock:
+        if not hasattr(self, "_graph_lock_internal"):
+            self._graph_lock_internal = threading.RLock()
+        return self._graph_lock_internal
+
     def _classify_query_route(self, query: str, cfg: AxonConfig) -> str:
         """Return one of: factual | synthesis | table_lookup | entity_relation | corpus_exploration."""
         if cfg.query_router == "llm":
@@ -150,41 +157,81 @@ class QueryRouterMixin:
 
         matched_entities: set[str] = set()
 
-        for query_entity in query_entities:
-            # Support both new dict-node format and legacy list format
-            q_name = query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
-            if not q_name:
-                continue
-            for eid, node in self._entity_graph.items():
-                score = self._entity_matches(q_name, eid)
-                if score <= 0.0:
+        with self._graph_lock:
+            for query_entity in query_entities:
+                # Support both new dict-node format and legacy list format
+                q_name = (
+                    query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
+                )
+                if not q_name:
                     continue
-                matched_entities.add(eid)
-                # Scale matched score into [0.5, 0.8) range so it is clearly below
-                # a direct vector-match score but still meaningfully ranked.
-                doc_score = 0.5 + score * 0.3
-                doc_ids = node.get("chunk_ids", [])
-                for did in doc_ids:
-                    if did not in existing_ids:
-                        if extra_id_scores.get(did, 0.0) < doc_score:
-                            extra_id_scores[did] = doc_score
-
-        # 1-hop traversal via relation graph
-        use_relations = getattr(active_cfg, "graph_rag_relations", True) and self._relation_graph
-        if use_relations and matched_entities:
-            for src_entity in matched_entities:
-                for entry in self._relation_graph.get(src_entity, []):
-                    target = entry.get("target", "").lower()
-                    if not target:
+                for eid, node in self._entity_graph.items():
+                    score = self._entity_matches(q_name, eid)
+                    if score <= 0.0:
                         continue
-                    target_node = self._entity_graph.get(target, {})
-                    target_chunk_ids = target_node.get("chunk_ids", [])
-                    for did in target_chunk_ids:
+                    matched_entities.add(eid)
+                    # Scale matched score into [0.5, 0.8) range so it is clearly below
+                    # a direct vector-match score but still meaningfully ranked.
+                    doc_score = 0.5 + score * 0.3
+                    doc_ids = node.get("chunk_ids", [])
+                    for did in doc_ids:
                         if did not in existing_ids:
-                            # 1-hop score: lower than direct match
-                            hop_score = 0.62
-                            if extra_id_scores.get(did, 0.0) < hop_score:
-                                extra_id_scores[did] = hop_score
+                            if extra_id_scores.get(did, 0.0) < doc_score:
+                                extra_id_scores[did] = doc_score
+
+            # Multi-hop traversal via relation graph
+            def _cfg_get(name, default):
+                return getattr(active_cfg, name, default)
+
+            max_hops = _cfg_get("graph_rag_max_hops", 1)
+            hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
+
+            # Performance guard for large graphs (Epic 1/4)
+            large_threshold = _cfg_get("graph_rag_large_graph_threshold", 50000)
+            if len(self._entity_graph) > large_threshold and max_hops > 1:
+                logger.info(
+                    f"   GraphRAG: large graph detected ({len(self._entity_graph)} nodes); "
+                    f"capping max_hops at 1 for performance."
+                )
+                max_hops = 1
+
+            use_relations = (
+                getattr(active_cfg, "graph_rag_relations", True)
+                and self._relation_graph
+                and max_hops > 0
+            )
+
+            if use_relations and matched_entities:
+                # BFS for multi-hop traversal
+                current_hop_entities = set(matched_entities)
+                visited_entities = set(matched_entities)
+
+                for hop in range(1, max_hops + 1):
+                    next_hop_entities = set()
+                    # Score for this hop decays from base 0.8
+                    # Hop 1: 0.8 * 0.7 = 0.56
+                    # Hop 2: 0.56 * 0.7 = 0.392
+                    hop_score = 0.8 * (hop_decay**hop)
+
+                    for src_entity in current_hop_entities:
+                        for entry in self._relation_graph.get(src_entity, []):
+                            target = entry.get("target", "").lower()
+                            if not target or target in visited_entities:
+                                continue
+
+                            visited_entities.add(target)
+                            next_hop_entities.add(target)
+
+                            target_node = self._entity_graph.get(target, {})
+                            target_chunk_ids = target_node.get("chunk_ids", [])
+                            for did in target_chunk_ids:
+                                if did not in existing_ids:
+                                    if extra_id_scores.get(did, 0.0) < hop_score:
+                                        extra_id_scores[did] = hop_score
+
+                    if not next_hop_entities:
+                        break
+                    current_hop_entities = next_hop_entities
 
         if not extra_id_scores:
             return results, list(matched_entities)
@@ -198,7 +245,8 @@ class QueryRouterMixin:
                     f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)"
                 )
                 for r in extra_results:
-                    r["score"] = extra_id_scores.get(r["id"], 0.65)
+                    # Use a very low fallback if somehow missing from map
+                    r["score"] = extra_id_scores.get(r["id"], 0.01)
                     r["_graph_expanded"] = True
                 results = list(results) + extra_results
         except Exception as e:
@@ -208,9 +256,17 @@ class QueryRouterMixin:
 
     def _doc_hash(self, doc: dict) -> str:
         """Return an MD5 hex digest of the document's text content."""
+        text = doc.get("text", "")
+        from axon.rust_bridge import get_rust_bridge
+
+        bridge = get_rust_bridge()
+        if bridge.can_doc_hash():
+            result = bridge.compute_doc_hash(text)
+            if result is not None:
+                return result
         import hashlib
 
-        return hashlib.md5(doc.get("text", "").encode("utf-8", errors="replace")).hexdigest()
+        return hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()
 
     def _prepend_contextual_context(self, chunk: dict, whole_doc_text: str) -> dict:
         """Prepend LLM-generated situating context to chunk text (Anthropic method)."""
@@ -440,6 +496,90 @@ class QueryRouterMixin:
         queries = [q.strip("- \t1234567890.") for q in response.split("\n") if q.strip()]
         return [query] + queries[:3]  # Always include original query
 
+    def _get_all_transforms_unified(
+        self,
+        query: str,
+        enabled: dict[str, bool],
+        multi_count: int = 3,
+    ) -> dict[str, Any]:
+        """Single LLM call that produces all enabled query transforms at once.
+
+        Returns dict with keys: "multi_queries", "step_back", "decomposed", "hyde_doc".
+        Values are None for disabled transforms.
+        """
+        import json as _json
+        import re as _re_mod
+
+        if not any(enabled.values()):
+            return {
+                "multi_queries": None,
+                "step_back": None,
+                "decomposed": None,
+                "hyde_doc": None,
+            }
+
+        sections = []
+        output_format: dict[str, Any] = {}
+
+        if enabled.get("multi"):
+            sections.append(
+                f'1. "multi_queries": Generate {multi_count} alternative phrasings of the query '
+                "that approach it from different angles. Return as a JSON array of strings."
+            )
+            output_format["multi_queries"] = ["alternative phrasing 1", "..."]
+
+        if enabled.get("step_back"):
+            sections.append(
+                '2. "step_back": Generate ONE broader, more general question that the original query '
+                "is a specific instance of. Return as a single string."
+            )
+            output_format["step_back"] = "broader question"
+
+        if enabled.get("decompose"):
+            sections.append(
+                '3. "decomposed": Break the query into 2-4 simpler sub-questions that together '
+                "would answer the original. Return as a JSON array of strings."
+            )
+            output_format["decomposed"] = ["sub-question 1", "..."]
+
+        if enabled.get("hyde"):
+            sections.append(
+                '4. "hyde_doc": Write a short (2-3 sentence) hypothetical document that would '
+                "directly answer the query if it existed. Return as a single string."
+            )
+            output_format["hyde_doc"] = "hypothetical answer text"
+
+        task_list = "\n".join(sections)
+        format_example = _json.dumps(output_format, indent=2)
+
+        prompt = (
+            f"Query: {query}\n\n"
+            f"Complete ALL of the following tasks for the query above:\n{task_list}\n\n"
+            f"Return ONLY valid JSON in this exact format:\n{format_example}\n"
+            "Output only valid JSON, no explanations."
+        )
+
+        try:
+            raw = self.llm.complete(prompt, system_prompt="You are a query analysis assistant.")
+            raw_clean = _re_mod.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+            parsed = _json.loads(raw_clean)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM did not return a JSON object")
+            return {
+                "multi_queries": parsed.get("multi_queries") if enabled.get("multi") else None,
+                "step_back": parsed.get("step_back") if enabled.get("step_back") else None,
+                "decomposed": parsed.get("decomposed") if enabled.get("decompose") else None,
+                "hyde_doc": parsed.get("hyde_doc") if enabled.get("hyde") else None,
+            }
+        except Exception as _e:
+            logger.debug("Unified query transform failed, falling back: %s", _e)
+            return {
+                "multi_queries": None,
+                "step_back": None,
+                "decomposed": None,
+                "hyde_doc": None,
+            }
+
     def _mmr_deduplicate(self, results: list[dict], cfg) -> list[dict]:
         """Reorder and deduplicate results using Maximal Marginal Relevance (Jaccard similarity).
 
@@ -453,6 +593,15 @@ class QueryRouterMixin:
 
         lambda_mult = getattr(cfg, "mmr_lambda", 0.5)
         dup_threshold = 0.85
+
+        # Try Rust fast-path
+        from axon.rust_bridge import get_rust_bridge
+
+        _rust = get_rust_bridge()
+        if _rust.can_mmr_rerank():
+            result = _rust.mmr_rerank(results, lambda_mult, dup_threshold)
+            if result is not None:
+                return result
 
         def _tok(text: str) -> frozenset:
             return frozenset(re.sub(r"[^\w\s]", "", text.lower()).split())
@@ -558,6 +707,9 @@ class QueryRouterMixin:
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
         self._check_mount_revocation()
+        from axon.rust_bridge import get_rust_bridge
+
+        _rust = get_rust_bridge()
         if cfg is None:
             cfg = self.config
         transforms = {
@@ -570,40 +722,80 @@ class QueryRouterMixin:
         }
 
         # --- Phase 1: Parallel Query Transformation ---
-        future_to_task = {}
-        if cfg.multi_query:
-            future_to_task[self._executor.submit(self._get_multi_queries, query)] = "multi"
-        if cfg.step_back:
-            future_to_task[self._executor.submit(self._get_step_back_query, query)] = "step_back"
-        if cfg.query_decompose:
-            future_to_task[self._executor.submit(self._decompose_query, query)] = "decompose"
-        if cfg.hyde:
-            future_to_task[self._executor.submit(self._get_hyde_document, query)] = "hyde"
+        _enabled_transforms = {
+            "multi": bool(cfg.multi_query),
+            "step_back": bool(cfg.step_back),
+            "decompose": bool(cfg.query_decompose),
+            "hyde": bool(cfg.hyde),
+        }
+        _n_enabled = sum(_enabled_transforms.values())
+        _use_unified = (
+            _n_enabled >= 2
+            and getattr(cfg, "unified_query_transforms", True)
+            and getattr(self, "llm", None) is not None
+        )
 
         search_queries = [query]
         vector_query = query
 
-        from concurrent.futures import as_completed
+        if _use_unified:
+            _all_transforms = self._get_all_transforms_unified(
+                query,
+                _enabled_transforms,
+                multi_count=3,
+            )
+            _multi_queries = _all_transforms.get("multi_queries") or []
+            _step_back_q = _all_transforms.get("step_back") or ""
+            _decomposed_qs = _all_transforms.get("decomposed") or []
+            _hyde_doc = _all_transforms.get("hyde_doc") or ""
 
-        for future in as_completed(future_to_task):
-            task = future_to_task[future]
-            try:
-                res = future.result()
-                if task == "multi":
-                    search_queries.extend([q for q in res if q not in search_queries])
-                    transforms["multi_query_applied"] = True
-                elif task == "step_back":
-                    if res not in search_queries:
-                        search_queries.append(res)
-                    transforms["step_back_applied"] = True
-                elif task == "decompose":
-                    search_queries.extend([q for q in res if q not in search_queries])
-                    transforms["decompose_applied"] = True
-                elif task == "hyde":
-                    vector_query = res
-                    transforms["hyde_applied"] = True
-            except Exception as e:
-                logger.warning(f"Retrieval transformation '{task}' failed: {e}")
+            if _enabled_transforms["multi"] and _multi_queries:
+                search_queries.extend([q for q in _multi_queries if q not in search_queries])
+                transforms["multi_query_applied"] = True
+            if _enabled_transforms["step_back"] and _step_back_q:
+                if _step_back_q not in search_queries:
+                    search_queries.append(_step_back_q)
+                transforms["step_back_applied"] = True
+            if _enabled_transforms["decompose"] and _decomposed_qs:
+                search_queries.extend([q for q in _decomposed_qs if q not in search_queries])
+                transforms["decompose_applied"] = True
+            if _enabled_transforms["hyde"] and _hyde_doc:
+                vector_query = _hyde_doc
+                transforms["hyde_applied"] = True
+        else:
+            future_to_task = {}
+            if cfg.multi_query:
+                future_to_task[self._executor.submit(self._get_multi_queries, query)] = "multi"
+            if cfg.step_back:
+                future_to_task[
+                    self._executor.submit(self._get_step_back_query, query)
+                ] = "step_back"
+            if cfg.query_decompose:
+                future_to_task[self._executor.submit(self._decompose_query, query)] = "decompose"
+            if cfg.hyde:
+                future_to_task[self._executor.submit(self._get_hyde_document, query)] = "hyde"
+
+            from concurrent.futures import as_completed
+
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    res = future.result()
+                    if task == "multi":
+                        search_queries.extend([q for q in res if q not in search_queries])
+                        transforms["multi_query_applied"] = True
+                    elif task == "step_back":
+                        if res not in search_queries:
+                            search_queries.append(res)
+                        transforms["step_back_applied"] = True
+                    elif task == "decompose":
+                        search_queries.extend([q for q in res if q not in search_queries])
+                        transforms["decompose_applied"] = True
+                    elif task == "hyde":
+                        vector_query = res
+                        transforms["hyde_applied"] = True
+                except Exception as e:
+                    logger.warning(f"Retrieval transformation '{task}' failed: {e}")
 
         transforms["queries"] = search_queries
 
@@ -682,11 +874,14 @@ class QueryRouterMixin:
                     )
 
         # Dedupe vector store results based on ID
-        dedup_vector = {}
-        for r in all_vector_results:
-            if r["id"] not in dedup_vector or r["score"] > dedup_vector[r["id"]]["score"]:
-                dedup_vector[r["id"]] = r
-        vector_results = list(dedup_vector.values())
+        if _rust.can_result_postprocess():
+            vector_results = _rust.dedupe_best_by_id(all_vector_results) or []
+        else:
+            dedup_vector = {}
+            for r in all_vector_results:
+                if r["id"] not in dedup_vector or r["score"] > dedup_vector[r["id"]]["score"]:
+                    dedup_vector[r["id"]] = r
+            vector_results = list(dedup_vector.values())
         vector_count = len(vector_results)
         diagnostics.channels_activated.append("dense")
         trace.channel_raw_counts["dense"] = vector_count
@@ -732,12 +927,21 @@ class QueryRouterMixin:
                     diagnostics.sentence_window_used = True
                     diagnostics.channels_activated.append("sentence_window")
                     trace.channel_raw_counts["sentence_window"] = len(sw_window_results)
-                    # Merge into dense dedup dict — best score wins per chunk
-                    for sw_r in sw_window_results:
-                        cid = sw_r["id"]
-                        if cid not in dedup_vector or sw_r["score"] > dedup_vector[cid]["score"]:
-                            dedup_vector[cid] = sw_r
-                    vector_results = list(dedup_vector.values())
+                    if _rust.can_result_postprocess():
+                        vector_results = (
+                            _rust.dedupe_best_by_id(vector_results + sw_window_results) or []
+                        )
+                    else:
+                        dedup_vector = {item["id"]: item for item in vector_results}
+                        # Merge into dense dedup dict — best score wins per chunk
+                        for sw_r in sw_window_results:
+                            cid = sw_r["id"]
+                            if (
+                                cid not in dedup_vector
+                                or sw_r["score"] > dedup_vector[cid]["score"]
+                            ):
+                                dedup_vector[cid] = sw_r
+                        vector_results = list(dedup_vector.values())
                     vector_count = len(vector_results)
                     logger.debug(
                         "sentence_window: %d sentence hits → %d window results merged",
@@ -768,12 +972,8 @@ class QueryRouterMixin:
             for b_list in all_bm25_lists:
                 all_bm25_results.extend(b_list)
 
-            dedup_bm25 = {}
-            for r in all_bm25_results:
-                if r["id"] not in dedup_bm25 or r["score"] > dedup_bm25[r["id"]]["score"]:
-                    dedup_bm25[r["id"]] = r
-
             # --- Symbol channel injection (code mode only) ---
+            sym_hits = []
             if _code_mode and _code_query_tokens:
                 sym_hits = self._symbol_channel_search(
                     _code_query_tokens, top_k=fetch_k, filters=filters
@@ -788,13 +988,18 @@ class QueryRouterMixin:
                         trace.channel_raw_counts[ch] = sum(
                             1 for r in sym_hits if r.get("metadata", {}).get("channel") == ch
                         )
-                    # Merge into BM25 dedup (best score wins)
-                    for sr in sym_hits:
-                        sid = sr["id"]
-                        if sid not in dedup_bm25 or sr["score"] > dedup_bm25[sid]["score"]:
-                            dedup_bm25[sid] = sr
-
-            bm25_results = list(dedup_bm25.values())
+            if _rust.can_result_postprocess():
+                bm25_results = _rust.dedupe_best_by_id(all_bm25_results + sym_hits) or []
+            else:
+                dedup_bm25 = {}
+                for r in all_bm25_results:
+                    if r["id"] not in dedup_bm25 or r["score"] > dedup_bm25[r["id"]]["score"]:
+                        dedup_bm25[r["id"]] = r
+                for sr in sym_hits:
+                    sid = sr["id"]
+                    if sid not in dedup_bm25 or sr["score"] > dedup_bm25[sid]["score"]:
+                        dedup_bm25[sid] = sr
+                bm25_results = list(dedup_bm25.values())
             bm25_count = len(bm25_results)
             diagnostics.channels_activated.append("bm25")
             trace.channel_raw_counts["bm25"] = bm25_count
@@ -818,22 +1023,39 @@ class QueryRouterMixin:
             results = vector_results
 
         # Web Search Fallback (if enabled and local results are insufficient)
-        filtered_results = []
-        for r in results:
-            # BM25-only hits (fused_only=True) have no meaningful vector_score;
-            # skip threshold for them so lexical-exact matches always surface.
-            if r.get("fused_only"):
-                filtered_results.append(r)
-                continue
-            # When hybrid search is active, apply threshold to the fused score so that
-            # docs with strong BM25 scores (e.g. exact-token matches like INC-44721) are
-            # not silently suppressed by a low vector_score alone.
-            if cfg.hybrid_search:
-                sig = r.get("score", r.get("vector_score", 0.0))
-            else:
-                sig = r.get("vector_score", r.get("score", 0.0))
-            if sig >= cfg.similarity_threshold:
-                filtered_results.append(r)
+        _threshold_score_field = (
+            "score"
+            if cfg.hybrid_search and getattr(cfg, "hybrid_mode", "rrf") != "rrf"
+            else "vector_score"
+        )
+        if _rust.can_result_postprocess():
+            filtered_results = (
+                _rust.filter_results_by_threshold(
+                    results,
+                    cfg.similarity_threshold,
+                    _threshold_score_field,
+                )
+                or []
+            )
+        else:
+            filtered_results = []
+            for r in results:
+                # BM25-only hits (fused_only=True) have no meaningful vector_score;
+                # skip threshold for them so lexical-exact matches always surface.
+                if r.get("fused_only"):
+                    filtered_results.append(r)
+                    continue
+                # Choose the score to compare against similarity_threshold:
+                # - Dense-only: use vector_score (cosine similarity, 0–1).
+                # - Hybrid weighted: fused score is on the same cosine scale, so use score.
+                # - Hybrid RRF: fused score is 1/(rank+k) ≈ 0.016 max — NOT comparable to
+                #   a cosine threshold.  Use vector_score so the threshold is meaningful.
+                if _threshold_score_field == "score":
+                    sig = r.get("score", r.get("vector_score", 0.0))
+                else:
+                    sig = r.get("vector_score", r.get("score", 0.0))
+                if sig >= cfg.similarity_threshold:
+                    filtered_results.append(r)
 
         # CRAG-Lite correction policy (Epic 2, Stories 2.2–2.3)
         _crag_lite_enabled = getattr(cfg, "crag_lite", False)
@@ -1314,6 +1536,21 @@ class QueryRouterMixin:
         """
         self._validate_embedding_meta(on_mismatch="warn")
         cfg = self._apply_overrides(overrides)
+
+        # --- System-level query router (mirrors query() routing logic) ---
+        if cfg.query_router != "off":
+            route = self._classify_query_route(query, cfg)
+            profile_overrides = _ROUTE_PROFILES.get(route, {})
+            for k, v in profile_overrides.items():
+                if hasattr(cfg, k):
+                    object.__setattr__(cfg, k, v)
+            logger.debug("query_router(stream): route=%s overrides=%s", route, profile_overrides)
+        elif cfg.graph_rag_auto_route != "off" and cfg.graph_rag:
+            _needs_grag = self._classify_query_needs_graphrag(query, cfg.graph_rag_auto_route)
+            if not _needs_grag:
+                cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
+                logger.debug("Auto-route(stream): GraphRAG bypassed for query '%s...'", query[:60])
+
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
         self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())

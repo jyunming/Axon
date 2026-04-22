@@ -1,0 +1,21 @@
+{
+  "_comment": "Project doc fixture. Tests PERSON+PRODUCT+ORGANIZATION graph with tool/process relations.",
+  "expected_entity_keys": [
+    "Axon", "jyunming", "Ollama", "pytest", "black",
+    "ruff", "mypy", "GitHub Actions", "GitHub Copilot", "PyPI"
+  ],
+  "expected_entity_types": {
+    "jyunming": "PERSON",
+    "Axon": "PRODUCT",
+    "Ollama": "PRODUCT",
+    "pytest": "PRODUCT",
+    "PyPI": "PRODUCT"
+  },
+  "expected_relation_pairs": [
+    ["Axon", "jyunming"],
+    ["Axon", "PyPI"],
+    ["Axon", "Ollama"],
+    ["GitHub Actions", "Axon"],
+    ["GitHub Copilot", "Axon"]
+  ]
+}

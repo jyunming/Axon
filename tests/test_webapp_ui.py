@@ -3,6 +3,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+pytest.importorskip("streamlit", reason="streamlit not installed — run: pip install axon-rag[ui]")
 from streamlit.testing.v1 import AppTest
 
 

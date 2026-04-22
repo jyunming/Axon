@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
-from axon.api_routes.ingest import _enforce_write_access
+from axon.api_routes import _enforce_write_access
+from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import QueryVisualizeRequest, SearchVisualizeRequest
 
 logger = logging.getLogger("AxonAPI")
@@ -284,8 +285,31 @@ async def get_graph_visualization():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/graph/backend/status", tags=["graph"])
+async def graph_backend_status():
+    """Return the active graph backend's status dict."""
+
+    from axon import api as _api
+
+    brain = _api.brain
+
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    backend = getattr(brain, "_graph_backend", None)
+    if backend is None:
+        return {"backend": "none", "ready": False}
+
+    try:
+        status = backend.status()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return status
+
+
 @router.get("/graph/data", tags=["graph"])
-async def graph_data():
+async def graph_data(project: str | None = Query(None, description="Expected active project")):
     """Return the entity/relation knowledge-graph payload for VS Code webview consumption."""
 
     from axon import api as _api
@@ -295,16 +319,35 @@ async def graph_data():
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
-    payload = brain.build_graph_payload()
+    _enforce_project(project, brain)
 
-    if isinstance(payload, dict):
-        return payload
+    backend = getattr(brain, "_graph_backend", None)
+    if backend is not None and callable(getattr(backend, "graph_data", None)):
+        try:
+            payload = backend.graph_data()
+        except Exception:
+            return {"nodes": [], "links": []}
+
+        if hasattr(payload, "to_dict"):
+            result = payload.to_dict()
+            return result if isinstance(result, dict) else {"nodes": [], "links": []}
+
+        if isinstance(payload, dict):
+            return payload
+
+        return {"nodes": [], "links": []}
+
+    # Fall back to the legacy build_graph_payload() on AxonBrain
+    if callable(getattr(brain, "build_graph_payload", None)):
+        payload = brain.build_graph_payload()
+        if isinstance(payload, dict):
+            return payload
 
     return {"nodes": [], "links": []}
 
 
 @router.get("/code-graph/data", tags=["graph"])
-async def code_graph_data():
+async def code_graph_data(project: str | None = Query(None, description="Expected active project")):
     """Return the code structure graph as JSON for VS Code webview."""
 
     from axon import api as _api
@@ -313,5 +356,7 @@ async def code_graph_data():
 
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    _enforce_project(project, brain)
 
     return brain.build_code_graph_payload()

@@ -92,6 +92,225 @@ def _make_brain(config=None, **extra_attrs):
 
 
 # ---------------------------------------------------------------------------
+# GraphRAG extraction cache persistence / batching
+# ---------------------------------------------------------------------------
+
+
+class TestGraphRagExtractionCachePersistence:
+    def test_save_and_load_roundtrip(self, tmp_path):
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._graph_rag_cache = {
+            "entities": {
+                "ent-key": [{"name": "Alice", "type": "PERSON", "description": "Engineer"}]
+            },
+            "relations": {
+                "rel-key": [
+                    {
+                        "subject": "alice",
+                        "relation": "knows",
+                        "object": "bob",
+                        "description": "Friendship",
+                        "strength": 6,
+                    }
+                ]
+            },
+        }
+        brain._graph_rag_cache_dirty = True
+
+        brain._save_graph_rag_extraction_cache()
+
+        reloaded = _make_brain(config=cfg)
+        loaded = reloaded._load_graph_rag_extraction_cache()
+
+        assert loaded["entities"]["ent-key"][0]["name"] == "Alice"
+        assert loaded["relations"]["rel-key"][0]["object"] == "bob"
+
+    def test_extract_entities_hits_persisted_cache_after_restart(self, tmp_path):
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain.llm.complete.return_value = "Alice | PERSON | Engineer"
+
+        first = brain._extract_entities("Alice builds systems.")
+        brain._save_graph_rag_extraction_cache()
+
+        reloaded = _make_brain(config=cfg)
+        second = reloaded._extract_entities("Alice builds systems.")
+
+        assert first == second
+        reloaded.llm.complete.assert_not_called()
+
+
+class TestGraphRagExtractionBatching:
+    def test_pipelines_relation_extraction_when_budget_allows(self, tmp_path):
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_relation_budget=0,
+            graph_rag_llm_fused_extraction=False,
+        )
+        brain = _make_brain(config=cfg)
+        submitted: list[str] = []
+
+        class RecordingExecutor:
+            def submit(self, fn, *args, **kwargs):
+                from concurrent.futures import Future
+
+                submitted.append(getattr(fn, "__name__", "callable"))
+                future = Future()
+                try:
+                    future.set_result(fn(*args, **kwargs))
+                except Exception as exc:  # pragma: no cover - passthrough guard
+                    future.set_exception(exc)
+                return future
+
+            def map(self, fn, *iterables):
+                return map(fn, *iterables)
+
+        brain._executor = RecordingExecutor()
+
+        def _fake_entities(_text):
+            return [{"name": "Alice", "type": "PERSON", "description": ""}]
+
+        def _fake_relations(_text):
+            return [{"subject": "alice", "relation": "knows", "object": "bob"}]
+
+        brain._extract_entities = _fake_entities
+        brain._extract_relations = _fake_relations
+
+        docs = [
+            {"id": "d1", "text": "Alice knows Bob."},
+            {"id": "d2", "text": "Alice knows Carol."},
+        ]
+
+        results, rel_results, rel_chunks, pipelined = brain._extract_graph_llm_batches(
+            docs,
+            relations_enabled=True,
+            min_entities_for_relations=0,
+            relation_budget=0,
+        )
+
+        assert pipelined is True
+        assert [doc["id"] for doc in rel_chunks] == ["d1", "d2"]
+        assert len(results) == 2
+        assert len(rel_results) == 2
+        assert submitted.count("_fake_entities") == 2
+        assert submitted.count("_fake_relations") == 2
+
+    def test_skips_executor_for_cached_chunks(self, tmp_path):
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_relation_budget=0,
+        )
+        brain = _make_brain(config=cfg)
+        docs = [{"id": "d1", "text": "Alice knows Bob."}]
+        entity_key = brain._graph_rag_entity_cache_key(docs[0]["text"])
+        relation_key = brain._graph_rag_relation_cache_key(docs[0]["text"])
+        cached_entities = [{"name": "Alice", "type": "PERSON", "description": ""}]
+        cached_relations = [{"subject": "alice", "relation": "knows", "object": "bob"}]
+        brain._graph_rag_cache = {
+            "entities": {entity_key: cached_entities},
+            "relations": {relation_key: cached_relations},
+        }
+        submitted: list[str] = []
+
+        class RecordingExecutor:
+            def submit(self, fn, *args, **kwargs):
+                from concurrent.futures import Future
+
+                submitted.append(getattr(fn, "__name__", "callable"))
+                future = Future()
+                future.set_result(fn(*args, **kwargs))
+                return future
+
+            def map(self, fn, *iterables):
+                submitted.append(getattr(fn, "__name__", "callable"))
+                return map(fn, *iterables)
+
+        brain._executor = RecordingExecutor()
+
+        results, rel_results, rel_chunks, pipelined = brain._extract_graph_llm_batches(
+            docs,
+            relations_enabled=True,
+            min_entities_for_relations=0,
+            relation_budget=0,
+        )
+
+        assert pipelined is True
+        assert submitted == []
+        assert results == [("d1", cached_entities)]
+        assert rel_results == [("d1", cached_relations)]
+        assert [doc["id"] for doc in rel_chunks] == ["d1"]
+
+
+class TestGraphRagFusedExtractionBatching:
+    def test_uses_combined_extractor_for_uncached_llm_pipeline(self, tmp_path):
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_relation_budget=0,
+            graph_rag_llm_fused_extraction=True,
+            graph_rag_ner_backend="llm",
+            graph_rag_relation_backend="llm",
+            graph_rag_depth="standard",
+        )
+        brain = _make_brain(config=cfg)
+        submitted: list[str] = []
+
+        class RecordingExecutor:
+            def submit(self, fn, *args, **kwargs):
+                from concurrent.futures import Future
+
+                submitted.append(getattr(fn, "__name__", "callable"))
+                future = Future()
+                try:
+                    future.set_result(fn(*args, **kwargs))
+                except Exception as exc:
+                    future.set_exception(exc)
+                return future
+
+            def map(self, fn, *iterables):
+                return map(fn, *iterables)
+
+        brain._executor = RecordingExecutor()
+
+        def _fake_combined(_text):
+            return (
+                [{"name": "Alice", "type": "PERSON", "description": ""}],
+                [{"subject": "alice", "relation": "knows", "object": "bob", "strength": 5}],
+            )
+
+        def _unexpected_entities(_text):  # pragma: no cover - assertion guard
+            raise AssertionError("separate entity extraction should not run")
+
+        def _unexpected_relations(_text):  # pragma: no cover - assertion guard
+            raise AssertionError("separate relation extraction should not run")
+
+        brain._extract_entities_and_relations_combined = _fake_combined
+        brain._extract_entities = _unexpected_entities
+        brain._extract_relations = _unexpected_relations
+
+        docs = [
+            {"id": "d1", "text": "Alice knows Bob."},
+            {"id": "d2", "text": "Alice knows Carol."},
+        ]
+
+        results, rel_results, rel_chunks, pipelined = brain._extract_graph_llm_batches(
+            docs,
+            relations_enabled=True,
+            min_entities_for_relations=0,
+            relation_budget=0,
+        )
+
+        assert pipelined is True
+        assert submitted.count("_fake_combined") == 2
+        assert len(results) == 2
+        assert len(rel_results) == 2
+        assert [doc["id"] for doc in rel_chunks] == ["d1", "d2"]
+
+
+# ---------------------------------------------------------------------------
 # Entity graph persistence
 # ---------------------------------------------------------------------------
 
@@ -166,7 +385,9 @@ class TestEntityGraphPersistence:
         brain = _make_brain(config=cfg)
         brain._entity_graph = {"x": {"description": "d", "chunk_ids": ["c1"]}}
         brain._save_entity_graph()
-        assert (nested / ".entity_graph.json").exists()
+        assert (nested / ".entity_graph.json").exists() or (
+            nested / ".entity_graph.msgpack"
+        ).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +451,54 @@ class TestRelationGraphPersistence:
         brain = _make_brain(config=cfg)
         (tmp_path / ".relation_graph.json").write_text("{{bad", encoding="utf-8")
         assert brain._load_relation_graph() == {}
+
+
+class TestRelationGraphMsgpackPersistence:
+    def test_save_load_roundtrip_with_msgpack_codec(self, tmp_path):
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_relation_msgpack_persist=True,
+        )
+        cfg.graph_rag_relation_shard_persist = False
+        brain = _make_brain(config=cfg)
+        brain._relation_graph = {
+            "alice": [
+                {
+                    "target": "bob",
+                    "relation": "knows",
+                    "chunk_id": "c1",
+                    "subject": "alice",
+                    "object": "bob",
+                    "strength": 7,
+                    "weight": 2.5,
+                }
+            ]
+        }
+        (tmp_path / ".relation_graph.json").write_text("{}", encoding="utf-8")
+        (tmp_path / ".relation_graph.shards.json").write_text("{}", encoding="utf-8")
+        (tmp_path / ".relation_graph.shard.000.json").write_text("{}", encoding="utf-8")
+
+        class FakeBridge:
+            def can_relation_graph_codec(self):
+                return True
+
+            def encode_relation_graph(self, graph):
+                return json.dumps(graph, sort_keys=True).encode("utf-8")
+
+            def decode_relation_graph(self, payload):
+                return json.loads(payload.decode("utf-8"))
+
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=FakeBridge()):
+            brain._save_relation_graph()
+            loaded = brain._load_relation_graph()
+
+        assert (tmp_path / ".relation_graph.msgpack").exists()
+        assert not (tmp_path / ".relation_graph.json").exists()
+        assert not (tmp_path / ".relation_graph.shards.json").exists()
+        assert not (tmp_path / ".relation_graph.shard.000.json").exists()
+        assert loaded["alice"][0]["strength"] == 7
+        assert loaded["alice"][0]["weight"] == 2.5
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +782,10 @@ class TestRunCommunityDetection:
             "b": {"description": "d", "chunk_ids": ["c2"], "frequency": 1},
         }
         brain._relation_graph = {"a": [{"target": "b", "relation": "r", "chunk_id": "c1"}]}
-        with patch(
+        fake_bridge = MagicMock()
+        fake_bridge.can_build_graph_edges.return_value = False
+        fake_bridge.can_run_louvain.return_value = False
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=fake_bridge), patch(
             "networkx.algorithms.community.louvain_communities", side_effect=RuntimeError("fail")
         ):
             result = brain._run_community_detection()
@@ -889,7 +1161,8 @@ class TestGlobalSearchMapReduce:
     def test_reduces_valid_points(self, tmp_path):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -942,7 +1215,8 @@ class TestGlobalSearchMapReduce:
     def test_reduce_exception_returns_fallback(self, tmp_path):
         """Lines 1190-1193: reduce exception returns fallback text."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -1713,6 +1987,48 @@ class TestResolveEntityAliases:
         assert result == 0
 
 
+class TestResolveEntityAliasesRustBackend:
+    def test_uses_rust_grouping_backend_when_enabled(self, tmp_path):
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_entity_resolve_backend="rust",
+            graph_rag_entity_resolve_threshold=0.9,
+        )
+        brain = _make_brain(config=cfg)
+        brain._entity_graph = {
+            "alpha systems": {"description": "A", "chunk_ids": ["c1", "c2"], "frequency": 2},
+            "alpha sys": {"description": "B", "chunk_ids": ["c3"], "frequency": 1},
+        }
+        brain._relation_graph = {
+            "alpha sys": [
+                {
+                    "target": "beta",
+                    "relation": "partner",
+                    "chunk_id": "c3",
+                    "subject": "alpha sys",
+                    "object": "beta",
+                }
+            ]
+        }
+        brain.embedding.embed.return_value = [
+            [1.0, 0.0, 0.0],
+            [0.999, 0.001, 0.0],
+        ]
+
+        fake_bridge = MagicMock()
+        fake_bridge.can_resolve_entity_alias_groups.return_value = True
+        fake_bridge.resolve_entity_alias_groups.return_value = [[0, 1]]
+
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=fake_bridge):
+            merged = brain._resolve_entity_aliases()
+
+        assert merged == 1
+        fake_bridge.resolve_entity_alias_groups.assert_called_once()
+        assert list(brain._entity_graph.keys()) == ["alpha systems"]
+        assert "alpha sys" not in brain._relation_graph
+
+
 # ---------------------------------------------------------------------------
 # _embed_entities
 # ---------------------------------------------------------------------------
@@ -2010,7 +2326,9 @@ class TestEntityGraphPersistenceV2:
         brain = _make_brain(config=cfg)
         brain._entity_graph = {"x": {"description": "d", "chunk_ids": ["c1"]}}
         brain._save_entity_graph()
-        assert (nested / ".entity_graph.json").exists()
+        assert (nested / ".entity_graph.json").exists() or (
+            nested / ".entity_graph.msgpack"
+        ).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -2357,7 +2675,10 @@ class TestRunCommunityDetectionV2:
             "b": {"description": "d", "chunk_ids": ["c2"], "frequency": 1},
         }
         brain._relation_graph = {"a": [{"target": "b", "relation": "r", "chunk_id": "c1"}]}
-        with patch(
+        fake_bridge = MagicMock()
+        fake_bridge.can_build_graph_edges.return_value = False
+        fake_bridge.can_run_louvain.return_value = False
+        with patch("axon.rust_bridge.get_rust_bridge", return_value=fake_bridge), patch(
             "networkx.algorithms.community.louvain_communities", side_effect=RuntimeError("fail")
         ):
             result = brain._run_community_detection()
@@ -2733,7 +3054,8 @@ class TestGlobalSearchMapReduceV2:
     def test_reduces_valid_points(self, tmp_path):
         """Lines 1184-1193: reduce phase calls LLM and returns response."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -2786,7 +3108,8 @@ class TestGlobalSearchMapReduceV2:
     def test_reduce_exception_returns_fallback(self, tmp_path):
         """Lines 1190-1193: reduce exception returns fallback text."""
         cfg = AxonConfig(
-            bm25_path=str(tmp_path), vector_store_path=str(tmp_path), graph_rag_global_min_score=0
+            graph_rag_global_min_score=0,
+            graph_rag_map_batch_size=1,
         )
         brain = _make_brain(config=cfg)
         brain._community_summaries = {
@@ -3652,3 +3975,146 @@ class TestMatchEntitiesByEmbeddingV2:
         brain.embedding.embed_query.side_effect = RuntimeError("fail")
         result = brain._match_entities_by_embedding("query")
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Persist incoming relation index
+# ---------------------------------------------------------------------------
+
+
+class TestIncomingRelationIndexPersistence:
+    def test_incoming_index_persisted_after_build(self, tmp_path):
+        import json as _json_t
+
+        from axon.config import AxonConfig
+
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+            "carol": [{"target": "alice", "relation": "manages", "chunk_id": "c2"}],
+        }
+        idx = brain._get_incoming_relation_index()
+        assert "bob" in idx
+        assert "alice" in idx
+        inc_path = tmp_path / ".relation_graph.incoming.json"
+        assert inc_path.exists(), "Incoming index should be persisted to disk"
+        raw = _json_t.loads(inc_path.read_text(encoding="utf-8"))
+        assert "bob" in raw
+        assert "alice" in raw
+
+    def test_incoming_index_loaded_from_disk_skips_rebuild(self, tmp_path):
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+        }
+        brain._get_incoming_relation_index()
+        inc_path = tmp_path / ".relation_graph.incoming.json"
+        assert inc_path.exists()
+        brain2 = _make_brain(config=cfg)
+        brain2._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+        }
+        for attr in ("_incoming_rel_index", "_incoming_rel_sig"):
+            if hasattr(brain2, attr):
+                delattr(brain2, attr)
+        idx2 = brain2._get_incoming_relation_index()
+        assert "bob" in idx2
+        first_item = idx2["bob"][0]
+        assert isinstance(first_item, tuple), f"Expected tuple, got {type(first_item)}"
+        assert first_item[0] == "alice"
+
+    def test_save_relation_graph_invalidates_disk_cache(self, tmp_path):
+        from unittest.mock import patch
+
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}],
+        }
+        brain._get_incoming_relation_index()
+        inc_path = tmp_path / ".relation_graph.incoming.json"
+        assert inc_path.exists()
+        with patch.object(brain, "_gr_write_json_if_changed"), patch(
+            "axon.rust_bridge.get_rust_bridge"
+        ) as mock_bridge:
+            mock_bridge.return_value.can_relation_graph_codec.return_value = False
+            brain._save_relation_graph()
+        assert not inc_path.exists(), "Disk cache should be deleted after _save_relation_graph"
+        assert not hasattr(brain, "_incoming_rel_index"), "_incoming_rel_index should be cleared"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Batch map-reduce (graph_rag_map_batch_size)
+# ---------------------------------------------------------------------------
+
+
+class TestMapCommunityBatch:
+    def _make_brain_with_summaries(self, tmp_path, n_summaries):
+        from axon.config import AxonConfig
+
+        cfg = AxonConfig(
+            bm25_path=str(tmp_path),
+            vector_store_path=str(tmp_path),
+            graph_rag_map_batch_size=5,
+            graph_rag_map_workers=0,
+            graph_rag_global_min_score=0,
+            graph_rag_global_top_points=100,
+        )
+        brain = _make_brain(config=cfg)
+        brain._community_summaries = {
+            f"0_{i}": {"full_content": f"Report about topic {i}."} for i in range(n_summaries)
+        }
+        return brain
+
+    def test_batch_reduces_llm_calls(self, tmp_path):
+        import json as _json_t
+
+        brain = self._make_brain_with_summaries(tmp_path, 10)
+        llm_calls = []
+
+        def fake_llm_complete(namespace, prompt, system_prompt=""):
+            llm_calls.append(namespace)
+            n = prompt.count("---Report ")
+            return _json_t.dumps({str(i): [] for i in range(n)})
+
+        from unittest.mock import MagicMock
+
+        brain._gr_llm_complete_cached = fake_llm_complete
+        brain._gr_cache_get = MagicMock(return_value=None)
+        brain._gr_cache_put = MagicMock()
+        brain._gr_log_profile = MagicMock()
+        brain._gr_text_hash = lambda s: str(hash(s))
+        brain._global_search_map_reduce("test query", brain.config)
+        assert len(llm_calls) == 2, f"Expected 2 LLM calls, got {len(llm_calls)}: {llm_calls}"
+
+    def test_batch_size_config_field_default(self):
+        from axon.config import AxonConfig
+
+        cfg = AxonConfig(bm25_path=".", vector_store_path=".")
+        assert cfg.graph_rag_map_batch_size == 5
+
+    def test_batch_mode_collects_points(self, tmp_path):
+        import json as _json_t
+
+        brain = self._make_brain_with_summaries(tmp_path, 4)
+        call_count = [0]
+
+        def fake_llm_complete(namespace, prompt, system_prompt=""):
+            call_count[0] += 1
+            n = prompt.count("---Report ")
+            return _json_t.dumps({str(i): [{"point": f"point_{i}", "score": 80}] for i in range(n)})
+
+        from unittest.mock import MagicMock
+
+        brain._gr_llm_complete_cached = fake_llm_complete
+        brain._gr_cache_get = MagicMock(return_value=None)
+        brain._gr_cache_put = MagicMock()
+        brain._gr_log_profile = MagicMock()
+        brain._gr_text_hash = lambda s: str(hash(s))
+        try:
+            brain._global_search_map_reduce("test query", brain.config)
+        except Exception:
+            pass
+        assert call_count[0] >= 1

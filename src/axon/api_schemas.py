@@ -83,7 +83,13 @@ def _validate_ingest_path(path: str) -> str:
 
 def _compute_content_hash(text: str) -> str:
     """Return a SHA-256 hex digest of the normalised text content."""
+    from axon.rust_bridge import get_rust_bridge
 
+    bridge = get_rust_bridge()
+    if bridge.can_sha256():
+        result = bridge.compute_sha256(text)
+        if result is not None:
+            return result
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 
@@ -290,6 +296,11 @@ class ProjectCreateRequest(BaseModel):
 
     description: str = Field("", description="Optional description for the project")
 
+    security_mode: str | None = Field(
+        None,
+        description="Optional security mode for the project (e.g. 'sealed_v1')",
+    )
+
 
 class SearchResult(BaseModel):
     id: str
@@ -434,3 +445,25 @@ class MaintenanceStateRequest(BaseModel):
         ...,
         description="Maintenance state: 'normal', 'draining', 'readonly', or 'offline'.",
     )
+
+
+class SecurityBootstrapRequest(BaseModel):
+    passphrase: str = Field(..., description="Passphrase to bootstrap the security store with.")
+
+
+class SecurityUnlockRequest(BaseModel):
+    passphrase: str = Field(..., description="Passphrase to unlock the security store.")
+
+
+class SecurityChangePassphraseRequest(BaseModel):
+    old_passphrase: str = Field(..., description="Current passphrase.")
+    new_passphrase: str = Field(..., description="New passphrase to set.")
+
+
+class ProjectRotateKeysRequest(BaseModel):
+    project_name: str = Field(..., description="Name of the sealed project to rotate keys for.")
+
+
+class ProjectSealRequest(BaseModel):
+    project_name: str = Field(..., description="Name of the open project to seal.")
+    migration_mode: str = Field("snapshot", description="Migration mode: 'snapshot' or 'live'.")

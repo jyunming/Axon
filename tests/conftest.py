@@ -4,6 +4,7 @@ tests/conftest.py
 Project-level pytest fixtures for the Axon test suite.
 """
 
+import importlib
 import logging
 import os
 import shutil
@@ -11,6 +12,22 @@ import uuid
 from pathlib import Path
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Skip test files that depend on optional packages not installed in this env.
+# collect_ignore_glob would hide the files unconditionally; instead we use
+# pytest's collect_ignore list so CI with full deps still runs them.
+# ---------------------------------------------------------------------------
+collect_ignore: list[str] = []
+
+_OPTIONAL_TEST_FILES = {
+    "test_webapp_ui.py": "streamlit",
+    "e2e/test_mcp_bridge_e2e.py": "mcp",
+}
+
+for _rel, _pkg in _OPTIONAL_TEST_FILES.items():
+    if importlib.util.find_spec(_pkg) is None:
+        collect_ignore.append(str(Path(__file__).parent / _rel))
 
 # ---------------------------------------------------------------------------
 # tmp_path override — Windows: the system pytest temp dir
@@ -36,6 +53,22 @@ def tmp_path():
 # ---------------------------------------------------------------------------
 # Axon logger state isolation
 # ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def clear_dry_run_env():
+    """Remove AXON_DRY_RUN between tests.
+
+    cli.py sets os.environ["AXON_DRY_RUN"] = "1" unconditionally when --dry-run
+    is passed.  Tests that call the CLI with --dry-run would otherwise poison
+    every subsequent test that checks os.getenv("AXON_DRY_RUN").
+    """
+    original = os.environ.pop("AXON_DRY_RUN", None)
+    yield
+    if "AXON_DRY_RUN" in os.environ:
+        del os.environ["AXON_DRY_RUN"]
+    if original is not None:
+        os.environ["AXON_DRY_RUN"] = original
+
+
 @pytest.fixture(autouse=True)
 def reset_axon_logger():
     """Restore Axon logger state after each test.

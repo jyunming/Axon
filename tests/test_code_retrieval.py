@@ -137,6 +137,8 @@ def _make_mixin():
             self.config.code_max_chunks_per_file = 3
             self.config.graph_rag_budget = 3
             self.config.top_k = 10
+            self.config.symbol_index_engine = "python"
+            self.config.rust_fallback_enabled = True
             self.vector_store = MagicMock()
             self.vector_store.get_by_ids.return_value = []
             self.bm25 = None
@@ -261,6 +263,41 @@ class TestSymbolChannelSearch:
         brain.bm25 = mock_bm25
         result = brain._symbol_channel_search(frozenset(["run_query"]), top_k=5)
         assert len(result) == 1
+
+    def test_rust_symbol_channel_is_used_when_enabled(self):
+        brain = _make_mixin()
+        brain.config.symbol_index_engine = "rust"
+        corpus = [
+            {
+                "id": "chunk-rust",
+                "text": "def run_query(): pass",
+                "metadata": {"symbol_name": "run_query", "qualified_name": ""},
+            }
+        ]
+        mock_bm25 = MagicMock()
+        mock_bm25.corpus = corpus
+        del mock_bm25._retrievers
+        brain.bm25 = mock_bm25
+
+        class _Bridge:
+            def can_symbol_search(self):
+                return True
+
+            def can_symbol_index(self):
+                return False
+
+            def symbol_channel_search(self, corpora, query_tokens, top_k, filters):
+                assert len(corpora) == 1
+                assert "run_query" in query_tokens
+                return [{"index": 0, "score": 1.0, "channel": "symbol_name"}]
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("axon.rust_bridge.get_rust_bridge", lambda: _Bridge())
+            result = brain._symbol_channel_search(frozenset(["run_query"]), top_k=5)
+
+        assert len(result) == 1
+        assert result[0]["id"] == "chunk-rust"
+        assert result[0]["metadata"]["channel"] == "symbol_name"
 
     def test_filter_excludes_non_matching(self):
         brain = _make_mixin()

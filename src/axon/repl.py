@@ -9,9 +9,13 @@ import os
 import re
 import shutil
 import sys
+import textwrap
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from axon.main import AxonBrain
@@ -32,10 +36,12 @@ from axon.sessions import (  # noqa: E402
 from axon.vector_store import MultiVectorStore  # noqa: E402
 
 _SLASH_COMMANDS = [
+    "/agent",
     "/clear",
     "/compact",
     "/config ",
     "/context",
+    "/debug",
     "/discuss",
     "/embed ",
     "/exit",
@@ -59,8 +65,776 @@ _SLASH_COMMANDS = [
     "/share ",
     "/stale",
     "/store ",
+    "/theme ",
     "/vllm-url ",
 ]
+
+_SLASH_CMD_DESC: dict[str, str] = {
+    "/agent": "Toggle agent mode (LLM calls Axon tools)",
+    "/clear": "Clear conversation history",
+    "/compact": "Summarize and compact chat history",
+    "/config": "Show current configuration",
+    "/context": "Show or clear attached context files",
+    "/debug": "Toggle verbose debug logging on/off",
+    "/discuss": "Toggle discussion fallback mode",
+    "/embed": "Switch embedding model",
+    "/exit": "Exit Axon",
+    "/graph": "GraphRAG operations (build / query / export)",
+    "/graph-viz": "Open graph visualisation in browser",
+    "/help": "Show all commands",
+    "/ingest": "Ingest a file or directory into the knowledge base",
+    "/keys": "Show keyboard shortcuts",
+    "/list": "List indexed documents",
+    "/llm": "Adjust LLM parameters (e.g. temperature)",
+    "/model": "Switch LLM model",
+    "/project": "Switch or manage project namespaces",
+    "/pull": "Fetch and ingest from a URL",
+    "/quit": "Exit Axon",
+    "/rag": "Toggle RAG flags (hybrid / rerank / hyde / graph)",
+    "/refresh": "Re-ingest files that have changed",
+    "/resume": "Resume a previous session",
+    "/retry": "Retry the last query",
+    "/search": "Toggle semantic search mode",
+    "/sessions": "List saved sessions",
+    "/share": "Share a project or manage share keys",
+    "/stale": "Show documents not refreshed recently",
+    "/store": "AxonStore management (init / status / share)",
+    "/theme": "Switch syntax-highlighting theme",
+    "/vllm-url": "Set the vLLM server base URL",
+}
+
+
+_BLOCK_MATH_RE = re.compile(r"\$\$(.*?)\$\$", re.DOTALL)
+_INLINE_MATH_RE = re.compile(r"\$([^$\n]{1,300}?)\$")
+
+# ---------------------------------------------------------------------------
+# Markdown code-block syntax-highlight theme (switchable via /theme)
+# ---------------------------------------------------------------------------
+
+_PREFS_FILE = Path.home() / ".axon" / "prefs.json"
+
+
+def _load_prefs() -> dict:
+    try:
+        import json
+
+        return json.loads(_PREFS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_pref(key: str, value: object) -> None:
+    import json
+
+    prefs = _load_prefs()
+    prefs[key] = value
+    _PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PREFS_FILE.write_text(json.dumps(prefs, indent=2))
+
+
+_MD_CODE_THEME: str = str(_load_prefs().get("md_code_theme", "monokai"))
+
+# ---------------------------------------------------------------------------
+# GitHub-style callout pre-processor
+# ---------------------------------------------------------------------------
+
+_CALLOUT_RE = re.compile(
+    r"^> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][^\n]*\n((?:^> [^\n]*\n?)*)",
+    re.MULTILINE,
+)
+_CALLOUT_RICH: dict[str, tuple[str, str]] = {
+    "NOTE": ("ℹ", "cyan"),
+    "TIP": ("✦", "green"),
+    "IMPORTANT": ("★", "magenta"),
+    "WARNING": ("⚠", "yellow"),
+    "CAUTION": ("✖", "red"),
+}
+
+_TASK_LIST_RE = re.compile(r"^([ \t]*[-*+] )\[([ xX])\] ", re.MULTILINE)
+_STRIKETHROUGH_RE = re.compile(r"~~(.+?)~~", re.DOTALL)
+
+
+def _fence_unfenced_code(text: str) -> str:
+    """Wrap runs of code-like lines not already inside ``` fences.
+
+    Detects consecutive lines that look like source code and wraps them in
+    triple-backtick fences with auto-detected language tags.
+    """
+    if not text:
+        return text
+
+    _LANG_SIGNALS: list[tuple[str, re.Pattern]] = [
+        ("python", re.compile(r"^(def |class |import |from |if __name__|@|#!/|async def )")),
+        ("javascript", re.compile(r"^(function |const |let |var |export |module\.)")),
+        ("typescript", re.compile(r"^(interface |type |export (type|interface|class|function))")),
+        ("rust", re.compile(r"^(fn |pub |use |impl |struct |enum |mod |let mut )")),
+        ("go", re.compile(r"^(package |func |import \(|var |type .+ struct)")),
+        (
+            "sql",
+            re.compile(r"^(SELECT |INSERT |UPDATE |DELETE |CREATE |DROP |ALTER )", re.IGNORECASE),
+        ),
+        ("bash", re.compile(r"^(#!/|if \[|for |while |echo |export |source )")),
+        ("java", re.compile(r"^(public |private |protected |class |interface |import java)")),
+        ("c", re.compile(r"^(#include|int main|void |typedef )")),
+    ]
+    _SQL_CONT = re.compile(
+        r"^(FROM|WHERE|AND|OR|JOIN|ORDER BY|GROUP BY|LIMIT|VALUES|SET)\b", re.IGNORECASE
+    )
+
+    def _detect_lang(lines: list) -> str:
+        for line in lines[:3]:
+            stripped = line.lstrip()
+            for lang, pat in _LANG_SIGNALS:
+                if pat.match(stripped):
+                    return lang
+        return ""
+
+    def _is_code_start(line: str) -> bool:
+        # 4-space-indented lines with code-like content are code starts
+        if line.startswith("    ") or line.startswith("\t"):
+            stripped = line.strip()
+            if re.search(r"[=()\[\]{}]", stripped):
+                return True
+        stripped = line.lstrip()
+        return any(pat.match(stripped) for _, pat in _LANG_SIGNALS)
+
+    def _is_code_continuation(line: str) -> bool:
+        if not line.strip():
+            return True
+        if line.startswith("    ") or line.startswith("\t"):
+            return True
+        stripped = line.strip()
+        if stripped.startswith(
+            ("#", "//", "/*", "*", "return ", "print(", "println!", "assert", "console.")
+        ):
+            return True
+        if re.search(r"[{}()\[\];]", stripped):
+            return True
+        if _SQL_CONT.match(stripped):
+            return True
+        return False
+
+    lines = text.split("\n")
+    result: list = []
+    in_fence = False
+    code_run: list = []
+
+    def flush_run() -> None:
+        while code_run and not code_run[-1].strip():
+            code_run.pop()
+        if len(code_run) < 2:
+            result.extend(code_run)
+            code_run.clear()
+            return
+        lang = _detect_lang(code_run)
+        # Ensure a blank line before the opening fence for proper markdown rendering.
+        if result and result[-1].strip():
+            result.append("")
+        result.append(f"```{lang}")
+        result.extend(code_run)
+        result.append("```")
+        code_run.clear()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            if code_run:
+                flush_run()
+            in_fence = not in_fence
+            result.append(line)
+            i += 1
+            continue
+        if in_fence:
+            result.append(line)
+            i += 1
+            continue
+        if _is_code_start(line):
+            code_run.append(line)
+            i += 1
+            while i < len(lines):
+                next_line = lines[i]
+                if next_line.lstrip().startswith("```"):
+                    break
+                if (
+                    next_line.strip()
+                    and not _is_code_continuation(next_line)
+                    and not _is_code_start(next_line)
+                ):
+                    break
+                code_run.append(next_line)
+                i += 1
+            flush_run()
+        else:
+            if code_run:
+                flush_run()
+            result.append(line)
+            i += 1
+
+    if code_run:
+        flush_run()
+
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
+# Bullet normalization
+# ---------------------------------------------------------------------------
+
+_BULLET_CHAR_RE = re.compile(r"^([ \t]*)•\s*", re.MULTILINE)
+
+
+def _normalize_bullets(text: str) -> str:
+    """Replace • bullet characters with markdown - list syntax."""
+    return _BULLET_CHAR_RE.sub(lambda m: m.group(1) + "- ", text)
+
+
+# ---------------------------------------------------------------------------
+# Math ASCII → Unicode converter
+# ---------------------------------------------------------------------------
+
+_SUP_MAP: dict = {
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+    "a": "ᵃ",
+    "b": "ᵇ",
+    "c": "ᶜ",
+    "d": "ᵈ",
+    "e": "ᵉ",
+    "f": "ᶠ",
+    "g": "ᵍ",
+    "h": "ʰ",
+    "i": "ⁱ",
+    "j": "ʲ",
+    "k": "ᵏ",
+    "l": "ˡ",
+    "m": "ᵐ",
+    "n": "ⁿ",
+    "o": "ᵒ",
+    "p": "ᵖ",
+    "r": "ʳ",
+    "s": "ˢ",
+    "t": "ᵗ",
+    "u": "ᵘ",
+    "v": "ᵛ",
+    "w": "ʷ",
+    "x": "ˣ",
+    "y": "ʸ",
+    "z": "ᶻ",
+    "+": "⁺",
+    "-": "⁻",
+    "(": "⁽",
+    ")": "⁾",
+}
+_SUB_MAP: dict = {str(i): c for i, c in enumerate("₀₁₂₃₄₅₆₇₈₉")}
+
+_GREEK_WORDS: list = [
+    ("alpha", "α"),
+    ("beta", "β"),
+    ("gamma", "γ"),
+    ("delta", "δ"),
+    ("epsilon", "ε"),
+    ("zeta", "ζ"),
+    ("eta", "η"),
+    ("theta", "θ"),
+    ("iota", "ι"),
+    ("kappa", "κ"),
+    ("lambda", "λ"),
+    ("mu", "μ"),
+    ("nu", "ν"),
+    ("xi", "ξ"),
+    ("pi", "π"),
+    ("rho", "ρ"),
+    ("sigma", "σ"),
+    ("tau", "τ"),
+    ("upsilon", "υ"),
+    ("phi", "φ"),
+    ("chi", "χ"),
+    ("psi", "ψ"),
+    ("omega", "ω"),
+    ("Alpha", "Α"),
+    ("Beta", "Β"),
+    ("Gamma", "Γ"),
+    ("Delta", "Δ"),
+    ("Epsilon", "Ε"),
+    ("Zeta", "Ζ"),
+    ("Eta", "Η"),
+    ("Theta", "Θ"),
+    ("Iota", "Ι"),
+    ("Kappa", "Κ"),
+    ("Lambda", "Λ"),
+    ("Mu", "Μ"),
+    ("Nu", "Ν"),
+    ("Xi", "Ξ"),
+    ("Pi", "Π"),
+    ("Rho", "Ρ"),
+    ("Sigma", "Σ"),
+    ("Tau", "Τ"),
+    ("Upsilon", "Υ"),
+    ("Phi", "Φ"),
+    ("Chi", "Χ"),
+    ("Psi", "Ψ"),
+    ("Omega", "Ω"),
+]
+_GREEK_PATTERNS = [(re.compile(r"\b" + word + r"\b"), sym) for word, sym in _GREEK_WORDS]
+
+
+def _mathify(text: str) -> str:
+    """Convert ASCII math notation to Unicode scientific symbols.
+
+    Handles superscripts, subscripts, Greek words, multiplication dots,
+    comparison operators, and infinity keyword.
+    """
+
+    def _to_sup(chars: str) -> str:
+        out = ""
+        for c in chars:
+            if c in _SUP_MAP:
+                out += _SUP_MAP[c]
+            else:
+                return ""
+        return out
+
+    def _brace_sup(m: re.Match) -> str:
+        converted = _to_sup(m.group(2))
+        if converted:
+            return m.group(1) + converted
+        return m.group(0)
+
+    def _simple_sup(m: re.Match) -> str:
+        converted = _to_sup(m.group(2))
+        if converted:
+            return m.group(1) + converted
+        return m.group(0)
+
+    # Greek words first so that pi^2 → π^2 → π² (not pi² with unreplaced pi)
+    for pat, sym in _GREEK_PATTERNS:
+        text = pat.sub(sym, text)
+    text = re.sub(r"(\w+)\^\{([^}]+)\}", _brace_sup, text)
+    text = re.sub(r"(\w+)\^(\d+|\w)", _simple_sup, text)
+    # Multiplication dot BEFORE subscript: I_0 * cos still has digit [0-9] before *
+    text = re.sub(r"(?<=[a-zA-Z0-9]) \* (?=[a-zA-Z0-9])", " · ", text)
+    text = re.sub(r"(?<=[a-zA-Z0-9])\*(?=[a-zA-Z0-9])", "·", text)
+    text = re.sub(r"(\w)_(\d)", lambda m: m.group(1) + _SUB_MAP.get(m.group(2), m.group(2)), text)
+    text = text.replace(">=", "≥").replace("<=", "≤").replace("!=", "≠")
+    text = re.sub(r"\binfinity\b", "∞", text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Math formula detection and fencing
+# ---------------------------------------------------------------------------
+
+_MATH_OP_RE = re.compile(
+    r"[\^]"
+    r"|(?<=[a-zA-Z0-9]) \* (?=[a-zA-Z0-9])"
+    r"|(?<=[a-zA-Z0-9])\*(?=[a-zA-Z0-9])"
+    r"|sqrt\(|sin\(|cos\(|tan\(|log\(|exp\("
+)
+_LIST_ITEM_START_RE = re.compile(r"^[ \t]*[-*•][ \t]")
+
+
+def _is_formula_line(line: str) -> bool:
+    """Return True if line looks like a standalone math formula."""
+    stripped = line.strip()
+    if "=" not in stripped:
+        return False
+    if _LIST_ITEM_START_RE.match(line):
+        return False
+    if not _MATH_OP_RE.search(stripped):
+        return False
+    words = re.findall(r"[a-zA-Z]{3,}", stripped)
+    _ENGLISH = {
+        "the",
+        "and",
+        "for",
+        "are",
+        "was",
+        "that",
+        "this",
+        "with",
+        "from",
+        "have",
+        "will",
+        "can",
+        "all",
+        "not",
+        "but",
+        "out",
+        "more",
+        "result",
+        "value",
+        "where",
+        "which",
+        "also",
+    }
+    if words:
+        eng_count = sum(1 for w in words if w.lower() in _ENGLISH)
+        if eng_count / len(words) > 0.4:
+            return False
+    return True
+
+
+def _fence_math_formulas(text: str) -> str:
+    """Wrap standalone math formula lines in code blocks with Unicode conversion."""
+    lines = text.split("\n")
+    result: list = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+            i += 1
+            continue
+        if in_fence:
+            result.append(line)
+            i += 1
+            continue
+        if _is_formula_line(line):
+            formula_run = [_mathify(line)]
+            i += 1
+            while i < len(lines) and _is_formula_line(lines[i]):
+                formula_run.append(_mathify(lines[i]))
+                i += 1
+            result.append("```")
+            result.extend(formula_run)
+            result.append("```")
+        else:
+            result.append(line)
+            i += 1
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
+# Inline math symbols for prose lines
+# ---------------------------------------------------------------------------
+
+
+def _inline_math_symbols(text: str) -> str:
+    """Apply Greek letter and subscript conversions to prose text outside fences."""
+    lines = text.split("\n")
+    result = []
+    in_fence = False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+            continue
+        if in_fence:
+            result.append(line)
+            continue
+        for pat, sym in _GREEK_PATTERNS:
+            line = pat.sub(sym, line)
+        line = re.sub(
+            r"(\w)_(\d)", lambda m: m.group(1) + _SUB_MAP.get(m.group(2), m.group(2)), line
+        )
+        result.append(line)
+    return "\n".join(result)
+
+
+def _preprocess_markdown(text: str) -> str:
+    """Apply terminal-friendly substitutions before passing text to Rich Markdown.
+
+    * ``- [x]`` / ``- [ ]`` → ✅ / ☐  (task lists)
+    * ``~~text~~``           → ``text``   (strikethrough — unsupported in Rich)
+    * ``> [!NOTE]`` etc.     → ``> **ℹ NOTE:** …`` (GitHub callout → blockquote)
+    """
+
+    def _task_sub(m: re.Match) -> str:
+        checked = m.group(2).strip()
+        return m.group(1) + ("✅ " if checked.lower() == "x" else "☐ ")
+
+    text = _TASK_LIST_RE.sub(_task_sub, text)
+    text = _STRIKETHROUGH_RE.sub(r"\1", text)
+
+    def _callout_sub(m: re.Match) -> str:
+        ctype = m.group(1)
+        icon, color = _CALLOUT_RICH[ctype]
+        body_lines = m.group(2)
+        body = "\n".join(
+            line[2:] if line.startswith("> ") else line for line in body_lines.rstrip().splitlines()
+        )
+        # Emit as a bold-prefixed blockquote — Rich renders ▌ border.
+        prefix = f"**{icon} {ctype}:**"
+        if body.strip():
+            return f"> {prefix} {body.strip()}\n"
+        return f"> {prefix}\n"
+
+    text = _CALLOUT_RE.sub(_callout_sub, text)
+    text = _normalize_bullets(text)
+    text = _fence_math_formulas(text)
+    text = _inline_math_symbols(text)
+    text = _fence_unfenced_code(text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# LaTeX → Unicode converter for terminal display
+# ---------------------------------------------------------------------------
+
+_LATEX_SYMBOLS: list[tuple[str, str]] = [
+    # Greek letters — lowercase
+    (r"\alpha", "α"),
+    (r"\beta", "β"),
+    (r"\gamma", "γ"),
+    (r"\delta", "δ"),
+    (r"\epsilon", "ε"),
+    (r"\varepsilon", "ε"),
+    (r"\zeta", "ζ"),
+    (r"\eta", "η"),
+    (r"\theta", "θ"),
+    (r"\vartheta", "ϑ"),
+    (r"\iota", "ι"),
+    (r"\kappa", "κ"),
+    (r"\lambda", "λ"),
+    (r"\mu", "μ"),
+    (r"\nu", "ν"),
+    (r"\xi", "ξ"),
+    (r"\pi", "π"),
+    (r"\rho", "ρ"),
+    (r"\sigma", "σ"),
+    (r"\tau", "τ"),
+    (r"\upsilon", "υ"),
+    (r"\phi", "φ"),
+    (r"\varphi", "φ"),
+    (r"\chi", "χ"),
+    (r"\psi", "ψ"),
+    (r"\omega", "ω"),
+    # Greek letters — uppercase
+    (r"\Gamma", "Γ"),
+    (r"\Delta", "Δ"),
+    (r"\Theta", "Θ"),
+    (r"\Lambda", "Λ"),
+    (r"\Xi", "Ξ"),
+    (r"\Pi", "Π"),
+    (r"\Sigma", "Σ"),
+    (r"\Upsilon", "Υ"),
+    (r"\Phi", "Φ"),
+    (r"\Psi", "Ψ"),
+    (r"\Omega", "Ω"),
+    # Operators and relations
+    (r"\approx", "≈"),
+    (r"\neq", "≠"),
+    (r"\leq", "≤"),
+    (r"\geq", "≥"),
+    (r"\ll", "≪"),
+    (r"\gg", "≫"),
+    (r"\pm", "±"),
+    (r"\mp", "∓"),
+    (r"\times", "×"),
+    (r"\cdot", "·"),
+    (r"\div", "÷"),
+    (r"\circ", "∘"),
+    (r"\infty", "∞"),
+    (r"\partial", "∂"),
+    (r"\nabla", "∇"),
+    (r"\forall", "∀"),
+    (r"\exists", "∃"),
+    (r"\in", "∈"),
+    (r"\notin", "∉"),
+    (r"\subset", "⊂"),
+    (r"\subseteq", "⊆"),
+    (r"\supset", "⊃"),
+    (r"\cup", "∪"),
+    (r"\cap", "∩"),
+    (r"\emptyset", "∅"),
+    (r"\to", "→"),
+    (r"\rightarrow", "→"),
+    (r"\leftarrow", "←"),
+    (r"\Rightarrow", "⇒"),
+    (r"\Leftarrow", "⇐"),
+    (r"\Leftrightarrow", "⇔"),
+    (r"\leftrightarrow", "↔"),
+    (r"\uparrow", "↑"),
+    (r"\downarrow", "↓"),
+    (r"\perp", "⊥"),
+    (r"\parallel", "∥"),
+    (r"\sim", "∼"),
+    (r"\simeq", "≃"),
+    (r"\equiv", "≡"),
+    (r"\propto", "∝"),
+    (r"\therefore", "∴"),
+    (r"\because", "∵"),
+    # Blackboard bold / script
+    (r"\mathbb{R}", "ℝ"),
+    (r"\mathbb{Z}", "ℤ"),
+    (r"\mathbb{N}", "ℕ"),
+    (r"\mathbb{Q}", "ℚ"),
+    (r"\mathbb{C}", "ℂ"),
+    (r"\mathbb{E}", "𝔼"),
+    (r"\mathcal{O}", "𝒪"),
+    # Functions
+    (r"\log", "log"),
+    (r"\ln", "ln"),
+    (r"\exp", "exp"),
+    (r"\sin", "sin"),
+    (r"\cos", "cos"),
+    (r"\tan", "tan"),
+    (r"\min", "min"),
+    (r"\max", "max"),
+    (r"\sup", "sup"),
+    (r"\inf", "inf"),
+    (r"\lim", "lim"),
+    (r"\det", "det"),
+    (r"\text{sign}", "sign"),
+    (r"\text{argmin}", "argmin"),
+    (r"\text{argmax}", "argmax"),
+    # Sums, integrals, products
+    (r"\sum", "∑"),
+    (r"\prod", "∏"),
+    (r"\int", "∫"),
+    (r"\iint", "∬"),
+    (r"\oint", "∮"),
+    # Dots
+    (r"\ldots", "…"),
+    (r"\cdots", "⋯"),
+    (r"\vdots", "⋮"),
+    (r"\ddots", "⋱"),
+    # Brackets / norms
+    (r"\langle", "⟨"),
+    (r"\rangle", "⟩"),
+    (r"\|", "‖"),
+    (r"\left\|", "‖"),
+    (r"\right\|", "‖"),
+    (r"\left|", "|"),
+    (r"\right|", "|"),
+    # Misc
+    (r"\sqrt", "√"),
+    (r"\prime", "′"),
+    (r"^\prime", "′"),
+    (r"\dag", "†"),
+    (r"\top", "ᵀ"),
+    (r"^\top", "ᵀ"),
+]
+
+_SUPERSCRIPT_MAP = str.maketrans(
+    "0123456789+-=()naebijrstuvwxyz",
+    "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿᵃᵉᵇⁱʲʳˢᵗᵘᵛʷˣʸᶻ",
+)
+_SUBSCRIPT_MAP = str.maketrans(
+    "0123456789+-=()aeijnorstuvx",
+    "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢⱼₙₒᵣₛₜᵤᵥₓ",
+)
+
+_FRAC_RE = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+_SUP_RE = re.compile(r"\^\{([^{}]{1,20})\}|\^([A-Za-z0-9])")
+_SUB_RE = re.compile(r"_\{([^{}]{1,20})\}|_([A-Za-z0-9])")
+_CMD_ARG_RE = re.compile(r"\\[a-zA-Z]+\{([^{}]*)\}")
+
+
+def _latex_to_unicode(formula: str) -> str:
+    """Convert a LaTeX formula string to a Unicode-rich terminal representation.
+
+    Handles Greek letters, operators, blackboard bold, fractions, super/subscripts,
+    and common functions.  Falls back to the raw token for unknown commands.
+    """
+    s = formula
+
+    # 1. Substitute named symbols — longest key first to avoid partial matches
+    #    (e.g. \infty before \in, \int before \in, \iint before \int).
+    for latex, uni in sorted(_LATEX_SYMBOLS, key=lambda t: len(t[0]), reverse=True):
+        s = s.replace(latex, uni)
+
+    # 2. \\frac{num}{den} → num/den
+    s = _FRAC_RE.sub(lambda m: f"{m.group(1)}/{m.group(2)}", s)
+
+    # 3. Superscripts  ^{...} or ^x
+    def _sup(m: re.Match) -> str:
+        inner = m.group(1) or m.group(2)
+        return inner.translate(_SUPERSCRIPT_MAP)
+
+    s = _SUP_RE.sub(_sup, s)
+
+    # 4. Subscripts  _{...} or _x
+    def _sub(m: re.Match) -> str:
+        inner = m.group(1) or m.group(2)
+        return inner.translate(_SUBSCRIPT_MAP)
+
+    s = _SUB_RE.sub(_sub, s)
+
+    # 5. Strip remaining \cmd{arg} wrappers → keep the arg (e.g. \text{foo} → foo)
+    s = _CMD_ARG_RE.sub(lambda m: m.group(1), s)
+
+    # 6. Remove remaining backslash commands
+    s = re.sub(r"\\[a-zA-Z]+", "", s)
+
+    # 7. Convert \sqrt{...} → √(...)
+    s = re.sub(r"√\{([^{}]*)\}", r"√(\1)", s)
+
+    # 8. Strip remaining bare braces (artifacts from nested commands)
+    s = s.replace("{", "").replace("}", "")
+
+    # 9. Strip leftover bare backslashes and tidy whitespace
+    s = s.replace("\\", "").strip()
+    s = re.sub(r" {2,}", " ", s)
+
+    return s
+
+
+def _make_math_renderable(text: str):  # type: ignore[return]
+    """Return a Rich renderable for *text* with math formula support.
+
+    Block formulas (``$$...$$``) become cyan-bordered panels with LaTeX
+    symbols converted to Unicode (Greek letters, operators, fractions, etc.).
+    Inline formulas (``$...$``) are converted to Unicode and wrapped in
+    backticks so Markdown renders them as code spans.
+
+    Returns a single Rich renderable suitable for ``Live.update()``
+    or ``Console.print()``.
+    """
+    from rich.console import Group as _RGroup
+    from rich.markdown import Markdown as _RM
+    from rich.panel import Panel as _RP
+    from rich.text import Text as _RT
+
+    # Apply task-list / strikethrough / callout substitutions first.
+    text = _preprocess_markdown(text)
+
+    # Split on $$...$$ — result alternates [text, formula, text, formula, ...]
+    segments = _BLOCK_MATH_RE.split(text)
+    renderables = []
+
+    for i, seg in enumerate(segments):
+        if i % 2 == 1:
+            # Block math: convert to Unicode and display in a bordered panel.
+            formula = _latex_to_unicode(seg.strip())
+            renderables.append(
+                _RP(
+                    _RT(formula, style="bold cyan"),
+                    title="[dim cyan]∫ math[/dim cyan]",
+                    border_style="dim cyan",
+                    padding=(0, 1),
+                )
+            )
+        elif seg.strip():
+            # Regular text: convert inline $...$ to Unicode, then wrap in backticks
+            # so Rich Markdown displays them as code spans with visual distinction.
+            def _replace_inline(m: re.Match) -> str:
+                return "`" + _latex_to_unicode(m.group(1)) + "`"
+
+            styled = _INLINE_MATH_RE.sub(_replace_inline, seg)
+            renderables.append(_RM(styled, code_theme=_MD_CODE_THEME))
+
+    if not renderables:
+        return _RM(text, code_theme=_MD_CODE_THEME)
+    if len(renderables) == 1:
+        return renderables[0]
+    return _RGroup(*renderables)
+
+
+def _render_rich_with_math(text: str, console) -> None:  # type: ignore[type-arg]
+    """Print *text* with math support via :func:`_make_math_renderable`."""
+    console.print(_make_math_renderable(text))
 
 
 def _save_env_key(env_name: str, key: str) -> None:
@@ -110,15 +884,15 @@ def _prompt_key_if_missing(provider: str, brain) -> bool:
         return True  # already configured
 
     if provider == "github_copilot":
-        print("  ⚠️  No GitHub OAuth token set for the 'github_copilot' provider.")
+        print("    ⚠️  No GitHub OAuth token set for the 'github_copilot' provider.")
 
-        print("  Starting GitHub OAuth device flow…")
+        print("    Starting GitHub OAuth device flow…")
 
         try:
             key = _copilot_device_flow()
 
         except (EOFError, KeyboardInterrupt, RuntimeError) as e:
-            print(f"\n  Cancelled: {e}")
+            print(f"\n    Cancelled: {e}")
 
             return False
 
@@ -134,11 +908,11 @@ def _prompt_key_if_missing(provider: str, brain) -> bool:
 
         brain.llm._openai_clients.pop("_copilot_token", None)
 
-        print(f"  {env_name} saved and applied.")
+        print(f"    {env_name} saved and applied.")
 
         return True
 
-    print(f"  ⚠️  No {env_name} set for the '{provider}' provider.")
+    print(f"    ⚠️  No {env_name} set for the '{provider}' provider.")
 
     try:
         import getpass
@@ -146,12 +920,12 @@ def _prompt_key_if_missing(provider: str, brain) -> bool:
         key = getpass.getpass(f"  Enter {env_name} (hidden, Enter to skip): ").strip()
 
     except (EOFError, KeyboardInterrupt):
-        print("\n  Skipped.")
+        print("\n    Skipped.")
 
         return False
 
     if not key:
-        print("  Skipped — you can set it later with /keys set " + provider)
+        print("    Skipped — you can set it later with /keys set " + provider)
 
         return False
 
@@ -159,7 +933,7 @@ def _prompt_key_if_missing(provider: str, brain) -> bool:
 
     setattr(brain.config, attr, key)
 
-    print(f"  {env_name} saved and applied.")
+    print(f"    {env_name} saved and applied.")
 
     return True
 
@@ -374,13 +1148,13 @@ def _show_context(
 
     W = _box_width()  # match main header box width
 
-    TOP = f"  ╭{'─' * W}╮"
+    TOP = f"    ╭{'─' * W}╮"
 
-    BOTTOM = f"  ╰{'─' * W}╯"
+    BOTTOM = f"    ╰{'─' * W}╯"
 
-    SEP = f"  ├{'─' * W}┤"
+    SEP = f"    ├{'─' * W}┤"
 
-    BLANK = f"  │{' ' * W}│"
+    BLANK = f"    │{' ' * W}│"
 
     def _wlen(s: str) -> int:
         """Terminal display width: wide Unicode chars (emoji, CJK) count as 2 columns."""
@@ -672,13 +1446,13 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
     """
 
     if not chat_history:
-        print("  Nothing to compact — chat history is empty.")
+        print("    Nothing to compact — chat history is empty.")
 
         return
 
     turns_before = len(chat_history)
 
-    print(f"  ⠿ Compacting {turns_before} turns…", end="", flush=True)
+    print(f"    ⠿ Compacting {turns_before} turns…", end="", flush=True)
 
     conversation = "\n".join(
         f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in chat_history
@@ -701,21 +1475,23 @@ def _do_compact(brain: AxonBrain, chat_history: list) -> None:
 
         tokens_saved = _estimate_tokens(conversation) - _estimate_tokens(summary)
 
-        print(f"\r  Compacted {turns_before} turns -> 1 summary  (~{tokens_saved:,} tokens freed)")
+        print(
+            f"\r    Compacted {turns_before} turns -> 1 summary  (~{tokens_saved:,} tokens freed)"
+        )
 
     except Exception as e:
-        print(f"\r  Compact failed: {e}")
+        print(f"\r    Compact failed: {e}")
 
 
 # ── Banner constants ───────────────────────────────────────────────────────────
 
-_HINT = "  Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
+_HINT = "    Type your question  ·  /help for commands  ·  Tab to autocomplete  ·  @file or @folder/ to attach context"
 
 
 def _box_width() -> int:
     """Return inner box width: terminal columns minus 4, minimum 43."""
 
-    return max(43, shutil.get_terminal_size((120, 24)).columns - 4)
+    return max(43, shutil.get_terminal_size((120, 24)).columns - 6)
 
 
 # FIGlet "Big" ASCII art for AXON — all chars are 1-col wide, each line is 35 cols
@@ -882,7 +1658,7 @@ def _brow(content: str, emoji_extra: int = 0) -> str:
 
     pad = bw - vis
 
-    return f"  ┃{content}{' ' * pad}┃"
+    return f"    ┃{content}{' ' * pad}┃"
 
 
 def _anim_pad(row_idx: int, frame: int, width: int) -> str:
@@ -940,13 +1716,13 @@ def _build_header(brain: AxonBrain, tick_lines: list | None = None) -> list:
     else:
         ticks_s2 = None
 
-    blank = f"  ┃{' ' * bw}┃"
+    blank = f"    ┃{' ' * bw}┃"
 
     rows = [
-        f"  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m",  # 1
+        f"    \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m",  # 1
         blank,  # 2
         *[  # 3-8  blue-shaded art lines + brain design
-            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{_get_brain_anim_row(i, -1, apad_w)}┃"
+            f"    ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{_get_brain_anim_row(i, -1, apad_w)}┃"
             for i, line in enumerate(_AXON_ART)
         ],
         blank,  # 9
@@ -964,7 +1740,7 @@ def _build_header(brain: AxonBrain, tick_lines: list | None = None) -> list:
     if ticks_s2:
         rows.append(_brow(f"    {ticks_s2}"))  # 12b (overflow)
 
-    rows.append(f"  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m")  # 13
+    rows.append(f"    \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m")  # 13
 
     return rows
 
@@ -990,7 +1766,7 @@ def _draw_header(brain: AxonBrain, tick_lines: list | None = None) -> None:
 
     bw = _box_width()
 
-    sep = "  " + "─" * (bw + 2)
+    sep = "    " + "─" * bw
 
     lines = _build_header(brain, tick_lines)
 
@@ -1026,7 +1802,7 @@ def _print_recent_turns(history: list, n_turns: int = 2) -> None:
         content = msg.get("content", "")
 
         if role == "user":
-            sys.stdout.write(f"  \033[1;32mYou\033[0m: {content}\n")
+            sys.stdout.write(f"    \033[1;32mYou\033[0m: {content}\n")
 
         elif role == "assistant":
             # Cap very long responses so they don't flood the screen
@@ -1034,7 +1810,7 @@ def _print_recent_turns(history: list, n_turns: int = 2) -> None:
             if len(content) > 600:
                 content = content[:600] + "…"
 
-            sys.stdout.write(f"\n  \033[1;33mAxon\033[0m:\n  {content}\n")
+            sys.stdout.write(f"\n    \033[1;33mAxon\033[0m:\n    {content}\n")
 
         sys.stdout.write("\n")
 
@@ -1080,23 +1856,38 @@ class _InitDisplay(logging.Handler):
 
         self.tick_lines: list = []  # collected for the final banner
 
-        # Print CLOSED 7-line box immediately — step line updated in-place
+        # Redirect stderr to /dev/null for the duration of the animation so
+        # that library noise (e.g. transformers "UNEXPECTED key" warnings) does
+        # not write bytes to the terminal and corrupt the alternate screen.
+        self._real_stderr = sys.stderr
+        try:
+            sys.stderr = open(os.devnull, "w", encoding="utf-8")
+        except Exception:
+            pass
 
         bw = _box_width()
 
         art_pad = " " * max(0, bw - 39)  # 4 indent + 35 art cols = 39 vis cols
 
         _art_rows = "".join(
-            f"  ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃\n"
+            f"\r    ┃    {_AXON_BLUE[i]}{line}{_AXON_RST}{art_pad}┃\n"
             for i, line in enumerate(_AXON_ART)
         )
 
+        # Enter the alternate screen buffer: gives us a completely clean canvas
+        # so we can redraw from \x1b[H (top-left) every frame with zero cursor-
+        # tracking arithmetic.  Primary screen content is preserved and restored
+        # automatically when we exit with \x1b[?1049l in stop().
         sys.stdout.write(
-            f"\n  \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
-            f"  ┃{' ' * bw}┃\n" + _art_rows + f"  ┃{' ' * bw}┃\n"
-            f"  ┃{'    ⠿  Initializing…'.ljust(bw)}┃\n"  # step line (3rd from bottom)
-            f"  ┃{' ' * bw}┃\n"
-            f"  \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
+            "\x1b[?1049h"  # enter alternate screen
+            "\x1b[?25l"  # hide cursor
+            "\x1b[H"  # cursor to top-left (1, 1)
+            f"\r\n"  # blank line for top margin
+            f"\r    \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
+            f"\r    ┃{' ' * bw}┃\n" + _art_rows + f"\r    ┃{' ' * bw}┃\n"
+            f"\r    ┃{'    ⠿  Initializing…'.ljust(bw)}┃\n"
+            f"\r    ┃{' ' * bw}┃\n"
+            f"\r    \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
         )
 
         sys.stdout.flush()
@@ -1111,59 +1902,48 @@ class _InitDisplay(logging.Handler):
                 self._anim_frame += 1
 
                 bw = _box_width()
-
                 apad_w = max(0, bw - 39)
 
-                # Rebuild the 6 animated art rows (AXON text + signal animation)
-
-                art_rows = [
-                    f"  ┃    {_AXON_BLUE[i]}{_AXON_ART[i]}{_AXON_RST}"
-                    f"{_anim_pad(i, self._anim_frame, apad_w)}┃"
+                art_rows = "".join(
+                    f"\r    ┃    {_AXON_BLUE[i]}{_AXON_ART[i]}{_AXON_RST}"
+                    f"{_anim_pad(i, self._anim_frame, apad_w)}┃\n"
                     for i in range(6)
-                ]
-
-                # Box line layout (1-indexed, cursor rests at line 14 after init print):
-
-                #  1=blank  2=╭╮  3=┃blank┃  4-9=art  10=┃blank┃  11=┃step┃  12=┃blank┃  13=╰╯
-
-                # Go up 10 from line 14 → line 4 (first art row), rewrite all 6.
-
-                sys.stdout.write("\033[10A")
-
-                for arow in art_rows:
-                    sys.stdout.write(f"\r{arow}\n")
-
-                # Cursor now at line 10 (blank row after art).
+                )
 
                 if self._step:
                     spinner = self._FRAMES[self._idx % len(self._FRAMES)]
-
-                    line = _brow(f"    {spinner}  {self._step}")
-
-                    # Down 1 → line 11 (step), write, newline → 12, down 2 → 14.
-
-                    sys.stdout.write(f"\033[1B\r{line}\n\033[2B")
-
+                    step_text = f"    {spinner}  {self._step}"
                     self._idx += 1
-
+                elif self.tick_lines:
+                    step_text = f"    ✓  {self.tick_lines[-1]}"
                 else:
-                    # Skip blank(10) step(11) blank(12) bottom(13) → back to line 14.
+                    step_text = "    ⠿  Initializing…"
 
-                    sys.stdout.write("\033[4B")
+                step_line = f"\r    ┃{step_text.ljust(bw)}┃\n"
 
+                # Cursor to home on the alternate screen, then redraw the full
+                # box from scratch.  No cursor arithmetic needed at all — we
+                # always know exactly where we are.
+                buf = (
+                    "\x1b[H"  # cursor to (1,1) on alternate screen
+                    "\r\n"  # blank top-margin line
+                    f"\r    \x1b[1m╭\x1b[22m{'━' * bw}\x1b[1m╮\x1b[22m\n"
+                    f"\r    ┃{' ' * bw}┃\n"
+                    + art_rows
+                    + f"\r    ┃{' ' * bw}┃\n"
+                    + step_line
+                    + f"\r    ┃{' ' * bw}┃\n"
+                    f"\r    \x1b[1m╰\x1b[22m{'━' * bw}\x1b[1m╯\x1b[22m\n"
+                )
+                sys.stdout.write(buf)
                 sys.stdout.flush()
 
     def _tick(self, label: str) -> None:
         with self._lock:
             self._step = ""
-
             self.tick_lines.append(label)
-
-            line = _brow(f"    ✓  {label}")
-
-            sys.stdout.write(f"\033[3A\r{line}\n\033[2B")
-
-            sys.stdout.flush()
+            # The next spin_loop frame redraws the whole box showing "✓ label"
+            # in the step line — no relative cursor positioning needed here.
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
@@ -1204,6 +1984,18 @@ class _InitDisplay(logging.Handler):
             self._step = ""
 
         self._thread.join(timeout=0.5)
+
+        # Restore stderr before any further output
+        try:
+            sys.stderr.close()
+        except Exception:
+            pass
+        sys.stderr = self._real_stderr
+
+        # Exit alternate screen — the primary screen with its original content
+        # is restored automatically by the terminal.  Also restore the cursor.
+        sys.stdout.write("\x1b[?1049l\x1b[?25h")
+        sys.stdout.flush()
 
 
 _AT_TEXT_EXTS = {
@@ -1408,20 +2200,29 @@ def _expand_at_files(text: str) -> str:
         return "\n".join(parts) if parts else f"\n(no readable files found in {dirpath})"
 
     def _replace(m: re.Match) -> str:
-        path = m.group(1).rstrip("/\\")
+        raw_path = m.group(1).rstrip("/\\")
+        from pathlib import Path as _P
 
-        if os.path.isdir(path):
-            return f"\n\n=== folder: {path} ===\n{_expand_dir(path)}\n=== end folder ===\n"
+        p = _P(raw_path)
+        try:
+            p_resolved = p.resolve()
+        except Exception:
+            p_resolved = p
 
-        if os.path.isfile(path):
-            content = _read_file(path)
+        if p_resolved.is_dir():
+            path_str = str(p_resolved)
+            return f"\n\n=== folder: {path_str} ===\n{_expand_dir(path_str)}\n=== end folder ===\n"
+
+        if p_resolved.is_file():
+            path_str = str(p_resolved)
+            content = _read_file(path_str)
 
             if content:
-                return f"\n\n--- @{path} ---\n{content}\n--- end ---\n"
+                return f"\n\n--- @{path_str} ---\n{content}\n--- end ---\n"
 
         return m.group(0)
 
-    return re.sub(r"@(\S+)", _replace, text)
+    return re.sub(r"(?<!\S)@(\S+)", _replace, text)
 
 
 # ---------------------------------------------------------------------------
@@ -1457,7 +2258,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
 
     if subcmd in ("", "show"):
         if brain is None:
-            print("  Brain not initialised.")
+            print("    Brain not initialised.")
 
             return
 
@@ -1470,7 +2271,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
 
     elif subcmd == "wizard":
         if brain is None:
-            print("  Brain not initialised.")
+            print("    Brain not initialised.")
 
             return
 
@@ -1478,7 +2279,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
             changes = run_wizard(brain=brain, config_path=cfg_path)
 
         except KeyboardInterrupt:
-            print("\n  Setup cancelled.")
+            print("\n    Setup cancelled.")
 
             return
 
@@ -1488,7 +2289,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
 
             brain.config.save(cfg_path or None)
 
-            print(f"  Saved {len(changes)} change(s) to {cfg_path or '(default path)'}.")
+            print(f"    Saved {len(changes)} change(s) to {cfg_path or '(default path)'}.")
 
     elif subcmd == "reset":
         try:
@@ -1498,7 +2299,7 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
             confirm = "n"
 
         if confirm == "y":
-            import os
+            # use module-level os
             from pathlib import Path
 
             from axon.config import _DEFAULT_CONFIG_YAML, _USER_CONFIG_PATH
@@ -1509,16 +2310,16 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
 
             Path(os.path.expanduser(target)).write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
 
-            print(f"  Config reset to defaults at {target}")
+            print(f"    Config reset to defaults at {target}")
 
         else:
-            print("  Cancelled.")
+            print("    Cancelled.")
 
     elif subcmd == "set":
         if len(parts) < 3:
-            print("  Usage: /config set <key> <value>")
+            print("    Usage: /config set <key> <value>")
 
-            print("  Example: /config set chunk.strategy markdown")
+            print("    Example: /config set chunk.strategy markdown")
 
             return
 
@@ -1531,12 +2332,12 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
         flat_key = _DOT_TO_FLAT.get(dot_key, dot_key.replace(".", "_"))
 
         if brain is None:
-            print("  Brain not initialised.")
+            print("    Brain not initialised.")
 
             return
 
         if not hasattr(brain.config, flat_key):
-            print(f"  Unknown config key '{dot_key}'. Known keys: {sorted(_DOT_TO_FLAT.keys())}")
+            print(f"    Unknown config key '{dot_key}'. Known keys: {sorted(_DOT_TO_FLAT.keys())}")
 
             return
 
@@ -1564,13 +2365,67 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
 
         brain.config.save(cfg_path or None)
 
-        print(f"  Set {dot_key} = {coerced!r}  (saved to config).")
+        print(f"    Set {dot_key} = {coerced!r}  (saved to config).")
 
     else:
         print(
-            f"  Unknown sub-command '{subcmd}'. "
+            f"    Unknown sub-command '{subcmd}'. "
             "Usage: /config [show|validate|wizard|reset|set <key> <value>]"
         )
+
+
+def _find_bash() -> list[str] | None:
+    """Detect the best available bash interpreter on the current platform.
+
+    Returns a command prefix suitable for ``subprocess.run([*prefix, cmd])``,
+    or ``None`` if no bash is found (caller should fall back to ``shell=True``).
+
+    Detection order:
+    1. ``bash`` in PATH  — covers Linux, macOS, and Windows with Git Bash in PATH.
+    2. ``wsl`` in PATH   — Windows Subsystem for Linux (Windows only).
+    3. Known Git Bash install paths (Windows only).
+    """
+    import shutil as _shutil
+
+    if _shutil.which("bash"):
+        return ["bash", "-c"]
+
+    if sys.platform == "win32":
+        if _shutil.which("wsl"):
+            return ["wsl", "bash", "-c"]
+        for _p in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ]:
+            if os.path.exists(_p):
+                return [_p, "-c"]
+
+    return None
+
+
+def _resolve_bash(setting: str) -> list[str] | None:
+    """Return bash command prefix according to ``repl.shell`` config value."""
+    import shutil as _shutil
+
+    if setting == "native":
+        return None
+    if setting == "wsl":
+        return ["wsl", "bash", "-c"] if _shutil.which("wsl") else None
+    if setting == "gitbash":
+        for _p in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ]:
+            if os.path.exists(_p):
+                return [_p, "-c"]
+        return None
+    if setting == "bash":
+        b = _shutil.which("bash")
+        return [b, "-c"] if b else None
+    # "auto" (default)
+    return _find_bash()
 
 
 def _interactive_repl(
@@ -1578,6 +2433,7 @@ def _interactive_repl(
     stream: bool = True,
     init_display: _InitDisplay | None = None,
     quiet: bool = False,
+    _scripted_inputs: list[str] | None = None,
 ) -> None:
     """Interactive REPL chat session with session persistence and live tab completion.
 
@@ -1591,7 +2447,7 @@ def _interactive_repl(
 
     - Slash commands: /help, /list, /ingest, /model, /embed, /pull, /search, /discuss, /rag,
 
-      /compact, /context, /sessions, /resume, /retry, /clear, /project, /keys, /vllm-url, /quit, /exit
+      /compact, /context, /sessions, /resume, /retry, /clear, /project, /agent, /keys, /vllm-url, /quit, /exit
 
     - @file/folder context: type @path/file.txt or @path/folder/ to inline contents into your query (read-only)
 
@@ -1626,6 +2482,8 @@ def _interactive_repl(
         "sentence_transformers",
         "chromadb",
         "httpcore",
+        "google_genai",
+        "google.genai",
     ):
         _lg = _logging.getLogger(_log)
 
@@ -1635,18 +2493,29 @@ def _interactive_repl(
 
     # ── Input: prefer prompt_toolkit (live completions), fall back to readline ──
 
-    _pt_session = None
+    _pt_app = None
+    _input_queue = None
+    _repl_event_loop = None  # captured inside _repl_loop_async for thread-safe run_in_terminal
+    _spin_state: dict = {"active": False, "idx": 0}
 
     try:
         import glob as _pglob
 
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.application import Application
+        from prompt_toolkit.buffer import Buffer
         from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.filters import has_completions
         from prompt_toolkit.formatted_text import ANSI as _PTANSI
         from prompt_toolkit.formatted_text import HTML as _PThtml
         from prompt_toolkit.formatted_text import FormattedText as _PTFT  # noqa: F401
         from prompt_toolkit.history import FileHistory as _FileHistory
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.key_binding.bindings.emacs import load_emacs_bindings
+        from prompt_toolkit.layout import Layout
+        from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+        from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+        from prompt_toolkit.layout.menus import CompletionsMenu
+        from prompt_toolkit.patch_stdout import patch_stdout as _pt_patch_stdout
         from prompt_toolkit.styles import Style
 
         _HIST_DIR = os.path.expanduser("~/.axon")
@@ -1658,8 +2527,16 @@ def _interactive_repl(
         _PT_STYLE = Style.from_dict(
             {
                 "": "",
-                "completion-menu.completion.current": "bg:#444466 #ffffff",
-                "bottom-toolbar": "bg:#0a2a5e #c8d8f0",
+                # Completion menu — dark panel with highlighted selection
+                "completion-menu": "bg:#1e2030 #cdd6f4",
+                "completion-menu.completion": "bg:#1e2030 #cdd6f4",
+                "completion-menu.completion.current": "bg:#363a4f #cba6f7 bold",
+                "completion-menu.meta.completion": "bg:#1e2030 #6c7086 italic",
+                "completion-menu.meta.completion.current": "bg:#363a4f #89b4fa italic",
+                "completion-menu.border": "#494d64",
+                # Input area
+                "bottom-toolbar": "noinherit bg:default fg:#87ceeb",
+                "separator": "#334466",
             }
         )
 
@@ -1677,7 +2554,8 @@ def _interactive_repl(
                         c = cmd.rstrip()
 
                         if c.startswith(text):
-                            yield Completion(c[len(text) :], display=c, display_meta="command")
+                            desc = _SLASH_CMD_DESC.get(c, "")
+                            yield Completion(c[len(text) :], display=c, display_meta=desc)
 
                 # ── /ingest path / glob ───────────────────────────────────
 
@@ -1720,23 +2598,30 @@ def _interactive_repl(
                                 )
 
                     else:
-                        try:
-                            import ollama as _ol
+                        # use module-level os
 
-                            resp = _ol.list()
-
-                            mods = (
-                                resp.models if hasattr(resp, "models") else resp.get("models", [])
-                            )
-
-                            for m in mods:
-                                name = m.model if hasattr(m, "model") else m.get("name", "")
-
-                                if name.startswith(prefix):
-                                    yield Completion(name[len(prefix) :], display=name)
-
-                        except Exception:
+                        if os.getenv("AXON_DRY_RUN"):
                             pass
+                        else:
+                            try:
+                                import ollama as _ol
+
+                                resp = _ol.list()
+
+                                mods = (
+                                    resp.models
+                                    if hasattr(resp, "models")
+                                    else resp.get("models", [])
+                                )
+
+                                for m in mods:
+                                    name = m.model if hasattr(m, "model") else m.get("name", "")
+
+                                    if name.startswith(prefix):
+                                        yield Completion(name[len(prefix) :], display=name)
+
+                            except Exception:
+                                pass
 
                 # ── /resume <session-id> ──────────────────────────────────
 
@@ -1838,6 +2723,26 @@ def _interactive_repl(
                             pass
 
         def _toolbar():
+            # Fast-path: if embedding is in progress, show the progress bar immediately
+            # without hitting ChromaDB (which may be locked during ingest).
+            from axon._ui_state import state as _ui_state_fast
+
+            _embed_prog_fast = _ui_state_fast.get("embed_progress", "")
+            if _embed_prog_fast:
+                _BON = "\x1b[1m"
+                _RST = "\x1b[0m"
+                m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
+                emb = f"{brain.config.embedding_provider}/{brain.config.embedding_model}"
+                row1 = f"    {_BON}LLM\x1b[22m  {m}    {_BON}Embed\x1b[22m  {emb}"
+                return _PTANSI(f"{row1}\n    \x1b[1;32m{_embed_prog_fast}\x1b[0m{_RST}")
+
+            if _spin_state.get("active"):
+                _tb_frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+                _tf = _tb_frames[_spin_state.get("idx", 0) % len(_tb_frames)]
+                return _PTANSI(
+                    f"    \x1b[1;33m✦\x1b[0m \x1b[2m{_tf} Thinking\u2026  Ctrl+C to cancel\x1b[0m"
+                )
+
             def _t(s: str, w: int) -> str:
                 return s if len(s) <= w else s[: w - 1] + "…"
 
@@ -1896,13 +2801,13 @@ def _interactive_repl(
             h_state = "ON" if brain.config.hybrid_search else "off"
 
             row1 = (
-                f"  {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
+                f"    {_lbl('LLM')}  {_t(m, W1):{W1}}{sep}"
                 f"{_lbl('Embed')}  {_t(emb, W2):{W2}}{sep}"
                 f"{_lbl('Docs')}  {doc_s}"
             )
 
             row2 = (
-                f"  {_lbl('search')}:{s_state}{_pad('search', s_state, C1)}{sep}"
+                f"    {_lbl('search')}:{s_state}{_pad('search', s_state, C1)}{sep}"
                 f"{_lbl('discuss')}:{d_state}{_pad('discuss', d_state, C2)}{sep}"
                 f"{_lbl('hybrid')}:{h_state}  "
                 f"{_lbl('top-k')}:{brain.config.top_k}  "
@@ -1912,14 +2817,119 @@ def _interactive_repl(
 
             return _PTANSI(f"{row1}\n{row2}{_RST}")
 
-        _pt_session = PromptSession(
-            completer=_PTCompleter(brain),
-            auto_suggest=AutoSuggestFromHistory(),
-            style=_PT_STYLE,
-            complete_while_typing=True,
-            bottom_toolbar=_toolbar,
-            history=_FileHistory(_HIST_FILE),
-        )
+        # Build the Application when running interactively on a real TTY.
+        # Skip in test-mode (_scripted_inputs). Attempt to create a full-screen
+        # prompt_toolkit Application and fall back gracefully to readline/input
+        # if the environment does not support it.
+        if _scripted_inputs is None:
+            try:
+
+                def _handle_enter(buf: Buffer) -> None:
+                    text = buf.text
+                    if text.strip() and _input_queue is not None:
+                        _input_queue.put_nowait(text)
+                    # Do NOT call buf.reset() here — prompt_toolkit resets the buffer
+                    # after accept_handler returns and records history before reset.
+
+                _input_buf = Buffer(
+                    completer=_PTCompleter(brain),
+                    complete_while_typing=True,
+                    history=_FileHistory(_HIST_FILE),
+                    name="input",
+                    accept_handler=_handle_enter,
+                )
+
+                _kb = KeyBindings()
+
+                @_kb.add("enter")
+                def _handle_enter_key(event):
+                    # validate_and_handle() calls accept_handler then resets the buffer.
+                    # This is what PromptSession does internally; we must wire it
+                    # explicitly in a raw Application since load_emacs_bindings()
+                    # does not include the submit-on-enter behaviour.
+                    event.current_buffer.validate_and_handle()
+
+                @_kb.add("c-c")
+                def _handle_ctrl_c(event):
+                    if _input_buf.text:
+                        _input_buf.reset()
+                    else:
+                        event.app.exit(exception=KeyboardInterrupt())
+
+                @_kb.add("c-d")
+                def _handle_ctrl_d(event):
+                    event.app.exit(exception=EOFError())
+
+                from prompt_toolkit.key_binding import merge_key_bindings
+
+                _SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+                _pt_app = Application(
+                    layout=Layout(
+                        HSplit(
+                            [
+                                # Completions expand upward above the input row
+                                ConditionalContainer(
+                                    content=CompletionsMenu(max_height=8, scroll_offset=1),
+                                    filter=has_completions,
+                                ),
+                                # Thin separator line between conversation and input area
+                                Window(
+                                    height=1,
+                                    content=FormattedTextControl(
+                                        lambda: "    "
+                                        + "─" * max(1, shutil.get_terminal_size().columns - 8)
+                                    ),
+                                    style="class:separator",
+                                ),
+                                Window(
+                                    content=BufferControl(
+                                        buffer=_input_buf,
+                                        focusable=True,
+                                        include_default_input_processors=True,
+                                    ),
+                                    get_line_prefix=lambda lineno, wrap_count: _PThtml(
+                                        "    <ansigreen><b>></b></ansigreen> "
+                                    ),
+                                    height=1,
+                                    wrap_lines=False,
+                                ),
+                                # Thin separator between input and status bar
+                                Window(
+                                    height=1,
+                                    content=FormattedTextControl(
+                                        lambda: "    "
+                                        + "─" * max(1, shutil.get_terminal_size().columns - 8)
+                                    ),
+                                    style="class:separator",
+                                ),
+                                Window(
+                                    content=FormattedTextControl(_toolbar),
+                                    height=2,
+                                    style="class:bottom-toolbar",
+                                ),
+                            ]
+                        )
+                    ),
+                    key_bindings=merge_key_bindings([load_emacs_bindings(), _kb]),
+                    style=_PT_STYLE,
+                    mouse_support=False,
+                    full_screen=False,
+                )
+
+                # Store app reference so background threads can trigger redraws.
+                from axon._ui_state import state as _ui_state_ref
+
+                _ui_state_ref["_pt_app"] = _pt_app
+
+            except Exception as _pt_exc:  # pragma: no cover - best-effort fallback
+                import logging as _logging
+
+                _logging.getLogger("Axon").info(
+                    "Prompt toolkit Application unavailable: %s. Falling back to readline/input.",
+                    _pt_exc,
+                )
+                _pt_app = None
 
     except ImportError:
         # Fall back to readline with history persistence
@@ -1998,22 +3008,56 @@ def _interactive_repl(
         C2 = len("Embed  ") + W2  # 37
 
         row1 = (
-            f"  \033[1mLLM\033[0m\033[2m  {_t(m, W1):{W1}}"
+            f"    \033[1mLLM\033[0m\033[2m  {_t(m, W1):{W1}}"
             f"{sep}\033[0m\033[1mEmbed\033[0m\033[2m  {_t(emb, W2):{W2}}"
             f"{sep}\033[0m\033[1mDocs\033[0m\033[2m  {doc_s}\033[0m"
         )
 
-        row2 = f"\033[2m  {s_val:<{C1}}" f"{sep}{d_val:<{C2}}" f"{sep}{h_val}  {tk}{proj_s}\033[0m"
+        row2 = (
+            f"\033[2m    {s_val:<{C1}}" f"{sep}{d_val:<{C2}}" f"{sep}{h_val}  {tk}{proj_s}\033[0m"
+        )
 
         print(row1)
 
         print(row2)
 
-    def _read_input(prompt: str = "") -> str:
-        if _pt_session:
-            _p = _PThtml("<ansigreen><b>You</b></ansigreen>: ") if not prompt else prompt
+    # Shared iterator for test-mode scripted inputs (covers both main loop and
+    # mid-command confirmation prompts like /clear and /project new).
+    _script_iter = iter(_scripted_inputs) if _scripted_inputs is not None else None
 
-            return _pt_session.prompt(_p)
+    def _read_input(prompt: str = "") -> str:
+        # During Application.run_in_terminal the terminal is given back to us,
+        # so plain input() works correctly here.  In test-mode, consume from the
+        # scripted iterator so mid-command prompts get the right canned answer.
+        if _script_iter is not None:
+            try:
+                return next(_script_iter)
+            except StopIteration:
+                raise EOFError
+
+        # If tests monkeypatch prompt_toolkit.PromptSession to provide scripted
+        # inputs, prefer that API so pytest can capture stdout while supplying
+        # input via the fake PromptSession. This preserves existing test
+        # fixtures that replaced PromptSession.
+        try:
+            import prompt_toolkit as _pt
+
+            PS = getattr(_pt, "PromptSession", None)
+
+            if PS:
+                try:
+                    session = PS()
+
+                    return session.prompt(prompt if prompt else "\033[1;32mYou\033[0m: ")
+
+                except StopIteration:
+                    raise EOFError
+
+                except Exception:
+                    # Fall back to builtin input() if PromptSession fails for any reason
+                    pass
+        except Exception:
+            pass
 
         return input(prompt if prompt else "\033[1;32mYou\033[0m: ")
 
@@ -2058,6 +3102,8 @@ def _interactive_repl(
 
     _last_query: str = ""
 
+    _agent_mode: bool = False
+
     # Initial snapshot to avoid printing status on the very first query
 
     m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
@@ -2074,15 +3120,14 @@ def _interactive_repl(
 
     _last_config_snapshot: tuple = (m, s_v, d_v, h_v, tk, thr)
 
-    while True:
-        try:
-            user_input = _read_input().strip()
+    # Resolve bash once at REPL startup — used by both ! passthrough and run_shell agent tool.
+    _bash_cmd: list[str] | None = _resolve_bash(
+        str(getattr(brain.config, "repl_shell", "auto")).lower().strip()
+    )
 
-        except (EOFError, KeyboardInterrupt):
-            break
-
-        if not user_input:
-            continue
+    def _process_input_sync(user_input: str) -> bool:
+        """Process one REPL input. Returns True to exit the REPL loop."""
+        nonlocal session, _agent_mode, _last_sources, _last_query, _last_config_snapshot
 
         # --- Shell passthrough: !command ---
 
@@ -2094,17 +3139,53 @@ def _interactive_repl(
 
                 if not allowed:
                     print(
-                        "  Shell passthrough blocked by policy "
+                        "    Shell passthrough blocked by policy "
                         f"(repl.shell_passthrough={policy})."
                     )
 
-                    continue
+                    return False
 
                 import subprocess
 
-                subprocess.run(shell_cmd, shell=True)
+                # Intercept `cd` — child subprocess cwd changes don't propagate to the
+                # parent REPL process, so we call os.chdir() directly instead.
+                _sc = shell_cmd.strip()
+                if _sc == "cd" or _sc.startswith("cd "):
+                    _target = _sc[2:].strip() or str(Path.home())
+                    try:
+                        os.chdir(Path(_target).expanduser())
+                        print(f"    {os.getcwd()}")
+                    except OSError as _cde:
+                        print(f"    cd: {_cde}")
+                    return False
 
-            continue
+                # Route through bash when available; fall back to cmd.exe / /bin/sh.
+                # Use run_in_terminal so the Application suspends while the subprocess
+                # writes to the raw TTY — prevents display corruption.
+                def _run_shell_cmd() -> None:
+                    if _bash_cmd:
+                        subprocess.run([*_bash_cmd, shell_cmd], cwd=os.getcwd())
+                    else:
+                        subprocess.run(shell_cmd, shell=True)
+
+                if _pt_app is not None and _repl_event_loop is not None:
+                    import asyncio as _aio
+
+                    from prompt_toolkit.application import in_terminal as _in_terminal
+
+                    async def _run_shell_in_terminal() -> None:
+                        async with _in_terminal():
+                            _run_shell_cmd()
+
+                    _fut = _aio.run_coroutine_threadsafe(
+                        _run_shell_in_terminal(),
+                        _repl_event_loop,
+                    )
+                    _fut.result()
+                else:
+                    _run_shell_cmd()
+
+            return False
 
         # --- Slash commands ---
 
@@ -2123,111 +3204,118 @@ def _interactive_repl(
                 cmd = "/help"
 
             if cmd in ("/quit", "/exit", "/q"):
-                break
+                return True
 
             elif cmd == "/help":
                 if arg:
                     # Per-command detail
 
                     _detail = {
-                        "model": "  /model <model>              keep current provider\n"
-                        "  /model <provider>/<model>   switch provider + model\n"
-                        "  providers: ollama, gemini, openai, ollama_cloud, vllm, github_copilot\n"
-                        "  e.g.  /model gemini/gemini-2.0-flash\n"
-                        "        /model ollama/gemma:2b\n"
-                        "        /model openai/gpt-4o\n"
-                        "        /model vllm/meta-llama/Llama-3.1-8B-Instruct",
-                        "embed": "  /embed <model>              keep current provider\n"
-                        "  /embed <provider>/<model>   switch provider + model\n"
-                        "  /embed /path/to/local        local HuggingFace folder\n"
-                        "  providers: sentence_transformers, ollama, fastembed, openai\n"
-                        "  !  Re-ingest after changing embedding model.",
-                        "ingest": "  /ingest <path>              ingest a directory\n"
-                        "  /ingest ./src/*.py           glob pattern\n"
-                        "  /ingest ./notes/**/*.md      recursive glob",
-                        "llm": "  /llm                         show LLM settings (provider, model, temperature)\n"
-                        "  /llm temperature <0.0–2.0>   set generation temperature\n"
-                        "  Lower temperature = more deterministic; higher = more creative.",
-                        "rag": "  /rag                         show all RAG settings\n"
-                        "  /rag topk <n>                results to retrieve (1–20)\n"
-                        "  /rag threshold <0.0–1.0>     min similarity score\n"
-                        "  /rag hybrid                  toggle hybrid BM25+vector\n"
-                        "  /rag rerank                  toggle cross-encoder reranker\n"
-                        "  /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
-                        "  /rag hyde                    toggle HyDE query expansion\n"
-                        "  /rag multi                   toggle multi-query expansion\n"
-                        "  /rag step-back               toggle step-back prompting\n"
-                        "  /rag decompose               toggle query decomposition\n"
-                        "  /rag compress                toggle LLM context compression\n"
-                        "  /rag cite                    toggle inline [Document N] citations\n"
-                        "  /rag raptor                  toggle RAPTOR hierarchical indexing\n"
-                        "  /rag graph-rag               toggle GraphRAG entity retrieval",
-                        "sessions": "  /sessions                    list recent saved sessions\n"
-                        "  /resume <id>                 load a session by ID\n"
-                        "  Sessions auto-save after each turn.",
-                        "keys": "  /keys                        show API key status for all providers\n"
-                        "  /keys set <provider>         interactively set an API key\n"
-                        "  providers: gemini, openai, brave, ollama_cloud\n"
-                        "  Keys are saved to ~/.axon/.env and loaded at startup.",
-                        "project": "  /project                               show active project + list all\n"
-                        "  /project list                          list all projects and mounted shares\n"
-                        "  /project new <name>                    create a new project and switch to it\n"
-                        "  /project new <name> <desc>             create with description\n"
-                        "  /project new <parent>/<child>          create a sub-project (up to 5 levels)\n"
-                        "  /project switch <name>                 switch to an existing local project\n"
-                        "  /project switch <parent>/<child>       switch to a sub-project\n"
-                        "  /project switch default                return to the global knowledge base\n"
-                        "  /project switch @projects              merged view of all local projects\n"
-                        "  /project switch @mounts                merged view of all mounted shares\n"
-                        "  /project switch @store                 merged view of entire AxonStore\n"
-                        "  /project switch mounts/<name>          switch to a mounted share\n"
-                        "  /project delete <name>                 delete a leaf project and its data\n"
-                        "  /project folder                        open the active project folder\n"
+                        "model": "    /model <model>              keep current provider\n"
+                        "    /model <provider>/<model>   switch provider + model\n"
+                        "    providers: ollama, gemini, openai, ollama_cloud, vllm, github_copilot\n"
+                        "    e.g.  /model gemini/gemini-2.0-flash\n"
+                        "          /model ollama/gemma:2b\n"
+                        "          /model openai/gpt-4o\n"
+                        "          /model vllm/meta-llama/Llama-3.1-8B-Instruct",
+                        "embed": "    /embed <model>              keep current provider\n"
+                        "    /embed <provider>/<model>   switch provider + model\n"
+                        "    /embed /path/to/local        local HuggingFace folder\n"
+                        "    providers: sentence_transformers, ollama, fastembed, openai\n"
+                        "    !  Re-ingest after changing embedding model.",
+                        "ingest": "    /ingest <path>              ingest a directory\n"
+                        "    /ingest ./src/*.py           glob pattern\n"
+                        "    /ingest ./notes/**/*.md      recursive glob",
+                        "llm": "    /llm                         show LLM settings (provider, model, temperature)\n"
+                        "    /llm temperature <0.0–2.0>   set generation temperature\n"
+                        "    Lower temperature = more deterministic; higher = more creative.",
+                        "rag": "    /rag                         show all RAG settings\n"
+                        "    /rag topk <n>                results to retrieve (1–20)\n"
+                        "    /rag threshold <0.0–1.0>     min similarity score\n"
+                        "    /rag hybrid                  toggle hybrid BM25+vector\n"
+                        "    /rag rerank                  toggle cross-encoder reranker\n"
+                        "    /rag rerank-model <model>    set reranker model (HF ID or local path)\n"
+                        "    /rag hyde                    toggle HyDE query expansion\n"
+                        "    /rag multi                   toggle multi-query expansion\n"
+                        "    /rag step-back               toggle step-back prompting\n"
+                        "    /rag decompose               toggle query decomposition\n"
+                        "    /rag compress                toggle LLM context compression\n"
+                        "    /rag cite                    toggle inline [Document N] citations\n"
+                        "    /rag raptor                  toggle RAPTOR hierarchical indexing\n"
+                        "    /rag graph-rag               toggle GraphRAG entity retrieval",
+                        "sessions": "    /sessions                    list recent saved sessions\n"
+                        "    /resume <id>                 load a session by ID\n"
+                        "    Sessions auto-save after each turn.",
+                        "keys": "    /keys                        show API key status for all providers\n"
+                        "    /keys set <provider>         interactively set an API key\n"
+                        "    providers: gemini, openai, brave, ollama_cloud\n"
+                        "    Keys are saved to ~/.axon/.env and loaded at startup.",
+                        "project": "    /project                               show active project + list all\n"
+                        "    /project list                          list all projects and mounted shares\n"
+                        "    /project new <name>                    create a new project and switch to it\n"
+                        "    /project new <name> <desc>             create with description\n"
+                        "    /project new <parent>/<child>          create a sub-project (up to 5 levels)\n"
+                        "    /project switch <name>                 switch to an existing local project\n"
+                        "    /project switch <parent>/<child>       switch to a sub-project\n"
+                        "    /project switch default                return to the global knowledge base\n"
+                        "    /project switch @projects              merged view of all local projects\n"
+                        "    /project switch @mounts                merged view of all mounted shares\n"
+                        "    /project switch @store                 merged view of entire AxonStore\n"
+                        "    /project switch mounts/<name>          switch to a mounted share\n"
+                        "    /project delete <name>                 delete a leaf project and its data\n"
+                        "    /project folder                        open the active project folder\n"
                         "\n"
-                        "  Projects are stored in ~/.axon/projects/<name>/\n"
-                        "  Sub-projects use nested subs/ directories (max depth: 5).\n"
-                        "  Switching to a parent project shows merged data across all sub-projects.\n"
-                        "  Use /ingest after switching to add documents to the current project.",
-                        "share": "  /share list                              list all issued and received shares\n"
-                        "  /share generate <project> <grantee>      generate a read-only share key\n"
-                        "  /share redeem <share_string>              mount a shared project\n"
-                        "  /share revoke <key_id>                   revoke a previously issued share\n"
+                        "    Projects are stored in ~/.axon/projects/<name>/\n"
+                        "    Sub-projects use nested subs/ directories (max depth: 5).\n"
+                        "    Switching to a parent project shows merged data across all sub-projects.\n"
+                        "    Use /ingest after switching to add documents to the current project.",
+                        "share": "    /share list                              list all issued and received shares\n"
+                        "    /share generate <project> <grantee>      generate a read-only share key\n"
+                        "    /share redeem <share_string>              mount a shared project\n"
+                        "    /share revoke <key_id>                   revoke a previously issued share\n"
                         "\n"
-                        "  Share strings are base64-encoded payloads; send them out-of-band.\n"
-                        "  Mounted shares appear under mounts/ in your project list and can be\n"
-                        "  switched to with /project switch mounts/<name>.",
-                        "store": "  /store whoami                  show store identity and active project\n"
-                        "  /store init <base_path>        change the store base path (e.g. to a shared drive)\n"
+                        "    Share strings are base64-encoded payloads; send them out-of-band.\n"
+                        "    Mounted shares appear under mounts/ in your project list and can be\n"
+                        "    switched to with /project switch mounts/<name>.",
+                        "store": "    /store whoami                  show store identity and active project\n"
+                        "    /store init <base_path>        change the store base path (e.g. to a shared drive)\n"
                         "\n"
-                        "  Example: /store init ~/axon_data\n"
-                        "  Moves data to: <base_path>/AxonStore/<username>/\n"
-                        "  Config is updated and persisted to ~/.config/axon/config.yaml.",
-                        "graph": "  /graph status                  show entity count, edges, community summaries\n"
-                        "  /graph finalize                trigger community detection rebuild\n"
-                        "  /graph viz [path]              export graph as HTML (opens in browser)\n"
+                        "    Example: /store init ~/axon_data\n"
+                        "    Moves data to: <base_path>/AxonStore/<username>/\n"
+                        "    Config is updated and persisted to ~/.config/axon/config.yaml.",
+                        "graph": "    /graph status                  show entity count, edges, community summaries\n"
+                        "    /graph finalize                trigger community detection rebuild\n"
+                        "    /graph viz [path]              export graph as HTML (opens in browser)\n"
                         "\n"
-                        "  GraphRAG must be enabled: /rag graph-rag\n"
-                        "  Finalize is useful after batch ingest with community summarisation deferred.",
-                        "refresh": "  /refresh                       re-ingest files whose content has changed\n"
+                        "    GraphRAG must be enabled: /rag graph-rag\n"
+                        "    Finalize is useful after batch ingest with community summarisation deferred.",
+                        "refresh": "    /refresh                       re-ingest files whose content has changed\n"
                         "\n"
-                        "  Computes current content hash for each tracked file and compares\n"
-                        "  to the stored hash from the last ingest. Only changed files are re-ingested.\n"
-                        "  Use /stale to preview which files are old before refreshing.",
-                        "stale": "  /stale                         list documents older than 7 days\n"
-                        "  /stale <days>                  list documents older than N days\n"
+                        "    Computes current content hash for each tracked file and compares\n"
+                        "    to the stored hash from the last ingest. Only changed files are re-ingested.\n"
+                        "    Use /stale to preview which files are old before refreshing.",
+                        "stale": "    /stale                         list documents older than 7 days\n"
+                        "    /stale <days>                  list documents older than N days\n"
                         "\n"
-                        "  Reports age based on the last ingest timestamp for each source.\n"
-                        "  Use /refresh to re-ingest any changed files.",
-                        "config": "  /config                        show current config as a table\n"
-                        "  /config show                   same as /config\n"
-                        "  /config validate               validate config.yaml and list issues\n"
-                        "  /config wizard                 interactive setup wizard\n"
-                        "  /config reset                  overwrite config.yaml with defaults\n"
-                        "  /config set <key> <value>      set a dot-notation config key\n"
+                        "    Reports age based on the last ingest timestamp for each source.\n"
+                        "    Use /refresh to re-ingest any changed files.",
+                        "config": "    /config                        show current config as a table\n"
+                        "    /config show                   same as /config\n"
+                        "    /config validate               validate config.yaml and list issues\n"
+                        "    /config wizard                 interactive setup wizard\n"
+                        "    /config reset                  overwrite config.yaml with defaults\n"
+                        "    /config set <key> <value>      set a dot-notation config key\n"
                         "\n"
-                        "  Example: /config set chunk.strategy markdown\n"
-                        "           /config set rag.top_k 15\n"
-                        "           /config set llm.model gemma3:4b",
+                        "    Example: /config set chunk.strategy markdown\n"
+                        "             /config set rag.top_k 15\n"
+                        "             /config set llm.model gemma3:4b",
+                        "theme": "    /theme                         show current markdown code-block theme\n"
+                        "    /theme list                    list popular theme names\n"
+                        "    /theme <name>                  switch to a Pygments theme by name\n"
+                        "\n"
+                        "    Choice is saved to ~/.axon/prefs.json and restored on next launch.\n"
+                        "    Any valid Pygments style name is accepted (e.g. dracula, nord, vs).\n"
+                        "    Default: monokai",
                     }
 
                     key = arg.lstrip("/")
@@ -2236,63 +3324,66 @@ def _interactive_repl(
                         print(f"\n{_detail[key]}\n")
 
                     else:
-                        print(f"  No detail for '{arg}'. Available: {', '.join(_detail)}")
+                        print(f"    No detail for '{arg}'. Available: {', '.join(_detail)}")
 
                 else:
                     print(
                         "\n"
-                        "  /clear          clear knowledge base for current project\n"
-                        "  /compact        summarise conversation to free context\n"
-                        "  /context        show current conversation context size\n"
-                        "  /discuss        toggle discussion fallback (general knowledge)\n"
-                        "  /embed [model]  show or switch embedding model\n"
-                        "  /graph [sub]    GraphRAG status, finalize communities, or viz export\n"
-                        "  /help [cmd]     show this help or details for a command\n"
-                        "  /ingest <path>  ingest a file, directory, or glob\n"
-                        "  /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
-                        "  /list           list ingested documents\n"
-                        "  /llm [opt val]  show or set LLM settings (temperature)\n"
-                        "  /model [model]  show or switch LLM model\n"
-                        "  /project [sub]  manage projects (list, new, switch, delete, folder)\n"
-                        "  /pull <name>    pull an Ollama model\n"
-                        "  /quit           exit Axon\n"
-                        "  /config [sub]   show, validate, or edit config (validate, wizard, set, reset)\n"
-                        "  /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
-                        "  /refresh        re-ingest documents whose content has changed\n"
-                        "  /resume <id>    load a saved session\n"
-                        "  /retry          retry the last query\n"
-                        "  /search         toggle Brave web search fallback\n"
-                        "  /sessions       list recent saved sessions\n"
-                        "  /share [sub]    share projects (generate, redeem, revoke, list)\n"
-                        "  /stale [days]   list documents not refreshed in N days (default: 7)\n"
-                        "  /store [sub]    AxonStore multi-user mode (init, whoami)\n"
+                        "    /agent          toggle agent mode (LLM can call Axon tools directly)\n"
+                        "    /clear          clear knowledge base for current project\n"
+                        "    /compact        summarise conversation to free context\n"
+                        "    /config [sub]   show, validate, or edit config (validate, wizard, set, reset)\n"
+                        "    /context        show current conversation context size\n"
+                        "    /discuss        toggle discussion fallback (general knowledge)\n"
+                        "    /embed [model]  show or switch embedding model\n"
+                        "    /graph [sub]    GraphRAG status, finalize communities, or viz export\n"
+                        "    /help [cmd]     show this help or details for a command\n"
+                        "    /ingest <path>  ingest a file, directory, or glob\n"
+                        "    /keys           show/set API keys (gemini, openai, brave, ollama_cloud)\n"
+                        "    /list           list ingested documents\n"
+                        "    /llm [opt val]  show or set LLM settings (temperature)\n"
+                        "    /model [model]  show or switch LLM model\n"
+                        "    /project [sub]  manage projects (list, new, switch, delete, folder)\n"
+                        "    /pull <name>    pull an Ollama model\n"
+                        "    /quit           exit Axon\n"
+                        "    /rag [opt val]  show or set retrieval settings (topk, threshold, hybrid, …)\n"
+                        "    /refresh        re-ingest documents whose content has changed\n"
+                        "    /resume <id>    load a saved session\n"
+                        "    /retry          retry the last query\n"
+                        "    /search         toggle Brave web search fallback\n"
+                        "    /sessions       list recent saved sessions\n"
+                        "    /share [sub]    share projects (generate, redeem, revoke, list)\n"
+                        "    /stale [days]   list documents not refreshed in N days (default: 7)\n"
+                        "    /store [sub]    AxonStore multi-user mode (init, whoami)\n"
+                        "    /theme [name]   show or switch markdown code-block highlight theme\n"
+                        "    /vllm-url <url> set the vLLM server base URL\n"
                         "\n"
-                        "  Shell:   !<cmd>  run a shell command (local-only default)\n"
-                        "  Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
+                        "    Shell:   !<cmd>  run a shell command (local-only default)\n"
+                        "    Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
                         "\n"
-                        "  /help <cmd>  for details  ·  e.g.  /help rag   /help share   /help project\n"
-                        "  Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
+                        "    /help <cmd>  for details  ·  e.g.  /help rag   /help share   /help project\n"
+                        "    Tab  autocomplete  ·  ↑↓  history  ·  Ctrl+C  cancel  ·  Ctrl+D  exit\n"
                     )
 
             elif cmd == "/list":
                 docs = brain.list_documents()
 
                 if not docs:
-                    print("  Knowledge base is empty.")
+                    print("    Knowledge base is empty.")
 
                 else:
                     total = sum(d["chunks"] for d in docs)
 
-                    print(f"\n  {len(docs)} file(s), {total} chunk(s)\n")
+                    print(f"\n    {len(docs)} file(s), {total} chunk(s)\n")
 
                     for d in docs:
-                        print(f"  {d['source']:<60} {d['chunks']:>6}")
+                        print(f"    {d['source']:<60} {d['chunks']:>6}")
 
                     print()
 
             elif cmd == "/ingest":
                 if not arg:
-                    print("  Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
+                    print("    Usage: /ingest <path|glob>  e.g. /ingest ./docs  /ingest ./src/*.py")
 
                 else:
                     from axon.projects import ensure_project
@@ -2302,19 +3393,19 @@ def _interactive_repl(
                     if brain.should_recommend_project():
                         try:
                             print(
-                                "\n  \033[1mNote\033[0m: You are about to ingest into the 'default' project."
+                                "\n    \033[1mNote\033[0m: You are about to ingest into the 'default' project."
                             )
 
                             print(
-                                "  It is recommended to create a dedicated project to keep your data organized."
+                                "    It is recommended to create a dedicated project to keep your data organized."
                             )
 
                             confirm = (
-                                _read_input("  Create a new project now? [y/N]: ").strip().lower()
+                                _read_input("    Create a new project now? [y/N]: ").strip().lower()
                             )
 
                             if confirm == "y":
-                                new_name = _read_input("  New project name: ").strip().lower()
+                                new_name = _read_input("    New project name: ").strip().lower()
 
                                 if new_name:
                                     try:
@@ -2322,13 +3413,13 @@ def _interactive_repl(
 
                                         brain.switch_project(new_name)
 
-                                        print(f"  Switched to project '{new_name}'.\n")
+                                        print(f"    Switched to project '{new_name}'.\n")
 
                                     except ValueError as e:
-                                        print(f"  {e}")
+                                        print(f"    {e}")
 
                         except (EOFError, KeyboardInterrupt):
-                            print("\n  Cancelled project check.")
+                            print("\n    Cancelled project check.")
 
                     import glob as _glob
 
@@ -2341,11 +3432,11 @@ def _interactive_repl(
                     if not matched:
                         # No glob match — try as plain directory
 
-                        if os.path.isdir(arg):
+                        if Path(arg).is_dir():
                             matched = [arg]
 
                         else:
-                            print(f"  No files matched: {arg}")
+                            print(f"    No files matched: {arg}")
 
                     if matched:
                         loader_mgr = DirectoryLoader()
@@ -2353,31 +3444,33 @@ def _interactive_repl(
                         ingested, skipped = 0, 0
 
                         for path in matched:
-                            if os.path.isdir(path):
-                                print(f"  {path} …", end="", flush=True)
+                            p = Path(path)
+
+                            if p.is_dir():
+                                print(f"    {path} …", end="", flush=True)
 
                                 asyncio.run(brain.load_directory(path))
 
-                                print("  done")
+                                print("    done")
 
                                 ingested += 1
 
-                            elif os.path.isfile(path):
-                                ext = os.path.splitext(path)[1].lower()
+                            elif p.is_file():
+                                ext = p.suffix.lower()
 
                                 if ext in loader_mgr.loaders:
                                     brain.ingest(loader_mgr.loaders[ext].load(path))
 
-                                    print(f"  {path}")
+                                    print(f"    {path}")
 
                                     ingested += 1
 
                                 else:
-                                    print(f"  !  Skipped (unsupported type): {path}")
+                                    print(f"    !  Skipped (unsupported type): {path}")
 
                                     skipped += 1
 
-                        print(f"  Done — {ingested} ingested, {skipped} skipped.")
+                        print(f"    Done — {ingested} ingested, {skipped} skipped.")
 
             elif cmd == "/model":
                 _PROVIDERS = (
@@ -2390,20 +3483,20 @@ def _interactive_repl(
                 )
 
                 if not arg:
-                    print(f"  LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
+                    print(f"    LLM:       {brain.config.llm_provider}/{brain.config.llm_model}")
 
                     print(
-                        f"  Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                        f"    Embedding: {brain.config.embedding_provider}/{brain.config.embedding_model}"
                     )
 
-                    print("  Usage:   /model <model>              (auto-detect provider)")
+                    print("    Usage:   /model <model>              (auto-detect provider)")
 
                     print("           /model <provider>/<model>   (switch provider too)")
 
-                    print(f"  Providers: {', '.join(_PROVIDERS)}")
+                    print(f"    Providers: {', '.join(_PROVIDERS)}")
 
                     print(
-                        f"  vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
+                        f"    vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
                     )
 
                 elif "/" in arg:
@@ -2411,7 +3504,7 @@ def _interactive_repl(
 
                     if provider not in _PROVIDERS:
                         print(
-                            f"  Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
+                            f"    Unknown provider '{provider}'. Choose from: {', '.join(_PROVIDERS)}"
                         )
 
                     else:
@@ -2421,7 +3514,7 @@ def _interactive_repl(
 
                         brain.llm = OpenLLM(brain.config)
 
-                        print(f"  Switched LLM to {provider}/{model}")
+                        print(f"    Switched LLM to {provider}/{model}")
 
                         if provider == "vllm":
                             print(
@@ -2440,48 +3533,50 @@ def _interactive_repl(
 
                     brain.llm = OpenLLM(brain.config)
 
-                    print(f"  Switched LLM to {inferred}/{arg}")
+                    print(f"    Switched LLM to {inferred}/{arg}")
 
                     _prompt_key_if_missing(inferred, brain)
 
             elif cmd == "/vllm-url":
                 if not arg:
-                    print(f"  Current vLLM base URL: {brain.config.vllm_base_url}")
+                    print(f"    Current vLLM base URL: {brain.config.vllm_base_url}")
 
-                    print("  Usage: /vllm-url http://host:port/v1")
+                    print("    Usage: /vllm-url http://host:port/v1")
 
                 else:
                     brain.config.vllm_base_url = arg
 
                     brain.llm._openai_clients = {}  # invalidate cached client
 
-                    print(f"  vLLM base URL set to {arg}")
+                    print(f"    vLLM base URL set to {arg}")
 
             elif cmd == "/embed":
                 _EMBED_PROVIDERS = ("sentence_transformers", "ollama", "fastembed", "openai")
 
                 if not arg:
                     print(
-                        f"  Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                        f"    Current:   {brain.config.embedding_provider}/{brain.config.embedding_model}"
                     )
 
-                    print("  Usage:   /embed <model>              (keep current provider)")
+                    print("    Usage:   /embed <model>              (keep current provider)")
 
                     print("           /embed <provider>/<model>   (switch provider too)")
 
-                    print(f"  Providers: {', '.join(_EMBED_PROVIDERS)}")
+                    print(f"    Providers: {', '.join(_EMBED_PROVIDERS)}")
 
-                    print("  Examples:")
+                    print("    Examples:")
 
-                    print("    /embed all-MiniLM-L6-v2                    (sentence_transformers)")
+                    print(
+                        "      /embed all-MiniLM-L6-v2                    (sentence_transformers)"
+                    )
 
-                    print("    /embed /path/to/local/model                (local folder)")
+                    print("      /embed /path/to/local/model                (local folder)")
 
-                    print("    /embed ollama/nomic-embed-text")
+                    print("      /embed ollama/nomic-embed-text")
 
-                    print("    /embed fastembed/BAAI/bge-small-en")
+                    print("      /embed fastembed/BAAI/bge-small-en")
 
-                    print("  !  Changing embedding model invalidates existing indexed documents.")
+                    print("    !  Changing embedding model invalidates existing indexed documents.")
 
                 else:
                     if "/" in arg:
@@ -2507,69 +3602,74 @@ def _interactive_repl(
                         brain.config.embedding_model = model
 
                     try:
-                        print("  ⠿ Loading embedding model…", end="", flush=True)
+                        print("    ⠿ Loading embedding model…", end="", flush=True)
 
                         brain.embedding = OpenEmbedding(brain.config)
 
                         print(
-                            f"\r  Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
+                            f"\r    Embedding switched to {brain.config.embedding_provider}/{brain.config.embedding_model}"
                         )
 
-                        print("  Re-ingest your documents so they use the new embedding model.")
+                        print("    Re-ingest your documents so they use the new embedding model.")
 
                     except Exception as e:
-                        print(f"\r  Failed to load embedding: {e}")
+                        print(f"\r    Failed to load embedding: {e}")
 
             elif cmd == "/pull":
                 if not arg:
-                    print("  Usage: /pull <model-name>")
+                    print("    Usage: /pull <model-name>")
 
                 else:
-                    try:
-                        import ollama as _ollama
+                    # use module-level os
 
-                        print(f"  Pulling '{arg}' …")
+                    if os.getenv("AXON_DRY_RUN"):
+                        print("    Pulling models disabled in dry-run mode.")
+                    else:
+                        try:
+                            import ollama as _ollama
 
-                        last_status = ""
+                            print(f"    Pulling '{arg}' …")
 
-                        for chunk in _ollama.pull(arg, stream=True):
-                            status = (
-                                chunk.get("status", "")
-                                if isinstance(chunk, dict)
-                                else getattr(chunk, "status", "")
-                            )
+                            last_status = ""
 
-                            total = (
-                                chunk.get("total", 0)
-                                if isinstance(chunk, dict)
-                                else getattr(chunk, "total", 0)
-                            )
+                            for chunk in _ollama.pull(arg, stream=True):
+                                status = (
+                                    chunk.get("status", "")
+                                    if isinstance(chunk, dict)
+                                    else getattr(chunk, "status", "")
+                                )
 
-                            completed = (
-                                chunk.get("completed", 0)
-                                if isinstance(chunk, dict)
-                                else getattr(chunk, "completed", 0)
-                            )
+                                total = (
+                                    chunk.get("total", 0)
+                                    if isinstance(chunk, dict)
+                                    else getattr(chunk, "total", 0)
+                                )
 
-                            if total and completed:
-                                line = f"  {status}: {int(completed/total*100)}%"
+                                completed = (
+                                    chunk.get("completed", 0)
+                                    if isinstance(chunk, dict)
+                                    else getattr(chunk, "completed", 0)
+                                )
 
-                            elif status:
-                                line = f"  {status}"
+                                if total and completed:
+                                    line = f"  {status}: {int(completed/total*100)}%"
 
-                            else:
-                                continue
+                                elif status:
+                                    line = f"  {status}"
 
-                            # Pad to clear previous longer line
+                                else:
+                                    continue
 
-                            print(f"\r{line:<60}", end="", flush=True)
+                                # Pad to clear previous longer line
 
-                            last_status = line  # noqa: F841
+                                print(f"\r{line:<60}", end="", flush=True)
 
-                        print(f"\r  '{arg}' ready.{' ' * 50}")
+                                last_status = line  # noqa: F841
 
-                    except Exception as e:
-                        print(f"  Pull failed: {e}")
+                            print(f"\r    '{arg}' ready.{' ' * 50}")
+
+                        except Exception as e:
+                            print(f"    Pull failed: {e}")
 
             elif cmd == "/graph-viz":
                 import hashlib as _hashlib
@@ -2603,27 +3703,27 @@ def _interactive_repl(
                 try:
                     brain.export_graph_html(_out_path)
 
-                    print(f"  Graph visualization saved → {_out_path}")
+                    print(f"    Graph visualization saved → {_out_path}")
 
-                    print("  Open in your browser to explore the entity–relation graph.")
+                    print("    Open in your browser to explore the entity–relation graph.")
 
                 except ImportError as _e:
-                    print(f"  {_e}")
+                    print(f"    {_e}")
 
                 except Exception as _e:
-                    print(f"  Failed to export graph: {_e}")
+                    print(f"    Failed to export graph: {_e}")
 
             elif cmd == "/clear":
                 _confirm = (
-                    _read_input("  Clear knowledge base for the current project? [y/N]: ")
+                    _read_input("    Clear knowledge base for the current project? [y/N]: ")
                     .strip()
                     .lower()
                 )
 
                 if _confirm not in ("y", "yes"):
-                    print("  Clear cancelled.")
+                    print("    Clear cancelled.")
 
-                    continue
+                    return False
 
                 try:
                     brain._assert_write_allowed("clear")
@@ -2639,26 +3739,28 @@ def _interactive_repl(
                     if project_key == "default":
                         _api._source_hashes.pop("_global", None)
 
-                    print(f"  Knowledge base cleared for project '{brain._active_project}'.")
+                    print(f"    Knowledge base cleared for project '{brain._active_project}'.")
 
                 except PermissionError as _e:
-                    print(f"  {_e}")
+                    print(f"    {_e}")
 
                 except Exception as _e:
-                    print(f"  Clear failed: {_e}")
+                    print(f"    Clear failed: {_e}")
 
             elif cmd == "/search":
                 if brain.config.offline_mode:
-                    print("  Offline mode is ON — web search is disabled.")
+                    print("    Offline mode is ON — web search is disabled.")
 
                 elif brain.config.truth_grounding:
                     brain.config.truth_grounding = False
 
-                    print("  Web search OFF — answers from local knowledge only.")
+                    print("    Web search OFF — answers from local knowledge only.")
 
                 else:
                     if not brain.config.brave_api_key:
-                        print("  BRAVE_API_KEY is not set. Export it and restart, or set it with:")
+                        print(
+                            "    BRAVE_API_KEY is not set. Export it and restart, or set it with:"
+                        )
 
                         print("     export BRAVE_API_KEY=your_key")
 
@@ -2666,7 +3768,7 @@ def _interactive_repl(
                         brain.config.truth_grounding = True
 
                         print(
-                            "  Web search ON — Brave Search will be used as fallback when local knowledge is insufficient."
+                            "    Web search ON — Brave Search will be used as fallback when local knowledge is insufficient."
                         )
 
             elif cmd == "/discuss":
@@ -2674,31 +3776,31 @@ def _interactive_repl(
 
                 state = "ON" if brain.config.discussion_fallback else "OFF"
 
-                print(f"  Discussion mode {state}.")
+                print(f"    Discussion mode {state}.")
 
             elif cmd == "/rag":
                 if not arg:
                     _grag_mode = getattr(brain.config, "graph_rag_mode", "local")
 
                     print(
-                        f"\n  top-k           · {brain.config.top_k}\n"
-                        f"  threshold       · {brain.config.similarity_threshold}\n"
-                        f"  hybrid          · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
-                        f"  rerank          · {'ON' if brain.config.rerank else 'OFF'}"
+                        f"\n    top-k           · {brain.config.top_k}\n"
+                        f"    threshold       · {brain.config.similarity_threshold}\n"
+                        f"    hybrid          · {'ON' if brain.config.hybrid_search else 'OFF'}\n"
+                        f"    rerank          · {'ON' if brain.config.rerank else 'OFF'}"
                         + (f"  [{brain.config.reranker_model}]" if brain.config.rerank else "")
                         + "\n"
-                        f"  hyde            · {'ON' if brain.config.hyde else 'OFF'}\n"
-                        f"  multi-query     · {'ON' if brain.config.multi_query else 'OFF'}\n"
-                        f"  step-back       · {'ON' if brain.config.step_back else 'OFF'}\n"
-                        f"  decompose       · {'ON' if brain.config.query_decompose else 'OFF'}\n"
-                        f"  compress        · {'ON' if brain.config.compress_context else 'OFF'}\n"
-                        f"  sentence-window · {'ON' if getattr(brain.config, 'sentence_window', False) else 'OFF'}\n"
-                        f"  crag-lite       · {'ON' if getattr(brain.config, 'crag_lite', False) else 'OFF'}\n"
-                        f"  code-graph      · {'ON' if getattr(brain.config, 'code_graph', False) else 'OFF'}\n"
-                        f"  raptor          · {'ON' if brain.config.raptor else 'OFF'}\n"
-                        f"  graph-rag       · {'ON' if brain.config.graph_rag else 'OFF'}\n"
-                        f"  graph-rag-mode  · {_grag_mode}\n"
-                        f"\n  /help rag   for usage details\n"
+                        f"    hyde            · {'ON' if brain.config.hyde else 'OFF'}\n"
+                        f"    multi-query     · {'ON' if brain.config.multi_query else 'OFF'}\n"
+                        f"    step-back       · {'ON' if brain.config.step_back else 'OFF'}\n"
+                        f"    decompose       · {'ON' if brain.config.query_decompose else 'OFF'}\n"
+                        f"    compress        · {'ON' if brain.config.compress_context else 'OFF'}\n"
+                        f"    sentence-window · {'ON' if getattr(brain.config, 'sentence_window', False) else 'OFF'}\n"
+                        f"    crag-lite       · {'ON' if getattr(brain.config, 'crag_lite', False) else 'OFF'}\n"
+                        f"    code-graph      · {'ON' if getattr(brain.config, 'code_graph', False) else 'OFF'}\n"
+                        f"    raptor          · {'ON' if brain.config.raptor else 'OFF'}\n"
+                        f"    graph-rag       · {'ON' if brain.config.graph_rag else 'OFF'}\n"
+                        f"    graph-rag-mode  · {_grag_mode}\n"
+                        f"\n    /help rag   for usage details\n"
                     )
 
                 else:
@@ -2716,10 +3818,10 @@ def _interactive_repl(
 
                             brain.config.top_k = n
 
-                            print(f"  top-k set to {n}")
+                            print(f"    top-k set to {n}")
 
                         except Exception:
-                            print("  Usage: /rag topk <integer 1–50>")
+                            print("    Usage: /rag topk <integer 1–50>")
 
                     elif rag_opt == "threshold":
                         try:
@@ -2729,67 +3831,69 @@ def _interactive_repl(
 
                             brain.config.similarity_threshold = v
 
-                            print(f"  threshold set to {v}")
+                            print(f"    threshold set to {v}")
 
                         except Exception:
-                            print("  Usage: /rag threshold <float 0.0–1.0>")
+                            print("    Usage: /rag threshold <float 0.0–1.0>")
 
                     elif rag_opt == "hybrid":
                         brain.config.hybrid_search = not brain.config.hybrid_search
 
-                        print(f"  Hybrid search {'ON' if brain.config.hybrid_search else 'OFF'}")
+                        print(f"    Hybrid search {'ON' if brain.config.hybrid_search else 'OFF'}")
 
                     elif rag_opt == "rerank":
                         brain.config.rerank = not brain.config.rerank
 
-                        print(f"  Reranker {'ON' if brain.config.rerank else 'OFF'}")
+                        print(f"    Reranker {'ON' if brain.config.rerank else 'OFF'}")
 
                     elif rag_opt == "hyde":
                         brain.config.hyde = not brain.config.hyde
 
-                        print(f"  HyDE {'ON' if brain.config.hyde else 'OFF'}")
+                        print(f"    HyDE {'ON' if brain.config.hyde else 'OFF'}")
 
                     elif rag_opt == "multi":
                         brain.config.multi_query = not brain.config.multi_query
 
-                        print(f"  Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
+                        print(f"    Multi-query {'ON' if brain.config.multi_query else 'OFF'}")
 
                     elif rag_opt == "step-back":
                         brain.config.step_back = not brain.config.step_back
 
-                        print(f"  Step-back prompting {'ON' if brain.config.step_back else 'OFF'}")
+                        print(
+                            f"    Step-back prompting {'ON' if brain.config.step_back else 'OFF'}"
+                        )
 
                     elif rag_opt == "decompose":
                         brain.config.query_decompose = not brain.config.query_decompose
 
                         print(
-                            f"  Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}"
+                            f"    Query decomposition {'ON' if brain.config.query_decompose else 'OFF'}"
                         )
 
                     elif rag_opt == "compress":
                         brain.config.compress_context = not brain.config.compress_context
 
                         print(
-                            f"  Context compression {'ON' if brain.config.compress_context else 'OFF'}"
+                            f"    Context compression {'ON' if brain.config.compress_context else 'OFF'}"
                         )
 
                     elif rag_opt == "cite":
                         brain.config.cite = not brain.config.cite
 
-                        print(f"  Inline citations {'ON' if brain.config.cite else 'OFF'}")
+                        print(f"    Inline citations {'ON' if brain.config.cite else 'OFF'}")
 
                     elif rag_opt == "raptor":
                         brain.config.raptor = not brain.config.raptor
 
                         print(
-                            f"  RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}"
+                            f"    RAPTOR hierarchical indexing {'ON' if brain.config.raptor else 'OFF'}"
                         )
 
                     elif rag_opt in ("graph-rag", "graph_rag", "graphrag"):
                         brain.config.graph_rag = not brain.config.graph_rag
 
                         print(
-                            f"  GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
+                            f"    GraphRAG entity retrieval {'ON' if brain.config.graph_rag else 'OFF'}"
                         )
 
                     elif rag_opt in ("sentence-window", "sentence_window"):
@@ -2807,7 +3911,7 @@ def _interactive_repl(
                             "1",
                             "0",
                         ):
-                            print("  Usage: /rag sentence-window on|off")
+                            print("    Usage: /rag sentence-window on|off")
 
                         else:
                             _on = (
@@ -2818,7 +3922,7 @@ def _interactive_repl(
 
                             brain.config.sentence_window = _on
 
-                            print(f"  Sentence-window retrieval {'ON' if _on else 'OFF'}")
+                            print(f"    Sentence-window retrieval {'ON' if _on else 'OFF'}")
 
                     elif rag_opt in ("sentence-window-size", "sentence_window_size"):
                         try:
@@ -2828,10 +3932,10 @@ def _interactive_repl(
 
                             brain.config.sentence_window_size = _sz
 
-                            print(f"  Sentence-window size set to {_sz}")
+                            print(f"    Sentence-window size set to {_sz}")
 
                         except Exception:
-                            print("  Usage: /rag sentence-window-size <integer 1–10>")
+                            print("    Usage: /rag sentence-window-size <integer 1–10>")
 
                     elif rag_opt in ("crag-lite", "crag_lite"):
                         _on = (
@@ -2842,7 +3946,7 @@ def _interactive_repl(
 
                         brain.config.crag_lite = _on
 
-                        print(f"  CRAG-lite corrective retrieval {'ON' if _on else 'OFF'}")
+                        print(f"    CRAG-lite corrective retrieval {'ON' if _on else 'OFF'}")
 
                     elif rag_opt in ("code-graph", "code_graph"):
                         _on = (
@@ -2853,26 +3957,80 @@ def _interactive_repl(
 
                         brain.config.code_graph = _on
 
-                        print(f"  Code-graph retrieval {'ON' if _on else 'OFF'}")
+                        print(f"    Code-graph retrieval {'ON' if _on else 'OFF'}")
 
                     elif rag_opt in ("graph-rag-mode", "graph_rag_mode"):
                         _valid_modes = ("local", "global", "hybrid", "auto")
 
                         if rag_val.lower() not in _valid_modes:
-                            print("  Usage: /rag graph-rag-mode local|global|hybrid|auto")
+                            print("    Usage: /rag graph-rag-mode local|global|hybrid|auto")
 
                         else:
                             brain.config.graph_rag_mode = rag_val.lower()
 
-                            print(f"  GraphRAG mode set to '{rag_val.lower()}'")
+                            print(f"    GraphRAG mode set to '{rag_val.lower()}'")
+
+                    elif rag_opt in ("max-hops", "max_hops", "graph-rag-max-hops"):
+                        if not rag_val:
+                            _cur = getattr(brain.config, "graph_rag_max_hops", 2)
+                            print(f"    graph_rag_max_hops = {_cur}")
+                            print("    Usage: /rag max-hops <int>  (0 = direct matches only)")
+                        else:
+                            try:
+                                _hops = int(rag_val)
+                                if _hops < 0:
+                                    raise ValueError
+                                brain.config.graph_rag_max_hops = _hops
+                                print(f"    GraphRAG max hops set to {_hops}")
+                            except ValueError:
+                                print("    Usage: /rag max-hops <non-negative integer>")
+
+                    elif rag_opt in ("hop-decay", "hop_decay", "graph-rag-hop-decay"):
+                        if not rag_val:
+                            _cur = getattr(brain.config, "graph_rag_hop_decay", 0.7)
+                            print(f"    graph_rag_hop_decay = {_cur}")
+                            print("    Usage: /rag hop-decay <float 0.0–1.0>")
+                        else:
+                            try:
+                                _decay = float(rag_val)
+                                if not (0.0 <= _decay <= 1.0):
+                                    raise ValueError
+                                brain.config.graph_rag_hop_decay = _decay
+                                print(f"    GraphRAG hop decay set to {_decay}")
+                            except ValueError:
+                                print("    Usage: /rag hop-decay <float between 0.0 and 1.0>")
+
+                    elif rag_opt in (
+                        "distance-weighted",
+                        "distance_weighted",
+                        "graph-rag-distance-weighted",
+                    ):
+                        _choices = {
+                            "on": True,
+                            "true": True,
+                            "1": True,
+                            "off": False,
+                            "false": False,
+                            "0": False,
+                        }
+                        if rag_val.lower() not in _choices:
+                            print("    Usage: /rag distance-weighted on|off")
+                        else:
+                            brain.config.graph_rag_distance_weighted = _choices[rag_val.lower()]
+                            _state = (
+                                "ON (Dijkstra)"
+                                if brain.config.graph_rag_distance_weighted
+                                else "OFF (BFS)"
+                            )
+                            print(f"    GraphRAG distance weighted → {_state}")
 
                     elif rag_opt == "rerank-model":
                         if not rag_val:
-                            print(f"  Current reranker: {brain.config.reranker_model}")
+                            print(f"    Current reranker: {brain.config.reranker_model}")
 
-                            print("  Usage: /rag rerank-model <HuggingFace ID or local path>")
+                            print("    Usage: /rag rerank-model <HuggingFace ID or local path>")
 
-                            print("  e.g.  /rag rerank-model BAAI/bge-reranker-base")
+                            print("    e.g.  /rag rerank-model BAAI/bge-reranker-base")
 
                             print("        /rag rerank-model ./models/bge-reranker-base")
 
@@ -2880,38 +4038,39 @@ def _interactive_repl(
                             resolved = brain._resolve_model_path(rag_val)
 
                             if resolved != rag_val:
-                                print(f"  Resolved to local path: {resolved}")
+                                print(f"    Resolved to local path: {resolved}")
 
                             brain.config.reranker_model = resolved
 
                             brain.config.rerank = True  # auto-enable when setting a model
 
-                            print(f"  Loading reranker '{resolved}'…")
+                            print(f"    Loading reranker '{resolved}'…")
 
                             try:
                                 brain.reranker = OpenReranker(brain.config)
 
-                                print(f"  Reranker → {resolved}  (rerank: ON)")
+                                print(f"    Reranker → {resolved}  (rerank: ON)")
 
                             except Exception as e:
                                 brain.config.rerank = False
 
-                                print(f"  Failed to load reranker: {e}")
+                                print(f"    Failed to load reranker: {e}")
 
                     else:
                         print(
-                            f"  Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, "
+                            f"    Unknown option '{rag_opt}'. Try: topk, threshold, hybrid, rerank, rerank-model, "
                             f"hyde, multi, step-back, decompose, compress, cite, raptor, graph-rag, "
-                            f"sentence-window, sentence-window-size, crag-lite, code-graph, graph-rag-mode"
+                            f"sentence-window, sentence-window-size, crag-lite, code-graph, graph-rag-mode, "
+                            f"max-hops, hop-decay, distance-weighted"
                         )
 
             elif cmd == "/llm":
                 if not arg:
                     print(
-                        f"\n  temperature  · {brain.config.llm_temperature}\n"
-                        f"  provider     · {brain.config.llm_provider}\n"
-                        f"  model        · {brain.config.llm_model}\n"
-                        f"\n  /llm temperature <0.0–2.0>   set generation temperature\n"
+                        f"\n    temperature  · {brain.config.llm_temperature}\n"
+                        f"    provider     · {brain.config.llm_provider}\n"
+                        f"    model        · {brain.config.llm_model}\n"
+                        f"\n    /llm temperature <0.0–2.0>   set generation temperature\n"
                     )
 
                 else:
@@ -2929,13 +4088,13 @@ def _interactive_repl(
 
                             brain.config.llm_temperature = v
 
-                            print(f"  Temperature set to {v}")
+                            print(f"    Temperature set to {v}")
 
                         except Exception:
-                            print("  Usage: /llm temperature <float 0.0–2.0>")
+                            print("    Usage: /llm temperature <float 0.0–2.0>")
 
                     else:
-                        print(f"  Unknown option '{llm_opt}'. Available: temperature")
+                        print(f"    Unknown option '{llm_opt}'. Available: temperature")
 
             elif cmd == "/compact":
                 _do_compact(brain, chat_history)
@@ -2963,7 +4122,7 @@ def _interactive_repl(
                     active = brain._active_project
 
                     if not projects:
-                        print("  No projects yet. Use /project new <name> to create one.")
+                        print("    No projects yet. Use /project new <name> to create one.")
 
                     else:
                         print()
@@ -2978,33 +4137,35 @@ def _interactive_repl(
                         _mounts = _list_mounts(_user_dir)
 
                         if _mounts:
-                            print("\n  Mounted shares:")
+                            print("\n    Mounted shares:")
 
                             for _m in _mounts:
                                 _broken = "  [broken]" if _m.get("is_broken") else ""
 
-                                print(f"    mounts/{_m['name']}  (owner: {_m['owner']}){_broken}")
+                                print(f"      mounts/{_m['name']}  (owner: {_m['owner']}){_broken}")
 
                     except Exception:
                         pass
 
-                    print(f"\n  Active: {active}")
+                    print(f"\n    Active: {active}")
 
-                    print("  /project new <name>                      create + switch")
+                    print("    /project new <name>                      create + switch")
 
-                    print("  /project new <parent>/<name>             create sub-project")
+                    print("    /project new <parent>/<name>             create sub-project")
 
-                    print("  /project switch <name>                   switch to existing")
+                    print("    /project switch <name>                   switch to existing")
 
-                    print("  /project switch @projects|@mounts|@store switch to merged scope")
+                    print("    /project switch @projects|@mounts|@store switch to merged scope")
 
-                    print("  /project switch mounts/<name>            switch to mounted share")
+                    print("    /project switch mounts/<name>            switch to mounted share")
 
-                    print("  /project folder                          open active project folder\n")
+                    print(
+                        "    /project folder                          open active project folder\n"
+                    )
 
                 elif sub == "new":
                     if not sub_arg:
-                        print("  Usage: /project new <name>  [description]")
+                        print("    Usage: /project new <name>  [description]")
 
                         print("         /project new research/papers  (sub-project)")
 
@@ -3020,18 +4181,18 @@ def _interactive_repl(
 
                             brain.switch_project(proj_name)
 
-                            print(f"  Created and switched to project '{proj_name}'")
+                            print(f"    Created and switched to project '{proj_name}'")
 
-                            print(f"  {project_dir(proj_name)}")
+                            print(f"    {project_dir(proj_name)}")
 
-                            print("  Use /ingest to add documents to this project.\n")
+                            print("    Use /ingest to add documents to this project.\n")
 
                         except ValueError as e:
-                            print(f"  {e}")
+                            print(f"    {e}")
 
                 elif sub == "switch":
                     if not sub_arg:
-                        print("  Usage: /project switch <name>")
+                        print("    Usage: /project switch <name>")
 
                     else:
                         proj_name = sub_arg.strip().lower()
@@ -3053,29 +4214,29 @@ def _interactive_repl(
                                 is_merged = isinstance(brain.vector_store, MultiVectorStore)
 
                                 if is_merged:
-                                    print(f"  Switched to project '{proj_name}'  [merged view]\n")
+                                    print(f"    Switched to project '{proj_name}'  [merged view]\n")
 
                                 elif brain.vector_store.provider == "chroma":
                                     count = brain.vector_store.collection.count()
 
                                     print(
-                                        f"  Switched to project '{proj_name}'  ({count} chunks)\n"
+                                        f"    Switched to project '{proj_name}'  ({count} chunks)\n"
                                     )
 
                                 else:
-                                    print(f"  Switched to project '{proj_name}'\n")
+                                    print(f"    Switched to project '{proj_name}'\n")
 
                             except Exception as e:
-                                print(f"  {e}")
+                                print(f"    {e}")
 
                         else:
                             print(
-                                f"  Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
+                                f"    Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
                             )
 
                 elif sub == "delete":
                     if not sub_arg:
-                        print("  Usage: /project delete <name>")
+                        print("    Usage: /project delete <name>")
 
                     else:
                         proj_name = sub_arg.strip().lower()
@@ -3083,7 +4244,7 @@ def _interactive_repl(
                         try:
                             confirm = (
                                 _read_input(
-                                    f"  !  Delete project '{proj_name}' and ALL its data? [y/N]: "
+                                    f"    !  Delete project '{proj_name}' and ALL its data? [y/N]: "
                                 )
                                 .strip()
                                 .lower()
@@ -3097,35 +4258,35 @@ def _interactive_repl(
                                 if brain._active_project == proj_name:
                                     brain.switch_project("default")
 
-                                    print("  ↩️  Switched back to default project.")
+                                    print("    ↩️  Switched back to default project.")
 
                                 delete_project(proj_name)
 
-                                print(f"  Deleted project '{proj_name}'.\n")
+                                print(f"    Deleted project '{proj_name}'.\n")
 
                             except ProjectHasChildrenError as e:
-                                print(f"  {e}")
+                                print(f"    {e}")
 
                             except ValueError as e:
-                                print(f"  {e}")
+                                print(f"    {e}")
 
                         else:
-                            print("  Cancelled.")
+                            print("    Cancelled.")
 
                 elif sub == "folder":
                     active = brain._active_project
 
                     if active == "default":
-                        print("  Default project uses config paths:")
+                        print("    Default project uses config paths:")
 
-                        print(f"    Vector store: {brain.config.vector_store_path}")
+                        print(f"      Vector store: {brain.config.vector_store_path}")
 
-                        print(f"    BM25 index:   {brain.config.bm25_path}\n")
+                        print(f"      BM25 index:   {brain.config.bm25_path}\n")
 
                     else:
                         folder = str(project_dir(active))
 
-                        print(f"  {folder}")
+                        print(f"    {folder}")
 
                         import subprocess
 
@@ -3143,16 +4304,18 @@ def _interactive_repl(
                             pass
 
                 else:
-                    print(f"  Unknown sub-command '{sub}'. Try: list, new, switch, delete, folder")
+                    print(
+                        f"    Unknown sub-command '{sub}'. Try: list, new, switch, delete, folder"
+                    )
 
             elif cmd == "/retry":
                 if not _last_query:
-                    print("  Nothing to retry — no previous query.")
+                    print("    Nothing to retry — no previous query.")
 
                 else:
                     user_input = _last_query
 
-                    print(f"  ↩️  Retrying: {user_input}")
+                    print(f"    ↩️  Retrying: {user_input}")
 
             elif cmd == "/context":
                 _show_context(brain, chat_history, _last_sources, _last_query)
@@ -3162,13 +4325,13 @@ def _interactive_repl(
 
             elif cmd == "/resume":
                 if not arg:
-                    print("  Usage: /resume <session-id>")
+                    print("    Usage: /resume <session-id>")
 
                 else:
                     loaded = _load_session(arg, project=brain._active_project)
 
                     if loaded is None:
-                        print(f"  Session '{arg}' not found. Use /sessions to list.")
+                        print(f"    Session '{arg}' not found. Use /sessions to list.")
 
                     else:
                         session = loaded
@@ -3179,7 +4342,7 @@ def _interactive_repl(
 
                         turns = len(chat_history) // 2
 
-                        print(f"  Loaded session {session['id']}  ({turns} turns)\n")
+                        print(f"    Loaded session {session['id']}  ({turns} turns)\n")
 
             elif cmd == "/keys":
                 _env_file = Path.home() / ".axon" / ".env"
@@ -3198,18 +4361,18 @@ def _interactive_repl(
                     prov = set_parts[1].lower().strip() if len(set_parts) > 1 else ""
 
                     if not prov or prov not in _provider_keys:
-                        print("  Usage: /keys set <provider>")
+                        print("    Usage: /keys set <provider>")
 
-                        print(f"  Providers: {', '.join(_provider_keys)}")
+                        print(f"    Providers: {', '.join(_provider_keys)}")
 
                     elif prov == "github_copilot":
-                        print("  Starting GitHub OAuth device flow…")
+                        print("    Starting GitHub OAuth device flow…")
 
                         try:
                             new_key = _copilot_device_flow()
 
                         except (EOFError, KeyboardInterrupt, RuntimeError) as e:
-                            print(f"\n  Cancelled: {e}")
+                            print(f"\n    Cancelled: {e}")
 
                         else:
                             env_name = _provider_keys[prov]
@@ -3221,9 +4384,9 @@ def _interactive_repl(
                             for k in ("_copilot", "_copilot_session", "_copilot_token"):
                                 brain.llm._openai_clients.pop(k, None)
 
-                            print(f"  {env_name} saved to {_env_file} and applied.")
+                            print(f"    {env_name} saved to {_env_file} and applied.")
 
-                            print("  Switch provider: /model github_copilot/<model>")
+                            print("    Switch provider: /model github_copilot/<model>")
 
                     else:
                         env_name = _provider_keys[prov]
@@ -3234,7 +4397,7 @@ def _interactive_repl(
                             new_key = getpass.getpass(f"  Enter {env_name} (hidden): ").strip()
 
                         except (EOFError, KeyboardInterrupt):
-                            print("\n  Cancelled.")
+                            print("\n    Cancelled.")
 
                         else:
                             if new_key:
@@ -3252,15 +4415,15 @@ def _interactive_repl(
                                 elif prov == "ollama_cloud":
                                     brain.config.ollama_cloud_key = new_key
 
-                                print(f"  {env_name} saved to {_env_file} and applied.")
+                                print(f"    {env_name} saved to {_env_file} and applied.")
 
-                                print(f"  Switch provider: /model {prov}/<model-name>")
+                                print(f"    Switch provider: /model {prov}/<model-name>")
 
                             else:
-                                print("  No key entered — nothing saved.")
+                                print("    No key entered — nothing saved.")
 
                 else:
-                    print("\n  API Key Status\n  " + "─" * 50)
+                    print("\n    API Key Status\n    " + "─" * 50)
 
                     for prov, env_name in _provider_keys.items():
                         val = os.environ.get(env_name, "")
@@ -3273,17 +4436,17 @@ def _interactive_repl(
                         else:
                             status = "not set"
 
-                        print(f"  {prov:<14} {env_name:<22} {status}")
+                        print(f"    {prov:<14} {env_name:<22} {status}")
 
                     if _env_file.exists():
-                        print(f"\n  Keys file: {_env_file}")
+                        print(f"\n    Keys file: {_env_file}")
 
                     else:
-                        print("\n  No keys file yet. Use /keys set <provider> to add keys.")
+                        print("\n    No keys file yet. Use /keys set <provider> to add keys.")
 
-                    print("  /keys set <provider>  to set a key interactively")
+                    print("    /keys set <provider>  to set a key interactively")
 
-                    print("  /help keys            for provider URLs and usage\n")
+                    print("    /help keys            for provider URLs and usage\n")
 
             elif cmd == "/share":
                 # ── /share — project sharing lifecycle ──────────────────────────
@@ -3307,25 +4470,27 @@ def _interactive_repl(
 
                     shared = data.get("shared", [])
 
-                    print("\n  Shares — issued by me:")
+                    print("\n    Shares — issued by me:")
 
                     if sharing:
                         for s in sharing:
                             tag = " [revoked]" if s.get("revoked") else ""
 
-                            print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
+                            print(f"      {s['project']} → {s['grantee']}  [ro]{tag}")
 
                     else:
-                        print("    (none)")
+                        print("      (none)")
 
-                    print("\n  Shares — received:")
+                    print("\n    Shares — received:")
 
                     if shared:
                         for s in shared:
-                            print(f"    {s['owner']}/{s['project']} mounted as {s['mount']}  [ro]")
+                            print(
+                                f"      {s['owner']}/{s['project']} mounted as {s['mount']}  [ro]"
+                            )
 
                     else:
-                        print("    (none)")
+                        print("      (none)")
 
                     print()
 
@@ -3335,7 +4500,7 @@ def _interactive_repl(
                     parts = sub_arg.split()
 
                     if len(parts) < 2:
-                        print("  Usage: /share generate <project> <grantee>")
+                        print("    Usage: /share generate <project> <grantee>")
 
                     else:
                         proj = parts[0]
@@ -3355,7 +4520,7 @@ def _interactive_repl(
 
                         if not proj_dir.exists() or not (proj_dir / "meta.json").exists():
                             print(
-                                f"  Project '{proj}' not found. Use /project list to see projects."
+                                f"    Project '{proj}' not found. Use /project list to see projects."
                             )
 
                         else:
@@ -3366,28 +4531,28 @@ def _interactive_repl(
                                     grantee=grantee,
                                 )
 
-                                print(f"\n  Share key generated for project '{proj}'")
+                                print(f"\n    Share key generated for project '{proj}'")
 
-                                print(f"  Grantee:      {grantee}")
+                                print(f"    Grantee:      {grantee}")
 
-                                print("  Access:       read-only")
+                                print("    Access:       read-only")
 
-                                print(f"  Key ID:       {result['key_id']}")
+                                print(f"    Key ID:       {result['key_id']}")
 
-                                print(f"\n  Share string (send this to {grantee}):")
+                                print(f"\n    Share string (send this to {grantee}):")
 
-                                print(f"\n    {result['share_string']}\n")
+                                print(f"\n      {result['share_string']}\n")
 
-                                print(f"  Revoke with:  /share revoke {result['key_id']}\n")
+                                print(f"    Revoke with:  /share revoke {result['key_id']}\n")
 
                             except Exception as e:
-                                print(f"  Share generation failed: {e}")
+                                print(f"    Share generation failed: {e}")
 
                 elif sub == "redeem":
                     # Usage: /share redeem <share_string>
 
                     if not sub_arg:
-                        print("  Usage: /share redeem <share_string>")
+                        print("    Usage: /share redeem <share_string>")
 
                     else:
                         user_dir = Path(brain.config.projects_root)
@@ -3398,27 +4563,27 @@ def _interactive_repl(
                                 share_string=sub_arg.strip(),
                             )
 
-                            print("\n  Share redeemed!")
+                            print("\n    Share redeemed!")
 
-                            print(f"  Project '{result['project']}' from {result['owner']}")
+                            print(f"    Project '{result['project']}' from {result['owner']}")
 
                             print(
-                                f"  Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
+                                f"    Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
                             )
 
-                            print("  Access:      read-only\n")
+                            print("    Access:      read-only\n")
 
                         except (ValueError, NotImplementedError) as e:
-                            print(f"  Redeem failed: {e}")
+                            print(f"    Redeem failed: {e}")
 
                         except Exception as e:
-                            print(f"  Redeem failed: {e}")
+                            print(f"    Redeem failed: {e}")
 
                 elif sub == "revoke":
                     # Usage: /share revoke <key_id>
 
                     if not sub_arg:
-                        print("  Usage: /share revoke <key_id>")
+                        print("    Usage: /share revoke <key_id>")
 
                     else:
                         user_dir = Path(brain.config.projects_root)
@@ -3429,19 +4594,19 @@ def _interactive_repl(
                                 key_id=sub_arg.strip(),
                             )
 
-                            print(f"  Share '{result['key_id']}' revoked.")
+                            print(f"    Share '{result['key_id']}' revoked.")
 
                         except ValueError as e:
-                            print(f"  Revoke failed: {e}")
+                            print(f"    Revoke failed: {e}")
 
                         except Exception as e:
-                            print(f"  Revoke failed: {e}")
+                            print(f"    Revoke failed: {e}")
 
                 else:
-                    print(f"  Unknown sub-command '{sub}'.")
+                    print(f"    Unknown sub-command '{sub}'.")
 
                     print(
-                        "  Usage: /share list | generate <project> <grantee> [--write] | redeem <string> | revoke <key_id>"
+                        "    Usage: /share list | generate <project> <grantee> [--write] | redeem <string> | revoke <key_id>"
                     )
 
             elif cmd == "/store":
@@ -3458,21 +4623,21 @@ def _interactive_repl(
 
                     username = _gp.getuser()
 
-                    print(f"\n  User:       {username}")
+                    print(f"\n    User:       {username}")
 
-                    print(f"  User dir:   {brain.config.projects_root}")
+                    print(f"    User dir:   {brain.config.projects_root}")
 
                     store_path = str(Path(brain.config.projects_root).parent)
 
-                    print(f"  Store path: {store_path}")
+                    print(f"    Store path: {store_path}")
 
-                    print(f"  Project:    {brain._active_project}\n")
+                    print(f"    Project:    {brain._active_project}\n")
 
                 elif sub == "init":
                     if not sub_arg:
-                        print("  Usage: /store init <base_path>")
+                        print("    Usage: /store init <base_path>")
 
-                        print("  Example: /store init ~/axon_data")
+                        print("    Example: /store init ~/axon_data")
 
                     else:
                         import getpass as _gp
@@ -3495,7 +4660,7 @@ def _interactive_repl(
                             brain.config.projects_root = str(user_dir)
 
                             brain.config.vector_store_path = str(
-                                user_dir / "default" / "lancedb_data"
+                                user_dir / "default" / "vector_data"
                             )
 
                             brain.config.bm25_path = str(user_dir / "default" / "bm25_index")
@@ -3504,23 +4669,23 @@ def _interactive_repl(
                                 brain.config.save()
 
                             except Exception as _save_exc:
-                                print(f"  Warning: could not save config: {_save_exc}")
+                                print(f"    Warning: could not save config: {_save_exc}")
 
-                            print(f"\n  AxonStore initialised at {store_root}")
+                            print(f"\n    AxonStore initialised at {store_root}")
 
-                            print(f"  Your directory:  {user_dir}")
+                            print(f"    Your directory:  {user_dir}")
 
-                            print(f"  Username:        {username}")
+                            print(f"    Username:        {username}")
 
-                            print("  Use /share generate to share projects with others.\n")
+                            print("    Use /share generate to share projects with others.\n")
 
                         except Exception as e:
-                            print(f"  Store init failed: {e}")
+                            print(f"    Store init failed: {e}")
 
                 else:
-                    print(f"  Unknown sub-command '{sub}'.")
+                    print(f"    Unknown sub-command '{sub}'.")
 
-                    print("  Usage: /store whoami | /store init <base_path>")
+                    print("    Usage: /store whoami | /store init <base_path>")
 
             elif cmd == "/refresh":
                 # ── /refresh — re-ingest changed documents ───────────────────────
@@ -3532,7 +4697,7 @@ def _interactive_repl(
                 versions = brain.get_doc_versions()
 
                 if not versions:
-                    print("  No tracked documents. Use /ingest to add documents.")
+                    print("    No tracked documents. Use /ingest to add documents.")
 
                 else:
                     _dl = _DL()
@@ -3579,25 +4744,25 @@ def _interactive_repl(
                         except Exception as _e:
                             errors.append(f"{source_path}: {_e}")
 
-                    print("\n  Refresh complete:")
+                    print("\n    Refresh complete:")
 
-                    print(f"    Re-ingested: {len(reingested)}")
+                    print(f"      Re-ingested: {len(reingested)}")
 
-                    print(f"    Unchanged:   {len(skipped)}")
+                    print(f"      Unchanged:   {len(skipped)}")
 
-                    print(f"    Missing:     {len(missing)}")
+                    print(f"      Missing:     {len(missing)}")
 
                     if errors:
-                        print(f"    Errors:      {len(errors)}")
+                        print(f"      Errors:      {len(errors)}")
 
                         for err in errors:
                             print(f"      {err}")
 
                     if reingested:
-                        print("  Updated:")
+                        print("    Updated:")
 
                         for s in reingested:
-                            print(f"    {s}")
+                            print(f"      {s}")
 
                     print()
 
@@ -3610,7 +4775,7 @@ def _interactive_repl(
                     threshold_days = int(arg) if arg.strip() else 7
 
                 except ValueError:
-                    print("  Usage: /stale [days]  (default: 7)")
+                    print("    Usage: /stale [days]  (default: 7)")
 
                     threshold_days = -1
 
@@ -3647,17 +4812,17 @@ def _interactive_repl(
                     stale.sort(reverse=True)
 
                     if stale:
-                        print(f"\n  Stale documents (>{threshold_days} days):")
+                        print(f"\n    Stale documents (>{threshold_days} days):")
 
                         for age, src, _ts in stale:
-                            print(f"    {age:6.1f}d  {src}")
+                            print(f"      {age:6.1f}d  {src}")
 
-                        print(f"\n  Total: {len(stale)}")
+                        print(f"\n    Total: {len(stale)}")
 
-                        print("  Run /refresh to re-ingest changed documents.\n")
+                        print("    Run /refresh to re-ingest changed documents.\n")
 
                     else:
-                        print(f"  All documents are fresh (threshold: {threshold_days} days).")
+                        print(f"    All documents are fresh (threshold: {threshold_days} days).")
 
             elif cmd == "/graph":
                 # ── /graph — GraphRAG status + finalize ──────────────────────────
@@ -3667,46 +4832,62 @@ def _interactive_repl(
                 sub = sub_parts[0].lower() if sub_parts else ""
 
                 if not sub or sub == "status":
+                    # Prefer the backend's own status() for consistency across backends.
+                    try:
+                        _bs = brain._graph_backend.status()
+                        _backend_name = _bs.get("backend", "graphrag")
+                        _entities = _bs.get("entities", 0)
+                        _relations = _bs.get("relations", 0)
+                        _summaries = _bs.get("community_summaries", 0)
+                        _communities = _bs.get("communities", 0)
+                    except Exception:
+                        # Graceful fallback for legacy or stub backends.
+                        _backend_name = "graphrag"
+                        _entities = len(getattr(brain, "_entity_graph", {}) or {})
+                        _relations = sum(
+                            len(v) for v in (getattr(brain, "_relation_graph", {}) or {}).values()
+                        )
+                        _summaries = len(getattr(brain, "_community_summaries", {}) or {})
+                        _communities = 0
+
                     in_progress = getattr(brain, "_community_build_in_progress", False)
 
-                    summaries = getattr(brain, "_community_summaries", {}) or {}
+                    print("\n    GraphRAG status:")
 
-                    entities = getattr(brain, "_entity_graph", {})
+                    print(f"      Backend:               {_backend_name}")
 
-                    relations = getattr(brain, "_relation_graph", {})
+                    print(f"      Entities:              {_entities}")
 
-                    relation_edges = sum(len(v) for v in relations.values())
+                    print(f"      Relation edges:        {_relations}")
 
-                    print("\n  GraphRAG status:")
+                    print(f"      Communities:           {_communities}")
 
-                    print(f"    Entities:              {len(entities)}")
+                    print(f"      Community summaries:   {_summaries}")
 
-                    print(f"    Relation edges:        {relation_edges}")
+                    print(
+                        f"      Community build:       {'in progress' if in_progress else 'idle'}"
+                    )
 
-                    print(f"    Community summaries:   {len(summaries)}")
-
-                    print(f"    Community build:       {'in progress' if in_progress else 'idle'}")
-
-                    print(f"    graph_rag enabled:     {brain.config.graph_rag}")
+                    print(f"      graph_rag enabled:     {brain.config.graph_rag}")
 
                     print()
 
                 elif sub == "finalize":
                     if not brain.config.graph_rag:
-                        print("  GraphRAG is disabled. Enable with /rag graph-rag first.")
+                        print("    GraphRAG is disabled. Enable with /rag graph-rag first.")
 
                     else:
-                        print("  Finalizing graph communities… (this may take a moment)")
+                        print("    Finalizing graph communities… (this may take a moment)")
 
                         try:
                             brain.finalize_graph()
 
                             summaries = getattr(brain, "_community_summaries", {}) or {}
 
-                            print(f"  Done. {len(summaries)} community summaries generated.\n")
+                            print(f"    Done. {len(summaries)} community summaries generated.\n")
 
                         except Exception as e:
-                            print(f"  Finalize failed: {e}")
+                            print(f"    Finalize failed: {e}")
 
                 elif sub == "viz":
                     import hashlib as _hashlib_g
@@ -3748,7 +4929,7 @@ def _interactive_repl(
 
                         out.write_text(html, encoding="utf-8")
 
-                        print(f"  Graph saved to: {out}")
+                        print(f"    Graph saved to: {out}")
 
                         try:
                             import subprocess as _sp_g
@@ -3764,16 +4945,53 @@ def _interactive_repl(
 
                         except Exception:
                             print(
-                                "  Open the file in your browser to explore the entity–relation graph."
+                                "    Open the file in your browser to explore the entity–relation graph."
                             )
 
                     except Exception as e:
-                        print(f"  Graph visualisation failed: {e}")
+                        print(f"    Graph visualisation failed: {e}")
 
                 else:
-                    print(f"  Unknown sub-command '{sub}'.")
+                    print(f"    Unknown sub-command '{sub}'.")
 
-                    print("  Usage: /graph status | /graph finalize | /graph viz [path]")
+                    print("    Usage: /graph status | /graph finalize | /graph viz [path]")
+
+            elif cmd == "/theme":
+                global _MD_CODE_THEME
+                _theme_arg = arg.strip()
+                if not _theme_arg or _theme_arg == "show":
+                    print(f"    Current markdown code theme: {_MD_CODE_THEME}")
+                    print("    Use /theme list  to see popular themes.")
+                    print("    Use /theme <name>  to switch.")
+                elif _theme_arg == "list":
+                    _popular = [
+                        "monokai",
+                        "dracula",
+                        "gruvbox-dark",
+                        "nord",
+                        "one-dark",
+                        "solarized-dark",
+                        "solarized-light",
+                        "github-dark",
+                        "vim",
+                        "vs",
+                        "friendly",
+                        "tango",
+                    ]
+                    print("    Popular themes (any Pygments style name is accepted):")
+                    for _t in _popular:
+                        marker = " ◀ current" if _t == _MD_CODE_THEME else ""
+                        print(f"      {_t}{marker}")
+                else:
+                    try:
+                        from pygments.styles import get_style_by_name
+
+                        get_style_by_name(_theme_arg)  # raises if unknown
+                        _MD_CODE_THEME = _theme_arg
+                        _save_pref("md_code_theme", _theme_arg)
+                        print(f"    Markdown code theme set to: {_theme_arg}")
+                    except Exception:
+                        print(f"    Unknown theme '{_theme_arg}'. Run /theme list for suggestions.")
 
             elif cmd == "/config":
                 _cfg_path = (
@@ -3782,22 +5000,87 @@ def _interactive_repl(
 
                 _handle_config_cmd(arg.strip(), brain, _cfg_path)
 
+            elif cmd == "/agent":
+                _agent_mode = not _agent_mode
+                state = "ON" if _agent_mode else "OFF"
+                print(
+                    f"    Agent mode {state}. LLM can now call Axon tools directly."
+                    if _agent_mode
+                    else "    Agent mode OFF. Back to Q&A mode."
+                )
+
+            elif cmd == "/debug":
+                import logging as _logging
+
+                _NOISY_LOGGERS = (
+                    "httpcore",
+                    "httpcore.http11",
+                    "hpack",
+                    "urllib3",
+                    "markdown_it",
+                    "asyncio",
+                    "google_genai",
+                    "google.genai",
+                )
+                # Determine current state from the first logger's level
+                _first = _logging.getLogger(_NOISY_LOGGERS[0])
+                _debug_on = _first.level != _logging.DEBUG
+                _new_level = _logging.DEBUG if _debug_on else _logging.WARNING
+                for _nl in _NOISY_LOGGERS:
+                    _logging.getLogger(_nl).setLevel(_new_level)
+                if _debug_on:
+                    print("    Debug logging ON — verbose library logs enabled.")
+                else:
+                    print("    Debug logging OFF.")
+
             else:
-                print(f"  Unknown command: {cmd}. Type /help for options.")
+                print(f"    Unknown command: {cmd}. Type /help for options.")
 
             if cmd != "/retry":
-                continue
+                return False
 
         # --- @file expansion: replace @path references with file contents ---
 
         query_text = _expand_at_files(user_input)
 
-        if query_text != user_input:
-            at_files = re.findall(r"@(\S+)", user_input)
+        # Always resolve @file references — even when _expand_at_files could not
+        # expand the content (file not at CWD).  The resolved absolute path is
+        # prepended for agent mode regardless so the LLM can call ingest_path
+        # with the correct path instead of the user-typed relative form.
+        def _resolve_at_path(p: str) -> str:
+            expanded = Path(p).expanduser()
+            if expanded.is_absolute():
+                logger.debug("@file resolved (absolute): %s", expanded)
+                return str(expanded)
+            cwd_resolved = expanded.resolve()
+            if cwd_resolved.exists():
+                logger.debug("@file resolved (cwd): %s", cwd_resolved)
+                return str(cwd_resolved)
+            home_resolved = Path.home() / p
+            if home_resolved.exists():
+                logger.debug("@file resolved (home fallback): %s", home_resolved)
+                return str(home_resolved)
+            logger.warning(
+                "@file '%s' not found — tried cwd (%s) and home (%s). "
+                "Use ~/path or an absolute path to be explicit.",
+                p,
+                cwd_resolved,
+                home_resolved,
+            )
+            return str(home_resolved)  # best guess pointing at home even if missing
 
-            print(f"  Attached: {', '.join(at_files)}")
+        at_files = re.findall(r"(?<!\S)@(\S+)", user_input)
+        if at_files:
+            at_files_abs = [_resolve_at_path(p) for p in at_files]
+            print(f"    Attached: {', '.join(at_files_abs)}")
 
-        # --- Regular query — use Rich Live for spinner + streaming response ---
+            # In agent mode, prepend the resolved absolute file paths so the agent can
+            # call ingest_path(path=...) instead of add_text with the content blob.
+            if _agent_mode:
+                paths_note = "  ".join(at_files_abs)
+                query_text = f"[Attached file path(s): {paths_note}]\n\n{query_text}"
+
+        # --- Regular query — use Rich Console for output + toolbar spinner ---
 
         response_parts: list = []
 
@@ -3805,30 +5088,209 @@ def _interactive_repl(
 
         try:
             from rich.console import Console as _RC
-            from rich.live import Live as _RL
-            from rich.markdown import Markdown as _RM
-            from rich.text import Text as _RT
 
-            _console = _RC()
+            _console = _RC(file=sys.stdout, force_terminal=True)
 
-            # ── Spinner phase (transient=True removes it cleanly when stopped) ──
+            # Helpers that route Rich output through prompt_toolkit's own output
+            # pipeline so ANSI codes render correctly on Windows (no ?[ artifacts).
+            import io as _io
 
-            _spin_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            def _rich_print(markup: str, **kw) -> None:
+                _buf = _io.StringIO()
+                _cap = _RC(file=_buf, force_terminal=True, width=_console.width or 120)
+                _cap.print(markup, **kw)
+                _ansi = _buf.getvalue()
+                sys.stdout.write(_ansi)
+                sys.stdout.flush()
 
-            _spin_stop = threading.Event()
+            def _format_user_label(text: str, tc: int) -> str:
+                """Wrap user input so every line gets the full-width grey15 highlight."""
+                prefix = "    > "
+                cont = "      "  # same width, no marker
+                avail = max(tc - len(prefix), 20)
+                lines = textwrap.wrap(text, width=avail) or [""]
+                parts = [f"{prefix}{lines[0]}".ljust(tc)]
+                for ln in lines[1:]:
+                    parts.append(f"{cont}{ln}".ljust(tc))
+                return "\n".join(parts)
 
-            _spin_idx = [0]
-
-            def _spin_update(live: _RL) -> None:
-                while not _spin_stop.wait(0.1):
-                    f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
-
-                    live.update(_RT.from_markup(f"[bold yellow]Axon:[/bold yellow] {f} thinking…"))
-
-                    _spin_idx[0] += 1
+            def _rich_render(text: str, indent: str = "", right_margin: int = 0) -> None:
+                _buf = _io.StringIO()
+                _w = max(40, (int(_console.width or 120)) - len(indent) - right_margin)
+                _cap = _RC(file=_buf, force_terminal=True, width=_w)
+                _cap.print(_make_math_renderable(text))
+                _ansi = _buf.getvalue()
+                if indent:
+                    _ansi = "\n".join(indent + ln if ln else ln for ln in _ansi.split("\n"))
+                sys.stdout.write(_ansi)
+                sys.stdout.flush()
 
             if stream:
-                token_gen = brain.query_stream(query_text, chat_history=chat_history)
+                if _agent_mode:
+                    # Agent mode: run_agent_loop in a thread with spinner feedback,
+                    # then render the result as rich markdown (same as non-streaming path).
+                    from axon.agent import REPL_TOOLS, run_agent_loop
+
+                    def _confirm_cb(msg: str) -> bool:
+                        # Called from the agent background thread — must suspend the
+                        # prompt_toolkit Application before reading stdin, otherwise
+                        # keystrokes go to the Application rather than to input().
+                        # NOTE: `run_in_terminal` (module-level) calls ensure_future()
+                        # synchronously in the calling thread → fails with "no current
+                        # event loop".  Use `in_terminal` (async ctx-mgr) inside a
+                        # proper coroutine scheduled on the REPL event loop instead.
+                        try:
+                            _result: list = []
+
+                            def _do_confirm() -> None:
+                                ans = input(f"\n  ⚠️  {msg} [y/N]: ").strip().lower()
+                                _result.append(ans == "y")
+
+                            if _pt_app is not None and _repl_event_loop is not None:
+                                import asyncio as _aio
+
+                                from prompt_toolkit.application import (
+                                    in_terminal as _in_terminal,
+                                )
+
+                                async def _run_confirm() -> None:
+                                    async with _in_terminal():
+                                        _do_confirm()
+
+                                fut = _aio.run_coroutine_threadsafe(
+                                    _run_confirm(),
+                                    _repl_event_loop,
+                                )
+                                fut.result()
+                                return _result[0] if _result else False
+                            else:
+                                _do_confirm()
+                                return _result[0] if _result else False
+                        except (EOFError, KeyboardInterrupt):
+                            return False
+
+                    # Tool-step callback: print each Axon tool's result as a
+                    # labelled block immediately after execution.
+                    # run_shell prints its own "Bash" block — skip it here.
+                    _SKIP_STEP_CB = {"run_shell"}
+                    # Tools whose output is retrieval/listing detail — show only
+                    # the first (summary) line; the synthesised answer carries the value.
+                    _SUMMARY_ONLY_TOOLS = {
+                        "search_knowledge",
+                        "query_knowledge",
+                        "list_knowledge",
+                        "graph_data",
+                    }
+
+                    # Collect tool steps during agent execution; render them
+                    # inside the Axon response block after the agent finishes.
+                    _tool_steps: list[tuple[str, str]] = []
+
+                    def _agent_step_cb(tool_name: str, result: str) -> None:
+                        if tool_name in _SKIP_STEP_CB:
+                            return
+                        _tool_steps.append((tool_name, result))
+
+                    _agent_result: list = []
+                    _agent_err: list = []
+                    _agent_spin_stop = threading.Event()
+
+                    def _run_agent() -> None:
+                        try:
+                            _agent_result.append(
+                                run_agent_loop(
+                                    brain.llm,
+                                    brain,
+                                    query_text,
+                                    chat_history,
+                                    tools=REPL_TOOLS,
+                                    confirm_cb=_confirm_cb,
+                                    step_cb=_agent_step_cb,
+                                )
+                            )
+                        except Exception as _ae:
+                            _agent_err.append(_ae)
+                        finally:
+                            _agent_spin_stop.set()
+
+                    _agent_thread = threading.Thread(target=_run_agent, daemon=True)
+                    _agent_thread.start()
+
+                    if not quiet:
+                        # Echo user message with full-width highlight.
+                        _tc_ag = shutil.get_terminal_size().columns
+                        _rich_print(
+                            f"\n[bold white on grey15]{_format_user_label(user_input, _tc_ag)}[/bold white on grey15]\n"
+                        )
+                        _spin_state["active"] = True
+                        _spin_state["idx"] = 0
+                        _ast = threading.Thread(target=_animate_spinner, daemon=True)
+                        _ast.start()
+                        _agent_spin_stop.wait()
+                        _spin_state["active"] = False
+                        _ast.join(timeout=0.5)
+                        if _pt_app is not None:
+                            try:
+                                _pt_app.invalidate()
+                            except Exception:
+                                pass
+                    else:
+                        _agent_thread.join()
+
+                    if _agent_err:
+                        _rich_print(f"    [bold red]✦[/bold red] ⚠️  {_agent_err[0]}\n")
+                        response_parts = []
+                    else:
+                        _agent_response = _agent_result[0] if _agent_result else ""
+                        _rich_print("    [bold yellow]✦[/bold yellow]")
+                        _YEL = "\x1b[33m"
+                        _GRN = "\x1b[1;32m"
+                        _RED = "\x1b[1;31m"
+                        _DIM = "\x1b[2m"
+                        _RST = "\x1b[0m"
+                        for _tname, _tresult in _tool_steps:
+                            _is_err = (
+                                _tresult.startswith("⚠️")
+                                or _tresult.startswith("🚫")
+                                or _tresult.startswith("No files matched")
+                                or _tresult.startswith("No path")
+                                or _tresult.startswith("No text")
+                                or _tresult.startswith("Unknown tool")
+                            )
+                            _icon = "✗" if _is_err else "✓"
+                            _clr = _RED if _is_err else _GRN
+                            _tlines = _tresult.strip().splitlines()
+                            _first = _tlines[0] if _tlines else "(no output)"
+                            _rest = _tlines[1:]
+                            print(f"    {_DIM}↳ {_tname}{_RST}  " f"{_clr}{_icon}{_RST}  {_first}")
+                            if _is_err:
+                                for _ln in _rest[:3]:
+                                    print(f"           {_ln}")
+                            elif _tname in _SUMMARY_ONLY_TOOLS:
+                                if _rest:
+                                    print(
+                                        f"           {_DIM}({len(_rest)} line(s) collapsed){_RST}"
+                                    )
+                            else:
+                                for _ln in _rest[:3]:
+                                    print(f"           {_ln}")
+                                if len(_rest) > 3:
+                                    print(f"           {_DIM}… +{len(_rest) - 3} more{_RST}")
+                        if _tool_steps:
+                            print()
+                        _rich_render(_agent_response, indent="    ", right_margin=4)
+                        print()
+                        response_parts = [_agent_response]
+
+                    response = "".join(response_parts)
+                    if not _cancelled:
+                        chat_history.append({"role": "user", "content": user_input})
+                        chat_history.append({"role": "assistant", "content": response})
+                        _last_query = user_input
+                        _save_session(session)
+                    return False
+                else:
+                    token_gen = brain.query_stream(query_text, chat_history=chat_history)
 
                 if not quiet:
                     m = f"{brain.config.llm_provider}/{brain.config.llm_model}"
@@ -3855,84 +5317,61 @@ def _interactive_repl(
                                 changes.append(val)
 
                         if changes:
-                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
+                            _rich_print(f"[dim]    {'  │  '.join(changes)}[/dim]")
 
                         _last_config_snapshot = _snap
 
-                    print()
+                    # Echo user message then show thinking indicator in conversation area.
+                    if not quiet:
+                        _tc_in = shutil.get_terminal_size().columns
+                        _rich_print(
+                            f"\n[bold white on grey15]{_format_user_label(user_input, _tc_in)}[/bold white on grey15]\n"
+                        )
 
-                    # Spinner until first real token arrives
+                    # Collect all streaming tokens while spinner shows.
+                    # Writing token-by-token conflicts with prompt_toolkit's
+                    # Application redraws (invalidate races run_in_terminal),
+                    # causing truncated output. Collect first, render once after
+                    # spinner fully stops. Rich markdown is also restored this way.
+                    _spin_state["active"] = True
+                    _spin_state["idx"] = 0
+                    _st = threading.Thread(target=_animate_spinner, daemon=True)
+                    _st.start()
 
-                    with _RL(
-                        _RT.from_markup("[bold yellow]Axon:[/bold yellow] ⠋ thinking…"),
-                        console=_console,
-                        transient=True,
-                        refresh_per_second=10,
-                    ) as _spin_live:
-                        _st = threading.Thread(target=_spin_update, args=(_spin_live,), daemon=True)
-
-                        _st.start()
-
+                    _stream_error = None
+                    try:
                         for chunk in token_gen:
                             if isinstance(chunk, dict):
                                 if chunk.get("type") == "sources":
                                     _last_sources = chunk.get("sources", [])
-
                                 continue
-
                             response_parts.append(chunk)
-
-                            break  # first token → exit spinner
-
-                        _spin_stop.set()
-
+                    except KeyboardInterrupt:
+                        _cancelled = True
+                    except Exception as _se:
+                        _stream_error = _se
+                    finally:
+                        _spin_state["active"] = False
                         _st.join(timeout=0.3)
-
-                    # spinner gone (transient); cursor is at a clean line
-
-                # Stream remaining tokens via Rich Live (plain text + cursor),
-
-                # then swap to full Markdown on completion — no raw cursor
-
-                # save/restore so the terminal scrollback is never corrupted.
-
-                try:
-                    _console.print("[bold yellow]Axon:[/bold yellow]")
+                        if _pt_app is not None:
+                            try:
+                                _pt_app.invalidate()
+                            except Exception:
+                                pass
 
                     _accumulated = "".join(response_parts)
 
-                    with _RL(
-                        _RT(_accumulated + " ▋"),
-                        console=_console,
-                        transient=False,
-                        refresh_per_second=15,
-                    ) as live:
-                        for chunk in token_gen:
-                            if isinstance(chunk, dict):
-                                if chunk.get("type") == "sources":
-                                    _last_sources = chunk.get("sources", [])
+                    if _stream_error is not None:
+                        _rich_print(f"    [bold red]✦[/bold red] ⚠️  {_stream_error}\n")
+                    elif _accumulated:
+                        _rich_print("    [bold yellow]✦[/bold yellow]")
+                        _rich_render(_accumulated, indent="    ", right_margin=4)
+                        print()
+                    else:
+                        _rich_print("    [bold yellow]✦[/bold yellow] (no response)\n")
 
-                                continue
-
-                            _accumulated += chunk
-
-                            response_parts.append(chunk)
-
-                            live.update(_RT(_accumulated + " ▋"))
-
-                        # All tokens received — swap plain text for Markdown
-
-                        live.update(_RM(_accumulated))
-
-                    print()
-
-                except KeyboardInterrupt:
-                    _cancelled = True
-
-                    if _accumulated:
-                        _console.print(_RM(_accumulated))
-
-                    print("\n  !  Cancelled.\n")
+                    if _cancelled:
+                        _rich_print("    ⚠  Cancelled.\n")
 
             else:
                 # Non-streaming: spinner while brain.query() blocks
@@ -3968,7 +5407,7 @@ def _interactive_repl(
                                 changes.append(val)
 
                         if changes:
-                            print(f"\033[2m  {'  │  '.join(changes)}\033[0m")
+                            _rich_print(f"[dim]    {'  │  '.join(changes)}[/dim]")
 
                         _last_config_snapshot = _snap
 
@@ -3987,25 +5426,23 @@ def _interactive_repl(
                 _qt.start()
 
                 if not quiet:
-                    print()
-
-                    with _RL(
-                        _RT.from_markup("[bold yellow]Axon:[/bold yellow] ⠋ thinking…"),
-                        console=_console,
-                        transient=True,
-                        refresh_per_second=10,
-                    ) as _spin_live2:
-                        _st2 = threading.Thread(
-                            target=_spin_update, args=(_spin_live2,), daemon=True
-                        )
-
-                        _st2.start()
-
-                        _spin_stop2.wait()
-
-                        _spin_stop.set()
-
-                        _st2.join(timeout=0.3)
+                    # Echo user message with full-width highlight.
+                    _tc_in2 = shutil.get_terminal_size().columns
+                    _rich_print(
+                        f"\n[bold white on grey15]{_format_user_label(user_input, _tc_in2)}[/bold white on grey15]\n"
+                    )
+                    _spin_state["active"] = True
+                    _spin_state["idx"] = 0
+                    _st2 = threading.Thread(target=_animate_spinner, daemon=True)
+                    _st2.start()
+                    _spin_stop2.wait()
+                    _spin_state["active"] = False
+                    _st2.join(timeout=0.5)
+                    if _pt_app is not None:
+                        try:
+                            _pt_app.invalidate()
+                        except Exception:
+                            pass
 
                 else:
                     _qt.join()
@@ -4015,13 +5452,11 @@ def _interactive_repl(
 
                 response = _result[0] if _result else ""
 
-                print()  # blank line between You: and Axon:
+                _rich_print("    [bold yellow]✦[/bold yellow]")
 
-                _console.print("[bold yellow]Axon:[/bold yellow]")
+                _rich_render(response, indent="    ", right_margin=4)
 
-                _console.print(_RM(response))
-
-                print()  # blank line after Brain response, before next You:
+                print()
 
                 response_parts = [response]
 
@@ -4038,7 +5473,7 @@ def _interactive_repl(
                 while not _spin_stop.wait(0.1):
                     f = _spin_frames[_spin_idx[0] % len(_spin_frames)]
 
-                    sys.stdout.write(f"\r  Axon: {f} thinking…")
+                    sys.stdout.write(f"\r    ✦ {f} thinking…")
 
                     sys.stdout.flush()
 
@@ -4056,7 +5491,7 @@ def _interactive_repl(
             if not quiet:
                 _spin_stop.set()
 
-            print(f"\n\033[1;33mAxon:\033[0m {response}\n")
+            print(f"\n\033[1;33m✦\033[0m {response}\n")
 
             response_parts = [response]
 
@@ -4072,3 +5507,89 @@ def _interactive_repl(
             _last_query = user_input
 
             _save_session(session)  # persist after every turn
+
+        return False
+
+    # ── Main REPL runner ───────────────────────────────────────────────────────
+
+    # Always define _animate_spinner so _process_input_sync can reference it
+    # whether running in Application mode or readline fallback.
+    def _animate_spinner() -> None:
+        """Animate the spinner in the toolbar at ~12fps via prompt_toolkit invalidate."""
+        while _spin_state["active"]:
+            _spin_state["idx"] += 1
+            if _pt_app is not None:
+                try:
+                    _pt_app.invalidate()
+                except Exception:
+                    pass
+            time.sleep(0.08)
+
+    if _pt_app is not None and _scripted_inputs is None:
+        # Application loop: runs continuously so toolbar+input are always
+        # visible.  Processing happens in asyncio.to_thread so the event loop
+        # (and the Application) keep running during LLM calls.
+
+        async def _repl_loop_async() -> None:
+            nonlocal _input_queue, _repl_event_loop
+            _input_queue = asyncio.Queue()
+            _repl_event_loop = asyncio.get_running_loop()
+            # patch_stdout must be entered after the event loop is running
+            # so it binds to the correct loop for run_in_terminal calls.
+            with _pt_patch_stdout(raw=True):
+                app_task = asyncio.ensure_future(_pt_app.run_async())
+
+                def _on_app_done(fut: asyncio.Future) -> None:
+                    exc = fut.exception() if not fut.cancelled() else None
+                    if exc and not isinstance(exc, KeyboardInterrupt | EOFError | SystemExit):
+                        import logging as _lg2
+
+                        _lg2.getLogger("Axon").warning("REPL Application exited with: %s", exc)
+                    _input_queue.put_nowait(None)
+
+                app_task.add_done_callback(_on_app_done)
+                try:
+                    while True:
+                        text = await _input_queue.get()
+                        if text is None:
+                            break
+                        text = text.strip()
+                        if not text:
+                            continue
+                        should_exit = await asyncio.to_thread(lambda t=text: _process_input_sync(t))
+                        if should_exit:
+                            break
+                except (KeyboardInterrupt, EOFError):
+                    pass
+                finally:
+                    try:
+                        _pt_app.exit()
+                    except Exception:
+                        pass  # Application may have already stopped
+                    try:
+                        await app_task
+                    except Exception:
+                        pass
+
+        asyncio.run(_repl_loop_async())
+    else:
+        # Readline / plain fallback loop
+        while True:
+            try:
+                user_input = _read_input().strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not user_input:
+                continue
+            should_exit = False
+            try:
+                should_exit = _process_input_sync(user_input)
+            finally:
+                # In non-Application mode, reprint the status bar to keep the UI informative.
+                if _pt_app is None:
+                    try:
+                        _print_status_bar()
+                    except Exception:
+                        pass
+            if should_exit:
+                break

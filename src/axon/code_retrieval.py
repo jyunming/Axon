@@ -40,6 +40,14 @@ def _extract_code_query_tokens(query: str) -> frozenset[str]:
     - Qualified names (foo.bar → "foo", "bar", "foo.bar")
     - All identifiers of length >= 4
     """
+    from axon.rust_bridge import get_rust_bridge
+
+    bridge = get_rust_bridge()
+    if bridge.can_extract_code_tokens():
+        result = bridge.extract_code_query_tokens(query)
+        if result is not None:
+            return result
+
     tokens: set[str] = set()
 
     # Basename references: strip known code extensions
@@ -412,6 +420,17 @@ class CodeRetrievalMixin:
                 if len(stem) >= 4:
                     sym_lookup[stem] = node_id
 
+        # Try Rust fast-path
+        from axon.rust_bridge import get_rust_bridge
+
+        _rust = get_rust_bridge()
+        if _rust.can_code_doc_bridge():
+            existing_tuples = list(existing_edges)
+            new_edges = _rust.build_code_doc_bridge_edges(sym_lookup, prose_chunks, existing_tuples)
+            if new_edges is not None:
+                edges_list.extend(new_edges)
+                return
+
         for chunk in prose_chunks:
             text = chunk.get("text", "")
             chunk_id = chunk.get("id", "")
@@ -430,6 +449,39 @@ class CodeRetrievalMixin:
                             }
                         )
                         existing_edges.add(ek)
+
+    def _get_symbol_cache(
+        self, corpora: list[list[dict]]
+    ) -> tuple[list[dict], list[tuple[dict, dict, str, str]], dict[str, list[tuple[dict, str]]]]:
+        """Build/reuse cached symbol metadata structures for repeated channel queries."""
+        signature = tuple((id(c), len(c)) for c in corpora)
+        if getattr(self, "_symbol_cache_signature", None) == signature:
+            return (
+                self._symbol_flat_docs,
+                self._symbol_entries,
+                self._symbol_exact,
+            )
+
+        flat_docs: list[dict] = [doc for corpus in corpora for doc in corpus]
+        entries: list[tuple[dict, dict, str, str]] = []
+        exact: dict[str, list[tuple[dict, str]]] = {}
+        for doc in flat_docs:
+            meta = doc.get("metadata", {})
+            sym = (meta.get("symbol_name") or "").lower()
+            qname = (meta.get("qualified_name") or "").lower()
+            if not sym and not qname:
+                continue
+            entries.append((doc, meta, sym, qname))
+            if sym:
+                exact.setdefault(sym, []).append((doc, "symbol_name"))
+            if qname:
+                exact.setdefault(qname, []).append((doc, "qualified_name"))
+
+        self._symbol_cache_signature = signature
+        self._symbol_flat_docs = flat_docs
+        self._symbol_entries = entries
+        self._symbol_exact = exact
+        return flat_docs, entries, exact
 
     def _apply_code_lexical_boost(
         self,
@@ -454,73 +506,91 @@ class CodeRetrievalMixin:
 
         long_tokens = frozenset(t for t in query_tokens if len(t) >= 4)
 
+        # Try Rust acceleration for the score-computation kernel.
+        # Falls back to Python when the compiled extension is unavailable or raises.
+        _rust_scores: list[float] | None = None
+        _rust_max_lex: float = 0.0
+        from axon.rust_bridge import get_rust_bridge
+
+        _bridge = get_rust_bridge()
+        if _bridge.can_code_lexical_scores():
+            _rust_result = _bridge.code_lexical_scores(results, list(query_tokens))
+            if _rust_result is not None:
+                _rust_scores, _rust_max_lex = _rust_result
+
         lex_scores: list[float] = []
         score_signals: list[dict] = []  # per-result signal breakdown for trace
-        for r in results:
-            meta = r.get("metadata", {})
-            if meta.get("source_class") != "code":
-                lex_scores.append(0.0)
-                score_signals.append({})
-                continue
+        if _rust_scores is not None:
+            lex_scores = _rust_scores
+            # Diagnostics/trace signal breakdown not available on the Rust path
+            score_signals = [{} for _ in results]
+            max_lex = _rust_max_lex
+        else:
+            for r in results:
+                meta = r.get("metadata", {})
+                if meta.get("source_class") != "code":
+                    lex_scores.append(0.0)
+                    score_signals.append({})
+                    continue
 
-            score = 0.0
-            signals: dict = {}
-            sym_name = (meta.get("symbol_name") or "").lower()
-            sym_type = (meta.get("symbol_type") or "").lower()
-            file_path = meta.get("file_path") or meta.get("source") or ""
-            basename = os.path.splitext(os.path.basename(file_path))[0].lower()
-            qualified = f"{basename}.{sym_name}" if sym_name and basename else ""
-            text_lower = r.get("text", "").lower()
+                score = 0.0
+                signals: dict = {}
+                sym_name = (meta.get("symbol_name") or "").lower()
+                sym_type = (meta.get("symbol_type") or "").lower()
+                file_path = meta.get("file_path") or meta.get("source") or ""
+                basename = os.path.splitext(os.path.basename(file_path))[0].lower()
+                qualified = f"{basename}.{sym_name}" if sym_name and basename else ""
+                text_lower = r.get("text", "").lower()
 
-            # Exact symbol name match
-            if sym_name and sym_name in query_tokens:
-                score += 1.0
-                signals["symbol_hit"] = "exact"
-            # Partial symbol name match
-            elif sym_name:
-                for tok in long_tokens:
-                    if tok in sym_name:
-                        score += 0.5
-                        signals["symbol_hit"] = "partial"
-                        break
+                # Exact symbol name match
+                if sym_name and sym_name in query_tokens:
+                    score += 1.0
+                    signals["symbol_hit"] = "exact"
+                # Partial symbol name match
+                elif sym_name:
+                    for tok in long_tokens:
+                        if tok in sym_name:
+                            score += 0.5
+                            signals["symbol_hit"] = "partial"
+                            break
 
-            # Basename match
-            if basename and basename in query_tokens:
-                score += 0.4
-                signals["file_hit"] = True
+                # Basename match
+                if basename and basename in query_tokens:
+                    score += 0.4
+                    signals["file_hit"] = True
 
-            # Qualified name match
-            if qualified and qualified in query_tokens:
-                score += 1.0
-                signals["qualified_hit"] = True
+                # Qualified name match
+                if qualified and qualified in query_tokens:
+                    score += 1.0
+                    signals["qualified_hit"] = True
 
-            # Token-in-text hits (capped)
-            text_hits = sum(1 for tok in long_tokens if tok in text_lower)
-            score += min(text_hits * 0.08, 0.32)
-            if text_hits:
-                signals["text_hits"] = text_hits
+                # Token-in-text hits (capped)
+                text_hits = sum(1 for tok in long_tokens if tok in text_lower)
+                score += min(text_hits * 0.08, 0.32)
+                if text_hits:
+                    signals["text_hits"] = text_hits
 
-            # Multiplier for function/method results that matched anything
-            if score > 0.0 and sym_type in {"function", "method"}:
-                score *= 1.1
-                signals["sym_type_boost"] = True
+                # Multiplier for function/method results that matched anything
+                if score > 0.0 and sym_type in {"function", "method"}:
+                    score *= 1.1
+                    signals["sym_type_boost"] = True
 
-            # Line-range tightness tie-breaker: reward narrowly scoped chunks.
-            # +0.05 for ≤30 lines, +0.02 for ≤80 lines (secondary signal only).
-            start_line = meta.get("start_line")
-            end_line = meta.get("end_line")
-            if start_line is not None and end_line is not None:
-                span = max(int(end_line) - int(start_line), 1)
-                if span <= 30:
-                    score += 0.05
-                    signals["line_range_tight"] = span
-                elif span <= 80:
-                    score += 0.02
+                # Line-range tightness tie-breaker: reward narrowly scoped chunks.
+                # +0.05 for ≤30 lines, +0.02 for ≤80 lines (secondary signal only).
+                start_line = meta.get("start_line")
+                end_line = meta.get("end_line")
+                if start_line is not None and end_line is not None:
+                    span = max(int(end_line) - int(start_line), 1)
+                    if span <= 30:
+                        score += 0.05
+                        signals["line_range_tight"] = span
+                    elif span <= 80:
+                        score += 0.02
 
-            lex_scores.append(score)
-            score_signals.append(signals)
+                lex_scores.append(score)
+                score_signals.append(signals)
 
-        max_lex = max(lex_scores) if lex_scores else 0.0
+            max_lex = max(lex_scores) if lex_scores else 0.0
         if max_lex == 0.0:
             # No matches — skip re-scoring entirely
             return results
@@ -599,46 +669,123 @@ class CodeRetrievalMixin:
         else:
             return []
 
+        if getattr(self.config, "symbol_index_engine", "python") == "rust":
+            from axon.rust_bridge import get_rust_bridge
+
+            flat_docs, entries, exact = self._get_symbol_cache(corpora)
+            bridge = get_rust_bridge()
+            if not filters and bridge.can_symbol_index():
+                if getattr(self, "_symbol_rust_index_signature", None) != getattr(
+                    self, "_symbol_cache_signature", None
+                ):
+                    rust_index = bridge.build_symbol_index(corpora=corpora)
+                    if rust_index is not None:
+                        self._symbol_rust_index = rust_index
+                        self._symbol_rust_index_signature = getattr(
+                            self, "_symbol_cache_signature", None
+                        )
+                rust_index = getattr(self, "_symbol_rust_index", None)
+                if rust_index is not None:
+                    rust_hits = bridge.search_symbol_index(
+                        index=rust_index,
+                        query_tokens=sorted(long_tokens),
+                        top_k=top_k,
+                    )
+                    if rust_hits is not None:
+                        normalized_hits: list[dict] = []
+                        for hit in rust_hits:
+                            idx = hit.get("index", hit.get("doc_index"))
+                            if not isinstance(idx, int) or idx < 0 or idx >= len(flat_docs):
+                                continue
+                            doc = dict(flat_docs[idx])
+                            try:
+                                doc["score"] = float(hit.get("score", 1.0))
+                            except (TypeError, ValueError):
+                                doc["score"] = 0.0
+                            meta = dict(doc.get("metadata", {}))
+                            meta["channel"] = hit.get("channel") or "symbol_name"
+                            doc["metadata"] = meta
+                            normalized_hits.append(doc)
+                        import heapq as _heapq
+
+                        return _heapq.nlargest(
+                            top_k, normalized_hits, key=lambda x: x.get("score", 0.0)
+                        )
+            if bridge.can_symbol_search():
+                rust_hits = bridge.symbol_channel_search(
+                    corpora=corpora,
+                    query_tokens=sorted(long_tokens),
+                    top_k=top_k,
+                    filters=filters,
+                )
+                if rust_hits is not None:
+                    normalized_hits: list[dict] = []
+                    for hit in rust_hits:
+                        if not isinstance(hit, dict):
+                            continue
+                        if "id" in hit and "metadata" in hit:
+                            normalized_hits.append(hit)
+                            continue
+                        idx = hit.get("index", hit.get("doc_index"))
+                        if not isinstance(idx, int) or idx < 0 or idx >= len(flat_docs):
+                            continue
+                        doc = dict(flat_docs[idx])
+                        score = hit.get("score", 1.0)
+                        try:
+                            doc["score"] = float(score)
+                        except (TypeError, ValueError):
+                            doc["score"] = 0.0
+                        meta = dict(doc.get("metadata", {}))
+                        channel = hit.get("channel") or "symbol_name"
+                        meta["channel"] = channel
+                        doc["metadata"] = meta
+                        normalized_hits.append(doc)
+                    import heapq as _heapq
+
+                    return _heapq.nlargest(
+                        top_k, normalized_hits, key=lambda x: x.get("score", 0.0)
+                    )
+            elif not getattr(self.config, "rust_fallback_enabled", True):
+                return []
+
+        flat_docs, entries, exact = self._get_symbol_cache(corpora)
         hits: dict[str, dict] = {}  # id → best result
-        for corpus in corpora:
-            for doc in corpus:
+        # Fast path: exact matches from cached map (score=1.0)
+        for tok in long_tokens:
+            for doc, channel in exact.get(tok, []):
                 meta = doc.get("metadata", {})
-                sym = (meta.get("symbol_name") or "").lower()
-                qname = (meta.get("qualified_name") or "").lower()
-                if not sym and not qname:
+                if filters and not all(meta.get(k) == v for k, v in filters.items()):
+                    continue
+                doc_id = doc.get("id", "")
+                if doc_id not in hits:
+                    result = dict(doc)
+                    result["score"] = 1.0
+                    result["metadata"] = dict(meta)
+                    result["metadata"]["channel"] = channel
+                    hits[doc_id] = result
+
+        # If exact hits already satisfy top_k, partial matches cannot outrank them.
+        if len(hits) < top_k:
+            for doc, meta, sym, qname in entries:
+                # Apply metadata filters if provided
+                if filters and not all(meta.get(k) == v for k, v in filters.items()):
                     continue
 
-                # Apply metadata filters if provided
-                if filters:
-                    match = all(meta.get(k) == v for k, v in filters.items())
-                    if not match:
-                        continue
-
-                # Score: exact match = 1.0, partial = 0.6
+                # Score: partial = 0.6 only (exact handled in fast path)
                 best_score = 0.0
                 best_channel = "symbol_name"
-                if sym:
-                    if sym in long_tokens:
-                        best_score = 1.0
-                        best_channel = "symbol_name"
-                    elif any(tok in sym for tok in long_tokens):
-                        best_score = max(best_score, 0.6)
-                        best_channel = "symbol_name"
-                if qname:
-                    if qname in long_tokens:
-                        if 1.0 >= best_score:
-                            best_score = 1.0
-                            best_channel = "qualified_name"
-                    elif any(tok in qname for tok in long_tokens):
-                        if 0.6 > best_score:
-                            best_score = 0.6
-                            best_channel = "qualified_name"
-
+                if sym and any(tok in sym for tok in long_tokens):
+                    best_score = 0.6
+                    best_channel = "symbol_name"
+                if qname and any(tok in qname for tok in long_tokens):
+                    if 0.6 > best_score:
+                        best_score = 0.6
+                        best_channel = "qualified_name"
                 if best_score == 0.0:
                     continue
 
                 doc_id = doc.get("id", "")
-                if doc_id not in hits or best_score > hits[doc_id]["score"]:
+                if doc_id not in hits:
                     result = dict(doc)
                     result["score"] = best_score
                     result["metadata"] = dict(meta)

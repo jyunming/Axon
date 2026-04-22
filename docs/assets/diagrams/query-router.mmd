@@ -1,0 +1,15 @@
+flowchart TB
+    Q["❓ Incoming Query"]
+    Router{"Query Router\n(heuristic · llm · off)"}
+
+    Q --> Router
+
+    Router -->|"short, specific fact"| F["factual\n━━━━━━━━━━\nHybrid BM25 + Dense\nno extra LLM calls\n(default fallback)"]
+    Router -->|"summarise / compare / explain"| S["synthesis\n━━━━━━━━━━\n+ RAPTOR summary nodes\n+ parent-doc expansion"]
+    Router -->|"numbers, rows, stats"| T["table_lookup\n━━━━━━━━━━\nDense only\ntabular retrieval path"]
+    Router -->|"X related to Y"| E["entity_relation\n━━━━━━━━━━\n+ GraphRAG 1-hop\nentity/relation context"]
+    Router -->|"themes / key topics"| C["corpus_exploration\n━━━━━━━━━━\n+ RAPTOR tree\n+ multi-query expansion"]
+
+    F & S & T & E & C --> Fuse["Hybrid Fuse → Rerank → LLM → Answer"]
+
+    note["💡 heuristic mode: zero LLM calls to classify\nllm mode: one classification call, more accurate\noff mode: always factual route"]

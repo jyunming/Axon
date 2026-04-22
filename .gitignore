@@ -115,6 +115,14 @@ poetry.lock
 tmp/
 temp/
 *.tmp
+.tmp_manual_merge/
+
+# HuggingFace model cache (large, should not be committed)
+.hf_cache/
+
+# Generated benchmark outputs (use CI artifacts instead)
+bench_results*.json
+bench_logs_*/
 list_gemini_models.py
 
 # Root-level ad-hoc test scripts (not part of test suite)
@@ -164,6 +172,15 @@ AxonStore/
 Qualification/
 sample_docs
 
+# HuggingFace model cache (downloaded at runtime)
+.hf_cache/
+
+# Manual merge scratch files
+.tmp_manual_merge/
+
+# Benchmark output logs
+bench_logs_*/
+
 # Root-level Axon project data directories (chroma/bm25 leaked outside ~/.axon)
 /default/
 /black/
@@ -176,3 +193,30 @@ scripts/memory_audit.py
 
 # Attended test notes (markdown, not runnable test files)
 tests/e2e/*.md
+!tests/e2e/test_vscode_extension_copilot_attended*.md
+
+# Rust git worktrees and temporary research dirs
+_wt_rust/
+_wt_*/
+tmp_graphiti_research/
+
+# Temporary scratch directories and files
+tmp_pkg_site/
+tmp_*.yaml
+tmp_*.py
+
+# Internal evaluation reports and planning docs
+reports/
+plans/
+
+# Evaluation outputs and demo scripts
+recall_results.json
+demo_*.py
+
+# Compiled Python extensions (binary)
+*.pyd
+
+# Root-level benchmark and internal report markdown files
+/rust_worktree_benchmark_report.md
+/benchmark_report*.md
+

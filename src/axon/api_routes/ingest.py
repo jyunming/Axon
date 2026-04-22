@@ -5,11 +5,13 @@ import asyncio
 import logging
 import os
 import pathlib
+import tempfile
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 
+from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
 from axon.api_schemas import (
     BatchTextIngestRequest,
@@ -23,13 +25,29 @@ from axon.api_schemas import (
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
+_PATH_ENRICHMENT_EXCLUDED_TYPES = frozenset(
+    {
+        "csv",
+        "tsv",
+        "excel",
+        "parquet",
+        "image",
+        "code",
+    }
+)
 
-def _enforce_write_access(brain, operation: str) -> None:
-    """Translate AxonBrain write-access denials into HTTP 403 responses."""
-    try:
-        brain._assert_write_allowed(operation)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+
+def _normalise_uploaded_filename(filename: str | None, index: int) -> str:
+    """Return a safe basename for an uploaded file, preserving its extension."""
+
+    raw_name = pathlib.Path(filename or "").name.strip()
+    if not raw_name:
+        raw_name = f"upload_{index}"
+
+    safe_stem = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in raw_name)
+    safe_stem = safe_stem.strip("._") or f"upload_{index}"
+
+    return safe_stem
 
 
 @router.post("/ingest/refresh")
@@ -73,21 +91,37 @@ async def refresh_docs(background_tasks: BackgroundTasks):
         if job is None:
             return
         try:
-            versions = brain.get_doc_versions()
+            versions = brain.get_doc_versions() or {}
             loader = DirectoryLoader()
+
             for source_id, record in versions.items():
-                if not os.path.exists(source_id):
+                try:
+                    src_path = pathlib.Path(source_id).expanduser().resolve()
+                except Exception:
+                    job["errors"].append({"source": source_id, "error": "invalid source path"})
+                    continue
+
+                if not src_path.exists():
                     job["missing"].append(source_id)
                     continue
+
                 try:
-                    suffix = os.path.splitext(source_id)[1].lower()
+                    _validate_ingest_path(str(src_path))
+                except (ValueError, PermissionError) as e:
+                    logger.warning(
+                        "Refresh: skipping %s (path validation failed: %s)", source_id, e
+                    )
+                    continue
+
+                try:
+                    suffix = os.path.splitext(str(src_path))[1].lower()
                     loader_instance = loader.loaders.get(suffix)
                     if loader_instance is None:
                         job["errors"].append(
                             {"source": source_id, "error": f"no loader for extension '{suffix}'"}
                         )
                         continue
-                    docs = functools.partial(loader_instance.load, source_id)()
+                    docs = functools.partial(loader_instance.load, str(src_path))()
                     if not docs:
                         job["errors"].append(
                             {"source": source_id, "error": "loader returned no documents"}
@@ -462,6 +496,146 @@ async def ingest_url(request: URLIngestRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
     return {"status": "ingested", "doc_id": doc["id"], "url": request.url}
+
+
+@router.post("/ingest/upload")
+async def ingest_upload(
+    files: list[UploadFile] = File(...),
+    project: str | None = Form(None),
+):
+    """Accept multipart file uploads, load them through the normal file loaders, and ingest."""
+
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    _enforce_project(project, brain)
+    _enforce_write_access(brain, "ingest")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+
+    from axon.loaders import DirectoryLoader
+
+    loader_mgr = DirectoryLoader()
+    docs_to_ingest: list[dict] = []
+    results: list[dict] = []
+    total_chunks = 0
+
+    with tempfile.TemporaryDirectory(prefix="axon_upload_") as tmp_dir:
+        temp_root = pathlib.Path(tmp_dir)
+        used_names: set[str] = set()
+
+        for index, upload in enumerate(files):
+            safe_name = _normalise_uploaded_filename(upload.filename, index)
+
+            candidate_name = safe_name
+            stem = pathlib.Path(safe_name).stem
+            suffix = pathlib.Path(safe_name).suffix
+            counter = 1
+            while candidate_name.lower() in used_names:
+                candidate_name = f"{stem}_{counter}{suffix}"
+                counter += 1
+            used_names.add(candidate_name.lower())
+
+            ext = pathlib.Path(candidate_name).suffix.lower()
+            loader = loader_mgr.loaders.get(ext)
+            if loader is None:
+                results.append(
+                    {
+                        "filename": candidate_name,
+                        "status": "unsupported",
+                        "error": f"Unsupported file type: {ext or 'no extension'}",
+                        "chunks": 0,
+                    }
+                )
+                await upload.close()
+                continue
+
+            temp_path = temp_root / candidate_name
+            # Stream upload to disk in chunks to avoid reading entire file into memory.
+            MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB per file cap
+            total_written = 0
+            try:
+                with open(temp_path, "wb") as _out:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)  # 1 MB
+                        if not chunk:
+                            break
+                        _out.write(chunk)
+                        total_written += len(chunk)
+                        if total_written > MAX_UPLOAD_BYTES:
+                            await upload.close()
+                            raise HTTPException(
+                                status_code=413,
+                                detail=f"File '{candidate_name}' exceeds the allowed size of {MAX_UPLOAD_BYTES} bytes",
+                            )
+                await upload.close()
+            except HTTPException:
+                # Let the HTTPException bubble up to the client
+                raise
+            except Exception as exc:
+                try:
+                    await upload.close()
+                except Exception:
+                    pass
+                logger.error("Failed to save uploaded file %s: %s", candidate_name, exc)
+                results.append(
+                    {
+                        "filename": candidate_name,
+                        "status": "error",
+                        "error": "failed to save uploaded file",
+                        "chunks": 0,
+                    }
+                )
+                continue
+
+            try:
+                docs = await asyncio.to_thread(loader.load, str(temp_path))
+            except Exception as exc:
+                logger.error("Failed to ingest uploaded file %s: %s", candidate_name, exc)
+                results.append(
+                    {
+                        "filename": candidate_name,
+                        "status": "error",
+                        "error": str(exc),
+                        "chunks": 0,
+                    }
+                )
+                continue
+
+            for doc in docs:
+                doc["metadata"]["source"] = candidate_name
+                if doc["metadata"].get("type") not in _PATH_ENRICHMENT_EXCLUDED_TYPES:
+                    doc["text"] = f"[File Path: {candidate_name}]\n{doc['text']}"
+
+            docs_to_ingest.extend(docs)
+            total_chunks += len(docs)
+            results.append(
+                {
+                    "filename": candidate_name,
+                    "status": "ingested",
+                    "error": None,
+                    "chunks": len(docs),
+                }
+            )
+
+        if not docs_to_ingest:
+            raise HTTPException(status_code=400, detail="No supported files found in upload")
+        try:
+            await asyncio.to_thread(brain.ingest, docs_to_ingest)
+        except Exception as exc:
+            logger.error("Error ingesting uploaded file batch: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "status": "success",
+        "files": results,
+        "ingested_files": sum(1 for item in results if item["status"] == "ingested"),
+        "ingested_chunks": total_chunks,
+    }
 
 
 @router.post("/delete")
