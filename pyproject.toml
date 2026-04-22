@@ -9,6 +9,7 @@ description = "General-purpose open-source RAG engine with multi-LLM, hybrid ret
 readme = "PYPI_README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
+license-files = ["LICENSE"]
 authors = [
     {name = "Open Source Contributor"}
 ]
@@ -151,6 +152,7 @@ python-source = "src"
 include = [
     { path = "src/axon/extensions/*.vsix", format = "wheel" },
     { path = "src/axon/extensions/*.vsix", format = "sdist" },
+    { path = "LICENSE", format = "sdist" },
 ]
 exclude = [
     { path = "src/axon/target/**/*", format = "wheel" },
