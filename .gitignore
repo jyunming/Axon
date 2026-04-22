@@ -200,3 +200,26 @@ _wt_rust/
 _wt_*/
 tmp_graphiti_research/
 
+# Temporary scratch directories and files
+tmp_pkg_site/
+tmp_*.yaml
+tmp_*.py
+
+# Internal evaluation reports and planning docs
+reports/
+plans/
+
+# Evaluation outputs and demo scripts
+recall_results.json
+demo_*.py
+
+# Compiled Python extensions (binary)
+*.pyd
+
+# Root-level benchmark and internal report markdown files
+/rust_worktree_benchmark_report.md
+/benchmark_report*.md
+
+# Root-level graph viewer (standalone HTML, not part of the web app)
+/index.html
+

@@ -1,6 +1,0 @@
-[console_scripts]
-axon=axon.cli:main
-axon-api=axon.api:main
-axon-ext=axon.ext_install:install_vscode_extension
-axon-mcp=axon.mcp_server:main
-axon-ui=axon.webapp:main_ui
