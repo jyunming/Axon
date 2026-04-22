@@ -1670,7 +1670,16 @@ class AxonConfig:
 
         _tmp_root = os.path.realpath(_tempfile.gettempdir())
 
-        if os.path.commonpath([os.path.realpath(_resolved_target), _tmp_root]) == _tmp_root:
+        try:
+            _in_tmp = (
+                os.path.commonpath([os.path.realpath(_resolved_target), _tmp_root]) == _tmp_root
+            )
+        except ValueError:
+            # Windows raises ValueError when paths are on different drives;
+            # different drives means the target cannot be inside the tmp root.
+            _in_tmp = False
+
+        if _in_tmp:
             logger.warning(
                 "AxonConfig.save() blocked: target path '%s' is inside the system temp "
                 "directory. This usually means a test run is trying to overwrite your live "
