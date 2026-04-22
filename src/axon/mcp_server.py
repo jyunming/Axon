@@ -226,12 +226,10 @@ async def refresh_ingest(project: str | None = None) -> Any:
 
     """
 
-    body: dict = {}
-
     if project:
-        body["project"] = project
+        await _post("/project/switch", {"project_name": project})
 
-    return await _post("/ingest/refresh", body)
+    return await _post("/ingest/refresh", {})
 
 
 @mcp.tool()
@@ -494,6 +492,7 @@ async def update_settings(
     code_graph: bool | None = None,
     graph_rag_mode: str | None = None,
     cite: bool | None = None,
+    persist: bool = False,
 ) -> Any:
     """Update global Axon RAG and retrieval settings for the current session.
 
@@ -536,6 +535,9 @@ async def update_settings(
         graph_rag_mode: GraphRAG query mode — "local", "global", or "hybrid".
 
         cite: Include inline source citations in generated answers.
+
+        persist: Save these settings to config.yaml so they survive restarts.
+            Defaults to False (session-only changes).
 
     """
 

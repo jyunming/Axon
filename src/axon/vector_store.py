@@ -27,6 +27,11 @@ _MERGED_VIEW_WRITE_ERROR = (
 )
 
 
+def _escape_sql_str(s: str) -> str:
+    """Escape single quotes in a string for safe SQL interpolation."""
+    return s.replace("'", "''")
+
+
 class OpenVectorStore:
     """Unified interface over ChromaDB, Qdrant, and LanceDB vector stores.
 
@@ -515,7 +520,10 @@ class OpenVectorStore:
             try:
                 counts = self.client.list_metadata_values("source")
                 return sorted(
-                    [{"source": src, "chunks": count} for src, count in counts.items()],
+                    [
+                        {"source": src, "chunks": count, "doc_ids": []}
+                        for src, count in counts.items()
+                    ],
                     key=lambda x: x["source"],
                 )
             except Exception as e:
@@ -683,7 +691,7 @@ class OpenVectorStore:
                 return []
 
             try:
-                id_str = ", ".join(f"'{i}'" for i in ids)
+                id_str = ", ".join(f"'{_escape_sql_str(i)}'" for i in ids)
 
                 rows = self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
 
@@ -819,7 +827,7 @@ class OpenVectorStore:
             if self.collection is None:
                 return
 
-            id_str = ", ".join(f"'{i}'" for i in ids)
+            id_str = ", ".join(f"'{_escape_sql_str(i)}'" for i in ids)
 
             self.collection.delete(f"id IN ({id_str})")
 
@@ -876,11 +884,14 @@ class MultiVectorStore:
             ]
 
             for fut in futures:
-                for doc in fut.result():
-                    doc_id = doc["id"]
+                try:
+                    for doc in fut.result():
+                        doc_id = doc["id"]
 
-                    if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
-                        seen[doc_id] = doc
+                        if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                            seen[doc_id] = doc
+                except Exception as e:
+                    logger.warning("MultiVectorStore: sub-store search failed, skipping: %s", e)
 
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
@@ -900,7 +911,7 @@ class MultiVectorStore:
                 else:
                     seen[src]["chunks"] += doc["chunks"]
 
-                    seen[src]["doc_ids"].extend(doc["doc_ids"])
+                    seen[src]["doc_ids"].extend(doc.get("doc_ids", []))
 
         return sorted(seen.values(), key=lambda x: x["source"])
 
@@ -949,11 +960,16 @@ class MultiBM25Retriever:
             futures = [ex.submit(r.search, query, top_k) for r in self._retrievers]
 
             for fut in futures:
-                for doc in fut.result():
-                    doc_id = doc["id"]
+                try:
+                    for doc in fut.result():
+                        doc_id = doc["id"]
 
-                    if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
-                        seen[doc_id] = doc
+                        if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
+                            seen[doc_id] = doc
+                except Exception as e:
+                    logger.warning(
+                        "MultiBM25Retriever: sub-retriever search failed, skipping: %s", e
+                    )
 
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 

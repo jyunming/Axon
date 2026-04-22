@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from axon.api_schemas import (
     SecurityBootstrapRequest,
@@ -14,6 +15,10 @@ from axon.api_schemas import (
 )
 
 logger = logging.getLogger("AxonAPI")
+
+_unlock_failures: dict[str, list[float]] = {}  # ip → list of failure timestamps
+_UNLOCK_MAX_ATTEMPTS = 5
+_UNLOCK_WINDOW_SECS = 300
 
 
 router = APIRouter()
@@ -53,13 +58,27 @@ async def security_bootstrap(request: SecurityBootstrapRequest):
 
 
 @router.post("/security/unlock")
-async def security_unlock(request: SecurityUnlockRequest):
+async def security_unlock(request: SecurityUnlockRequest, req: Request):
     from axon import security as _security
 
+    client_ip = req.client.host if req.client else "unknown"
+    now = time.time()
+
+    # Clean up timestamps outside the lockout window
+    failures = _unlock_failures.get(client_ip, [])
+    failures = [t for t in failures if now - t < _UNLOCK_WINDOW_SECS]
+    _unlock_failures[client_ip] = failures
+
+    if len(failures) >= _UNLOCK_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
+
     try:
-        return _security.unlock_store(_current_user_dir(), request.passphrase)
+        result = _security.unlock_store(_current_user_dir(), request.passphrase)
+        _unlock_failures.pop(client_ip, None)
+        return result
     except _security.SecurityError as exc:
         message = str(exc)
+        _unlock_failures[client_ip].append(time.time())
         status = 401 if "unlock failed" in message.lower() else 400
         raise HTTPException(status_code=status, detail=message)
 

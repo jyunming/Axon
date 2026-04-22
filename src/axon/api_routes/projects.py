@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -22,6 +23,8 @@ logger = logging.getLogger("AxonAPI")
 
 
 router = APIRouter()
+
+_switch_lock = asyncio.Lock()
 
 
 def _require_local_turboquantdb(brain, action: str = "This action") -> None:
@@ -137,9 +140,20 @@ async def update_config(request: ConfigUpdateRequest):
     if persist:
         brain.config.save()
 
+    from dataclasses import asdict
+
+    try:
+        config_data = asdict(brain.config)
+    except TypeError:
+        config_data = brain.config  # type: ignore[assignment]
+    else:
+        for field in _SENSITIVE_FIELDS:
+            if field in config_data and config_data[field]:
+                config_data[field] = "***"
+
     return {
         "status": "success",
-        "config": brain.config,
+        "config": config_data,
         "persisted": persist,
         "applied": applied_keys,
     }
@@ -319,7 +333,8 @@ async def switch_project(request: ProjectSwitchRequest):
             except Exception as exc:
                 logger.warning(f"Could not validate share before switch: {exc}")
 
-        brain.switch_project(project_name)
+        async with _switch_lock:
+            brain.switch_project(project_name)
 
         return {"status": "success", "active_project": project_name}
 

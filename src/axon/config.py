@@ -13,7 +13,7 @@ import difflib
 import getpass
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -250,7 +250,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "ollama_cloud_key",
         "ollama_cloud_url",
     },
-    "embedding": {"provider", "model", "model_path"},
+    "embedding": {"provider", "model", "model_path", "dim"},
     "vector_store": {
         "provider",
         "path",
@@ -402,6 +402,9 @@ class AxonConfig:
 
     embedding_model_path: str = ""
 
+    # Override the embedding vector dimension.  0 = auto-detect from the model.
+    embedding_dim: int = 0
+
     ollama_base_url: str = "http://localhost:11434"
 
     # Local directory where Ollama stores its model blobs.
@@ -427,6 +430,10 @@ class AxonConfig:
     llm_max_tokens: int = 2048
 
     api_key: str = ""  # legacy alias -- prefer openai_api_key
+
+    # CORS origins allowed by the REST API server (maps from api.allow_origins in config.yaml).
+    # Example: ["http://localhost:3000", "https://my.app"]
+    api_allow_origins: list = field(default_factory=list)
 
     openai_api_key: str = ""
 
@@ -642,6 +649,9 @@ class AxonConfig:
 
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+    # Maximum number of results to return after re-ranking (maps from rerank.top_k in config.yaml).
+    rerank_top_k: int = 5
+
     # Parent-Document / Small-to-Big Retrieval
 
     # Child chunks (chunk_size tokens) are indexed for precise retrieval;
@@ -703,6 +713,9 @@ class AxonConfig:
     truth_grounding: bool = False
 
     brave_api_key: str = ""
+
+    # Number of web search results to fetch per query (maps from web_search.num_results).
+    web_search_num_results: int = 10
 
     # Query Result Caching
 
@@ -1353,6 +1366,9 @@ class AxonConfig:
             if "model" in data["rerank"]:
                 config_dict["reranker_model"] = data["rerank"]["model"]
 
+            if "top_k" in data["rerank"]:
+                config_dict["rerank_top_k"] = int(data["rerank"]["top_k"])
+
         if "query_transformations" in data:
             for key in (
                 "multi_query",
@@ -1370,6 +1386,12 @@ class AxonConfig:
 
         if "context_compression" in data:
             config_dict["compress_context"] = data["context_compression"].get("enabled", False)
+            if "strategy" in data["context_compression"]:
+                config_dict["compression_strategy"] = data["context_compression"]["strategy"]
+            if "token_budget" in data["context_compression"]:
+                config_dict["compression_token_budget"] = int(
+                    data["context_compression"]["token_budget"]
+                )
 
         if "web_search" in data:
             ws = data["web_search"]
@@ -1378,6 +1400,9 @@ class AxonConfig:
 
             if ws.get("brave_api_key"):
                 config_dict["brave_api_key"] = ws["brave_api_key"]
+
+            if "num_results" in ws:
+                config_dict["web_search_num_results"] = int(ws["num_results"])
 
         if "offline" in data:
             ol = data["offline"]
@@ -1457,6 +1482,13 @@ class AxonConfig:
 
         if "repl_shell_passthrough" in data:
             config_dict["repl_shell_passthrough"] = data["repl_shell_passthrough"]
+
+        if "api" in data and isinstance(data["api"], dict):
+            api_section = data["api"]
+            if api_section.get("key"):
+                config_dict["api_key"] = api_section["key"]
+            if "allow_origins" in api_section:
+                config_dict["api_allow_origins"] = api_section["allow_origins"] or []
 
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
 
@@ -1557,6 +1589,7 @@ class AxonConfig:
                 "enabled": flat["rerank"],
                 "provider": flat["reranker_provider"],
                 "model": flat["reranker_model"],
+                "top_k": flat["rerank_top_k"],
             },
             "query_transformations": {
                 "multi_query": flat["multi_query"],
@@ -1570,10 +1603,13 @@ class AxonConfig:
             },
             "context_compression": {
                 "enabled": flat["compress_context"],
+                "strategy": flat["compression_strategy"],
+                "token_budget": flat["compression_token_budget"],
             },
             "web_search": {
                 "enabled": flat["truth_grounding"],
                 "brave_api_key": flat["brave_api_key"],
+                "num_results": flat["web_search_num_results"],
             },
             "offline": {
                 "enabled": flat["offline_mode"],
@@ -1582,6 +1618,10 @@ class AxonConfig:
                 "embedding_models_dir": flat["embedding_models_dir"],
                 "hf_models_dir": flat["hf_models_dir"],
                 "tokenizer_cache_dir": flat["tokenizer_cache_dir"],
+            },
+            "api": {
+                "key": flat["api_key"],
+                "allow_origins": flat["api_allow_origins"],
             },
             "projects_root": flat["projects_root"],
         }

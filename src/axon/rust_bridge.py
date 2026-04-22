@@ -176,7 +176,7 @@ class RustBridge:
         out = self._call("compute_doc_hash", text)
         if isinstance(out, str):
             return out
-        return hashlib.md5(text.encode("utf-8")).hexdigest()
+        return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
     def can_extract_code_tokens(self) -> bool:
         return self._has("extract_code_query_tokens") or True
@@ -295,7 +295,10 @@ class RustBridge:
         mod = self._load()
         fn = getattr(mod, "load_hash_store_binary", None) if mod else None
         if not callable(fn):
-            return None
+            try:
+                return set(Path(path).read_text("utf-8").splitlines())
+            except OSError:
+                return None
         try:
             out = fn(path)
         except Exception as exc:

@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 import os
@@ -330,7 +331,7 @@ def _render_source_card(i: int, doc: dict):
             f"font-weight:600;'>{score:.3f}</span>"
         )
         st.markdown(
-            f"**{icon} [{i + 1}] `{src}`** {score_badge}",
+            f"**{icon} [{i + 1}] `{html.escape(src)}`** {score_badge}",
             unsafe_allow_html=True,
         )
     text = doc["text"][:600] + ("…" if len(doc["text"]) > 600 else "")
@@ -1083,7 +1084,12 @@ with st.sidebar:
             if os.path.isdir(ingest_dir):
                 allowed_base = os.path.abspath(os.getenv("RAG_INGEST_BASE", "."))
                 abs_path = os.path.abspath(ingest_dir)
-                if not abs_path.startswith(allowed_base):
+                try:
+                    common = os.path.commonpath([allowed_base, abs_path])
+                    if common != allowed_base:
+                        st.error(f"Access denied: path outside allowed base '{allowed_base}'.")
+                        st.stop()
+                except ValueError:
                     st.error(f"Access denied: path outside allowed base '{allowed_base}'.")
                     st.stop()
                 from axon.loaders import DirectoryLoader
@@ -1140,7 +1146,7 @@ with st.sidebar:
                     st.markdown(
                         f"<div style='display:flex;justify-content:space-between;"
                         f"font-size:0.78rem;padding:2px 0;'>"
-                        f"<span>📄 {d['source']}</span>"
+                        f"<span>📄 {html.escape(d['source'])}</span>"
                         f"<span style='color:rgba(200,200,200,0.6);'>{d['chunks']} chunks</span>"
                         f"</div>",
                         unsafe_allow_html=True,
@@ -1151,7 +1157,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 st.markdown(
     f'<h3 style="margin:0 0 1rem;font-size:1.1rem;color:rgba(228,228,231,0.85);">'
-    f'{current_session["name"]}</h3>',
+    f'{html.escape(current_session["name"])}</h3>',
     unsafe_allow_html=True,
 )
 
@@ -1316,11 +1322,11 @@ st.markdown(
     #axon-status-bar .val {{ color: rgba(228,228,231,0.75); font-weight: 500; }}
     </style>
     <div id="axon-status-bar">
-        <span>📁 <span class="val">{_active_proj_display}</span></span>
+        <span>📁 <span class="val">{html.escape(_active_proj_display)}</span></span>
         <span class="dot">•</span>
-        <span>🤖 <span class="val">{_llm_model_display}</span></span>
+        <span>🤖 <span class="val">{html.escape(_llm_model_display)}</span></span>
         <span class="dot">•</span>
-        <span>⚡ <span class="val">{_emb_model_display}</span></span>
+        <span>⚡ <span class="val">{html.escape(_emb_model_display)}</span></span>
     </div>
     """,
     unsafe_allow_html=True,

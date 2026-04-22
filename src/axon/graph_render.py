@@ -416,7 +416,7 @@ class GraphRenderMixin:
 
       .nodeOpacity(0.95)
 
-      .linkLabel(link => `<div><b>${{link.relation || 'relation'}}</b><br>${{link.description || ''}}</div>`)
+      .linkLabel(link => `<div><b>${{esc(link.relation || 'relation')}}</b><br>${{esc(link.description || '')}}</div>`)
 
       .linkWidth(link => link.width || 1)
 
@@ -802,16 +802,16 @@ class GraphRenderMixin:
 
         cg_json = _json.dumps(cg, ensure_ascii=False).replace("</script>", "<\\/script>")
 
+        import html as _html_mod
+
         sources_html = "".join(
             f'<div style="padding:5px 10px;border-bottom:1px solid #333;font-size:11px">'
             f'<span style="color:#4ec9b0">[{i+1}] '
-            f'{(s.get("metadata") or {}).get("source", "") or s.get("source", "")}'
+            f'{_html_mod.escape((s.get("metadata") or {}).get("source", "") or s.get("source", ""))}'
             f'</span><div style="color:#888;margin-top:2px">'
-            f'{(s.get("text","") or "")[:120]}…</div></div>'
+            f'{_html_mod.escape((s.get("text","") or "")[:120])}…</div></div>'
             for i, s in enumerate(sources)
         )
-
-        import html as _html_mod
 
         answer_esc = _html_mod.escape(answer or "*(no answer)*")
 

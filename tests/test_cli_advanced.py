@@ -1,4 +1,5 @@
 import sys
+from importlib.metadata import version
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,7 @@ def test_cli_version_flag(capsys):
             cli_main()
         assert e.value.code == 0
         captured = capsys.readouterr()
-        assert "0.1.0" in captured.out
+        assert version("axon-rag") in captured.out
 
 
 def test_cli_help_flag(capsys):

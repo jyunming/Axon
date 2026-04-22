@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -292,7 +293,7 @@ async def api_key_middleware(request: Request, call_next):
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key")
-        if provided != _RAG_API_KEY:
+        if not hmac.compare_digest(provided or "", _RAG_API_KEY):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing X-API-Key header."},

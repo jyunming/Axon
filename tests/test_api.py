@@ -1067,11 +1067,9 @@ def test_ingest_upload_unsupported_file_is_reported():
         files=[("files", ("archive.xyz", b"not supported", "application/octet-stream"))],
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 400
     payload = resp.json()
-    assert payload["status"] == "error"
-    assert payload["ingested_files"] == 0
-    assert payload["files"][0]["status"] == "unsupported"
+    assert "supported" in payload["detail"].lower()
     api_module.brain.ingest.assert_not_called()
 
 

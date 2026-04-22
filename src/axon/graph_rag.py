@@ -1503,12 +1503,15 @@ class GraphRagMixin:
     def _save_claims_graph(self) -> None:
         """Persist claims graph to disk."""
         import json
+        import os
         import pathlib
 
         path = pathlib.Path(self.config.bm25_path) / ".claims_graph.json"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._claims_graph), encoding="utf-8")
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._claims_graph), encoding="utf-8")
+            os.replace(tmp, path)
         except Exception as e:
             logger.debug(f"Could not save claims graph: {e}")
 
@@ -1929,8 +1932,12 @@ class GraphRagMixin:
         """
         self._assert_write_allowed("finalize_graph")
         if force or self._community_graph_dirty:
-            self._community_graph_dirty = False
-            self._rebuild_communities()
+            try:
+                self._rebuild_communities()
+                self._community_graph_dirty = False
+            except Exception:
+                # leave dirty=True so it retries next time
+                raise
 
     # ── Graph visualization ──────────────────────────────────────────────────
 

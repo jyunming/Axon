@@ -27,6 +27,66 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                             "type": "object",
                             "description": "Optional metadata filters (e.g. {'type': 'text'})",
                         },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Override number of chunks to retrieve for context.",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Target project. Must match the active project; use switch_project first if needed.",
+                        },
+                        "threshold": {
+                            "type": "number",
+                            "description": "Override similarity threshold for this request (0.0-1.0).",
+                        },
+                        "hybrid": {
+                            "type": "boolean",
+                            "description": "Override hybrid BM25+vector search toggle for this request.",
+                        },
+                        "rerank": {
+                            "type": "boolean",
+                            "description": "Override cross-encoder re-ranking toggle for this request.",
+                        },
+                        "hyde": {
+                            "type": "boolean",
+                            "description": "Override HyDE query transformation toggle for this request.",
+                        },
+                        "multi_query": {
+                            "type": "boolean",
+                            "description": "Override multi-query retrieval toggle for this request.",
+                        },
+                        "step_back": {
+                            "type": "boolean",
+                            "description": "Override step-back prompting toggle for this request.",
+                        },
+                        "decompose": {
+                            "type": "boolean",
+                            "description": "Override query decomposition toggle for this request.",
+                        },
+                        "compress": {
+                            "type": "boolean",
+                            "description": "Override LLM context compression toggle for this request.",
+                        },
+                        "discuss": {
+                            "type": "boolean",
+                            "description": "Override discussion fallback toggle for this request.",
+                        },
+                        "temperature": {
+                            "type": "number",
+                            "description": "Override LLM temperature for this request (0.0-2.0).",
+                        },
+                        "timeout": {
+                            "type": "number",
+                            "description": "Query timeout in seconds (default 120).",
+                        },
+                        "include_diagnostics": {
+                            "type": "boolean",
+                            "description": "When true, include retrieval diagnostics in the response.",
+                        },
+                        "dry_run": {
+                            "type": "boolean",
+                            "description": "Skip LLM generation; return ranked chunks and diagnostics only.",
+                        },
                     },
                     "required": ["query"],
                 },
@@ -404,6 +464,71 @@ def get_rag_tool_definition(api_base_url: str = "http://localhost:8000") -> list
                         "cite": {
                             "type": "boolean",
                             "description": "Include inline source citations in answers.",
+                        },
+                        "truth_grounding": {
+                            "type": "boolean",
+                            "description": "Toggle truth-grounding enforcement on retrieved chunks.",
+                        },
+                        "discussion_fallback": {
+                            "type": "boolean",
+                            "description": "Allow general-knowledge fallback when no chunks are found.",
+                        },
+                        "llm_provider": {
+                            "type": "string",
+                            "description": "LLM provider (e.g. 'ollama', 'openai', 'gemini').",
+                        },
+                        "llm_model": {
+                            "type": "string",
+                            "description": "LLM model name (e.g. 'llama3.2', 'gpt-4o').",
+                        },
+                        "embedding_provider": {
+                            "type": "string",
+                            "description": "Embedding provider (e.g. 'sentence_transformers', 'ollama').",
+                        },
+                        "embedding_model": {
+                            "type": "string",
+                            "description": "Embedding model name.",
+                        },
+                        "hybrid_weight": {
+                            "type": "number",
+                            "description": "BM25 weight in hybrid search (0.0 = pure vector, 1.0 = pure BM25).",
+                        },
+                        "reranker_model": {
+                            "type": "string",
+                            "description": "Cross-encoder reranker model name.",
+                        },
+                        "code_graph_bridge": {
+                            "type": "boolean",
+                            "description": "Toggle MENTIONED_IN edges linking prose docs to code symbols.",
+                        },
+                        "graph_rag_community": {
+                            "type": "boolean",
+                            "description": "Toggle community-summary augmentation in GraphRAG.",
+                        },
+                        "graph_rag_relations": {
+                            "type": "boolean",
+                            "description": "Toggle relation extraction in GraphRAG.",
+                        },
+                        "graph_rag_ner_backend": {
+                            "type": "string",
+                            "description": "NER backend for entity extraction: 'llm' or 'gliner'.",
+                        },
+                        "graph_rag_depth": {
+                            "type": "string",
+                            "description": "GraphRAG retrieval depth: 'light', 'standard', or 'deep'.",
+                        },
+                        "graph_rag_budget": {
+                            "type": "integer",
+                            "description": "Maximum number of entities to expand per query (>= 1).",
+                        },
+                        "graph_rag_relation_budget": {
+                            "type": "integer",
+                            "description": "Maximum number of relations to include per entity (>= 1).",
+                        },
+                        "persist": {
+                            "type": "boolean",
+                            "description": "Save these settings to config.yaml so they survive restarts. Defaults to false (session-only).",
+                            "default": False,
                         },
                     },
                     "required": [],

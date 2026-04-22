@@ -868,26 +868,29 @@ def reciprocal_rank_fusion(
             return result
 
     fused_scores: dict[str, float] = {}
+    fused_only_ids: set[str] = set()
 
     # Preserve original cosine scores keyed by doc_id
     vector_scores = {doc["id"]: doc.get("score", 0.0) for doc in vector_results}
 
-    for rank, doc in enumerate(vector_results):
+    # RRF formula requires 1-indexed rank: score = 1 / (k + rank)
+    for rank, doc in enumerate(vector_results, start=1):
         doc_id = doc["id"]
-        fused_scores[doc_id] = fused_scores.get(doc_id, 0) + 1 / (rank + k)
+        fused_scores[doc_id] = fused_scores.get(doc_id, 0) + 1 / (k + rank)
 
-    for rank, doc in enumerate(bm25_results):
+    for rank, doc in enumerate(bm25_results, start=1):
         doc_id = doc["id"]
         if doc_id not in fused_scores:
-            fused_scores[doc_id] = 1 / (rank + k)
-            doc["fused_only"] = True
+            fused_scores[doc_id] = 1 / (k + rank)
+            fused_only_ids.add(doc_id)
         else:
-            fused_scores[doc_id] += 1 / (rank + k)
+            fused_scores[doc_id] += 1 / (k + rank)
 
-    all_docs = {doc["id"]: doc for doc in vector_results}
+    # Use shallow copies to avoid mutating the caller's input lists
+    all_docs = {doc["id"]: dict(doc) for doc in vector_results}
     for doc in bm25_results:
         if doc["id"] not in all_docs:
-            all_docs[doc["id"]] = doc
+            all_docs[doc["id"]] = dict(doc)
 
     sorted_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
 
@@ -895,6 +898,8 @@ def reciprocal_rank_fusion(
     for doc_id in sorted_ids:
         doc = all_docs[doc_id]
         doc["score"] = fused_scores[doc_id]
+        if doc_id in fused_only_ids:
+            doc["fused_only"] = True
         # Expose the original cosine similarity for display purposes
         if doc_id in vector_scores:
             doc["vector_score"] = vector_scores[doc_id]

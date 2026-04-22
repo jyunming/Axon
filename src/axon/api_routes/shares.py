@@ -38,6 +38,12 @@ async def store_init(request: StoreInitRequest):
 
     base = Path(request.base_path).expanduser().resolve()
 
+    # Validate: reject null bytes and ensure the resolved path is absolute
+    if "\x00" in str(base) or not base.is_absolute():
+        raise HTTPException(
+            status_code=400, detail="Invalid path: must be an absolute path with no null bytes."
+        )
+
     username = getpass.getuser()
 
     store_root = base / "AxonStore"

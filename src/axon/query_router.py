@@ -181,12 +181,7 @@ class QueryRouterMixin:
 
             # Multi-hop traversal via relation graph
             def _cfg_get(name, default):
-                val = getattr(active_cfg, name, default)
-                if isinstance(val, MagicMock):
-                    return default
-                return val
-
-            from unittest.mock import MagicMock
+                return getattr(active_cfg, name, default)
 
             max_hops = _cfg_get("graph_rag_max_hops", 1)
             hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
@@ -1541,6 +1536,21 @@ class QueryRouterMixin:
         """
         self._validate_embedding_meta(on_mismatch="warn")
         cfg = self._apply_overrides(overrides)
+
+        # --- System-level query router (mirrors query() routing logic) ---
+        if cfg.query_router != "off":
+            route = self._classify_query_route(query, cfg)
+            profile_overrides = _ROUTE_PROFILES.get(route, {})
+            for k, v in profile_overrides.items():
+                if hasattr(cfg, k):
+                    object.__setattr__(cfg, k, v)
+            logger.debug("query_router(stream): route=%s overrides=%s", route, profile_overrides)
+        elif cfg.graph_rag_auto_route != "off" and cfg.graph_rag:
+            _needs_grag = self._classify_query_needs_graphrag(query, cfg.graph_rag_auto_route)
+            if not _needs_grag:
+                cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
+                logger.debug("Auto-route(stream): GraphRAG bypassed for query '%s...'", query[:60])
+
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
         self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())

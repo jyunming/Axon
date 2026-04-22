@@ -51,6 +51,9 @@ _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
     ("graph_backends/", ""),
     ("target_rebuild/", ""),
     ("config_wizard.py", ""),
+    # _rust_loader.py — module attributes set dynamically at runtime via setattr;
+    # mypy cannot see them on ModuleType.
+    ("_rust_loader.py", ""),
 ]
 
 

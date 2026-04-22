@@ -106,6 +106,14 @@ async def refresh_docs(background_tasks: BackgroundTasks):
                     continue
 
                 try:
+                    _validate_ingest_path(str(src_path))
+                except (ValueError, PermissionError) as e:
+                    logger.warning(
+                        "Refresh: skipping %s (path validation failed: %s)", source_id, e
+                    )
+                    continue
+
+                try:
                     suffix = os.path.splitext(str(src_path))[1].lower()
                     loader_instance = loader.loaders.get(suffix)
                     if loader_instance is None:
@@ -614,15 +622,16 @@ async def ingest_upload(
                 }
             )
 
-        if docs_to_ingest:
-            try:
-                await asyncio.to_thread(brain.ingest, docs_to_ingest)
-            except Exception as exc:
-                logger.error("Error ingesting uploaded file batch: %s", exc)
-                raise HTTPException(status_code=500, detail=str(exc))
+        if not docs_to_ingest:
+            raise HTTPException(status_code=400, detail="No supported files found in upload")
+        try:
+            await asyncio.to_thread(brain.ingest, docs_to_ingest)
+        except Exception as exc:
+            logger.error("Error ingesting uploaded file batch: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
 
     return {
-        "status": "success" if docs_to_ingest else "error",
+        "status": "success",
         "files": results,
         "ingested_files": sum(1 for item in results if item["status"] == "ingested"),
         "ingested_chunks": total_chunks,

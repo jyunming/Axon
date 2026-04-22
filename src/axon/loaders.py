@@ -504,6 +504,11 @@ class URLLoader(BaseLoader):
         except httpx.RequestError as exc:
             raise ValueError(f"Failed to fetch '{url}': {exc}")
 
+        # Re-validate after redirects to prevent SSRF bypass via 301/302 redirect chains
+        final_url = str(resp.url)
+        if final_url != url:
+            self._check_ssrf(final_url)
+
         if resp.status_code != 200:
             raise ValueError(f"'{url}' returned HTTP {resp.status_code}.")
 
@@ -617,6 +622,7 @@ class ImageLoader(BaseLoader):
             logger.info(f"🖼️ [DRY RUN] Skipping image processing: {path}")
             return [
                 {
+                    "id": _stable_file_id(path, "image"),
                     "text": f"Image at {path} (Dry Run - No Caption)",
                     "metadata": {
                         "source": path,

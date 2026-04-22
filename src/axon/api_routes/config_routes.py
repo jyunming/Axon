@@ -263,7 +263,10 @@ async def set_config_field(request: ConfigSetRequest):
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
 
-    flat_key = _DOT_TO_FLAT.get(request.key, request.key)
+    flat_key = _DOT_TO_FLAT.get(request.key)
+
+    if flat_key is None:
+        raise HTTPException(status_code=400, detail=f"Unknown config key: {request.key!r}")
 
     if not hasattr(brain.config, flat_key):
         raise HTTPException(

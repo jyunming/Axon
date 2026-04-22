@@ -2846,10 +2846,6 @@ Your primary goal is to help the user by answering questions based on the provid
             if not documents:
                 return
 
-            self._ingested_hashes.update(new_hashes)
-
-            self._save_hash_store()
-
         # Contextual retrieval: prepend LLM context to each chunk
 
         if self.config.contextual_retrieval and self.config.dataset_type in {
@@ -2988,6 +2984,12 @@ Your primary goal is to help the user by answering questions based on the provid
         self._own_vector_store.add(ids, texts, all_embeddings, metadatas)
 
         store_ms = (time.time() - t_store) * 1000
+
+        # Persist dedup hashes only after a successful vector store write so that a
+        # failed write does not permanently mark documents as "seen".
+        if self.config.dedup_on_ingest and new_hashes:
+            self._ingested_hashes.update(new_hashes)
+            self._save_hash_store()
 
         # Persist embedding meta after first successful ingest (idempotent on subsequent calls)
 

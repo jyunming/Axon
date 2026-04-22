@@ -965,9 +965,9 @@ def _tool_purge_source(brain, args: dict) -> str:
         if target:
             ids_to_delete = [cid for d in target for cid in d.get("doc_ids", [])]
             if ids_to_delete:
-                brain.vector_store.delete_by_ids(ids_to_delete)
-                if brain.bm25 is not None:
-                    brain.bm25.delete_documents(ids_to_delete)
+                brain._own_vector_store.delete_by_ids(ids_to_delete)
+                if brain._own_bm25 is not None:
+                    brain._own_bm25.delete_documents(ids_to_delete)
                 if brain._entity_graph:
                     brain._prune_entity_graph(set(ids_to_delete))
                 removed_vectors = len(ids_to_delete)
@@ -1042,10 +1042,10 @@ def _tool_delete_documents(brain, args: dict) -> str:
         return f"Source '{source}' found but has no chunk IDs."
 
     # Delete from vector store
-    brain.vector_store.delete_by_ids(ids_to_delete)
+    brain._own_vector_store.delete_by_ids(ids_to_delete)
     # Delete from BM25 index
-    if brain.bm25 is not None:
-        brain.bm25.delete_documents(ids_to_delete)
+    if brain._own_bm25 is not None:
+        brain._own_bm25.delete_documents(ids_to_delete)
     # Prune entity graph (no-op if graph is empty)
     if brain._entity_graph:
         brain._prune_entity_graph(set(ids_to_delete))
@@ -1337,6 +1337,15 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
             if current_hash == stored_hash:
                 skipped += 1
                 continue
+            # Delete existing chunks for this source before re-ingesting to prevent duplicates.
+            all_docs = brain.list_documents()
+            target = [d for d in all_docs if d.get("source") == source]
+            if target:
+                ids_to_delete = [cid for d in target for cid in d.get("doc_ids", [])]
+                if ids_to_delete:
+                    brain._own_vector_store.delete_by_ids(ids_to_delete)
+                    if brain._own_bm25 is not None:
+                        brain._own_bm25.delete_documents(ids_to_delete)
             brain.ingest(docs)
             refreshed += 1
         except Exception as exc:

@@ -1105,3 +1105,6 @@ class OpenLLM:
             # True streaming via the bridge would require a more complex WebSocket setup.
 
             yield self.complete(prompt, system_prompt, chat_history)
+
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider!r}")

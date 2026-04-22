@@ -67,12 +67,15 @@ def _write_json(path: Path, data: dict) -> None:
             pass
 
 
-def _compute_hmac(token: str, key_id: str, project: str, grantee: str) -> str:
-    """HMAC-SHA256 binding the token to (key_id, project, grantee).
+def _compute_hmac(
+    token: str, key_id: str, project: str, grantee: str, owner_store_path: str
+) -> str:
+    """HMAC-SHA256 binding the token to (key_id, project, grantee, owner_store_path).
 
-    Prevents a leaked token from being used for a different project or grantee.
+    Including owner_store_path prevents a recipient from swapping the store path
+    in the share string to bypass revocation — the HMAC would no longer verify.
     """
-    message = f"{key_id}:{project}:{grantee}".encode()
+    message = f"{key_id}:{project}:{grantee}:{owner_store_path}".encode()
     return hmac.new(token.encode(), message, hashlib.sha256).hexdigest()
 
 
@@ -96,8 +99,9 @@ def generate_share_key(
     """
     key_id = "sk_" + secrets.token_hex(4)
     token = secrets.token_hex(32)
-    token_hmac = _compute_hmac(token, key_id, project, grantee)
     owner_name = owner_user_dir.name
+    owner_store_path = str(owner_user_dir.parent)
+    token_hmac = _compute_hmac(token, key_id, project, grantee, owner_store_path)
     now = datetime.now(timezone.utc).isoformat()
 
     issued_record = {
@@ -135,7 +139,6 @@ def generate_share_key(
 
     # Build share_string: base64(key_id:token:owner:project:owner_store_path)
     # owner_store_path is the AxonStore root (parent of owner_user_dir)
-    owner_store_path = str(owner_user_dir.parent)
     raw = f"{key_id}:{token}:{owner_name}:{project}:{owner_store_path}"
     share_string = base64.urlsafe_b64encode(raw.encode()).decode()
 
@@ -198,7 +201,7 @@ def redeem_share_key(
     key_record = next((r for r in issued_records if r["key_id"] == key_id), None)
     if key_record is None:
         raise ValueError(f"Key '{key_id}' not found in owner's key store.")
-    expected_hmac = _compute_hmac(token, key_id, project, grantee_user_dir.name)
+    expected_hmac = _compute_hmac(token, key_id, project, grantee_user_dir.name, owner_store_path)
     if not hmac.compare_digest(key_record["token_hmac"], expected_hmac):
         raise ValueError("Share key HMAC verification failed.")
 

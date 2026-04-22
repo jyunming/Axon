@@ -421,7 +421,7 @@ REGISTRY: list[Capability] = [
             Surface.VSCODE: "Graph panel exists but uses /graph/data; separate from viz export",
             Surface.WEBAPP: "Streamlit embeds the graph panel inline rather than exporting HTML",
         },
-        api_route="/graph/viz",
+        api_route="/graph/visualize",
     ),
     # ── Session ──────────────────────────────────────────────────────────────
     Capability(

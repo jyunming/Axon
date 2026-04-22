@@ -151,11 +151,14 @@ async def query_brain_stream(request: QueryRequest):
         "llm_temperature": request.temperature,
     }
 
-    def generate():
+    async def generate():
         try:
-            for chunk in brain.query_stream(
-                request.query, filters=request.filters, overrides=overrides
-            ):
+            chunks = await asyncio.to_thread(
+                lambda: list(
+                    brain.query_stream(request.query, filters=request.filters, overrides=overrides)
+                )
+            )
+            for chunk in chunks:
                 if isinstance(chunk, dict):
                     # Add type field if not present to help frontend dispatching
                     if "type" not in chunk:
