@@ -58,6 +58,7 @@ jobs:
           python -m py_compile src/axon/webapp.py
 
       - name: Lint with ruff (if installed)
+        shell: bash
         run: |
           if pip show ruff &>/dev/null; then
             ruff check src/ tests/
@@ -66,6 +67,7 @@ jobs:
           fi
 
       - name: Format check with black (if installed)
+        shell: bash
         run: |
           if pip show black &>/dev/null; then
             black --check src/ tests/
@@ -74,6 +76,7 @@ jobs:
           fi
 
       - name: Type check with mypy (if installed)
+        shell: bash
         run: |
           if pip show mypy &>/dev/null; then
             mypy src/axon/ --ignore-missing-imports --no-error-summary
@@ -83,6 +86,7 @@ jobs:
         continue-on-error: true
 
       - name: Run tests
+        shell: bash
         run: |
           if [ -d tests ] && [ -n "$(find tests -name '*.py' -not -name '__init__.py')" ]; then
             if pip show pytest-cov &>/dev/null; then
