@@ -4505,6 +4505,8 @@ class TestGraphRAGAuditFixes:
 
         brain.config.graph_rag_global_max_map_chunks = 0
 
+        brain.config.graph_rag_large_graph_threshold = 50000
+
         brain._entity_graph = {}
 
         brain._relation_graph = {}

@@ -1406,6 +1406,7 @@ class TestQueryStream:
         stub = _make_full_stub(similarity_threshold=0.0)
         stub.config.graph_rag = True
         stub.config.graph_rag_mode = "local"
+        stub.config.query_router = "off"
         stub._entity_graph = {"e1": {"chunk_ids": []}}
         stub._community_summaries = {}
         stub._local_search_context = MagicMock(return_value="local ctx header")

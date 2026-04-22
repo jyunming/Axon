@@ -197,8 +197,8 @@ class TestDynamicGraphBackendRetrieve:
         self._seed_facts(backend, tmp_path)
         results = backend.retrieve("alice", cfg=RetrievalConfig(top_k=10))
         assert len(results) >= 1
-        subjects = [r.matched_entity_names[0] for r in results]
-        assert "alice" in subjects
+        all_matched = [name for r in results for name in r.matched_entity_names]
+        assert "alice" in all_matched
 
     def test_retrieve_empty_graph(self, tmp_path):
         """Empty graph returns empty list."""

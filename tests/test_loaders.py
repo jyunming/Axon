@@ -1060,6 +1060,8 @@ class TestRewriteGithubUrl:
 
         mock_resp.text = "# Hello World"
 
+        mock_resp.url = raw_url
+
         with patch(
             "axon.loaders.socket.getaddrinfo", return_value=[("", "", "", "", ("1.2.3.4", 0))]
         ):

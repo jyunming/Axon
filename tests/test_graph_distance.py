@@ -222,6 +222,7 @@ class TestExpandWithEntityGraph:
         cfg.graph_rag_max_hops = 2
         cfg.graph_rag_hop_decay = 0.7
         cfg.graph_rag_distance_weighted = True
+        cfg.graph_rag_large_graph_threshold = 50000
         if config_overrides:
             for k, v in config_overrides.items():
                 setattr(cfg, k, v)
@@ -649,6 +650,7 @@ class TestPerformanceGuard:
         cfg.graph_rag_max_hops = config_max_hops
         cfg.graph_rag_hop_decay = 0.7
         cfg.graph_rag_distance_weighted = True
+        cfg.graph_rag_large_graph_threshold = 50000
 
         router = QueryRouterMixin.__new__(QueryRouterMixin)
         router.config = cfg
