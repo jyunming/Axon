@@ -164,6 +164,15 @@ AxonStore/
 Qualification/
 sample_docs
 
+# HuggingFace model cache (downloaded at runtime)
+.hf_cache/
+
+# Manual merge scratch files
+.tmp_manual_merge/
+
+# Benchmark output logs
+bench_logs_*/
+
 # Root-level Axon project data directories (chroma/bm25 leaked outside ~/.axon)
 /default/
 /black/

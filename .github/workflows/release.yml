@@ -55,7 +55,7 @@ jobs:
         with:
           command: build
           target: ${{ matrix.maturin-target }}
-          manylinux: ${{ matrix.maturin-manylinux || 'auto' }}
+          manylinux: ${{ matrix.maturin-manylinux != '' && matrix.maturin-manylinux || 'off' }}
           args: --release --out dist --interpreter 3.10 3.11 3.12 3.13
 
       - name: Upload wheel artifacts
