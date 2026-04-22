@@ -315,6 +315,9 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "symbol_index_engine",
         "rust_fallback_enabled",
         "rust_batch_size",
+        "query_cache",
+        "query_cache_size",
+        "query_cache_ttl",
     },
     "chunk": {
         "strategy",
@@ -722,6 +725,9 @@ class AxonConfig:
     query_cache: bool = False
 
     query_cache_size: int = 128
+
+    # Cached query entries expire after this many seconds (0 or negative = no expiry).
+    query_cache_ttl: int = 1800
 
     # Ingest Deduplication
 

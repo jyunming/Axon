@@ -122,12 +122,12 @@ class GraphRagMixin:
     def _persist_executor(self) -> concurrent.futures.ThreadPoolExecutor:
         """Single-worker executor dedicated to background graph persistence I/O.
 
-        Reuses ``self._executor`` when available (set by AxonBrain.__init__) to
-        avoid spawning an extra thread pool.  Falls back to a private
-        single-worker pool so the mixin works standalone in tests.
+        Always uses a dedicated private pool so that every graph persist job
+        (entity + relation + claims) is serialized.  This guarantees that the
+        ``_gr_persist_hashes`` digest cache and the per-path temp-file writes
+        have no concurrent writers — reusing the shared ``self._executor``
+        (8 workers in AxonBrain) would race on both.
         """
-        if hasattr(self, "_executor") and self._executor is not None:
-            return self._executor  # type: ignore[return-value]
         if (
             not hasattr(self, "_persist_executor_internal")
             or self._persist_executor_internal is None
@@ -725,9 +725,19 @@ class GraphRagMixin:
     def _get_incoming_relation_index(self) -> dict[str, list]:
         if not getattr(self.config, "graph_rag_local_cached_incoming", True):
             return {}
+        # Fast path: if the relation graph hasn't been mutated since the last
+        # rebuild, skip the O(N*M) signature scan entirely.  ``_save_relation_graph``
+        # sets ``_incoming_rel_dirty = True`` (and clears the cached index) on every
+        # mutation, so when dirty is False the cached index is still correct.
+        if (
+            not getattr(self, "_incoming_rel_dirty", True)
+            and hasattr(self, "_incoming_rel_index")
+        ):
+            return self._incoming_rel_index
         rel = self._relation_graph
         sig = (len(rel), sum(len(v) for v in rel.values()))
         if getattr(self, "_incoming_rel_sig", None) == sig and hasattr(self, "_incoming_rel_index"):
+            self._incoming_rel_dirty = False
             return self._incoming_rel_index
         import json as _json_in
         import pathlib as _pathlib_in
@@ -744,6 +754,7 @@ class GraphRagMixin:
                         for k, v in _raw.items()
                     }
                     self._incoming_rel_sig = sig
+                    self._incoming_rel_dirty = False
                     logger.debug(
                         "GraphRAG: incoming relation index loaded from disk (%d entries)",
                         len(self._incoming_rel_index),
@@ -761,6 +772,7 @@ class GraphRagMixin:
                 idx.setdefault(tgt, []).append((src, entry))
         self._incoming_rel_sig = sig
         self._incoming_rel_index = idx
+        self._incoming_rel_dirty = False
         # Persist for fast reload on next startup.
         try:
             import os as _os_in
