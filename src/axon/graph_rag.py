@@ -729,10 +729,7 @@ class GraphRagMixin:
         # rebuild, skip the O(N*M) signature scan entirely.  ``_save_relation_graph``
         # sets ``_incoming_rel_dirty = True`` (and clears the cached index) on every
         # mutation, so when dirty is False the cached index is still correct.
-        if (
-            not getattr(self, "_incoming_rel_dirty", True)
-            and hasattr(self, "_incoming_rel_index")
-        ):
+        if not getattr(self, "_incoming_rel_dirty", True) and hasattr(self, "_incoming_rel_index"):
             return self._incoming_rel_index
         rel = self._relation_graph
         sig = (len(rel), sum(len(v) for v in rel.values()))
