@@ -85,6 +85,10 @@ def _make_brain(config=None, **extra_attrs):
             pass
 
     brain._executor = SyncExecutor()
+    # _persist_executor_internal overrides the lazy ThreadPoolExecutor created by
+    # the _persist_executor property, making graph saves synchronous in tests so
+    # file-existence assertions don't race against the background write thread.
+    brain._persist_executor_internal = SyncExecutor()
 
     for k, v in extra_attrs.items():
         setattr(brain, k, v)
@@ -2245,6 +2249,10 @@ def _make_brain(config=None, **extra_attrs):
             pass
 
     brain._executor = SyncExecutor()
+    # _persist_executor_internal overrides the lazy ThreadPoolExecutor created by
+    # the _persist_executor property, making graph saves synchronous in tests so
+    # file-existence assertions don't race against the background write thread.
+    brain._persist_executor_internal = SyncExecutor()
 
     for k, v in extra_attrs.items():
         setattr(brain, k, v)
