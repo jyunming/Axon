@@ -220,6 +220,3 @@ demo_*.py
 /rust_worktree_benchmark_report.md
 /benchmark_report*.md
 
-# Root-level graph viewer (standalone HTML, not part of the web app)
-/index.html
-
