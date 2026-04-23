@@ -224,3 +224,12 @@ demo_*.py
 /rust_worktree_benchmark_report.md
 /benchmark_report*.md
 
+
+# Session-local planning docs (removed from tracking in chore/v021-consolidation)
+docs/GITHUB_PROJECT_SETUP.md
+docs/packaging_release.md
+docs/sprint_process.md
+docs/SOTA_ANALYSIS.md
+
+# VS Code extension build artifact (bundled copy lives in src/axon/extensions/)
+integrations/vscode-axon/axon-copilot-*.vsix

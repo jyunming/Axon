@@ -4,14 +4,69 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
+def _run(cmd: list[str], cwd: Path) -> None:
+    print(f"  $ {' '.join(cmd)}  (cwd={cwd.name})")
+    subprocess.run(cmd, cwd=cwd, check=True, shell=(sys.platform == "win32"))
+
+
+def _rebuild_and_bundle_vsix(root: Path, version: str) -> None:
+    ext_dir = root / "integrations" / "vscode-axon"
+    bundle_dir = root / "src" / "axon" / "extensions"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Rebuilding VS Code extension VSIX...")
+    try:
+        _run(["npm", "run", "package"], cwd=ext_dir)
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f"  WARNING: VSIX rebuild failed ({exc}); bundled copy NOT refreshed.")
+        print(f"  Run manually:   cd {ext_dir} && npm run package")
+        return
+
+    built = ext_dir / f"axon-copilot-{version}.vsix"
+    if not built.exists():
+        print(f"  WARNING: expected {built.name} not produced; skipping bundle refresh.")
+        return
+
+    for old in bundle_dir.glob("axon-copilot-*.vsix"):
+        if old.name != built.name:
+            print(f"  removing stale bundled VSIX: {old.name}")
+            old.unlink()
+
+    dest = bundle_dir / built.name
+    shutil.copy2(built, dest)
+    print(f"  bundled: {dest.relative_to(root)} ({dest.stat().st_size // 1024} KB)")
+
+
+def _refresh_cargo_lock(root: Path) -> None:
+    try:
+        _run(["cargo", "update", "-p", "axon", "--precise", _cargo_version(root)], cwd=root / "src" / "axon")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # cargo may be absent in bump-only workflows; acceptable
+        print("  note: cargo not available; Cargo.lock not refreshed (CI will update it).")
+
+
+def _cargo_version(root: Path) -> str:
+    cargo = root / "src" / "axon" / "Cargo.toml"
+    for line in cargo.read_text(encoding="utf-8").splitlines():
+        m = re.match(r'^version\s*=\s*"([^"]+)"', line)
+        if m:
+            return m.group(1)
+    raise SystemExit("could not read Cargo version")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Bump single-source package version in Cargo.toml")
     ap.add_argument("version", help="New version (e.g. 0.2.0)")
+    ap.add_argument("--skip-vsix", action="store_true", help="Skip VSIX rebuild (default: rebuild and bundle)")
+    ap.add_argument("--skip-cargo-lock", action="store_true", help="Skip Cargo.lock refresh")
     args = ap.parse_args()
 
     version = args.version.strip()
@@ -55,7 +110,13 @@ def main() -> int:
     print(" - src/axon/Cargo.toml")
     print(" - integrations/vscode-axon/package.json")
     print(" - index.html")
-    print("Next: run `python scripts/audit_packaging.py --expected-version <version>`")
+
+    if not args.skip_vsix:
+        _rebuild_and_bundle_vsix(root, version)
+    if not args.skip_cargo_lock:
+        _refresh_cargo_lock(root)
+
+    print(f"\nNext: run `python scripts/audit_packaging.py --expected-version {version}`")
     return 0
 
 

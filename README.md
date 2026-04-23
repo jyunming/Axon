@@ -8,8 +8,9 @@
     Nothing leaves your machine.
   </p>
 
+  [![PyPI version](https://img.shields.io/pypi/v/axon-rag.svg)](https://pypi.org/project/axon-rag/)
   [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-  [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/jyunming/Axon/tree/main/tests)
+  [![CI](https://github.com/jyunming/Axon/actions/workflows/ci.yml/badge.svg)](https://github.com/jyunming/Axon/actions/workflows/ci.yml)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/jyunming/Axon/blob/main/LICENSE)
   [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
@@ -111,9 +112,11 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 ## ⚡ Quick Start
 
 ```bash
-pip install -e .   # requires Python 3.10+ and Ollama
-axon               # launches the interactive REPL
+pip install axon-rag    # requires Python 3.10+
+axon                    # launches the interactive REPL
 ```
+
+Local inference uses [Ollama](https://ollama.com). Cloud providers (OpenAI, Gemini, Grok, vLLM, GitHub Copilot) work via API keys.
 
 **[→ Full installation guide with VS Code, MCP, and cloud provider setup](https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md)**
 
@@ -152,6 +155,8 @@ Extensions panel  →  "..."  →  Install from VSIX...
 ```
 
 Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 31 tools appear in the agent hammer menu automatically.
+
+> The VS Code extension surfaces **35 LM tools** to Copilot Chat (a superset of the 31 MCP tools, adding VS Code–specific helpers like `show_graph`).
 
 **[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 

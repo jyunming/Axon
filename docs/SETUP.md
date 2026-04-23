@@ -906,7 +906,7 @@ Expected: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}
 
 ### Available MCP tools
 
-For the full list of all 30 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
+For the full list of all 31 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
 
 > **Tip:** use `search_knowledge` (not `query_knowledge`) in agent mode — the agent's own LLM synthesises the answer from raw chunks, so no Ollama is required.
 

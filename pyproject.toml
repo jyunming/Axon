@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "axon-rag"
 dynamic = ["version"]
 description = "General-purpose open-source RAG engine with multi-LLM, hybrid retrieval, GraphRAG, and MCP support"
-readme = "PYPI_README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 license-files = ["LICENSE"]
@@ -121,22 +121,21 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jyunming/studio_brain_open"
-Repository = "https://github.com/jyunming/studio_brain_open"
-Documentation = "https://github.com/jyunming/studio_brain_open/tree/main/docs"
-"Getting Started" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/GETTING_STARTED.md"
-"Setup Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/SETUP.md"
-"API Reference" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/API_REFERENCE.md"
-"MCP Tools" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/MCP_TOOLS.md"
-"Advanced RAG" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/ADVANCED_RAG.md"
-"Offline Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/OFFLINE_GUIDE.md"
-"Code RAG Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/CODE_RAG_GUIDE.md"
-"AxonStore Guide" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/AXON_STORE.md"
-"Governance Console" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/GOVERNANCE_CONSOLE.md"
-"Packaging & Release" = "https://github.com/jyunming/studio_brain_open/blob/main/docs/packaging_release.md"
-"Issue Tracker" = "https://github.com/jyunming/studio_brain_open/issues"
-"Release Notes" = "https://github.com/jyunming/studio_brain_open/releases"
-Security = "https://github.com/jyunming/studio_brain_open/blob/main/SECURITY.md"
+Homepage = "https://github.com/jyunming/Axon"
+Repository = "https://github.com/jyunming/Axon"
+Documentation = "https://github.com/jyunming/Axon/tree/main/docs"
+"Getting Started" = "https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md"
+"Setup Guide" = "https://github.com/jyunming/Axon/blob/main/docs/SETUP.md"
+"API Reference" = "https://github.com/jyunming/Axon/blob/main/docs/API_REFERENCE.md"
+"MCP Tools" = "https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md"
+"Advanced RAG" = "https://github.com/jyunming/Axon/blob/main/docs/ADVANCED_RAG.md"
+"Offline Guide" = "https://github.com/jyunming/Axon/blob/main/docs/OFFLINE_GUIDE.md"
+"Code RAG Guide" = "https://github.com/jyunming/Axon/blob/main/docs/CODE_RAG_GUIDE.md"
+"AxonStore Guide" = "https://github.com/jyunming/Axon/blob/main/docs/AXON_STORE.md"
+"Governance Console" = "https://github.com/jyunming/Axon/blob/main/docs/GOVERNANCE_CONSOLE.md"
+"Issue Tracker" = "https://github.com/jyunming/Axon/issues"
+"Release Notes" = "https://github.com/jyunming/Axon/releases"
+Security = "https://github.com/jyunming/Axon/blob/main/SECURITY.md"
 
 [project.scripts]
 axon = "axon.cli:main"

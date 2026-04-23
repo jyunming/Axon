@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -418,6 +419,7 @@ def _make_full_stub(**config_kwargs) -> RouterStubV2:
         }
     ]
     stub._entity_graph = {}
+    stub._entity_token_index_internal = {}
     stub._relation_graph = {}
     stub._entity_embeddings = {}
     stub._community_summaries = {}
@@ -589,6 +591,7 @@ class TestExpandWithEntityGraph:
             "python": {"chunk_ids": ["c1", "c2"], "description": "Python language"},
             "django": {"chunk_ids": ["c3"], "description": "Django framework"},
         }
+        stub._rebuild_entity_token_index()
         stub._relation_graph = {}
         stub._entity_embeddings = {}
         return stub
@@ -596,6 +599,7 @@ class TestExpandWithEntityGraph:
     def test_empty_entities_returns_original_results(self):
         stub = _make_full_stub()
         stub._entity_graph = {"foo": {"chunk_ids": ["c1"]}}
+        stub._rebuild_entity_token_index()
         results = [{"id": "x", "text": "hello", "score": 0.8, "metadata": {}}]
         out, matched = stub._expand_with_entity_graph("unrelated query", results)
         # no entities extracted → returns unchanged
@@ -606,6 +610,7 @@ class TestExpandWithEntityGraph:
         """Line 155: q_name empty → continue."""
         stub = _make_full_stub()
         stub._entity_graph = {"": {"chunk_ids": ["c1"]}}
+        stub._rebuild_entity_token_index()
         stub._extract_entities = MagicMock(
             return_value=[{"name": "", "type": "UNKNOWN", "description": ""}]
         )
@@ -619,6 +624,7 @@ class TestExpandWithEntityGraph:
         stub._entity_graph = {
             "python": {"chunk_ids": ["c1"]},
         }
+        stub._rebuild_entity_token_index()
         stub._relation_graph = {
             "python": [{"target": "", "relation": "uses"}],
         }
@@ -637,6 +643,7 @@ class TestExpandWithEntityGraph:
         stub._entity_graph = {
             "python": {"chunk_ids": ["new_doc"]},
         }
+        stub._rebuild_entity_token_index()
         stub._extract_entities = MagicMock(
             return_value=[{"name": "python", "type": "TECH", "description": ""}]
         )
@@ -1599,7 +1606,7 @@ class TestQueryCache:
         )
         # Populate cache manually
         cache_key = stub._make_cache_key("cached query", None, stub.config)
-        stub._query_cache[cache_key] = "cached answer"
+        stub._query_cache[cache_key] = (time.monotonic(), "cached answer")
         result = stub.query("cached query")
         assert result == "cached answer"
         # LLM should NOT have been called
@@ -1616,7 +1623,8 @@ class TestQueryCache:
         assert result == "fresh answer"
         # Should now be cached
         cache_key = stub._make_cache_key("new query", None, stub.config)
-        assert stub._query_cache.get(cache_key) == "fresh answer"
+        cached = stub._query_cache.get(cache_key)
+        assert cached is not None and cached[1] == "fresh answer"
 
     def test_cache_bypassed_when_chat_history_present(self):
         stub = _make_full_stub(

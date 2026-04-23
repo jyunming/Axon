@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -66,6 +67,24 @@ class QueryRouterMixin:
         if not hasattr(self, "_graph_lock_internal"):
             self._graph_lock_internal = threading.RLock()
         return self._graph_lock_internal
+
+    @property
+    def _traversal_cache_lock(self) -> threading.Lock:
+        if not hasattr(self, "_traversal_cache_lock_internal"):
+            self._traversal_cache_lock_internal = threading.Lock()
+        return self._traversal_cache_lock_internal
+
+    @property
+    def _entity_token_index(self) -> dict:
+        """Fallback when GraphRagMixin is not in the MRO (e.g. standalone tests).
+        GraphRagMixin overrides this with the real lazy-initialised index.
+        """
+        if not hasattr(self, "_entity_token_index_internal"):
+            self._entity_token_index_internal: dict = {}
+        return self._entity_token_index_internal
+
+    def _rebuild_entity_token_index(self) -> None:
+        """No-op fallback; GraphRagMixin provides the real implementation."""
 
     def _classify_query_route(self, query: str, cfg: AxonConfig) -> str:
         """Return one of: factual | synthesis | table_lookup | entity_relation | corpus_exploration."""
@@ -165,7 +184,27 @@ class QueryRouterMixin:
                 )
                 if not q_name:
                     continue
-                for eid, node in self._entity_graph.items():
+                # Token-index candidate lookup: gather entities that share at least
+                # one token with the query entity, then score only that candidate set
+                # (typically 10-200 nodes) instead of all |V| entities.
+                # Falls back to full scan when index is empty (e.g. direct attribute
+                # assignment in tests without calling _rebuild_entity_token_index).
+                q_lower = q_name.lower().strip()
+                q_tokens = q_lower.split()
+                token_idx = self._entity_token_index
+                if token_idx:
+                    candidates: set[str] = set()
+                    for tok in q_tokens:
+                        bucket = token_idx.get(tok)
+                        if bucket:
+                            candidates.update(bucket)
+                    candidate_iter = [(eid, self._entity_graph.get(eid)) for eid in candidates]
+                else:
+                    # Fallback: index not populated yet
+                    candidate_iter = list(self._entity_graph.items())
+                for eid, node in candidate_iter:
+                    if node is None:
+                        continue
                     score = self._entity_matches(q_name, eid)
                     if score <= 0.0:
                         continue
@@ -202,36 +241,71 @@ class QueryRouterMixin:
             )
 
             if use_relations and matched_entities:
-                # BFS for multi-hop traversal
-                current_hop_entities = set(matched_entities)
-                visited_entities = set(matched_entities)
+                # Check traversal cache before running BFS.
+                # Cache key covers entity set + hop params so different configs
+                # don't collide.
+                _cache_key = (frozenset(matched_entities), max_hops, hop_decay)
+                _now = time.monotonic()
+                _bfs_scores: dict[str, float] | None = None
 
-                for hop in range(1, max_hops + 1):
-                    next_hop_entities = set()
-                    # Score for this hop decays from base 0.8
-                    # Hop 1: 0.8 * 0.7 = 0.56
-                    # Hop 2: 0.56 * 0.7 = 0.392
-                    hop_score = 0.8 * (hop_decay**hop)
+                _tc: OrderedDict | None = getattr(self, "_traversal_cache", None)
+                _tc_ttl: float = getattr(self, "_traversal_cache_ttl", 900.0)
+                if _tc is not None:
+                    with self._traversal_cache_lock:
+                        _cached = _tc.get(_cache_key)
+                        if _cached is not None:
+                            _stored_time, _stored_scores = _cached
+                            if _now - _stored_time < _tc_ttl:
+                                _tc.move_to_end(_cache_key)
+                                _bfs_scores = _stored_scores
+                            else:
+                                del _tc[_cache_key]
 
-                    for src_entity in current_hop_entities:
-                        for entry in self._relation_graph.get(src_entity, []):
-                            target = entry.get("target", "").lower()
-                            if not target or target in visited_entities:
-                                continue
+                if _bfs_scores is None:
+                    # BFS for multi-hop traversal
+                    _bfs_scores = {}
+                    current_hop_entities = set(matched_entities)
+                    visited_entities = set(matched_entities)
 
-                            visited_entities.add(target)
-                            next_hop_entities.add(target)
+                    for hop in range(1, max_hops + 1):
+                        next_hop_entities = set()
+                        # Score for this hop decays from base 0.8
+                        # Hop 1: 0.8 * 0.7 = 0.56
+                        # Hop 2: 0.56 * 0.7 = 0.392
+                        hop_score = 0.8 * (hop_decay**hop)
 
-                            target_node = self._entity_graph.get(target, {})
-                            target_chunk_ids = target_node.get("chunk_ids", [])
-                            for did in target_chunk_ids:
-                                if did not in existing_ids:
-                                    if extra_id_scores.get(did, 0.0) < hop_score:
-                                        extra_id_scores[did] = hop_score
+                        for src_entity in current_hop_entities:
+                            for entry in self._relation_graph.get(src_entity, []):
+                                target = entry.get("target", "").lower()
+                                if not target or target in visited_entities:
+                                    continue
 
-                    if not next_hop_entities:
-                        break
-                    current_hop_entities = next_hop_entities
+                                visited_entities.add(target)
+                                next_hop_entities.add(target)
+
+                                target_node = self._entity_graph.get(target, {})
+                                target_chunk_ids = target_node.get("chunk_ids", [])
+                                for did in target_chunk_ids:
+                                    if _bfs_scores.get(did, 0.0) < hop_score:
+                                        _bfs_scores[did] = hop_score
+
+                        if not next_hop_entities:
+                            break
+                        current_hop_entities = next_hop_entities
+
+                    # Store BFS result in traversal cache
+                    if _tc is not None:
+                        _tc_maxsize: int = getattr(self, "_traversal_cache_maxsize", 512)
+                        with self._traversal_cache_lock:
+                            if len(_tc) >= _tc_maxsize:
+                                _tc.popitem(last=False)  # evict LRU
+                            _tc[_cache_key] = (time.monotonic(), dict(_bfs_scores))
+
+                # Merge BFS scores into extra_id_scores (skip IDs already in results)
+                for did, hop_score in _bfs_scores.items():
+                    if did not in existing_ids:
+                        if extra_id_scores.get(did, 0.0) < hop_score:
+                            extra_id_scores[did] = hop_score
 
         if not extra_id_scores:
             return results, list(matched_entities)
@@ -841,21 +915,18 @@ class QueryRouterMixin:
             # HyDE: embed the hypothetical document and search with it.
             # If multi-query/step-back/decompose also produced variants, search with
             # those as well so transforms compose rather than HyDE replacing them.
-            all_vector_results.extend(
-                self.vector_store.search(
-                    self.embedding.embed_query(vector_query), top_k=fetch_k, filter_dict=filters
-                )
-            )
+            hyde_embs = [self.embedding.embed_query(vector_query)]
             if len(search_queries) > 1:
-                # search_queries[0] is the original query; additional entries are transform variants
-                for variant in search_queries[1:]:
-                    all_vector_results.extend(
-                        self.vector_store.search(
-                            self.embedding.embed_query(variant),
-                            top_k=fetch_k,
-                            filter_dict=filters,
-                        )
-                    )
+                hyde_embs.extend(self.embedding.embed_query(v) for v in search_queries[1:])
+            if len(hyde_embs) == 1:
+                all_vector_results.extend(
+                    self.vector_store.search(hyde_embs[0], top_k=fetch_k, filter_dict=filters)
+                )
+            else:
+                for res_list in self.vector_store.batch_search(
+                    hyde_embs, top_k=fetch_k, filter_dict=filters
+                ):
+                    all_vector_results.extend(res_list)
         else:
             # Batch embed all unique queries
             if len(search_queries) == 1:
@@ -868,10 +939,10 @@ class QueryRouterMixin:
                 )
             else:
                 embeddings = self.embedding.embed(search_queries)
-                for emb in embeddings:
-                    all_vector_results.extend(
-                        self.vector_store.search(emb, top_k=fetch_k, filter_dict=filters)
-                    )
+                for res_list in self.vector_store.batch_search(
+                    embeddings, top_k=fetch_k, filter_dict=filters
+                ):
+                    all_vector_results.extend(res_list)
 
         # Dedupe vector store results based on ID
         if _rust.can_result_postprocess():
@@ -1185,6 +1256,18 @@ class QueryRouterMixin:
                 graph_in_merged += 1
         return merged
 
+    def _pre_filter_for_rerank(self, results: list, top_k: int) -> list:
+        """Trim *results* to a reranking candidate pool before scoring.
+
+        Reranking every retrieved document is expensive.  Keeping ``top_k * 3``
+        candidates (minimum 20) preserves recall while cutting model calls by
+        ~66 % when the retriever returns more documents than needed.
+        """
+        if len(results) > top_k:
+            pool = min(len(results), max(top_k * 3, 20))
+            return results[:pool]
+        return results
+
     def search_raw(
         self,
         query: str,
@@ -1203,10 +1286,11 @@ class QueryRouterMixin:
         diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
         trace = retrieval.get("trace", CodeRetrievalTrace())
 
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.rerank:
+            results = self._pre_filter_for_rerank(results, _top_k)
             results = self.reranker.rerank(query, results)
 
-        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
             results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
@@ -1349,11 +1433,16 @@ class QueryRouterMixin:
         if cfg.query_cache and not chat_history and cfg.query_cache_size >= 1:
             cache_key = self._make_cache_key(query, filters, cfg)
             with self._cache_lock:
-                if cache_key in self._query_cache:
-                    logger.info(f"Cache hit for query: {query[:60]}")
-                    # Move to end so this entry is treated as most-recently-used (LRU)
-                    self._query_cache.move_to_end(cache_key)
-                    return self._query_cache[cache_key]
+                cached = self._query_cache.get(cache_key)
+                if cached is not None:
+                    stored_time, stored_response = cached
+                    ttl = getattr(cfg, "query_cache_ttl", 1800)
+                    if ttl <= 0 or time.monotonic() - stored_time < ttl:
+                        logger.info(f"Cache hit for query: {query[:60]}")
+                        self._query_cache.move_to_end(cache_key)
+                        return stored_response
+                    else:
+                        del self._query_cache[cache_key]
 
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
@@ -1392,10 +1481,11 @@ class QueryRouterMixin:
             }
             return "I don't have any relevant information to answer that question."
 
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.rerank:
+            results = self._pre_filter_for_rerank(results, _top_k)
             results = self.reranker.rerank(query, results)
 
-        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
             results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
@@ -1516,7 +1606,7 @@ class QueryRouterMixin:
                 # Evict least-recently-used entry when cache is at capacity
                 if len(self._query_cache) >= cfg.query_cache_size and self._query_cache:
                     self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
-                self._query_cache[cache_key] = response
+                self._query_cache[cache_key] = (time.monotonic(), response)
                 self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
 
         return response
@@ -1577,10 +1667,11 @@ class QueryRouterMixin:
             yield "I don't have any relevant information to answer that question."
             return
 
+        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.rerank:
+            results = self._pre_filter_for_rerank(results, _top_k)
             results = self.reranker.rerank(query, results)
 
-        _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
             results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:

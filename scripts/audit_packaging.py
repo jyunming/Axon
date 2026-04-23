@@ -80,15 +80,35 @@ def main() -> int:
     if duplicate_manifest.exists():
         errors.append("duplicate manifest exists: src/axon/axon_rust_Cargo.toml")
 
+    # Bundled VSIX must exist and match Cargo version
+    bundle_dir = root / "src" / "axon" / "extensions"
+    bundled_vsixes = sorted(bundle_dir.glob("axon-copilot-*.vsix")) if bundle_dir.exists() else []
+    expected_vsix_name = f"axon-copilot-{cargo_version}.vsix"
+    bundled_vsix_name: str | None = None
+    if not bundled_vsixes:
+        errors.append(f"no bundled VSIX found in {bundle_dir.relative_to(root)}")
+    elif len(bundled_vsixes) > 1:
+        names = ", ".join(v.name for v in bundled_vsixes)
+        errors.append(f"multiple bundled VSIX files present ({names}); keep exactly one")
+        bundled_vsix_name = bundled_vsixes[0].name
+    else:
+        bundled_vsix_name = bundled_vsixes[0].name
+        if bundled_vsix_name != expected_vsix_name:
+            errors.append(
+                f"bundled VSIX name mismatch: have {bundled_vsix_name!r}, expected {expected_vsix_name!r}"
+            )
+
     if args.expected_version and cargo_version != args.expected_version:
         errors.append(
             f"version mismatch: expected {args.expected_version!r}, Cargo.toml has {cargo_version!r}"
         )
 
-    print(f"Cargo version: {cargo_version}")
+    print(f"Cargo version:             {cargo_version}")
     print(f"VS Code extension version: {ext_version}")
-    print(f"Website hero version: {hero_version}")
-    print(f"Website terminal version: {install_version}")
+    print(f"Website hero version:      {hero_version}")
+    print(f"Website terminal version:  {install_version}")
+    print(f"Bundled VSIX file:         {bundled_vsix_name}")
+    print(f"Expected VSIX file:        {expected_vsix_name}")
     if errors:
         print("Packaging audit FAILED:")
         for e in errors:

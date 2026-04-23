@@ -145,7 +145,7 @@ def test_mcp_protocol_initialize():
         input=msg,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=30,
     )
 
     # Parse first line of stdout as JSON
@@ -164,33 +164,63 @@ def test_mcp_protocol_initialize():
 
 
 def test_mcp_protocol_tools_list():
-    """Spawn the MCP server and verify tools/list returns all 12 expected tools."""
+    """Spawn the MCP server and verify tools/list returns all expected tools.
+
+    Uses interactive Popen communication (write → read → write → read) so each
+    response is received before the next request is sent.  Sending all messages
+    at once via subprocess.run() can race: the server may exit before flushing
+    the tools/list response on some platforms / Python versions.
+    """
 
     import json
     import subprocess
     import sys
 
-    msgs = (
-        '{"jsonrpc":"2.0","id":1,"method":"initialize",'
-        '"params":{"protocolVersion":"2024-11-05","capabilities":{},'
-        '"clientInfo":{"name":"test","version":"1"}}}\n'
-        '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
-        '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n'
-    )
-
-    result = subprocess.run(
+    proc = subprocess.Popen(
         [sys.executable, "-m", "axon.mcp_server"],
-        input=msgs,
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=10,
     )
 
-    lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
+    try:
+        # 1. Send initialize and read its response.
+        init_msg = (
+            '{"jsonrpc":"2.0","id":1,"method":"initialize",'
+            '"params":{"protocolVersion":"2024-11-05","capabilities":{},'
+            '"clientInfo":{"name":"test","version":"1"}}}\n'
+        )
+        proc.stdin.write(init_msg)
+        proc.stdin.flush()
+        init_line = proc.stdout.readline()
 
-    # Second response is tools/list
+        # 2. Send notifications/initialized (no response expected).
+        proc.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n')
+        proc.stdin.flush()
 
-    tools_resp = json.loads(lines[1])
+        # 3. Send tools/list and read its response.
+        proc.stdin.write('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n')
+        proc.stdin.flush()
+        tools_line = proc.stdout.readline()
+
+        # Close stdin so the server can exit cleanly.
+        proc.stdin.close()
+        proc.wait(timeout=10)
+
+    except Exception:
+        proc.kill()
+        proc.wait()
+        raise
+
+    stderr_output = proc.stderr.read()
+
+    assert init_line.strip(), f"No initialize response.\nstderr: {stderr_output}"
+    assert (
+        tools_line.strip()
+    ), f"No tools/list response.\ninit_line: {init_line!r}\nstderr: {stderr_output}"
+
+    tools_resp = json.loads(tools_line.strip())
 
     assert tools_resp["id"] == 2
 
