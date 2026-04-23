@@ -2,7 +2,7 @@
   "name": "axon-copilot",
   "displayName": "Axon Copilot",
   "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "axon",
   "engines": {
     "vscode": "^1.93.0"
@@ -53,7 +53,7 @@
         "id": "axon.chat",
         "name": "axon",
         "fullName": "Axon Knowledge Base",
-        "description": "Ask questions answered by your local Axon RAG knowledge base. Uses the same backend synthesis as query_knowledge — consistent behavior, no separate Copilot step.",
+        "description": "Ask questions answered by your local Axon RAG knowledge base. Uses the same backend synthesis as query_knowledge \u2014 consistent behavior, no separate Copilot step.",
         "isSticky": true
       }
     ],
@@ -61,7 +61,7 @@
       {
         "name": "search_knowledge",
         "displayName": "Axon: Search Knowledge Base",
-        "modelDescription": "Search the Axon knowledge base and return raw document chunks. Returns source text — you synthesize the answer. Also opens the knowledge graph panel. Use for discovery tasks or when inspecting multiple documents.",
+        "modelDescription": "Search the Axon knowledge base and return raw document chunks. Returns source text \u2014 you synthesize the answer. Also opens the knowledge graph panel. Use for discovery tasks or when inspecting multiple documents.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonSearch",
         "inputSchema": {
@@ -215,7 +215,7 @@
       {
         "name": "list_projects",
         "displayName": "Axon: List Projects",
-        "modelDescription": "List all knowledge base projects. Call first if search returns nothing — data may be in a different project. Then use switch_project.",
+        "modelDescription": "List all knowledge base projects. Call first if search returns nothing \u2014 data may be in a different project. Then use switch_project.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonList",
         "inputSchema": {
@@ -287,7 +287,7 @@
       {
         "name": "delete_documents",
         "displayName": "Axon: Delete Documents",
-        "modelDescription": "Remove specific document(s) from the active project using their IDs. Accepts both chunk IDs and source doc IDs (e.g. the doc_id returned by ingest_text) — source IDs are automatically expanded to all their chunks before deletion.",
+        "modelDescription": "Remove specific document(s) from the active project using their IDs. Accepts both chunk IDs and source doc IDs (e.g. the doc_id returned by ingest_text) \u2014 source IDs are automatically expanded to all their chunks before deletion.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonDeleteDocs",
         "inputSchema": {
@@ -517,7 +517,7 @@
             },
             "persist": {
               "type": "boolean",
-              "description": "Set true to write the new store path to config.yaml so it survives server restarts. Defaults to false — omit this for test or temporary AxonStore sessions to avoid permanently modifying the user config."
+              "description": "Set true to write the new store path to config.yaml so it survives server restarts. Defaults to false \u2014 omit this for test or temporary AxonStore sessions to avoid permanently modifying the user config."
             }
           },
           "required": [
@@ -581,7 +581,7 @@
       {
         "name": "refresh_ingest",
         "displayName": "Axon: Refresh Ingest",
-        "modelDescription": "Re-ingest tracked files whose content has changed since the last ingest. Returns a job_id immediately — poll with axon_getIngestStatus until status is 'completed', then check reingested/skipped/missing/errors counts. Use after editing source files to keep the knowledge base current without re-ingesting everything.",
+        "modelDescription": "Re-ingest tracked files whose content has changed since the last ingest. Returns a job_id immediately \u2014 poll with axon_getIngestStatus until status is 'completed', then check reingested/skipped/missing/errors counts. Use after editing source files to keep the knowledge base current without re-ingesting everything.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "axonRefreshIngest",
         "inputSchema": {
@@ -708,7 +708,7 @@
       {
         "name": "get_active_leases",
         "displayName": "Axon: Get Active Leases",
-        "modelDescription": "Return active write-lease counts for all projects. Operator tool — use to check whether it is safe to put a project into maintenance mode (wait for active_leases to reach 0 first).",
+        "modelDescription": "Return active write-lease counts for all projects. Operator tool \u2014 use to check whether it is safe to put a project into maintenance mode (wait for active_leases to reach 0 first).",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -862,7 +862,7 @@
         "axon.graphSynthesis": {
           "type": "boolean",
           "default": true,
-          "description": "When showing the knowledge graph, also call POST /query to synthesise an answer. Disable this if your LLM is slow or unavailable — the graph still renders without it."
+          "description": "When showing the knowledge graph, also call POST /query to synthesise an answer. Disable this if your LLM is slow or unavailable \u2014 the graph still renders without it."
         },
         "axon.pythonPath": {
           "type": "string",
@@ -887,7 +887,7 @@
         "axon.showGraphOnQuery": {
           "type": "boolean",
           "default": false,
-          "description": "Automatically open the Axon graph panel after every search or query. Off by default — use show_graph or the 'Show Graph for Query' command to open the graph on demand."
+          "description": "Automatically open the Axon graph panel after every search or query. Off by default \u2014 use show_graph or the 'Show Graph for Query' command to open the graph on demand."
         }
       }
     }
