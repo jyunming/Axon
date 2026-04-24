@@ -543,3 +543,5 @@ Axon's share-mount model assumes the owner's project directory sits on a **coher
 - **What's still risky:** the vector store binary files (TurboQuantDB / LanceDB / Chroma) are NOT yet cloud-sync-safe in v0.2.1 — TurboQuantDB's `wal.log` + `manifest.json` pair can be re-ordered by cloud sync and produce silent wrong answers. See issues #51–#54 in the repo for the broader Path A hardening plan. Until those ship, keep Axon project directories on local disk or an on-prem SMB3 share.
 
 If you must co-locate a project with OneDrive/Dropbox/Google Drive, back up the project dir to the synced folder on a schedule instead of running live — Axon's query path expects a coherent view of all index files at the same instant.
+
+For the full supported / unsupported filesystem matrix and the per-backend recommendation table, see [SHARE_MOUNT.md](SHARE_MOUNT.md).

@@ -183,6 +183,40 @@ class TestOpenVectorStoreChroma:
             with pytest.raises(ValueError, match="some other error"):
                 OpenVectorStore(cfg)
 
+    def test_preflight_blocks_onedrive_path(self):
+        """Cloud-sync path is rejected BEFORE chromadb is asked to open it."""
+        mock_chromadb, _mock_client, _ = _make_chroma_mocks()
+        cfg = _make_config(
+            vector_store="chroma",
+            vector_store_path=r"C:\Users\alice\OneDrive\Axon\vs",
+        )
+        with patch.dict(
+            "sys.modules",
+            {"chromadb": mock_chromadb, "rich.console": MagicMock(Console=MagicMock())},
+        ):
+            from axon.vector_store import OpenVectorStore
+
+            with pytest.raises(RuntimeError, match="ChromaDB failed to initialize"):
+                OpenVectorStore(cfg)
+            mock_chromadb.PersistentClient.assert_not_called()
+
+    def test_preflight_blocks_unc_path(self):
+        """UNC / network share path is rejected at preflight."""
+        mock_chromadb, _mock_client, _ = _make_chroma_mocks()
+        cfg = _make_config(
+            vector_store="chroma",
+            vector_store_path=r"\\fileserver\share\axon\vs",
+        )
+        with patch.dict(
+            "sys.modules",
+            {"chromadb": mock_chromadb, "rich.console": MagicMock(Console=MagicMock())},
+        ):
+            from axon.vector_store import OpenVectorStore
+
+            with pytest.raises(RuntimeError, match="ChromaDB failed to initialize"):
+                OpenVectorStore(cfg)
+            mock_chromadb.PersistentClient.assert_not_called()
+
     # --- close ---
 
     def test_close_calls_client_close_if_available(self):
@@ -1531,6 +1565,40 @@ class TestOpenVectorStoreChromaV2:
 
             with pytest.raises(ValueError, match="some other error"):
                 OpenVectorStore(cfg)
+
+    def test_preflight_blocks_onedrive_path(self):
+        """Cloud-sync path is rejected BEFORE chromadb is asked to open it."""
+        mock_chromadb, _mock_client, _ = _make_chroma_mocks()
+        cfg = _make_config(
+            vector_store="chroma",
+            vector_store_path=r"C:\Users\alice\OneDrive\Axon\vs",
+        )
+        with patch.dict(
+            "sys.modules",
+            {"chromadb": mock_chromadb, "rich.console": MagicMock(Console=MagicMock())},
+        ):
+            from axon.vector_store import OpenVectorStore
+
+            with pytest.raises(RuntimeError, match="ChromaDB failed to initialize"):
+                OpenVectorStore(cfg)
+            mock_chromadb.PersistentClient.assert_not_called()
+
+    def test_preflight_blocks_unc_path(self):
+        """UNC / network share path is rejected at preflight."""
+        mock_chromadb, _mock_client, _ = _make_chroma_mocks()
+        cfg = _make_config(
+            vector_store="chroma",
+            vector_store_path=r"\\fileserver\share\axon\vs",
+        )
+        with patch.dict(
+            "sys.modules",
+            {"chromadb": mock_chromadb, "rich.console": MagicMock(Console=MagicMock())},
+        ):
+            from axon.vector_store import OpenVectorStore
+
+            with pytest.raises(RuntimeError, match="ChromaDB failed to initialize"):
+                OpenVectorStore(cfg)
+            mock_chromadb.PersistentClient.assert_not_called()
 
     # --- close ---
 
