@@ -2691,7 +2691,7 @@ def _interactive_repl(
                 # ── /project <subcommand> ──────────────────────────────────
 
                 elif text.startswith("/project "):
-                    sub_opts = ["list", "new ", "switch ", "delete ", "folder"]
+                    sub_opts = ["list", "new ", "switch ", "delete ", "folder", "refresh"]
 
                     prefix = text[len("/project ") :]
 
@@ -4160,6 +4160,10 @@ def _interactive_repl(
                     print("    /project switch mounts/<name>            switch to mounted share")
 
                     print(
+                        "    /project refresh                         re-read mount version marker"
+                    )
+
+                    print(
                         "    /project folder                          open active project folder\n"
                     )
 
@@ -4233,6 +4237,34 @@ def _interactive_repl(
                             print(
                                 f"    Project '{proj_name}' not found. Use /project list or /project new {proj_name}"
                             )
+
+                elif sub == "refresh":
+                    # Re-read the owner's version marker; reopen handles
+                    # if newer. No-op when not on a mount.
+                    try:
+                        from axon.version_marker import MountSyncPendingError
+
+                        refreshed = brain.refresh_mount()
+                        marker = getattr(brain, "_mount_version_marker", None) or {}
+                        if refreshed:
+                            print(
+                                f"    Refreshed mount: now at owner seq={marker.get('seq')}"
+                                f" (generated_at={marker.get('generated_at')})\n"
+                            )
+                        elif brain._is_mounted_share():
+                            print(f"    Mount already up to date (seq={marker.get('seq')}).\n")
+                        else:
+                            print(
+                                "    /project refresh only applies to mounted shares "
+                                "(mounts/<name>).\n"
+                            )
+                    except MountSyncPendingError as exc:
+                        print(
+                            f"    Owner has advanced but index files are still "
+                            f"replicating: {exc}\n    Try again in a few seconds.\n"
+                        )
+                    except Exception as exc:
+                        print(f"    Refresh failed: {exc}\n")
 
                 elif sub == "delete":
                     if not sub_arg:

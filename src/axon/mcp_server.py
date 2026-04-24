@@ -369,6 +369,24 @@ async def switch_project(project_name: str) -> Any:
 
 
 @mcp.tool()
+async def refresh_mount() -> Any:
+    """Re-read the owner's version marker for an active mounted share and
+    reopen project handles if the owner has re-ingested.
+
+    No-op when the active project is not a mount (mounts/<name>). On a
+    cloud-sync mid-replication race the API may respond with HTTP 503
+    + ``X-Axon-Mount-Sync-Pending: true``; retry after a few seconds.
+
+    Returns:
+        ``{"status": "success", "refreshed": bool, "seq": int|null}``
+        when refresh completed, or ``{"status": "sync_pending", ...}``
+        when the owner advanced but index files are still in flight.
+    """
+
+    return await _post("/mount/refresh", {})
+
+
+@mcp.tool()
 async def delete_documents(doc_ids: list[str]) -> Any:
     """Remove documents from the knowledge base by their IDs.
 

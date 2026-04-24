@@ -124,6 +124,19 @@ async def query_brain(request: QueryRequest):
     except HTTPException:
         raise
     except Exception as e:
+        from axon.version_marker import MountSyncPendingError
+
+        if isinstance(e, MountSyncPendingError):
+            # Per-query refresh detected the owner has advanced but index
+            # files are still in flight. Surface as 503 + dedicated header
+            # so REST clients can detect-and-retry without parsing the body.
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=503,
+                headers={"X-Axon-Mount-Sync-Pending": "true"},
+                content={"status": "sync_pending", "detail": str(e)},
+            )
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

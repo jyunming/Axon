@@ -43,6 +43,7 @@ EXPECTED_MCP_TOOL_NAMES = {
     "switch_project",
     "create_project",
     "delete_project",
+    "refresh_mount",
     # Settings / sessions
     "get_current_settings",
     "update_settings",
