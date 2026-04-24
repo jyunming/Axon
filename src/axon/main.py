@@ -1172,6 +1172,32 @@ Your primary goal is to help the user by answering questions based on the provid
 
             self.config.bm25_path = str(target / "bm25_index")
 
+            # Cache the owner's version marker so a future TTL/per-query
+            # check (issue #53 follow-up) can detect when the owner has
+            # re-ingested and we need to reopen handles. For now this is
+            # informational — logged at INFO so operators can see what
+            # snapshot of the owner's state they bound to.
+            try:
+                from axon.version_marker import read as _read_marker
+
+                self._mount_version_marker = _read_marker(target)
+                if self._mount_version_marker is not None:
+                    logger.info(
+                        "Mounted '%s' at owner version seq=%s (generated_at=%s)",
+                        name,
+                        self._mount_version_marker.get("seq"),
+                        self._mount_version_marker.get("generated_at"),
+                    )
+                else:
+                    self._mount_version_marker = None
+                    logger.info(
+                        "Mounted '%s' — owner has not yet emitted a version marker.",
+                        name,
+                    )
+            except Exception as _vm_exc:
+                logger.debug("Could not read mount version marker: %s", _vm_exc)
+                self._mount_version_marker = None
+
         elif name == "default":
             self.config.vector_store_path = self._base_vector_store_path
 
@@ -3740,6 +3766,19 @@ Your primary goal is to help the user by answering questions based on the provid
                     "This may indicate basename-derived IDs colliding. Re-ingest with current version to fix.",
                     _collision_count,
                 )
+
+        # Bump the cross-machine version marker LAST. Grantees read this
+        # file on mount switch (and, in a future iteration, on a TTL
+        # background poll) to detect when the owner has re-indexed and
+        # in-memory handles need to be reopened. Atomic write — if any
+        # part of this fails, the previous marker stays intact.
+        try:
+            from axon.version_marker import bump as _bump_marker
+
+            _project_dir = Path(self.config.bm25_path).parent
+            _bump_marker(_project_dir)
+        except Exception as _vm_exc:
+            logger.debug("version_marker bump failed (non-fatal): %s", _vm_exc)
 
         # Explicitly release lease (fallback: _WriteLease.__del__ handles it)
 
