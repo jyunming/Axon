@@ -49,11 +49,26 @@ __all__ = [
     "VERSION_MARKER_FILENAME",
     "SCHEMA_VERSION",
     "MANIFEST_FILES",
+    "MountSyncPendingError",
     "bump",
     "read",
     "is_newer_than",
     "rollup_hashes",
+    "artifacts_match",
 ]
+
+
+class MountSyncPendingError(RuntimeError):
+    """Raised when the marker says the owner has advanced but the underlying
+    index files haven't fully synced to this grantee yet — typically because
+    the owner's ``version.json`` arrived first (it's tiny) and the larger
+    index files are still in flight on the cloud-sync client.
+
+    Callers should surface this to the user as a transient "sync in progress"
+    condition (e.g. HTTP 503 with ``X-Axon-Mount-Sync-Pending: true``) rather
+    than treat it as a hard failure.
+    """
+
 
 logger = logging.getLogger("Axon")
 
@@ -179,6 +194,28 @@ def read(project_dir: Path | str) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
     return data
+
+
+def artifacts_match(project_dir: Path | str, marker: dict[str, Any] | None) -> bool:
+    """Return True iff every artifact hash in *marker* matches the on-disk file.
+
+    Used by the grantee-side refresh path to detect the **mid-sync** race:
+    the marker says ``seq=N`` but the index files are still at ``seq=N-1``
+    because they haven't fully replicated yet. Re-hashing the actual files
+    catches this; ``True`` means we're safe to reopen handles, ``False``
+    means we should wait + retry (or surface ``MountSyncPendingError``).
+
+    A marker with no artifacts (e.g. very early bump on an empty project)
+    trivially matches.
+    """
+    if not marker:
+        return True
+    expected = marker.get("artifacts") or {}
+    if not expected:
+        return True
+    hash_algo = marker.get("hash_algo", "sha256")
+    actual = rollup_hashes(project_dir, hash_algo=hash_algo)
+    return actual == expected
 
 
 def is_newer_than(current: dict[str, Any] | None, cached: dict[str, Any] | None) -> bool:

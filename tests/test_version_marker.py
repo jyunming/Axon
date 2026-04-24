@@ -8,6 +8,8 @@ from axon.version_marker import (
     MANIFEST_FILES,
     SCHEMA_VERSION,
     VERSION_MARKER_FILENAME,
+    MountSyncPendingError,
+    artifacts_match,
     bump,
     is_newer_than,
     read,
@@ -154,6 +156,111 @@ class TestManifestFilesConstant:
         assert "bm25_index/.bm25_log.jsonl" in MANIFEST_FILES
         assert "vector_store_data/manifest.json" in MANIFEST_FILES
         assert "bm25_index/.dynamic_graph.snapshot.json" in MANIFEST_FILES
+
+
+class TestArtifactsMatch:
+    def test_none_marker_trivially_matches(self, tmp_path):
+        assert artifacts_match(tmp_path, None) is True
+
+    def test_empty_artifacts_trivially_matches(self, tmp_path):
+        assert artifacts_match(tmp_path, {"artifacts": {}}) is True
+
+    def test_matches_after_fresh_bump(self, tmp_path):
+        _seed_project(tmp_path)
+        m = bump(tmp_path)
+        assert artifacts_match(tmp_path, m) is True
+
+    def test_mismatches_when_file_changed_after_bump(self, tmp_path):
+        _seed_project(tmp_path)
+        m = bump(tmp_path)
+        # Simulate mid-sync: marker describes old state, but a file arrived
+        # with new bytes before the marker was re-bumped.
+        (tmp_path / "meta.json").write_text('{"project_id": "changed"}', encoding="utf-8")
+        assert artifacts_match(tmp_path, m) is False
+
+
+class TestRefreshMount:
+    """AxonBrain.refresh_mount bound to a stub object so we exercise the real
+    method without spinning up a full brain."""
+
+    def _make_stub_brain(self, tmp_path, monkeypatch):
+        from types import MethodType, SimpleNamespace
+
+        from axon.main import AxonBrain
+
+        owner_dir = tmp_path / "owner_proj"
+        _seed_project(owner_dir)
+
+        cfg = SimpleNamespace(
+            mount_sync_retry_max=2,
+            mount_sync_retry_backoff_s=0.0,  # no real wall-clock sleeps
+        )
+        switch_calls: list[str] = []
+
+        stub = SimpleNamespace(
+            config=cfg,
+            _active_project="mounts/shared",
+            _active_project_kind="mounted",
+            _active_mount_descriptor={"target_project_dir": str(owner_dir)},
+            _mount_version_marker=None,
+            switch_project=lambda name: switch_calls.append(name),
+        )
+        # Bind the real methods we want to exercise to the stub.
+        stub._is_mounted_share = MethodType(AxonBrain._is_mounted_share, stub)
+        stub.refresh_mount = MethodType(AxonBrain.refresh_mount, stub)
+        return stub, owner_dir, switch_calls
+
+    def test_refresh_noop_when_not_mounted(self, tmp_path, monkeypatch):
+        stub, _, switch_calls = self._make_stub_brain(tmp_path, monkeypatch)
+        stub._active_project_kind = "local"
+        assert stub.refresh_mount() is False
+        assert switch_calls == []
+
+    def test_refresh_noop_when_marker_not_newer(self, tmp_path, monkeypatch):
+        stub, owner_dir, switch_calls = self._make_stub_brain(tmp_path, monkeypatch)
+        bump(owner_dir)
+        stub._mount_version_marker = read(owner_dir)  # grantee caches current
+        assert stub.refresh_mount() is False
+        assert switch_calls == []
+
+    def test_refresh_reopens_when_owner_advanced(self, tmp_path, monkeypatch):
+        stub, owner_dir, switch_calls = self._make_stub_brain(tmp_path, monkeypatch)
+        # Grantee cached seq=1
+        bump(owner_dir)
+        stub._mount_version_marker = read(owner_dir)
+        # Owner re-ingests → bumps to seq=2; artifact bytes match new marker.
+        (owner_dir / "meta.json").write_text('{"project_id": "p1-v2"}', encoding="utf-8")
+        bump(owner_dir)
+
+        assert stub.refresh_mount() is True
+        assert switch_calls == ["mounts/shared"]
+
+    def test_refresh_raises_sync_pending_when_artifacts_stale(self, tmp_path, monkeypatch):
+        stub, owner_dir, switch_calls = self._make_stub_brain(tmp_path, monkeypatch)
+        bump(owner_dir)
+        stub._mount_version_marker = read(owner_dir)
+
+        # Simulate mid-sync: owner bumped marker describing future artifacts,
+        # but the actual files have not arrived yet.  We fake this by
+        # hand-writing a marker whose artifact hashes point to content that
+        # the on-disk files don't match.
+        import json as _json
+
+        synthetic = {
+            "schema_version": SCHEMA_VERSION,
+            "seq": 99,
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "owner_host": "stub",
+            "hash_algo": "sha256",
+            "artifacts": {"meta.json": "ff" * 32},  # impossible hash
+        }
+        (owner_dir / VERSION_MARKER_FILENAME).write_text(_json.dumps(synthetic), encoding="utf-8")
+
+        import pytest
+
+        with pytest.raises(MountSyncPendingError, match="replicating"):
+            stub.refresh_mount()
+        assert switch_calls == []
 
 
 class TestMarkerJsonShape:

@@ -1089,6 +1089,80 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return bool(getattr(self, "_mounted_share", False))
 
+    def refresh_mount(self) -> bool:
+        """Re-read the owner's version marker; reopen project handles if newer.
+
+        Called automatically before retrieval when ``cfg.mount_refresh_mode``
+        is ``"per_query"`` (see :meth:`QueryRouterMixin._maybe_refresh_mount`)
+        and available as a public API for explicit refresh.
+
+        Returns:
+            ``True`` if handles were reopened (the owner had advanced),
+            ``False`` if no refresh was needed or the brain is not on a mount.
+
+        Raises:
+            MountSyncPendingError: when the owner's marker has advanced but
+                the underlying index files have not yet replicated to this
+                grantee — typical for cloud-sync where ``version.json``
+                arrives before larger index files. Callers should retry
+                later or surface a transient ``X-Axon-Mount-Sync-Pending``
+                signal to the user.
+        """
+        import time as _time
+
+        from axon.version_marker import (
+            MountSyncPendingError,
+            artifacts_match,
+            is_newer_than,
+        )
+        from axon.version_marker import (
+            read as _read_marker,
+        )
+
+        if not self._is_mounted_share():
+            return False
+        desc = getattr(self, "_active_mount_descriptor", None)
+        if not desc:
+            return False
+        target = Path(desc.get("target_project_dir", ""))
+        if not target.exists():
+            return False
+
+        cached = getattr(self, "_mount_version_marker", None)
+        current = _read_marker(target)
+        if not is_newer_than(current, cached):
+            return False
+
+        # Mid-sync mismatch protection: re-hash the actual files and compare
+        # to the marker's expected hashes. If they don't match yet, the
+        # index files are still in flight; back off and retry.
+        retry_max = max(0, int(getattr(self.config, "mount_sync_retry_max", 5)))
+        backoff = float(getattr(self.config, "mount_sync_retry_backoff_s", 0.5))
+        for attempt in range(retry_max + 1):
+            if artifacts_match(target, current):
+                break
+            if attempt == retry_max:
+                raise MountSyncPendingError(
+                    f"Mount '{self._active_project}' has a newer version marker "
+                    f"(seq={current.get('seq')}) but its index files have not "
+                    f"finished replicating after {retry_max} retries. "
+                    f"Try again in a few seconds."
+                )
+            _time.sleep(backoff * (2**attempt))
+            current = _read_marker(target) or current
+
+        # Files are coherent with the marker — reopen handles via the
+        # existing switch logic. switch_project resets caches, GCs file
+        # handles, and rebuilds vector_store + bm25 from the new on-disk
+        # state. The marker we just read is re-cached during that call.
+        logger.info(
+            "Refreshing mount '%s': owner advanced to seq=%s",
+            self._active_project,
+            current.get("seq"),
+        )
+        self.switch_project(self._active_project)
+        return True
+
     def _assert_write_allowed(self, operation: str = "write") -> None:
         """Raise PermissionError if current project is read-only (scope, mounted share, or maintenance state)."""
 

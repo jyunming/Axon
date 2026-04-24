@@ -1240,6 +1240,25 @@ class AxonConfig:
 
     axon_store_base: str = ""
 
+    # ── Share-mount staleness detection ────────────────────────────────────
+    # When the grantee opens a mount the owner's version.json marker is
+    # cached on the brain (see src/axon/version_marker.py). The settings
+    # below control whether — and how often — the grantee re-checks that
+    # marker to detect the owner re-ingesting while the grantee was idle.
+
+    # "off"        → never auto-refresh; user must `/project switch` again.
+    # "switch"     → cache the marker on switch; no further auto-refresh
+    #                (default — minimal overhead, manual refresh via
+    #                 explicit re-switch only).
+    # "per_query"  → re-read the marker before every retrieval; on a newer
+    #                marker, re-open project handles. Adds ~1ms/query.
+    mount_refresh_mode: Literal["off", "switch", "per_query"] = "switch"
+
+    # Maximum mid-sync retry attempts before raising MountSyncPendingError.
+    # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
+    mount_sync_retry_max: int = 5
+    mount_sync_retry_backoff_s: float = 0.5
+
     @classmethod
     def load(cls, path: str | None = None) -> "AxonConfig":
         """Load configuration from a YAML file.
