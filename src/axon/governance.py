@@ -4,13 +4,16 @@ axon/governance.py — Governance audit store for the Operator Console.
 Provides:
 - AuditEvent dataclass: UUID, ISO-8601 timestamp, actor, surface, project,
   action, target_type, target_id, status, details (dict), request_id
-- AuditStore: SQLite (WAL) backend with JSONL fallback; no new dependencies
+- AuditStore: SQLite (DELETE journal) backend with JSONL fallback; no new deps
 - CopilotSessionStore: in-memory active/recent Copilot bridge session tracker
 - emit(): fire-and-forget audit write (background thread, never blocks callers)
 
 Design constraints
 ------------------
-- SQLite WAL mode for concurrent access safety
+- SQLite DELETE journal mode (share-mount safe; see src/axon/paths.py).
+  WAL is unsafe on cloud-sync / network filesystems because the wal-index
+  cannot be replicated coherently. Writes are already serialised by the
+  per-instance lock, so WAL's concurrent-reader benefit is immaterial.
 - No new runtime dependencies (stdlib sqlite3, uuid, datetime only)
 - Audit writes are background-threaded: callers are never blocked
 - Fallback to JSONL if SQLite is unavailable (e.g., read-only filesystem)
@@ -115,7 +118,10 @@ class AuditStore:
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
+        # DELETE journal mode: no -wal/-shm sidecars that cloud-sync tools
+        # cannot replicate atomically. Writes are already serialised by
+        # _lock, so WAL's concurrent-reader benefit is immaterial here.
+        conn.execute("PRAGMA journal_mode=DELETE")
         conn.row_factory = sqlite3.Row
         return conn
 

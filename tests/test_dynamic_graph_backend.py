@@ -370,3 +370,111 @@ class TestDynamicGraphBackendFactory:
         brain.config.graph_backend = "nonexistent"
         with pytest.raises(ValueError, match="Unknown graph_backend"):
             get_graph_backend(brain)
+
+
+# ---------------------------------------------------------------------------
+# Share-mount safety: journal mode + snapshot export/load
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicGraphShareMountSafety:
+    def test_journal_mode_is_delete_not_wal(self, tmp_path):
+        """Owner DB uses DELETE journal — no -wal/-shm sidecars (cloud-sync-safe)."""
+        backend = _make_backend(tmp_path)
+        now = "2026-01-01T00:00:00+00:00"
+        backend._upsert_entity("alice", "PERSON", "", now)
+        # PRAGMA should report 'delete' mode.
+        mode = backend._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "delete"
+        # And no -wal/-shm sidecar files should have been created.
+        assert not (tmp_path / ".dynamic_graph.db-wal").exists()
+        assert not (tmp_path / ".dynamic_graph.db-shm").exists()
+
+    def test_ingest_writes_snapshot_file(self, tmp_path):
+        """Owner ingest emits a JSON snapshot for grantees to read."""
+        from axon.graph_backends.dynamic_graph_backend import SNAPSHOT_FILENAME
+
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={
+                "Extract the key named entities": "Alice | PERSON | Engineer",
+                "Extract key relationships": "",
+            },
+        )
+        backend.ingest([_chunk("Alice runs.", "c1")])
+        snap = tmp_path / SNAPSHOT_FILENAME
+        assert snap.exists()
+        import json as _json
+
+        data = _json.loads(snap.read_text(encoding="utf-8"))
+        assert data["snapshot_version"] >= 1
+        assert any(e["canonical_name"] == "alice" for e in data["entities"])
+
+    def test_snapshot_written_atomically_no_tempfile_left(self, tmp_path):
+        """Snapshot export uses tmp+replace — no ``.json.tmp`` remains afterwards."""
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={"Extract the key named entities": "Alice | PERSON | x"},
+        )
+        backend.ingest([_chunk("Alice.", "c1")])
+        tmp_files = list(tmp_path.glob("*.json.tmp"))
+        assert tmp_files == []
+
+    def test_grantee_uses_in_memory_db_not_owner_file(self, tmp_path, monkeypatch):
+        """A mounted (grantee) brain never opens the owner's on-disk SQLite."""
+        from axon.graph_backends.dynamic_graph_backend import (
+            SNAPSHOT_FILENAME,
+            DynamicGraphBackend,
+        )
+
+        owner_brain = _make_brain(tmp_path)
+        owner_brain._active_project = "research"  # owner — not a mount
+        owner = DynamicGraphBackend(owner_brain)
+        assert not owner._is_mounted
+        # Seed an entity and a fact so the snapshot has content.
+        now = "2026-01-01T00:00:00+00:00"
+        owner._upsert_entity("alice", "PERSON", "engineer", now)
+        owner._upsert_fact("alice", "WORKS_FOR", "acme", "", 0.9, "c1", "ep1", now)
+        owner._export_snapshot()
+        assert (tmp_path / SNAPSHOT_FILENAME).exists()
+
+        # Now simulate a grantee pointing at the same path — they should load
+        # the snapshot, not open the owner's .dynamic_graph.db.
+        grantee_brain = _make_brain(tmp_path)
+        grantee_brain._active_project = "mounts/shared"
+        grantee = DynamicGraphBackend(grantee_brain)
+        assert grantee._is_mounted
+        # Grantee sees the snapshot data via an in-memory DB.
+        s = grantee.status()
+        assert s["entities"] == 1
+        assert s["active_facts"] == 1
+        # Grantee did NOT create or touch an on-disk DB in the mount.
+        # (The owner's file still exists, but grantee's connection is :memory:.)
+        rows = grantee._conn.execute("PRAGMA database_list").fetchall()
+        main_file = [r["file"] for r in rows if r["name"] == "main"][0]
+        assert main_file == ""  # in-memory DB reports empty file path
+
+    def test_grantee_with_missing_snapshot_is_empty_not_error(self, tmp_path):
+        """No snapshot file yet: grantee gets an empty graph, no exception."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        grantee_brain = _make_brain(tmp_path)
+        grantee_brain._active_project = "mounts/nothing_yet"
+        grantee = DynamicGraphBackend(grantee_brain)
+        s = grantee.status()
+        assert s["entities"] == 0
+        assert s["active_facts"] == 0
+
+    def test_grantee_with_corrupt_snapshot_logs_and_stays_empty(self, tmp_path):
+        """A malformed snapshot is logged and treated as empty, not re-raised."""
+        from axon.graph_backends.dynamic_graph_backend import (
+            SNAPSHOT_FILENAME,
+            DynamicGraphBackend,
+        )
+
+        (tmp_path / SNAPSHOT_FILENAME).write_text("not json {[", encoding="utf-8")
+        grantee_brain = _make_brain(tmp_path)
+        grantee_brain._active_project = "mounts/shared"
+        grantee = DynamicGraphBackend(grantee_brain)
+        s = grantee.status()
+        assert s["entities"] == 0

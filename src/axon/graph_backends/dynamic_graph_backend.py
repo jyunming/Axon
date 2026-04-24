@@ -1,12 +1,22 @@
-"""DynamicGraphBackend — SQLite-WAL temporal graph (v0.3).
+"""DynamicGraphBackend — SQLite temporal graph (v0.3).
 
-Implements the ``GraphBackend`` Protocol using SQLite in WAL mode.
+Implements the ``GraphBackend`` Protocol using SQLite.
 
 Schema mirrors Graphiti's bi-temporal model:
   episodes     → source_chunk_id, content, reference_time
   entities     → canonical_name, entity_type, description, first/last_seen_at
   facts        → subject, relation, object, valid_at, invalid_at, status, scope_key
   fact_evidence → fact_id, chunk_id, episode_id
+
+Share-mount safety
+------------------
+- Journal mode is ``DELETE`` (not WAL). WAL relies on a shared-memory
+  ``-shm`` segment that cannot be replicated coherently across machines
+  over cloud-sync or SMB; see https://sqlite.org/wal.html.
+- After every ingest, the owner exports a compact JSON snapshot to
+  ``{bm25_path}/.dynamic_graph.snapshot.json``. Grantees (``mounts/<name>``)
+  never open the owner's SQLite file; they load the snapshot into an
+  in-memory SQLite so the existing retrieve() queries work unchanged.
 
 Conflict resolution:
   - Append-and-preserve (default): scope_key = NULL; all facts kept
@@ -157,12 +167,23 @@ def _norm(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+SNAPSHOT_FILENAME = ".dynamic_graph.snapshot.json"
+SNAPSHOT_VERSION = 1
+
+
 class DynamicGraphBackend:
-    """SQLite-WAL temporal graph backend satisfying ``GraphBackend`` Protocol.
+    """SQLite temporal graph backend satisfying ``GraphBackend`` Protocol.
+
+    The owner writes to an on-disk SQLite database under ``bm25_path`` and
+    exports a read-only JSON snapshot after each ingest.  Grantees of a
+    shared project (``mounts/<mount_name>`` active project) never touch the
+    owner's SQLite file — they load the snapshot into an in-memory SQLite
+    so queries work unchanged.
 
     Args:
         brain: An ``AxonBrain`` instance.  Uses ``brain.config.bm25_path``
                for the database path, ``brain.llm`` for extraction LLM calls,
+               ``brain._active_project`` to detect grantee mount state,
                and ``brain.config`` for retrieval configuration.
     """
 
@@ -170,8 +191,22 @@ class DynamicGraphBackend:
         self._brain = brain
         _base = Path(getattr(brain.config, "bm25_path", "."))
         self._db_path = _base / ".dynamic_graph.db"
+        self._snapshot_path = _base / SNAPSHOT_FILENAME
         self._write_lock = threading.Lock()
-        self._conn: sqlite3.Connection = self._init_db()
+
+        active_project = getattr(brain, "_active_project", "") or ""
+        self._is_mounted: bool = active_project.startswith("mounts/")
+
+        if self._is_mounted:
+            # Grantee: load the owner's JSON snapshot into an in-memory DB.
+            # Never open the owner's .dynamic_graph.db directly — WAL/DELETE
+            # sidecars and concurrent writes on a shared path would corrupt.
+            self._conn = self._init_memory_db()
+            self._load_snapshot()
+        else:
+            # Owner: real on-disk DB in DELETE journal mode (share-safe).
+            self._conn = self._init_db()
+
         self._cached_nx_graph: Any = None
         self._cached_nx_time: float = 0.0
 
@@ -180,14 +215,135 @@ class DynamicGraphBackend:
     # ------------------------------------------------------------------
 
     def _init_db(self) -> sqlite3.Connection:
-        """Open (or create) the SQLite database and apply the schema."""
+        """Open (or create) the on-disk SQLite database and apply the schema."""
         conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+        # DELETE journal mode (was WAL): WAL relies on a shared-memory
+        # wal-index file that cloud-sync/network filesystems cannot
+        # replicate coherently. The per-instance write lock already
+        # serialises writes, so WAL's concurrent-reader benefit is moot.
+        conn.execute("PRAGMA journal_mode=DELETE")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(_SCHEMA_SQL)
         conn.commit()
         return conn
+
+    def _init_memory_db(self) -> sqlite3.Connection:
+        """Create an in-memory SQLite used by grantees to replay a snapshot."""
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(_SCHEMA_SQL)
+        conn.commit()
+        return conn
+
+    # ------------------------------------------------------------------
+    # Snapshot export / import (share-mount safety)
+    # ------------------------------------------------------------------
+
+    def _export_snapshot(self) -> None:
+        """Write a read-only JSON snapshot for grantees of a shared project.
+
+        Called at the end of :meth:`ingest` on the owner side only.  The
+        snapshot is the only graph artefact that lives on a potentially-
+        synced path — the full SQLite database stays local (write-path
+        stays single-writer) so WAL-on-sync corruption is impossible.
+
+        Write is atomic: temp file + ``os.replace``.
+        """
+        if self._is_mounted:
+            return
+        try:
+            entities = [
+                dict(r)
+                for r in self._execute(
+                    "SELECT entity_id, canonical_name, entity_type, description, "
+                    "first_seen_at, last_seen_at FROM entities"
+                )
+            ]
+            facts = [
+                dict(r)
+                for r in self._execute(
+                    "SELECT fact_id, subject, relation, object, valid_at, invalid_at, "
+                    "status, scope_key, confidence, metadata FROM facts WHERE status = 'active'"
+                )
+            ]
+            payload = {
+                "snapshot_version": SNAPSHOT_VERSION,
+                "generated_at": _now_iso(),
+                "entities": entities,
+                "facts": facts,
+            }
+            tmp = self._snapshot_path.with_suffix(".json.tmp")
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            os.replace(tmp, self._snapshot_path)
+        except Exception as exc:
+            logger.debug("DynamicGraph snapshot export failed: %s", exc)
+
+    def _load_snapshot(self) -> None:
+        """Populate the in-memory DB (grantee side) from the owner's snapshot.
+
+        Missing or unreadable snapshot is not an error: the grantee simply
+        sees an empty graph and retrieve() returns nothing, which is the
+        sensible default when the owner has never ingested.
+        """
+        if not self._snapshot_path.exists():
+            return
+        try:
+            data = json.loads(self._snapshot_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(
+                "DynamicGraph snapshot at %s could not be read: %s",
+                self._snapshot_path,
+                exc,
+            )
+            return
+        if not isinstance(data, dict):
+            return
+        entities = data.get("entities") or []
+        facts = data.get("facts") or []
+        with self._write_lock:
+            try:
+                for ent in entities:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO entities "
+                        "(entity_id, canonical_name, entity_type, description, "
+                        "first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            ent.get("entity_id", ""),
+                            ent.get("canonical_name", ""),
+                            ent.get("entity_type", "UNKNOWN"),
+                            ent.get("description", ""),
+                            ent.get("first_seen_at", _now_iso()),
+                            ent.get("last_seen_at", _now_iso()),
+                        ),
+                    )
+                for f in facts:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO facts "
+                        "(fact_id, subject, relation, object, valid_at, invalid_at, "
+                        "status, scope_key, confidence, metadata) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            f.get("fact_id", ""),
+                            f.get("subject", ""),
+                            f.get("relation", ""),
+                            f.get("object", ""),
+                            f.get("valid_at", _now_iso()),
+                            f.get("invalid_at"),
+                            f.get("status", "active"),
+                            f.get("scope_key"),
+                            float(f.get("confidence", 1.0)),
+                            f.get("metadata", "{}"),
+                        ),
+                    )
+                self._conn.commit()
+            except Exception as exc:
+                logger.warning("DynamicGraph snapshot replay failed: %s", exc)
 
     def _execute(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         # SELECT queries are thread-safe in WAL mode without explicit locking
@@ -410,12 +566,16 @@ class DynamicGraphBackend:
                 )
                 relations_added += 1
 
-        return IngestResult(
+        result = IngestResult(
             entities_added=entities_added,
             relations_added=relations_added,
             chunks_processed=len(chunks),
             backend_id=BACKEND_ID,
         )
+        # Export a grantee-readable snapshot so mounted readers stay in sync
+        # without opening this backend's SQLite file directly.
+        self._export_snapshot()
+        return result
 
     def retrieve(
         self,

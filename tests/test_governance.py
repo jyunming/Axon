@@ -84,6 +84,18 @@ class TestAuditStoreSQLite:
         assert (tmp_path / "gov.db").exists()
         assert not store._use_jsonl
 
+    def test_journal_mode_is_delete_not_wal(self, tmp_path):
+        """Governance DB must not use WAL: -wal/-shm sidecars corrupt on cloud sync."""
+        store = _store(tmp_path)
+        store.append(_event(project="p1", action="ingest_completed"))
+        # No WAL sidecar files should be left lying around in DELETE mode.
+        assert not (tmp_path / "gov.db-wal").exists()
+        assert not (tmp_path / "gov.db-shm").exists()
+        # And PRAGMA should report delete.
+        with store._connect() as conn:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "delete"
+
     def test_append_and_query_roundtrip(self, tmp_path):
         store = _store(tmp_path)
         e = _event(project="proj_a", action="ingest_completed")

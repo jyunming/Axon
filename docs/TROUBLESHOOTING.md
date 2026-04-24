@@ -533,3 +533,13 @@ axon> /model llama3.1:8b
 ```
 
 **Cause 3 — Gemma model + system prompt:** Gemma models (e.g. `gemma-3-27b-it`) don't support `system_instruction` in the Gemini SDK. Axon automatically falls back to prepending the system prompt to the first user message — no action needed, but if you see unexpected output check the model name is recognised as a Gemma variant.
+
+## Share mount: putting a project under OneDrive / Dropbox / Google Drive
+
+Axon's share-mount model assumes the owner's project directory sits on a **coherent filesystem** (local disk, or on-prem SMB3 from a Windows-native grantee). Consumer cloud-sync tools do **not** qualify:
+
+- **SQLite WAL corrupts on cloud sync.** SQLite's own maintainers categorically forbid WAL mode on filesystems where advisory locks or shared-memory mappings cannot be replicated coherently (see https://sqlite.org/useovernet.html and https://sqlite.org/wal.html). OneDrive / Dropbox / Google Drive all fit this description.
+- **Axon mitigations in the default install:** the governance audit DB (`.governance.db`) and the Dynamic Graph backend (`.dynamic_graph.db`) now use journal mode `DELETE` instead of `WAL`, so there are no `-wal`/`-shm` sidecars for sync clients to re-order. Grantees on a share mount never open the owner's `.dynamic_graph.db`; they read a read-only JSON snapshot (`.dynamic_graph.snapshot.json`) that the owner exports on every ingest.
+- **What's still risky:** the vector store binary files (TurboQuantDB / LanceDB / Chroma) are NOT yet cloud-sync-safe in v0.2.1 — TurboQuantDB's `wal.log` + `manifest.json` pair can be re-ordered by cloud sync and produce silent wrong answers. See issues #51–#54 in the repo for the broader Path A hardening plan. Until those ship, keep Axon project directories on local disk or an on-prem SMB3 share.
+
+If you must co-locate a project with OneDrive/Dropbox/Google Drive, back up the project dir to the synced folder on a schedule instead of running live — Axon's query path expects a coherent view of all index files at the same instant.
