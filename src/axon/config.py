@@ -1964,6 +1964,45 @@ class AxonConfig:
 
         # ------------------------------------------------------------------ #
 
+        # 2b. Share-mount safety pass — flag cloud-sync / network paths that  #
+
+        #     would corrupt SQLite-backed components or break atomic rename.  #
+
+        # ------------------------------------------------------------------ #
+
+        try:
+            from axon.paths import cloud_sync_path_reason
+        except Exception:  # pragma: no cover — import-time safety net
+
+            def cloud_sync_path_reason(_p: object) -> str:
+                return ""
+
+        for _section, _field, _value in (
+            ("store", "base", cfg.axon_store_base),
+            ("vector_store", "path", cfg.vector_store_path),
+            ("bm25", "path", cfg.bm25_path),
+        ):
+            _reason = cloud_sync_path_reason(_value)
+            if _reason:
+                issues.append(
+                    ConfigIssue(
+                        level="warn",
+                        section=_section,
+                        field=_field,
+                        message=(
+                            f"{_section}.{_field} is on an unsafe filesystem: {_reason}. "
+                            f"Path: {_value}"
+                        ),
+                        suggestion=(
+                            "Move Axon state off cloud-sync (OneDrive/Dropbox/Google Drive) "
+                            "and network shares; see docs/TROUBLESHOOTING.md "
+                            "(Share mount) for details."
+                        ),
+                    )
+                )
+
+        # ------------------------------------------------------------------ #
+
         # 3. Store health pass                                                 #
 
         # ------------------------------------------------------------------ #

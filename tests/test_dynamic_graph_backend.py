@@ -478,3 +478,109 @@ class TestDynamicGraphShareMountSafety:
         grantee = DynamicGraphBackend(grantee_brain)
         s = grantee.status()
         assert s["entities"] == 0
+
+
+class TestDynamicGraphDbRelocation:
+    """When bm25_path is on a cloud-sync / network path, the owner DB is
+    redirected to ``~/.axon/graphs/<id>/`` so a sync client never observes
+    a torn mid-write file."""
+
+    def test_safe_path_keeps_db_inline(self, tmp_path):
+        """Local path: DB stays at bm25_path (no relocation, no migration)."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        backend = DynamicGraphBackend(_make_brain(tmp_path))
+        assert not backend._db_relocated
+        assert backend._db_path == tmp_path / ".dynamic_graph.db"
+        assert backend._db_path.exists()
+
+    def test_cloud_sync_path_redirects_to_local_root(self, tmp_path, monkeypatch):
+        """Synthetic OneDrive path: DB lands under ~/.axon/graphs/<id>/."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        # Pin Path.home() so the test is deterministic and writes only into tmp.
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+
+        # Build a project layout under a synthetic OneDrive subtree.
+        synced_root = tmp_path / "OneDrive" / "AxonStore" / "alice" / "research"
+        bm25_dir = synced_root / "bm25_index"
+        bm25_dir.mkdir(parents=True)
+        (synced_root / "meta.json").write_text('{"project_id": "proj-deadbeef"}', encoding="utf-8")
+
+        brain = _make_brain(bm25_dir)
+        backend = DynamicGraphBackend(brain)
+
+        assert backend._db_relocated
+        # DB is under ~/.axon/graphs/<project_id>/
+        local_root = tmp_path / "home" / ".axon" / "graphs" / "proj-deadbeef"
+        assert backend._db_path == local_root / ".dynamic_graph.db"
+        assert backend._db_path.exists()
+        # The synced bm25_path holds NO .dynamic_graph.db (only the snapshot
+        # path is OK to live there once an ingest runs).
+        assert not (bm25_dir / ".dynamic_graph.db").exists()
+
+    def test_legacy_db_migrated_on_first_open(self, tmp_path, monkeypatch):
+        """An existing DB at the old (synced) path is copied into the local root."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+
+        synced_root = tmp_path / "Dropbox" / "AxonStore" / "alice" / "research"
+        bm25_dir = synced_root / "bm25_index"
+        bm25_dir.mkdir(parents=True)
+        (synced_root / "meta.json").write_text('{"project_id": "legacy-proj"}', encoding="utf-8")
+        # Seed a "legacy" DB at the old location with a recognisable row.
+        legacy_db = bm25_dir / ".dynamic_graph.db"
+        import sqlite3 as _sqlite
+
+        with _sqlite.connect(legacy_db) as _c:
+            _c.executescript(
+                "CREATE TABLE entities (entity_id TEXT PRIMARY KEY, "
+                "canonical_name TEXT NOT NULL UNIQUE, entity_type TEXT NOT NULL DEFAULT 'X', "
+                "description TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL, "
+                "last_seen_at TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}');"
+                "INSERT INTO entities VALUES ('e1','legacy-marker','X','','t','t','{}');"
+            )
+
+        backend = DynamicGraphBackend(_make_brain(bm25_dir))
+        assert backend._db_relocated
+        assert backend._db_path.exists()
+        assert backend._db_path != legacy_db
+
+        rows = backend._conn.execute(
+            "SELECT canonical_name FROM entities WHERE entity_id = 'e1'"
+        ).fetchall()
+        assert rows and rows[0]["canonical_name"] == "legacy-marker"
+
+
+class TestConfigShareMountValidation:
+    """AxonConfig.validate() flags axon_store_base / vector_store / bm25 paths
+    that sit on cloud-sync, UNC, or WSL Windows mount filesystems."""
+
+    def test_safe_path_emits_no_share_mount_warnings(self, tmp_path, monkeypatch):
+        from axon.config import AxonConfig
+
+        # Point everything inside tmp_path so __post_init__ derives safe paths.
+        monkeypatch.setenv("AXON_STORE_BASE", str(tmp_path / "axon"))
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("rag:\n  top_k: 10\n", encoding="utf-8")
+        issues = AxonConfig.validate(str(cfg_path))
+        share_mount_warns = [
+            i
+            for i in issues
+            if "unsafe filesystem" in i.message and i.section in {"store", "vector_store", "bm25"}
+        ]
+        assert share_mount_warns == []
+
+    def test_onedrive_store_base_emits_warning(self, tmp_path, monkeypatch):
+        from axon.config import AxonConfig
+
+        synced = tmp_path / "OneDrive" / "axon"
+        synced.mkdir(parents=True)
+        monkeypatch.setenv("AXON_STORE_BASE", str(synced))
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("rag:\n  top_k: 10\n", encoding="utf-8")
+        issues = AxonConfig.validate(str(cfg_path))
+        msgs = [i.message for i in issues if i.section == "store"]
+        assert any("unsafe filesystem" in m and "cloud-sync" in m for m in msgs)

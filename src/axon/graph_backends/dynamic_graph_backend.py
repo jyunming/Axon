@@ -31,6 +31,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -190,12 +191,19 @@ class DynamicGraphBackend:
     def __init__(self, brain: Any) -> None:
         self._brain = brain
         _base = Path(getattr(brain.config, "bm25_path", "."))
-        self._db_path = _base / ".dynamic_graph.db"
         self._snapshot_path = _base / SNAPSHOT_FILENAME
         self._write_lock = threading.Lock()
 
         active_project = getattr(brain, "_active_project", "") or ""
         self._is_mounted: bool = active_project.startswith("mounts/")
+
+        # Owner-side DB lives under bm25_path by default, but is redirected to
+        # a guaranteed-local path under ~/.axon/graphs/<id>/ when bm25_path is
+        # itself on a cloud-sync / network filesystem. Even with DELETE journal
+        # mode the owner's mid-write file state can be torn by a sync client
+        # racing the writer; keeping the DB local-only side-steps the issue.
+        # Snapshots are still emitted to the (synced) bm25_path for grantees.
+        self._db_path, self._db_relocated = self._resolve_db_path(_base)
 
         if self._is_mounted:
             # Grantee: load the owner's JSON snapshot into an in-memory DB.
@@ -205,10 +213,87 @@ class DynamicGraphBackend:
             self._load_snapshot()
         else:
             # Owner: real on-disk DB in DELETE journal mode (share-safe).
+            self._maybe_migrate_legacy_db(_base)
             self._conn = self._init_db()
 
         self._cached_nx_graph: Any = None
         self._cached_nx_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # DB-path resolution (owner side; relocates off cloud-synced paths)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _local_graphs_root() -> Path:
+        """Return the always-local root for owner DBs (``~/.axon/graphs``)."""
+        return Path.home() / ".axon" / "graphs"
+
+    def _resolve_db_path(self, base: Path) -> tuple[Path, bool]:
+        """Return ``(db_path, relocated)`` for the owner-side SQLite file.
+
+        When *base* (== ``brain.config.bm25_path``) is on a cloud-sync /
+        network / WSL-mount path, the DB is redirected to
+        ``~/.axon/graphs/<project_id>/.dynamic_graph.db`` so the writer's
+        mid-update file state is never observed by a sync client. ``base``
+        is used as-is for the snapshot, which IS meant to be visible to
+        grantees on a synced path.
+
+        ``project_id`` is read from ``base.parent/meta.json`` if available,
+        otherwise derived from a hash of ``base`` so it stays stable across
+        process restarts on the same project.
+        """
+        from axon.paths import is_cloud_sync_or_mount_path
+
+        default = base / ".dynamic_graph.db"
+        if not is_cloud_sync_or_mount_path(base):
+            return default, False
+
+        # Read project_id from the project's meta.json (one level up from bm25_path).
+        project_id = ""
+        meta_path = base.parent / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            project_id = (meta.get("project_id") or "").strip()
+        except Exception:
+            pass
+        if not project_id:
+            project_id = _sha8(str(base.resolve() if base.exists() else base))
+
+        local_dir = self._local_graphs_root() / project_id
+        try:
+            local_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "Could not create local graphs dir %s (%s); falling back to %s",
+                local_dir,
+                exc,
+                default,
+            )
+            return default, False
+        return local_dir / ".dynamic_graph.db", True
+
+    def _maybe_migrate_legacy_db(self, base: Path) -> None:
+        """One-shot migration: copy a pre-existing DB at ``base`` to the new
+        local path so existing projects keep their entities/facts."""
+        if not self._db_relocated:
+            return
+        legacy = base / ".dynamic_graph.db"
+        if not legacy.exists() or self._db_path.exists():
+            return
+        try:
+            shutil.copy2(legacy, self._db_path)
+            logger.info(
+                "Migrated dynamic-graph DB off cloud-sync path: %s -> %s",
+                legacy,
+                self._db_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not migrate legacy dynamic-graph DB %s -> %s: %s",
+                legacy,
+                self._db_path,
+                exc,
+            )
 
     # ------------------------------------------------------------------
     # Init
