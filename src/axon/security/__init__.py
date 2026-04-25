@@ -174,13 +174,40 @@ def generate_sealed_share(
     grantee: str,
     key_id: str,
 ) -> dict[str, Any]:
-    """Generate a sealed share envelope."""
-    raise SecurityError("generate_sealed_share not configured")
+    """Generate a sealed share envelope.
+
+    Phase 3 — wired to :mod:`axon.security.share`. Wraps the project
+    DEK under a per-share KEK derived from a fresh random token, writes
+    ``<project>/.security/shares/<key_id>.wrapped``, and returns a
+    base64 ``share_string`` with the ``SEALED1:`` prefix the redeem
+    path uses to tell sealed shares apart from legacy shares.
+    """
+    try:
+        from .share import generate_sealed_share as _impl
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
+        ) from exc
+    return _impl(owner_user_dir, project, grantee, key_id)
 
 
 def redeem_sealed_share(user_dir: Path, share_string: str) -> dict[str, Any]:
-    """Redeem a sealed share string."""
-    raise SecurityError("redeem_sealed_share not configured")
+    """Redeem a sealed share_string.
+
+    Phase 3 — wired to :mod:`axon.security.share`. Parses the envelope,
+    fetches the wrap file from the owner's synced folder, unwraps the
+    DEK, and persists it in the grantee's OS keyring at
+    ``axon.share.<key_id>``. Writes a ``mount.json`` with
+    ``mount_type="sealed"`` so the brain knows to fetch the DEK from
+    the keyring at switch-project time.
+    """
+    try:
+        from .share import redeem_sealed_share as _impl
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
+        ) from exc
+    return _impl(user_dir, share_string)
 
 
 def validate_received_sealed_shares(user_dir: Path) -> list[str]:
