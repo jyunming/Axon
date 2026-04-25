@@ -12,7 +12,16 @@ Share flow:
   1. Owner calls generate_share_key()  -> gets a share_string to send out-of-band
   2. Grantee calls redeem_share_key()  -> descriptor created in grantee's mounts/
   3. Owner calls revoke_share_key()    -> marks revoked in manifest (lazy invalidate)
-  4. Grantee's Axon calls validate_received_shares() on next access -> removes stale descriptors
+  4. Owner calls extend_share_key()    -> bumps expires_at when the share is still in use
+  5. Grantee's Axon calls validate_received_shares() on next access -> removes stale descriptors
+
+Expiry (issue #54)
+------------------
+Each share record carries an optional ``expires_at`` ISO timestamp. When set,
+``redeem_share_key`` and ``validate_received_shares`` treat past-expiry the
+same as revoked: the mount descriptor is removed and the grantee loses
+access. Owners can renew via :func:`extend_share_key`. ``ttl_days=None``
+preserves the original "never expires" behaviour for backward compatibility.
 """
 
 import base64
@@ -22,9 +31,35 @@ import json
 import os
 import secrets
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+def _is_expired(expires_at: str | None, *, now: datetime | None = None) -> bool:
+    """Return True if *expires_at* is set and lies in the past.
+
+    Missing / empty / unparseable values are treated as "no expiry".
+    """
+    if not expires_at:
+        return False
+    try:
+        exp = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return False
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    ref = (now or _utcnow()).astimezone(timezone.utc)
+    return exp <= ref
+
 
 _lock = threading.Lock()  # process-wide lock for share key file I/O
 
@@ -83,6 +118,8 @@ def generate_share_key(
     owner_user_dir: Path,
     project: str,
     grantee: str,
+    *,
+    ttl_days: int | None = None,
 ) -> dict[str, Any]:
     """Generate a share key allowing grantee to access owner's project.
 
@@ -92,9 +129,16 @@ def generate_share_key(
         owner_user_dir: Path to the owner's user directory under AxonStore.
         project: Name of the project to share (must exist).
         grantee: OS username of the recipient.
+        ttl_days: Optional time-to-live in days. When set, the share key
+            (and the grantee's mount descriptor) automatically expire
+            ``ttl_days`` after creation; grantees can no longer redeem
+            or query the share. Owners can renew via
+            :func:`extend_share_key`. ``None`` (default) preserves the
+            original "never expires" behaviour.
 
     Returns:
-        Dict with: key_id, share_string, project, grantee, owner.
+        Dict with: key_id, share_string, project, grantee, owner,
+        expires_at (or ``None`` when ``ttl_days`` was ``None``).
         The share_string should be transmitted to the grantee out-of-band.
     """
     key_id = "sk_" + secrets.token_hex(4)
@@ -102,7 +146,13 @@ def generate_share_key(
     owner_name = owner_user_dir.name
     owner_store_path = str(owner_user_dir.parent)
     token_hmac = _compute_hmac(token, key_id, project, grantee, owner_store_path)
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = _utcnow()
+    now = _iso(now_dt)
+    expires_at: str | None = None
+    if ttl_days is not None:
+        if ttl_days <= 0:
+            raise ValueError("ttl_days must be a positive integer (or None for no expiry).")
+        expires_at = _iso(now_dt + timedelta(days=int(ttl_days)))
 
     issued_record = {
         "key_id": key_id,
@@ -111,6 +161,7 @@ def generate_share_key(
         "token": token,
         "token_hmac": token_hmac,
         "created_at": now,
+        "expires_at": expires_at,
         "revoked": False,
         "revoked_at": None,
     }
@@ -120,6 +171,7 @@ def generate_share_key(
         "project": project,
         "grantee": grantee,
         "created_at": now,
+        "expires_at": expires_at,
         "revoked": False,
         "revoked_at": None,
     }
@@ -148,6 +200,7 @@ def generate_share_key(
         "project": project,
         "grantee": grantee,
         "owner": owner_name,
+        "expires_at": expires_at,
     }
 
 
@@ -194,6 +247,11 @@ def redeem_share_key(
         raise ValueError(f"Key '{key_id}' not found in owner's share manifest.")
     if manifest_record.get("revoked"):
         raise ValueError(f"Key '{key_id}' has been revoked by the owner.")
+    if _is_expired(manifest_record.get("expires_at")):
+        raise ValueError(
+            f"Key '{key_id}' expired at {manifest_record.get('expires_at')}. "
+            "Ask the owner to extend the share (`/share extend`)."
+        )
 
     # Verify HMAC against owner's private key store
     owner_keys = _read_json(_keys_path(owner_user_dir))
@@ -331,6 +389,8 @@ def list_shares(user_dir: Path) -> dict[str, list]:
             "grantee": r["grantee"],
             "revoked": r.get("revoked", False),
             "created_at": r.get("created_at"),
+            "expires_at": r.get("expires_at"),
+            "expired": _is_expired(r.get("expires_at")),
         }
         for r in keys.get("issued", [])
     ]
@@ -382,7 +442,9 @@ def validate_received_shares(user_dir: Path) -> list[str]:
         manifest_record = next(
             (r for r in manifest.get("issued", []) if r["key_id"] == key_id), None
         )
-        if manifest_record and manifest_record.get("revoked"):
+        if manifest_record and (
+            manifest_record.get("revoked") or _is_expired(manifest_record.get("expires_at"))
+        ):
             mount_name = record["mount_name"]
             # Primary: remove descriptor from mounts/
             remove_mount_descriptor(user_dir, mount_name)
@@ -396,3 +458,76 @@ def validate_received_shares(user_dir: Path) -> list[str]:
             _write_json(_keys_path(user_dir), keys)
 
     return removed
+
+
+def extend_share_key(
+    owner_user_dir: Path,
+    key_id: str,
+    *,
+    ttl_days: int | None,
+) -> dict[str, Any]:
+    """Renew (or remove) a share key's expiry.
+
+    Args:
+        owner_user_dir: Path to the owner's user directory.
+        key_id: The key_id to extend (e.g. ``'sk_a1b2c3d4'``).
+        ttl_days: New time-to-live in days, measured from *now*.
+            ``None`` clears the expiry entirely (key never expires until
+            revoked).
+
+    Returns:
+        Dict with: key_id, project, grantee, expires_at (the new value,
+        or ``None`` when cleared).
+
+    Raises:
+        ValueError: If the key is not found or has been revoked.
+    """
+    if ttl_days is not None and ttl_days <= 0:
+        raise ValueError("ttl_days must be a positive integer (or None to clear expiry).")
+
+    now_dt = _utcnow()
+    new_expires_at: str | None = None
+    if ttl_days is not None:
+        new_expires_at = _iso(now_dt + timedelta(days=int(ttl_days)))
+
+    with _lock:
+        # Update private keys file
+        keys = _read_json(_keys_path(owner_user_dir))
+        issued = keys.get("issued", [])
+        record = next((r for r in issued if r["key_id"] == key_id), None)
+        if record is None:
+            raise ValueError(f"Key '{key_id}' not found.")
+        if record.get("revoked"):
+            raise ValueError(
+                f"Key '{key_id}' is revoked; revoked keys cannot be extended. "
+                "Generate a new share key instead."
+            )
+        record["expires_at"] = new_expires_at
+        _write_json(_keys_path(owner_user_dir), keys)
+
+        # Mirror to the public manifest so grantees see the new expiry.
+        manifest = _read_json(_manifest_path(owner_user_dir))
+        issued_m = manifest.setdefault("issued", [])
+        manifest_record = next((r for r in issued_m if r["key_id"] == key_id), None)
+        if manifest_record is not None:
+            manifest_record["expires_at"] = new_expires_at
+        else:
+            issued_m.append(
+                {
+                    "key_id": key_id,
+                    "project": record.get("project", ""),
+                    "grantee": record.get("grantee", ""),
+                    "created_at": record.get("created_at"),
+                    "expires_at": new_expires_at,
+                    "revoked": False,
+                    "revoked_at": None,
+                }
+            )
+        _write_json(_manifest_path(owner_user_dir), manifest)
+
+    return {
+        "key_id": key_id,
+        "project": record.get("project"),
+        "grantee": record.get("grantee"),
+        "expires_at": new_expires_at,
+    }

@@ -4527,12 +4527,23 @@ def _interactive_repl(
                     print()
 
                 elif sub == "generate":
-                    # Usage: /share generate <project> <grantee>
+                    # Usage: /share generate <project> <grantee> [--ttl-days N]
 
                     parts = sub_arg.split()
 
+                    # Optional --ttl-days flag (issue #54)
+                    ttl_days: int | None = None
+                    if "--ttl-days" in parts:
+                        try:
+                            _idx = parts.index("--ttl-days")
+                            ttl_days = int(parts[_idx + 1])
+                            del parts[_idx : _idx + 2]
+                        except (ValueError, IndexError):
+                            print("    Invalid --ttl-days value (must be a positive integer).")
+                            parts = []
+
                     if len(parts) < 2:
-                        print("    Usage: /share generate <project> <grantee>")
+                        print("    Usage: /share generate <project> <grantee> [--ttl-days N]")
 
                     else:
                         proj = parts[0]
@@ -4561,6 +4572,7 @@ def _interactive_repl(
                                     owner_user_dir=user_dir,
                                     project=proj,
                                     grantee=grantee,
+                                    ttl_days=ttl_days,
                                 )
 
                                 print(f"\n    Share key generated for project '{proj}'")
@@ -4570,6 +4582,9 @@ def _interactive_repl(
                                 print("    Access:       read-only")
 
                                 print(f"    Key ID:       {result['key_id']}")
+
+                                if result.get("expires_at"):
+                                    print(f"    Expires at:   {result['expires_at']}")
 
                                 print(f"\n    Share string (send this to {grantee}):")
 
@@ -4634,11 +4649,48 @@ def _interactive_repl(
                         except Exception as e:
                             print(f"    Revoke failed: {e}")
 
+                elif sub == "extend":
+                    # Usage: /share extend <key_id> [--ttl-days N | --clear]
+                    parts = sub_arg.split()
+                    ttl_days: int | None = None
+                    if "--clear" in parts:
+                        parts.remove("--clear")
+                    elif "--ttl-days" in parts:
+                        try:
+                            _idx = parts.index("--ttl-days")
+                            ttl_days = int(parts[_idx + 1])
+                            del parts[_idx : _idx + 2]
+                        except (ValueError, IndexError):
+                            print("    Invalid --ttl-days value (must be a positive integer).")
+                            parts = []
+
+                    if not parts:
+                        print(
+                            "    Usage: /share extend <key_id> [--ttl-days N | --clear]\n"
+                            "      --ttl-days N : renew expiry to N days from now\n"
+                            "      --clear      : remove expiry entirely"
+                        )
+                    else:
+                        user_dir = Path(brain.config.projects_root)
+                        try:
+                            result = _shares_mod.extend_share_key(
+                                owner_user_dir=user_dir,
+                                key_id=parts[0].strip(),
+                                ttl_days=ttl_days,
+                            )
+                            new_exp = result.get("expires_at") or "(no expiry)"
+                            print(f"    Share '{result['key_id']}' expiry updated → {new_exp}")
+                        except ValueError as e:
+                            print(f"    Extend failed: {e}")
+                        except Exception as e:
+                            print(f"    Extend failed: {e}")
+
                 else:
                     print(f"    Unknown sub-command '{sub}'.")
 
                     print(
-                        "    Usage: /share list | generate <project> <grantee> [--write] | redeem <string> | revoke <key_id>"
+                        "    Usage: /share list | generate <project> <grantee> [--ttl-days N] | "
+                        "redeem <string> | revoke <key_id> | extend <key_id> [--ttl-days N | --clear]"
                     )
 
             elif cmd == "/store":

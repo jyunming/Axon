@@ -772,10 +772,22 @@ class QueryRouterMixin:
         except Exception:
             return  # Can't reach owner manifest — leave mounted
         for record in manifest.get("issued", []):
-            if record.get("key_id") == key_id and record.get("revoked"):
+            if record.get("key_id") != key_id:
+                continue
+            if record.get("revoked"):
                 raise PermissionError(
                     f"Share '{desc.get('project', '')}' has been revoked by the owner. "
                     "Run `/project switch default` to continue with your own projects."
+                )
+            # Issue #54: also enforce expires_at as a hard cutoff so a
+            # forgotten share doesn't leak indefinitely.
+            from axon.shares import _is_expired
+
+            if _is_expired(record.get("expires_at")):
+                raise PermissionError(
+                    f"Share '{desc.get('project', '')}' expired at "
+                    f"{record.get('expires_at')}. Ask the owner to extend "
+                    "(`/share extend`) and re-redeem."
                 )
 
     def _maybe_refresh_mount(self) -> None:

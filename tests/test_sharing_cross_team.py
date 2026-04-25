@@ -274,23 +274,29 @@ class TestTamperedKey:
 
 
 class TestNoExpiry:
-    def test_generated_key_has_no_expires_at(self, tmp_path):
-        """Shares currently have no expiry — generated result has no expires_at field."""
+    """When ``ttl_days`` is omitted (default), the share never expires.
+
+    ``expires_at`` is always present in the result + record after #54, but
+    is ``None`` to signal "no expiry" — the legacy "missing field" shape
+    became "explicit null" so consumers can distinguish "not yet set" from
+    "loaded from an old key store"; both cases are treated as no-expiry.
+    """
+
+    def test_generated_key_default_has_null_expires_at(self, tmp_path):
         from axon import shares
 
         owner_dir = _make_user_dir(tmp_path, "alice")
         gen = shares.generate_share_key(owner_dir, "myproject", "bob")
-        assert "expires_at" not in gen
+        assert gen["expires_at"] is None
 
-    def test_key_store_record_has_no_expires_at(self, tmp_path):
-        """The key store record also has no expires_at field."""
+    def test_key_store_record_default_has_null_expires_at(self, tmp_path):
         from axon import shares
 
         owner_dir = _make_user_dir(tmp_path, "alice")
         shares.generate_share_key(owner_dir, "myproject", "bob")
 
         keys = json.loads((owner_dir / ".shares" / ".share_keys.json").read_text())
-        assert "expires_at" not in keys["issued"][0]
+        assert keys["issued"][0]["expires_at"] is None
 
 
 # ---------------------------------------------------------------------------

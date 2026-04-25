@@ -53,6 +53,7 @@ EXPECTED_MCP_TOOL_NAMES = {
     "share_project",
     "redeem_share",
     "revoke_share",
+    "extend_share",
     "list_shares",
     "init_store",
     "get_store_status",

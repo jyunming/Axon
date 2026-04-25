@@ -49,6 +49,7 @@ VALID_ACTIONS: frozenset[str] = frozenset(
         "share_generated",
         "share_redeemed",
         "share_revoked",
+        "share_extended",
         "copilot_session_opened",
         "copilot_session_closed",
         "copilot_session_failed",

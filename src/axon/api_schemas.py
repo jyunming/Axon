@@ -332,6 +332,15 @@ class ShareGenerateRequest(BaseModel):
 
     grantee: str = Field(..., description="OS username of the recipient.")
 
+    ttl_days: int | None = Field(
+        default=None,
+        description=(
+            "Optional time-to-live in days. When set, the share automatically "
+            "expires this many days after creation. Owners can renew via "
+            "POST /share/extend. None (default) means no expiry."
+        ),
+    )
+
 
 class ShareRedeemRequest(BaseModel):
     share_string: str = Field(..., description="The base64 share string from the owner.")
@@ -339,6 +348,18 @@ class ShareRedeemRequest(BaseModel):
 
 class ShareRevokeRequest(BaseModel):
     key_id: str = Field(..., description="The key_id to revoke (e.g. 'sk_a1b2c3d4').")
+
+
+class ShareExtendRequest(BaseModel):
+    key_id: str = Field(..., description="The key_id to extend (e.g. 'sk_a1b2c3d4').")
+
+    ttl_days: int | None = Field(
+        default=None,
+        description=(
+            "New time-to-live in days, measured from now. None clears the "
+            "expiry entirely (key never expires until revoked)."
+        ),
+    )
 
 
 class CopilotMessage(BaseModel):
