@@ -85,8 +85,14 @@ def is_unlocked(user_dir: Path) -> bool:
 
 
 def get_sealed_project_record(project: str, user_dir: Path) -> dict[str, Any] | None:
-    """Return the sealed project record if this project is sealed, else None."""
-    return None
+    """Return the sealed project record if this project is sealed, else None.
+
+    Phase 2 (PR #57) — wired to the on-disk ``.security/.sealed`` marker
+    via :mod:`axon.security.seal`.
+    """
+    from .seal import get_sealed_project_record as _impl
+
+    return _impl(project, user_dir)
 
 
 def generate_sealed_share(
@@ -128,9 +134,24 @@ def project_seal(
     project_name: str,
     user_dir: Path,
     *,
-    migration_mode: str = "snapshot",
+    migration_mode: str = "in_place",
     config: Any = None,
     embedding: Any = None,
 ) -> dict[str, Any]:
-    """Seal an existing open project, converting it to sealed_v1 mode."""
-    raise SecurityError("project_seal not configured")
+    """Seal an existing open project, converting it to sealed_v1 mode.
+
+    Phase 2 (PR #57) — wired to the in-place per-file AES-256-GCM
+    sealer in :mod:`axon.security.seal`. ``migration_mode`` /
+    ``config`` / ``embedding`` are reserved for future variants and
+    have no effect in v1; the parameters are preserved so existing
+    callers (api_routes/projects.py) keep working.
+    """
+    from .seal import project_seal as _impl
+
+    return _impl(
+        project_name,
+        user_dir,
+        migration_mode=migration_mode,
+        config=config,
+        embedding=embedding,
+    )
