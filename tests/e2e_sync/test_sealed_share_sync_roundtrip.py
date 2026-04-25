@@ -119,9 +119,11 @@ class TestSealedShareWebDavRoundTrip:
         bytes are identical (no corruption in transit / encoding)."""
         from axon.security.share import share_wrap_path
 
-        alice, bob = two_users
+        alice, _bob = two_users
         proj = _populate_and_seal(owner_user_dir)
-        share = generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_dav01")
+        # Generate the sealed share — wrap file lands on local disk;
+        # share_string isn't needed for this transport-only test.
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_dav01")
         wrap = share_wrap_path(proj, "ssk_dav01")
         wrap_bytes = wrap.read_bytes()
         assert len(wrap_bytes) == 40  # AES-KW invariant
