@@ -44,6 +44,7 @@ def materialize_for_read(
     user_dir: Path | str,
     *,
     cache_root: Path | str | None = None,
+    dek: bytes | None = None,
 ) -> SealedCache:
     """Decrypt a sealed project into an ephemeral cache + return the handle.
 
@@ -53,12 +54,19 @@ def materialize_for_read(
     when the brain closes the project to wipe the plaintext.
 
     Args:
-        project_dir: The owner's on-disk project directory (the same
-            path that would be opened directly in the unsealed flow).
-        user_dir: The owner's AxonStore user directory — needed to
-            locate the keyring service and cached master.
+        project_dir: The on-disk project directory to materialise (the
+            owner's path; for grantees this is the path under their
+            mount descriptor's ``target_project_dir``).
+        user_dir: AxonStore user directory — needed to locate the
+            keyring service and cached master when *dek* is None
+            (owner path). For grantees with a pre-supplied DEK this
+            arg is unused but kept for signature stability.
         cache_root: Override the OS temp dir for the cache (mostly for
             tests; production should leave it as None).
+        dek: Pre-fetched 32-byte project DEK. When supplied, skips
+            the master-key + ``get_project_dek`` lookup. Used by the
+            grantee path to pass in a DEK fetched from the OS keyring
+            via :func:`axon.security.share.get_grantee_dek`.
 
     Returns:
         A live :class:`SealedCache` whose ``path`` contains plaintext
@@ -94,11 +102,21 @@ def materialize_for_read(
             "The project may have been sealed by an older incompatible version."
         )
 
-    # Read-only DEK lookup. Refuses to mint a fresh DEK if dek.wrapped
-    # is missing — silently creating a new DEK on the read path would
-    # make the existing ciphertext permanently undecryptable. Raises
-    # SecurityError on locked store OR on missing DEK file.
-    dek = get_project_dek(user_dir, project_dir)
+    if dek is not None:
+        # Grantee path: caller supplied the DEK from the OS keyring.
+        # Skip the read-only get_project_dek lookup — grantees never
+        # have access to dek.wrapped (the master-wrapped form).
+        from .crypto import DEK_LEN as _DEK_LEN
+
+        if len(dek) != _DEK_LEN:
+            raise SecurityError(f"Supplied DEK is {len(dek)} bytes (expected {_DEK_LEN}).")
+    else:
+        # Owner path: read-only DEK lookup. Refuses to mint a fresh
+        # DEK if dek.wrapped is missing — silently creating a new DEK
+        # on the read path would make the existing ciphertext
+        # permanently undecryptable. Raises SecurityError on locked
+        # store OR on missing DEK file.
+        dek = get_project_dek(user_dir, project_dir)
 
     try:
         cache = SealedCache.create(

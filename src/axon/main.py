@@ -768,8 +768,11 @@ Your primary goal is to help the user by answering questions based on the provid
         # project is plaintext (the common case).
         self._sealed_cache: Any = None
         # Two-phase materialisation handoff between the path-setup arm
-        # of switch_project and the post-close block.
-        self._pending_seal_mount: tuple[str, Path] | None = None
+        # of switch_project and the post-close block. Tuple is
+        # ``(project_name, project_root, share_key_id_or_None)`` —
+        # ``share_key_id`` is None for the owner's own sealed projects
+        # and a non-empty key_id for sealed mounts (grantee path).
+        self._pending_seal_mount: tuple[str, Path, str | None] | None = None
 
         # Wipe stale sealed caches from previous crashed sessions. Cheap
         # (just lists temp dir) and only fires when the optional
@@ -1238,7 +1241,12 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.debug("is_project_sealed raised on %s: %s", project_root, exc)
             return False
 
-    def _mount_sealed_project(self, name: str, project_root: Path) -> Path:
+    def _mount_sealed_project(
+        self,
+        name: str,
+        project_root: Path,
+        share_key_id: str | None = None,
+    ) -> Path:
         """Decrypt *project_root* into an ephemeral cache; return its path.
 
         Wipes any pre-existing sealed cache before creating the new one,
@@ -1246,8 +1254,17 @@ Your primary goal is to help the user by answering questions based on the provid
         Stashes the new cache on ``self._sealed_cache`` so ``close()``
         can wipe it on shutdown.
 
+        Args:
+            name: Project name (for logging).
+            project_root: Directory containing the sealed files.
+            share_key_id: When set, this is a grantee mount; the DEK is
+                fetched from the OS keyring at ``axon.share.<key_id>``.
+                When None, this is the owner's own sealed project; the
+                DEK is unwrapped from ``dek.wrapped`` via the master.
+
         Raises:
-            SecurityError: store is locked, or sealed marker missing /
+            SecurityError: store is locked (owner path) or DEK missing
+                from keyring (grantee path), sealed marker missing /
                 malformed, or cache materialisation failed (capacity,
                 I/O, or decryption error).
         """
@@ -1263,12 +1280,22 @@ Your primary goal is to help the user by answering questions based on the provid
             self._sealed_cache = None
 
         user_dir = Path(self.config.projects_root)
-        cache = materialize_for_read(project_root, user_dir)
+
+        if share_key_id is not None:
+            # Grantee path — DEK from keyring, not from disk.
+            from axon.security.share import get_grantee_dek
+
+            grantee_dek = get_grantee_dek(share_key_id)
+            cache = materialize_for_read(project_root, user_dir, dek=grantee_dek)
+        else:
+            cache = materialize_for_read(project_root, user_dir)
+
         self._sealed_cache = cache
         logger.info(
-            "Sealed project '%s' mounted at %s",
+            "Sealed project '%s' mounted at %s (key_id=%s)",
             name,
             cache.path,
+            share_key_id or "owner",
         )
         return Path(cache.path)
 
@@ -1343,9 +1370,25 @@ Your primary goal is to help the user by answering questions based on the provid
 
             target = Path(desc["target_project_dir"])
 
-            self.config.vector_store_path = str(target / "vector_store_data")
+            # Sealed mounts route through the cache: descriptor carries
+            # mount_type="sealed" + share_key_id; fetch the DEK from the
+            # grantee's keyring, materialise the cache after close().
+            if desc.get("mount_type") == "sealed":
+                share_key_id = desc.get("share_key_id", "")
+                if not share_key_id:
+                    raise ValueError(
+                        f"Sealed mount '{name}' has no share_key_id in its descriptor; "
+                        "the redeem flow may be from an incompatible older version."
+                    )
+                # Defer cache materialisation until AFTER close() — see
+                # the local-project arm for the same two-phase reason.
+                self._pending_seal_mount = (name, target, share_key_id)
+                self.config.vector_store_path = str(target / "vector_store_data")
+                self.config.bm25_path = str(target / "bm25_index")
+            else:
+                self.config.vector_store_path = str(target / "vector_store_data")
 
-            self.config.bm25_path = str(target / "bm25_index")
+                self.config.bm25_path = str(target / "bm25_index")
 
             # Cache the owner's version marker so a future TTL/per-query
             # check (issue #53 follow-up) can detect when the owner has
@@ -1403,7 +1446,9 @@ Your primary goal is to help the user by answering questions based on the provid
                 # the cache before close() would wipe it before any
                 # backend can read it. Stash the project root on the
                 # instance so the post-close block can pick it up.
-                self._pending_seal_mount: tuple[str, Path] | None = (name, root)
+                # Owner path: share_key_id is None — DEK comes from
+                # the master via get_project_dek.
+                self._pending_seal_mount = (name, root, None)
                 # Sentinel paths — overwritten right after close().
                 self.config.vector_store_path = str(root / "vector_store_data")
                 self.config.bm25_path = str(root / "bm25_index")
@@ -1432,13 +1477,13 @@ Your primary goal is to help the user by answering questions based on the provid
 
         # Sealed-project routing — close() wiped any prior _sealed_cache,
         # so it's safe to materialise the new one now. The sentinel
-        # paths set in the local-project arm above are overwritten with
-        # the cache directory.
+        # paths set in the local-project / sealed-mount arm above are
+        # overwritten with the cache directory.
         pending = getattr(self, "_pending_seal_mount", None)
         if pending is not None:
-            seal_name, seal_root = pending
+            seal_name, seal_root, seal_share_key_id = pending
             self._pending_seal_mount = None
-            cache_path = self._mount_sealed_project(seal_name, seal_root)
+            cache_path = self._mount_sealed_project(seal_name, seal_root, seal_share_key_id)
             self.config.vector_store_path = str(cache_path / "vector_store_data")
             self.config.bm25_path = str(cache_path / "bm25_index")
 
