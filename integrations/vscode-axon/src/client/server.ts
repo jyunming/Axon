@@ -42,13 +42,11 @@ export async function getPortPid(port: number): Promise<number | undefined> {
 export async function discoverPythonPath(): Promise<string> {
   const config = vscode.workspace.getConfiguration('axon');
   const isWin = process.platform === 'win32';
-
   // 1. Explicit user setting
   const explicit = config.get<string>('pythonPath', '');
   if (explicit) {
     return explicit;
   }
-
   // 2. ~/.axon/.python_path written by `axon` CLI on first run
   const discoveryFile = path.join(os.homedir(), '.axon', '.python_path');
   if (fs.existsSync(discoveryFile)) {
@@ -58,7 +56,6 @@ export async function discoverPythonPath(): Promise<string> {
       return discovered;
     }
   }
-
   // 3. pipx isolated venv (fixed path for `pipx install axon`)
   const pipxPython = isWin
     ? path.join(os.homedir(), '.local', 'pipx', 'venvs', 'axon', 'Scripts', 'python.exe')
@@ -67,7 +64,6 @@ export async function discoverPythonPath(): Promise<string> {
     state.outputChannel.appendLine(`Python auto-detected via pipx venv: ${pipxPython}`);
     return pipxPython;
   }
-
   // 4. Workspace venv (.venv, venv, env)
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders) {
@@ -83,14 +79,12 @@ export async function discoverPythonPath(): Promise<string> {
       }
     }
   }
-
   // 5. System Python fallback
   const systemPython = isWin ? 'python' : 'python3';
   state.outputChannel.appendLine(
     `Python auto-detection: no venv found. Falling back to system ${systemPython}. ` +
     `If Axon is not found, run \`axon\` once after installation, or set axon.pythonPath.`
   );
-
   // Show a one-time notification so users know what to do
   const msg = 'Axon: Python auto-detection did not find an Axon installation. ' +
     'Run `axon` once after installing, or set the `axon.pythonPath` setting.';
@@ -99,14 +93,12 @@ export async function discoverPythonPath(): Promise<string> {
       vscode.commands.executeCommand('workbench.action.openSettings', 'axon.pythonPath');
     }
   });
-
   return systemPython;
 }
 
 export async function ensureServerRunning(apiBase: string, context: vscode.ExtensionContext): Promise<void> {
   const portMatch = apiBase.match(/:(\d+)/);
   const port = portMatch ? parseInt(portMatch[1], 10) : 8000;
-
   if (await isAxonRunning(apiBase)) {
     state.outputChannel.appendLine('Axon API already running.');
     // Capture PID so we can stop it on deactivate even if we didn't spawn it
@@ -116,7 +108,6 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
     }
     return;
   }
-
   // Detect stale listener: something is bound to the port but not answering /health.
   // Only auto-kill if the process can be positively identified as an Axon/uvicorn process
   // to avoid terminating unrelated user services bound to the same port.
@@ -141,7 +132,6 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
     } catch {
       // If we can't inspect the process, don't kill it
     }
-
     if (isAxonProcess) {
       state.outputChannel.appendLine(
         `Axon: stale process (PID ${stalePid}) found on port ${port} — terminating and restarting.`
@@ -181,33 +171,26 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
       return;
     }
   }
-
   const config = vscode.workspace.getConfiguration('axon');
   const pythonPath = await discoverPythonPath();
-
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
     state.outputChannel.appendLine('No workspace folder open. Cannot auto-start Axon server.');
     return;
   }
   const workspaceRoot = workspaceFolders[0].uri.fsPath;
-
   // Port as string for uvicorn spawn argument
   let portStr = String(port);
-
   // Default ingest base to workspaceRoot for safety (prevents ingesting files outside the project).
   // Users can broaden this to the filesystem root via axon.ingestBase in settings.
   const configuredBase = config.get<string>('ingestBase', '');
   const fsRoot = configuredBase || workspaceRoot;
-
   const storeBase = config.get<string>('storeBase', '');
-
   state.outputChannel.appendLine(`Starting Axon API server with: ${pythonPath} -m uvicorn axon.api:app --host 127.0.0.1 --port ${portStr}`);
   state.outputChannel.appendLine(`RAG_INGEST_BASE=${fsRoot} (any path under this root is ingestable)`);
   if (storeBase) {
     state.outputChannel.appendLine(`AXON_STORE_BASE=${storeBase}`);
   }
-
   state.serverProcess = spawn(pythonPath, ['-m', 'uvicorn', 'axon.api:app', '--host', '127.0.0.1', '--port', portStr], {
     cwd: workspaceRoot,
     shell: process.platform === 'win32', // Required on Windows for Python path resolution
@@ -218,7 +201,6 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
       ...(storeBase ? { AXON_STORE_BASE: storeBase } : {}),
     },
   });
-
   state.serverProcess.on('error', (err) => {
     state.outputChannel.appendLine(`Axon server spawn error: ${err.message}`);
     state.serverProcess = undefined;
@@ -233,9 +215,7 @@ export async function ensureServerRunning(apiBase: string, context: vscode.Exten
     state.outputChannel.appendLine(`Axon server exited with code ${code}`);
     state.serverProcess = undefined;
   });
-
   const started = await waitForHealth(apiBase, SERVER_START_TIMEOUT_MS);
-
   if (started) {
     state.outputChannel.appendLine('Axon API server is ready.');
     vscode.window.showInformationMessage('Axon API server started successfully.');
@@ -293,7 +273,6 @@ export async function startCopilotLlmWorker(apiBase: string, apiKey: string): Pr
       if (result.status === 200) {
         const data = JSON.parse(result.body);
         const tasks = data.tasks || [];
-
         if (tasks.length > 0) {
           state.outputChannel.appendLine(`Fulfilling ${tasks.length} Axon backend LLM tasks via Copilot...`);
           // Process in parallel
@@ -301,19 +280,16 @@ export async function startCopilotLlmWorker(apiBase: string, apiKey: string): Pr
             try {
               const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
               if (models.length === 0) { throw new Error('Copilot LLM not available'); }
-
               const systemPrompt = task.system_prompt || 'You are a helpful assistant.';
               const messages = [
                 vscode.LanguageModelChatMessage.User(systemPrompt + '\n\n' + task.prompt)
               ];
-
               // Use the first available model (usually GPT-4o or similar)
               const chatResponse = await models[0].sendRequest(messages, {});
               let fullText = '';
               for await (const chunk of chatResponse.text) {
                 fullText += chunk;
               }
-
               await httpPost(`${apiBase}/llm/copilot/result/${task.id}`, { result: fullText }, apiKey);
             } catch (err) {
               state.outputChannel.appendLine(`Task ${task.id} failed: ${err}`);
