@@ -49,39 +49,107 @@ class SecurityError(Exception):
 
 
 def store_status(user_dir: Path) -> dict[str, Any]:
-    """Return the current security store status."""
+    """Return the current security store status.
+
+    Phase 2 (PR #57) — wired to the on-disk master record via
+    :mod:`axon.security.master`. When the optional ``[sealed]`` extra
+    is not installed, falls back to the v0 stub response so callers
+    on minimal installs keep working.
+    """
+    try:
+        from . import master as _m
+    except ImportError:
+        return {
+            "initialized": False,
+            "unlocked": False,
+            "sealed_hidden_count": 0,
+            "public_key_fingerprint": "",
+            "cipher_suite": "",
+        }
+
+    initialized = _m.is_bootstrapped(user_dir)
     return {
-        "initialized": False,
-        "unlocked": False,
+        "initialized": initialized,
+        "unlocked": _m.is_unlocked(user_dir) if initialized else False,
         "sealed_hidden_count": 0,
         "public_key_fingerprint": "",
-        "cipher_suite": "",
+        "cipher_suite": "AES-256-GCM-v1" if initialized else "",
     }
 
 
 def bootstrap_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
-    """Bootstrap the security store with a passphrase."""
-    raise SecurityError("Security store not configured")
+    """Bootstrap the security store with a passphrase.
+
+    Phase 2 (PR #57) — wired to :mod:`axon.security.master`.
+    Requires the ``[sealed]`` extra (``pip install axon-rag[sealed]``)
+    so the ``cryptography`` + ``keyring`` dependencies are present.
+    """
+    try:
+        from . import master as _m
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
+        ) from exc
+    return _m.bootstrap_store(user_dir, passphrase)
 
 
 def unlock_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
-    """Unlock the security store."""
-    raise SecurityError("unlock failed: store not initialized")
+    """Unlock the security store.
+
+    Phase 2 (PR #57) — wired to :mod:`axon.security.master`. Raises
+    :class:`axon.security.master.BadPassphraseError` (a SecurityError
+    subclass) on a wrong passphrase.
+    """
+    try:
+        from . import master as _m
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
+        ) from exc
+    return _m.unlock_store(user_dir, passphrase)
 
 
 def lock_store(user_dir: Path) -> dict[str, Any]:
-    """Lock the security store."""
-    return {"initialized": False, "unlocked": False}
+    """Lock the security store.
+
+    Phase 2 (PR #57) — wired to :mod:`axon.security.master`. Always
+    returns successfully even when nothing was unlocked, so callers
+    can use this as a no-throw cleanup hook on shutdown.
+    """
+    try:
+        from . import master as _m
+    except ImportError:
+        return {"initialized": False, "unlocked": False}
+    return _m.lock_store(user_dir)
 
 
 def change_passphrase(user_dir: Path, old_passphrase: str, new_passphrase: str) -> dict[str, Any]:
-    """Change the store passphrase."""
-    raise SecurityError("passphrase change failed: store not initialized")
+    """Change the store passphrase.
+
+    Phase 2 (PR #57) — wired to :mod:`axon.security.master`. Project
+    DEKs are not touched (they're wrapped under the master, not the
+    passphrase), so this is O(1) regardless of how many sealed
+    projects the owner has.
+    """
+    try:
+        from . import master as _m
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
+        ) from exc
+    return _m.change_passphrase(user_dir, old_passphrase, new_passphrase)
 
 
 def is_unlocked(user_dir: Path) -> bool:
-    """Return True if the sealed store is currently unlocked."""
-    return False
+    """Return True if the sealed store is currently unlocked.
+
+    Phase 2 (PR #57) — wired to :mod:`axon.security.master`.
+    """
+    try:
+        from . import master as _m
+    except ImportError:
+        return False
+    return _m.is_unlocked(user_dir)
 
 
 def get_sealed_project_record(project: str, user_dir: Path) -> dict[str, Any] | None:

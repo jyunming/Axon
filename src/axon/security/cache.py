@@ -172,36 +172,40 @@ def _wipe_dir_contents(cache_dir: Path) -> None:
 def _pid_alive(pid: int) -> bool:
     """Return True if a process with *pid* is still running.
 
-    Cross-platform best-effort check: ``os.kill(pid, 0)`` on POSIX is
-    the canonical existence test; on Windows we use the same call
-    which Python's ``os.kill`` translates to ``OpenProcess`` semantics.
-    Treat any error other than "process exists" as "not alive" so
-    cleanup leans toward wiping orphans rather than leaking them.
+    Cross-platform best-effort check:
+
+    - POSIX: ``os.kill(pid, 0)`` succeeds for live PIDs, raises
+      ``ProcessLookupError`` (errno ``ESRCH``) for dead ones, and
+      ``PermissionError`` for live PIDs we don't own.
+    - Windows: ``os.kill(pid, 0)`` raises ``OSError`` with ``errno``
+      ``EINVAL`` for invalid handle (PID never existed / out of range)
+      and ``ESRCH`` for "no such process". ``PermissionError`` again
+      means a live PID we can't signal.
+
+    Cleanup leans toward wiping orphans rather than leaking plaintext:
+    on any unrecognised error we treat the PID as dead.
     """
     if pid <= 0:
         return False
+    import errno
+
     try:
         os.kill(pid, 0)
+    except PermissionError:
+        # Live PID owned by another user — leave its cache alone.
         return True
-    except (OSError, PermissionError):
-        # PermissionError on Windows means the process exists but we
-        # can't signal it — treat as alive (don't wipe a cache that
-        # might still be in use by another user).
-        # POSIX: PermissionError likewise indicates the PID is in use.
-        # Pure OSError (ESRCH / "no such process") = not alive.
-        import errno
-
-        if isinstance(getattr(_pid_alive, "_last_exc", None), OSError):
-            pass  # placeholder — real branch is below via except
-        # Re-classify by inspecting the original exception; simpler
-        # to just re-call with a different probe:
-        try:
-            os.kill(pid, 0)
-            return True
-        except PermissionError:
-            return True
-        except OSError as exc:
-            return exc.errno != errno.ESRCH
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        # ESRCH = "no such process". EINVAL on Windows = handle out of
+        # range / invalid PID. Either way: not a live process.
+        if exc.errno in (errno.ESRCH, errno.EINVAL):
+            return False
+        # Unknown failure mode — be conservative and treat as alive
+        # so we don't accidentally wipe a cache that might still be
+        # in use. The next boot will re-check.
+        return True
+    return True
 
 
 # ---------------------------------------------------------------------------
