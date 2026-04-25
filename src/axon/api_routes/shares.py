@@ -326,14 +326,29 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
 
     surface = getattr(req.state, "surface", "api")
 
+    # Detect sealed share by the ``SEALED1:`` prefix in the decoded
+    # envelope (Phase 3 wire format). The legacy JSON-with-security_mode
+    # detection is kept as a fallback in case any older share_strings
+    # using that earlier shape are still in flight.
+    is_sealed_share = False
     try:
-        payload = json.loads(
-            base64.urlsafe_b64decode(request.share_string.encode("ascii")).decode("utf-8")
+        decoded = base64.urlsafe_b64decode(request.share_string.encode("ascii")).decode(
+            "utf-8", errors="replace"
         )
+        if decoded.startswith("SEALED1:"):
+            is_sealed_share = True
+        else:
+            # Fallback: try the legacy JSON-envelope shape.
+            try:
+                payload = json.loads(decoded)
+                if isinstance(payload, dict) and payload.get("security_mode") == "sealed_v1":
+                    is_sealed_share = True
+            except (json.JSONDecodeError, ValueError):
+                pass
     except Exception:
-        payload = None
+        pass
 
-    if isinstance(payload, dict) and payload.get("security_mode") == "sealed_v1":
+    if is_sealed_share:
         try:
             result = _security.redeem_sealed_share(user_dir, request.share_string)
         except _security.SecurityError as e:
@@ -374,10 +389,19 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
 
 @router.post("/share/revoke")
 async def share_revoke(request: ShareRevokeRequest, req: Request):
-    """Revoke a share key."""
+    """Revoke a share key.
+
+    Routing:
+    - ``key_id`` starting with ``ssk_`` → sealed-share revoke (Phase 4).
+      Soft (default) deletes the wrap; hard (``rotate=true``) rotates
+      the project DEK and invalidates ALL shares — the body's
+      ``project`` field is required so the wrap file can be located.
+    - Any other ``key_id`` → legacy plaintext-mount share revoke.
+    """
 
     from axon import api as _api
     from axon import governance as gov
+    from axon import security as _security
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
@@ -385,6 +409,60 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
     rid = getattr(req.state, "request_id", "")
 
     surface = getattr(req.state, "surface", "api")
+
+    # Sealed-share revoke is keyed off the ``ssk_`` key_id prefix
+    # produced by ``api_routes/shares.py::share_generate`` for sealed
+    # projects.
+    if request.key_id.startswith("ssk_"):
+        if not request.project:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Sealed-share revoke requires the body's ``project`` "
+                    "field so the wrap file can be located."
+                ),
+            )
+        try:
+            result = _security.revoke_sealed_share(
+                owner_user_dir=user_dir,
+                project=request.project,
+                key_id=request.key_id,
+                rotate=request.rotate,
+            )
+        except _security.SecurityError as exc:
+            message = str(exc)
+            # The most common "404"-shaped errors from
+            # security.revoke_sealed_share: project doesn't exist,
+            # project not sealed, no share wrap for that key_id.
+            # The substring set covers _soft_revoke ("No sealed-share
+            # wrap exists ..."), _resolve_owned_project_dir error
+            # ("does not exist"), and is_project_sealed error
+            # ("is not sealed"). Other SecurityError instances (locked
+            # store, stage I/O failure) map to 400.
+            msg_lower = message.lower()
+            is_not_found = (
+                "no sealed-share wrap" in msg_lower
+                or "does not exist" in msg_lower
+                or "is not sealed" in msg_lower
+            )
+            status = 404 if is_not_found else 400
+            raise HTTPException(status_code=status, detail=message)
+
+        gov.emit(
+            "share_revoked",
+            "share",
+            request.key_id,
+            project=request.project,
+            details={
+                "security_mode": "sealed_v1",
+                "rotate": request.rotate,
+                "files_resealed": result.get("files_resealed", 0),
+                "invalidated_share_key_ids": result.get("invalidated_share_key_ids", []),
+            },
+            surface=surface,
+            request_id=rid,
+        )
+        return result
 
     try:
         result = _shares.revoke_share_key(owner_user_dir=user_dir, key_id=request.key_id)

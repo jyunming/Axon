@@ -598,6 +598,11 @@ async def share_project(
 
     All shares are read-only; write access is not supported.
 
+    Sealed-share auto-detection: if the project has been encrypted at rest
+    via ``seal_project``, this returns a SEALED1: envelope (Phase 3). The
+    sealed-store must be unlocked (``security_unlock``) — otherwise the
+    server returns a 409 telling you to unlock first.
+
     Args:
 
         project: Name of the project to share (must exist).
@@ -606,7 +611,9 @@ async def share_project(
 
         ttl_days: Optional time-to-live in days. When set, the share
             automatically expires after this many days; owners can renew
-            with extend_share. None (default) means no expiry.
+            with extend_share. None (default) means no expiry. Sealed
+            shares record the TTL too but enforcement lives in the
+            legacy manifest layer.
 
     """
 
@@ -623,6 +630,12 @@ async def redeem_share(share_string: str) -> Any:
     After redemption, the shared project appears as mounts/{owner}_{project}
 
     and can be queried normally.
+
+    Sealed-share auto-detection: a share_string starting with the
+    SEALED1: prefix (post-base64 decode) is routed through the
+    encryption-at-rest redeem path (Phase 3). The unwrapped DEK is
+    persisted in your OS keyring at ``axon.share.<key_id>``; the
+    AxonBrain reads it from there at switch-project time.
 
     Args:
 
@@ -649,22 +662,38 @@ async def list_shares() -> Any:
 
 
 @mcp.tool()
-async def revoke_share(key_id: str) -> Any:
+async def revoke_share(
+    key_id: str,
+    project: str | None = None,
+    rotate: bool = False,
+) -> Any:
     """Revoke a previously generated share key, cutting off the grantee's access.
 
-    The grantee's mount becomes broken immediately; they will receive a 404 on
+    For legacy plaintext-mount shares (key_id starting with ``sk_``):
+    cuts off access on the next project-list or switch attempt.
 
-    their next project-list or switch attempt.  Use list_shares to find the
-
-    key_id of the share you want to revoke.
+    For sealed shares (key_id starting with ``ssk_``, Phase 4):
+    - Soft (default): deletes the wrap file. Fresh redeems fail. Caveat:
+      a grantee who already redeemed and cached the DEK in their OS
+      keyring CAN keep decrypting files synced before the revocation.
+    - Hard (``rotate=True``): rotates the project DEK + re-encrypts every
+      content file + invalidates ALL share wraps (not just this one).
+      Surviving grantees must re-issue + re-redeem. Requires the
+      ``project`` arg so the wrap file can be located.
 
     Args:
-
         key_id: The key ID of the share to revoke (from list_shares output).
-
+        project: Project name — required for sealed shares. Ignored for
+            legacy shares.
+        rotate: Hard revoke for sealed shares. Default False (soft).
     """
 
-    return await _post("/share/revoke", {"key_id": key_id})
+    body: dict[str, Any] = {"key_id": key_id}
+    if project is not None:
+        body["project"] = project
+    if rotate:
+        body["rotate"] = True
+    return await _post("/share/revoke", body)
 
 
 @mcp.tool()

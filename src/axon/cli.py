@@ -676,7 +676,26 @@ def main():
     parser.add_argument(
         "--share-revoke",
         metavar="KEY_ID",
-        help="Revoke a previously issued share by KEY_ID, then exit",
+        help="Revoke a previously issued share by KEY_ID, then exit. "
+        "For sealed shares (KEY_ID starts with 'ssk_'), pair with "
+        "--share-project NAME to identify the wrap; add --share-rotate "
+        "for hard revoke (DEK rotation, all shares invalidated).",
+    )
+
+    parser.add_argument(
+        "--share-rotate",
+        action="store_true",
+        help="Hard-revoke a sealed share: rotate the project DEK and "
+        "re-encrypt every content file (invalidates ALL share wraps). "
+        "Pair with --share-revoke <ssk_id> --share-project <name>.",
+    )
+
+    parser.add_argument(
+        "--share-project",
+        metavar="NAME",
+        help="Project name companion to --share-revoke when revoking a "
+        "sealed share (key_id starts with 'ssk_'). Required to locate "
+        "the wrap file under .security/shares/. Ignored for legacy shares.",
     )
 
     # ── Sessions ────────────────────────────────────────────────────────────
@@ -1533,21 +1552,55 @@ def main():
             return
 
         if args.share_revoke:
-            from axon import shares as _shares_mod
-
             user_dir = Path(config.projects_root)
+            key_id = args.share_revoke.strip()
 
-            try:
-                result = _shares_mod.revoke_share_key(
-                    owner_user_dir=user_dir, key_id=args.share_revoke.strip()
-                )
+            if key_id.startswith("ssk_"):
+                # Sealed-share path (Phase 4).
+                from axon import security as _security
 
-                print(f"  Share '{result['key_id']}' revoked.")
+                if not getattr(args, "share_project", None):
+                    print(
+                        "  Sealed-share revoke requires --share-project <name> "
+                        "to locate the wrap file."
+                    )
+                    sys.exit(2)
+                rotate = bool(getattr(args, "share_rotate", False))
+                try:
+                    result = _security.revoke_sealed_share(
+                        owner_user_dir=user_dir,
+                        project=args.share_project,
+                        key_id=key_id,
+                        rotate=rotate,
+                    )
+                    if rotate:
+                        files = result.get("files_resealed", 0)
+                        invalid = result.get("invalidated_share_key_ids", [])
+                        print(
+                            f"  Sealed-share '{key_id}' hard-revoked: "
+                            f"DEK rotated, {files} files re-encrypted, "
+                            f"{len(invalid)} share(s) invalidated."
+                        )
+                        if invalid:
+                            print("  Re-issue these to surviving grantees: " + ", ".join(invalid))
+                    else:
+                        print(
+                            f"  Sealed-share '{key_id}' soft-revoked. "
+                            "Note: cached DEKs on grantee machines remain "
+                            "valid; pass --share-rotate for hard revoke."
+                        )
+                except _security.SecurityError as exc:
+                    print(f"  Sealed revoke failed: {exc}")
+                    sys.exit(1)
+            else:
+                from axon import shares as _shares_mod
 
-            except Exception as exc:
-                print(f"  Revoke failed: {exc}")
-
-                sys.exit(1)
+                try:
+                    result = _shares_mod.revoke_share_key(owner_user_dir=user_dir, key_id=key_id)
+                    print(f"  Share '{result['key_id']}' revoked.")
+                except Exception as exc:
+                    print(f"  Revoke failed: {exc}")
+                    sys.exit(1)
 
             return
 
@@ -2153,21 +2206,55 @@ def main():
         return
 
     if getattr(args, "share_revoke", None):
-        from axon import shares as _shares_mod
-
         user_dir = Path(brain.config.projects_root)
+        key_id = args.share_revoke.strip()
 
-        try:
-            result = _shares_mod.revoke_share_key(
-                owner_user_dir=user_dir, key_id=args.share_revoke.strip()
-            )
+        if key_id.startswith("ssk_"):
+            # Sealed-share path (Phase 4).
+            from axon import security as _security
 
-            print(f"  Share '{result['key_id']}' revoked.")
+            if not getattr(args, "share_project", None):
+                print(
+                    "  Sealed-share revoke requires --share-project <name> "
+                    "to locate the wrap file."
+                )
+                sys.exit(2)
+            rotate = bool(getattr(args, "share_rotate", False))
+            try:
+                result = _security.revoke_sealed_share(
+                    owner_user_dir=user_dir,
+                    project=args.share_project,
+                    key_id=key_id,
+                    rotate=rotate,
+                )
+                if rotate:
+                    files = result.get("files_resealed", 0)
+                    invalid = result.get("invalidated_share_key_ids", [])
+                    print(
+                        f"  Sealed-share '{key_id}' hard-revoked: "
+                        f"DEK rotated, {files} files re-encrypted, "
+                        f"{len(invalid)} share(s) invalidated."
+                    )
+                    if invalid:
+                        print("  Re-issue these to surviving grantees: " + ", ".join(invalid))
+                else:
+                    print(
+                        f"  Sealed-share '{key_id}' soft-revoked. "
+                        "Note: cached DEKs on grantee machines remain "
+                        "valid; pass --share-rotate for hard revoke."
+                    )
+            except _security.SecurityError as exc:
+                print(f"  Sealed revoke failed: {exc}")
+                sys.exit(1)
+        else:
+            from axon import shares as _shares_mod
 
-        except Exception as exc:
-            print(f"  Revoke failed: {exc}")
-
-            sys.exit(1)
+            try:
+                result = _shares_mod.revoke_share_key(owner_user_dir=user_dir, key_id=key_id)
+                print(f"  Share '{result['key_id']}' revoked.")
+            except Exception as exc:
+                print(f"  Revoke failed: {exc}")
+                sys.exit(1)
 
         return
 

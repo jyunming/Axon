@@ -3270,9 +3270,13 @@ def _interactive_repl(
                         "    Switching to a parent project shows merged data across all sub-projects.\n"
                         "    Use /ingest after switching to add documents to the current project.",
                         "share": "    /share list                              list all issued and received shares\n"
-                        "    /share generate <project> <grantee>      generate a read-only share key\n"
-                        "    /share redeem <share_string>              mount a shared project\n"
-                        "    /share revoke <key_id>                   revoke a previously issued share\n"
+                        "    /share generate <project> <grantee>             generate a read-only share key\n"
+                        "                                                    (auto-detects sealed projects)\n"
+                        "    /share redeem <share_string>                    mount a shared project\n"
+                        "                                                    (auto-detects sealed envelopes)\n"
+                        "    /share revoke <key_id>                                  revoke a legacy share\n"
+                        "    /share revoke <ssk_id> --project <name>                 sealed soft revoke\n"
+                        "    /share revoke <ssk_id> --project <name> --rotate        sealed hard revoke (rotates DEK)\n"
                         "\n"
                         "    Share strings are base64-encoded payloads; send them out-of-band.\n"
                         "    Mounted shares appear under mounts/ in your project list and can be\n"
@@ -4666,27 +4670,89 @@ def _interactive_repl(
                             print(f"    Redeem failed: {e}")
 
                 elif sub == "revoke":
-                    # Usage: /share revoke <key_id>
+                    # Usage:
+                    #   /share revoke <key_id>                              (legacy)
+                    #   /share revoke <ssk_id> --project <name>             (sealed soft)
+                    #   /share revoke <ssk_id> --project <name> --rotate    (sealed hard)
+                    parts = sub_arg.split() if sub_arg else []
+                    rotate = False
+                    project_name: str | None = None
+                    if "--rotate" in parts:
+                        parts.remove("--rotate")
+                        rotate = True
+                    if "--project" in parts:
+                        try:
+                            _pidx = parts.index("--project")
+                            project_name = parts[_pidx + 1]
+                            del parts[_pidx : _pidx + 2]
+                        except IndexError:
+                            print(
+                                "    --project requires a name: "
+                                "/share revoke <key_id> --project <name> [--rotate]"
+                            )
+                            parts = []
 
-                    if not sub_arg:
-                        print("    Usage: /share revoke <key_id>")
-
+                    if not parts:
+                        print(
+                            "    Usage: /share revoke <key_id>\n"
+                            "         /share revoke <ssk_id> --project <name>            "
+                            "(sealed soft)\n"
+                            "         /share revoke <ssk_id> --project <name> --rotate   "
+                            "(sealed hard)"
+                        )
                     else:
+                        key_id = parts[0].strip()
                         user_dir = Path(brain.config.projects_root)
 
-                        try:
-                            result = _shares_mod.revoke_share_key(
-                                owner_user_dir=user_dir,
-                                key_id=sub_arg.strip(),
-                            )
+                        if key_id.startswith("ssk_"):
+                            from axon import security as _security
 
-                            print(f"    Share '{result['key_id']}' revoked.")
-
-                        except ValueError as e:
-                            print(f"    Revoke failed: {e}")
-
-                        except Exception as e:
-                            print(f"    Revoke failed: {e}")
+                            if not project_name:
+                                print(
+                                    "    Sealed-share revoke requires --project <name> "
+                                    "to locate the wrap file."
+                                )
+                            else:
+                                try:
+                                    result = _security.revoke_sealed_share(
+                                        owner_user_dir=user_dir,
+                                        project=project_name,
+                                        key_id=key_id,
+                                        rotate=rotate,
+                                    )
+                                    if rotate:
+                                        files = result.get("files_resealed", 0)
+                                        invalid = result.get("invalidated_share_key_ids", [])
+                                        print(
+                                            f"    Sealed-share '{key_id}' hard-revoked: "
+                                            f"DEK rotated, {files} files re-encrypted, "
+                                            f"{len(invalid)} share(s) invalidated."
+                                        )
+                                        if invalid:
+                                            print(
+                                                f"    Re-issue these to surviving grantees: "
+                                                f"{', '.join(invalid)}"
+                                            )
+                                    else:
+                                        print(
+                                            f"    Sealed-share '{key_id}' soft-revoked. "
+                                            f"Note: cached DEKs on grantee machines remain "
+                                            f"valid; pass --rotate for hard revoke."
+                                        )
+                                except _security.SecurityError as e:
+                                    print(f"    Sealed revoke failed: {e}")
+                        else:
+                            # Legacy plaintext-mount share path.
+                            try:
+                                result = _shares_mod.revoke_share_key(
+                                    owner_user_dir=user_dir,
+                                    key_id=key_id,
+                                )
+                                print(f"    Share '{result['key_id']}' revoked.")
+                            except ValueError as e:
+                                print(f"    Revoke failed: {e}")
+                            except Exception as e:
+                                print(f"    Revoke failed: {e}")
 
                 elif sub == "extend":
                     # Usage: /share extend <key_id> [--ttl-days N | --clear]
