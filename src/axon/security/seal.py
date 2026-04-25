@@ -65,8 +65,15 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 SEALED_MARKER_PATH: str = ".security/.sealed"
+SEALING_INPROGRESS_PATH: str = ".security/.sealing"
 SEAL_SCHEMA_VERSION: int = 1
 CIPHER_SUITE_AES_256_GCM_V1: str = "AES-256-GCM-v1"
+
+# Vector store segment files routinely run 100 MB+ but should not exceed a
+# few hundred MB; refuse anything wildly larger so we don't OOM the seal
+# process. Streaming AES-GCM (CipherContext + chunked I/O) is tracked as
+# follow-up work — until then, keep the safety net.
+_SEAL_MAX_FILE_BYTES: int = 1024 * 1024 * 1024  # 1 GiB
 
 # Content directories whose every file gets sealed. Anything OUTSIDE
 # this set + the explicit single-file allowlist below stays plaintext.
@@ -184,16 +191,67 @@ def _cleanup_sealing_orphans(project_dir: Path) -> int:
     rename hadn't happened) so the orphan is just dead weight; remove
     it before re-sealing.
 
+    Skips the in-progress seal context file (``.security/.sealing``) —
+    that one is intentionally kept across crashes so the resume can
+    re-use the same ``seal_id``.
+
     Returns the number of orphans removed.
     """
     removed = 0
+    inprogress = project_dir / SEALING_INPROGRESS_PATH
     for orphan in project_dir.rglob("*.sealing"):
+        if orphan == inprogress:
+            continue  # the resume context — leave alone
         try:
             orphan.unlink()
             removed += 1
         except OSError as exc:
             logger.debug("could not remove .sealing orphan %s: %s", orphan, exc)
     return removed
+
+
+def _read_inprogress_seal_id(project_dir: Path) -> str | None:
+    """Return the persisted resume ``seal_id`` if a prior seal crashed.
+
+    The file is written via :func:`_write_inprogress_seal_id` BEFORE any
+    file is encrypted, so a crash leaves the seal_id on disk for the
+    next attempt to pick up. Mismatched / malformed files are treated
+    as "no resume context" and the caller mints a fresh seal_id (the
+    pre-existing AXSL files are then unrecoverable, which surfaces as
+    InvalidTag at mount time — better than silent corruption).
+    """
+    path = project_dir / SEALING_INPROGRESS_PATH
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if record.get("v") != SEAL_SCHEMA_VERSION:
+        return None
+    seal_id = record.get("seal_id")
+    return seal_id if isinstance(seal_id, str) and seal_id else None
+
+
+def _write_inprogress_seal_id(project_dir: Path, seal_id: str) -> None:
+    """Persist the seal_id BEFORE encrypting any file (resume safety)."""
+    path = project_dir / SEALING_INPROGRESS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"v": SEAL_SCHEMA_VERSION, "seal_id": seal_id})
+    tmp = path.with_suffix(path.suffix + ".write")
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _remove_inprogress_seal_id(project_dir: Path) -> None:
+    """Clean up the resume context after a successful seal."""
+    path = project_dir / SEALING_INPROGRESS_PATH
+    try:
+        path.unlink()
+    except OSError:
+        pass  # absent or in use — best-effort, won't impact correctness
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +337,21 @@ def project_seal(
 
     # Stable seal_id used as the AAD's key_id position so that files
     # cannot be swapped between two projects sealed with the same
-    # owner master. Persisted in the marker so the read path can
-    # recompute the AAD.
-    seal_id = "seal_" + secrets.token_hex(8)
+    # owner master. Persisted in .security/.sealing BEFORE any file is
+    # encrypted so a crash mid-seal can re-use the same seal_id on
+    # resume — otherwise already-sealed files would have AADs that no
+    # longer match the marker's seal_id and become undecryptable.
+    resumed_seal_id = _read_inprogress_seal_id(project_dir)
+    if resumed_seal_id:
+        seal_id = resumed_seal_id
+        logger.info(
+            "project_seal: resuming prior crashed seal of %s (seal_id=%s)",
+            project_name,
+            seal_id,
+        )
+    else:
+        seal_id = "seal_" + secrets.token_hex(8)
+        _write_inprogress_seal_id(project_dir, seal_id)
 
     files_sealed = 0
     files_skipped = 0
@@ -295,10 +365,27 @@ def project_seal(
             files_skipped += 1
             continue
         if is_sealed_file(src):
-            # Resumed after a crash — file already encrypted.
+            # Resumed after a crash — file already encrypted under the
+            # SAME seal_id (we just persisted/recovered it above), so
+            # the AAD will validate at mount time.
             files_already_sealed += 1
             files_sealed += 1
             continue
+
+        # Refuse oversized files — full read into memory would OOM. The
+        # streaming path is tracked as future work; for now, surface a
+        # clear error rather than crash the process.
+        try:
+            size = src.stat().st_size
+        except OSError:
+            size = 0
+        if size > _SEAL_MAX_FILE_BYTES:
+            raise SecurityError(
+                f"project_seal refusing to seal {src} ({size:,} bytes); "
+                f"current implementation reads the file into memory and the "
+                f"per-file limit is {_SEAL_MAX_FILE_BYTES:,} bytes. Streaming "
+                "encryption is tracked as follow-up work."
+            )
 
         plaintext = src.read_bytes()
         aad = make_aad(seal_id, str(rel).replace("\\", "/"))
@@ -321,6 +408,8 @@ def project_seal(
         files_sealed=files_sealed,
         files_skipped=files_skipped,
     )
+    # Marker persisted — clean up the resume context.
+    _remove_inprogress_seal_id(project_dir)
 
     logger.info(
         "project_seal: %s sealed (%d files; %d skipped; %d already-sealed; "

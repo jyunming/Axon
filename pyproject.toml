@@ -111,6 +111,10 @@ dev = [
     "mypy>=1.5.0,<2.0.0",
     "pre-commit>=3.4.0,<4.0.0",
     "chromadb>=0.4.0",
+    # Sealed-store deps so CI exercises the real master/seal/cache paths
+    # rather than the ImportError-fallback stubs (Phase 2 of #SEALED).
+    "cryptography>=42.0.0",
+    "keyring>=24.0.0",
 ]
 all = [
     "streamlit>=1.30.0",

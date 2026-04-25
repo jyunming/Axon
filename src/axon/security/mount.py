@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import SecurityError
 from .cache import SealedCache
-from .master import get_or_create_project_dek
+from .master import get_project_dek
 from .seal import is_project_sealed, read_sealed_marker
 
 logger = logging.getLogger("Axon")
@@ -94,8 +94,11 @@ def materialize_for_read(
             "The project may have been sealed by an older incompatible version."
         )
 
-    # Raises SecurityError("…locked…") if the store is not unlocked.
-    dek = get_or_create_project_dek(user_dir, project_dir)
+    # Read-only DEK lookup. Refuses to mint a fresh DEK if dek.wrapped
+    # is missing — silently creating a new DEK on the read path would
+    # make the existing ciphertext permanently undecryptable. Raises
+    # SecurityError on locked store OR on missing DEK file.
+    dek = get_project_dek(user_dir, project_dir)
 
     try:
         cache = SealedCache.create(

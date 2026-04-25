@@ -455,7 +455,7 @@ def _self_check(user_dir: Path | None = None) -> dict[str, Any]:
 
             # Stash the original master_service to restore later.
             original = _kr.master_service
-            _kr.master_service = lambda owner: unique_service  # type: ignore[assignment]
+            _kr.master_service = lambda owner: unique_service
             try:
                 bootstrap_store(ud, "selfcheck-passphrase")
                 if not is_unlocked(ud):
@@ -483,7 +483,7 @@ def _self_check(user_dir: Path | None = None) -> dict[str, Any]:
                 except BadPassphraseError:
                     pass
             finally:
-                _kr.master_service = original  # type: ignore[assignment]
+                _kr.master_service = original
                 # Best-effort cleanup of the test keyring entry.
                 try:
                     _kr.delete_secret(unique_service, MASTER_USERNAME)

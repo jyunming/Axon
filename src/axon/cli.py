@@ -1384,11 +1384,15 @@ def main():
         if args.project_seal:
             from axon import security as _security
 
+            # Lowercase to match the validation rule used by --project /
+            # --project-new / --project-delete; project names are
+            # required to be lowercase per axon.projects._parse_name.
+            project_name = args.project_seal.lower()
             try:
-                result = _security.project_seal(args.project_seal, Path(config.projects_root))
+                result = _security.project_seal(project_name, Path(config.projects_root))
                 status = result.get("status", "sealed")
                 files = result.get("files_sealed", 0)
-                print(f"  Project '{args.project_seal}': {status} ({files} files)")
+                print(f"  Project '{project_name}': {status} ({files} files)")
             except _security.SecurityError as exc:
                 print(f"  Seal failed: {exc}")
                 sys.exit(1)

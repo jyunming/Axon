@@ -156,9 +156,14 @@ def get_sealed_project_record(project: str, user_dir: Path) -> dict[str, Any] | 
     """Return the sealed project record if this project is sealed, else None.
 
     Phase 2 (PR #57) — wired to the on-disk ``.security/.sealed`` marker
-    via :mod:`axon.security.seal`.
+    via :mod:`axon.security.seal`. When the optional ``[sealed]`` extra
+    is not installed, returns ``None`` (no project can be sealed on a
+    minimal install) so callers like ``shares.py`` keep working.
     """
-    from .seal import get_sealed_project_record as _impl
+    try:
+        from .seal import get_sealed_project_record as _impl
+    except ImportError:
+        return None
 
     return _impl(project, user_dir)
 
@@ -214,7 +219,12 @@ def project_seal(
     have no effect in v1; the parameters are preserved so existing
     callers (api_routes/projects.py) keep working.
     """
-    from .seal import project_seal as _impl
+    try:
+        from .seal import project_seal as _impl
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
+        ) from exc
 
     return _impl(
         project_name,

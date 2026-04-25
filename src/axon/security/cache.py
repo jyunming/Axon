@@ -182,8 +182,11 @@ def _pid_alive(pid: int) -> bool:
       and ``ESRCH`` for "no such process". ``PermissionError`` again
       means a live PID we can't signal.
 
-    Cleanup leans toward wiping orphans rather than leaking plaintext:
-    on any unrecognised error we treat the PID as dead.
+    On unrecognised errors we treat the PID as **alive** (return True)
+    so we don't accidentally wipe a cache that another process might
+    still be reading. The next boot will re-evaluate; preserving a
+    live cache once is much better than wiping it under another
+    process's nose.
     """
     if pid <= 0:
         return False

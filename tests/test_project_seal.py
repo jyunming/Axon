@@ -244,38 +244,58 @@ class TestSealAtomicity:
         assert result["orphans_removed"] == 1
         assert not orphan.exists()
 
-    def test_partial_seal_resumes_skips_already_sealed_files(self, kr_backend, user_dir):
-        """If the prior run sealed some files before crashing, those files
-        already have an AXSL header. A re-run must not double-seal them."""
+    def test_partial_seal_resumes_with_persisted_seal_id(self, kr_backend, user_dir):
+        """A real resume case: prior run persisted ``.security/.sealing``
+        before encrypting one file then crashed. The next run reads the
+        persisted seal_id, re-uses it, and skips the already-sealed file
+        with a matching AAD so a subsequent mount can decrypt it.
+        """
         from axon.security.crypto import SealedFile, make_aad
+        from axon.security.master import get_or_create_project_dek
+        from axon.security.seal import (
+            SEALING_INPROGRESS_PATH,
+            _read_inprogress_seal_id,
+            _write_inprogress_seal_id,
+        )
 
         bootstrap_store(user_dir, "pw")
         proj = _populate_plaintext_project(user_dir)
-        # Hand-seal one file with a different DEK to simulate the
-        # "partial prior run" condition. Only the magic header check
-        # should matter — content is overwritten on next full seal? No,
-        # the resume path SKIPS already-sealed files and trusts them.
-        # So we must seal it with the SAME DEK that project_seal will
-        # derive — that means we have to pre-bootstrap and grab the DEK
-        # first.
-        from axon.security.master import get_or_create_project_dek
-
         dek = get_or_create_project_dek(user_dir, proj)
+
+        # Simulate the prior run: persist a seal_id then encrypt one file
+        # under that seal_id and crash before completing.
+        prior_seal_id = "seal_resume_test_0001"
+        _write_inprogress_seal_id(proj, prior_seal_id)
         rel = "bm25_index/.bm25_log.jsonl"
         target = proj / rel
-        target.write_bytes(b"")  # blank it so the existing read doesn't matter
-        # Note: we need the seal_id from project_seal's marker write,
-        # but project_seal generates it fresh. So pre-sealing with a
-        # synthetic key_id will FAIL to decrypt later. To test the
-        # "already sealed → skipped" branch correctly, just verify the
-        # files_already_sealed counter increments when ANY file is
-        # AXSL-headered going in.
-        SealedFile.write(target, b"prior-payload", dek, aad=make_aad("synthetic", rel))
+        SealedFile.write(target, b"prior-payload", dek, aad=make_aad(prior_seal_id, rel))
 
+        # Resume: project_seal reads the persisted seal_id and re-uses it.
         result = project_seal("research", user_dir)
-        # Already-sealed file counted but NOT re-encrypted with the new
-        # AAD. The counter increments per file that started AXSL.
+        assert result["status"] == "sealed"
         assert result["files_already_sealed"] >= 1
+        # The marker carries the resumed seal_id, NOT a fresh one.
+        marker = read_sealed_marker(proj)
+        assert marker is not None
+        assert marker["seal_id"] == prior_seal_id
+        # Resume context is cleaned up after success.
+        assert not (proj / SEALING_INPROGRESS_PATH).is_file()
+        assert _read_inprogress_seal_id(proj) is None
+
+    def test_fresh_seal_persists_inprogress_marker_then_cleans_it_up(self, kr_backend, user_dir):
+        """The .security/.sealing resume context must exist DURING seal but
+        be removed after the marker is written.
+        """
+        from axon.security.seal import SEALING_INPROGRESS_PATH
+
+        bootstrap_store(user_dir, "pw")
+        proj = _populate_plaintext_project(user_dir)
+        # Pre-condition: no resume context.
+        assert not (proj / SEALING_INPROGRESS_PATH).is_file()
+        result = project_seal("research", user_dir)
+        # Post-condition: resume context cleaned up.
+        assert result["status"] == "sealed"
+        assert not (proj / SEALING_INPROGRESS_PATH).is_file()
 
 
 # ---------------------------------------------------------------------------
