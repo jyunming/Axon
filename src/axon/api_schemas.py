@@ -349,6 +349,25 @@ class ShareRedeemRequest(BaseModel):
 class ShareRevokeRequest(BaseModel):
     key_id: str = Field(..., description="The key_id to revoke (e.g. 'sk_a1b2c3d4').")
 
+    project: str | None = Field(
+        default=None,
+        description=(
+            "Project name — required for sealed shares (key_id starting with "
+            "'ssk_') so the revoke can locate the wrap file. Ignored for "
+            "legacy plaintext shares."
+        ),
+    )
+
+    rotate: bool = Field(
+        default=False,
+        description=(
+            "Hard revoke for sealed shares: rotate the project DEK and "
+            "re-encrypt every content file, invalidating ALL existing share "
+            "wraps. Surviving grantees must re-issue + re-redeem. Ignored "
+            "for legacy shares."
+        ),
+    )
+
 
 class ShareExtendRequest(BaseModel):
     key_id: str = Field(..., description="The key_id to extend (e.g. 'sk_a1b2c3d4').")
