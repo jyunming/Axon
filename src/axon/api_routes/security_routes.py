@@ -79,7 +79,12 @@ async def security_unlock(request: SecurityUnlockRequest, req: Request):
     except _security.SecurityError as exc:
         message = str(exc)
         _unlock_failures[client_ip].append(time.time())
-        status = 401 if "unlock failed" in message.lower() else 400
+        # 401 for credential failures (wrong passphrase, legacy stub
+        # message). 400 for everything else (store not bootstrapped,
+        # malformed keyring record, etc.).
+        msg_lower = message.lower()
+        is_auth_failure = "wrong passphrase" in msg_lower or "unlock failed" in msg_lower
+        status = 401 if is_auth_failure else 400
         raise HTTPException(status_code=status, detail=message)
 
 

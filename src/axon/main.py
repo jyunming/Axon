@@ -763,6 +763,31 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._executor = ThreadPoolExecutor(max_workers=self.config.max_workers)
 
+        # Sealed-project cache slot. Held across switch_project calls so
+        # close() can wipe it on shutdown. None whenever the active
+        # project is plaintext (the common case).
+        self._sealed_cache: Any = None
+        # Two-phase materialisation handoff between the path-setup arm
+        # of switch_project and the post-close block.
+        self._pending_seal_mount: tuple[str, Path] | None = None
+
+        # Wipe stale sealed caches from previous crashed sessions. Cheap
+        # (just lists temp dir) and only fires when the optional
+        # [sealed] extra is installed.
+        try:
+            from axon.security.cache import cleanup_orphans as _cleanup_sealed_orphans
+
+            wiped = _cleanup_sealed_orphans()
+            if wiped:
+                logger.info(
+                    "Wiped %d orphaned sealed-cache directories from a previous session",
+                    wiped,
+                )
+        except ImportError:
+            pass  # [sealed] extra not installed — nothing to clean up
+        except Exception as _orphan_exc:
+            logger.debug("Sealed-cache orphan cleanup raised: %s", _orphan_exc)
+
         self._log_startup_summary()
 
     def __enter__(self):
@@ -801,6 +826,22 @@ Your primary goal is to help the user by answering questions based on the provid
                 store.close()
 
                 seen_stores.add(id(store))
+
+        # Force GC so Windows file handles into the sealed cache are
+        # released BEFORE we try to overwrite + unlink the cache files.
+        # Without this, wipe() may fail on Windows with PermissionError.
+        sealed_cache = getattr(self, "_sealed_cache", None)
+        if sealed_cache is not None:
+            import gc as _gc
+
+            _gc.collect()
+            try:
+                from axon.security.mount import release_cache as _release_sealed
+
+                _release_sealed(sealed_cache)
+            except Exception as _wipe_exc:
+                logger.debug("Sealed-cache wipe on close raised: %s", _wipe_exc)
+            self._sealed_cache = None
 
     def _log_startup_summary(self) -> None:
         """Log a one-line startup summary: active project, namespace ID, scope type."""
@@ -1175,6 +1216,62 @@ Your primary goal is to help the user by answering questions based on the provid
             self._is_mounted_share(),
         )
 
+    # ------------------------------------------------------------------
+    # Sealed-project routing (lazy — only fires when [sealed] installed)
+    # ------------------------------------------------------------------
+
+    def _project_is_sealed(self, project_root: Path) -> bool:
+        """Return True if *project_root* has a ``.security/.sealed`` marker.
+
+        Cheap probe — does not require an unlocked store. Returns False
+        when the optional ``[sealed]`` extra is not installed (in which
+        case sealed projects can never have been created on this
+        install anyway).
+        """
+        try:
+            from axon.security.seal import is_project_sealed
+        except ImportError:
+            return False
+        try:
+            return is_project_sealed(project_root)
+        except Exception as exc:
+            logger.debug("is_project_sealed raised on %s: %s", project_root, exc)
+            return False
+
+    def _mount_sealed_project(self, name: str, project_root: Path) -> Path:
+        """Decrypt *project_root* into an ephemeral cache; return its path.
+
+        Wipes any pre-existing sealed cache before creating the new one,
+        so back-to-back ``switch_project`` calls don't leak plaintext.
+        Stashes the new cache on ``self._sealed_cache`` so ``close()``
+        can wipe it on shutdown.
+
+        Raises:
+            SecurityError: store is locked, or sealed marker missing /
+                malformed, or cache materialisation failed (capacity,
+                I/O, or decryption error).
+        """
+        from axon.security.mount import materialize_for_read, release_cache
+
+        # Wipe stale cache from a previously-active sealed project.
+        prior = getattr(self, "_sealed_cache", None)
+        if prior is not None:
+            try:
+                release_cache(prior)
+            except Exception as exc:
+                logger.debug("Wiping prior sealed cache raised: %s", exc)
+            self._sealed_cache = None
+
+        user_dir = Path(self.config.projects_root)
+        cache = materialize_for_read(project_root, user_dir)
+        self._sealed_cache = cache
+        logger.info(
+            "Sealed project '%s' mounted at %s",
+            name,
+            cache.path,
+        )
+        return Path(cache.path)
+
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
 
@@ -1203,6 +1300,10 @@ Your primary goal is to help the user by answering questions based on the provid
         """
 
         _prev_project = self._active_project  # stash for epoch bump below
+
+        # Clear any stale sealed-mount intent from a previous switch
+        # that didn't reach the post-close materialisation block.
+        self._pending_seal_mount = None
 
         if getattr(self, "_graph_rag_cache_dirty", False):
             self._save_graph_rag_extraction_cache()
@@ -1285,14 +1386,31 @@ Your primary goal is to help the user by answering questions based on the provid
 
             root = project_dir(name)
 
-            if not root.exists() or not (root / "meta.json").exists():
+            # A sealed project has every content file as AES-GCM
+            # ciphertext, so meta.json on disk is unreadable plaintext.
+            # Skip the meta.json existence check for sealed projects —
+            # the sealed marker (.security/.sealed) is the proof the
+            # project exists.
+            sealed = self._project_is_sealed(root)
+            if not root.exists() or (not sealed and not (root / "meta.json").exists()):
                 raise ValueError(
                     f"Project '{name}' does not exist. Create it first with /project new {name}"
                 )
 
-            self.config.vector_store_path = project_vector_path(name)
-
-            self.config.bm25_path = project_bm25_path(name)
+            if sealed:
+                # Defer cache materialisation until AFTER self.close()
+                # below — close() wipes self._sealed_cache, so creating
+                # the cache before close() would wipe it before any
+                # backend can read it. Stash the project root on the
+                # instance so the post-close block can pick it up.
+                self._pending_seal_mount: tuple[str, Path] | None = (name, root)
+                # Sentinel paths — overwritten right after close().
+                self.config.vector_store_path = str(root / "vector_store_data")
+                self.config.bm25_path = str(root / "bm25_index")
+            else:
+                self._pending_seal_mount = None
+                self.config.vector_store_path = project_vector_path(name)
+                self.config.bm25_path = project_bm25_path(name)
 
         # Close existing stores before replacing them; force GC to release Windows
 
@@ -1311,6 +1429,18 @@ Your primary goal is to help the user by answering questions based on the provid
         import gc as _gc
 
         _gc.collect()
+
+        # Sealed-project routing — close() wiped any prior _sealed_cache,
+        # so it's safe to materialise the new one now. The sentinel
+        # paths set in the local-project arm above are overwritten with
+        # the cache directory.
+        pending = getattr(self, "_pending_seal_mount", None)
+        if pending is not None:
+            seal_name, seal_root = pending
+            self._pending_seal_mount = None
+            cache_path = self._mount_sealed_project(seal_name, seal_root)
+            self.config.vector_store_path = str(cache_path / "vector_store_data")
+            self.config.bm25_path = str(cache_path / "bm25_index")
 
         # Recreate the executor — close() shuts it down and it cannot be reused
 
