@@ -172,8 +172,46 @@ def bump(
     target = project_dir / VERSION_MARKER_FILENAME
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(marker, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, target)
+    _atomic_replace(tmp, target)
     return marker
+
+
+def _atomic_replace(src: Path, dst: Path) -> None:
+    """``os.replace`` with a copy+unlink fallback for transient locks.
+
+    On Windows + cloud-sync paths (OneDrive, network shares), the live
+    target file can be briefly held open by the sync client / file
+    indexer, causing ``os.replace`` to raise ``PermissionError`` or
+    ``OSError``. The fallback copies the temp file's bytes over the
+    live target then unlinks the temp — slower but resilient. Same
+    pattern as ``BM25Retriever.save()``.
+
+    On the unlikely path that even the fallback fails, we re-raise the
+    original ``os.replace`` error and clean up the orphan ``.tmp`` so
+    we don't leave junk behind.
+    """
+    import shutil
+
+    try:
+        os.replace(src, dst)
+        return
+    except OSError as primary_exc:
+        try:
+            shutil.copy2(src, dst)
+            try:
+                src.unlink()
+            except OSError:
+                pass
+            return
+        except OSError:
+            # Both replace and copy failed. Clean up the temp file
+            # if possible and re-raise the original error so the
+            # caller sees the most informative failure.
+            try:
+                src.unlink()
+            except OSError:
+                pass
+            raise primary_exc
 
 
 def read(project_dir: Path | str) -> dict[str, Any] | None:

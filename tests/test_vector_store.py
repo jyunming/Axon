@@ -183,12 +183,21 @@ class TestOpenVectorStoreChroma:
             with pytest.raises(ValueError, match="some other error"):
                 OpenVectorStore(cfg)
 
-    def test_preflight_blocks_onedrive_path(self):
-        """Cloud-sync path is rejected BEFORE chromadb is asked to open it."""
+    def test_preflight_blocks_onedrive_path(self, tmp_path):
+        """Cloud-sync path is rejected BEFORE chromadb is asked to open it.
+
+        The path must be absolute on the test runner's OS — otherwise
+        ``AxonConfig.__post_init__`` rewrites it to the default user-dir
+        path (it only respects explicitly-provided absolute paths). On
+        Linux/macOS, ``C:\\...`` is not absolute, so we synthesise an
+        OneDrive-shaped path under ``tmp_path`` instead.
+        """
         mock_chromadb, _mock_client, _ = _make_chroma_mocks()
+        onedrive_path = tmp_path / "OneDrive" / "Axon" / "vs"
+        onedrive_path.mkdir(parents=True)
         cfg = _make_config(
             vector_store="chroma",
-            vector_store_path=r"C:\Users\alice\OneDrive\Axon\vs",
+            vector_store_path=str(onedrive_path),
         )
         with patch.dict(
             "sys.modules",
@@ -201,11 +210,18 @@ class TestOpenVectorStoreChroma:
             mock_chromadb.PersistentClient.assert_not_called()
 
     def test_preflight_blocks_unc_path(self):
-        """UNC / network share path is rejected at preflight."""
+        """UNC / network share path is rejected at preflight.
+
+        Forward-slash UNC (``//fileserver/share/...``) is absolute on
+        BOTH Windows and POSIX — ``os.path.isabs`` accepts a leading
+        double-slash on Linux. Backslash UNC (``\\\\server\\share\\...``)
+        is NOT absolute on Linux, so we use the forward-slash form for
+        cross-OS test reliability.
+        """
         mock_chromadb, _mock_client, _ = _make_chroma_mocks()
         cfg = _make_config(
             vector_store="chroma",
-            vector_store_path=r"\\fileserver\share\axon\vs",
+            vector_store_path="//fileserver/share/axon/vs",
         )
         with patch.dict(
             "sys.modules",
@@ -1566,12 +1582,21 @@ class TestOpenVectorStoreChromaV2:
             with pytest.raises(ValueError, match="some other error"):
                 OpenVectorStore(cfg)
 
-    def test_preflight_blocks_onedrive_path(self):
-        """Cloud-sync path is rejected BEFORE chromadb is asked to open it."""
+    def test_preflight_blocks_onedrive_path(self, tmp_path):
+        """Cloud-sync path is rejected BEFORE chromadb is asked to open it.
+
+        The path must be absolute on the test runner's OS — otherwise
+        ``AxonConfig.__post_init__`` rewrites it to the default user-dir
+        path (it only respects explicitly-provided absolute paths). On
+        Linux/macOS, ``C:\\...`` is not absolute, so we synthesise an
+        OneDrive-shaped path under ``tmp_path`` instead.
+        """
         mock_chromadb, _mock_client, _ = _make_chroma_mocks()
+        onedrive_path = tmp_path / "OneDrive" / "Axon" / "vs"
+        onedrive_path.mkdir(parents=True)
         cfg = _make_config(
             vector_store="chroma",
-            vector_store_path=r"C:\Users\alice\OneDrive\Axon\vs",
+            vector_store_path=str(onedrive_path),
         )
         with patch.dict(
             "sys.modules",
@@ -1584,11 +1609,18 @@ class TestOpenVectorStoreChromaV2:
             mock_chromadb.PersistentClient.assert_not_called()
 
     def test_preflight_blocks_unc_path(self):
-        """UNC / network share path is rejected at preflight."""
+        """UNC / network share path is rejected at preflight.
+
+        Forward-slash UNC (``//fileserver/share/...``) is absolute on
+        BOTH Windows and POSIX — ``os.path.isabs`` accepts a leading
+        double-slash on Linux. Backslash UNC (``\\\\server\\share\\...``)
+        is NOT absolute on Linux, so we use the forward-slash form for
+        cross-OS test reliability.
+        """
         mock_chromadb, _mock_client, _ = _make_chroma_mocks()
         cfg = _make_config(
             vector_store="chroma",
-            vector_store_path=r"\\fileserver\share\axon\vs",
+            vector_store_path="//fileserver/share/axon/vs",
         )
         with patch.dict(
             "sys.modules",

@@ -95,20 +95,40 @@ As of v0.2.2 (branch `fix/share-mount-sqlite-wal-safety`):
   loud `RuntimeError` before attempting to open a DB on an unsafe
   filesystem.
 
-Still pending (see open issues `#53`, `#54`):
+Now shipped on the same release:
 
-- **Version marker for staleness detection** (`#53`) — grantees
-  currently have no way to tell when the owner has re-ingested. A
-  future `version.json` + refresh hook will close this gap.
-- **Dual-revocation** (`#54`) — revoking an Axon share-key does not
-  currently invalidate a grantee's cached `vector_store_data/`. A
-  determined grantee with a hacked client could still read the
-  vectors until the underlying filesystem ACL is also revoked.
+- **Version marker for staleness detection** (`#53`) — owner writes
+  `version.json` last after every ingest; grantees cache it on mount
+  switch and detect when it has advanced. `mount_refresh_mode =
+  per_query` re-checks before each retrieval and reopens handles on
+  mismatch; `MountSyncPendingError` is raised (and surfaced as REST
+  503 + `X-Axon-Mount-Sync-Pending: true` header) when the marker
+  has advanced but the underlying index files haven't fully
+  replicated yet. Manual refresh: `/project refresh` in the REPL,
+  `POST /mount/refresh` over REST, `refresh_mount` over MCP.
+- **Share-key TTL + extend** (`#54` Option B) — share keys carry an
+  optional `expires_at`; `axon share generate ... --ttl-days N`
+  sets it, `axon share extend <key_id> --ttl-days N` renews it.
+  Expiry is enforced on `redeem_share_key` and on every grantee
+  query via `_check_mount_revocation` (with a 5-minute clock-skew
+  leeway, fail-closed on unparseable timestamps). Hard cutoff for
+  forgotten shares.
 
-Until those land, the recommendation is: keep share-mount usage on
-local disk or on-prem SMB3, and treat OneDrive / Dropbox / Google Drive
-as backup paths only (ship a snapshot tarball to the cloud folder on a
-schedule rather than running Axon live against it).
+Still out of scope (separate epic):
+
+- **True byte invalidation / sealed mounts** (`#54` Option A) —
+  revoking an Axon share-key does NOT retroactively erase bytes a
+  grantee already copied or cached locally. A grantee with a hacked
+  client can still read cached `vector_store_data/` until the
+  underlying filesystem ACL is also revoked. The full encrypted-at-
+  rest design that closes this gap is in
+  [SHARE_MOUNT_SEALED.md](SHARE_MOUNT_SEALED.md); Phase 1 (crypto +
+  keyring primitives) is on branch `feat/sealed-mount-phase-1`.
+
+Until sealed mounts ship, the recommendation is: keep share-mount
+usage on local disk or on-prem SMB3, and treat OneDrive / Dropbox /
+Google Drive as backup paths only (ship a snapshot tarball to the
+cloud folder on a schedule rather than running Axon live against it).
 
 ## Troubleshooting
 

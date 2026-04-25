@@ -365,7 +365,26 @@ class DynamicGraphBackend:
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                 encoding="utf-8",
             )
-            os.replace(tmp, self._snapshot_path)
+            # On Windows + cloud-sync paths, os.replace can fail with
+            # PermissionError when the live target is briefly held by a
+            # sync client / file indexer. Fall back to copy+unlink and
+            # always clean up the .tmp on the failure path so we don't
+            # leave junk for grantees to see.
+            try:
+                os.replace(tmp, self._snapshot_path)
+            except OSError as primary_exc:
+                try:
+                    shutil.copy2(tmp, self._snapshot_path)
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+                except OSError:
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+                    raise primary_exc
         except Exception as exc:
             logger.debug("DynamicGraph snapshot export failed: %s", exc)
 

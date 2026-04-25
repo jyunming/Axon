@@ -123,8 +123,16 @@ def safe_local_path(p: Path | str) -> Path:
     Used by components that want to move hot SQLite state off a synced /
     network path.  Returns ``~/.axon/{basename}`` when *p* is unsafe, else
     returns ``Path(p)`` unchanged.  The caller is responsible for ``mkdir``.
+
+    Cross-platform basename extraction: ``Path("C:/...").name`` on Linux
+    returns the whole string because Linux doesn't recognise ``C:\\`` as
+    a path separator.  Normalise separators first so the basename is
+    correct on both OSes.
     """
-    p = Path(p)
     if not is_cloud_sync_or_mount_path(p):
-        return p
-    return Path.home() / ".axon" / p.name
+        return Path(p)
+    # Normalise both Windows and POSIX separators so the basename is
+    # correct regardless of which OS produced the path string.
+    normed = str(p).replace("\\", "/").rstrip("/")
+    basename = normed.rsplit("/", 1)[-1] if "/" in normed else normed
+    return Path.home() / ".axon" / basename

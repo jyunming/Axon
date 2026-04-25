@@ -44,21 +44,42 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def _is_expired(expires_at: str | None, *, now: datetime | None = None) -> bool:
-    """Return True if *expires_at* is set and lies in the past.
+_EXPIRY_CLOCK_SKEW_SECONDS = 300  # 5-minute leeway for cross-machine clock drift
 
-    Missing / empty / unparseable values are treated as "no expiry".
+
+def _is_expired(expires_at: str | None, *, now: datetime | None = None) -> bool:
+    """Return True if *expires_at* is set and lies in the past (modulo clock skew).
+
+    - Missing / empty value → no expiry → False.
+    - **Unparseable timestamp → expired (fail-closed).** A corrupted or
+      hand-edited manifest record should NOT silently grant access; we
+      log a warning and deny instead. This is a defence-in-depth choice
+      for #54 — fail-open here would weaken TTL enforcement.
+    - Valid timestamp → expired iff ``exp + skew_leeway <= now`` so a
+      grantee with a slightly slow clock isn't booted off the moment
+      the owner's clock crosses the expiry instant.
     """
     if not expires_at:
         return False
     try:
         exp = datetime.fromisoformat(expires_at)
-    except ValueError:
-        return False
+    except (TypeError, ValueError) as exc:
+        import logging as _logging
+
+        _logging.getLogger("AxonShares").warning(
+            "share-key expires_at value %r is unparseable (%s); treating as expired "
+            "(fail-closed). Fix the manifest or generate a new share.",
+            expires_at,
+            exc,
+        )
+        return True
     if exp.tzinfo is None:
         exp = exp.replace(tzinfo=timezone.utc)
     ref = (now or _utcnow()).astimezone(timezone.utc)
-    return exp <= ref
+    # Leeway: token is still valid for _EXPIRY_CLOCK_SKEW_SECONDS past
+    # nominal expiry — protects against minor clock drift between the
+    # owner who issued the share and the grantee who's reading it.
+    return exp + timedelta(seconds=_EXPIRY_CLOCK_SKEW_SECONDS) <= ref
 
 
 _lock = threading.Lock()  # process-wide lock for share key file I/O

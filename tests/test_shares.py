@@ -795,14 +795,30 @@ class TestShareKeyExpiry:
         # None / empty: never expired.
         assert _is_expired(None) is False
         assert _is_expired("") is False
-        # Garbage timestamp: never expired (defensive — don't break access on malformed data).
-        assert _is_expired("not-a-timestamp") is False
+        # Garbage timestamp: FAIL-CLOSED — treat as expired so a corrupted
+        # or hand-edited manifest cannot weaken TTL enforcement (issue #54).
+        assert _is_expired("not-a-timestamp") is True
         # Past: expired.
         assert _is_expired("2020-01-01T00:00:00+00:00") is True
         # Far future: not expired.
         assert _is_expired("2099-01-01T00:00:00+00:00") is False
         # Naive timestamp (no tz) is treated as UTC.
         assert _is_expired("2020-01-01T00:00:00") is True
+
+    def test_is_expired_clock_skew_leeway(self):
+        """A share that nominally expired 30 seconds ago is still considered
+        valid — protects against minor cross-machine clock drift."""
+        from datetime import datetime, timedelta, timezone
+
+        from axon.shares import _is_expired
+
+        now = datetime.now(timezone.utc)
+        # 30 seconds past nominal expiry → still valid (within 5-min leeway).
+        recent_past = (now - timedelta(seconds=30)).isoformat()
+        assert _is_expired(recent_past, now=now) is False
+        # 6 minutes past → expired (beyond 5-min leeway).
+        beyond_leeway = (now - timedelta(minutes=6)).isoformat()
+        assert _is_expired(beyond_leeway, now=now) is True
 
 
 class TestExtendShareKey:
