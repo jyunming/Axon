@@ -55,7 +55,9 @@ def _skip_reason() -> str | None:
             "Install with: pip install axon-rag[sealed-test]"
         )
     # Quick "is the daemon alive" probe — `docker info` exits non-zero
-    # when the daemon isn't reachable.
+    # when the daemon isn't reachable. FileNotFoundError catches the
+    # macOS GitHub Actions case where shutil.which finds a stub but
+    # the actual binary isn't executable.
     try:
         proc = subprocess.run(
             ["docker", "info"],
@@ -65,6 +67,8 @@ def _skip_reason() -> str | None:
         )
         if proc.returncode != 0:
             return f"Docker daemon not reachable: {proc.stderr.strip()[:200]}"
+    except FileNotFoundError as exc:
+        return f"Docker binary not executable: {exc}"
     except (subprocess.TimeoutExpired, OSError) as exc:
         return f"Docker daemon probe failed: {exc}"
     return None
@@ -116,15 +120,27 @@ def nextcloud_stack() -> Iterator[str]:
     """Bring up + tear down the Nextcloud container for the suite.
 
     Yields the base URL (``http://localhost:18080``). Skips the suite
-    when ``docker compose up`` fails (daemon installed but Docker
-    Desktop not running, daemon unreachable, image-pull failure
-    behind a corp proxy, etc.) rather than crashing every test as
-    an ERROR.
+    when ``docker compose up`` fails or when ``docker`` itself can't
+    be invoked (FileNotFoundError = binary not actually executable
+    even though shutil.which found it; CalledProcessError = daemon
+    not running / image-pull failure; TimeoutExpired = network
+    stall). Skips cleanly rather than crashing every test as an ERROR.
     """
     # Best-effort cleanup of any orphaned container from a prior run.
-    _compose("down", "-v", check=False, timeout=30)
+    # Suppress all subprocess errors here — this is a defensive cleanup
+    # before the real "up" call below, which is where we surface skips.
+    try:
+        _compose("down", "-v", check=False, timeout=30)
+    except (FileNotFoundError, OSError):
+        pass
+
     try:
         _compose("up", "-d", timeout=180)
+    except FileNotFoundError as exc:
+        pytest.skip(
+            f"docker binary not actually executable on this runner "
+            f"(shutil.which found it but exec failed): {exc}"
+        )
     except subprocess.CalledProcessError as exc:
         pytest.skip(
             f"docker compose up failed (daemon installed but couldn't "
@@ -135,11 +151,15 @@ def nextcloud_stack() -> Iterator[str]:
             "docker compose up timed out — image pull may be stuck "
             "behind a slow / proxied network."
         )
+
     try:
         _wait_for_nextcloud()
         yield _NEXTCLOUD_BASE
     finally:
-        _compose("down", "-v", check=False, timeout=60)
+        try:
+            _compose("down", "-v", check=False, timeout=60)
+        except (FileNotFoundError, OSError):
+            pass
 
 
 # ---------------------------------------------------------------------------
