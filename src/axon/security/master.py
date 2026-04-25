@@ -153,31 +153,59 @@ def _derive_kek(passphrase: str, salt: bytes) -> bytes:
 
 
 def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
-    """Read the JSON keyring record; return None when not bootstrapped.
+    """Read the JSON master record from the keyring or fallback file.
+
+    Resolution order:
+    1. OS keyring (DPAPI / Keychain / Secret Service).
+    2. ``<user_dir>/.security/master.enc`` fallback (Phase 6) — used
+       when the keyring is unavailable (headless Linux servers,
+       stripped containers).
 
     Raises ``SecurityError`` if the record exists but is malformed —
-    a defence-in-depth signal that the user's keyring may have been
+    a defence-in-depth signal that the storage layer may have been
     tampered with.
     """
-    raw = _kr.get_secret(_service(user_dir), MASTER_USERNAME)
+    from . import fallback_store as _fb
+
+    raw: str | None = None
+    try:
+        raw = _kr.get_secret(_service(user_dir), MASTER_USERNAME)
+    except _kr.KeyringUnavailableError:
+        raw = None  # fall through to file fallback
+
+    if raw is None:
+        # File fallback. Used when keyring backend is missing OR when
+        # the keyring is healthy but holds nothing yet (so the file
+        # was the bootstrap target). Either way, prefer the file's
+        # content if it exists.
+        raw = _fb.read_master_record(user_dir)
+
     if raw is None:
         return None
     try:
         record: dict[str, Any] = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise SecurityError(
-            f"keyring record at {_service(user_dir)} is unparseable JSON ({exc}). "
-            "Manual recovery may be needed."
+            f"keyring/fallback master record at {_service(user_dir)} is unparseable "
+            f"JSON ({exc}). Manual recovery may be needed."
         ) from exc
     if not isinstance(record, dict) or record.get("v") != SCHEMA_VERSION:
         raise SecurityError(
-            f"keyring record schema_version mismatch (expected {SCHEMA_VERSION}, "
+            f"master record schema_version mismatch (expected {SCHEMA_VERSION}, "
             f"got {record.get('v') if isinstance(record, dict) else type(record).__name__})."
         )
     return record
 
 
 def _write_keyring_record(user_dir: Path, *, salt: bytes, wrapped_master: bytes) -> None:
+    """Persist the master record to the keyring or fallback file.
+
+    Routes to the file fallback when the OS keyring is unavailable.
+    The wrapped master is identical in both stores — only the location
+    differs.
+    """
+    from . import fallback_store as _fb
+
     payload = json.dumps(
         {
             "v": SCHEMA_VERSION,
@@ -186,7 +214,14 @@ def _write_keyring_record(user_dir: Path, *, salt: bytes, wrapped_master: bytes)
         },
         separators=(",", ":"),
     )
-    _kr.store_secret(_service(user_dir), MASTER_USERNAME, payload)
+    try:
+        _kr.store_secret(_service(user_dir), MASTER_USERNAME, payload)
+    except _kr.KeyringUnavailableError:
+        _fb.write_master_record(user_dir, payload)
+        logger.info(
+            "Sealed-store master persisted to file fallback at %s " "(OS keyring unavailable)",
+            _fb.fallback_master_path(user_dir),
+        )
 
 
 # ---------------------------------------------------------------------------
