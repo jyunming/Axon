@@ -534,6 +534,135 @@ class TestReplShare:
         assert isinstance(output, str)
 
 
+class TestReplShareExtend:
+    """Coverage for /share extend and /share generate --ttl-days (#54)."""
+
+    def test_share_generate_passes_ttl_days(self, tmp_path):
+        """`/share generate <project> <grantee> --ttl-days N` forwards N to shares.generate_share_key."""
+        from axon import shares as _shares_mod
+
+        brain = _make_mock_brain()
+        brain.config.projects_root = str(tmp_path)
+        # Seed a project dir so the generate path doesn't bail early.
+        proj = tmp_path / "myproject"
+        proj.mkdir()
+        (proj / "meta.json").write_text('{"name": "myproject"}', encoding="utf-8")
+
+        with patch.object(_shares_mod, "generate_share_key") as gen_mock:
+            gen_mock.return_value = {
+                "key_id": "sk_z",
+                "share_string": "abc",
+                "expires_at": "2099-01-01T00:00:00+00:00",
+            }
+            _run_repl_with_commands(["/share generate myproject bob --ttl-days 14"], brain=brain)
+        _, kwargs = gen_mock.call_args
+        assert kwargs.get("ttl_days") == 14
+
+    def test_share_generate_no_ttl_passes_none(self, tmp_path):
+        from axon import shares as _shares_mod
+
+        brain = _make_mock_brain()
+        brain.config.projects_root = str(tmp_path)
+        proj = tmp_path / "myproject"
+        proj.mkdir()
+        (proj / "meta.json").write_text('{"name": "myproject"}', encoding="utf-8")
+
+        with patch.object(_shares_mod, "generate_share_key") as gen_mock:
+            gen_mock.return_value = {"key_id": "sk_z", "share_string": "x"}
+            _run_repl_with_commands(["/share generate myproject bob"], brain=brain)
+        _, kwargs = gen_mock.call_args
+        assert kwargs.get("ttl_days") is None
+
+    def test_share_extend_with_ttl_days(self, tmp_path):
+        from axon import shares as _shares_mod
+
+        brain = _make_mock_brain()
+        brain.config.projects_root = str(tmp_path)
+        with patch.object(_shares_mod, "extend_share_key") as ext_mock:
+            ext_mock.return_value = {
+                "key_id": "sk_a",
+                "expires_at": "2099-01-01T00:00:00+00:00",
+            }
+            output = _run_repl_with_commands(["/share extend sk_a --ttl-days 30"], brain=brain)
+        _, kwargs = ext_mock.call_args
+        assert kwargs.get("ttl_days") == 30
+        assert kwargs.get("key_id") == "sk_a"
+        assert "sk_a" in output
+
+    def test_share_extend_clear_drops_expiry(self, tmp_path):
+        from axon import shares as _shares_mod
+
+        brain = _make_mock_brain()
+        brain.config.projects_root = str(tmp_path)
+        with patch.object(_shares_mod, "extend_share_key") as ext_mock:
+            ext_mock.return_value = {"key_id": "sk_a", "expires_at": None}
+            _run_repl_with_commands(["/share extend sk_a --clear"], brain=brain)
+        _, kwargs = ext_mock.call_args
+        assert kwargs.get("ttl_days") is None
+
+    def test_share_extend_no_arg_prints_usage(self):
+        brain = _make_mock_brain()
+        output = _run_repl_with_commands(["/share extend"], brain=brain)
+        assert "Usage" in output
+
+    def test_share_extend_handles_value_error(self, tmp_path):
+        from axon import shares as _shares_mod
+
+        brain = _make_mock_brain()
+        brain.config.projects_root = str(tmp_path)
+        with patch.object(
+            _shares_mod, "extend_share_key", side_effect=ValueError("Key 'sk_x' not found.")
+        ):
+            output = _run_repl_with_commands(["/share extend sk_x --ttl-days 7"], brain=brain)
+        assert "Extend failed" in output and "not found" in output
+
+
+class TestReplProjectRefresh:
+    """Coverage for /project refresh (#53)."""
+
+    def test_refresh_invokes_brain_refresh_mount(self):
+        brain = _make_mock_brain()
+        brain.refresh_mount = MagicMock(return_value=False)
+        brain._is_mounted_share = MagicMock(return_value=True)
+        brain._mount_version_marker = {"seq": 5}
+        _run_repl_with_commands(["/project refresh"], brain=brain)
+        brain.refresh_mount.assert_called_once()
+
+    def test_refresh_reports_seq_when_advanced(self):
+        brain = _make_mock_brain()
+        brain.refresh_mount = MagicMock(return_value=True)
+        brain._is_mounted_share = MagicMock(return_value=True)
+        brain._mount_version_marker = {"seq": 9, "generated_at": "2026-04-25T00:00:00+00:00"}
+        output = _run_repl_with_commands(["/project refresh"], brain=brain)
+        assert "Refreshed" in output
+        assert "seq=9" in output
+
+    def test_refresh_reports_already_up_to_date(self):
+        brain = _make_mock_brain()
+        brain.refresh_mount = MagicMock(return_value=False)
+        brain._is_mounted_share = MagicMock(return_value=True)
+        brain._mount_version_marker = {"seq": 4}
+        output = _run_repl_with_commands(["/project refresh"], brain=brain)
+        assert "up to date" in output and "seq=4" in output
+
+    def test_refresh_outside_mount_prints_help(self):
+        brain = _make_mock_brain()
+        brain.refresh_mount = MagicMock(return_value=False)
+        brain._is_mounted_share = MagicMock(return_value=False)
+        brain._mount_version_marker = None
+        output = _run_repl_with_commands(["/project refresh"], brain=brain)
+        assert "mounted shares" in output
+
+    def test_refresh_reports_sync_pending(self):
+        from axon.version_marker import MountSyncPendingError
+
+        brain = _make_mock_brain()
+        brain.refresh_mount = MagicMock(side_effect=MountSyncPendingError("indices in flight"))
+        output = _run_repl_with_commands(["/project refresh"], brain=brain)
+        assert "replicating" in output
+        assert "in flight" in output
+
+
 class TestReplGraph:
     def test_graph_status(self):
         brain = _make_mock_brain()

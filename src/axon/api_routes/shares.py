@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from axon.api_schemas import (
     _VALID_PROJECT_NAME_RE,
+    ShareExtendRequest,
     ShareGenerateRequest,
     ShareRedeemRequest,
     ShareRevokeRequest,
@@ -283,11 +284,15 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
     if not project_path.exists() or not (project_path / "meta.json").exists():
         raise HTTPException(status_code=404, detail=f"Project '{request.project}' not found.")
 
-    result = _shares.generate_share_key(
-        owner_user_dir=user_dir,
-        project=request.project,
-        grantee=request.grantee,
-    )
+    try:
+        result = _shares.generate_share_key(
+            owner_user_dir=user_dir,
+            project=request.project,
+            grantee=request.grantee,
+            ttl_days=request.ttl_days,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     rid = getattr(req.state, "request_id", "")
 
@@ -298,7 +303,7 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
         "share",
         result.get("key_id", ""),
         project=request.project,
-        details={"grantee": request.grantee},
+        details={"grantee": request.grantee, "expires_at": result.get("expires_at")},
         surface=surface,
         request_id=rid,
     )
@@ -392,6 +397,55 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
         "share",
         request.key_id,
         project=result.get("project", ""),
+        surface=surface,
+        request_id=rid,
+    )
+
+    return result
+
+
+@router.post("/share/extend")
+async def share_extend(request: ShareExtendRequest, req: Request):
+    """Renew a share key's expiry — or clear it (``ttl_days=null``).
+
+    Pairs with ``POST /share/generate``'s ``ttl_days`` to give owners a
+    hard cutoff for forgotten shares while still letting them keep an
+    in-use share alive on demand.
+    """
+
+    from axon import api as _api
+    from axon import governance as gov
+    from axon import shares as _shares
+
+    user_dir = _api._get_user_dir()
+
+    rid = getattr(req.state, "request_id", "")
+    surface = getattr(req.state, "surface", "api")
+
+    try:
+        result = _shares.extend_share_key(
+            owner_user_dir=user_dir,
+            key_id=request.key_id,
+            ttl_days=request.ttl_days,
+        )
+    except ValueError as e:
+        msg = str(e)
+        # 404 when the key is unknown; 409 when it is revoked (irreversible);
+        # 422 for malformed ttl. Keep the existing 422-on-validation pattern.
+        if "not found" in msg.lower():
+            status = 404
+        elif "revoked" in msg.lower():
+            status = 409
+        else:
+            status = 422
+        raise HTTPException(status_code=status, detail=msg)
+
+    gov.emit(
+        "share_extended",
+        "share",
+        request.key_id,
+        project=result.get("project", ""),
+        details={"new_expires_at": result.get("expires_at")},
         surface=surface,
         request_id=rid,
     )

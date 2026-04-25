@@ -772,15 +772,58 @@ class QueryRouterMixin:
         except Exception:
             return  # Can't reach owner manifest — leave mounted
         for record in manifest.get("issued", []):
-            if record.get("key_id") == key_id and record.get("revoked"):
+            if record.get("key_id") != key_id:
+                continue
+            if record.get("revoked"):
                 raise PermissionError(
                     f"Share '{desc.get('project', '')}' has been revoked by the owner. "
                     "Run `/project switch default` to continue with your own projects."
                 )
+            # Issue #54: also enforce expires_at as a hard cutoff so a
+            # forgotten share doesn't leak indefinitely.
+            from axon.shares import _is_expired
+
+            if _is_expired(record.get("expires_at")):
+                raise PermissionError(
+                    f"Share '{desc.get('project', '')}' expired at "
+                    f"{record.get('expires_at')}. Ask the owner to extend "
+                    "(`/share extend`) and re-redeem."
+                )
+
+    def _maybe_refresh_mount(self) -> None:
+        """When ``cfg.mount_refresh_mode == "per_query"``, re-check the
+        owner's version marker before retrieval and reopen handles if the
+        owner has re-ingested.
+
+        ``MountSyncPendingError`` is allowed to propagate so callers (REST
+        API, REPL, MCP) can surface a transient "sync in progress" signal
+        instead of returning stale results.
+        """
+        mode = getattr(self.config, "mount_refresh_mode", "switch")
+        if mode != "per_query":
+            return
+        try:
+            self.refresh_mount()
+        except Exception:
+            # MountSyncPendingError propagates; everything else (path
+            # missing, race during owner shutdown, etc.) is logged-and-
+            # continue so a retrieval is never lost to refresh-machinery
+            # bugs.
+            import sys as _sys
+
+            from axon.version_marker import MountSyncPendingError
+
+            _exc = _sys.exc_info()[1]
+            if isinstance(_exc, MountSyncPendingError):
+                raise
+            import logging as _logging
+
+            _logging.getLogger("Axon").debug("refresh_mount failed (non-fatal): %s", _exc)
 
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
         self._check_mount_revocation()
+        self._maybe_refresh_mount()
         from axon.rust_bridge import get_rust_bridge
 
         _rust = get_rust_bridge()

@@ -1089,6 +1089,80 @@ Your primary goal is to help the user by answering questions based on the provid
 
         return bool(getattr(self, "_mounted_share", False))
 
+    def refresh_mount(self) -> bool:
+        """Re-read the owner's version marker; reopen project handles if newer.
+
+        Called automatically before retrieval when ``cfg.mount_refresh_mode``
+        is ``"per_query"`` (see :meth:`QueryRouterMixin._maybe_refresh_mount`)
+        and available as a public API for explicit refresh.
+
+        Returns:
+            ``True`` if handles were reopened (the owner had advanced),
+            ``False`` if no refresh was needed or the brain is not on a mount.
+
+        Raises:
+            MountSyncPendingError: when the owner's marker has advanced but
+                the underlying index files have not yet replicated to this
+                grantee — typical for cloud-sync where ``version.json``
+                arrives before larger index files. Callers should retry
+                later or surface a transient ``X-Axon-Mount-Sync-Pending``
+                signal to the user.
+        """
+        import time as _time
+
+        from axon.version_marker import (
+            MountSyncPendingError,
+            artifacts_match,
+            is_newer_than,
+        )
+        from axon.version_marker import (
+            read as _read_marker,
+        )
+
+        if not self._is_mounted_share():
+            return False
+        desc = getattr(self, "_active_mount_descriptor", None)
+        if not desc:
+            return False
+        target = Path(desc.get("target_project_dir", ""))
+        if not target.exists():
+            return False
+
+        cached = getattr(self, "_mount_version_marker", None)
+        current = _read_marker(target)
+        if not is_newer_than(current, cached):
+            return False
+
+        # Mid-sync mismatch protection: re-hash the actual files and compare
+        # to the marker's expected hashes. If they don't match yet, the
+        # index files are still in flight; back off and retry.
+        retry_max = max(0, int(getattr(self.config, "mount_sync_retry_max", 5)))
+        backoff = float(getattr(self.config, "mount_sync_retry_backoff_s", 0.5))
+        for attempt in range(retry_max + 1):
+            if artifacts_match(target, current):
+                break
+            if attempt == retry_max:
+                raise MountSyncPendingError(
+                    f"Mount '{self._active_project}' has a newer version marker "
+                    f"(seq={current.get('seq')}) but its index files have not "
+                    f"finished replicating after {retry_max} retries. "
+                    f"Try again in a few seconds."
+                )
+            _time.sleep(backoff * (2**attempt))
+            current = _read_marker(target) or current
+
+        # Files are coherent with the marker — reopen handles via the
+        # existing switch logic. switch_project resets caches, GCs file
+        # handles, and rebuilds vector_store + bm25 from the new on-disk
+        # state. The marker we just read is re-cached during that call.
+        logger.info(
+            "Refreshing mount '%s': owner advanced to seq=%s",
+            self._active_project,
+            current.get("seq"),
+        )
+        self.switch_project(self._active_project)
+        return True
+
     def _assert_write_allowed(self, operation: str = "write") -> None:
         """Raise PermissionError if current project is read-only (scope, mounted share, or maintenance state)."""
 
@@ -1171,6 +1245,32 @@ Your primary goal is to help the user by answering questions based on the provid
             self.config.vector_store_path = str(target / "vector_store_data")
 
             self.config.bm25_path = str(target / "bm25_index")
+
+            # Cache the owner's version marker so a future TTL/per-query
+            # check (issue #53 follow-up) can detect when the owner has
+            # re-ingested and we need to reopen handles. For now this is
+            # informational — logged at INFO so operators can see what
+            # snapshot of the owner's state they bound to.
+            try:
+                from axon.version_marker import read as _read_marker
+
+                self._mount_version_marker = _read_marker(target)
+                if self._mount_version_marker is not None:
+                    logger.info(
+                        "Mounted '%s' at owner version seq=%s (generated_at=%s)",
+                        name,
+                        self._mount_version_marker.get("seq"),
+                        self._mount_version_marker.get("generated_at"),
+                    )
+                else:
+                    self._mount_version_marker = None
+                    logger.info(
+                        "Mounted '%s' — owner has not yet emitted a version marker.",
+                        name,
+                    )
+            except Exception as _vm_exc:
+                logger.debug("Could not read mount version marker: %s", _vm_exc)
+                self._mount_version_marker = None
 
         elif name == "default":
             self.config.vector_store_path = self._base_vector_store_path
@@ -3740,6 +3840,19 @@ Your primary goal is to help the user by answering questions based on the provid
                     "This may indicate basename-derived IDs colliding. Re-ingest with current version to fix.",
                     _collision_count,
                 )
+
+        # Bump the cross-machine version marker LAST. Grantees read this
+        # file on mount switch (and, in a future iteration, on a TTL
+        # background poll) to detect when the owner has re-indexed and
+        # in-memory handles need to be reopened. Atomic write — if any
+        # part of this fails, the previous marker stays intact.
+        try:
+            from axon.version_marker import bump as _bump_marker
+
+            _project_dir = Path(self.config.bm25_path).parent
+            _bump_marker(_project_dir)
+        except Exception as _vm_exc:
+            logger.debug("version_marker bump failed (non-fatal): %s", _vm_exc)
 
         # Explicitly release lease (fallback: _WriteLease.__del__ handles it)
 

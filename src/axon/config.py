@@ -1240,6 +1240,25 @@ class AxonConfig:
 
     axon_store_base: str = ""
 
+    # ── Share-mount staleness detection ────────────────────────────────────
+    # When the grantee opens a mount the owner's version.json marker is
+    # cached on the brain (see src/axon/version_marker.py). The settings
+    # below control whether — and how often — the grantee re-checks that
+    # marker to detect the owner re-ingesting while the grantee was idle.
+
+    # "off"        → never auto-refresh; user must `/project switch` again.
+    # "switch"     → cache the marker on switch; no further auto-refresh
+    #                (default — minimal overhead, manual refresh via
+    #                 explicit re-switch only).
+    # "per_query"  → re-read the marker before every retrieval; on a newer
+    #                marker, re-open project handles. Adds ~1ms/query.
+    mount_refresh_mode: Literal["off", "switch", "per_query"] = "switch"
+
+    # Maximum mid-sync retry attempts before raising MountSyncPendingError.
+    # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
+    mount_sync_retry_max: int = 5
+    mount_sync_retry_backoff_s: float = 0.5
+
     @classmethod
     def load(cls, path: str | None = None) -> "AxonConfig":
         """Load configuration from a YAML file.
@@ -1959,6 +1978,45 @@ class AxonConfig:
                         field="grok_api_key",
                         message="llm.provider is 'grok' but no Grok API key is configured.",
                         suggestion=("Set llm.grok_api_key in config.yaml or export XAI_API_KEY."),
+                    )
+                )
+
+        # ------------------------------------------------------------------ #
+
+        # 2b. Share-mount safety pass — flag cloud-sync / network paths that  #
+
+        #     would corrupt SQLite-backed components or break atomic rename.  #
+
+        # ------------------------------------------------------------------ #
+
+        try:
+            from axon.paths import cloud_sync_path_reason
+        except Exception:  # pragma: no cover — import-time safety net
+
+            def cloud_sync_path_reason(_p: object) -> str:
+                return ""
+
+        for _section, _field, _value in (
+            ("store", "base", cfg.axon_store_base),
+            ("vector_store", "path", cfg.vector_store_path),
+            ("bm25", "path", cfg.bm25_path),
+        ):
+            _reason = cloud_sync_path_reason(_value)
+            if _reason:
+                issues.append(
+                    ConfigIssue(
+                        level="warn",
+                        section=_section,
+                        field=_field,
+                        message=(
+                            f"{_section}.{_field} is on an unsafe filesystem: {_reason}. "
+                            f"Path: {_value}"
+                        ),
+                        suggestion=(
+                            "Move Axon state off cloud-sync (OneDrive/Dropbox/Google Drive) "
+                            "and network shares; see docs/TROUBLESHOOTING.md "
+                            "(Share mount) for details."
+                        ),
                     )
                 )
 

@@ -369,6 +369,24 @@ async def switch_project(project_name: str) -> Any:
 
 
 @mcp.tool()
+async def refresh_mount() -> Any:
+    """Re-read the owner's version marker for an active mounted share and
+    reopen project handles if the owner has re-ingested.
+
+    No-op when the active project is not a mount (mounts/<name>). On a
+    cloud-sync mid-replication race the API may respond with HTTP 503
+    + ``X-Axon-Mount-Sync-Pending: true``; retry after a few seconds.
+
+    Returns:
+        ``{"status": "success", "refreshed": bool, "seq": int|null}``
+        when refresh completed, or ``{"status": "sync_pending", ...}``
+        when the owner advanced but index files are still in flight.
+    """
+
+    return await _post("/mount/refresh", {})
+
+
+@mcp.tool()
 async def delete_documents(doc_ids: list[str]) -> Any:
     """Remove documents from the knowledge base by their IDs.
 
@@ -570,6 +588,7 @@ async def get_session(session_id: str) -> Any:
 async def share_project(
     project: str,
     grantee: str,
+    ttl_days: int | None = None,
 ) -> Any:
     """Generate a share key allowing another user to access one of your projects.
 
@@ -585,12 +604,16 @@ async def share_project(
 
         grantee: OS username of the recipient.
 
+        ttl_days: Optional time-to-live in days. When set, the share
+            automatically expires after this many days; owners can renew
+            with extend_share. None (default) means no expiry.
+
     """
 
-    return await _post(
-        "/share/generate",
-        {"project": project, "grantee": grantee},
-    )
+    body: dict[str, Any] = {"project": project, "grantee": grantee}
+    if ttl_days is not None:
+        body["ttl_days"] = ttl_days
+    return await _post("/share/generate", body)
 
 
 @mcp.tool()
@@ -642,6 +665,26 @@ async def revoke_share(key_id: str) -> Any:
     """
 
     return await _post("/share/revoke", {"key_id": key_id})
+
+
+@mcp.tool()
+async def extend_share(key_id: str, ttl_days: int | None = None) -> Any:
+    """Renew a share key's expiry, or clear it (``ttl_days=null``).
+
+    Pairs with ``share_project(ttl_days=...)`` to give owners a hard
+    cutoff for forgotten shares while still letting them keep an
+    in-use share alive on demand.
+
+    Args:
+
+        key_id: The key ID of the share to extend (from list_shares).
+
+        ttl_days: New time-to-live in days, measured from now.
+            None clears the expiry entirely.
+
+    """
+
+    return await _post("/share/extend", {"key_id": key_id, "ttl_days": ttl_days})
 
 
 @mcp.tool()

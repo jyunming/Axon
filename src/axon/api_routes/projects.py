@@ -363,6 +363,55 @@ async def switch_project(request: ProjectSwitchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/mount/refresh")
+async def refresh_mount():
+    """Re-read the owner's version marker and reopen handles if newer.
+
+    Useful for grantees of a shared project who want to pick up the
+    owner's most recent ingest without typing ``/project switch
+    mounts/<name>`` again. No-op when the active project is not a mount.
+
+    Responses:
+      200 ``{"status": "success", "refreshed": true|false, "seq": int|None}``
+        Returned on success; ``refreshed`` indicates whether handles were
+        actually reopened (False = owner had not advanced).
+      503 with ``X-Axon-Mount-Sync-Pending: true`` header
+        Returned when the owner's marker has advanced but the underlying
+        index files are still in flight from cloud sync. Retry later.
+    """
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+
+    from axon.version_marker import MountSyncPendingError
+
+    try:
+        async with _switch_lock:
+            refreshed = brain.refresh_mount()
+        marker = getattr(brain, "_mount_version_marker", None) or {}
+        return {
+            "status": "success",
+            "refreshed": refreshed,
+            "seq": marker.get("seq"),
+            "generated_at": marker.get("generated_at"),
+        }
+    except MountSyncPendingError as exc:
+        # Transient: the owner has advanced but bytes haven't arrived.
+        # Use 503 + a dedicated header so REST clients can detect this
+        # cleanly (vs. an arbitrary 5xx) and back off without parsing
+        # the body.
+        return JSONResponse(
+            status_code=503,
+            headers={"X-Axon-Mount-Sync-Pending": "true"},
+            content={"status": "sync_pending", "detail": str(exc)},
+        )
+    except Exception as exc:
+        logger.error(f"Mount refresh failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post("/project/delete/{name}")
 async def delete_project_endpoint(name: str):
     """Delete a project and all its data."""

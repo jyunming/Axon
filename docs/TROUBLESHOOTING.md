@@ -533,3 +533,15 @@ axon> /model llama3.1:8b
 ```
 
 **Cause 3 — Gemma model + system prompt:** Gemma models (e.g. `gemma-3-27b-it`) don't support `system_instruction` in the Gemini SDK. Axon automatically falls back to prepending the system prompt to the first user message — no action needed, but if you see unexpected output check the model name is recognised as a Gemma variant.
+
+## Share mount: putting a project under OneDrive / Dropbox / Google Drive
+
+Axon's share-mount model assumes the owner's project directory sits on a **coherent filesystem** (local disk, or on-prem SMB3 from a Windows-native grantee). Consumer cloud-sync tools do **not** qualify:
+
+- **SQLite WAL corrupts on cloud sync.** SQLite's own maintainers categorically forbid WAL mode on filesystems where advisory locks or shared-memory mappings cannot be replicated coherently (see https://sqlite.org/useovernet.html and https://sqlite.org/wal.html). OneDrive / Dropbox / Google Drive all fit this description.
+- **Axon mitigations in the default install:** the governance audit DB (`.governance.db`) and the Dynamic Graph backend (`.dynamic_graph.db`) now use journal mode `DELETE` instead of `WAL`, so there are no `-wal`/`-shm` sidecars for sync clients to re-order. Grantees on a share mount never open the owner's `.dynamic_graph.db`; they read a read-only JSON snapshot (`.dynamic_graph.snapshot.json`) that the owner exports on every ingest.
+- **What's still risky:** cloud-sync is still not a supported live-storage layer for vector store binaries. Sync clients can delay, reorder, or partially publish binary index updates; TurboQuantDB's `wal.log` + `manifest.json` pair can become temporarily inconsistent during sync. Axon now reduces stale / torn-read exposure on mounts by publishing `version.json` and offering `refresh_mount` to move readers onto a coherent published version (see #53 / `mount_refresh_mode`), and revoking-or-expiring an Axon share-key now actually denies subsequent queries (see #54 / share-key TTL). But that does **not** make OneDrive / Dropbox / Google Drive equivalent to local disk or SMB3. **Bytes-on-grantee invalidation after revocation** (encrypted-at-rest sealed mounts, see `docs/SHARE_MOUNT_SEALED.md`) is still future work — a determined grantee with cached files and a hacked client can read them. Keep live Axon project directories on local disk or an on-prem SMB3 share until sealed mounts ship.
+
+If you must co-locate a project with OneDrive/Dropbox/Google Drive, back up the project dir to the synced folder on a schedule instead of running live — Axon's query path expects a coherent view of all index files at the same instant.
+
+For the full supported / unsupported filesystem matrix and the per-backend recommendation table, see [SHARE_MOUNT.md](SHARE_MOUNT.md).

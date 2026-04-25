@@ -28,6 +28,17 @@ class TestAxonConfig:
 
         assert config.chunk_size == 1000
 
+    def test_share_mount_defaults(self):
+        """Share-mount config knobs added by #53 must keep their advertised defaults
+        — silent drift would change runtime behaviour for grantees on a mount."""
+
+        config = AxonConfig()
+
+        # Default refresh policy: cache marker on switch, no per-query overhead.
+        assert config.mount_refresh_mode == "switch"
+        assert config.mount_sync_retry_max == 5
+        assert config.mount_sync_retry_backoff_s == 0.5
+
     def test_load_from_yaml(self, tmp_path):
         """Test loading configuration from YAML file."""
 

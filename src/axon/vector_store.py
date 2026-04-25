@@ -77,6 +77,16 @@ class OpenVectorStore:
 
             logger.info(f"Initializing ChromaDB: {self.config.vector_store_path}")
 
+            # Preflight: Chroma is SQLite-backed and will silently corrupt on
+            # cloud-sync / network / WSL-mount filesystems (see
+            # https://sqlite.org/useovernet.html). Fail loud BEFORE chromadb
+            # opens the file so users understand the diagnosis.
+            from axon.paths import cloud_sync_path_reason
+
+            _reason = cloud_sync_path_reason(self.config.vector_store_path)
+            if _reason:
+                self._raise_unsupported_path(self.config.vector_store_path, _reason)
+
             try:
                 self.client = chromadb.PersistentClient(path=self.config.vector_store_path)
 
@@ -85,25 +95,15 @@ class OpenVectorStore:
                 )
 
             except Exception as e:
-                # Catch the specific WSL/SQLite readonly error (code 8)
-
+                # Catch the specific WSL/SQLite readonly error (code 8).
+                # Surface the cloud-sync cause when the path matches too.
                 if "(code: 8)" in str(e) and "readonly database" in str(e).lower():
-                    msg = (
-                        f"\n\n[bold red]ERROR:[/bold red] ChromaDB failed to initialize at: {self.config.vector_store_path}\n"
-                        "This typically happens in WSL when using a Windows-mounted drive (/mnt/c/...). \n"
-                        "SQLite does not support locking on these mounts.\n\n"
-                        "FIX: Store your data in the Linux filesystem instead:\n"
-                        "  1. Set environment variable: [bold]CHROMA_DATA_PATH=~/axon_data[/bold]\n"
-                        "  2. Or edit config.yaml to use a path like: [bold]~/axon_data[/bold]\n"
+                    _late_reason = (
+                        cloud_sync_path_reason(self.config.vector_store_path)
+                        or "path does not support SQLite locking (WSL Windows mount, "
+                        "cloud sync, or network share)"
                     )
-
-                    from rich.console import Console
-
-                    Console().print(msg)
-
-                    raise RuntimeError(
-                        f"ChromaDB failed to initialize at: {self.config.vector_store_path}"
-                    )
+                    self._raise_unsupported_path(self.config.vector_store_path, _late_reason)
 
                 raise e
 
@@ -163,6 +163,40 @@ class OpenVectorStore:
                 )
             else:
                 self.client = None  # opened lazily on first add()
+
+    @staticmethod
+    def _raise_unsupported_path(path: str, reason: str) -> None:
+        """Print a user-facing diagnosis and raise ``RuntimeError``.
+
+        Called when Chroma's SQLite backend is being asked to live on a
+        filesystem that cannot guarantee the locking / atomicity it needs
+        (cloud sync, UNC share, WSL Windows mount).
+        """
+        msg = (
+            f"\n\n[bold red]ERROR:[/bold red] ChromaDB cannot run at: {path}\n"
+            f"Reason: {reason}.\n\n"
+            "Chroma is SQLite-backed and WILL corrupt on:\n"
+            "  - OneDrive / Dropbox / Google Drive (consumer cloud sync)\n"
+            "  - UNC / network shares (\\\\server\\share, //server/share)\n"
+            "  - WSL-mounted Windows drives (/mnt/c/..., //wsl$/...)\n\n"
+            "FIX options:\n"
+            "  1. Move the store onto a local filesystem:\n"
+            "     export AXON_STORE_BASE=~/.axon   # or any local path\n"
+            "  2. Use the default TurboQuantDB backend "
+            "(vector_store.provider: turboquantdb in config.yaml) — it does "
+            "not use SQLite.\n"
+            "  3. See docs/SHARE_MOUNT.md for the full supported / unsupported"
+            " matrix.\n"
+        )
+        try:
+            from rich.console import Console
+
+            Console().print(msg)
+        except Exception:
+            # Fall back to plain print when rich is unavailable (offline /
+            # minimal install).
+            print(msg)
+        raise RuntimeError(f"ChromaDB failed to initialize at: {path} ({reason})")
 
     def close(self):
         """Release any open file handles or database connections."""

@@ -370,3 +370,217 @@ class TestDynamicGraphBackendFactory:
         brain.config.graph_backend = "nonexistent"
         with pytest.raises(ValueError, match="Unknown graph_backend"):
             get_graph_backend(brain)
+
+
+# ---------------------------------------------------------------------------
+# Share-mount safety: journal mode + snapshot export/load
+# ---------------------------------------------------------------------------
+
+
+class TestDynamicGraphShareMountSafety:
+    def test_journal_mode_is_delete_not_wal(self, tmp_path):
+        """Owner DB uses DELETE journal — no -wal/-shm sidecars (cloud-sync-safe)."""
+        backend = _make_backend(tmp_path)
+        now = "2026-01-01T00:00:00+00:00"
+        backend._upsert_entity("alice", "PERSON", "", now)
+        # PRAGMA should report 'delete' mode.
+        mode = backend._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "delete"
+        # And no -wal/-shm sidecar files should have been created.
+        assert not (tmp_path / ".dynamic_graph.db-wal").exists()
+        assert not (tmp_path / ".dynamic_graph.db-shm").exists()
+
+    def test_ingest_writes_snapshot_file(self, tmp_path):
+        """Owner ingest emits a JSON snapshot for grantees to read."""
+        from axon.graph_backends.dynamic_graph_backend import SNAPSHOT_FILENAME
+
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={
+                "Extract the key named entities": "Alice | PERSON | Engineer",
+                "Extract key relationships": "",
+            },
+        )
+        backend.ingest([_chunk("Alice runs.", "c1")])
+        snap = tmp_path / SNAPSHOT_FILENAME
+        assert snap.exists()
+        import json as _json
+
+        data = _json.loads(snap.read_text(encoding="utf-8"))
+        assert data["snapshot_version"] >= 1
+        assert any(e["canonical_name"] == "alice" for e in data["entities"])
+
+    def test_snapshot_written_atomically_no_tempfile_left(self, tmp_path):
+        """Snapshot export uses tmp+replace — no ``.json.tmp`` remains afterwards."""
+        backend = _make_backend(
+            tmp_path,
+            llm_responses={"Extract the key named entities": "Alice | PERSON | x"},
+        )
+        backend.ingest([_chunk("Alice.", "c1")])
+        tmp_files = list(tmp_path.glob("*.json.tmp"))
+        assert tmp_files == []
+
+    def test_grantee_uses_in_memory_db_not_owner_file(self, tmp_path, monkeypatch):
+        """A mounted (grantee) brain never opens the owner's on-disk SQLite."""
+        from axon.graph_backends.dynamic_graph_backend import (
+            SNAPSHOT_FILENAME,
+            DynamicGraphBackend,
+        )
+
+        owner_brain = _make_brain(tmp_path)
+        owner_brain._active_project = "research"  # owner — not a mount
+        owner = DynamicGraphBackend(owner_brain)
+        assert not owner._is_mounted
+        # Seed an entity and a fact so the snapshot has content.
+        now = "2026-01-01T00:00:00+00:00"
+        owner._upsert_entity("alice", "PERSON", "engineer", now)
+        owner._upsert_fact("alice", "WORKS_FOR", "acme", "", 0.9, "c1", "ep1", now)
+        owner._export_snapshot()
+        assert (tmp_path / SNAPSHOT_FILENAME).exists()
+
+        # Now simulate a grantee pointing at the same path — they should load
+        # the snapshot, not open the owner's .dynamic_graph.db.
+        grantee_brain = _make_brain(tmp_path)
+        grantee_brain._active_project = "mounts/shared"
+        grantee = DynamicGraphBackend(grantee_brain)
+        assert grantee._is_mounted
+        # Grantee sees the snapshot data via an in-memory DB.
+        s = grantee.status()
+        assert s["entities"] == 1
+        assert s["active_facts"] == 1
+        # Grantee did NOT create or touch an on-disk DB in the mount.
+        # (The owner's file still exists, but grantee's connection is :memory:.)
+        rows = grantee._conn.execute("PRAGMA database_list").fetchall()
+        main_file = [r["file"] for r in rows if r["name"] == "main"][0]
+        assert main_file == ""  # in-memory DB reports empty file path
+
+    def test_grantee_with_missing_snapshot_is_empty_not_error(self, tmp_path):
+        """No snapshot file yet: grantee gets an empty graph, no exception."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        grantee_brain = _make_brain(tmp_path)
+        grantee_brain._active_project = "mounts/nothing_yet"
+        grantee = DynamicGraphBackend(grantee_brain)
+        s = grantee.status()
+        assert s["entities"] == 0
+        assert s["active_facts"] == 0
+
+    def test_grantee_with_corrupt_snapshot_logs_and_stays_empty(self, tmp_path):
+        """A malformed snapshot is logged and treated as empty, not re-raised."""
+        from axon.graph_backends.dynamic_graph_backend import (
+            SNAPSHOT_FILENAME,
+            DynamicGraphBackend,
+        )
+
+        (tmp_path / SNAPSHOT_FILENAME).write_text("not json {[", encoding="utf-8")
+        grantee_brain = _make_brain(tmp_path)
+        grantee_brain._active_project = "mounts/shared"
+        grantee = DynamicGraphBackend(grantee_brain)
+        s = grantee.status()
+        assert s["entities"] == 0
+
+
+class TestDynamicGraphDbRelocation:
+    """When bm25_path is on a cloud-sync / network path, the owner DB is
+    redirected to ``~/.axon/graphs/<id>/`` so a sync client never observes
+    a torn mid-write file."""
+
+    def test_safe_path_keeps_db_inline(self, tmp_path):
+        """Local path: DB stays at bm25_path (no relocation, no migration)."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        backend = DynamicGraphBackend(_make_brain(tmp_path))
+        assert not backend._db_relocated
+        assert backend._db_path == tmp_path / ".dynamic_graph.db"
+        assert backend._db_path.exists()
+
+    def test_cloud_sync_path_redirects_to_local_root(self, tmp_path, monkeypatch):
+        """Synthetic OneDrive path: DB lands under ~/.axon/graphs/<id>/."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        # Pin Path.home() so the test is deterministic and writes only into tmp.
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+
+        # Build a project layout under a synthetic OneDrive subtree.
+        synced_root = tmp_path / "OneDrive" / "AxonStore" / "alice" / "research"
+        bm25_dir = synced_root / "bm25_index"
+        bm25_dir.mkdir(parents=True)
+        (synced_root / "meta.json").write_text('{"project_id": "proj-deadbeef"}', encoding="utf-8")
+
+        brain = _make_brain(bm25_dir)
+        backend = DynamicGraphBackend(brain)
+
+        assert backend._db_relocated
+        # DB is under ~/.axon/graphs/<project_id>/
+        local_root = tmp_path / "home" / ".axon" / "graphs" / "proj-deadbeef"
+        assert backend._db_path == local_root / ".dynamic_graph.db"
+        assert backend._db_path.exists()
+        # The synced bm25_path holds NO .dynamic_graph.db (only the snapshot
+        # path is OK to live there once an ingest runs).
+        assert not (bm25_dir / ".dynamic_graph.db").exists()
+
+    def test_legacy_db_migrated_on_first_open(self, tmp_path, monkeypatch):
+        """An existing DB at the old (synced) path is copied into the local root."""
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+
+        synced_root = tmp_path / "Dropbox" / "AxonStore" / "alice" / "research"
+        bm25_dir = synced_root / "bm25_index"
+        bm25_dir.mkdir(parents=True)
+        (synced_root / "meta.json").write_text('{"project_id": "legacy-proj"}', encoding="utf-8")
+        # Seed a "legacy" DB at the old location with a recognisable row.
+        legacy_db = bm25_dir / ".dynamic_graph.db"
+        import sqlite3 as _sqlite
+
+        with _sqlite.connect(legacy_db) as _c:
+            _c.executescript(
+                "CREATE TABLE entities (entity_id TEXT PRIMARY KEY, "
+                "canonical_name TEXT NOT NULL UNIQUE, entity_type TEXT NOT NULL DEFAULT 'X', "
+                "description TEXT NOT NULL DEFAULT '', first_seen_at TEXT NOT NULL, "
+                "last_seen_at TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}');"
+                "INSERT INTO entities VALUES ('e1','legacy-marker','X','','t','t','{}');"
+            )
+
+        backend = DynamicGraphBackend(_make_brain(bm25_dir))
+        assert backend._db_relocated
+        assert backend._db_path.exists()
+        assert backend._db_path != legacy_db
+
+        rows = backend._conn.execute(
+            "SELECT canonical_name FROM entities WHERE entity_id = 'e1'"
+        ).fetchall()
+        assert rows and rows[0]["canonical_name"] == "legacy-marker"
+
+
+class TestConfigShareMountValidation:
+    """AxonConfig.validate() flags axon_store_base / vector_store / bm25 paths
+    that sit on cloud-sync, UNC, or WSL Windows mount filesystems."""
+
+    def test_safe_path_emits_no_share_mount_warnings(self, tmp_path, monkeypatch):
+        from axon.config import AxonConfig
+
+        # Point everything inside tmp_path so __post_init__ derives safe paths.
+        monkeypatch.setenv("AXON_STORE_BASE", str(tmp_path / "axon"))
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "home")
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("rag:\n  top_k: 10\n", encoding="utf-8")
+        issues = AxonConfig.validate(str(cfg_path))
+        share_mount_warns = [
+            i
+            for i in issues
+            if "unsafe filesystem" in i.message and i.section in {"store", "vector_store", "bm25"}
+        ]
+        assert share_mount_warns == []
+
+    def test_onedrive_store_base_emits_warning(self, tmp_path, monkeypatch):
+        from axon.config import AxonConfig
+
+        synced = tmp_path / "OneDrive" / "axon"
+        synced.mkdir(parents=True)
+        monkeypatch.setenv("AXON_STORE_BASE", str(synced))
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("rag:\n  top_k: 10\n", encoding="utf-8")
+        issues = AxonConfig.validate(str(cfg_path))
+        msgs = [i.message for i in issues if i.section == "store"]
+        assert any("unsafe filesystem" in m and "cloud-sync" in m for m in msgs)
