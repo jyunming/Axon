@@ -36,7 +36,6 @@ class GraphContext:
     # Entity names that matched the query and led to this context being retrieved.
     # Used by query_router to build GraphRAG local-search context headers.
     matched_entity_names: list[str] = field(default_factory=list)
-
     # Multi-hop diagnostics (Epic 1/4)
     hop_count: int = 0
     path: list[tuple[str, str, str]] = field(default_factory=list)
@@ -80,7 +79,6 @@ class RetrievalConfig:
 @dataclass
 class GraphPayload:
     """Renderer-neutral graph payload.
-
     Shape is identical to what :meth:`AxonBrain.build_graph_payload` returns::
 
         {
@@ -108,7 +106,6 @@ _REQUIRED_METHODS = frozenset(
 @runtime_checkable
 class GraphBackend(Protocol):
     """Pluggable graph strategy interface.
-
     All seven methods are required.  Implementations must NOT raise
     ``NotImplementedError`` for ``status()`` — callers use it to probe
     readiness without triggering side effects.
@@ -125,14 +122,12 @@ class GraphBackend(Protocol):
         existing_results: list[dict] | None = None,
     ) -> list[GraphContext]:
         """Return graph-enriched contexts relevant to *query*.
-
         Args:
             query: The search query string.
             cfg: Optional retrieval parameters (top_k, etc.).
             existing_results: Chunks already present in the retrieval result set.
                 Backends may use this to skip fetching already-present chunks
                 (deduplication hint — not required for correctness).
-
         Returns:
             A list of new :class:`GraphContext` objects not already in
             *existing_results*.  Each context carries ``matched_entity_names``
@@ -142,7 +137,6 @@ class GraphBackend(Protocol):
 
     def finalize(self, force: bool = False) -> FinalizationResult:
         """Trigger post-ingest finalisation (e.g. community detection).
-
         Implementations may defer this to a background thread unless
         *force* is True.
         """

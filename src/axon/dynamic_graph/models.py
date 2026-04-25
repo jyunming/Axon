@@ -3,7 +3,6 @@
 These models mirror the SQLite schema defined in
 ``docs/DYNAMIC_GRAPH_ROADMAP.md`` (branch: ``docs/dynamic-graph-design``),
 which in turn follows Graphiti's bi-temporal data model:
-
   Episode  →  source_chunk_id, content, reference_time
   Entity   →  canonical_name, first_seen_at, last_seen_at
   Fact     →  subject, relation, object, valid_at, invalid_at, status
@@ -51,7 +50,6 @@ class Entity(BaseModel):
 
 class Fact(BaseModel):
     """A bi-temporal fact (subject, relation, object) with validity window.
-
     When a new fact contradicts an existing one, ``invalid_at`` is set on
     the old row and ``status`` is set to ``"superseded"``.  The new fact
     row is inserted with ``status = "active"``.  Facts are never deleted.
@@ -103,7 +101,6 @@ _DEFAULT_RELATIONS: list[str] = [
 
 class RelationRegistry:
     """Registry of known relation types with built-in defaults.
-
     Usage::
 
         reg = RelationRegistry(extra=["FUNDED_BY", "ACQUIRED_BY"])

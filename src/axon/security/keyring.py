@@ -53,13 +53,11 @@ __all__ = [
 
 class KeyringUnavailableError(RuntimeError):
     """Raised when the OS keyring backend is missing or unusable.
-
     Common causes:
       - Linux server with no D-Bus / Secret Service running (gnome-keyring).
       - WSL distro that hasn't been configured for Linux Secret Service.
       - A ``keyring`` install that defaulted to the no-op ``keyring.backends.fail``
         backend.
-
     The Phase 2 work in ``docs/SHARE_MOUNT_SEALED.md`` will add a
     passphrase-protected file fallback for these cases. Until then,
     install one of:
@@ -90,7 +88,6 @@ def share_service(key_id: str) -> str:
 
 def _active_backend() -> Any:
     """Return the active keyring backend; raise KeyringUnavailableError when unusable.
-
     Detects the no-op ``keyring.backends.fail.Keyring`` stub by module
     name (the class name itself is just ``Keyring`` — same as the base
     class — so we cannot disambiguate on class name alone).
@@ -109,7 +106,6 @@ def _active_backend() -> Any:
 
 def is_available() -> bool:
     """Return True if the OS keyring is usable.
-
     Performs a lightweight write/read/delete round-trip on a sentinel
     service name. Catches any exception and returns False rather than
     propagating, so callers can branch on availability without a
@@ -140,7 +136,6 @@ def is_available() -> bool:
 
 def store_secret(service: str, username: str, secret: str) -> None:
     """Store *secret* under (*service*, *username*).
-
     Raises:
         KeyringUnavailableError: backend unavailable.
         RuntimeError: backend present but operation failed (rare —
@@ -155,7 +150,6 @@ def store_secret(service: str, username: str, secret: str) -> None:
 
 def get_secret(service: str, username: str) -> str | None:
     """Return the secret stored at (*service*, *username*) or ``None``.
-
     Returns ``None`` for "not found"; raises only on backend
     unavailability or unexpected backend errors.
     """
@@ -172,7 +166,6 @@ def get_secret(service: str, username: str) -> str | None:
 
 def delete_secret(service: str, username: str) -> None:
     """Delete the secret at (*service*, *username*).
-
     Silently no-ops on "not found" (the desired user-facing behaviour
     for a delete) so callers can call ``delete_secret`` defensively.
     """

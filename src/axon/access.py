@@ -11,7 +11,6 @@ __all__ = ["check_write_allowed", "is_mounted_share_path"]
 
 def is_mounted_share_path(project_name: str) -> bool:
     """Return True when *project_name* refers to a received share mount.
-
     The canonical format is ``mounts/<mount_name>``.
     """
     if project_name == "default":
@@ -26,13 +25,10 @@ def check_write_allowed(
     is_mounted: bool,
 ) -> None:
     """Raise ``PermissionError`` if a write operation is not permitted.
-
     Checks (in order):
-
     1. Read-only merged scope (``@projects`` / ``@mounts`` / ``@store``)
     2. Mounted share — always read-only regardless of ``write_access`` flag
     3. Project maintenance state (``readonly``, ``offline``, ``draining``)
-
     Args:
         operation:      Human-readable name of the attempted operation (e.g. "ingest").
         active_project: Name of the currently active project.

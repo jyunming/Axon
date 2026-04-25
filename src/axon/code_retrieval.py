@@ -32,7 +32,6 @@ _CODE_EXTENSIONS: frozenset[str] = frozenset(
 
 def _extract_code_query_tokens(query: str) -> frozenset[str]:
     """Extract identifier-like tokens from a query for lexical code matching.
-
     Returns a frozenset of lowercase token strings covering:
     - CamelCase identifiers and their split parts
     - snake_case parts
@@ -47,37 +46,30 @@ def _extract_code_query_tokens(query: str) -> frozenset[str]:
         result = bridge.extract_code_query_tokens(query)
         if result is not None:
             return result
-
     tokens: set[str] = set()
-
     # Basename references: strip known code extensions
     for ext in _CODE_EXTENSIONS:
         for m in re.finditer(r"\b(\w+)" + re.escape(ext) + r"\b", query):
             tokens.add(m.group(1).lower())
-
     # Qualified names: foo.bar → {"foo", "bar", "foo.bar"}
     for m in re.finditer(r"\b([A-Za-z_]\w+)\.([A-Za-z_]\w+)\b", query):
         tokens.add(m.group(1).lower())
         tokens.add(m.group(2).lower())
         tokens.add((m.group(1) + "." + m.group(2)).lower())
-
     # All identifier-like tokens (length >= 4)
     for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]{3,}\b", query):
         word = m.group(0)
         tokens.add(word.lower())
-
         # CamelCase split: CodeAwareSplitter → ["Code", "Aware", "Splitter"]
         camel_parts = re.findall(r"[A-Z][a-z0-9]*|[a-z][a-z0-9]*", word)
         for part in camel_parts:
             if len(part) >= 3:
                 tokens.add(part.lower())
-
         # snake_case split: _split_python_ast → ["split", "python", "ast"]
         if "_" in word:
             for part in word.split("_"):
                 if len(part) >= 3:
                     tokens.add(part.lower())
-
     return frozenset(tokens)
 
 
@@ -103,22 +95,18 @@ def _looks_like_code_query(query: str) -> bool:
 
 def _build_code_bm25_queries(query: str, query_tokens: frozenset) -> list[str]:
     """Build deterministic BM25-only sub-queries from code identifier tokens.
-
     Expands CamelCase, snake_case, dotted module paths, and filename stems
     into short search strings that target BM25's lexical index.  These are
     *not* fed to vector search — they are added to the BM25 pool only.
-
     Returns a list of query strings (may be empty if no useful variants found).
     """
     variants: list[str] = []
     seen: set[str] = {query.lower()}
-
     for tok in sorted(query_tokens):  # deterministic order
         if len(tok) < 4:
             continue
         if tok in seen:
             continue
-
         # CamelCase → spaced words (e.g. "CodeAwareSplitter" → "Code Aware Splitter")
         camel_parts = re.findall(r"[A-Z][a-z0-9]*|[a-z][a-z0-9]*", tok)
         if len(camel_parts) > 1:
@@ -126,7 +114,6 @@ def _build_code_bm25_queries(query: str, query_tokens: frozenset) -> list[str]:
             if spaced.lower() not in seen:
                 variants.append(spaced)
                 seen.add(spaced.lower())
-
         # snake_case → spaced words (e.g. "split_python_ast" → "split python ast")
         if "_" in tok:
             parts = [p for p in tok.split("_") if len(p) >= 2]
@@ -135,19 +122,16 @@ def _build_code_bm25_queries(query: str, query_tokens: frozenset) -> list[str]:
                 if spaced not in seen:
                     variants.append(spaced)
                     seen.add(spaced)
-
         # Dotted module path → base name (e.g. "axon.loaders" → "loaders")
         if "." in tok:
             base = tok.rsplit(".", 1)[-1]
             if len(base) >= 4 and base not in seen:
                 variants.append(base)
                 seen.add(base)
-
         # Raw token itself as a BM25 exact-ish search
         if tok not in seen:
             variants.append(tok)
             seen.add(tok)
-
     return variants
 
 
@@ -245,7 +229,6 @@ _RETRIEVAL_FEATURES: dict[str, dict] = {
 @dataclass
 class CodeRetrievalDiagnostics:
     """Stable external contract for code retrieval observability.
-
     Versioned and serializable. Returned in API responses (include_diagnostics=True)
     and benchmark output. Schema version bumps when field semantics change.
     """
@@ -305,7 +288,6 @@ class CodeRetrievalDiagnostics:
 @dataclass
 class CodeRetrievalTrace:
     """Internal debug trace — volatile, not returned in API by default.
-
     Contains per-result score breakdowns, channel raw counts, query variants,
     and diversity-cap deferral details. Use for offline tuning only.
     """
@@ -332,10 +314,8 @@ def _classify_retrieval_failure(
     expected_symbol: str | None = None,
 ) -> list[str]:
     """Classify automatable retrieval failure modes for CI benchmarking.
-
     Returns a list of applicable labels. Labels that require ground truth
     (e.g. synthesis failures) are NOT included — those are benchmark-only.
-
     Labels:
     - ``exact_symbol_missed``: query had symbol tokens but none matched result symbol_names
     - ``right_file_wrong_block``: expected_symbol's file appeared but not the exact symbol chunk
@@ -344,9 +324,7 @@ def _classify_retrieval_failure(
     """
     if not results:
         return []
-
     labels: list[str] = []
-
     result_symbols = [(r.get("metadata", {}).get("symbol_name") or "").lower() for r in results]
     result_sources = [
         (
@@ -354,7 +332,6 @@ def _classify_retrieval_failure(
         ).lower()
         for r in results
     ]
-
     # exact_symbol_missed
     code_tokens = frozenset(t for t in query_tokens if len(t) >= 3)
     if code_tokens:
@@ -363,7 +340,6 @@ def _classify_retrieval_failure(
         )
         if not any_symbol_hit:
             labels.append("exact_symbol_missed")
-
     # right_file_wrong_block
     if expected_symbol:
         exp_lower = expected_symbol.lower()
@@ -371,7 +347,6 @@ def _classify_retrieval_failure(
         sym_hit = any(exp_lower in sym for sym in result_symbols if sym)
         if file_hit and not sym_hit:
             labels.append("right_file_wrong_block")
-
     # too_many_broad_chunks
     broad = sum(
         1
@@ -381,11 +356,9 @@ def _classify_retrieval_failure(
     )
     if broad / len(results) > 0.5:
         labels.append("too_many_broad_chunks")
-
     # fallback_chunk_involved
     if any(r.get("metadata", {}).get("is_fallback") for r in results):
         labels.append("fallback_chunk_involved")
-
     return labels
 
 
@@ -398,17 +371,14 @@ class CodeRetrievalMixin:
 
     def _build_code_doc_bridge(self, prose_chunks: list[dict]) -> None:
         """Phase 3: add MENTIONED_IN edges from code symbol nodes to prose chunks.
-
         Scans prose chunk text for occurrences of known code symbol/file names.
         Only matches names >= 4 chars to avoid false positives on short tokens.
         """
         nodes: dict = self._code_graph.get("nodes", {})
         if not nodes:
             return
-
         edges_list: list = self._code_graph.setdefault("edges", [])
         existing_edges: set = {(e["source"], e["target"], e["edge_type"]) for e in edges_list}
-
         # Build lookup: name → node_id  (symbols + file basenames/stems)
         sym_lookup: dict[str, str] = {}
         for node_id, node in nodes.items():
@@ -419,7 +389,6 @@ class CodeRetrievalMixin:
                 stem = os.path.splitext(name)[0]
                 if len(stem) >= 4:
                     sym_lookup[stem] = node_id
-
         # Try Rust fast-path
         from axon.rust_bridge import get_rust_bridge
 
@@ -430,7 +399,6 @@ class CodeRetrievalMixin:
             if new_edges is not None:
                 edges_list.extend(new_edges)
                 return
-
         for chunk in prose_chunks:
             text = chunk.get("text", "")
             chunk_id = chunk.get("id", "")
@@ -461,7 +429,6 @@ class CodeRetrievalMixin:
                 self._symbol_entries,
                 self._symbol_exact,
             )
-
         flat_docs: list[dict] = [doc for corpus in corpora for doc in corpus]
         entries: list[tuple[dict, dict, str, str]] = []
         exact: dict[str, list[tuple[dict, str]]] = {}
@@ -476,7 +443,6 @@ class CodeRetrievalMixin:
                 exact.setdefault(sym, []).append((doc, "symbol_name"))
             if qname:
                 exact.setdefault(qname, []).append((doc, "qualified_name"))
-
         self._symbol_cache_signature = signature
         self._symbol_flat_docs = flat_docs
         self._symbol_entries = entries
@@ -492,7 +458,6 @@ class CodeRetrievalMixin:
         trace: CodeRetrievalTrace | None = None,
     ) -> list[dict]:
         """Re-score code results by lexical identifier match, then enforce per-file diversity.
-
         Only results with ``metadata.source_class == "code"`` are re-scored; all
         others pass through unchanged.  If no query tokens match any result, the
         original scores are preserved (no degradation on non-identifier queries).
@@ -500,12 +465,9 @@ class CodeRetrievalMixin:
         """
         if cfg is None:
             cfg = self.config
-
         if not query_tokens:
             return results
-
         long_tokens = frozenset(t for t in query_tokens if len(t) >= 4)
-
         # Try Rust acceleration for the score-computation kernel.
         # Falls back to Python when the compiled extension is unavailable or raises.
         _rust_scores: list[float] | None = None
@@ -517,7 +479,6 @@ class CodeRetrievalMixin:
             _rust_result = _bridge.code_lexical_scores(results, list(query_tokens))
             if _rust_result is not None:
                 _rust_scores, _rust_max_lex = _rust_result
-
         lex_scores: list[float] = []
         score_signals: list[dict] = []  # per-result signal breakdown for trace
         if _rust_scores is not None:
@@ -532,7 +493,6 @@ class CodeRetrievalMixin:
                     lex_scores.append(0.0)
                     score_signals.append({})
                     continue
-
                 score = 0.0
                 signals: dict = {}
                 sym_name = (meta.get("symbol_name") or "").lower()
@@ -541,7 +501,6 @@ class CodeRetrievalMixin:
                 basename = os.path.splitext(os.path.basename(file_path))[0].lower()
                 qualified = f"{basename}.{sym_name}" if sym_name and basename else ""
                 text_lower = r.get("text", "").lower()
-
                 # Exact symbol name match
                 if sym_name and sym_name in query_tokens:
                     score += 1.0
@@ -553,28 +512,23 @@ class CodeRetrievalMixin:
                             score += 0.5
                             signals["symbol_hit"] = "partial"
                             break
-
                 # Basename match
                 if basename and basename in query_tokens:
                     score += 0.4
                     signals["file_hit"] = True
-
                 # Qualified name match
                 if qualified and qualified in query_tokens:
                     score += 1.0
                     signals["qualified_hit"] = True
-
                 # Token-in-text hits (capped)
                 text_hits = sum(1 for tok in long_tokens if tok in text_lower)
                 score += min(text_hits * 0.08, 0.32)
                 if text_hits:
                     signals["text_hits"] = text_hits
-
                 # Multiplier for function/method results that matched anything
                 if score > 0.0 and sym_type in {"function", "method"}:
                     score *= 1.1
                     signals["sym_type_boost"] = True
-
                 # Line-range tightness tie-breaker: reward narrowly scoped chunks.
                 # +0.05 for ≤30 lines, +0.02 for ≤80 lines (secondary signal only).
                 start_line = meta.get("start_line")
@@ -586,18 +540,14 @@ class CodeRetrievalMixin:
                         signals["line_range_tight"] = span
                     elif span <= 80:
                         score += 0.02
-
                 lex_scores.append(score)
                 score_signals.append(signals)
-
             max_lex = max(lex_scores) if lex_scores else 0.0
         if max_lex == 0.0:
             # No matches — skip re-scoring entirely
             return results
-
         if diagnostics is not None:
             diagnostics.boost_applied = True
-
         # Blend: normalize lex scores then mix with original score
         boosted: list[dict] = []
         for r, lex, signals in zip(results, lex_scores, score_signals):
@@ -617,7 +567,6 @@ class CodeRetrievalMixin:
                     }
                 )
             boosted.append(r)
-
         # Per-file diversity cap
         cap = cfg.code_max_chunks_per_file
         seen_files: dict[str, int] = {}
@@ -631,11 +580,9 @@ class CodeRetrievalMixin:
                 seen_files[fp] = count + 1
             else:
                 deferred.append(r)
-
         if trace is not None:
             trace.diversity_cap_deferrals = len(deferred)
             trace.deferred_chunk_ids = [r.get("id", "") for r in deferred]
-
         return diverse + deferred
 
     def _symbol_channel_search(
@@ -645,22 +592,18 @@ class CodeRetrievalMixin:
         filters: dict = None,
     ) -> list[dict]:
         """Dedicated symbol_name + qualified_name retrieval channel.
-
         Scans the in-memory BM25 corpus for chunks whose ``symbol_name`` or
         ``qualified_name`` metadata field exactly (or partially) matches any
         query token.  Returns scored result dicts with ``metadata.channel``
         set to ``"symbol_name"`` or ``"qualified_name"``.
-
         Handles both ``BM25Retriever`` (single corpus) and
         ``MultiBM25Retriever`` (fan-out across projects).
         """
         if not self.bm25 or not query_tokens:
             return []
-
         long_tokens = frozenset(t for t in query_tokens if len(t) >= 3)
         if not long_tokens:
             return []
-
         # Collect all corpora (handles single and multi-project fan-out)
         if hasattr(self.bm25, "_retrievers"):
             corpora = [r.corpus for r in self.bm25._retrievers if hasattr(r, "corpus")]
@@ -668,7 +611,6 @@ class CodeRetrievalMixin:
             corpora = [self.bm25.corpus]
         else:
             return []
-
         if getattr(self.config, "symbol_index_engine", "python") == "rust":
             from axon.rust_bridge import get_rust_bridge
 
@@ -747,7 +689,6 @@ class CodeRetrievalMixin:
                     )
             elif not getattr(self.config, "rust_fallback_enabled", True):
                 return []
-
         flat_docs, entries, exact = self._get_symbol_cache(corpora)
         hits: dict[str, dict] = {}  # id → best result
         # Fast path: exact matches from cached map (score=1.0)
@@ -763,14 +704,12 @@ class CodeRetrievalMixin:
                     result["metadata"] = dict(meta)
                     result["metadata"]["channel"] = channel
                     hits[doc_id] = result
-
         # If exact hits already satisfy top_k, partial matches cannot outrank them.
         if len(hits) < top_k:
             for doc, meta, sym, qname in entries:
                 # Apply metadata filters if provided
                 if filters and not all(meta.get(k) == v for k, v in filters.items()):
                     continue
-
                 # Score: partial = 0.6 only (exact handled in fast path)
                 best_score = 0.0
                 best_channel = "symbol_name"
@@ -783,7 +722,6 @@ class CodeRetrievalMixin:
                         best_channel = "qualified_name"
                 if best_score == 0.0:
                     continue
-
                 doc_id = doc.get("id", "")
                 if doc_id not in hits:
                     result = dict(doc)
@@ -791,7 +729,6 @@ class CodeRetrievalMixin:
                     result["metadata"] = dict(meta)
                     result["metadata"]["channel"] = best_channel
                     hits[doc_id] = result
-
         ranked = sorted(hits.values(), key=lambda x: x["score"], reverse=True)
         return ranked[:top_k]
 
@@ -799,7 +736,6 @@ class CodeRetrievalMixin:
         self, query: str, results: list[dict], cfg=None
     ) -> tuple[list[dict], list[str]]:
         """Expand retrieval results using structural code graph traversal.
-
         Matches query tokens against code node names, then follows CONTAINS,
         IMPORTS, and MENTIONED_IN edges to fetch related chunks.
         """
@@ -807,7 +743,6 @@ class CodeRetrievalMixin:
         edges_list: list = self._code_graph.get("edges", [])
         if not nodes:
             return results, []
-
         # Build edge index
         outgoing: dict[str, list[tuple[str, str]]] = {}
         incoming: dict[str, list[tuple[str, str]]] = {}
@@ -815,10 +750,8 @@ class CodeRetrievalMixin:
             src, tgt, et = edge["source"], edge["target"], edge["edge_type"]
             outgoing.setdefault(src, []).append((tgt, et))
             incoming.setdefault(tgt, []).append((src, et))
-
         # Extract tokens from query (identifier-like words, >= 3 chars)
         query_tokens: set[str] = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_.]{2,}\b", query))
-
         # Match against node names
         matched_node_ids: set[str] = set()
         matched_names: list[str] = []
@@ -828,20 +761,16 @@ class CodeRetrievalMixin:
                 matched_node_ids.add(node_id)
                 if name not in matched_names:
                     matched_names.append(name)
-
         # Also match file_path from already-retrieved results
         for r in results:
             fp = r.get("metadata", {}).get("file_path", "")
             if fp and fp in nodes:
                 matched_node_ids.add(fp)
-
         if not matched_node_ids:
             return results, []
-
         # Collect extra chunk_ids via 1-hop traversal
         already_ids: set[str] = {r["id"] for r in results}
         extra_chunk_ids: set[str] = set()
-
         for node_id in list(matched_node_ids):
             # Own chunk_ids
             for cid in nodes[node_id].get("chunk_ids", []):
@@ -860,14 +789,11 @@ class CodeRetrievalMixin:
                     if src_node:
                         for cid in src_node.get("chunk_ids", [])[:2]:
                             extra_chunk_ids.add(cid)
-
         extra_chunk_ids -= already_ids
         if not extra_chunk_ids:
             return results, matched_names
-
         budget = getattr(cfg, "graph_rag_budget", 3)
         fetch_ids = list(extra_chunk_ids)[: budget * 2]
-
         try:
             extra_docs = self.vector_store.get_by_ids(fetch_ids)
             for doc in extra_docs:
@@ -880,5 +806,4 @@ class CodeRetrievalMixin:
                         break
         except Exception:
             pass
-
         return results, matched_names

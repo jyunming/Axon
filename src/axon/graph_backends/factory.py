@@ -3,11 +3,9 @@
 Usage::
 
     from axon.graph_backends.factory import get_graph_backend
-
     backend = get_graph_backend(brain)
 
 The backend type is determined by ``brain.config.graph_backend``:
-
   - ``"graphrag"`` (default) → :class:`GraphRagBackend`
   - ``"dynamic_graph"`` → :class:`DynamicGraphBackend` (SQLite-WAL, v0.3)
 
@@ -42,25 +40,20 @@ def _registry() -> dict[str, type]:
 
 def get_graph_backend(brain: Any) -> GraphBackend:
     """Return a GraphBackend instance appropriate for *brain*'s configuration.
-
     Args:
         brain: An ``AxonBrain`` instance.  ``brain.config.graph_backend``
                selects the backend type (default: ``"graphrag"``).
-
     Returns:
         A :class:`GraphBackend`-conforming instance wrapping *brain*.
-
     Raises:
         ValueError: If ``brain.config.graph_backend`` names an unknown backend.
     """
     backend_id: str = (
         getattr(getattr(brain, "config", None), "graph_backend", "graphrag") or "graphrag"
     )
-
     reg = _registry()
     cls = reg.get(backend_id)
     if cls is None:
         valid = sorted(reg)
         raise ValueError(f"Unknown graph_backend '{backend_id}'. Valid options: {valid}")
-
     return cls(brain)

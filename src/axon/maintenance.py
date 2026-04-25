@@ -12,15 +12,12 @@ __all__ = ["apply_maintenance_state", "get_maintenance_status"]
 
 def apply_maintenance_state(name: str, state: str) -> dict:
     """Persist *state* on *name* and synchronise the lease registry.
-
     When *state* is ``"draining"`` the registry drain is started so that
     in-flight writes can complete before the project goes fully read-only.
     When *state* is ``"normal"`` any active drain is stopped.
-
     Returns:
         A dict with keys ``status``, ``project``, ``maintenance_state``,
         ``active_leases``, and ``epoch``.
-
     Raises:
         ValueError: If *state* is invalid or *name* does not exist.
     """
@@ -48,7 +45,6 @@ def apply_maintenance_state(name: str, state: str) -> dict:
 
 def get_maintenance_status(name: str) -> dict:
     """Return the current maintenance state and registry snapshot for *name*.
-
     Returns:
         A dict with keys ``project``, ``maintenance_state``, ``active_leases``,
         ``epoch``, and ``draining``.

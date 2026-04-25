@@ -621,14 +621,12 @@ def dispatch_tool(
     confirm_cb: Callable[[str], bool] | None = None,
 ) -> str:
     """Execute a single tool call and return a human-readable result string.
-
     Args:
         brain: AxonBrain instance.
         tool_name: Name of the tool to run (must be in REPL_TOOLS).
         args: Tool arguments parsed from the LLM response.
         confirm_cb: Optional callable(message) -> bool for destructive ops.
             If None, destructive tools are blocked.
-
     Returns:
         A string summary of the tool result, suitable for feeding back to the LLM.
     """
@@ -646,7 +644,6 @@ def dispatch_tool(
         }.get(tool_name, f"Run {tool_name}?")
         if not confirm_cb(msg):
             return f"🚫 '{tool_name}' cancelled by user."
-
     try:
         if tool_name == "ingest_path":
             return _tool_ingest_path(brain, args)
@@ -714,7 +711,6 @@ def _make_vision_fn(brain):
     llm = getattr(brain, "llm", None)
     if llm is None or not callable(getattr(llm, "complete_with_image", None)):
         return None
-
     _ocr_prompt = (
         "You are an OCR engine. Extract ALL text from this image exactly as it appears. "
         "Preserve paragraph structure. Output only the extracted text with no commentary."
@@ -738,15 +734,12 @@ def _tool_ingest_path(brain, args: dict) -> str:
     path = args.get("path", "").strip()
     if not path:
         return "No path provided."
-
     logger.info(
         "ingest_path called: path=%r project=%r cwd=%r", path, args.get("project"), os.getcwd()
     )
-
     # B1: Route URLs to URLLoader rather than the file-system glob
     if path.startswith("http://") or path.startswith("https://"):
         return _tool_ingest_url(brain, {"url": path, "project": args.get("project", "")})
-
     # Expand ~ and resolve relative paths: try CWD first, then home directory.
     # This handles cases where the user typed @Downloads/file.pdf (relative to home)
     # and the LLM passed it without the leading ~.
@@ -765,13 +758,10 @@ def _tool_ingest_path(brain, args: dict) -> str:
                 logger.info("ingest_path resolved to home fallback: %r", path)
     else:
         path = str(_p)
-
     project = args.get("project", "").strip()
     if project:
         brain.switch_project(project)
-
     brain._assert_write_allowed("ingest")
-
     matched = sorted(_glob.glob(path, recursive=True))
     logger.info("ingest_path glob matched %d file(s): %s", len(matched), matched[:5])
     if not matched:
@@ -780,7 +770,6 @@ def _tool_ingest_path(brain, args: dict) -> str:
         else:
             logger.warning("ingest_path: no files matched %r (cwd=%r)", path, os.getcwd())
             return f"No files matched: {path}"
-
     force_reingest = bool(args.get("force", False))
     _vision_fn = _make_vision_fn(brain)
     loader_mgr = DirectoryLoader(vision_fn=_vision_fn)
@@ -838,26 +827,21 @@ def _tool_ingest_path(brain, args: dict) -> str:
                             ingested += 1
             else:
                 skipped += 1
-
     if ingested == 0 and empty_content > 0:
         return (
             f"⚠️ {empty_content} file(s) loaded but contained no extractable text. "
             f"This usually means the file is an image-based or scanned PDF that requires OCR. "
             f"Try converting the PDF to text first, or use a document with embedded text."
         )
-
     if ingested == 0 and skipped > 0:
         return f"No supported files ingested (skipped {skipped} unsupported file type(s))."
-
     active_project = brain._active_project
-
     if ingested == 0 and dedup_skipped > 0:
         return (
             f"⚠️ All {dedup_skipped} file(s) were already in the knowledge base "
             f"(deduplication skipped them). Use list_knowledge to see existing documents. "
             f"If the file is missing from list_knowledge, re-run with force=true to bypass deduplication."
         )
-
     result = (
         f"Ingested {ingested} file(s) / director{'y' if ingested == 1 else 'ies'} "
         f"({total_chunks} chunk(s)), skipped {skipped} (unsupported) "
@@ -894,17 +878,14 @@ def _tool_search_knowledge(brain, args: dict) -> str:
     if not query:
         return "No query provided."
     top_k = int(args.get("top_k", 5))
-
     project = args.get("project", "").strip()
     prev = brain._active_project if project else None
     if project:
         brain.switch_project(project)
-
     filters = args.get("filters") or {}
     overrides: dict = {"top_k": top_k}
     if filters:
         overrides["where"] = filters
-
     try:
         results, _diag, _trace = brain.search_raw(query, overrides=overrides)
     except Exception as exc:
@@ -912,7 +893,6 @@ def _tool_search_knowledge(brain, args: dict) -> str:
     finally:
         if prev is not None and prev != brain._active_project:
             brain.switch_project(prev)
-
     if not results:
         return "No results found."
     lines = [f"{len(results)} result(s) for '{query}':"]
@@ -932,9 +912,7 @@ def _tool_add_text(brain, args: dict) -> str:
     project = args.get("project", "").strip()
     if project:
         brain.switch_project(project)
-
     brain._assert_write_allowed("ingest")
-
     text = args.get("text", "").strip()
     if not text:
         return "No text provided."
@@ -949,15 +927,12 @@ def _tool_add_text(brain, args: dict) -> str:
 def _tool_purge_source(brain, args: dict) -> str:
     """Remove stale content hashes and optionally vectors for a source path."""
     brain._assert_write_allowed("purge_source")
-
     source = args.get("source", "").strip()
     if not source:
         return "No source provided."
-
     also_delete_vectors = bool(args.get("also_delete_vectors", True))
     removed_vectors = 0
     removed_hashes = 0
-
     # Step 1: Delete vectors if requested (and source is in the doc index)
     if also_delete_vectors:
         all_docs = brain.list_documents()
@@ -971,7 +946,6 @@ def _tool_purge_source(brain, args: dict) -> str:
                 if brain._entity_graph:
                     brain._prune_entity_graph(set(ids_to_delete))
                 removed_vectors = len(ids_to_delete)
-
     # Step 2: Recompute chunk hashes from the source file and remove from hash store
     import os
 
@@ -983,7 +957,6 @@ def _tool_purge_source(brain, args: dict) -> str:
             if os.path.exists(candidate):
                 abs_path = os.path.abspath(candidate)
                 break
-
     if os.path.exists(abs_path):
         try:
             loader_mgr = DirectoryLoader(vision_fn=_make_vision_fn(brain))
@@ -1008,39 +981,32 @@ def _tool_purge_source(brain, args: dict) -> str:
                 brain._save_hash_store()
         except Exception as e:
             logger.debug("purge_source hash removal error: %s", e)
-
     parts = []
     if removed_vectors:
         parts.append(f"deleted {removed_vectors} vector chunk(s)")
     if removed_hashes:
         parts.append(f"purged {removed_hashes} stale content hash(es)")
-
     if not parts:
         return (
             f"⚠️ Nothing found to purge for source '{source}'. "
             "Verify the source name matches exactly what list_knowledge shows, "
             "and that the file path is accessible."
         )
-
     return f"✓ Purged '{source}': {', '.join(parts)}. " "You can now re-ingest the file normally."
 
 
 def _tool_delete_documents(brain, args: dict) -> str:
     brain._assert_write_allowed("delete")
-
     source = args.get("source", "").strip()
     if not source:
         return "No source provided."
-
     all_docs = brain.list_documents()
     target = [d for d in all_docs if d["source"] == source]
     if not target:
         return f"No documents found with source '{source}'."
-
     ids_to_delete = [cid for d in target for cid in d.get("doc_ids", [])]
     if not ids_to_delete:
         return f"Source '{source}' found but has no chunk IDs."
-
     # Delete from vector store
     brain._own_vector_store.delete_by_ids(ids_to_delete)
     # Delete from BM25 index
@@ -1049,7 +1015,6 @@ def _tool_delete_documents(brain, args: dict) -> str:
     # Prune entity graph (no-op if graph is empty)
     if brain._entity_graph:
         brain._prune_entity_graph(set(ids_to_delete))
-
     # Purge content hashes so the source can be re-ingested without force=true.
     # The hashes are keyed by chunk content, not by ID, so we retrieve the chunk
     # texts from the doc index metadata if available, else use the stored IDs as
@@ -1069,7 +1034,6 @@ def _tool_delete_documents(brain, args: dict) -> str:
             brain._save_hash_store()
         except Exception:
             pass
-
     note = f" (purged {removed_hashes} content hash(es))" if removed_hashes else ""
     return f"Deleted {len(ids_to_delete)} chunk(s) from source '{source}'.{note}"
 
@@ -1078,7 +1042,6 @@ def _tool_clear_project(brain) -> str:
     from axon.collection_ops import clear_active_project
 
     brain._assert_write_allowed("clear")
-
     project = brain._active_project
     clear_active_project(brain)
     return f"Cleared all documents from project '{project}'."
@@ -1143,21 +1106,16 @@ def _tool_ingest_url(brain, args: dict) -> str:
         return "No URL provided."
     if not (url.startswith("http://") or url.startswith("https://")):
         return f"Invalid URL — must start with http:// or https://: {url}"
-
     project = args.get("project", "").strip()
     if project:
         brain.switch_project(project)
-
     brain._assert_write_allowed("ingest")
-
     try:
         docs = URLLoader().load(url)
     except Exception as exc:
         return f"Failed to fetch '{url}': {exc}"
-
     if not docs:
         return f"No content extracted from '{url}'."
-
     brain.ingest(docs)
     active_project = brain._active_project
     return f"Ingested {len(docs)} chunk(s) from '{url}' into project '{active_project}'."
@@ -1205,13 +1163,10 @@ def _tool_ingest_texts(brain, args: dict) -> str:
     items = args.get("docs", [])
     if not items:
         return "No text snippets provided."
-
     project = args.get("project", "").strip()
     if project:
         brain.switch_project(project)
-
     brain._assert_write_allowed("ingest")
-
     loader = SmartTextLoader()
     all_docs: list[dict] = []
     for item in items:
@@ -1223,10 +1178,8 @@ def _tool_ingest_texts(brain, args: dict) -> str:
         for d in loader.load_text(text, source=source):
             d["metadata"].update(extra_meta)
             all_docs.append(d)
-
     if not all_docs:
         return "All provided snippets were empty."
-
     brain.ingest(all_docs)
     active_project = brain._active_project
     return (
@@ -1242,7 +1195,6 @@ def _tool_get_stale_docs(brain, args: dict) -> str:
     doc_versions = getattr(brain, "_doc_versions", {}) or {}
     if not doc_versions:
         return "No ingestion history tracked in this session."
-
     cutoff = datetime.now(timezone.utc).timestamp() - days * 86_400
     stale: list[str] = []
     for source, info in doc_versions.items():
@@ -1256,7 +1208,6 @@ def _tool_get_stale_docs(brain, args: dict) -> str:
         if ts < cutoff:
             age = round((datetime.now(timezone.utc).timestamp() - ts) / 86_400, 1)
             stale.append(f"  {source}  (last ingested {age} day(s) ago)")
-
     if not stale:
         return f"No stale documents found (threshold: {days} day(s))."
     return f"{len(stale)} stale source(s) (>{days} days):\n" + "\n".join(stale)
@@ -1309,22 +1260,17 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
     project = args.get("project", "").strip()
     if project:
         brain.switch_project(project)
-
     brain._assert_write_allowed("ingest")
-
     doc_versions = getattr(brain, "_doc_versions", {}) or {}
     if not doc_versions:
         return "No ingestion history tracked — nothing to refresh."
-
     loader_mgr = DirectoryLoader(vision_fn=_make_vision_fn(brain))
     refreshed, skipped, errors = 0, 0, 0
-
     for source, info in list(doc_versions.items()):
         if not isinstance(info, dict):
             continue
         if not _os.path.isfile(source):
             continue
-
         stored_hash = info.get("content_hash", "")
         try:
             ext = _os.path.splitext(source)[1].lower()
@@ -1351,7 +1297,6 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
         except Exception as exc:
             logger.debug("refresh_ingest error for %s: %s", source, exc)
             errors += 1
-
     return (
         f"Refresh complete: {refreshed} file(s) re-ingested, "
         f"{skipped} unchanged, {errors} error(s)."
@@ -1402,9 +1347,7 @@ def _tool_run_shell(args: dict) -> str:
     command = args.get("command", "").strip()
     if not command:
         return "⚠️  run_shell: no command provided."
-
     timeout = min(int(args.get("timeout", 30)), 120)
-
     # All output uses plain print + ANSI — routes through patch_stdout correctly
     # from the agent thread. rich Console buffers and does not go through the hook.
     _YEL = "\x1b[1;33m"  # bold yellow — Bash label
@@ -1413,7 +1356,6 @@ def _tool_run_shell(args: dict) -> str:
     _RED = "\x1b[1;31m"  # bold red    — failure
     _DIM = "\x1b[2m"
     _RST = "\x1b[0m"
-
     print(f"\n  {_YEL}Bash{_RST}  {_DIM}$ {command}{_RST}")
 
     def _p(line: str, color: str = "") -> None:
@@ -1443,7 +1385,6 @@ def _tool_run_shell(args: dict) -> str:
         elif not result.stdout and not has_stderr:
             parts.append("(exit 0 — command succeeded, no output)")
         output = "\n".join(parts)
-
         if not success:
             icon, clr = "✗", _RED
         elif has_stderr:
@@ -1457,7 +1398,6 @@ def _tool_run_shell(args: dict) -> str:
                 _p(f"     {line}")
         else:
             _p(f"  {icon}", clr)
-
         sys.stdout.flush()
         return output
     except subprocess.TimeoutExpired:
@@ -1550,7 +1490,6 @@ def run_agent_loop(
     max_steps: int = 8,
 ) -> str:
     """Run the agentic tool-calling loop and return the final text response.
-
     Args:
         llm: OpenLLM instance.
         brain: AxonBrain instance.
@@ -1561,7 +1500,6 @@ def run_agent_loop(
         step_cb: Optional callable(tool_name, result) called after each tool step.
             Surfaces can use this to render intermediate progress cards.
         max_steps: Maximum tool-call iterations before forcing a plain text response.
-
     Returns:
         Final assistant text response.
     """
@@ -1569,12 +1507,10 @@ def run_agent_loop(
     messages = list(chat_history)
     original_prompt = prompt
     current_prompt = prompt
-
     # Track (tool_name, frozen_args) pairs to detect identical retry loops.
     # If the same tool is called with the same arguments twice in a row, stop.
     _last_call_sig: str | None = None
     _identical_retries = 0
-
     for _step in range(max_steps):
         result = llm.complete_with_tools(
             current_prompt,
@@ -1582,7 +1518,6 @@ def run_agent_loop(
             system_prompt=_AGENT_SYSTEM_PROMPT,
             chat_history=messages,
         )
-
         if isinstance(result, str):
             # Plain text response — strip any leaked XML or JSON tool-call syntax and return
             import re as _re
@@ -1590,7 +1525,6 @@ def run_agent_loop(
             result = _re.sub(r"<tool_calls?>.*?</tool_calls?>", "", result, flags=_re.DOTALL)
             result = _re.sub(r'\{[\s]*"tool_calls"\s*:.*\}', "", result, flags=_re.DOTALL).strip()
             return result
-
         # result is a list of ToolCall namedtuples
         tool_results: list[str] = []
         tool_calls_raw: list[tuple] = []
@@ -1616,7 +1550,6 @@ def run_agent_loop(
             else:
                 _last_call_sig = _sig
                 _identical_retries = 0
-
             tool_result = dispatch_tool(brain, tc.name, tc.args, confirm_cb=confirm_cb)
             logger.debug("Agent tool %s(%s) → %s", tc.name, tc.args, tool_result[:100])
             tool_calls_raw.append(
@@ -1628,7 +1561,6 @@ def run_agent_loop(
                     step_cb(tc.name, tool_result)
                 except Exception:
                     pass
-
         # Feed tool results back; keep original user intent visible.
         # __tool_calls__ stores raw (name, args, result) for providers (e.g. Gemini) that
         # need native function_call / function_response parts in their conversation history.
@@ -1646,7 +1578,6 @@ def run_agent_loop(
             "Confirm to the user what was accomplished. "
             "Do NOT ask for information that was already provided in the original request."
         )
-
     # Exhausted max_steps — ask the LLM to summarise without tools
     final = llm.complete(
         f"Please summarise what was accomplished and provide a final response. "

@@ -60,7 +60,6 @@ def _total_tokens(chunks: list[dict]) -> int:
 @dataclass
 class CompressionResult:
     """Output of :class:`ContextCompressor.compress`.
-
     Carries the (possibly compressed) chunks plus telemetry fields that map
     directly to the diagnostics contract (Epic 3, Story 3.3).
     """
@@ -80,11 +79,9 @@ class CompressionResult:
 
 class ContextCompressor:
     """Centralised context-compression gateway (Story 3.1).
-
     Instantiate once per query (or cache on the router instance).
     Thread-safe: ``compress()`` uses an internal ThreadPoolExecutor for the
     sentence strategy; LLMLingua is single-threaded by default.
-
     Parameters
     ----------
     llm:
@@ -107,7 +104,6 @@ class ContextCompressor:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     def compress(
         self,
         query: str,
@@ -116,7 +112,6 @@ class ContextCompressor:
         token_budget: int = 0,
     ) -> CompressionResult:
         """Compress *chunks* and return a :class:`CompressionResult`.
-
         Parameters
         ----------
         query:
@@ -138,10 +133,8 @@ class ContextCompressor:
                 post_tokens=0,
                 compression_ratio=1.0,
             )
-
         pre_tokens = _total_tokens(chunks)
         fallback_reason = ""
-
         if strategy == "llmlingua":
             compressed, fallback_reason = self._llmlingua_compress(query, chunks, token_budget)
             if fallback_reason:
@@ -156,10 +149,8 @@ class ContextCompressor:
             # "none" or unknown
             compressed = chunks
             strategy_used = "none"
-
         post_tokens = _total_tokens(compressed)
         ratio = round(post_tokens / pre_tokens, 4) if pre_tokens else 1.0
-
         logger.info(
             "Compression: strategy=%s pre=%d post=%d ratio=%.3f fallback=%r",
             strategy_used,
@@ -180,10 +171,8 @@ class ContextCompressor:
     # ------------------------------------------------------------------
     # Sentence-extraction strategy (Story 3.2 — re-homed from query_router)
     # ------------------------------------------------------------------
-
     def _sentence_compress(self, query: str, chunks: list[dict]) -> list[dict]:
         """Ask the LLM to extract only query-relevant sentences from each chunk.
-
         Skips web results. Falls back to the original chunk on error or if
         compression makes the text longer.  Runs chunks in parallel (≤4 workers).
         """
@@ -224,7 +213,6 @@ class ContextCompressor:
     # ------------------------------------------------------------------
     # LLMLingua strategy (Story 3.2)
     # ------------------------------------------------------------------
-
     def _llmlingua_compress(
         self,
         query: str,
@@ -232,7 +220,6 @@ class ContextCompressor:
         token_budget: int,
     ) -> tuple[list[dict], str]:
         """Token-level LLMLingua-2 compression.
-
         Returns ``(compressed_chunks, fallback_reason)``.
         On any error, falls back to sentence-extraction and records the reason.
         """
@@ -243,14 +230,12 @@ class ContextCompressor:
             logger.warning("LLMLingua unavailable, falling back to sentence: %s", exc)
             fallback = self._sentence_compress(query, chunks) if self._llm else chunks
             return fallback, reason
-
         # Determine compression rate from token_budget
         if token_budget and token_budget > 0:
             current = _total_tokens(chunks)
             rate = max(0.1, min(0.95, token_budget / current)) if current else 0.5
         else:
             rate = 0.5  # default 50 % target
-
         compressed_chunks: list[dict] = []
         for chunk in chunks:
             if chunk.get("is_web"):
@@ -279,7 +264,6 @@ class ContextCompressor:
             except Exception as exc:
                 logger.debug("LLMLingua chunk compression failed for %s: %s", chunk.get("id"), exc)
                 compressed_chunks.append(chunk)
-
         return compressed_chunks, ""
 
     def _ensure_llmlingua(self) -> Any:

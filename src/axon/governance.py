@@ -90,7 +90,6 @@ class AuditEvent:
 
 class AuditStore:
     """SQLite-backed audit event store with JSONL fallback.
-
     Thread-safe: a per-instance lock serialises all writes so concurrent
     ``append()`` calls from different threads never corrupt the database.
     WAL journal mode allows concurrent readers alongside the writer.
@@ -116,7 +115,6 @@ class AuditStore:
     # ------------------------------------------------------------------
     # Internal — SQLite
     # ------------------------------------------------------------------
-
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         # DELETE journal mode: no -wal/-shm sidecars that cloud-sync tools
@@ -159,7 +157,6 @@ class AuditStore:
     # ------------------------------------------------------------------
     # Internal — JSONL fallback
     # ------------------------------------------------------------------
-
     def _append_jsonl(self, event: AuditEvent) -> None:
         row = json.dumps(asdict(event), ensure_ascii=False)
         with self._jsonl_path.open("a", encoding="utf-8") as fh:
@@ -168,7 +165,6 @@ class AuditStore:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     def append(self, event: AuditEvent) -> None:
         """Persist an audit event (thread-safe, swallows errors silently)."""
         with self._lock:
@@ -344,7 +340,6 @@ class CopilotSession:
 
 class CopilotSessionStore:
     """In-memory tracker for active and recent Copilot bridge sessions.
-
     Keeps at most *max_recent* sessions (oldest closed ones evicted first).
     """
 
@@ -463,10 +458,8 @@ def emit(
     request_id: str = "",
 ) -> None:
     """Fire-and-forget audit event write.
-
     Spawns a daemon thread so the calling code path is never blocked.
     Errors are logged at DEBUG level and never propagate.
-
     Args:
         action:      One of :data:`VALID_ACTIONS`.
         target_type: Entity type being acted on (e.g. ``"file"``, ``"project"``).

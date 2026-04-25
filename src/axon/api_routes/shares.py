@@ -30,147 +30,97 @@ router = APIRouter()
 @router.post("/store/init")
 async def store_init(request: StoreInitRequest):
     """Initialise AxonStore at the given base path and update config.yaml."""
-
     from axon import api as _api
     from axon.main import AxonBrain, AxonConfig
     from axon.projects import ensure_user_project
 
     brain = _api.brain
-
     base = Path(request.base_path).expanduser().resolve()
-
     # Validate: reject null bytes and ensure the resolved path is absolute
     if "\x00" in str(base) or not base.is_absolute():
         raise HTTPException(
             status_code=400, detail="Invalid path: must be an absolute path with no null bytes."
         )
-
     username = getpass.getuser()
-
     store_root = base / "AxonStore"
-
     user_dir = store_root / username
-
     # Enumerate projects that will become unreachable after the path change
-
     unreachable: list[str] = []
-
     if brain:
         try:
             from axon.projects import list_projects as _list_projects
 
             old_projects = _list_projects()
-
             new_root = str(user_dir)
-
             unreachable = [
                 p["name"] for p in old_projects if not p.get("path", "").startswith(new_root)
             ]
-
         except Exception:
             pass
-
     ensure_user_project(user_dir)
-
     config = brain.config if brain else AxonConfig()
-
     config.axon_store_base = str(base)
-
     # Explicitly update in-memory derived paths; __post_init__ only runs at
-
     # construction time so we must keep these assignments here.
-
     # config.save() will NOT write these to config.yaml (axon_store_base branch
-
     # strips vector_store/bm25 paths so they cannot become stale after a store move).
-
     config.projects_root = str(user_dir)
-
     config.vector_store_path = str(user_dir / "default" / "vector_store_data")
-
     config.bm25_path = str(user_dir / "default" / "bm25_index")
-
     if request.persist:
         try:
             config.save()
-
         except Exception as e:
             logger.warning(f"Could not save config after store init: {e}")
-
     else:
         logger.info("store_init: persist=False — in-memory only, config.yaml not modified")
-
     if brain:
         brain.close()
-
     _api.brain = AxonBrain(config)
-
     _api._source_hashes.clear()
-
     _api._jobs.clear()
-
     result: dict = {
         "status": "ok",
         "store_path": str(store_root),
         "user_dir": str(user_dir),
         "username": username,
     }
-
     if unreachable:
         result["warning"] = (
             f"{len(unreachable)} project(s) will be unreachable until the previous "
             f"store path is restored: {', '.join(unreachable)}"
         )
-
         result["unreachable_projects"] = unreachable
-
     return result
 
 
 @router.get("/store/status")
 async def store_status():
     """Return AxonStore initialisation status and metadata.
-
-
     Safe to call before brain is ready — reads ``store_meta.json`` directly.
-
-
     Clients should poll this on startup to decide whether to show a first-run
-
-
     setup UI.
-
-
     """
-
     import json
 
     from axon import api as _api
 
     brain = _api.brain
-
     import getpass as _getpass
 
     username = _getpass.getuser()
-
     if brain:
         user_dir = Path(brain.config.projects_root)
-
     else:
         # Best-effort: reconstruct default path without a live brain
-
         from axon.main import AxonConfig
 
         try:
             config = AxonConfig.load(None)
-
             user_dir = Path(config.projects_root)
-
         except Exception:
             return {"initialized": False, "path": None, "store_version": None}
-
     store_meta_path = user_dir / "store_meta.json"
-
     if not store_meta_path.exists():
         return {
             "initialized": False,
@@ -178,13 +128,10 @@ async def store_status():
             "store_version": None,
             "username": username,
         }
-
     try:
         meta = json.loads(store_meta_path.read_text(encoding="utf-8"))
-
     except Exception:
         meta = {}
-
     return {
         "initialized": True,
         "path": str(user_dir),
@@ -198,13 +145,10 @@ async def store_status():
 @router.get("/store/whoami")
 async def store_whoami():
     """Return current user identity and AxonStore status."""
-
     from axon import api as _api
 
     brain = _api.brain
-
     username = getpass.getuser()
-
     if brain:
         projects_root = Path(brain.config.projects_root)
         return {
@@ -214,14 +158,12 @@ async def store_whoami():
             "user_dir": str(projects_root),
             "active_project": getattr(brain, "_active_project", "default"),
         }
-
     return {"username": username}
 
 
 @router.post("/share/generate")
 async def share_generate(request: ShareGenerateRequest, req: Request):
     """Generate a share key allowing another user to access one of your projects."""
-
     from axon import api as _api
     from axon import governance as gov
     from axon import security as _security
@@ -232,9 +174,7 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
             status_code=422,
             detail=f"Invalid project name: '{request.project}'",
         )
-
     user_dir = _api._get_user_dir()
-
     sealed = _security.get_sealed_project_record(request.project, user_dir)
     if sealed is not None:
         if not _security.is_unlocked(user_dir):
@@ -252,13 +192,11 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
             )
         except _security.SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-
         result = {
             **result,
             "key_id": key_id,
             "security_mode": "sealed_v1",
         }
-
         rid = getattr(req.state, "request_id", "")
         surface = getattr(req.state, "surface", "api")
         gov.emit(
@@ -271,19 +209,13 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
             request_id=rid,
         )
         return result
-
     # Resolve nested projects via subs/ layout (e.g. research/papers → research/subs/papers)
-
     _segments = request.project.split("/")
-
     project_path = user_dir / _segments[0]
-
     for _seg in _segments[1:]:
         project_path = project_path / "subs" / _seg
-
     if not project_path.exists() or not (project_path / "meta.json").exists():
         raise HTTPException(status_code=404, detail=f"Project '{request.project}' not found.")
-
     try:
         result = _shares.generate_share_key(
             owner_user_dir=user_dir,
@@ -293,11 +225,8 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-
     rid = getattr(req.state, "request_id", "")
-
     surface = getattr(req.state, "surface", "api")
-
     gov.emit(
         "share_generated",
         "share",
@@ -307,25 +236,20 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
         surface=surface,
         request_id=rid,
     )
-
     return result
 
 
 @router.post("/share/redeem")
 async def share_redeem(request: ShareRedeemRequest, req: Request):
     """Redeem a share string, creating a mount descriptor in your mounts/ directory."""
-
     from axon import api as _api
     from axon import governance as gov
     from axon import security as _security
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
-
     rid = getattr(req.state, "request_id", "")
-
     surface = getattr(req.state, "surface", "api")
-
     # Detect sealed share by the ``SEALED1:`` prefix in the decoded
     # envelope (Phase 3 wire format). The legacy JSON-with-security_mode
     # detection is kept as a fallback in case any older share_strings
@@ -347,13 +271,11 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
                 pass
     except Exception:
         pass
-
     if is_sealed_share:
         try:
             result = _security.redeem_sealed_share(user_dir, request.share_string)
         except _security.SecurityError as e:
             raise HTTPException(status_code=400, detail=str(e))
-
         gov.emit(
             "share_redeemed",
             "share",
@@ -364,16 +286,13 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
             request_id=rid,
         )
         return result
-
     try:
         result = _shares.redeem_share_key(
             grantee_user_dir=user_dir,
             share_string=request.share_string,
         )
-
     except (ValueError, NotImplementedError) as e:
         raise HTTPException(status_code=400, detail=str(e))
-
     gov.emit(
         "share_redeemed",
         "share",
@@ -383,14 +302,12 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
         surface=surface,
         request_id=rid,
     )
-
     return result
 
 
 @router.post("/share/revoke")
 async def share_revoke(request: ShareRevokeRequest, req: Request):
     """Revoke a share key.
-
     Routing:
     - ``key_id`` starting with ``ssk_`` → sealed-share revoke (Phase 4).
       Soft (default) deletes the wrap; hard (``rotate=true``) rotates
@@ -398,18 +315,14 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
       ``project`` field is required so the wrap file can be located.
     - Any other ``key_id`` → legacy plaintext-mount share revoke.
     """
-
     from axon import api as _api
     from axon import governance as gov
     from axon import security as _security
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
-
     rid = getattr(req.state, "request_id", "")
-
     surface = getattr(req.state, "surface", "api")
-
     # Sealed-share revoke is keyed off the ``ssk_`` key_id prefix
     # produced by ``api_routes/shares.py::share_generate`` for sealed
     # projects.
@@ -447,7 +360,6 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
             )
             status = 404 if is_not_found else 400
             raise HTTPException(status_code=status, detail=message)
-
         gov.emit(
             "share_revoked",
             "share",
@@ -463,13 +375,10 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
             request_id=rid,
         )
         return result
-
     try:
         result = _shares.revoke_share_key(owner_user_dir=user_dir, key_id=request.key_id)
-
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
     gov.emit(
         "share_revoked",
         "share",
@@ -478,28 +387,23 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
         surface=surface,
         request_id=rid,
     )
-
     return result
 
 
 @router.post("/share/extend")
 async def share_extend(request: ShareExtendRequest, req: Request):
     """Renew a share key's expiry — or clear it (``ttl_days=null``).
-
     Pairs with ``POST /share/generate``'s ``ttl_days`` to give owners a
     hard cutoff for forgotten shares while still letting them keep an
     in-use share alive on demand.
     """
-
     from axon import api as _api
     from axon import governance as gov
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
-
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")
-
     try:
         result = _shares.extend_share_key(
             owner_user_dir=user_dir,
@@ -517,7 +421,6 @@ async def share_extend(request: ShareExtendRequest, req: Request):
         else:
             status = 422
         raise HTTPException(status_code=status, detail=msg)
-
     gov.emit(
         "share_extended",
         "share",
@@ -527,23 +430,19 @@ async def share_extend(request: ShareExtendRequest, req: Request):
         surface=surface,
         request_id=rid,
     )
-
     return result
 
 
 @router.get("/share/list")
 async def share_list():
     """List shares for the current user: both issued (sharing) and received (shared)."""
-
     from axon import api as _api
     from axon import security as _security
     from axon import shares as _shares
 
     user_dir = _api._get_user_dir()
-
     removed_open = _shares.validate_received_shares(user_dir)
     removed_sealed = _security.validate_received_sealed_shares(user_dir)
-
     open_result = _shares.list_shares(user_dir)
     sealed_result = _security.list_sealed_shares(user_dir)
 
@@ -556,9 +455,7 @@ async def share_list():
         "shared": _tag(open_result.get("shared", []), "open")
         + _tag(sealed_result.get("shared", []), "sealed_v1"),
     }
-
     removed = [*removed_open, *removed_sealed]
     if removed:
         result["removed_stale"] = removed
-
     return result

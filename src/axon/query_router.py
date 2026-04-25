@@ -143,7 +143,6 @@ class QueryRouterMixin:
         self, query: str, results: list[dict], cfg=None
     ) -> tuple[list[dict], list[str]]:
         """Expand retrieval results using GraphRAG entity linkage.
-
         1. Extract entities from the query.
         2. Match query entities against the entity graph using Jaccard similarity.
         3. Perform 1-hop traversal via the relation graph (when enabled).
@@ -164,18 +163,14 @@ class QueryRouterMixin:
                     query_entities.append({"name": k, "type": "UNKNOWN", "description": ""})
         if not query_entities:
             return results, []
-
         active_top_k = (
             cfg.top_k if (cfg is not None and cfg.top_k is not None) else self.config.top_k
         )
         active_cfg = cfg if cfg is not None else self.config
-
         existing_ids = {r["id"] for r in results}
         # {doc_id: best_score} so we don't lower a score if the same ID matches again
         extra_id_scores: dict[str, float] = {}
-
         matched_entities: set[str] = set()
-
         with self._graph_lock:
             for query_entity in query_entities:
                 # Support both new dict-node format and legacy list format
@@ -224,7 +219,6 @@ class QueryRouterMixin:
 
             max_hops = _cfg_get("graph_rag_max_hops", 1)
             hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
-
             # Performance guard for large graphs (Epic 1/4)
             large_threshold = _cfg_get("graph_rag_large_graph_threshold", 50000)
             if len(self._entity_graph) > large_threshold and max_hops > 1:
@@ -233,13 +227,11 @@ class QueryRouterMixin:
                     f"capping max_hops at 1 for performance."
                 )
                 max_hops = 1
-
             use_relations = (
                 getattr(active_cfg, "graph_rag_relations", True)
                 and self._relation_graph
                 and max_hops > 0
             )
-
             if use_relations and matched_entities:
                 # Check traversal cache before running BFS.
                 # Cache key covers entity set + hop params so different configs
@@ -247,7 +239,6 @@ class QueryRouterMixin:
                 _cache_key = (frozenset(matched_entities), max_hops, hop_decay)
                 _now = time.monotonic()
                 _bfs_scores: dict[str, float] | None = None
-
                 _tc: OrderedDict | None = getattr(self, "_traversal_cache", None)
                 _tc_ttl: float = getattr(self, "_traversal_cache_ttl", 900.0)
                 if _tc is not None:
@@ -260,39 +251,32 @@ class QueryRouterMixin:
                                 _bfs_scores = _stored_scores
                             else:
                                 del _tc[_cache_key]
-
                 if _bfs_scores is None:
                     # BFS for multi-hop traversal
                     _bfs_scores = {}
                     current_hop_entities = set(matched_entities)
                     visited_entities = set(matched_entities)
-
                     for hop in range(1, max_hops + 1):
                         next_hop_entities = set()
                         # Score for this hop decays from base 0.8
                         # Hop 1: 0.8 * 0.7 = 0.56
                         # Hop 2: 0.56 * 0.7 = 0.392
                         hop_score = 0.8 * (hop_decay**hop)
-
                         for src_entity in current_hop_entities:
                             for entry in self._relation_graph.get(src_entity, []):
                                 target = entry.get("target", "").lower()
                                 if not target or target in visited_entities:
                                     continue
-
                                 visited_entities.add(target)
                                 next_hop_entities.add(target)
-
                                 target_node = self._entity_graph.get(target, {})
                                 target_chunk_ids = target_node.get("chunk_ids", [])
                                 for did in target_chunk_ids:
                                     if _bfs_scores.get(did, 0.0) < hop_score:
                                         _bfs_scores[did] = hop_score
-
                         if not next_hop_entities:
                             break
                         current_hop_entities = next_hop_entities
-
                     # Store BFS result in traversal cache
                     if _tc is not None:
                         _tc_maxsize: int = getattr(self, "_traversal_cache_maxsize", 512)
@@ -300,16 +284,13 @@ class QueryRouterMixin:
                             if len(_tc) >= _tc_maxsize:
                                 _tc.popitem(last=False)  # evict LRU
                             _tc[_cache_key] = (time.monotonic(), dict(_bfs_scores))
-
                 # Merge BFS scores into extra_id_scores (skip IDs already in results)
                 for did, hop_score in _bfs_scores.items():
                     if did not in existing_ids:
                         if extra_id_scores.get(did, 0.0) < hop_score:
                             extra_id_scores[did] = hop_score
-
         if not extra_id_scores:
             return results, list(matched_entities)
-
         # Fetch the extra chunks from the vector store (capped to avoid huge fetches)
         extra_ids = list(extra_id_scores.keys())[:active_top_k]
         try:
@@ -325,7 +306,6 @@ class QueryRouterMixin:
                 results = list(results) + extra_results
         except Exception as e:
             logger.debug(f"GraphRAG expansion failed: {e}")
-
         return results, list(matched_entities)
 
     def _doc_hash(self, doc: dict) -> str:
@@ -361,7 +341,6 @@ class QueryRouterMixin:
 
     def _make_cache_key(self, query: str, filters, cfg) -> str:
         """Return a stable cache key for the given query + active config.
-
         All flags that change retrieval or generation are included so two
         requests that differ only by (e.g.) compress_context
         receive distinct cache entries.
@@ -453,7 +432,6 @@ class QueryRouterMixin:
         "reference": (False, False),
     }
     _SOURCE_POLICY_DEFAULT = (True, True)
-
     _CODE_EXTENSIONS = {
         ".py",
         ".ts",
@@ -492,7 +470,6 @@ class QueryRouterMixin:
 
     def _decompose_query(self, query: str) -> list[str]:
         """Break a complex query into atomic sub-questions for independent retrieval.
-
         Returns the original query plus up to 4 sub-questions.
         """
         prompt = (
@@ -518,10 +495,8 @@ class QueryRouterMixin:
         self, query: str, results: list[dict], cfg=None
     ) -> tuple[list[dict], Any]:
         """Delegate to :class:`axon.compression.ContextCompressor` (Epic 3, Story 3.2).
-
         Selects strategy and token budget from *cfg* when provided; falls back to
         ``sentence`` compression with no budget for backward compatibility.
-
         Returns ``(compressed_chunks, CompressionResult)`` so the caller can
         record telemetry without re-computing token counts.
         """
@@ -535,11 +510,9 @@ class QueryRouterMixin:
                 post_tokens=0,
                 compression_ratio=1.0,
             )
-
         strategy = getattr(cfg, "compression_strategy", "sentence") if cfg else "sentence"
         token_budget = getattr(cfg, "compression_token_budget", 0) if cfg else 0
         llmlingua_model = getattr(cfg, "graph_rag_llmlingua_model", "") if cfg else ""
-
         compressor = ContextCompressor(llm=self.llm, llmlingua_model=llmlingua_model)
         result = compressor.compress(query, results, strategy=strategy, token_budget=token_budget)
         return result.chunks, result
@@ -577,7 +550,6 @@ class QueryRouterMixin:
         multi_count: int = 3,
     ) -> dict[str, Any]:
         """Single LLM call that produces all enabled query transforms at once.
-
         Returns dict with keys: "multi_queries", "step_back", "decomposed", "hyde_doc".
         Values are None for disabled transforms.
         """
@@ -591,48 +563,40 @@ class QueryRouterMixin:
                 "decomposed": None,
                 "hyde_doc": None,
             }
-
         sections = []
         output_format: dict[str, Any] = {}
-
         if enabled.get("multi"):
             sections.append(
                 f'1. "multi_queries": Generate {multi_count} alternative phrasings of the query '
                 "that approach it from different angles. Return as a JSON array of strings."
             )
             output_format["multi_queries"] = ["alternative phrasing 1", "..."]
-
         if enabled.get("step_back"):
             sections.append(
                 '2. "step_back": Generate ONE broader, more general question that the original query '
                 "is a specific instance of. Return as a single string."
             )
             output_format["step_back"] = "broader question"
-
         if enabled.get("decompose"):
             sections.append(
                 '3. "decomposed": Break the query into 2-4 simpler sub-questions that together '
                 "would answer the original. Return as a JSON array of strings."
             )
             output_format["decomposed"] = ["sub-question 1", "..."]
-
         if enabled.get("hyde"):
             sections.append(
                 '4. "hyde_doc": Write a short (2-3 sentence) hypothetical document that would '
                 "directly answer the query if it existed. Return as a single string."
             )
             output_format["hyde_doc"] = "hypothetical answer text"
-
         task_list = "\n".join(sections)
         format_example = _json.dumps(output_format, indent=2)
-
         prompt = (
             f"Query: {query}\n\n"
             f"Complete ALL of the following tasks for the query above:\n{task_list}\n\n"
             f"Return ONLY valid JSON in this exact format:\n{format_example}\n"
             "Output only valid JSON, no explanations."
         )
-
         try:
             raw = self.llm.complete(prompt, system_prompt="You are a query analysis assistant.")
             raw_clean = _re_mod.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
@@ -656,18 +620,14 @@ class QueryRouterMixin:
 
     def _mmr_deduplicate(self, results: list[dict], cfg) -> list[dict]:
         """Reorder and deduplicate results using Maximal Marginal Relevance (Jaccard similarity).
-
         Iteratively selects the next document maximising:
             lambda * relevance_score - (1-lambda) * max_jaccard_similarity_to_selected
-
         Near-duplicates (Jaccard >= 0.85) are dropped entirely.
         """
         if len(results) <= 1:
             return results
-
         lambda_mult = getattr(cfg, "mmr_lambda", 0.5)
         dup_threshold = 0.85
-
         # Try Rust fast-path
         from axon.rust_bridge import get_rust_bridge
 
@@ -687,7 +647,6 @@ class QueryRouterMixin:
         token_sets = [_tok(r.get("text", "")) for r in results]
         selected_idx: list[int] = []
         remaining = list(range(len(results)))
-
         while remaining:
             if not selected_idx:
                 best = max(remaining, key=lambda i: results[i].get("score", 0.0))
@@ -709,7 +668,6 @@ class QueryRouterMixin:
             ):
                 continue
             selected_idx.append(best)
-
         return [results[i] for i in selected_idx]
 
     def _execute_web_search(self, query: str, count: int = 5) -> list[dict]:
@@ -729,7 +687,6 @@ class QueryRouterMixin:
             )
             response.raise_for_status()
             data = response.json()
-
             web_results = []
             raw_results = data.get("web", {}).get("results", [])[:count]
             total = max(len(raw_results), 1)
@@ -794,7 +751,6 @@ class QueryRouterMixin:
         """When ``cfg.mount_refresh_mode == "per_query"``, re-check the
         owner's version marker before retrieval and reopen handles if the
         owner has re-ingested.
-
         ``MountSyncPendingError`` is allowed to propagate so callers (REST
         API, REPL, MCP) can surface a transient "sync in progress" signal
         instead of returning stale results.
@@ -837,7 +793,6 @@ class QueryRouterMixin:
             "web_search_applied": False,
             "queries": [query],
         }
-
         # --- Phase 1: Parallel Query Transformation ---
         _enabled_transforms = {
             "multi": bool(cfg.multi_query),
@@ -851,10 +806,8 @@ class QueryRouterMixin:
             and getattr(cfg, "unified_query_transforms", True)
             and getattr(self, "llm", None) is not None
         )
-
         search_queries = [query]
         vector_query = query
-
         if _use_unified:
             _all_transforms = self._get_all_transforms_unified(
                 query,
@@ -865,7 +818,6 @@ class QueryRouterMixin:
             _step_back_q = _all_transforms.get("step_back") or ""
             _decomposed_qs = _all_transforms.get("decomposed") or []
             _hyde_doc = _all_transforms.get("hyde_doc") or ""
-
             if _enabled_transforms["multi"] and _multi_queries:
                 search_queries.extend([q for q in _multi_queries if q not in search_queries])
                 transforms["multi_query_applied"] = True
@@ -891,7 +843,6 @@ class QueryRouterMixin:
                 future_to_task[self._executor.submit(self._decompose_query, query)] = "decompose"
             if cfg.hyde:
                 future_to_task[self._executor.submit(self._get_hyde_document, query)] = "hyde"
-
             from concurrent.futures import as_completed
 
             for future in as_completed(future_to_task):
@@ -913,14 +864,11 @@ class QueryRouterMixin:
                         transforms["hyde_applied"] = True
                 except Exception as e:
                     logger.warning(f"Retrieval transformation '{task}' failed: {e}")
-
         transforms["queries"] = search_queries
-
         # --- Retrieval accountability objects ---
         diagnostics = CodeRetrievalDiagnostics()
         trace = CodeRetrievalTrace()
         trace.query_rewrite_variants = list(search_queries[1:])
-
         # --- Code mode detection ---
         _code_mode = cfg.code_lexical_boost and _looks_like_code_query(query)
         _code_query_tokens: frozenset = frozenset()
@@ -931,7 +879,6 @@ class QueryRouterMixin:
             diagnostics.tokens_extracted = sorted(_code_query_tokens)
             if getattr(cfg, "code_top_k", 0) > 0:
                 _effective_top_k = cfg.code_top_k
-
         if _effective_top_k <= 0:
             return {
                 "results": [],
@@ -944,15 +891,12 @@ class QueryRouterMixin:
                 "diagnostics": diagnostics,
                 "trace": trace,
             }
-
         # --- Phase 2: Retrieval ---
         fetch_k = cfg.top_k * 3 if (cfg.rerank or cfg.hybrid_search) else cfg.top_k
         if _code_mode:
             fetch_k = int(fetch_k * cfg.code_top_k_multiplier)
-
         all_vector_results = []
         all_bm25_results = []
-
         # Vector Search
         if cfg.hyde:
             # HyDE: embed the hypothetical document and search with it.
@@ -986,7 +930,6 @@ class QueryRouterMixin:
                     embeddings, top_k=fetch_k, filter_dict=filters
                 ):
                     all_vector_results.extend(res_list)
-
         # Dedupe vector store results based on ID
         if _rust.can_result_postprocess():
             vector_results = _rust.dedupe_best_by_id(all_vector_results) or []
@@ -999,7 +942,6 @@ class QueryRouterMixin:
         vector_count = len(vector_results)
         diagnostics.channels_activated.append("dense")
         trace.channel_raw_counts["dense"] = vector_count
-
         # Sentence-Window channel (Story 1.4 — additive dense path)
         # Retrieves by sentence granularity and expands each hit to a coherent
         # ±N-sentence context window.  Window results use chunk-level IDs so they
@@ -1062,7 +1004,6 @@ class QueryRouterMixin:
                         len(_sw_hits),
                         len(sw_window_results),
                     )
-
         # Hybrid Search (Keyword component)
         bm25_count = 0
         if cfg.hybrid_search and self.bm25:
@@ -1085,7 +1026,6 @@ class QueryRouterMixin:
             all_bm25_lists = list(self._executor.map(_bm25_search, bm25_queries))
             for b_list in all_bm25_lists:
                 all_bm25_results.extend(b_list)
-
             # --- Symbol channel injection (code mode only) ---
             sym_hits = []
             if _code_mode and _code_query_tokens:
@@ -1117,14 +1057,12 @@ class QueryRouterMixin:
             bm25_count = len(bm25_results)
             diagnostics.channels_activated.append("bm25")
             trace.channel_raw_counts["bm25"] = bm25_count
-
             # Code mode: override BM25 weight (effective only in weighted mode)
             _fusion_weight = (
                 getattr(cfg, "code_bm25_weight", cfg.hybrid_weight)
                 if _code_mode
                 else cfg.hybrid_weight
             )
-
             if cfg.hybrid_mode == "rrf":
                 from axon.retrievers import reciprocal_rank_fusion
 
@@ -1135,7 +1073,6 @@ class QueryRouterMixin:
                 results = weighted_score_fusion(vector_results, bm25_results, weight=_fusion_weight)
         else:
             results = vector_results
-
         # Web Search Fallback (if enabled and local results are insufficient)
         _threshold_score_field = (
             "score"
@@ -1170,7 +1107,6 @@ class QueryRouterMixin:
                     sig = r.get("vector_score", r.get("score", 0.0))
                 if sig >= cfg.similarity_threshold:
                     filtered_results.append(r)
-
         # CRAG-Lite correction policy (Epic 2, Stories 2.2–2.3)
         _crag_lite_enabled = getattr(cfg, "crag_lite", False)
         if _crag_lite_enabled:
@@ -1220,11 +1156,9 @@ class QueryRouterMixin:
             results = web_results
         else:
             results = filtered_results
-
         # MMR deduplication — reorder and remove near-duplicate chunks
         if getattr(cfg, "mmr", False) and results:
             results = self._mmr_deduplicate(results, cfg)
-
         # Code lexical boost pass (before graph expansion, after threshold filtering)
         if cfg.code_lexical_boost and results:
             code_fraction = sum(
@@ -1235,27 +1169,22 @@ class QueryRouterMixin:
                 results = self._apply_code_lexical_boost(
                     results, boost_tokens, cfg=cfg, diagnostics=diagnostics, trace=trace
                 )
-
         # Save base count before GraphRAG expansion for accurate metrics
         base_count = len(results)
-
         # GraphRAG: expand results with entity-linked documents
         _matched_entities: list = []
         if cfg.graph_rag and self._entity_graph:
             results, _matched_entities = self._expand_with_entity_graph(query, results, cfg=cfg)
-
         # Code graph expansion (structural, independent of prose GraphRAG)
         if getattr(cfg, "code_graph", False) and self._code_graph.get("nodes"):
             results, _matched_code_syms = self._expand_with_code_graph(query, results, cfg=cfg)
             if _matched_code_syms:
                 logger.debug("code_graph: matched symbols=%s", _matched_code_syms)
-
         # Finalize diagnostics
         diagnostics.result_count = len(results)
         diagnostics.fallback_chunks_in_results = sum(
             1 for r in results if r.get("metadata", {}).get("is_fallback")
         )
-
         return {
             "results": results,
             "vector_count": vector_count,
@@ -1272,16 +1201,13 @@ class QueryRouterMixin:
     @staticmethod
     def _merge_graph_slots(results: list[dict], top_k: int, budget: int) -> list[dict]:
         """Merge base and graph-expanded results, preserving graph budget.
-
         After reranking, graph-expanded chunks may score above base chunks.  The
         previous logic always appended them after base[:top_k], so they could be
         dropped when synthesis only consumed the first ``top_k`` items.
-
         This helper:
         1. Selects the top ``top_k`` results by score (may include graph-expanded).
         2. Guarantees that at least ``min(budget, n_expanded)`` graph-expanded
            chunks survive, appending any not already in the top-k window.
-
         Result size is bounded by ``top_k + budget``.
         """
         expanded = [r for r in results if r.get("_graph_expanded")]
@@ -1301,7 +1227,6 @@ class QueryRouterMixin:
 
     def _pre_filter_for_rerank(self, results: list, top_k: int) -> list:
         """Trim *results* to a reranking candidate pool before scoring.
-
         Reranking every retrieved document is expensive.  Keeping ``top_k * 3``
         candidates (minimum 20) preserves recall while cutting model calls by
         ~66 % when the retriever returns more documents than needed.
@@ -1318,7 +1243,6 @@ class QueryRouterMixin:
         overrides: dict = None,
     ) -> tuple:
         """Run retrieval without calling the LLM.
-
         Returns ``(results, diagnostics, trace)`` — useful for benchmark harnesses,
         the ``/search/raw`` API endpoint, and the ``--dry-run`` CLI flag.
         The result list is already sliced to the effective top-k.
@@ -1328,26 +1252,22 @@ class QueryRouterMixin:
         results = retrieval["results"]
         diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
         trace = retrieval.get("trace", CodeRetrievalTrace())
-
         _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.rerank:
             results = self._pre_filter_for_rerank(results, _top_k)
             results = self.reranker.rerank(query, results)
-
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
             results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
             results = results[:_top_k]
         for r in results:
             r.pop("_graph_expanded", None)
-
         diagnostics.result_count = len(results)
         self._last_diagnostics = diagnostics
         return results, diagnostics, trace
 
     def _build_context(self, results: list[dict]) -> tuple:
         """Build context string from results, labelling web vs local sources distinctly.
-
         Returns:
             Tuple of (context_string, has_web_results).
         """
@@ -1383,7 +1303,6 @@ class QueryRouterMixin:
 
     def _build_system_prompt(self, has_web: bool, cfg=None, no_context: bool = False) -> str:
         """Return the system prompt based on discussion_fallback and web search state.
-
         When discussion_fallback is False, uses a strict context-only prompt.
         When True, uses the permissive prompt.
         When cite is False, the citation instruction is removed from the prompt.
@@ -1392,13 +1311,11 @@ class QueryRouterMixin:
         if cfg is None:
             cfg = self.config
         base = self.SYSTEM_PROMPT if cfg.discussion_fallback else self.SYSTEM_PROMPT_STRICT
-
         if not cfg.cite:
             # Strip citation instruction lines from the prompt
             import re as _re
 
             base = _re.sub(r"\d+\. \*\*Mandatory Citations\*\*:.*?\n", "", base)
-
         if no_context:
             return base + (
                 "\n\n**Note:** No relevant documents were found in the knowledge base for this query. "
@@ -1437,7 +1354,6 @@ class QueryRouterMixin:
         overrides: dict = None,
     ) -> str:
         """Retrieve relevant context and synthesise a natural-language answer.
-
         Args:
             query: The question or prompt to answer.
             filters: Optional metadata filters applied to vector search.
@@ -1445,17 +1361,14 @@ class QueryRouterMixin:
                 When non-empty, the query cache is bypassed.
             overrides: Per-request config overrides (e.g. ``{"top_k": 5, "rerank": True}``).
                 Keys must match :class:`AxonConfig` field names.
-
         Returns:
             A synthesised answer string from the LLM.
         """
         # Warn (don't block) if the embedding model has changed — retrieval
         # results will be degraded but the user can still access existing data.
         self._validate_embedding_meta(on_mismatch="warn")
-
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
-
         # --- System-level query router ---
         if cfg.query_router != "off":
             route = self._classify_query_route(query, cfg)
@@ -1470,7 +1383,6 @@ class QueryRouterMixin:
             if not _needs_grag:
                 cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
                 logger.debug("Auto-route: GraphRAG bypassed for query '%s...'", query[:60])
-
         # Cache lookup (only when chat_history is empty — cached responses don't track turns)
         cache_key = None
         if cfg.query_cache and not chat_history and cfg.query_cache_size >= 1:
@@ -1486,11 +1398,9 @@ class QueryRouterMixin:
                         return stored_response
                     else:
                         del self._query_cache[cache_key]
-
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
         self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
-
         if not results:
             self._log_query_metrics(
                 query,
@@ -1503,7 +1413,6 @@ class QueryRouterMixin:
                 retrieval["transforms"],
                 cfg=cfg,
             )
-
             if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
                 self._last_provenance = {
@@ -1516,37 +1425,30 @@ class QueryRouterMixin:
                     self._build_system_prompt(False, cfg=cfg, no_context=True),
                     chat_history=chat_history,
                 )
-
             self._last_provenance = {
                 "answer_source": "no_results",
                 "retrieved_count": 0,
                 "web_count": 0,
             }
             return "I don't have any relevant information to answer that question."
-
         _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.rerank:
             results = self._pre_filter_for_rerank(results, _top_k)
             results = self.reranker.rerank(query, results)
-
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
             results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
             results = results[:_top_k]
         for r in results:
             r.pop("_graph_expanded", None)
-
         # RAPTOR drill-down — replace summary hits with grounded leaf chunks
         if cfg.raptor and getattr(cfg, "raptor_drilldown", True):
             results = self._raptor_drilldown(query, results, cfg=cfg)
-
         # Artifact-type ranking pass
         if cfg.raptor or cfg.graph_rag:
             results = self._apply_artifact_ranking(results, cfg=cfg)
-
         graph_mode = getattr(cfg, "graph_rag_mode", "local")
         _matched_entities = retrieval.get("matched_entities", [])
-
         # GraphRAG local context header
         if (
             cfg.graph_rag
@@ -1557,7 +1459,6 @@ class QueryRouterMixin:
             _local_ctx = self._local_search_context(query, _matched_entities, cfg)
         else:
             _local_ctx = ""
-
         if cfg.compress_context:
             results, _comp = self._compress_context(query, results, cfg=cfg)
             # Story 3.3: write compression telemetry into diagnostics
@@ -1576,7 +1477,6 @@ class QueryRouterMixin:
             )
         else:
             top_score = 0
-
         # A4: Exclude community report synthetic docs from citation candidates.
         # They are internal artifacts and confuse users when cited as source documents.
         # Global community context is injected separately via _global_search_map_reduce.
@@ -1587,7 +1487,6 @@ class QueryRouterMixin:
             and not r.get("id", "").startswith("__community__")
         ]
         context, has_web = self._build_context(citation_results)
-
         # GraphRAG global context injection
         # Lazy mode — generate summaries on first global query if not yet generated
         if (
@@ -1612,13 +1511,11 @@ class QueryRouterMixin:
                         f"**Knowledge Graph Community Reports:**\n{_global_ctx}\n\n"
                         f"**Document Excerpts:**\n{context}"
                     )
-
         # Prepend local GraphRAG header
         if _local_ctx:
             context = (
                 f"**GraphRAG Local Context:**\n{_local_ctx}\n\n**Document Excerpts:**\n{context}"
             )
-
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
         system_prompt = (
@@ -1643,7 +1540,6 @@ class QueryRouterMixin:
             retrieval["transforms"],
             cfg=cfg,
         )
-
         if cache_key is not None:
             with self._cache_lock:
                 # Evict least-recently-used entry when cache is at capacity
@@ -1651,7 +1547,6 @@ class QueryRouterMixin:
                     self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
                 self._query_cache[cache_key] = (time.monotonic(), response)
                 self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
-
         return response
 
     def query_stream(
@@ -1662,14 +1557,12 @@ class QueryRouterMixin:
         overrides: dict = None,
     ):
         """Streaming variant of :meth:`query` — yields text chunks as they arrive.
-
         The first yielded item is always a ``{"type": "sources", "sources": [...]}``
         dict so callers can display source attribution before streaming begins.
         Subsequent items are plain string chunks from the LLM stream.
         """
         self._validate_embedding_meta(on_mismatch="warn")
         cfg = self._apply_overrides(overrides)
-
         # --- System-level query router (mirrors query() routing logic) ---
         if cfg.query_router != "off":
             route = self._classify_query_route(query, cfg)
@@ -1683,11 +1576,9 @@ class QueryRouterMixin:
             if not _needs_grag:
                 cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
                 logger.debug("Auto-route(stream): GraphRAG bypassed for query '%s...'", query[:60])
-
         retrieval = self._execute_retrieval(query, filters, cfg=cfg)
         results = retrieval["results"]
         self._last_diagnostics = retrieval.get("diagnostics", CodeRetrievalDiagnostics())
-
         if not results:
             if cfg.discussion_fallback:
                 # Send plain query as user message so multi-turn history stays consistent
@@ -1709,30 +1600,24 @@ class QueryRouterMixin:
             }
             yield "I don't have any relevant information to answer that question."
             return
-
         _top_k = retrieval.get("_effective_top_k", cfg.top_k)
         if cfg.rerank:
             results = self._pre_filter_for_rerank(results, _top_k)
             results = self.reranker.rerank(query, results)
-
         if cfg.graph_rag and cfg.graph_rag_budget > 0:
             results = self._merge_graph_slots(results, _top_k, cfg.graph_rag_budget)
         else:
             results = results[:_top_k]
         for r in results:
             r.pop("_graph_expanded", None)
-
         # RAPTOR drill-down — replace summary hits with grounded leaf chunks
         if cfg.raptor and getattr(cfg, "raptor_drilldown", True):
             results = self._raptor_drilldown(query, results, cfg=cfg)
-
         # Artifact-type ranking pass
         if cfg.raptor or cfg.graph_rag:
             results = self._apply_artifact_ranking(results, cfg=cfg)
-
         graph_mode = getattr(cfg, "graph_rag_mode", "local")
         _matched_entities = retrieval.get("matched_entities", [])
-
         # GraphRAG local context header
         if (
             cfg.graph_rag
@@ -1743,7 +1628,6 @@ class QueryRouterMixin:
             _local_ctx = self._local_search_context(query, _matched_entities, cfg)
         else:
             _local_ctx = ""
-
         if cfg.compress_context:
             results, _comp = self._compress_context(query, results, cfg=cfg)
             # Story 3.3: telemetry on the streaming path
@@ -1753,7 +1637,6 @@ class QueryRouterMixin:
             _sd.compression_post_tokens = _comp.post_tokens
             _sd.compression_ratio = _comp.compression_ratio
             _sd.compression_fallback_reason = _comp.fallback_reason
-
         # A4: Exclude community report synthetic docs from citation candidates.
         citation_results = [
             r
@@ -1762,7 +1645,6 @@ class QueryRouterMixin:
             and not r.get("id", "").startswith("__community__")
         ]
         context, has_web = self._build_context(citation_results)
-
         # GraphRAG global context injection
         # Lazy mode — generate summaries on first global query if not yet generated
         if (
@@ -1787,13 +1669,11 @@ class QueryRouterMixin:
                         f"**Knowledge Graph Community Reports:**\n{_global_ctx}\n\n"
                         f"**Document Excerpts:**\n{context}"
                     )
-
         # Prepend local GraphRAG header
         if _local_ctx:
             context = (
                 f"**GraphRAG Local Context:**\n{_local_ctx}\n\n**Document Excerpts:**\n{context}"
             )
-
         # Inject RAG context into system prompt so the user message stays as the plain
         # question — this keeps multi-turn chat_history consistent across turns.
         system_prompt = (
@@ -1806,10 +1686,8 @@ class QueryRouterMixin:
             "retrieved_count": len(citation_results),
             "web_count": _web_count,
         }
-
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
-
         yield from self.llm.stream(query, system_prompt, chat_history=chat_history)
 
     async def load_directory(self, directory: str):
@@ -1823,7 +1701,6 @@ class QueryRouterMixin:
 
     def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files in the knowledge base with chunk counts.
-
         Returns:
             List of dicts sorted by source name, each with keys:
                 - source (str): File name / source identifier.

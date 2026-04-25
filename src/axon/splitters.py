@@ -13,10 +13,8 @@ def _split_sentences(text: str) -> list[str]:
     # Split on period, exclamation, or question mark followed by whitespace.
     # We capture the punctuation to preserve it, then clean up.
     parts = _SENTENCE_SPLIT_RE.split(text.strip())
-
     sentences = []
     current_sentence = ""
-
     abbreviations = {
         "mr",
         "mrs",
@@ -38,32 +36,25 @@ def _split_sentences(text: str) -> list[str]:
         "i.e",
         "etc",
     }
-
     for i in range(0, len(parts), 2):
         text_part = parts[i].strip()
         if not text_part:
             continue
-
         punct_part = parts[i + 1] if i + 1 < len(parts) else ""
-
         # If current_sentence is empty, just start it. Otherwise, append.
         if current_sentence:
             current_sentence += " " + text_part + punct_part
         else:
             current_sentence = text_part + punct_part
-
         # Check if the text_part ends with a known abbreviation
         words = text_part.split()
         last_word = words[-1].lower() if words else ""
-
         # We don't want to split if it's an abbreviation
         if last_word not in abbreviations:
             sentences.append(current_sentence.strip())
             current_sentence = ""
-
     if current_sentence.strip():
         sentences.append(current_sentence.strip())
-
     return sentences
 
 
@@ -109,15 +100,12 @@ class SemanticTextSplitter:
         """Split text into semantically cohesive chunks."""
         if not text:
             return []
-
         sentences = self._split_sentences(text)
         # Pre-calculate lengths to avoid redundant tokenization in the overlap loop
         sentence_data = [(s, self._get_length(s)) for s in sentences]
-
         chunks = []
         current_chunk_sentences: list[tuple[str, int]] = []
         current_length = 0
-
         for sentence, sentence_len in sentence_data:
             # If a single sentence is larger than the chunk size, we yield it as its own chunk
             # rather than falling back to character splitting, preserving semantic integrity.
@@ -128,13 +116,11 @@ class SemanticTextSplitter:
                     current_length = 0
                 chunks.append(sentence)
                 continue
-
             if current_length + sentence_len <= self.chunk_size:
                 current_chunk_sentences.append((sentence, sentence_len))
                 current_length += sentence_len
             else:
                 chunks.append(" ".join([s for s, _ in current_chunk_sentences]))
-
                 # Handle overlap: take sentences from the end of the current chunk
                 # until we hit the overlap limit. Build in reverse then flip to
                 # avoid O(n) list.insert(0, ...) per iteration.
@@ -147,13 +133,10 @@ class SemanticTextSplitter:
                     else:
                         break
                 overlap_sentences = list(reversed(overlap_temp))
-
                 current_chunk_sentences = overlap_sentences + [(sentence, sentence_len)]
                 current_length = overlap_length + sentence_len
-
         if current_chunk_sentences:
             chunks.append(" ".join([s for s, _ in current_chunk_sentences]))
-
         return chunks
 
     def transform_documents(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -178,7 +161,6 @@ class SemanticTextSplitter:
 
 class TableSplitter:
     """Specialized splitter for tabular data (CSV, TSV, Markdown).
-
     Converts rows into enriched natural language strings to preserve
     header-value context during embedding and retrieval.
     """
@@ -191,7 +173,6 @@ class TableSplitter:
         """Convert a list of row dictionaries into enriched searchable strings."""
         chunks = []
         header_str = ", ".join(headers)
-
         current_batch = []
         for row in rows:
             # Enriched string format: [Table Context] [Column Schema] [Row Data]
@@ -201,14 +182,11 @@ class TableSplitter:
                 row_items
             )
             current_batch.append(row_str)
-
             if len(current_batch) >= self.batch_size:
                 chunks.append("\n".join(current_batch))
                 current_batch = []
-
         if current_batch:
             chunks.append("\n".join(current_batch))
-
         return chunks
 
 
@@ -235,19 +213,15 @@ class RecursiveCharacterTextSplitter:
         """Split text into chunks."""
         if not text:
             return []
-
         chunks = []
         start = 0
         text_len = len(text)
-
         while start < text_len:
             # If remaining text is smaller than chunk_size, take it all and finish
             if text_len - start <= self.chunk_size:
                 chunks.append(text[start:].strip())
                 break
-
             end = start + self.chunk_size
-
             # Find the best separator within the current window
             split_at = -1
             for sep in self.separators:
@@ -258,16 +232,13 @@ class RecursiveCharacterTextSplitter:
                 if idx != -1:
                     split_at = idx + len(sep)
                     break
-
             # If no separator found OR split_at would not make progress beyond overlap,
             # force split at the full chunk_size
             if split_at <= start + self.chunk_overlap:
                 split_at = end
-
             chunks.append(text[start:split_at].strip())
             # Next chunk starts after accounting for overlap
             start = split_at - self.chunk_overlap
-
         return [c for c in chunks if c]
 
     def transform_documents(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -292,7 +263,6 @@ class RecursiveCharacterTextSplitter:
 
 class MarkdownSplitter:
     """Splits Markdown text on heading boundaries (ATX headings: # through ######).
-
     Each section (heading + body) becomes a chunk. Sections exceeding max_chunk_size
     tokens are recursively split with SemanticTextSplitter to prevent oversized chunks.
     The heading is prepended to sub-chunks so each chunk retains section context.
@@ -310,7 +280,6 @@ class MarkdownSplitter:
         sections = [s.strip() for s in sections if s.strip()]
         if not sections:
             return [text]
-
         fallback = SemanticTextSplitter(
             chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
         )
@@ -350,15 +319,12 @@ class MarkdownSplitter:
 
 class CosineSemanticSplitter:
     """Semantic chunker using cosine similarity between consecutive sentences.
-
     Sentences are split into a new chunk when the cosine similarity to the next
     sentence drops below ``breakpoint_threshold``. A ``max_chunk_size`` guard
     prevents runaway chunks on repetitive text.
-
     The ``embed_fn`` must be a callable matching the OpenEmbedding.embed signature:
     ``embed_fn(texts: list[str]) -> list[list[float]]``. All sentences are embedded
     in a single batch call to minimise latency.
-
     Args:
         embed_fn: Embedding callable injected at construction time.
         breakpoint_threshold: Cosine similarity below which a new chunk starts (default 0.7).
@@ -409,7 +375,6 @@ class CosineSemanticSplitter:
         sentences = _split_sentences(text)
         if len(sentences) <= 1:
             return [text] if text.strip() else []
-
         try:
             embeddings = self.embed_fn(sentences)
         except Exception as exc:
@@ -417,11 +382,9 @@ class CosineSemanticSplitter:
                 f"CosineSemanticSplitter: embedding failed ({exc}), falling back to SemanticTextSplitter."
             )
             return SemanticTextSplitter(chunk_size=self.max_chunk_size).split(text)
-
         chunks: list[str] = []
         current: list[str] = [sentences[0]]
         current_len = self._get_length(sentences[0])
-
         for i in range(1, len(sentences)):
             sim = self._cosine(embeddings[i - 1], embeddings[i])
             s_len = self._get_length(sentences[i])
@@ -433,7 +396,6 @@ class CosineSemanticSplitter:
             else:
                 current.append(sentences[i])
                 current_len += s_len
-
         if current:
             chunks.append(" ".join(current))
         return chunks
@@ -459,12 +421,10 @@ class CosineSemanticSplitter:
 
 class CodeAwareSplitter:
     """Syntax-aware code splitter that chunks by symbol/block boundaries.
-
     Language support:
     - Python: stdlib ``ast`` (full symbol extraction + rich metadata)
     - Go, Rust, C++, Bash, Ruby, Perl, Julia, JS/TS: regex boundary detection
     - All others: ``RecursiveCharacterTextSplitter`` character fallback
-
     Each chunk carries code-specific metadata (``source_class``, ``language``,
     ``symbol_type``, ``symbol_name``, ``qualified_name``, ``signature``,
     ``start_line``, ``end_line``, ``imports``, ``has_docstring``,
@@ -498,7 +458,6 @@ class CodeAwareSplitter:
         ".scala": "scala",
         ".swift": "swift",
     }
-
     # Regex patterns matching the first line of a top-level symbol definition.
     # Only applied to lines with no leading whitespace (indentation level 0).
     _SYMBOL_PATTERNS: dict[str, re.Pattern] = {
@@ -555,7 +514,6 @@ class CodeAwareSplitter:
         self.fallback_chunks_produced: int = 0
 
     # ── language detection ────────────────────────────────────────────────
-
     def _detect_language(self, source: str) -> str:
         if not source:
             return "unknown"
@@ -563,7 +521,6 @@ class CodeAwareSplitter:
         return self.LANGUAGE_MAP.get(ext, "unknown")
 
     # ── import extraction ─────────────────────────────────────────────────
-
     def _extract_imports(self, text: str, language: str) -> list[str]:
         imports: list[str] = []
         for line in text.splitlines():
@@ -595,7 +552,6 @@ class CodeAwareSplitter:
         return imports
 
     # ── Python AST chunking ───────────────────────────────────────────────
-
     def _split_python_ast(self, text: str, source: str) -> list[dict]:
         import ast as _ast
 
@@ -603,17 +559,14 @@ class CodeAwareSplitter:
             tree = _ast.parse(text)
         except SyntaxError:
             return []
-
         lines = text.splitlines()
         chunks: list[dict] = []
-
         for node in tree.body:
             if not isinstance(
                 node,
                 _ast.FunctionDef | _ast.AsyncFunctionDef | _ast.ClassDef | _ast.If,
             ):
                 continue
-
             # Only handle if __name__ == "__main__": blocks
             if isinstance(node, _ast.If):
                 try:
@@ -638,12 +591,10 @@ class CodeAwareSplitter:
                     }
                 )
                 continue
-
             start, end = node.lineno - 1, node.end_lineno
             name = node.name
             is_class = isinstance(node, _ast.ClassDef)
             symbol_type = "class" if is_class else "function"
-
             try:
                 if isinstance(node, _ast.ClassDef):
                     bases = (
@@ -656,14 +607,12 @@ class CodeAwareSplitter:
                     sig = f"{prefix} {name}({args})"
             except Exception:
                 sig = f"{'class' if is_class else 'def'} {name}(...)"
-
             has_doc = False
             if node.body and isinstance(node.body[0], _ast.Expr):
                 _expr_val = node.body[0].value
                 if isinstance(_expr_val, _ast.Constant) and isinstance(_expr_val.value, str):
                     has_doc = True
             body_text = "\n".join(lines[start:end])
-
             # Large class: sub-chunk its methods individually
             if is_class and len(body_text) > self.max_symbol_size:
                 sub_chunks: list[dict] = []
@@ -701,7 +650,6 @@ class CodeAwareSplitter:
                 if sub_chunks:
                     chunks.extend(sub_chunks)
                     continue
-
             # Large single symbol: character fallback
             if len(body_text) > self.max_symbol_size:
                 for j, part in enumerate(
@@ -725,7 +673,6 @@ class CodeAwareSplitter:
                         }
                     )
                 continue
-
             chunks.append(
                 {
                     "text": body_text,
@@ -740,11 +687,9 @@ class CodeAwareSplitter:
                     "is_test": name.startswith("test") or name.startswith("Test"),
                 }
             )
-
         return chunks
 
     # ── Regex heuristic chunking ──────────────────────────────────────────
-
     def _parse_symbol_from_line(self, line: str, language: str) -> tuple[str, str]:
         """Return (symbol_type, symbol_name) from a definition line."""
         patterns_by_lang: dict[str, list[tuple[str, str]]] = {
@@ -816,14 +761,12 @@ class CodeAwareSplitter:
         ]
         if not boundaries:
             return []
-
         chunks: list[dict] = []
         for idx, start in enumerate(boundaries):
             end = boundaries[idx + 1] if idx + 1 < len(boundaries) else len(lines)
             body = "\n".join(lines[start:end]).rstrip()
             first_line = lines[start].strip()
             sym_type, sym_name = self._parse_symbol_from_line(first_line, language)
-
             if len(body) > self.max_symbol_size:
                 for j, part in enumerate(
                     RecursiveCharacterTextSplitter(
@@ -863,15 +806,12 @@ class CodeAwareSplitter:
         return chunks
 
     # ── Public API ────────────────────────────────────────────────────────
-
     def split_code(self, text: str, source: str = "") -> list[dict]:
         """Split code text into symbol-aware chunks with rich metadata.
-
         Returns a list of dicts, each with ``text`` plus code metadata fields.
         """
         language = self._detect_language(source)
         imports = self._extract_imports(text, language)
-
         chunks: list[dict] = []
         if language == "python":
             chunks = self._split_python_ast(text, source)
@@ -900,7 +840,6 @@ class CodeAwareSplitter:
                 for i, part in enumerate(raw)
             ]
             self.fallback_chunks_produced += len(chunks)
-
         module_path = source.replace("\\", "/") if source else ""
         for chunk in chunks:
             chunk.setdefault("source_class", "code")

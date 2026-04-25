@@ -63,15 +63,12 @@ async def security_unlock(request: SecurityUnlockRequest, req: Request):
 
     client_ip = req.client.host if req.client else "unknown"
     now = time.time()
-
     # Clean up timestamps outside the lockout window
     failures = _unlock_failures.get(client_ip, [])
     failures = [t for t in failures if now - t < _UNLOCK_WINDOW_SECS]
     _unlock_failures[client_ip] = failures
-
     if len(failures) >= _UNLOCK_MAX_ATTEMPTS:
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
-
     try:
         result = _security.unlock_store(_current_user_dir(), request.passphrase)
         _unlock_failures.pop(client_ip, None)

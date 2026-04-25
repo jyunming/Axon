@@ -73,7 +73,6 @@ CACHE_HEADROOM_FRACTION: float = 1.1
 class CacheCapacityError(RuntimeError):
     """Raised when the OS temp dir doesn't have enough free space to
     decrypt the sealed project.
-
     Surfaced with concrete numbers (project size, free space, deficit)
     so the user can either free up disk or move ``TMPDIR`` /
     ``TEMP`` to a roomier volume.
@@ -82,7 +81,6 @@ class CacheCapacityError(RuntimeError):
 
 def is_sealed_file(path: Path) -> bool:
     """Return True if *path* starts with the AXSL magic header.
-
     Used by :class:`SealedCache` to decide whether to decrypt or copy
     each file when materialising the cache. Cheap — reads only the
     first 4 bytes.
@@ -110,7 +108,6 @@ def _project_size_bytes(sealed_dir: Path) -> int:
 
 def _secure_delete_file(path: Path) -> None:
     """Overwrite *path* with zeros, fsync, then unlink.
-
     Best-effort at the filesystem layer — won't defeat SSD TRIM /
     wear-leveling, but ensures no readable plaintext bytes remain at
     the file's logical address before the inode is freed. Errors are
@@ -171,9 +168,7 @@ def _wipe_dir_contents(cache_dir: Path) -> None:
 
 def _pid_alive(pid: int) -> bool:
     """Return True if a process with *pid* is still running.
-
     Cross-platform best-effort check:
-
     - POSIX: ``os.kill(pid, 0)`` succeeds for live PIDs, raises
       ``ProcessLookupError`` (errno ``ESRCH``) for dead ones, and
       ``PermissionError`` for live PIDs we don't own.
@@ -181,7 +176,6 @@ def _pid_alive(pid: int) -> bool:
       ``EINVAL`` for invalid handle (PID never existed / out of range)
       and ``ESRCH`` for "no such process". ``PermissionError`` again
       means a live PID we can't signal.
-
     On unrecognised errors we treat the PID as **alive** (return True)
     so we don't accidentally wipe a cache that another process might
     still be reading. The next boot will re-evaluate; preserving a
@@ -218,7 +212,6 @@ def _pid_alive(pid: int) -> bool:
 
 class SealedCache:
     """An ephemeral plaintext cache backing one mounted sealed project.
-
     Use as a context manager so the cache is reliably wiped on close::
 
         with SealedCache.create(project_dir, dek, key_id="sk_xxx") as cache:
@@ -234,7 +227,6 @@ class SealedCache:
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
-
     @classmethod
     def create(
         cls,
@@ -245,7 +237,6 @@ class SealedCache:
         cache_root: Path | str | None = None,
     ) -> SealedCache:
         """Decrypt every sealed file in *sealed_dir* into a fresh cache.
-
         Args:
             sealed_dir: Project root containing AXSL-sealed files.
             dek: 32-byte AES-256 Data Encryption Key for the project.
@@ -254,10 +245,8 @@ class SealedCache:
                 between projects without an InvalidTag.
             cache_root: Override the temp directory (default: the OS
                 temp dir from :func:`tempfile.gettempdir`).
-
         Returns:
             A :class:`SealedCache` instance bound to the new cache dir.
-
         Raises:
             CacheCapacityError: free disk < project size × 1.1.
             FileNotFoundError: sealed_dir does not exist.
@@ -269,11 +258,9 @@ class SealedCache:
         sealed_dir = Path(sealed_dir)
         if not sealed_dir.is_dir():
             raise FileNotFoundError(f"sealed_dir does not exist: {sealed_dir}")
-
         size = _project_size_bytes(sealed_dir)
         cache_parent = Path(cache_root) if cache_root else Path(tempfile.gettempdir())
         cache_parent.mkdir(parents=True, exist_ok=True)
-
         # Capacity check BEFORE we mkdtemp so we don't leave an empty
         # cache dir behind on failure.
         try:
@@ -289,7 +276,6 @@ class SealedCache:
                 f"(have {free:,}). Free up disk or set TMPDIR/TEMP to a "
                 "roomier volume."
             )
-
         cache_dir = Path(tempfile.mkdtemp(prefix=CACHE_PREFIX, dir=str(cache_parent)))
         try:
             # PID sentinel — used by cleanup_orphans on next boot.
@@ -316,7 +302,6 @@ class SealedCache:
             # cache so we don't leak plaintext bytes already decrypted.
             _wipe_dir_contents(cache_dir)
             raise
-
         logger.info(
             "SealedCache.create: %d bytes from %s decrypted into %s (pid=%d)",
             size,
@@ -329,7 +314,6 @@ class SealedCache:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     @property
     def path(self) -> Path:
         """Cache directory backends should be pointed at."""
@@ -337,7 +321,6 @@ class SealedCache:
 
     def wipe(self) -> None:
         """Securely delete every cache file, then remove the cache dir.
-
         Idempotent — calling on an already-wiped cache is a no-op.
         """
         if self._wiped:
@@ -348,7 +331,6 @@ class SealedCache:
     # ------------------------------------------------------------------
     # Context-manager protocol
     # ------------------------------------------------------------------
-
     def __enter__(self) -> SealedCache:
         return self
 
@@ -366,7 +348,6 @@ class SealedCache:
 
 def list_orphans(cache_root: Path | str | None = None) -> list[Path]:
     """Return cache dirs whose owner process is no longer alive.
-
     Looks for ``axon-sealed-*`` directories under *cache_root* (default
     OS temp dir) and reads each one's ``.axon-cache-pid`` sentinel.
     A dir is "orphan" iff its sentinel PID is not alive (or the
@@ -395,7 +376,6 @@ def list_orphans(cache_root: Path | str | None = None) -> list[Path]:
 
 def cleanup_orphans(cache_root: Path | str | None = None) -> int:
     """Wipe every orphan cache dir; return the count wiped.
-
     Called from ``AxonBrain.__init__`` (Phase 2 follow-up) so a crashed
     previous session doesn't leak plaintext indefinitely. Always
     safe to call: reports findings via DEBUG logs and never raises.
@@ -418,7 +398,6 @@ def cleanup_orphans(cache_root: Path | str | None = None) -> int:
 
 def _self_check() -> dict[str, Any]:
     """Round-trip a tiny sealed project through the cache to confirm wiring.
-
     Used by future ``axon doctor`` output. Never raises — failures are
     reported in the dict.
     """

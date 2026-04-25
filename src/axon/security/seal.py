@@ -124,7 +124,6 @@ def _should_seal(rel: Path) -> bool:
 
 def is_project_sealed(project_dir: Path | str) -> bool:
     """Return True iff ``<project>/.security/.sealed`` exists.
-
     Cheap probe — does not require an unlocked store. Used by
     :func:`get_sealed_project_record` and by api_routes/shares to
     decide whether the sealed-share code path applies to a project.
@@ -134,7 +133,6 @@ def is_project_sealed(project_dir: Path | str) -> bool:
 
 def read_sealed_marker(project_dir: Path | str) -> dict[str, Any] | None:
     """Read the sealed marker JSON; return ``None`` when absent.
-
     Raises ``SecurityError`` if the file exists but is malformed —
     that's a defence-in-depth signal worth surfacing to the user
     (someone may have tampered with ``.security/``).
@@ -185,16 +183,13 @@ def _write_sealed_marker(
 
 def _cleanup_sealing_orphans(project_dir: Path) -> int:
     """Delete any ``*.sealing`` orphans under *project_dir*.
-
     A previous ``project_seal`` may have crashed between the tempfile
     write and the ``os.replace``. The original file is intact (atomic
     rename hadn't happened) so the orphan is just dead weight; remove
     it before re-sealing.
-
     Skips the in-progress seal context file (``.security/.sealing``) —
     that one is intentionally kept across crashes so the resume can
     re-use the same ``seal_id``.
-
     Returns the number of orphans removed.
     """
     removed = 0
@@ -212,7 +207,6 @@ def _cleanup_sealing_orphans(project_dir: Path) -> int:
 
 def _read_inprogress_seal_id(project_dir: Path) -> str | None:
     """Return the persisted resume ``seal_id`` if a prior seal crashed.
-
     The file is written via :func:`_write_inprogress_seal_id` BEFORE any
     file is encrypted, so a crash leaves the seal_id on disk for the
     next attempt to pick up. Mismatched / malformed files are treated
@@ -261,7 +255,6 @@ def _remove_inprogress_seal_id(project_dir: Path) -> None:
 
 def _resolve_project_dir(project_name: str, user_dir: Path) -> Path:
     """Mirror the AxonStore subs/ layout for nested projects.
-
     ``research/papers`` → ``<user_dir>/research/subs/papers``
     """
     segments = project_name.split("/")
@@ -280,12 +273,10 @@ def project_seal(
     embedding: Any = None,
 ) -> dict[str, Any]:
     """Encrypt every content file in *project_name* in place.
-
     Idempotent — if the project is already sealed, returns immediately
     with ``status="already_sealed"``. On a crashed prior attempt, any
     individually-sealed files are kept (skipped on re-run) and any
     ``.sealing`` orphans are removed.
-
     Args:
         project_name: Project name as used in the AxonStore (supports
             the ``parent/child`` nested form).
@@ -297,11 +288,9 @@ def project_seal(
         config: Reserved for future variants (e.g. backend-specific
             re-build during seal).
         embedding: Reserved for future variants.
-
     Returns:
         ``{"status": "sealed" | "already_sealed", "project": ...,
         "files_sealed": int, "files_skipped": int, "orphans_removed": int}``
-
     Raises:
         SecurityError: store is locked (call ``unlock_store`` first), or
             project does not exist, or any file write failed.
@@ -312,7 +301,6 @@ def project_seal(
             f"Project does not exist: {project_dir} "
             "(check the project name and that AxonStore is initialised)"
         )
-
     if is_project_sealed(project_dir):
         existing = read_sealed_marker(project_dir) or {}
         return {
@@ -320,11 +308,9 @@ def project_seal(
             "project": project_name,
             "seal_id": existing.get("seal_id", ""),
         }
-
     # Get/create the per-project DEK. Raises SecurityError if the
     # store is locked — surfaces upward to the caller.
     dek = get_or_create_project_dek(Path(user_dir), project_dir)
-
     # Crash-recovery: drop any leftover .sealing tempfiles before we
     # start writing new ones.
     orphans_removed = _cleanup_sealing_orphans(project_dir)
@@ -334,7 +320,6 @@ def project_seal(
             orphans_removed,
             project_dir,
         )
-
     # Stable seal_id used as the AAD's key_id position so that files
     # cannot be swapped between two projects sealed with the same
     # owner master. Persisted in .security/.sealing BEFORE any file is
@@ -352,11 +337,9 @@ def project_seal(
     else:
         seal_id = "seal_" + secrets.token_hex(8)
         _write_inprogress_seal_id(project_dir, seal_id)
-
     files_sealed = 0
     files_skipped = 0
     files_already_sealed = 0
-
     for src in project_dir.rglob("*"):
         if not src.is_file():
             continue
@@ -371,7 +354,6 @@ def project_seal(
             files_already_sealed += 1
             files_sealed += 1
             continue
-
         # Refuse oversized files — full read into memory would OOM. The
         # streaming path is tracked as future work; for now, surface a
         # clear error rather than crash the process.
@@ -386,7 +368,6 @@ def project_seal(
                 f"per-file limit is {_SEAL_MAX_FILE_BYTES:,} bytes. Streaming "
                 "encryption is tracked as follow-up work."
             )
-
         plaintext = src.read_bytes()
         aad = make_aad(seal_id, str(rel).replace("\\", "/"))
         tmp = src.with_suffix(src.suffix + ".sealing")
@@ -401,7 +382,6 @@ def project_seal(
                 pass
             raise SecurityError(f"project_seal failed to atomically replace {src}: {exc}") from exc
         files_sealed += 1
-
     _write_sealed_marker(
         project_dir,
         seal_id=seal_id,
@@ -410,7 +390,6 @@ def project_seal(
     )
     # Marker persisted — clean up the resume context.
     _remove_inprogress_seal_id(project_dir)
-
     logger.info(
         "project_seal: %s sealed (%d files; %d skipped; %d already-sealed; "
         "%d orphans removed; seal_id=%s)",
@@ -434,7 +413,6 @@ def project_seal(
 
 def get_sealed_project_record(project: str, user_dir: Path) -> dict[str, Any] | None:
     """Cheap probe: return the marker dict if sealed, else ``None``.
-
     Used by api_routes/shares.py to decide whether a share should go
     through the sealed-share generation path. Does NOT require an
     unlocked store.

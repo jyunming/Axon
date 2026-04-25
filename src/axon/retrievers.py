@@ -16,35 +16,27 @@ logger = logging.getLogger("Axon.Retrievers")
 
 class BM25Retriever:
     """Keyword-based retriever using BM25 algorithm.
-
     Complements vector search for specific term matching.
-
     Sync hot-spot audit (Epic 6 Story 6.1)
     ----------------------------------------
     The following paths were audited for event-loop risk:
-
     * ``add_documents()`` — previously rebuilt the full ``BM25Okapi`` index on
       every call (O(N) per batch, O(N²) over a whole ingest run).  **Mitigated
       in Story 6.2** via a lazy-rebuild flag: the index is now rebuilt exactly
       once on the first ``search()`` call after the last write, not on every
       add.  Disk writes remain synchronous but are already bounded by
       ``save_deferred`` batching in the ingest path.
-
     * ``search()`` — ``BM25Okapi.get_scores()`` is CPU-bound.  **Already
       mitigated**: ``QueryRouterMixin._execute_retrieval()`` offloads BM25
       searches to ``self._executor`` (a ``ThreadPoolExecutor``), preventing
       event-loop blocking on the async API path.
-
     * ``save()`` — synchronous atomic file write.  No change needed; writes are
       short relative to the ingest batch, and the ``save_deferred`` flag already
       lets callers defer them.
-
     * ``delete_documents()`` — rebuilds index + saves synchronously.  Index
       rebuild deferred to next ``search()`` via the lazy flag; save is still
       immediate (delete is an explicit operator action, not a hot path).
-
     * ``load()`` — called once at startup only.  No event-loop risk.
-
     Residual risk: ``save()`` blocks the calling thread for large corpora
     (10 k+ docs / several MB JSON).  Acceptable for the local-first deployment
     model; address with async file I/O if a high-throughput multi-tenant API
@@ -137,7 +129,6 @@ class BM25Retriever:
             dict[str, Any]
         ] = []  # List of dicts: {'id': id, 'text': text, 'metadata': meta}
         self._pending_log_entries: list[dict] = []
-
         if engine == "rust":
             if self._rust.can_bm25():
                 self._bm25_backend = "rust"
@@ -145,10 +136,8 @@ class BM25Retriever:
                 raise RuntimeError(
                     "BM25 engine is set to 'rust' but Rust BM25 capability is unavailable."
                 )
-
         if not os.path.exists(storage_path):
             os.makedirs(storage_path)
-
         self.load()
 
     def close(self):
@@ -165,12 +154,10 @@ class BM25Retriever:
 
     def add_documents(self, documents: list[dict[str, Any]], save_deferred: bool = False) -> None:
         """Add documents to the BM25 index.  No-op if *documents* is empty.
-
         The BM25Okapi index is **not rebuilt immediately**; it is rebuilt lazily
         on the next :meth:`search` call.  This eliminates the O(N²) rebuild cost
         that occurred during a full ingest run when this method was called for
         each chunk batch (Epic 6, Story 6.2).
-
         Args:
             documents: List of document dicts with keys ``id``, ``text``, ``metadata``.
             save_deferred: When ``True``, skip the disk write — corpus is updated in
@@ -260,7 +247,6 @@ class BM25Retriever:
 
     def flush(self) -> None:
         """Explicitly save corpus — call after deferred batch ingest session.
-
         If pending log entries are below the compaction threshold, appends them
         to the JSONL delta log instead of rewriting the full corpus file.
         Falls back to a full ``save()`` when the threshold is reached or when
@@ -327,10 +313,8 @@ class BM25Retriever:
                 return results[:top_k]
         if self.bm25 is None:
             return []
-
         tokenized_query = self._tokenize(query)
         scores = self.bm25.get_scores(tokenized_query)
-
         top_indices = None
         if self._numpy_topk_enabled:
             try:
@@ -349,19 +333,16 @@ class BM25Retriever:
         if top_indices is None:
             # Fallback: Get top-k indices efficiently using a heap
             top_indices = heapq.nlargest(top_k, range(len(scores)), key=lambda i: scores[i])
-
         results = []
         for i in top_indices:
             if scores[i] > 0:
                 doc = self.corpus[i].copy()
                 doc["score"] = float(scores[i])
                 results.append(doc)
-
         return results
 
     def delete_documents(self, doc_ids: list[str]) -> None:
         """Remove documents by ID.
-
         The index rebuild is deferred to the next :meth:`search` call via the
         lazy-rebuild flag (Epic 6, Story 6.2).  The corpus is saved immediately
         since delete is an explicit operator action, not a hot-path operation.
@@ -383,7 +364,6 @@ class BM25Retriever:
     def save(self):
         """Save corpus to disk (msgpack.zst preferred, then JSON or JSON.zst)."""
         self._ensure_corpus_materialized()
-
         # Fast-path: msgpack encode + optional zstd compress
         if self._corpus_dedup_enabled and self._rust.can_corpus_msgpack():
             payload_obj = self._build_dedup_corpus_payload()
@@ -428,12 +408,10 @@ class BM25Retriever:
                     return
                 except Exception as e:
                     logger.warning("BM25 msgpack save failed; falling back to JSON: %s", e)
-
         payload_obj = (
             self._build_dedup_corpus_payload() if self._corpus_dedup_enabled else self.corpus
         )
         payload_bytes = self._json_dumps_bytes(payload_obj)
-
         use_zst = self._compress_enabled and len(payload_bytes) >= max(0, self._compress_min_bytes)
         if use_zst:
             try:
@@ -454,11 +432,9 @@ class BM25Retriever:
                 return
             except Exception as e:
                 logger.warning("BM25 compression unavailable; falling back to JSON save: %s", e)
-
         tmp_file = self.corpus_file + ".tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
             f.write(payload_bytes.decode("utf-8"))
-
         # os.replace is atomic on POSIX and uses MoveFileEx(REPLACE_EXISTING) on
         # Windows — safe even when the destination already exists. Fall back to a
         # direct copy if os.replace fails (PermissionError from an exclusive lock,
@@ -586,7 +562,6 @@ class BM25Retriever:
 
     def _replay_jsonl_log(self) -> None:
         """Replay the JSONL delta log into self.corpus if it exists.
-
         Called at the end of every successful :meth:`load` branch so that
         incremental entries written by :meth:`flush` are merged back into the
         corpus.  Compacts automatically when the log exceeds
@@ -657,7 +632,6 @@ class BM25Retriever:
                     pass
                 except Exception as e:
                     logger.warning("Failed to load msgpack.zst BM25 corpus: %s", e)
-
             # Priority 2: json.zst
             if os.path.exists(self.corpus_file_zst):
                 try:
@@ -712,7 +686,6 @@ class BM25Retriever:
                     return
                 except Exception as e:
                     logger.warning("Failed to load compressed BM25 corpus: %s", e)
-
             # Priority 3: uncompressed msgpack
             if os.path.exists(self.corpus_file_msgpack):
                 try:
@@ -736,7 +709,6 @@ class BM25Retriever:
                         return
                 except Exception as e:
                     logger.warning("Failed to load msgpack BM25 corpus: %s", e)
-
             # Priority 4: plain JSON (with Rust fast-path)
             if os.path.exists(self.corpus_file):
                 with open(self.corpus_file, "rb") as f:
@@ -804,7 +776,6 @@ def weighted_score_fusion(
     vector_results: list[dict], bm25_results: list[dict], weight: float = 0.7
 ) -> list[dict]:
     """Merge results using a normalized convex combination of scores.
-
     weight: 1.0 = Pure Semantic, 0.0 = Pure Lexical.
     """
     # Try Rust fast-path
@@ -813,13 +784,10 @@ def weighted_score_fusion(
         result = _rust.score_fusion_weighted(vector_results, bm25_results, weight)
         if result is not None:
             return result
-
     all_docs = {}
-
     # 1. Extract and normalize Vector scores
     v_scores = [doc.get("score", 0.0) for doc in vector_results]
     v_norm = _min_max_normalize(v_scores)
-
     for i, doc in enumerate(vector_results):
         doc_id = doc["id"]
         all_docs[doc_id] = doc.copy()
@@ -827,11 +795,9 @@ def weighted_score_fusion(
         all_docs[doc_id]["vector_score"] = doc.get("score", 0.0)
         # Initialize fused score with weighted vector component
         all_docs[doc_id]["score"] = v_norm[i] * weight
-
     # 2. Extract and normalize BM25 scores
     b_scores = [doc.get("score", 0.0) for doc in bm25_results]
     b_norm = _min_max_normalize(b_scores)
-
     for i, doc in enumerate(bm25_results):
         doc_id = doc["id"]
         if doc_id not in all_docs:
@@ -840,14 +806,11 @@ def weighted_score_fusion(
             all_docs[doc_id]["vector_score"] = 0.0
             all_docs[doc_id]["score"] = 0.0
             all_docs[doc_id]["fused_only"] = True
-
         # Add weighted BM25 component
         all_docs[doc_id]["score"] += b_norm[i] * (1.0 - weight)
-
     # 3. Sort by final fused score
     final_results = list(all_docs.values())
     final_results.sort(key=lambda x: x["score"], reverse=True)
-
     return final_results
 
 
@@ -855,7 +818,6 @@ def reciprocal_rank_fusion(
     vector_results: list[dict], bm25_results: list[dict], k: int = 60
 ) -> list[dict]:
     """Merge results from multiple retrievers using Reciprocal Rank Fusion.
-
     The original cosine similarity score from vector search is preserved in the
     ``vector_score`` field so the UI can display a meaningful relevance value.
     The RRF-fused score (used only for ranking) is stored in ``score``.
@@ -866,18 +828,14 @@ def reciprocal_rank_fusion(
         result = _rust.score_fusion_rrf(vector_results, bm25_results, k)
         if result is not None:
             return result
-
     fused_scores: dict[str, float] = {}
     fused_only_ids: set[str] = set()
-
     # Preserve original cosine scores keyed by doc_id
     vector_scores = {doc["id"]: doc.get("score", 0.0) for doc in vector_results}
-
     # RRF formula requires 1-indexed rank: score = 1 / (k + rank)
     for rank, doc in enumerate(vector_results, start=1):
         doc_id = doc["id"]
         fused_scores[doc_id] = fused_scores.get(doc_id, 0) + 1 / (k + rank)
-
     for rank, doc in enumerate(bm25_results, start=1):
         doc_id = doc["id"]
         if doc_id not in fused_scores:
@@ -885,15 +843,12 @@ def reciprocal_rank_fusion(
             fused_only_ids.add(doc_id)
         else:
             fused_scores[doc_id] += 1 / (k + rank)
-
     # Use shallow copies to avoid mutating the caller's input lists
     all_docs = {doc["id"]: dict(doc) for doc in vector_results}
     for doc in bm25_results:
         if doc["id"] not in all_docs:
             all_docs[doc["id"]] = dict(doc)
-
     sorted_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
-
     final_results = []
     for doc_id in sorted_ids:
         doc = all_docs[doc_id]
@@ -904,5 +859,4 @@ def reciprocal_rank_fusion(
         if doc_id in vector_scores:
             doc["vector_score"] = vector_scores[doc_id]
         final_results.append(doc)
-
     return final_results

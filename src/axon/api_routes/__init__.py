@@ -12,7 +12,6 @@ def _enforce_write_access(brain, operation: str) -> None:
 
 def enforce_project(requested: str | None, brain) -> None:
     """Raise 409 if the caller requested a project that is not the active one.
-
     The brain is a singleton that serves one project at a time.  Silently
     ignoring a mismatched ``project`` field would read/write the wrong corpus.
     Callers should switch first via POST /project/switch.

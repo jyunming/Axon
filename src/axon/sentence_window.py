@@ -39,7 +39,6 @@ _INELIGIBLE_CHUNK_KINDS: frozenset[str] = frozenset({"raptor", "parent"})
 
 def is_eligible(chunk: dict) -> bool:
     """Return True if *chunk* should be added to the sentence-window index.
-
     Eligible chunks are non-code, non-summary leaf chunks.  The check is
     intentionally strict so sentence indexing never inflates the index with
     synthetic or code-structured text.
@@ -69,16 +68,13 @@ _MIN_SENTENCE_CHARS: int = 10
 
 def segment_text(text: str) -> list[str]:
     """Segment *text* into a list of sentence strings.
-
     Uses a simple regex boundary that splits after ``. ``, ``! ``, or ``? ``.
     Short fragments (< _MIN_SENTENCE_CHARS characters) are merged into the
     preceding sentence to avoid polluting the index with stubs.
-
     Returns an empty list for blank or None input.
     """
     if not text or not text.strip():
         return []
-
     from axon.rust_bridge import get_rust_bridge
 
     bridge = get_rust_bridge()
@@ -86,7 +82,6 @@ def segment_text(text: str) -> list[str]:
         result = bridge.segment_text(text, _MIN_SENTENCE_CHARS)
         if result is not None:
             return result
-
     raw = _SENTENCE_BOUNDARY.split(text.strip())
     sentences: list[str] = []
     for part in raw:
@@ -98,7 +93,6 @@ def segment_text(text: str) -> list[str]:
             sentences[-1] = sentences[-1] + " " + part
         else:
             sentences.append(part)
-
     return [s for s in sentences if s.strip()]
 
 
@@ -110,7 +104,6 @@ def segment_text(text: str) -> list[str]:
 @dataclass
 class SentenceRecord:
     """One sentence within a prose chunk.
-
     Fields are sufficient to:
     - reconstruct a ±N context window from sibling sentences
     - map the sentence back to its parent chunk and source for citations
@@ -130,7 +123,6 @@ def _make_sentence_id(chunk_id: str, idx: int) -> str:
 
 def segment_chunk(chunk: dict) -> list[SentenceRecord]:
     """Segment a chunk dict into :class:`SentenceRecord` objects.
-
     Returns an empty list for ineligible chunks, empty text, or chunks that
     produce only a single sentence (not worth indexing at sentence granularity).
     Only call on chunks that have already passed :func:`is_eligible`.
@@ -162,11 +154,9 @@ _INDEX_FILENAME = ".sentence_index.json"
 class SentenceWindowIndex:
     """Maps sentence IDs to :class:`SentenceRecord` objects and chunk IDs to
     ordered sentence ID lists.
-
     Provides :meth:`get_window` to reconstruct a coherent ±N-sentence context
     window around any sentence hit.  Persisted as a single JSON file alongside
     the BM25 index.
-
     Thread safety: not thread-safe — access is serialised by the ingest lock
     in ``AxonBrain``.
     """
@@ -180,7 +170,6 @@ class SentenceWindowIndex:
     # ------------------------------------------------------------------
     # Mutation
     # ------------------------------------------------------------------
-
     def add_records(self, records: list[SentenceRecord]) -> None:
         """Register sentence records derived from one chunk."""
         if not records:
@@ -195,7 +184,6 @@ class SentenceWindowIndex:
     # ------------------------------------------------------------------
     # Lookup
     # ------------------------------------------------------------------
-
     def get_record(self, sentence_id: str) -> SentenceRecord | None:
         """Return the :class:`SentenceRecord` for *sentence_id*, or None."""
         d = self._records.get(sentence_id)
@@ -210,14 +198,11 @@ class SentenceWindowIndex:
 
     def get_window(self, sentence_id: str, window_size: int = 3) -> str | None:
         """Reconstruct a coherent context window around *sentence_id*.
-
         Returns the concatenated text of sentences in the range
         [max(0, idx - window_size), min(total, idx + window_size + 1)] drawn
         from the parent chunk.
-
         Returns None if *sentence_id* is unknown; falls back to the single
         sentence text if sibling records are missing.
-
         Citations still map to the parent ``chunk_id``, which is stable.
         Overlapping windows from different sentence hits in the same chunk are
         deduplicated by the caller (query_router) before final results are
@@ -239,7 +224,6 @@ class SentenceWindowIndex:
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
-
     def save(self, directory: Path) -> None:
         """Save the index to *directory*/.sentence_index.msgpack (or .json fallback)."""
         from axon.rust_bridge import get_rust_bridge
@@ -303,16 +287,13 @@ _META_FILENAME = ".sentence_meta.json"
 
 class SentenceVectorStore:
     """Lightweight sentence-embedding index backed by a numpy float32 matrix.
-
     Does not require a third-party vector database.  Cosine-similarity search
     is performed with a single matrix–vector product, which is fast for the
     sentence-count ranges expected in practice (tens of thousands of sentences
     at most for a typical knowledge base).
-
     Persisted as two files in *directory*:
       - ``.sentence_vecs.npy``  — float32 embeddings matrix [N, dim]
       - ``.sentence_meta.json`` — parallel list of ``{id, metadata}`` records
-
     Thread safety: not thread-safe — reads and writes are serialised by the
     caller (``AxonBrain._index_sentence_windows`` holds the ingest lock).
     """
@@ -326,7 +307,6 @@ class SentenceVectorStore:
     # ------------------------------------------------------------------
     # Indexing (Story 1.2)
     # ------------------------------------------------------------------
-
     def add(
         self,
         ids: list[str],
@@ -334,7 +314,6 @@ class SentenceVectorStore:
         metadatas: list[dict],
     ) -> None:
         """Append *ids* / *embeddings* / *metadatas* to the in-memory index.
-
         Call :meth:`save` afterwards to persist to disk.
         """
         if not ids:
@@ -344,7 +323,6 @@ class SentenceVectorStore:
         except ImportError:
             logger.warning("SentenceVectorStore: numpy not available — sentence indexing skipped")
             return
-
         new_vecs = np.array(embeddings, dtype=np.float32)
         if self._vecs is None or len(self._ids) == 0:
             self._vecs = new_vecs
@@ -356,10 +334,8 @@ class SentenceVectorStore:
     # ------------------------------------------------------------------
     # Search (Story 1.3 — used in window reconstruction)
     # ------------------------------------------------------------------
-
     def search(self, query_embedding: list[float], top_k: int = 10) -> list[dict]:
         """Return the top-*k* most similar sentence records (cosine similarity).
-
         Each result is a dict with keys ``id``, ``score``, and ``metadata``.
         Returns an empty list when the index is empty or numpy is unavailable.
         """
@@ -369,23 +345,19 @@ class SentenceVectorStore:
             import numpy as np
         except ImportError:
             return []
-
         q = np.array(query_embedding, dtype=np.float32)
         q_norm = np.linalg.norm(q)
         if q_norm == 0:
             return []
         q = q / q_norm
-
         norms = np.linalg.norm(self._vecs, axis=1, keepdims=True)
         norms = np.where(norms == 0, 1.0, norms)
         normed = self._vecs / norms
         scores: np.ndarray = normed @ q  # shape [N]
-
         k = min(top_k, len(self._ids))
         # argpartition is O(N) rather than O(N log N) — fast for large N
         top_indices = np.argpartition(scores, -k)[-k:]
         top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
-
         return [
             {
                 "id": self._ids[i],
@@ -401,7 +373,6 @@ class SentenceVectorStore:
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
-
     def save(self) -> None:
         """Persist the embedding matrix and metadata list to disk."""
         from axon.rust_bridge import get_rust_bridge
@@ -412,7 +383,6 @@ class SentenceVectorStore:
 
             if self._vecs is not None and len(self._ids) > 0:
                 np.save(str(self._directory / _VECS_FILENAME), self._vecs)
-
             bridge = get_rust_bridge()
             if bridge.can_sentence_codec():
                 raw = bridge.encode_sentence_meta(self._ids, self._meta)

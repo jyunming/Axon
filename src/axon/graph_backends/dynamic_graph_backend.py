@@ -174,13 +174,11 @@ SNAPSHOT_VERSION = 1
 
 class DynamicGraphBackend:
     """SQLite temporal graph backend satisfying ``GraphBackend`` Protocol.
-
     The owner writes to an on-disk SQLite database under ``bm25_path`` and
     exports a read-only JSON snapshot after each ingest.  Grantees of a
     shared project (``mounts/<mount_name>`` active project) never touch the
     owner's SQLite file — they load the snapshot into an in-memory SQLite
     so queries work unchanged.
-
     Args:
         brain: An ``AxonBrain`` instance.  Uses ``brain.config.bm25_path``
                for the database path, ``brain.llm`` for extraction LLM calls,
@@ -193,10 +191,8 @@ class DynamicGraphBackend:
         _base = Path(getattr(brain.config, "bm25_path", "."))
         self._snapshot_path = _base / SNAPSHOT_FILENAME
         self._write_lock = threading.Lock()
-
         active_project = getattr(brain, "_active_project", "") or ""
         self._is_mounted: bool = active_project.startswith("mounts/")
-
         # Owner-side DB lives under bm25_path by default, but is redirected to
         # a guaranteed-local path under ~/.axon/graphs/<id>/ when bm25_path is
         # itself on a cloud-sync / network filesystem. Even with DELETE journal
@@ -204,7 +200,6 @@ class DynamicGraphBackend:
         # racing the writer; keeping the DB local-only side-steps the issue.
         # Snapshots are still emitted to the (synced) bm25_path for grantees.
         self._db_path, self._db_relocated = self._resolve_db_path(_base)
-
         if self._is_mounted:
             # Grantee: load the owner's JSON snapshot into an in-memory DB.
             # Never open the owner's .dynamic_graph.db directly — WAL/DELETE
@@ -215,14 +210,12 @@ class DynamicGraphBackend:
             # Owner: real on-disk DB in DELETE journal mode (share-safe).
             self._maybe_migrate_legacy_db(_base)
             self._conn = self._init_db()
-
         self._cached_nx_graph: Any = None
         self._cached_nx_time: float = 0.0
 
     # ------------------------------------------------------------------
     # DB-path resolution (owner side; relocates off cloud-synced paths)
     # ------------------------------------------------------------------
-
     @staticmethod
     def _local_graphs_root() -> Path:
         """Return the always-local root for owner DBs (``~/.axon/graphs``)."""
@@ -230,14 +223,12 @@ class DynamicGraphBackend:
 
     def _resolve_db_path(self, base: Path) -> tuple[Path, bool]:
         """Return ``(db_path, relocated)`` for the owner-side SQLite file.
-
         When *base* (== ``brain.config.bm25_path``) is on a cloud-sync /
         network / WSL-mount path, the DB is redirected to
         ``~/.axon/graphs/<project_id>/.dynamic_graph.db`` so the writer's
         mid-update file state is never observed by a sync client. ``base``
         is used as-is for the snapshot, which IS meant to be visible to
         grantees on a synced path.
-
         ``project_id`` is read from ``base.parent/meta.json`` if available,
         otherwise derived from a hash of ``base`` so it stays stable across
         process restarts on the same project.
@@ -247,7 +238,6 @@ class DynamicGraphBackend:
         default = base / ".dynamic_graph.db"
         if not is_cloud_sync_or_mount_path(base):
             return default, False
-
         # Read project_id from the project's meta.json (one level up from bm25_path).
         project_id = ""
         meta_path = base.parent / "meta.json"
@@ -258,7 +248,6 @@ class DynamicGraphBackend:
             pass
         if not project_id:
             project_id = _sha8(str(base.resolve() if base.exists() else base))
-
         local_dir = self._local_graphs_root() / project_id
         try:
             local_dir.mkdir(parents=True, exist_ok=True)
@@ -298,7 +287,6 @@ class DynamicGraphBackend:
     # ------------------------------------------------------------------
     # Init
     # ------------------------------------------------------------------
-
     def _init_db(self) -> sqlite3.Connection:
         """Open (or create) the on-disk SQLite database and apply the schema."""
         conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -325,15 +313,12 @@ class DynamicGraphBackend:
     # ------------------------------------------------------------------
     # Snapshot export / import (share-mount safety)
     # ------------------------------------------------------------------
-
     def _export_snapshot(self) -> None:
         """Write a read-only JSON snapshot for grantees of a shared project.
-
         Called at the end of :meth:`ingest` on the owner side only.  The
         snapshot is the only graph artefact that lives on a potentially-
         synced path — the full SQLite database stays local (write-path
         stays single-writer) so WAL-on-sync corruption is impossible.
-
         Write is atomic: temp file + ``os.replace``.
         """
         if self._is_mounted:
@@ -390,7 +375,6 @@ class DynamicGraphBackend:
 
     def _load_snapshot(self) -> None:
         """Populate the in-memory DB (grantee side) from the owner's snapshot.
-
         Missing or unreadable snapshot is not an error: the grantee simply
         sees an empty graph and retrieve() returns nothing, which is the
         sensible default when the owner has never ingested.
@@ -468,7 +452,6 @@ class DynamicGraphBackend:
     # ------------------------------------------------------------------
     # LLM extraction
     # ------------------------------------------------------------------
-
     def _llm_complete(self, prompt: str, system_prompt: str = "") -> str:
         """Call the brain's LLM; return empty string on error."""
         try:
@@ -538,7 +521,6 @@ class DynamicGraphBackend:
     # ------------------------------------------------------------------
     # Storage helpers
     # ------------------------------------------------------------------
-
     def _upsert_entity(self, name: str, entity_type: str, description: str, now: str) -> str:
         """Insert or update an entity; return canonical_name."""
         canon = _norm(name)
@@ -575,14 +557,11 @@ class DynamicGraphBackend:
         subj_norm = _norm(subject)
         obj_norm = _norm(obj)
         rel_upper = relation.upper()
-
         # Determine scope_key for conflict resolution
         scope_key: str | None = None
         if rel_upper in _EXCLUSIVE_RELATIONS:
             scope_key = f"{subj_norm}:{rel_upper}"
-
         fact_id = _sha8(f"{subj_norm}|{rel_upper}|{obj_norm}|{now}")
-
         with self._write_lock:
             # Supersede existing active facts with the same scope_key (exclusive families)
             if scope_key is not None:
@@ -590,7 +569,6 @@ class DynamicGraphBackend:
                     "UPDATE facts SET status = 'superseded', invalid_at = ? WHERE scope_key = ? AND status = 'active'",
                     (now, scope_key),
                 )
-
             self._conn.execute(
                 "INSERT OR IGNORE INTO facts (fact_id, subject, relation, object, valid_at, status, scope_key, confidence, metadata) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)",
                 (
@@ -614,10 +592,8 @@ class DynamicGraphBackend:
     # ------------------------------------------------------------------
     # GraphBackend protocol
     # ------------------------------------------------------------------
-
     def ingest(self, chunks: list[dict]) -> IngestResult:
         """Extract entities and facts from *chunks*; store in SQLite.
-
         Uses the brain's LLM to extract named entities and relational facts
         from each chunk's text.  Entities are upserted by canonical name;
         facts are inserted with temporal validity; exclusive facts supersede
@@ -626,15 +602,12 @@ class DynamicGraphBackend:
         now = _now_iso()
         entities_added = 0
         relations_added = 0
-
         for chunk in chunks:
             text = chunk.get("text", chunk.get("page_content", ""))
             chunk_id = chunk.get("id", _sha8(text[:200]))
             if not text:
                 continue
-
             episode_id = _sha8(f"ep|{chunk_id}|{now}")
-
             # Persist episode
             with self._write_lock:
                 self._conn.execute(
@@ -648,13 +621,11 @@ class DynamicGraphBackend:
                     ),
                 )
                 self._conn.commit()
-
             # Entity extraction
             entities = self._extract_entities(text)
             for ent in entities:
                 self._upsert_entity(ent["name"], ent["type"], ent["description"], now)
                 entities_added += 1
-
             # Fact extraction
             facts = self._extract_facts(text)
             for fact in facts:
@@ -669,7 +640,6 @@ class DynamicGraphBackend:
                     now=now,
                 )
                 relations_added += 1
-
         result = IngestResult(
             entities_added=entities_added,
             relations_added=relations_added,
@@ -688,7 +658,6 @@ class DynamicGraphBackend:
         existing_results: list[dict] | None = None,
     ) -> list[GraphContext]:
         """Return active facts related to *query* as :class:`GraphContext` objects.
-
         Steps:
         1. Extract query entities (via LLM or simple tokenization).
         2. Find active facts where subject or object matches a query entity.
@@ -696,13 +665,10 @@ class DynamicGraphBackend:
         4. Return as GraphContext objects (each fact = one context).
         """
         top_k = (cfg.top_k if cfg else None) or 10
-
         # Step 1: extract query entities (lightweight — just tokenize query terms)
         query_terms = [_norm(w) for w in query.split() if len(w) >= 3]
-
         if not query_terms:
             return []
-
         # Step 2: find active facts matching query terms (direct hits)
         placeholders = ",".join("?" for _ in query_terms)
         rows = self._execute(
@@ -712,20 +678,17 @@ class DynamicGraphBackend:
             f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
             (*query_terms, *query_terms, top_k),
         )
-
         # Step 3: Perform multi-hop BFS if requested (Epic 1/4)
         max_hops = 1
         if cfg and hasattr(cfg, "graph_rag_max_hops"):
             max_hops = int(cfg.graph_rag_max_hops)
         else:
             max_hops = int(os.getenv("AXON_GRAPH_RAG_MAX_HOPS", "1"))
-
         hop_decay = 0.7
         if cfg and hasattr(cfg, "graph_rag_hop_decay"):
             hop_decay = float(cfg.graph_rag_hop_decay)
         else:
             hop_decay = float(os.getenv("AXON_GRAPH_RAG_HOP_DECAY", "0.7"))
-
         # Map to track best score/path for each fact
         fact_map: dict[str, dict] = {}
         for rank, row in enumerate(rows):
@@ -739,7 +702,6 @@ class DynamicGraphBackend:
                     "path": [],
                     "matched": {row["subject"], row["object"]},
                 }
-
         if max_hops > 0:
             current_fringe = set(query_terms)
             visited_nodes = set(query_terms)
@@ -747,17 +709,14 @@ class DynamicGraphBackend:
             node_paths: dict[str, list[tuple[str, str, str]]] = {n: [] for n in query_terms}
             # node -> hop count
             node_hops: dict[str, int] = dict.fromkeys(query_terms, 0)
-
             for _hop in range(1, max_hops + 1):
                 if not current_fringe:
                     break
-
                 # Score for facts DISCOVERED at this hop level.
                 # A fact is discovered at hop H if it contains a node reached at hop H-1.
                 # Wait, if node X is at hop 0 (seed), facts containing X are hop 0.
                 # If node Y is reached from X, Y is hop 1. Facts containing Y are hop 1.
                 # So fact_hop = node_hop.
-
                 linked_rows = []
                 fringe_list = list(current_fringe)
                 # SQLITE_MAX_VARIABLE_NUMBER safe limit (Epic 1/4 Phase 2.2)
@@ -773,17 +732,14 @@ class DynamicGraphBackend:
                             (*chunk, *chunk),
                         )
                     )
-
                 next_fringe = set()
                 for row in linked_rows:
                     fact_id = row["fact_id"]
                     s_orig, r, o_orig = row["subject"], row["relation"], row["object"]
                     subj, obj = s_orig.lower(), o_orig.lower()
-
                     # The fact is reached via source_node which is in current_fringe
                     source_node = subj if subj in current_fringe else obj
                     fact_hop = node_hops[source_node]
-
                     # Update fact score/path
                     score = float(row["confidence"]) * (hop_decay**fact_hop)
                     if fact_id not in fact_map or score > fact_map[fact_id]["score"]:
@@ -795,7 +751,6 @@ class DynamicGraphBackend:
                             "path": node_paths[source_node],
                             "matched": {s_orig, o_orig},
                         }
-
                     # Find new nodes reached via this fact
                     target_node = obj if subj == source_node else subj
                     if target_node not in visited_nodes:
@@ -803,27 +758,22 @@ class DynamicGraphBackend:
                         next_fringe.add(target_node)
                         node_hops[target_node] = fact_hop + 1
                         node_paths[target_node] = node_paths[source_node] + [(s_orig, r, o_orig)]
-
                 current_fringe = next_fringe
-
         _existing_ids = {r.get("id") for r in (existing_results or []) if r.get("id")}
         sorted_facts = sorted(
             fact_map.values(), key=lambda x: (x["score"], x["row"]["valid_at"]), reverse=True
         )[:top_k]
-
         # Step 4: convert to GraphContext
         contexts: list[GraphContext] = []
         for rank, item in enumerate(sorted_facts):
             row = item["row"]
             if row["fact_id"] in _existing_ids:
                 continue
-
             text = f"{row['subject']} {row['relation'].replace('_', ' ').lower()} {row['object']}"
             meta = json.loads(row["metadata"] or "{}")
             desc = meta.get("description", "")
             if desc:
                 text = f"{text}: {desc}"
-
             ctx = GraphContext(
                 context_id=row["fact_id"],
                 context_type="fact",
@@ -839,7 +789,6 @@ class DynamicGraphBackend:
                 path=item["path"],
             )
             contexts.append(ctx)
-
         return contexts
 
     def _build_nx_graph_from_db(self):
@@ -848,7 +797,6 @@ class DynamicGraphBackend:
         ttl = float(os.getenv("AXON_GRAPH_CACHE_TTL", "300"))
         if self._cached_nx_graph and (now - self._cached_nx_time) < ttl:
             return self._cached_nx_graph
-
         import networkx as nx
 
         rows = self._execute(
@@ -862,17 +810,14 @@ class DynamicGraphBackend:
             except (ValueError, TypeError):
                 logger.warning(f"Malformed confidence value in fact DB: {row['confidence']!r}")
                 conf = 1.0
-
             if G.has_edge(u, v):
                 G[u][v]["weight"] += conf
             else:
                 G.add_edge(u, v, weight=conf)
-
         # Post-process for distance
         for _u, _v, d in G.edges(data=True):
             w = d.get("weight", 1.0)
             d["distance"] = 1.0 / (w + 1e-6)
-
         self._cached_nx_graph = G
         self._cached_nx_time = now
         return G
@@ -929,7 +874,6 @@ class DynamicGraphBackend:
                 "active_facts": 0,
                 "superseded_facts": 0,
             }
-
         row = rows[0]
         return {
             "backend": BACKEND_ID,
@@ -947,19 +891,15 @@ class DynamicGraphBackend:
             "FROM facts WHERE status = 'active' ORDER BY confidence DESC LIMIT ?",
             (limit,),
         )
-
         # Collect unique node names
         node_names: dict[str, dict] = {}
         links: list[dict] = []
-
         for row in rows:
             subj = row["subject"]
             obj = row["object"]
-
             for name in (subj, obj):
                 if name not in node_names:
                     node_names[name] = {"id": name, "name": name, "label": name, "type": "entity"}
-
             links.append(
                 {
                     "source": subj,
@@ -969,7 +909,6 @@ class DynamicGraphBackend:
                     "weight": float(row["confidence"]),
                 }
             )
-
         # Apply entity_type filter if requested
         if filters and filters.entity_types:
             allowed = set(filters.entity_types)
@@ -978,7 +917,6 @@ class DynamicGraphBackend:
             for name, node in node_names.items():
                 node["type"] = type_map.get(name, "entity")
             node_names = {n: d for n, d in node_names.items() if d["type"] in allowed}
-
         return GraphPayload(nodes=list(node_names.values()), links=links)
 
     def close(self) -> None:

@@ -23,26 +23,22 @@ def _build_overview(brain, jobs: dict) -> dict:
     from axon.runtime import get_registry
 
     project = getattr(brain, "_active_project", "default") if brain else "default"
-
     # Lease / drain state
     try:
         registry = get_registry()
         leases = registry.snapshot_all()
     except Exception:
         leases = []
-
     # Maintenance state
     try:
         maint = get_maintenance_status(project)
     except Exception:
         maint = {"maintenance_state": "unknown", "active_leases": 0}
-
     # Project list
     try:
         projects = list_projects()
     except Exception:
         projects = []
-
     # Graph state
     entity_count = 0
     relation_count = 0
@@ -51,7 +47,6 @@ def _build_overview(brain, jobs: dict) -> dict:
         entity_count = len(getattr(brain, "_entity_graph", {}) or {})
         relation_count = len(getattr(brain, "_relation_graph", {}) or {})
         community_count = len(getattr(brain, "_community_summaries", {}) or {})
-
     # Stale docs
     stale_count = 0
     if brain:
@@ -60,14 +55,11 @@ def _build_overview(brain, jobs: dict) -> dict:
             stale_count = len(stale) if stale else 0
         except Exception:
             pass
-
     # Active jobs
     active_jobs = sum(1 for j in jobs.values() if j.get("status") == "processing")
-
     # Copilot sessions
     session_store = gov.get_session_store()
     active_sessions = len(session_store.list_active())
-
     return {
         "project": project,
         "maintenance": maint,
@@ -176,12 +168,10 @@ async def governance_projects():
     from axon.projects import list_projects
 
     brain = _api.brain
-
     try:
         projects = list_projects()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
     result = []
     for p in projects:
         name = p.get("name", "")
@@ -196,7 +186,6 @@ async def governance_projects():
                 "community_count": len(getattr(brain, "_community_summaries", {}) or {}),
             }
         result.append({**p, "maintenance": maint, "graph": graph_state})
-
     return {"projects": result, "count": len(result)}
 
 

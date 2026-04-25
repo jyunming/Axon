@@ -59,7 +59,6 @@ class _ProjectLeaseState:
 
 class _WriteLease:
     """Represents a single acquired write lease.
-
     Call ``close()`` when the write operation completes.  ``__del__`` provides
     a safety net so the active counter is decremented even if the caller
     forgets or an exception propagates.
@@ -81,7 +80,6 @@ class _WriteLease:
 
     def is_stale(self) -> bool:
         """Return True if the project epoch advanced since this lease was acquired.
-
         A stale lease means a project switch happened after ingest started.
         Writers should abort their commit phase and discard results rather than
         committing data to the wrong project's stores.
@@ -110,7 +108,6 @@ class _WriteLease:
 
 class LeaseRegistry:
     """Thread-safe per-project lease registry.
-
     All public methods are safe to call from multiple threads concurrently.
     """
 
@@ -121,7 +118,6 @@ class LeaseRegistry:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
     def _state(self, project: str) -> _ProjectLeaseState:
         """Return (creating if absent) the state for *project*."""
         with self._global_lock:
@@ -150,17 +146,13 @@ class LeaseRegistry:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     def acquire(self, project: str) -> _WriteLease:
         """Acquire a write lease for *project*.
-
         Returns a :class:`_WriteLease` token.  Call ``close()`` on it (or
         use it as a context manager) when the write is done.
-
         Args:
             project: Project name. ``"default"`` is always allowed and is not
                      tracked (no drain semantics on the default project).
-
         Raises:
             PermissionError: If the project is in drain mode.
         """
@@ -178,10 +170,8 @@ class LeaseRegistry:
 
     def start_drain(self, project: str) -> int:
         """Enter drain mode: block new ``acquire()`` calls.
-
         Args:
             project: Project name.
-
         Returns:
             Current number of active (in-flight) write leases.
         """
@@ -206,14 +196,11 @@ class LeaseRegistry:
 
     def bump_epoch(self, project: str) -> int:
         """Increment the epoch counter to fence stale in-flight writers.
-
         Called by ``switch_project()`` when the active project changes, so any
         write that started on the previous activation is identifiable as stale
         at release time.
-
         Args:
             project: Project name.
-
         Returns:
             The new epoch value.
         """
@@ -226,11 +213,9 @@ class LeaseRegistry:
 
     def wait_for_drain(self, project: str, timeout: float = 30.0) -> bool:
         """Block until all active leases are released or *timeout* seconds pass.
-
         Args:
             project: Project name.
             timeout: Maximum seconds to wait.
-
         Returns:
             ``True`` if all leases drained within the timeout, ``False`` otherwise.
         """
@@ -249,7 +234,6 @@ class LeaseRegistry:
 
     def snapshot(self, project: str) -> dict:
         """Return a status dict suitable for serialisation.
-
         Keys: ``project``, ``epoch``, ``active_leases``, ``draining``.
         """
         if project == "default":
@@ -265,7 +249,6 @@ class LeaseRegistry:
 
     def snapshot_all(self) -> list[dict]:
         """Return snapshots for every tracked project that has non-zero leases or is draining.
-
         Returns:
             List of snapshot dicts (same shape as ``snapshot()``), sorted by project name.
             Projects with ``active_leases == 0`` and ``draining == False`` are omitted

@@ -70,10 +70,8 @@ def create_mount_descriptor(
     share_key_id: str,
 ) -> dict[str, Any]:
     """Write a ``mount.json`` descriptor and return it.
-
     Reads ``project_id`` from the owner's ``meta.json`` and
     ``store_id`` from the owner's ``store_meta.json`` if available.
-
     Args:
         grantee_user_dir: Grantee's AxonStore user directory.
         mount_name:        Logical mount identifier (e.g. ``alice_research``).
@@ -82,7 +80,6 @@ def create_mount_descriptor(
         owner_user_dir:    Owner's AxonStore user directory.
         target_project_dir: Absolute path to owner's project data directory.
         share_key_id:      The ``key_id`` of the share that was redeemed.
-
     Returns:
         The descriptor dict that was written to disk.
     """
@@ -98,7 +95,6 @@ def create_mount_descriptor(
         store_id = store_meta.get("store_id", "")
     except Exception:
         pass
-
     now = datetime.now(timezone.utc).isoformat()
     descriptor: dict[str, Any] = {
         "mount_name": mount_name,
@@ -116,7 +112,6 @@ def create_mount_descriptor(
         "readonly": True,
         "descriptor_version": DESCRIPTOR_VERSION,
     }
-
     desc_dir = mount_descriptor_dir(grantee_user_dir, mount_name)
     desc_dir.mkdir(parents=True, exist_ok=True)
     mount_descriptor_path(grantee_user_dir, mount_name).write_text(
@@ -159,7 +154,6 @@ def list_mount_descriptors(user_dir: Path) -> list[dict[str, Any]]:
 
 def remove_mount_descriptor(user_dir: Path, mount_name: str) -> bool:
     """Remove the descriptor directory for *mount_name*.
-
     Returns:
         True if the descriptor existed and was removed, False otherwise.
     """
@@ -172,7 +166,6 @@ def remove_mount_descriptor(user_dir: Path, mount_name: str) -> bool:
 
 def validate_mount_descriptor(descriptor: dict[str, Any]) -> tuple[bool, str]:
     """Check whether *descriptor* points to a valid, accessible project.
-
     Returns:
         ``(True, "")`` when valid, or ``(False, reason)`` when not.
     """
