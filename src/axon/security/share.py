@@ -653,15 +653,171 @@ def _soft_revoke(project_dir: Path, key_id: str) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Crash-safe hard-revoke staging
+# ---------------------------------------------------------------------------
+#
+# Hard revoke is a multi-step operation: generate new DEK → re-encrypt every
+# content file → swap in the new master-wrapped DEK → write new sealed
+# marker → delete share wraps. A crash anywhere in the middle without staged
+# state would leave files encrypted under a key that was never persisted —
+# permanently undecryptable.
+#
+# Strategy: persist the new master-wrapped DEK + a rotation marker BEFORE
+# touching any content file. Each file is rotated atomically (tempfile +
+# os.replace), and reads during rotation may transiently see a mix of
+# old/new ciphertext (the resume helper handles both). On completion, the
+# staged DEK is promoted over the live one, the sealed marker is updated,
+# and the rotation context is cleared.
+#
+# Resume helper (``_resume_rotation_if_needed``): if a prior rotation
+# crashed, the rotation marker survives. The next ``revoke_sealed_share(...,
+# rotate=True)`` call detects it, recovers the new DEK + new seal_id, and
+# resumes the per-file loop. Each file is decrypted with whichever (DEK,
+# seal_id) pair works (old or new), then re-encrypted with the new pair.
+
+_ROTATION_DEK_FILENAME = "dek.wrapped.rotating"
+_ROTATION_MARKER_FILENAME = ".sealing.rotation"
+
+
+def _rotation_dek_path(project_dir: Path) -> Path:
+    return project_dir / ".security" / _ROTATION_DEK_FILENAME
+
+
+def _rotation_marker_path(project_dir: Path) -> Path:
+    return project_dir / ".security" / _ROTATION_MARKER_FILENAME
+
+
+def _stage_rotation(
+    project_dir: Path,
+    *,
+    master: bytes,
+    new_dek: bytes,
+    old_seal_id: str,
+    new_seal_id: str,
+) -> None:
+    """Persist new DEK + rotation marker BEFORE any file is rotated.
+
+    Atomic per-file (tempfile + os.replace). After both files land, a
+    crash anywhere in the rotation loop is recoverable: the marker
+    plus the staged DEK contain everything needed to resume.
+    """
+    from cryptography.hazmat.primitives.keywrap import aes_key_wrap as _wrap
+
+    sec_dir = project_dir / ".security"
+    sec_dir.mkdir(parents=True, exist_ok=True)
+
+    dek_path = _rotation_dek_path(project_dir)
+    marker_path = _rotation_marker_path(project_dir)
+    dek_tmp = dek_path.with_suffix(dek_path.suffix + ".write")
+    marker_tmp = marker_path.with_suffix(marker_path.suffix + ".write")
+
+    try:
+        dek_tmp.write_bytes(_wrap(master, new_dek))
+        os.replace(dek_tmp, dek_path)
+    except OSError as exc:
+        try:
+            dek_tmp.unlink()
+        except OSError:
+            pass
+        raise SecurityError(f"hard_revoke failed to stage new DEK at {dek_path}: {exc}") from exc
+
+    payload = json.dumps(
+        {"v": 1, "old_seal_id": old_seal_id, "new_seal_id": new_seal_id},
+        sort_keys=True,
+    )
+    try:
+        marker_tmp.write_text(payload, encoding="utf-8")
+        os.replace(marker_tmp, marker_path)
+    except OSError as exc:
+        try:
+            marker_tmp.unlink()
+        except OSError:
+            pass
+        raise SecurityError(
+            f"hard_revoke failed to stage rotation marker at {marker_path}: {exc}"
+        ) from exc
+
+
+def _read_rotation_marker(project_dir: Path) -> dict[str, str] | None:
+    """Return ``{old_seal_id, new_seal_id}`` if a rotation is in progress."""
+    path = _rotation_marker_path(project_dir)
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SecurityError(
+            f"Rotation marker at {path} is unreadable / malformed ({exc}). "
+            "Manual recovery may be needed."
+        ) from exc
+    if (
+        not isinstance(record, dict)
+        or record.get("v") != 1
+        or not isinstance(record.get("old_seal_id"), str)
+        or not isinstance(record.get("new_seal_id"), str)
+        or not record["old_seal_id"]
+        or not record["new_seal_id"]
+    ):
+        raise SecurityError(f"Rotation marker at {path} has unexpected schema; refusing to resume.")
+    return {
+        "old_seal_id": record["old_seal_id"],
+        "new_seal_id": record["new_seal_id"],
+    }
+
+
+def _read_staged_dek(project_dir: Path, master: bytes) -> bytes:
+    """Unwrap the staged dek.wrapped.rotating with *master*."""
+    from cryptography.hazmat.primitives.keywrap import (
+        InvalidUnwrap,
+        aes_key_unwrap,
+    )
+
+    path = _rotation_dek_path(project_dir)
+    if not path.is_file():
+        raise SecurityError(
+            f"Rotation marker exists but staged DEK at {path} is missing; "
+            "cannot resume — manual recovery needed."
+        )
+    try:
+        wrapped = path.read_bytes()
+        dek: bytes = aes_key_unwrap(master, wrapped)
+    except InvalidUnwrap as exc:
+        raise SecurityError(f"Staged DEK at {path} won't unwrap with the current master.") from exc
+    except OSError as exc:
+        raise SecurityError(f"Could not read staged DEK at {path}: {exc}") from exc
+    if len(dek) != DEK_LEN:
+        raise SecurityError(f"Staged DEK at {path} is {len(dek)} bytes (expected {DEK_LEN}).")
+    return dek
+
+
+def _clear_rotation_context(project_dir: Path) -> None:
+    """Best-effort cleanup of the staging files after a successful promote."""
+    for path in (_rotation_dek_path(project_dir), _rotation_marker_path(project_dir)):
+        try:
+            path.unlink()
+        except OSError as exc:
+            logger.debug("Could not clear rotation context file %s: %s", path, exc)
+
+
 def _hard_revoke(
     owner_user_dir: Path,
     project: str,
     project_dir: Path,
     key_id: str,
 ) -> dict[str, Any]:
-    """Rotate the project DEK; re-encrypt every file; nuke every share wrap."""
+    """Rotate the project DEK; re-encrypt every file; nuke every share wrap.
+
+    Crash-safe via staged ``dek.wrapped.rotating`` + ``.sealing.rotation``
+    sidecars: if a prior rotation crashed, the next call detects the
+    rotation marker, recovers the staged DEK + seal_ids, and resumes
+    the per-file loop. Each file is decrypted with whichever (DEK,
+    seal_id) pair works (old or new) and re-encrypted with the new pair.
+    """
     # Defer imports — these pull in sealed-only modules that may not be
     # installed (the Phase 2 stack guards on ImportError already).
+    from cryptography.exceptions import InvalidTag
+
     from .crypto import SealedFile, generate_dek, make_aad
     from .master import get_master_key, get_project_dek
     from .seal import (
@@ -674,25 +830,57 @@ def _hard_revoke(
     marker = read_sealed_marker(project_dir)
     if marker is None:
         raise SecurityError(f"Sealed marker missing at {project_dir}; cannot hard-revoke.")
-    old_seal_id = marker.get("seal_id", "")
-    if not isinstance(old_seal_id, str) or not old_seal_id:
+    old_seal_id_marker = marker.get("seal_id", "")
+    if not isinstance(old_seal_id_marker, str) or not old_seal_id_marker:
         raise SecurityError(f"Sealed marker at {project_dir} has no seal_id; refusing to rotate.")
 
-    # Both old DEK (to decrypt) and master (to re-wrap the new DEK)
-    # must be available — get_project_dek raises SecurityError on a
-    # locked store + on missing dek.wrapped.
-    old_dek = get_project_dek(owner_user_dir, project_dir)
+    # The master + the live DEK are required either way; surface clear
+    # errors before touching any state.
     master = get_master_key(owner_user_dir)
+    old_dek = get_project_dek(owner_user_dir, project_dir)
 
-    new_dek = generate_dek()
-    new_seal_id = "seal_" + secrets.token_hex(8)
+    # Resume detection: if a prior rotation crashed, recover its
+    # new_seal_id + staged DEK rather than minting fresh ones (otherwise
+    # any files already rotated under the old new_seal_id would be
+    # stranded).
+    rotation = _read_rotation_marker(project_dir)
+    if rotation is not None:
+        new_seal_id = rotation["new_seal_id"]
+        new_dek = _read_staged_dek(project_dir, master)
+        # The persisted old_seal_id from the marker is the source of
+        # truth for the partially-rotated state. If it doesn't match
+        # the live marker, the live marker may have been promoted
+        # already — refuse rather than corrupt.
+        if rotation["old_seal_id"] != old_seal_id_marker:
+            raise SecurityError(
+                "Rotation marker's old_seal_id does not match the live "
+                "sealed marker; manual recovery needed."
+            )
+        old_seal_id = old_seal_id_marker
+        logger.info(
+            "Resuming crashed hard_revoke for '%s' (new_seal_id=%s)",
+            project,
+            new_seal_id,
+        )
+    else:
+        new_dek = generate_dek()
+        new_seal_id = "seal_" + secrets.token_hex(8)
+        old_seal_id = old_seal_id_marker
+        # Persist new DEK + rotation marker BEFORE rotating any file.
+        _stage_rotation(
+            project_dir,
+            master=master,
+            new_dek=new_dek,
+            old_seal_id=old_seal_id,
+            new_seal_id=new_seal_id,
+        )
 
     files_resealed = 0
-    rotated_files: list[Path] = []  # track for crash-recovery cleanup
+    files_already_rotated = 0
 
-    # Re-encrypt every content file with the new DEK + new seal_id.
-    # Atomic per-file (tempfile + os.replace) — same pattern as the
-    # initial seal in axon/security/seal.py.
+    # Re-encrypt every content file. On resume, files already rotated
+    # under new_dek/new_seal_id will fail the old-pair decrypt and
+    # succeed under the new pair — those are skipped + counted.
     for src in project_dir.rglob("*"):
         if not src.is_file():
             continue
@@ -710,11 +898,26 @@ def _hard_revoke(
                 f"per-file limit is {_SEAL_MAX_FILE_BYTES:,} bytes."
             )
 
-        old_aad = make_aad(old_seal_id, str(rel).replace("\\", "/"))
-        new_aad = make_aad(new_seal_id, str(rel).replace("\\", "/"))
+        rel_unix = str(rel).replace("\\", "/")
+        old_aad = make_aad(old_seal_id, rel_unix)
+        new_aad = make_aad(new_seal_id, rel_unix)
 
+        # Try old pair first (the common case). If the file was already
+        # rotated by a crashed prior pass, old decrypt fails with
+        # InvalidTag and we try the new pair to confirm — then skip.
+        plaintext: bytes | None = None
         try:
             plaintext = SealedFile.read(src, old_dek, aad=old_aad)
+        except InvalidTag:
+            try:
+                SealedFile.read(src, new_dek, aad=new_aad)
+                files_already_rotated += 1
+                continue  # already rotated by a crashed prior pass
+            except Exception as exc:
+                raise SecurityError(
+                    f"hard_revoke: {src} won't decrypt with old OR new DEK; "
+                    f"file may be corrupted ({type(exc).__name__}: {exc})."
+                ) from exc
         except Exception as exc:
             raise SecurityError(
                 f"hard_revoke failed to decrypt {src} during rotation: "
@@ -732,25 +935,19 @@ def _hard_revoke(
                 pass
             raise SecurityError(f"hard_revoke failed to atomically replace {src}: {exc}") from exc
         files_resealed += 1
-        rotated_files.append(src)
 
-    # New master-wrapped DEK file. AES-KW under master.
-    from cryptography.hazmat.primitives.keywrap import aes_key_wrap as _wrap
-
-    new_wrapped = _wrap(master, new_dek)
+    # Promote staged DEK over the live one. The staged DEK is identical
+    # to what we'd compute now; using it ensures a crash-safe ordering.
     dek_wrap_path = project_dir / ".security" / "dek.wrapped"
-    tmp_dek = dek_wrap_path.with_suffix(dek_wrap_path.suffix + ".sealing")
     try:
-        tmp_dek.write_bytes(new_wrapped)
-        os.replace(tmp_dek, dek_wrap_path)
+        os.replace(_rotation_dek_path(project_dir), dek_wrap_path)
     except OSError as exc:
-        try:
-            tmp_dek.unlink()
-        except OSError:
-            pass
         raise SecurityError(
-            f"hard_revoke failed to write new dek.wrapped at {dek_wrap_path}: {exc}"
+            f"hard_revoke failed to promote staged DEK at {dek_wrap_path}: {exc}"
         ) from exc
+
+    # Track which specific key_id was wrap-deleted before the bulk-delete.
+    wrap_existed = share_wrap_path(project_dir, key_id).is_file() if key_id else False
 
     # Nuke every share wrap — surviving grantees re-redeem to pick up
     # the new DEK. (Persisting per-share KEKs encrypted under the
@@ -767,21 +964,24 @@ def _hard_revoke(
                 except OSError as exc:
                     logger.debug("Could not delete share wrap %s: %s", entry, exc)
 
-    # Refresh the sealed marker to carry the new seal_id. The
-    # files_skipped counter is preserved as 0 since we only touched
-    # content files in this rotation.
+    # Refresh the sealed marker to carry the new seal_id.
     _write_sealed_marker(
         project_dir,
         seal_id=new_seal_id,
-        files_sealed=files_resealed,
+        files_sealed=files_resealed + files_already_rotated,
         files_skipped=0,
     )
 
+    # Rotation complete — clear the staging context.
+    _clear_rotation_context(project_dir)
+
     logger.info(
-        "Hard-revoked sealed project '%s': rotated DEK, resealed %d files, "
-        "invalidated %d share(s) (key_id=%s was the trigger)",
+        "Hard-revoked sealed project '%s': rotated DEK, resealed %d files "
+        "(%d already rotated by prior crashed run), invalidated %d share(s) "
+        "(triggering key_id=%s)",
         project,
         files_resealed,
+        files_already_rotated,
         len(invalidated),
         key_id,
     )
@@ -789,9 +989,10 @@ def _hard_revoke(
         "status": "hard_revoked",
         "key_id": key_id,
         "rotate": True,
-        "wrap_deleted": True,
+        "wrap_deleted": wrap_existed,
         "invalidated_share_key_ids": invalidated,
         "files_resealed": files_resealed,
+        "files_already_rotated": files_already_rotated,
         "new_seal_id": new_seal_id,
     }
 

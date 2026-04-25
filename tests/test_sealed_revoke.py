@@ -282,6 +282,22 @@ class TestHardRevoke:
         with pytest.raises(_security.SecurityError, match="locked"):
             revoke_sealed_share(owner_user_dir, "research", "ssk_x", rotate=True)
 
+    def test_wrap_deleted_false_when_key_id_never_existed(self, kr_backend, owner_user_dir):
+        """For hard revoke the trigger key_id may not correspond to any
+        actual share; status dict should reflect that accurately."""
+        _populate_and_seal(owner_user_dir)
+        result = revoke_sealed_share(owner_user_dir, "research", "ssk_phantom", rotate=True)
+        assert result["status"] == "hard_revoked"
+        assert result["wrap_deleted"] is False
+        assert result["invalidated_share_key_ids"] == []
+
+    def test_wrap_deleted_true_when_key_id_existed(self, kr_backend, owner_user_dir):
+        _populate_and_seal(owner_user_dir)
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_real_one")
+        result = revoke_sealed_share(owner_user_dir, "research", "ssk_real_one", rotate=True)
+        assert result["wrap_deleted"] is True
+        assert "ssk_real_one" in result["invalidated_share_key_ids"]
+
     def test_grantee_can_re_redeem_after_re_issue(
         self, kr_backend, owner_user_dir, grantee_user_dir
     ):
@@ -303,6 +319,88 @@ class TestHardRevoke:
         # Grantee can now decrypt with the new DEK.
         new_dek = get_grantee_dek("ssk_replacement")
         assert len(new_dek) == 32
+
+
+# ---------------------------------------------------------------------------
+# Crash-safe hard revoke: stage + resume on crash
+# ---------------------------------------------------------------------------
+
+
+class TestHardRevokeCrashSafety:
+    def test_stages_dek_and_marker_before_rotating_files(
+        self, kr_backend, owner_user_dir, monkeypatch
+    ):
+        """If the rotation crashes mid-loop, the staged DEK + marker
+        must already be on disk so the next attempt can resume.
+        Asserted by intercepting SealedFile.write and raising on the
+        very first file the loop tries to overwrite."""
+        from axon.security.crypto import SealedFile
+
+        proj = _populate_and_seal(owner_user_dir)
+        original_write = SealedFile.write
+        call_count = {"n": 0}
+
+        def first_write_fails(path, plaintext, dek, *, aad):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise OSError("simulated crash mid-rotation")
+            return original_write(path, plaintext, dek, aad=aad)
+
+        monkeypatch.setattr(SealedFile, "write", first_write_fails)
+
+        with pytest.raises(_security.SecurityError, match="simulated crash"):
+            revoke_sealed_share(owner_user_dir, "research", "ssk_x", rotate=True)
+
+        # Staged sidecars survived the crash.
+        assert (proj / ".security" / "dek.wrapped.rotating").is_file()
+        assert (proj / ".security" / ".sealing.rotation").is_file()
+
+    def test_resume_completes_partial_rotation(self, kr_backend, owner_user_dir, monkeypatch):
+        """After a crashed rotation, re-running revoke(rotate=True) must
+        re-use the staged DEK + new_seal_id (not generate fresh ones),
+        so files already rotated by the crashed run are recognised and
+        the final state is consistent.
+        """
+        from axon.security.crypto import SealedFile
+
+        proj = _populate_and_seal(owner_user_dir)
+        marker_before = read_sealed_marker(proj)
+        old_seal_id = marker_before["seal_id"]
+
+        # Crash on the second SealedFile.write (lets one file rotate).
+        original_write = SealedFile.write
+        call_count = {"n": 0}
+
+        def crash_after_one(path, plaintext, dek, *, aad):
+            call_count["n"] += 1
+            result = original_write(path, plaintext, dek, aad=aad)
+            if call_count["n"] >= 2:
+                raise OSError("simulated crash after one file rotated")
+            return result
+
+        monkeypatch.setattr(SealedFile, "write", crash_after_one)
+
+        with pytest.raises(_security.SecurityError, match="simulated crash"):
+            revoke_sealed_share(owner_user_dir, "research", "ssk_x", rotate=True)
+
+        # Staged sidecars present.
+        rotation_marker = proj / ".security" / ".sealing.rotation"
+        assert rotation_marker.is_file()
+
+        # Resume: restore the original SealedFile.write and re-run.
+        monkeypatch.setattr(SealedFile, "write", original_write)
+        result = revoke_sealed_share(owner_user_dir, "research", "ssk_x", rotate=True)
+        assert result["status"] == "hard_revoked"
+        # Final marker carries the SAME new_seal_id from the rotation
+        # marker (not a fresh one).
+        marker_after = read_sealed_marker(proj)
+        assert marker_after["seal_id"] == result["new_seal_id"]
+        assert marker_after["seal_id"] != old_seal_id
+        # Staging files cleaned up after success.
+        assert not rotation_marker.is_file()
+        assert not (proj / ".security" / "dek.wrapped.rotating").is_file()
+        # files_already_rotated > 0 because one file survived the crash.
+        assert result["files_already_rotated"] >= 1
 
 
 # ---------------------------------------------------------------------------
