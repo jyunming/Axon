@@ -1,6 +1,7 @@
 """Factory for creating GraphBackend instances.
 
 Usage::
+
     from axon.graph_backends.factory import get_graph_backend
     backend = get_graph_backend(brain)
 

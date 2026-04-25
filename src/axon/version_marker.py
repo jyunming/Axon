@@ -6,6 +6,7 @@ on a TTL background poll) so they can detect when the owner has re-
 indexed while they were idle and avoid serving stale query results.
 
 Marker schema (v1)::
+
     {
         "schema_version": 1,
         "seq": 42,                     # monotonic per-ingest counter

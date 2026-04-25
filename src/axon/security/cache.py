@@ -213,6 +213,7 @@ def _pid_alive(pid: int) -> bool:
 class SealedCache:
     """An ephemeral plaintext cache backing one mounted sealed project.
     Use as a context manager so the cache is reliably wiped on close::
+
         with SealedCache.create(project_dir, dek, key_id="sk_xxx") as cache:
             backend = OpenVectorStore(cfg.with_path(cache.path))
             ...

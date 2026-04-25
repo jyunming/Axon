@@ -80,6 +80,7 @@ class RetrievalConfig:
 class GraphPayload:
     """Renderer-neutral graph payload.
     Shape is identical to what :meth:`AxonBrain.build_graph_payload` returns::
+
         {
             "nodes": [{"id", "name", "label", "type", ...}, ...],
             "links": [{"source", "target", "label", "relation", ...}, ...],

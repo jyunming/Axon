@@ -29,6 +29,7 @@ class GraphRenderMixin:
     def build_graph_payload(self) -> dict:
         """Return a renderer-neutral graph payload normalised from internal graph state.
         The payload shape is::
+
             {
                 "nodes": [{"id", "name", "label", "type", "color", "val",
                            "chunk_count", "degree", "community", "description",

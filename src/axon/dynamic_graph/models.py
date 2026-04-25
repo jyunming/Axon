@@ -102,6 +102,7 @@ _DEFAULT_RELATIONS: list[str] = [
 class RelationRegistry:
     """Registry of known relation types with built-in defaults.
     Usage::
+
         reg = RelationRegistry(extra=["FUNDED_BY", "ACQUIRED_BY"])
         assert "WORKS_FOR" in reg
         reg.register("ACQUIRED_BY")

@@ -11,6 +11,7 @@ Tier 2 = required where practical; intentional exceptions are noted.
 
 
 Usage::
+
     from axon.surface_contract import REGISTRY, Tier, Surface
     tier1 = [c for c in REGISTRY if c.tier == Tier.ONE]
     repl_caps = [c for c in REGISTRY if Surface.REPL in c.supported_surfaces]

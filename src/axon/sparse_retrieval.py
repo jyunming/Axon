@@ -24,12 +24,14 @@ The integration is gated on ``brain._sparse_retriever is not None`` so existing
 behaviour is unaffected until a real implementation is registered:
 
 .. code-block:: python
+
     # query_router.py — inside _execute_retrieval(), after BM25 fusion:
     if getattr(self, "_sparse_retriever", None) is not None:
         from axon.sparse_retrieval import fuse_sparse
         results = fuse_sparse(self._sparse_retriever, query, results, top_k=cfg.top_k)
 
 ``AxonBrain.__init__`` should initialise the slot::
+
     self._sparse_retriever: SparseRetriever | None = None
 
 Deferred items (out of scope for Story 4.3)
@@ -135,6 +137,7 @@ class SparseRetriever(Protocol):
     ) -> list[dict]:
         """Retrieve the top-k documents most relevant to *query_vector*.
         The return format mirrors :meth:`~axon.vector_store.OpenVectorStore.search`::
+
             [{"id": str, "text": str, "score": float, "metadata": dict}, ...]
         Parameters
         ----------
