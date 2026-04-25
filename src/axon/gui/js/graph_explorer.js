@@ -9,7 +9,6 @@ class AxonGraph {
         this.container = container;
         this.graph = null;
         this.data = { nodes: [], links: [] };
-
         this.colors = {
             chunk: '#00d2ff',
             entity: '#e91e63',
@@ -17,13 +16,11 @@ class AxonGraph {
             default: '#999'
         };
     }
-
     async init() {
         if (!ForceGraph3D) {
             console.error('3D Force Graph library not loaded');
             return;
         }
-
         this.graph = ForceGraph3D()(this.container)
             .nodeLabel('label')
             .nodeAutoColorBy('type')
@@ -41,20 +38,16 @@ class AxonGraph {
                 const radius = Math.hypot(x, y, z);
                 const safeRadius = radius > 0 ? radius : 1;
                 const distRatio = 1 + distance / safeRadius;
-
                 this.graph.cameraPosition(
                     { x: x * distRatio, y: y * distRatio, z: z * distRatio },
                     { x, y, z },
                     1500
                 );
             });
-
         await this.refresh();
     }
-
     async refresh() {
         if (!this.graph) return;
-
         try {
             const data = await this.api.getGraphData();
             if (data && data.nodes) {
@@ -65,7 +58,6 @@ class AxonGraph {
             console.error('Failed to load graph data:', error);
         }
     }
-
     resize() {
         if (this.graph) {
             this.graph.width(this.container.clientWidth);
