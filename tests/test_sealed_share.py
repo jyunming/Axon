@@ -175,6 +175,24 @@ class TestGenerateSealedShareErrors:
         with pytest.raises(_security.SecurityError, match="non-empty"):
             generate_sealed_share(owner_user_dir, "research", "bob", key_id="")
 
+    @pytest.mark.parametrize(
+        "bad_key_id",
+        [
+            "../escape",
+            "..\\escape",
+            "ssk:colon",
+            "ssk space",
+            "ssk/slash",
+            "ssk\\back",
+            "a" * 65,  # over 64-char cap
+        ],
+    )
+    def test_unsafe_key_id_rejected(self, kr_backend, owner_user_dir, bad_key_id):
+        """Path-separators / colons / oversized key_ids must be refused."""
+        _populate_and_seal(owner_user_dir)
+        with pytest.raises(_security.SecurityError, match="Invalid key_id"):
+            generate_sealed_share(owner_user_dir, "research", "bob", key_id=bad_key_id)
+
 
 # ---------------------------------------------------------------------------
 # redeem_sealed_share — happy path round-trip
@@ -209,9 +227,42 @@ class TestRedeemSealedShareRoundTrip:
         desc = _json.loads(mount_json.read_text(encoding="utf-8"))
         assert desc["mount_type"] == "sealed"
         assert desc["share_key_id"] == "ssk_rt02"
-        assert desc["read_only"] is True
+        # Canonical mount schema uses ``readonly`` (no underscore).
+        assert desc["readonly"] is True
+        assert desc["state"] == "active"
+        assert desc["revoked"] is False
         assert desc["owner"] == "alice"
         assert desc["project"] == "research"
+
+    def test_descriptor_passes_canonical_validate(
+        self, kr_backend, owner_user_dir, grantee_user_dir
+    ):
+        """The sealed mount.json must satisfy axon.mounts.validate_mount_descriptor
+        + appear in axon.mounts.list_mount_descriptors. Without this,
+        AxonBrain.switch_project would refuse to open the sealed mount.
+        """
+        from axon.mounts import (
+            list_mount_descriptors,
+            load_mount_descriptor,
+            validate_mount_descriptor,
+        )
+
+        _populate_and_seal(owner_user_dir)
+        share = generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_compat")
+        redeem_sealed_share(grantee_user_dir, share["share_string"])
+
+        desc = load_mount_descriptor(grantee_user_dir, "alice_research")
+        assert desc is not None
+        valid, reason = validate_mount_descriptor(desc)
+        assert valid, f"Sealed mount descriptor failed canonical validation: {reason}"
+        # And it shows up in the user's active-mount listing.
+        listed = list_mount_descriptors(grantee_user_dir)
+        names = [d.get("mount_name") for d in listed]
+        assert "alice_research" in names
+        # Sealed-specific fields are preserved on top of the canonical ones.
+        seal_desc = next(d for d in listed if d.get("mount_name") == "alice_research")
+        assert seal_desc["mount_type"] == "sealed"
+        assert seal_desc["share_key_id"] == "ssk_compat"
 
     def test_dek_matches_owners_dek(self, kr_backend, owner_user_dir, grantee_user_dir):
         """The DEK the grantee unwraps must equal the DEK the owner has —
@@ -259,6 +310,33 @@ class TestRedeemSealedShareErrors:
         share_wrap_path(proj, "ssk_corrupt").write_bytes(b"\x00" * 40)
         with pytest.raises(_security.SecurityError, match="won't unwrap"):
             redeem_sealed_share(grantee_user_dir, share["share_string"])
+
+    def test_truncated_wrap_raises_security_error(
+        self, kr_backend, owner_user_dir, grantee_user_dir
+    ):
+        """aes_key_unwrap raises ValueError (not InvalidUnwrap) on a
+        truncated wrap file — our wrapper must catch both."""
+        proj = _populate_and_seal(owner_user_dir)
+        share = generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_trunc")
+        # Truncate the wrap file to 16 bytes (less than 1 AES block).
+        share_wrap_path(proj, "ssk_trunc").write_bytes(b"\x00" * 16)
+        with pytest.raises(_security.SecurityError, match="malformed|won't unwrap"):
+            redeem_sealed_share(grantee_user_dir, share["share_string"])
+
+    def test_tampered_key_id_in_envelope_rejected(
+        self, kr_backend, owner_user_dir, grantee_user_dir
+    ):
+        """A share_string whose key_id has been tampered with to contain
+        a path separator must be refused before path construction."""
+        _populate_and_seal(owner_user_dir)
+        share = generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_safe")
+        # Decode, swap key_id for a traversal, re-encode.
+        decoded = base64.urlsafe_b64decode(share["share_string"]).decode("utf-8")
+        parts = decoded.split(":")
+        parts[1] = "../escape"  # tampered key_id
+        bad = base64.urlsafe_b64encode(":".join(parts).encode()).decode("ascii")
+        with pytest.raises(_security.SecurityError, match="Invalid key_id"):
+            redeem_sealed_share(grantee_user_dir, bad)
 
     def test_owner_project_dir_missing_raises(
         self, kr_backend, owner_user_dir, grantee_user_dir, tmp_path

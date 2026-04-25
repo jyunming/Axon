@@ -48,7 +48,6 @@ import json
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -66,11 +65,20 @@ except ImportError as exc:  # pragma: no cover — import-time guard
         "Install with: pip install axon-rag[sealed]"
     ) from exc
 
+# Strict filename-safe pattern for key_id. Used both for the on-disk
+# wrap filename and the colon-delimited share_string envelope, so we
+# refuse path separators (``/``, ``\\``, ``..``), the colon delimiter
+# itself, and anything else outside ``[A-Za-z0-9_-]``. Length capped
+# to mitigate pathological filename lengths on FAT-style filesystems.
+import re as _re
+
 from . import SecurityError
 from . import keyring as _kr
 from .crypto import DEK_LEN
 from .master import get_project_dek
 from .seal import is_project_sealed
+
+_KEY_ID_PATTERN = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 logger = logging.getLogger("Axon")
 
@@ -102,8 +110,36 @@ HKDF_INFO: bytes = b"axon-share-v1"
 # ---------------------------------------------------------------------------
 
 
+def _validate_key_id(key_id: str) -> None:
+    """Refuse key_ids that could escape paths or break the envelope.
+
+    key_id appears in two places where untrusted input would be
+    dangerous:
+
+    1. The on-disk wrap filename ``<project>/.security/shares/<key_id>.wrapped``.
+       A crafted ``../foo`` would escape the shares/ directory and let
+       a tampered share_string write to / read from arbitrary paths
+       under the project root.
+    2. The colon-delimited share_string envelope. A key_id containing
+       ``:`` would break the parser and let an attacker smuggle
+       extra fields.
+
+    Strict pattern: ``[A-Za-z0-9_-]{1,64}``. Mirrors the conventional
+    filename-safe charset and bounds length to keep the on-disk
+    representation finite.
+    """
+    if not isinstance(key_id, str) or not key_id:
+        raise SecurityError("key_id must be a non-empty string")
+    if not _KEY_ID_PATTERN.match(key_id):
+        raise SecurityError(
+            f"Invalid key_id {key_id!r}: must match [A-Za-z0-9_-]{{1,64}} "
+            "(no path separators, no colons, no whitespace)."
+        )
+
+
 def share_wrap_path(project_dir: Path, key_id: str) -> Path:
     """Return the on-disk path of the wrapped DEK for *key_id*."""
+    _validate_key_id(key_id)
     return Path(project_dir) / SHARE_DIR_NAME / WRAP_FILENAME_FORMAT.format(key_id=key_id)
 
 
@@ -166,8 +202,7 @@ def generate_sealed_share(
             store is locked, wrap file already exists for *key_id*, or
             any I/O error occurred.
     """
-    if not key_id:
-        raise SecurityError("key_id must be a non-empty string")
+    _validate_key_id(key_id)
 
     owner_user_dir = Path(owner_user_dir).resolve()
     project_dir = _resolve_owned_project_dir(project, owner_user_dir)
@@ -299,8 +334,11 @@ def redeem_sealed_share(
             f"fields after the prefix, got {len(parts)})"
         )
     _prefix, key_id, token_hex, owner, project, owner_store_path = parts
-    if not key_id or not token_hex or not owner or not project:
-        raise SecurityError("Sealed share_string has empty key_id / token / owner / project")
+    if not token_hex or not owner or not project:
+        raise SecurityError("Sealed share_string has empty token / owner / project")
+    # key_id from a share_string is bearer-token data — validate before
+    # we use it to build paths or keyring service names.
+    _validate_key_id(key_id)
 
     try:
         token_bytes = bytes.fromhex(token_hex)
@@ -337,6 +375,14 @@ def redeem_sealed_share(
             f"Wrap file at {wrap_path} won't unwrap with the share token. "
             "Either the share_string is for a different key_id, or the "
             "owner has rotated the project DEK (hard revocation)."
+        ) from exc
+    except ValueError as exc:
+        # aes_key_unwrap raises ValueError on truncated / wrong-length
+        # ciphertext (e.g. partial OneDrive sync delivered a half-file).
+        raise SecurityError(
+            f"Wrap file at {wrap_path} is malformed ({exc}); the file "
+            "may not have finished syncing. Wait for the sync to complete "
+            "and retry."
         ) from exc
     except OSError as exc:
         raise SecurityError(f"Failed to read wrap file at {wrap_path}: {exc}") from exc
@@ -409,28 +455,46 @@ def _create_sealed_mount_descriptor(
 ) -> dict[str, Any]:
     """Write a mount.json carrying the ``mount_type="sealed"`` flag.
 
-    Mirrors :func:`axon.mounts.create_mount_descriptor` but adds the
-    sealed-share-specific fields the brain reads at switch-project time
-    (mount_type=sealed → fetch DEK from keyring → materialize cache).
+    Builds the descriptor via :func:`axon.mounts.create_mount_descriptor`
+    so the canonical schema (state, revoked, descriptor_version,
+    project_id, store_id, redeemed_at) is preserved — without that,
+    :func:`axon.mounts.validate_mount_descriptor` rejects the mount and
+    ``axon.mounts.list_mount_descriptors`` filters it out. The sealed
+    flag and pointer to the share key are added afterward + persisted
+    atomically (the mounts module's plain write isn't atomic).
     """
-    mount_dir = grantee_user_dir / "mounts" / mount_name
-    mount_dir.mkdir(parents=True, exist_ok=True)
-    descriptor: dict[str, Any] = {
-        "v": 1,
-        "mount_type": "sealed",
-        "name": mount_name,
-        "owner": owner,
-        "project": project,
-        "owner_user_dir": str(owner_user_dir),
-        "target_project_dir": str(target_project_dir),
-        "share_key_id": share_key_id,
-        "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        "read_only": True,
-    }
-    target = mount_dir / "mount.json"
+    from axon.mounts import create_mount_descriptor, mount_descriptor_path
+
+    try:
+        descriptor = create_mount_descriptor(
+            grantee_user_dir=grantee_user_dir,
+            mount_name=mount_name,
+            owner=owner,
+            project=project,
+            owner_user_dir=owner_user_dir,
+            target_project_dir=target_project_dir,
+            share_key_id=share_key_id,
+        )
+    except OSError as exc:
+        raise SecurityError(
+            f"Failed to create mount descriptor for sealed mount " f"{mount_name!r}: {exc}"
+        ) from exc
+
+    # Layer in the sealed-specific fields and persist atomically.
+    descriptor["mount_type"] = "sealed"
+    target = mount_descriptor_path(grantee_user_dir, mount_name)
     tmp = target.with_suffix(target.suffix + ".sealing")
-    tmp.write_text(json.dumps(descriptor, indent=2), encoding="utf-8")
-    os.replace(tmp, target)
+    try:
+        tmp.write_text(json.dumps(descriptor, indent=2), encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise SecurityError(
+            f"Failed to persist sealed mount descriptor at {target}: {exc}"
+        ) from exc
     return descriptor
 
 
@@ -447,8 +511,7 @@ def get_grantee_dek(key_id: str) -> bytes:
             ``axon.share.<key_id>`` (grantee never redeemed), or the
             stored value is malformed base64.
     """
-    if not key_id:
-        raise SecurityError("key_id must be a non-empty string")
+    _validate_key_id(key_id)
     service = _share_keyring_service(key_id)
     try:
         secret = _kr.get_secret(service, "dek")
