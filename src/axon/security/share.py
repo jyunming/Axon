@@ -92,6 +92,8 @@ __all__ = [
     "get_grantee_dek",
     "delete_grantee_dek",
     "share_wrap_path",
+    "list_sealed_share_key_ids",
+    "revoke_sealed_share",
 ]
 
 # ---------------------------------------------------------------------------
@@ -536,6 +538,262 @@ def get_grantee_dek(key_id: str) -> bytes:
             f"(expected {DEK_LEN}); keyring entry may be corrupted."
         )
     return dek
+
+
+# ---------------------------------------------------------------------------
+# Soft + hard revocation (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def list_sealed_share_key_ids(project_dir: Path | str) -> list[str]:
+    """Return key_ids of every active sealed-share wrap under *project_dir*.
+
+    Walks ``<project>/.security/shares/`` and parses ``.wrapped`` filenames.
+    Used by ``hard_revoke`` to enumerate which shares need to be re-issued
+    after a DEK rotation, and by ``list_sealed_shares`` for owner-side
+    audit output.
+    """
+    shares_dir = Path(project_dir) / SHARE_DIR_NAME
+    if not shares_dir.is_dir():
+        return []
+    suffix = ".wrapped"
+    return sorted(p.stem for p in shares_dir.iterdir() if p.is_file() and p.name.endswith(suffix))
+
+
+def revoke_sealed_share(
+    owner_user_dir: Path,
+    project: str,
+    key_id: str,
+    *,
+    rotate: bool = False,
+) -> dict[str, Any]:
+    """Revoke a sealed share — soft (default) or hard (``rotate=True``).
+
+    **Soft (``rotate=False``, default)** — fast, surface-only:
+
+    - Delete ``<project>/.security/shares/<key_id>.wrapped`` so a fresh
+      ``redeem_sealed_share`` for this key_id fails.
+    - Caveat: a grantee who already redeemed and cached the DEK in
+      their OS keyring CAN still decrypt files synced before the
+      revocation. Cached bytes stay decryptable; this is documented
+      and covered by the "soft vs hard" trade-off.
+
+    **Hard (``rotate=True``)** — slow, breaks all cached DEKs:
+
+    - Generate a fresh project DEK + a fresh ``seal_id``.
+    - Re-encrypt every content file under the project with the new
+      DEK + AAD (``make_aad(new_seal_id, rel)``).
+    - Update ``.security/dek.wrapped`` (master-wrapped form).
+    - Update the sealed marker with the new ``seal_id``.
+    - **Delete every share wrap** in ``.security/shares/`` (including
+      the one being revoked AND every still-valid share's wrap).
+    - Returns the list of invalidated key_ids in
+      ``invalidated_share_key_ids`` so the caller can re-issue them.
+
+    Why hard revoke kills ALL share wraps in v1: persisting per-share
+    KEKs encrypted-under-master so the owner can re-wrap surviving
+    shares without the original token is a meaningful design surface
+    (more files, more recovery edge-cases) tracked as a follow-up.
+    The simpler "rotate invalidates all" model matches the same UX as
+    "compromised master" — rare, well-understood, all-affected-grantees
+    re-redeem.
+
+    Args:
+        owner_user_dir: Owner's AxonStore user directory.
+        project: Sealed project the share belongs to.
+        key_id: Share key_id to revoke. For soft revoke this names the
+            specific wrap to delete; for hard revoke it's recorded in
+            the result for audit but every share is invalidated anyway.
+        rotate: When True, do the hard rotation. Default False (soft).
+
+    Returns:
+        ``{"status": "soft_revoked" | "hard_revoked", "key_id": ...,
+        "rotate": bool, "wrap_deleted": bool,
+        "invalidated_share_key_ids": list[str] (hard only),
+        "files_resealed": int (hard only),
+        "new_seal_id": str (hard only)}``
+
+    Raises:
+        SecurityError: project not sealed, store locked (hard rotate
+            needs to read + re-write the DEK), wrap missing (soft when
+            ``key_id`` doesn't exist), or any I/O / decryption error
+            during the rotate.
+    """
+    _validate_key_id(key_id)
+    owner_user_dir = Path(owner_user_dir).resolve()
+    project_dir = _resolve_owned_project_dir(project, owner_user_dir)
+    if not project_dir.is_dir():
+        raise SecurityError(f"Project '{project}' does not exist at {project_dir}; cannot revoke.")
+    if not is_project_sealed(project_dir):
+        raise SecurityError(f"Project '{project}' is not sealed; nothing to revoke.")
+
+    if not rotate:
+        return _soft_revoke(project_dir, key_id)
+    return _hard_revoke(owner_user_dir, project, project_dir, key_id)
+
+
+def _soft_revoke(project_dir: Path, key_id: str) -> dict[str, Any]:
+    """Delete the wrap file for *key_id* — fresh redeem will fail."""
+    wrap = share_wrap_path(project_dir, key_id)
+    if not wrap.is_file():
+        raise SecurityError(
+            f"No sealed-share wrap exists for key_id={key_id!r} at {wrap}. "
+            "Either it was already revoked or never generated."
+        )
+    try:
+        wrap.unlink()
+    except OSError as exc:
+        raise SecurityError(f"Failed to delete sealed-share wrap at {wrap}: {exc}") from exc
+    logger.info("Soft-revoked sealed share key_id=%s under %s", key_id, project_dir)
+    return {
+        "status": "soft_revoked",
+        "key_id": key_id,
+        "rotate": False,
+        "wrap_deleted": True,
+    }
+
+
+def _hard_revoke(
+    owner_user_dir: Path,
+    project: str,
+    project_dir: Path,
+    key_id: str,
+) -> dict[str, Any]:
+    """Rotate the project DEK; re-encrypt every file; nuke every share wrap."""
+    # Defer imports — these pull in sealed-only modules that may not be
+    # installed (the Phase 2 stack guards on ImportError already).
+    from .crypto import SealedFile, generate_dek, make_aad
+    from .master import get_master_key, get_project_dek
+    from .seal import (
+        _SEAL_MAX_FILE_BYTES,
+        _should_seal,
+        _write_sealed_marker,
+        read_sealed_marker,
+    )
+
+    marker = read_sealed_marker(project_dir)
+    if marker is None:
+        raise SecurityError(f"Sealed marker missing at {project_dir}; cannot hard-revoke.")
+    old_seal_id = marker.get("seal_id", "")
+    if not isinstance(old_seal_id, str) or not old_seal_id:
+        raise SecurityError(f"Sealed marker at {project_dir} has no seal_id; refusing to rotate.")
+
+    # Both old DEK (to decrypt) and master (to re-wrap the new DEK)
+    # must be available — get_project_dek raises SecurityError on a
+    # locked store + on missing dek.wrapped.
+    old_dek = get_project_dek(owner_user_dir, project_dir)
+    master = get_master_key(owner_user_dir)
+
+    new_dek = generate_dek()
+    new_seal_id = "seal_" + secrets.token_hex(8)
+
+    files_resealed = 0
+    rotated_files: list[Path] = []  # track for crash-recovery cleanup
+
+    # Re-encrypt every content file with the new DEK + new seal_id.
+    # Atomic per-file (tempfile + os.replace) — same pattern as the
+    # initial seal in axon/security/seal.py.
+    for src in project_dir.rglob("*"):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(project_dir)
+        if not _should_seal(rel):
+            continue
+
+        try:
+            size = src.stat().st_size
+        except OSError:
+            size = 0
+        if size > _SEAL_MAX_FILE_BYTES:
+            raise SecurityError(
+                f"hard_revoke refusing to rotate {src} ({size:,} bytes); "
+                f"per-file limit is {_SEAL_MAX_FILE_BYTES:,} bytes."
+            )
+
+        old_aad = make_aad(old_seal_id, str(rel).replace("\\", "/"))
+        new_aad = make_aad(new_seal_id, str(rel).replace("\\", "/"))
+
+        try:
+            plaintext = SealedFile.read(src, old_dek, aad=old_aad)
+        except Exception as exc:
+            raise SecurityError(
+                f"hard_revoke failed to decrypt {src} during rotation: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        tmp = src.with_suffix(src.suffix + ".sealing")
+        try:
+            SealedFile.write(tmp, plaintext, new_dek, aad=new_aad)
+            os.replace(tmp, src)
+        except OSError as exc:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise SecurityError(f"hard_revoke failed to atomically replace {src}: {exc}") from exc
+        files_resealed += 1
+        rotated_files.append(src)
+
+    # New master-wrapped DEK file. AES-KW under master.
+    from cryptography.hazmat.primitives.keywrap import aes_key_wrap as _wrap
+
+    new_wrapped = _wrap(master, new_dek)
+    dek_wrap_path = project_dir / ".security" / "dek.wrapped"
+    tmp_dek = dek_wrap_path.with_suffix(dek_wrap_path.suffix + ".sealing")
+    try:
+        tmp_dek.write_bytes(new_wrapped)
+        os.replace(tmp_dek, dek_wrap_path)
+    except OSError as exc:
+        try:
+            tmp_dek.unlink()
+        except OSError:
+            pass
+        raise SecurityError(
+            f"hard_revoke failed to write new dek.wrapped at {dek_wrap_path}: {exc}"
+        ) from exc
+
+    # Nuke every share wrap — surviving grantees re-redeem to pick up
+    # the new DEK. (Persisting per-share KEKs encrypted under the
+    # master so we can re-wrap surviving shares without the original
+    # token is a future enhancement; for v1, all-shares-invalidated
+    # matches the "compromised master" UX.)
+    invalidated: list[str] = list_sealed_share_key_ids(project_dir)
+    shares_dir = project_dir / SHARE_DIR_NAME
+    if shares_dir.is_dir():
+        for entry in shares_dir.iterdir():
+            if entry.is_file() and entry.name.endswith(".wrapped"):
+                try:
+                    entry.unlink()
+                except OSError as exc:
+                    logger.debug("Could not delete share wrap %s: %s", entry, exc)
+
+    # Refresh the sealed marker to carry the new seal_id. The
+    # files_skipped counter is preserved as 0 since we only touched
+    # content files in this rotation.
+    _write_sealed_marker(
+        project_dir,
+        seal_id=new_seal_id,
+        files_sealed=files_resealed,
+        files_skipped=0,
+    )
+
+    logger.info(
+        "Hard-revoked sealed project '%s': rotated DEK, resealed %d files, "
+        "invalidated %d share(s) (key_id=%s was the trigger)",
+        project,
+        files_resealed,
+        len(invalidated),
+        key_id,
+    )
+    return {
+        "status": "hard_revoked",
+        "key_id": key_id,
+        "rotate": True,
+        "wrap_deleted": True,
+        "invalidated_share_key_ids": invalidated,
+        "files_resealed": files_resealed,
+        "new_seal_id": new_seal_id,
+    }
 
 
 def delete_grantee_dek(key_id: str) -> bool:

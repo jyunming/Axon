@@ -29,6 +29,7 @@ __all__ = [
     "get_sealed_project_record",
     "generate_sealed_share",
     "redeem_sealed_share",
+    "revoke_sealed_share",
     "validate_received_sealed_shares",
     "list_sealed_shares",
     "resolve_owned_sealed_project_path",
@@ -208,6 +209,32 @@ def redeem_sealed_share(user_dir: Path, share_string: str) -> dict[str, Any]:
             "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
         ) from exc
     return _impl(user_dir, share_string)
+
+
+def revoke_sealed_share(
+    owner_user_dir: Path,
+    project: str,
+    key_id: str,
+    *,
+    rotate: bool = False,
+) -> dict[str, Any]:
+    """Revoke a sealed share — soft (default) or hard (``rotate=True``).
+
+    Phase 4 — wired to :mod:`axon.security.share`.
+
+    - Soft: deletes the wrap file so fresh redeems fail; cached DEKs
+      keep working until the owner does a hard rotate.
+    - Hard (``rotate=True``): rotates the project DEK, re-encrypts
+      every content file, deletes ALL share wraps. Surviving grantees
+      must re-issue + re-redeem.
+    """
+    try:
+        from .share import revoke_sealed_share as _impl
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
+        ) from exc
+    return _impl(owner_user_dir, project, key_id, rotate=rotate)
 
 
 def validate_received_sealed_shares(user_dir: Path) -> list[str]:
