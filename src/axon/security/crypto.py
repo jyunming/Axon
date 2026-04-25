@@ -10,7 +10,7 @@ Two primitive layers:
 
 2. **Envelope keys** — :func:`derive_kek` (HKDF-SHA256) derives a Key
    Encryption Key from a share token; :func:`wrap_key` /
-   :func:`unwrap_key` (AES-256-KW, RFC 5649) wrap/unwrap a Data
+   :func:`unwrap_key` (AES-256-KW, RFC 3394) wrap/unwrap a Data
    Encryption Key for transport. :func:`generate_dek` produces a fresh
    256-bit DEK from the OS CSPRNG.
 

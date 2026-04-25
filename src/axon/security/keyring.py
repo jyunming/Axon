@@ -117,15 +117,25 @@ def is_available() -> bool:
     """
     sentinel_service = "axon.__availability_check__"
     sentinel_user = "probe"
+    wrote_sentinel = False
     try:
         backend = _active_backend()
         backend.set_password(sentinel_service, sentinel_user, "ok")
+        wrote_sentinel = True
         recovered = backend.get_password(sentinel_service, sentinel_user)
-        backend.delete_password(sentinel_service, sentinel_user)
-        return recovered == "ok"
+        return bool(recovered == "ok")
     except Exception as exc:
         logger.debug("keyring is_available() check failed: %s", exc)
         return False
+    finally:
+        # Best-effort cleanup of the sentinel even when the get/return
+        # path above raised — otherwise a failed probe would leak the
+        # sentinel into the user's keyring.
+        if wrote_sentinel:
+            try:
+                backend.delete_password(sentinel_service, sentinel_user)
+            except Exception as cleanup_exc:
+                logger.debug("keyring is_available() sentinel cleanup failed: %s", cleanup_exc)
 
 
 def store_secret(service: str, username: str, secret: str) -> None:
@@ -151,9 +161,13 @@ def get_secret(service: str, username: str) -> str | None:
     """
     backend = _active_backend()
     try:
-        return backend.get_password(service, username)
+        secret = backend.get_password(service, username)
     except _BackendKeyringError as exc:
         raise RuntimeError(f"keyring get_password failed: {exc}") from exc
+    # Backends return Any; narrow to str | None for mypy and runtime sanity.
+    if secret is None:
+        return None
+    return str(secret)
 
 
 def delete_secret(service: str, username: str) -> None:
