@@ -289,33 +289,37 @@ class TestSealedShareEndToEndViaNextcloud:
         assert downloaded == wrap_bytes
 
         # The grantee's redeem path needs a local path it can read
-        # the wrap from — mirror the owner's project layout under
-        # tmp_path so we can point it via a tweaked share_string.
-        # In a real two-machine setup, OneDrive does this mirror
-        # automatically; here we do it manually.
-        grantee_owner_view = tmp_path / "AxonStore" / "alice" / "research" / ".security" / "shares"
-        grantee_owner_view.mkdir(parents=True)
-        (grantee_owner_view / "ssk_e2e_dav.wrapped").write_bytes(downloaded)
-        # Mirror the rest of the owner's project (sealed marker etc.)
-        # so is_project_sealed returns True.
+        # the wrap from — mirror the owner's project layout under a
+        # SEPARATE root (NOT tmp_path which is shared with the
+        # owner_user_dir fixture). In a real two-machine setup,
+        # OneDrive does this mirror automatically; here we do it
+        # manually under a dedicated grantee-side root.
         import shutil as _shutil
 
+        grantee_mirror_root = tmp_path / "grantee_mirror"
+        grantee_mirror_root.mkdir(parents=True)
+        mirror_alice_research = grantee_mirror_root / "AxonStore" / "alice" / "research"
+        mirror_alice_research.mkdir(parents=True)
         for src in owner_proj.rglob("*"):
             if not src.is_file():
                 continue
             rel = src.relative_to(owner_proj)
-            dst = tmp_path / "AxonStore" / "alice" / "research" / rel
+            dst = mirror_alice_research / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
-            if not dst.exists():
-                _shutil.copy2(src, dst)
+            _shutil.copy2(src, dst)
+        # Overlay the WebDAV-downloaded wrap so we're proving the
+        # round-tripped bytes (not the locally-copied ones) decrypt.
+        (mirror_alice_research / ".security" / "shares" / "ssk_e2e_dav.wrapped").write_bytes(
+            downloaded
+        )
 
-        # Build a share_string with a tweaked owner_store_path so
-        # the redeem looks at the grantee's local mirror.
+        # Build a share_string with a tweaked owner_store_path so the
+        # redeem looks at the grantee's mirror.
         import base64
 
         decoded = base64.urlsafe_b64decode(share["share_string"]).decode("utf-8")
         parts = decoded.split(":")
-        parts[-1] = str(tmp_path / "AxonStore")  # owner_store_path → grantee mirror
+        parts[-1] = str(grantee_mirror_root / "AxonStore")
         rebuilt_share_string = base64.urlsafe_b64encode(":".join(parts).encode()).decode("ascii")
 
         # 5. Grantee redeems using the rebuilt share_string.
