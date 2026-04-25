@@ -1,0 +1,36 @@
+# Nextcloud + WebDAV server for sealed-share sync E2E tests (Phase 7 Layer 2).
+#
+# Spun up by tests/e2e_sync/conftest.py — the fixture shells out to
+# ``docker compose -f <this file> up -d`` directly (no pytest-docker
+# plugin, just subprocess). Brings up a single Nextcloud instance the
+# test then provisions two users on. Each test's two grantee
+# subprocesses pull/push via the Nextcloud WebDAV endpoint at
+# http://localhost:18080/remote.php/dav/files/{user}/.
+#
+# Why not OneDrive: a real Microsoft account needs OAuth that breaks in
+# CI; Nextcloud's WebDAV semantics are isomorphic to OneDrive at the
+# file-level abstraction Axon cares about (eventual consistency,
+# conflict-copy generation, ETag-based change detection, two-writer
+# races). See docs/SHARE_MOUNT_SEALED_SMOKE.md for the rationale.
+
+services:
+  nextcloud:
+    image: nextcloud:30-apache
+    container_name: axon-test-nextcloud
+    ports:
+      # Port 18080 to avoid collision with whatever else might be on
+      # 8080 on the dev's machine.
+      - "18080:80"
+    environment:
+      SQLITE_DATABASE: nextcloud
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: admin
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost
+    healthcheck:
+      # Nextcloud's status.php returns 200 once boot completes. The
+      # pytest fixture polls this endpoint before the test runs.
+      test: ["CMD-SHELL", "curl -sf http://localhost/status.php > /dev/null"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+      start_period: 10s

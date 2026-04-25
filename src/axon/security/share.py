@@ -549,6 +549,12 @@ def list_sealed_share_key_ids(project_dir: Path | str) -> list[str]:
     """Return key_ids of every active sealed-share wrap under *project_dir*.
 
     Walks ``<project>/.security/shares/`` and parses ``.wrapped`` filenames.
+    Filters out anything whose stem doesn't match the strict key_id
+    pattern (``[A-Za-z0-9_-]{1,64}``) so sync-engine artifacts like
+    ``<wrap>-OneDrive-MachineB.conflict.wrapped`` (OneDrive),
+    ``<wrap> (1).wrapped`` (Dropbox), or ``<wrap>.tmp.drivedownload``
+    (Google Drive) don't pollute the listing.
+
     Used by ``hard_revoke`` to enumerate which shares need to be re-issued
     after a DEK rotation, and by ``list_sealed_shares`` for owner-side
     audit output.
@@ -557,7 +563,20 @@ def list_sealed_share_key_ids(project_dir: Path | str) -> list[str]:
     if not shares_dir.is_dir():
         return []
     suffix = ".wrapped"
-    return sorted(p.stem for p in shares_dir.iterdir() if p.is_file() and p.name.endswith(suffix))
+    out: list[str] = []
+    for p in shares_dir.iterdir():
+        if not p.is_file() or not p.name.endswith(suffix):
+            continue
+        stem = p.stem
+        if _KEY_ID_PATTERN.match(stem):
+            out.append(stem)
+        else:
+            logger.debug(
+                "Ignoring non-key_id wrap-shaped file under %s: %s",
+                shares_dir,
+                p.name,
+            )
+    return sorted(out)
 
 
 def revoke_sealed_share(
