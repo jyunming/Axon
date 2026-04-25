@@ -192,6 +192,8 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 💻 | **[Code RAG Guide](https://github.com/jyunming/Axon/blob/main/docs/CODE_RAG_GUIDE.md)** | Code graph retrieval and structural search |
 | 🤝 | **[AxonStore](https://github.com/jyunming/Axon/blob/main/docs/AXON_STORE.md)** | Multi-user sharing, revocation, and the lease lifecycle |
 | 📦 | **[Share Mount Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT.md)** | Which filesystems work for cross-machine sharing (and which corrupt) |
+| 🧪 | **[Share Mount Smoke](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SMOKE.md)** | Manual two-machine OneDrive verification recipe (run before each share-mount release) |
+| 🧭 | **[Share Mount Remote (ADR)](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_REMOTE.md)** | Design proposal — server-mediated mounts that eliminate the shared-filesystem layer |
 | 📊 | **[Governance Console](https://github.com/jyunming/Axon/blob/main/docs/GOVERNANCE_CONSOLE.md)** | Audit trail, maintenance runbook, session management |
 | 📈 | **[Evaluation Guide](https://github.com/jyunming/Axon/blob/main/docs/EVALUATION.md)** | RAGAS metrics, running evals, building testsets |
 | 🛠️ | **[Development Guide](https://github.com/jyunming/Axon/blob/main/docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks |

@@ -9,6 +9,12 @@ your data, and why.
 > **TL;DR.** Share via on-prem SMB3 from Windows-native machines, or
 > via a local/LAN copy protocol. **Do not** share via OneDrive, Dropbox,
 > Google Drive, WebDAV, or DFS-R.
+>
+> A future server-mediated mount design (no shared filesystem at all,
+> bytes never copied to grantees) is sketched in
+> [SHARE_MOUNT_REMOTE.md](SHARE_MOUNT_REMOTE.md). For verifying the
+> *current* file-sharing model against real OneDrive, see
+> [SHARE_MOUNT_SMOKE.md](SHARE_MOUNT_SMOKE.md).
 
 See also: `docs/AXON_STORE.md` (how the descriptor-backed mount model
 works) and `docs/TROUBLESHOOTING.md` (what to do when something has
