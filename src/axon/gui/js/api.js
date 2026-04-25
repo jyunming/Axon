@@ -28,16 +28,13 @@ class AxonAPI {
             graph_rag: 'rag.graph_rag'
         };
     }
-
     setApiKey(key) {
         this.apiKey = key;
         localStorage.setItem('axon_api_key', key);
     }
-
     setProject(projectName) {
         this.activeProject = projectName;
     }
-
     async request(endpoint, options = {}) {
         const url = new URL(endpoint, this.baseUrl);
         const { params, headers: optionHeaders, ...fetchOptions } = options;
@@ -45,15 +42,12 @@ class AxonAPI {
             'X-Axon-Surface': 'webgui',
             ...optionHeaders
         };
-
         if (!(fetchOptions.body instanceof FormData) && !headers['Content-Type']) {
             headers['Content-Type'] = 'application/json';
         }
-
         if (this.apiKey) {
             headers['X-API-Key'] = this.apiKey;
         }
-
         if (params) {
             const searchParams = new URLSearchParams(url.search);
             Object.entries(params).forEach(([key, value]) => {
@@ -63,27 +57,22 @@ class AxonAPI {
             });
             url.search = searchParams.toString();
         }
-
         const response = await fetch(url.toString(), {
             ...fetchOptions,
             headers
         });
-
         if (!response.ok) {
             const error = await response.json().catch(async () => ({
                 detail: await response.text().catch(() => response.statusText)
             }));
             throw new Error(error.detail || 'API Request Failed');
         }
-
         return response.json();
     }
-
     // Projects
     async listProjects() {
         const res = await this.request('/projects');
         const projects = [];
-
         for (const group of [res.projects || [], res.memory_only || [], res.shared_mounts || []]) {
             for (const project of group) {
                 if (project?.name) {
@@ -91,14 +80,11 @@ class AxonAPI {
                 }
             }
         }
-
         return projects;
     }
-
     async getHealth() {
         return this.request('/health');
     }
-
     async switchProject(projectName) {
         const res = await this.request('/project/switch', {
             method: 'POST',
@@ -107,7 +93,6 @@ class AxonAPI {
         this.activeProject = projectName;
         return res;
     }
-
     // Query & Search
     async query(question, overrides = {}) {
         const payload = {
@@ -115,13 +100,11 @@ class AxonAPI {
             project: this.activeProject,
             ...overrides
         };
-
         return this.request('/query', {
             method: 'POST',
             body: JSON.stringify(payload)
         });
     }
-
     /**
      * Stream a query response
      * @param {string} question
@@ -136,46 +119,37 @@ class AxonAPI {
             stream: true,
             ...overrides
         };
-
         const headers = {
             'Content-Type': 'application/json',
             'X-Axon-Surface': 'webgui'
         };
-
         if (this.apiKey) {
             headers['X-API-Key'] = this.apiKey;
         }
-
         const response = await fetch(new URL('/query/stream', this.baseUrl).toString(), {
             method: 'POST',
             headers,
             body: JSON.stringify(payload)
         });
-
         if (!response.ok) {
             const error = await response.json().catch(async () => ({
                 detail: await response.text().catch(() => 'Streaming failed')
             }));
             throw new Error(error.detail || 'Streaming failed');
         }
-
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
         const processLine = (line) => {
             if (!line.trim() || !line.startsWith('data: ')) return;
-
             const content = line.substring(6).trim();
             if (!content) return;
-
             let data = null;
-
             try {
                 data = JSON.parse(content);
             } catch (_error) {
                 data = null;
             }
-
             if (data) {
                 if (data.type === 'sources') {
                     onToken({ type: 'sources', content: data.sources });
@@ -190,61 +164,49 @@ class AxonAPI {
                 }
                 return;
             }
-
             if (content.startsWith('[ERROR]')) {
                 throw new Error(content.replace(/^\[ERROR\]\s*/, ''));
             }
-
             onToken({ type: 'token', content: content });
         };
-
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-
             buffer += decoder.decode(value, { stream: true });
-
             // FastAPI/SSE events are usually newline separated or JSON chunks
             const lines = buffer.split('\n');
             buffer = lines.pop(); // Keep incomplete line in buffer
-
             for (const line of lines) {
                 processLine(line);
             }
         }
-
         const trailing = buffer.trim();
         if (trailing) {
             processLine(trailing);
         }
     }
-
     // Graph
     async getGraphData() {
         return this.request('/graph/data', {
             params: { project: this.activeProject }
         });
     }
-
     // Ingest / Collection
     async getCollection() {
         return this.request('/collection');
     }
-
     async ingestPath(path) {
         return this.request('/ingest', {
             method: 'POST',
             body: JSON.stringify({ path })
         });
     }
-
     async ingestURL(url) {
         return this.request('/ingest_url', {
             method: 'POST',
             body: JSON.stringify({ url, project: this.activeProject })
         });
     }
-
     async addText(text, metadata = {}, docId = null) {
         return this.request('/add_text', {
             method: 'POST',
@@ -256,35 +218,29 @@ class AxonAPI {
             })
         });
     }
-
     async uploadFiles(files) {
         const formData = new FormData();
         files.forEach(file => {
             formData.append('files', file, file.name);
         });
         formData.append('project', this.activeProject);
-
         return this.request('/ingest/upload', {
             method: 'POST',
             body: formData
         });
     }
-
     // Config
     async getConfig() {
         return this.request('/config');
     }
-
     mapConfigKey(key) {
         return this.configKeyMap[key] || key;
     }
-
     async updateConfig(updates) {
         const entries = Object.entries(updates).filter(([, value]) => value !== undefined);
         if (entries.length === 0) {
             return { status: 'success', applied: [], results: [] };
         }
-
         const priority = new Map([
             ['llm_provider', 0],
             ['llm_model', 1],
@@ -293,13 +249,10 @@ class AxonAPI {
             ['rerank', 4],
             ['reranker_model', 5]
         ]);
-
         const orderedEntries = [...entries].sort((left, right) => {
             return (priority.get(left[0]) ?? 100) - (priority.get(right[0]) ?? 100);
         });
-
         const results = [];
-
         for (const [key, value] of orderedEntries) {
             try {
                 const result = await this.request('/config/set', {
@@ -315,14 +268,12 @@ class AxonAPI {
                 throw new Error(`Failed to save ${key}: ${error.message}`);
             }
         }
-
         return {
             status: 'success',
             applied: orderedEntries.map(([key]) => key),
             results
         };
     }
-
     // Governance
     async getAuditLogs(limit = 50) {
         return this.request(`/governance/audit?limit=${limit}`);

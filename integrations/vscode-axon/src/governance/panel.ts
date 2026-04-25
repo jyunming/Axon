@@ -34,7 +34,6 @@ export interface GovernanceOverview {
 
 export class AxonGovernancePanel {
   static currentPanel: AxonGovernancePanel | undefined;
-
   private readonly _panel: vscode.WebviewPanel;
   private readonly _apiBase: string;
   private readonly _apiKey: string;
@@ -42,7 +41,6 @@ export class AxonGovernancePanel {
   private _pollTimer: ReturnType<typeof setInterval> | undefined;
   private _disposed = false;
   private _lastOverview: GovernanceOverview | null = null;
-
   static createOrReveal(
     context: vscode.ExtensionContext,
     apiBase: string,
@@ -71,7 +69,6 @@ export class AxonGovernancePanel {
     );
     return AxonGovernancePanel.currentPanel;
   }
-
   private constructor(
     panel: vscode.WebviewPanel,
     apiBase: string,
@@ -80,18 +77,15 @@ export class AxonGovernancePanel {
     this._panel = panel;
     this._apiBase = apiBase;
     this._apiKey = apiKey;
-
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
     this._panel.webview.onDidReceiveMessage(
       (msg) => this._handleMessage(msg),
       null,
       this._disposables,
     );
-
     // Render loading state immediately, then fetch
     this._renderLoading();
     this._refresh().catch(() => {});
-
     // Auto-poll
     this._pollTimer = setInterval(() => {
       if (!this._disposed) {
@@ -99,7 +93,6 @@ export class AxonGovernancePanel {
       }
     }, POLL_INTERVAL_MS);
   }
-
   private async _refresh(): Promise<void> {
     try {
       const res = await httpGet(`${this._apiBase}/governance/overview`, this._apiKey);
@@ -124,12 +117,10 @@ export class AxonGovernancePanel {
       // Keep showing last known state on network error
     }
   }
-
   private _renderLoading(): void {
     this._panel.webview.html = `<!DOCTYPE html><html><body style="font-family:var(--vscode-font-family);padding:24px;color:var(--vscode-editor-foreground);">
       <p>Loading Axon Governance Console…</p></body></html>`;
   }
-
   private _handleMessage(msg: { command: string; [k: string]: unknown }): void {
     switch (msg.command) {
       case 'rebuildGraph':
@@ -146,7 +137,6 @@ export class AxonGovernancePanel {
         break;
     }
   }
-
   private async _rebuildGraph(): Promise<void> {
     try {
       const res = await httpPost(
@@ -164,7 +154,6 @@ export class AxonGovernancePanel {
       vscode.window.showErrorMessage(`Axon: Graph rebuild error: ${err}`);
     }
   }
-
   private async _setMaintenance(): Promise<void> {
     const overview = this._lastOverview;
     const project = overview?.project ?? '';
@@ -189,7 +178,6 @@ export class AxonGovernancePanel {
       vscode.window.showErrorMessage(`Axon: Maintenance error: ${err}`);
     }
   }
-
   private async _expireSession(sessionId: string): Promise<void> {
     if (!sessionId) { return; }
     try {
@@ -208,7 +196,6 @@ export class AxonGovernancePanel {
       vscode.window.showErrorMessage(`Axon: Expire session error: ${err}`);
     }
   }
-
   private _buildHtml(ov: GovernanceOverview): string {
     const maintState = ov.maintenance?.maintenance_state ?? 'unknown';
     const leases = ov.maintenance?.active_leases ?? 0;
@@ -218,11 +205,9 @@ export class AxonGovernancePanel {
     const jobs = ov.active_ingest_jobs ?? 0;
     const copilot = ov.copilot_sessions_active ?? 0;
     const projects = ov.project_count ?? 0;
-
     const maintColor = maintState === 'normal' ? '#4ec9b0'
       : maintState === 'draining' ? '#dcdcaa'
       : '#f44747';
-
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -305,7 +290,6 @@ export class AxonGovernancePanel {
 </body>
 </html>`;
   }
-
   private _escHtml(s: string): string {
     return String(s ?? '')
       .replace(/&/g, '&amp;')
@@ -313,7 +297,6 @@ export class AxonGovernancePanel {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
-
   dispose(): void {
     if (this._disposed) { return; }
     this._disposed = true;

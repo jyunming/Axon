@@ -25,16 +25,13 @@ function formatSecurityStatus(data: any): string {
 }
 
 export class AxonSecurityStatusTool implements vscode.LanguageModelTool<any> {
-
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
-
     try {
       const result = await httpGet(`${apiBase}/security/status`, apiKey);
       const data = parseJsonSafe(result.body);
-
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([
           new (vscode as any).LanguageModelTextPart(
@@ -42,7 +39,6 @@ export class AxonSecurityStatusTool implements vscode.LanguageModelTool<any> {
           ),
         ]);
       }
-
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(`Axon security status:\n${formatSecurityStatus(data)}`),
       ]);
@@ -56,21 +52,17 @@ export class AxonSecurityStatusTool implements vscode.LanguageModelTool<any> {
 }
 
 export class AxonSecurityBootstrapTool implements vscode.LanguageModelTool<any> {
-
   async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     return { invocationMessage: 'Bootstrapping Axon sealed-store security...' };
   }
-
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
     const { passphrase } = options.input ?? {};
-
     try {
       const result = await httpPost(`${apiBase}/security/bootstrap`, { passphrase }, apiKey);
       const data = parseJsonSafe(result.body);
-
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([
           new (vscode as any).LanguageModelTextPart(
@@ -78,7 +70,6 @@ export class AxonSecurityBootstrapTool implements vscode.LanguageModelTool<any> 
           ),
         ]);
       }
-
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(`Security bootstrapped.\n${formatSecurityStatus(data)}`),
       ]);
@@ -92,21 +83,17 @@ export class AxonSecurityBootstrapTool implements vscode.LanguageModelTool<any> 
 }
 
 export class AxonSecurityUnlockTool implements vscode.LanguageModelTool<any> {
-
   async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     return { invocationMessage: 'Unlocking Axon sealed-store security...' };
   }
-
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
     const { passphrase } = options.input ?? {};
-
     try {
       const result = await httpPost(`${apiBase}/security/unlock`, { passphrase }, apiKey);
       const data = parseJsonSafe(result.body);
-
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([
           new (vscode as any).LanguageModelTextPart(
@@ -114,7 +101,6 @@ export class AxonSecurityUnlockTool implements vscode.LanguageModelTool<any> {
           ),
         ]);
       }
-
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(`Security unlocked.\n${formatSecurityStatus(data)}`),
       ]);
@@ -128,20 +114,16 @@ export class AxonSecurityUnlockTool implements vscode.LanguageModelTool<any> {
 }
 
 export class AxonSecurityLockTool implements vscode.LanguageModelTool<any> {
-
   async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     return { invocationMessage: 'Locking Axon sealed-store security...' };
   }
-
   async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
-
     try {
       const result = await httpPost(`${apiBase}/security/lock`, {}, apiKey);
       const data = parseJsonSafe(result.body);
-
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([
           new (vscode as any).LanguageModelTextPart(
@@ -149,7 +131,6 @@ export class AxonSecurityLockTool implements vscode.LanguageModelTool<any> {
           ),
         ]);
       }
-
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(`Security locked.\n${formatSecurityStatus(data)}`),
       ]);
@@ -163,17 +144,14 @@ export class AxonSecurityLockTool implements vscode.LanguageModelTool<any> {
 }
 
 export class AxonSecurityChangePassphraseTool implements vscode.LanguageModelTool<any> {
-
   async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
     return { invocationMessage: 'Changing Axon sealed-store passphrase...' };
   }
-
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
     const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
     const apiKey = config.get<string>('apiKey', '');
     const { old_passphrase, new_passphrase } = options.input ?? {};
-
     try {
       const result = await httpPost(
         `${apiBase}/security/change-passphrase`,
@@ -181,7 +159,6 @@ export class AxonSecurityChangePassphraseTool implements vscode.LanguageModelToo
         apiKey,
       );
       const data = parseJsonSafe(result.body);
-
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([
           new (vscode as any).LanguageModelTextPart(
@@ -189,7 +166,6 @@ export class AxonSecurityChangePassphraseTool implements vscode.LanguageModelToo
           ),
         ]);
       }
-
       return new (vscode as any).LanguageModelToolResult([
         new (vscode as any).LanguageModelTextPart(
           `Security passphrase changed.\n${formatSecurityStatus(data)}`,
@@ -207,16 +183,13 @@ export class AxonSecurityChangePassphraseTool implements vscode.LanguageModelToo
 export async function showSecurityStatus(apiBase: string): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
   const apiKey = config.get<string>('apiKey', '');
-
   try {
     const result = await httpGet(`${apiBase}/security/status`, apiKey);
     const data = parseJsonSafe(result.body);
-
     if (result.status !== 200) {
       vscode.window.showErrorMessage(`Axon: Security status failed — ${formatDetail(data, result.body)}`);
       return;
     }
-
     state.outputChannel.show();
     state.outputChannel.appendLine(`\n=== Axon Security Status ===\n${formatSecurityStatus(data)}\n`);
     vscode.window.showInformationMessage('Axon: Security status written to the Axon output channel.');
@@ -228,23 +201,19 @@ export async function showSecurityStatus(apiBase: string): Promise<void> {
 export async function bootstrapSecurity(apiBase: string): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
   const apiKey = config.get<string>('apiKey', '');
-
   const passphrase = await vscode.window.showInputBox({
     prompt: 'Enter a passphrase to bootstrap sealed-store security',
     password: true,
     ignoreFocusOut: true,
   });
   if (!passphrase) { return; }
-
   try {
     const result = await httpPost(`${apiBase}/security/bootstrap`, { passphrase }, apiKey);
     const data = parseJsonSafe(result.body);
-
     if (result.status !== 200) {
       vscode.window.showErrorMessage(`Axon: Security bootstrap failed — ${formatDetail(data, result.body)}`);
       return;
     }
-
     vscode.window.showInformationMessage('Axon: Sealed-store security bootstrapped.');
     state.outputChannel.appendLine(`Security bootstrapped. ${formatSecurityStatus(data)}`);
   } catch (err) {
@@ -255,23 +224,19 @@ export async function bootstrapSecurity(apiBase: string): Promise<void> {
 export async function unlockSecurity(apiBase: string): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
   const apiKey = config.get<string>('apiKey', '');
-
   const passphrase = await vscode.window.showInputBox({
     prompt: 'Enter the sealed-store passphrase to unlock Axon',
     password: true,
     ignoreFocusOut: true,
   });
   if (!passphrase) { return; }
-
   try {
     const result = await httpPost(`${apiBase}/security/unlock`, { passphrase }, apiKey);
     const data = parseJsonSafe(result.body);
-
     if (result.status !== 200) {
       vscode.window.showErrorMessage(`Axon: Security unlock failed — ${formatDetail(data, result.body)}`);
       return;
     }
-
     vscode.window.showInformationMessage('Axon: Sealed-store unlocked.');
     state.outputChannel.appendLine(`Security unlocked. ${formatSecurityStatus(data)}`);
   } catch (err) {
@@ -282,16 +247,13 @@ export async function unlockSecurity(apiBase: string): Promise<void> {
 export async function lockSecurity(apiBase: string): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
   const apiKey = config.get<string>('apiKey', '');
-
   try {
     const result = await httpPost(`${apiBase}/security/lock`, {}, apiKey);
     const data = parseJsonSafe(result.body);
-
     if (result.status !== 200) {
       vscode.window.showErrorMessage(`Axon: Security lock failed — ${formatDetail(data, result.body)}`);
       return;
     }
-
     vscode.window.showInformationMessage('Axon: Sealed-store locked.');
     state.outputChannel.appendLine(`Security locked. ${formatSecurityStatus(data)}`);
   } catch (err) {
@@ -302,21 +264,18 @@ export async function lockSecurity(apiBase: string): Promise<void> {
 export async function changeSecurityPassphrase(apiBase: string): Promise<void> {
   const config = vscode.workspace.getConfiguration('axon');
   const apiKey = config.get<string>('apiKey', '');
-
   const oldPassphrase = await vscode.window.showInputBox({
     prompt: 'Enter the current sealed-store passphrase',
     password: true,
     ignoreFocusOut: true,
   });
   if (!oldPassphrase) { return; }
-
   const newPassphrase = await vscode.window.showInputBox({
     prompt: 'Enter the new sealed-store passphrase',
     password: true,
     ignoreFocusOut: true,
   });
   if (!newPassphrase) { return; }
-
   try {
     const result = await httpPost(
       `${apiBase}/security/change-passphrase`,
@@ -324,12 +283,10 @@ export async function changeSecurityPassphrase(apiBase: string): Promise<void> {
       apiKey,
     );
     const data = parseJsonSafe(result.body);
-
     if (result.status !== 200) {
       vscode.window.showErrorMessage(`Axon: Passphrase change failed — ${formatDetail(data, result.body)}`);
       return;
     }
-
     vscode.window.showInformationMessage('Axon: Sealed-store passphrase updated.');
     state.outputChannel.appendLine(`Security passphrase changed. ${formatSecurityStatus(data)}`);
   } catch (err) {
