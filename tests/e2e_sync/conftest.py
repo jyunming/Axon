@@ -148,7 +148,17 @@ def nextcloud_stack() -> Iterator[str]:
 
 
 def _create_user(username: str, password: str) -> None:
-    """Create *username* with *password* via the OCS API. Idempotent."""
+    """Create *username* with *password* via the OCS API. Idempotent.
+
+    Nextcloud OCS quirks observed in CI:
+    - First-time success returns HTTP 200 with ``statuscode: 200``.
+    - "User already exists" returns HTTP 400 with ``statuscode: 102``.
+    - Older OCS clients also see ``statuscode: 100`` for success.
+
+    Treat all three of {100, 102, 200} as success regardless of the
+    outer HTTP status — what matters is the user exists when we
+    return.
+    """
     import requests
 
     resp = requests.post(
@@ -158,16 +168,15 @@ def _create_user(username: str, password: str) -> None:
         data={"userid": username, "password": password},
         timeout=10,
     )
-    # 100 = success; 102 = user already exists (idempotent retry path).
-    if resp.status_code == 200:
-        try:
-            ocs_status = resp.json()["ocs"]["meta"]["statuscode"]
-            if ocs_status in (100, 102):
-                return
-        except (KeyError, ValueError):
-            pass
+    try:
+        ocs_status = resp.json()["ocs"]["meta"]["statuscode"]
+    except (KeyError, ValueError):
+        ocs_status = None
+    if ocs_status in (100, 102, 200):
+        return
     raise RuntimeError(
-        f"OCS create_user({username!r}) failed: HTTP {resp.status_code} {resp.text[:200]}"
+        f"OCS create_user({username!r}) failed: HTTP {resp.status_code} "
+        f"ocs_statuscode={ocs_status} body={resp.text[:200]}"
     )
 
 
