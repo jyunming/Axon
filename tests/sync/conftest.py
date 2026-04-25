@@ -1,29 +1,33 @@
-"""Sync-chaos fixtures for sealed-share tests (Phase 7).
+"""Sync-chaos fixtures for sealed-share tests (Phase 7 — Layer 1).
 
 These fixtures simulate the behaviours OneDrive / Dropbox / SMB sync
 exhibit during file propagation **without** requiring a real cloud
-account. The two-layer test strategy (research summary in PR thread):
+account. Part of a three-tier strategy:
 
 - **Layer 1 (this directory):** fault-injection on top of the local
   filesystem. Cheap (≤ 15 s per suite), runs every PR, catches
   partial-byte visibility, conflict-copy artifacts, locked files,
   and ``.tmp.drivedownload``-style debris.
-- **Layer 2 (deferred):** multi-process race harness on top of
-  WsgiDAV. Tracked as future work; covers true two-writer races and
-  the eventual-consistency settle behaviour Layer 1 can't model.
+- **Layer 2 (``tests/e2e_sync/``):** real WebDAV E2E via
+  Nextcloud-in-Docker. Covers true two-writer races, real
+  ETag-based change detection, and eventual-consistency settle
+  behaviour. Auto-skips when Docker is unavailable.
+- **Layer 3 (``docs/SHARE_MOUNT_SEALED_SMOKE.md``):** manual
+  pre-release smoke recipe on a real two-machine OneDrive setup.
+  Covers OneDrive-specific failures (Files-On-Demand placeholder,
+  Windows Explorer file lock, Microsoft Graph throttling at scale)
+  that no automated layer can reach.
 
-The fixtures are deliberately small & explicit — no new dependency
-(no pyfakefs / no fault-injection FS) so the harness runs anywhere
-the existing pytest config does.
+The Layer 1 fixtures are deliberately small & explicit — no new
+dependency (no pyfakefs / no fault-injection FS) so the harness runs
+anywhere the existing pytest config does.
 
-What CANNOT be simulated here (documented gaps, see
-``docs/SHARE_MOUNT_SEALED_SMOKE.md`` for the manual recipe):
+What CANNOT be simulated by Layer 1 (delegated to Layer 2 / Layer 3):
 
-- Real Microsoft Graph throttling / 429 patterns.
-- Windows Explorer preview-pane file lock (kernel-level).
-- OneDrive Files-On-Demand placeholder semantics (filter driver).
-- Multi-region propagation lag — Layer 1 picks one number; reality
-  is a distribution.
+- True two-writer races + ETag-based conflict detection (→ Layer 2).
+- Real Microsoft Graph throttling / 429 patterns (→ Layer 3 manual).
+- Windows Explorer preview-pane file lock (→ Layer 3 manual).
+- OneDrive Files-On-Demand placeholder semantics (→ Layer 3 manual).
 """
 from __future__ import annotations
 

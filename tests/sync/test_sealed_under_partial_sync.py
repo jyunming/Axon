@@ -205,13 +205,9 @@ class TestMetadataBeforePayload:
         so the partial state is invisible at the listing layer.
         """
         proj = _populate_and_seal(owner_user_dir)
-        wrap = share_wrap_path(
-            generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_partial2")[
-                "wrapped_path"
-            ]
-            and proj,
-            "ssk_partial2",
-        )
+        # Generate the share — wrap file lands at <proj>/.security/shares/<key_id>.wrapped.
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_partial2")
+        wrap = share_wrap_path(proj, "ssk_partial2")
         # Stat reports 0 bytes, but the file is on disk.
         sync_chaos.appear_partial(wrap, fake_size=0)
         ids = list_sealed_share_key_ids(proj)

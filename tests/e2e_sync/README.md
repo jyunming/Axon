@@ -65,9 +65,14 @@ These tests are **gated by Docker availability**. If your dev machine
 doesn't have Docker, all 5 tests skip with a clear reason (no error).
 You're not blocked from committing.
 
-In CI: a separate workflow (`.github/workflows/sync-e2e.yml`) runs
-this suite **only** when a PR touches `src/axon/security/**` or this
-directory. Most PRs don't pay the cost.
+In CI: the suite runs as part of the standard pytest invocation in
+`.github/workflows/ci.yml`. The GitHub-hosted Ubuntu runners have
+Docker available, so the Layer 2 suite executes there automatically;
+the macOS / Windows matrix runners skip because Docker Desktop isn't
+installed on those images. A dedicated path-filtered workflow that
+runs Layer 2 ONLY when sealed-share code changes is tracked as a
+follow-up — for now Layer 2 runs on every CI invocation that hits
+an Ubuntu runner.
 
 In pre-commit: **not added by default** — Docker is a heavy dep to
 require for every commit. Devs working on sealed-share code can

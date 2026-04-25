@@ -26,7 +26,7 @@ Three-tier testing strategy:
 | **Real OAuth refresh-token expiry mid-sync**           |                                    |                                                |                            |        ✅       |
 
 - **Layer 1** runs every PR (no extra deps, ~5 s).
-- **Layer 2** runs on PRs touching `src/axon/security/**` (Docker required, ~30–45 s).
+- **Layer 2** runs whenever the standard pytest workflow hits a CI runner that has Docker (currently the Ubuntu matrix cells; macOS/Windows skip cleanly). A path-filtered "only on sealed-share changes" workflow is tracked as future work.
 - **This manual recipe** runs pre-release on a real two-machine OneDrive setup (covers Windows-kernel + UI specifics that no automated layer can reach).
 
 **Why no automated real-OneDrive layer:** Microsoft 365 Developer Program ToS forbids using sandbox tenants as CI fixtures, Microsoft Graph throttling caps a single app+tenant at 3,500–8,000 ResourceUnits per 10s (a CI matrix would 429 immediately), and OAuth in headless CI is structurally brittle (refresh tokens get rotated by Conditional Access). Local-on-dev real-OneDrive is technically possible (`abraunegg/onedrive` does this in its own CI) — see `tests/e2e_sync/README.md` for the opt-in recipe. We chose Nextcloud-in-Docker as the default because it covers ~95% of what matters without per-dev OneDrive account setup.
