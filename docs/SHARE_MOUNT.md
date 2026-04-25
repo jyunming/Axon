@@ -10,10 +10,11 @@ your data, and why.
 > via a local/LAN copy protocol. **Do not** share via OneDrive, Dropbox,
 > Google Drive, WebDAV, or DFS-R.
 >
-> A future server-mediated mount design (no shared filesystem at all,
-> bytes never copied to grantees) is sketched in
-> [SHARE_MOUNT_REMOTE.md](SHARE_MOUNT_REMOTE.md). For verifying the
-> *current* file-sharing model against real OneDrive, see
+> A future **encrypted-at-rest** sealed-mount design — no API server,
+> works on any shared filesystem (including OneDrive) because bytes
+> are opaque without the share key — is in
+> [SHARE_MOUNT_SEALED.md](SHARE_MOUNT_SEALED.md). For verifying the
+> *current* (plaintext) file-sharing model against real OneDrive, see
 > [SHARE_MOUNT_SMOKE.md](SHARE_MOUNT_SMOKE.md).
 
 See also: `docs/AXON_STORE.md` (how the descriptor-backed mount model
