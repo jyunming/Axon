@@ -102,6 +102,11 @@ sealed = [
     "cryptography>=42.0.0",
     "keyring>=24.0.0",
 ]
+sealed-test = [
+    # Phase 7: real-WebDAV E2E tests for sealed shares (Nextcloud-in-Docker).
+    # Pure dev/test deps — not needed at runtime.
+    "requests>=2.31.0",
+]
 dev = [
     "pytest>=7.4.0,<8.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",
@@ -115,6 +120,10 @@ dev = [
     # rather than the ImportError-fallback stubs (Phase 2 of #SEALED).
     "cryptography>=42.0.0",
     "keyring>=24.0.0",
+    # Phase 7 sealed-test: requests for the WebDAV E2E suite. Pulled
+    # in here too so the auto-skip logic in tests/e2e_sync/conftest.py
+    # short-circuits cleanly on a fresh dev checkout.
+    "requests>=2.31.0",
 ]
 all = [
     "streamlit>=1.30.0",
