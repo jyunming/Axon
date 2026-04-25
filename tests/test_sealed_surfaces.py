@@ -176,6 +176,70 @@ class TestRestRevokeSealedRouting:
         assert resp.status_code == 422
         assert "project" in resp.json()["detail"].lower()
 
+    def test_missing_wrap_returns_404(self, stub_brain):
+        """A revoke for a key_id whose wrap file doesn't exist must
+        return 404, not 400 — matches the standard REST shape."""
+        from fastapi.testclient import TestClient
+
+        from axon.api import app
+        from axon.security import SecurityError
+
+        with patch(
+            "axon.security.revoke_sealed_share",
+            side_effect=SecurityError(
+                "No sealed-share wrap exists for key_id='ssk_phantom' at "
+                "/store/research/.security/shares/ssk_phantom.wrapped. "
+                "Either it was already revoked or never generated."
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/share/revoke",
+                json={"key_id": "ssk_phantom", "project": "research"},
+            )
+        assert resp.status_code == 404
+        assert "no sealed-share wrap" in resp.json()["detail"].lower()
+
+    def test_unsealed_project_returns_404(self, stub_brain):
+        """Project not sealed → 404 (not 400) so REST clients can
+        distinguish 'project doesn't accept this operation' from
+        'invalid request body'."""
+        from fastapi.testclient import TestClient
+
+        from axon.api import app
+        from axon.security import SecurityError
+
+        with patch(
+            "axon.security.revoke_sealed_share",
+            side_effect=SecurityError("Project 'open' is not sealed; nothing to revoke."),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/share/revoke",
+                json={"key_id": "ssk_x", "project": "open"},
+            )
+        assert resp.status_code == 404
+
+    def test_locked_store_returns_400(self, stub_brain):
+        """Store-locked errors are 400 (transient, fix and retry), not 404."""
+        from fastapi.testclient import TestClient
+
+        from axon.api import app
+        from axon.security import SecurityError
+
+        with patch(
+            "axon.security.revoke_sealed_share",
+            side_effect=SecurityError(
+                "Store axon.master.alice is locked. Call unlock_store first."
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                "/share/revoke",
+                json={"key_id": "ssk_x", "project": "research", "rotate": True},
+            )
+        assert resp.status_code == 400
+
     def test_legacy_key_id_routes_to_legacy_revoke(self, stub_brain):
         from fastapi.testclient import TestClient
 

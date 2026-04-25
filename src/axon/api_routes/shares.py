@@ -431,7 +431,21 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
             )
         except _security.SecurityError as exc:
             message = str(exc)
-            status = 404 if "missing" in message.lower() or "not exist" in message.lower() else 400
+            # The most common "404"-shaped errors from
+            # security.revoke_sealed_share: project doesn't exist,
+            # project not sealed, no share wrap for that key_id.
+            # The substring set covers _soft_revoke ("No sealed-share
+            # wrap exists ..."), _resolve_owned_project_dir error
+            # ("does not exist"), and is_project_sealed error
+            # ("is not sealed"). Other SecurityError instances (locked
+            # store, stage I/O failure) map to 400.
+            msg_lower = message.lower()
+            is_not_found = (
+                "no sealed-share wrap" in msg_lower
+                or "does not exist" in msg_lower
+                or "is not sealed" in msg_lower
+            )
+            status = 404 if is_not_found else 400
             raise HTTPException(status_code=status, detail=message)
 
         gov.emit(
