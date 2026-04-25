@@ -44,31 +44,17 @@ def _build_chroma_where(filter_dict: dict | None) -> dict | None:
 
 class OpenVectorStore:
     """Unified interface over ChromaDB, Qdrant, and LanceDB vector stores.
-
-
     Initialized via :class:`AxonConfig`.  Supports ``add``, ``search``,
-
-
     ``get_by_ids``, ``delete_by_ids``, and ``list_documents`` operations
-
-
     across all three backends.  Qdrant can operate in local file mode or
-
-
     remote mode (set ``qdrant_url`` in config).
-
-
     """
 
     def __init__(self, config: AxonConfig):
         self.config = config
-
         self.provider = config.vector_store
-
         self.client: Any = None
-
         self.collection: Any = None
-
         self._init_store()
 
     def _init_store(self):
@@ -76,7 +62,6 @@ class OpenVectorStore:
             import chromadb
 
             logger.info(f"Initializing ChromaDB: {self.config.vector_store_path}")
-
             # Preflight: Chroma is SQLite-backed and will silently corrupt on
             # cloud-sync / network / WSL-mount filesystems (see
             # https://sqlite.org/useovernet.html). Fail loud BEFORE chromadb
@@ -86,14 +71,11 @@ class OpenVectorStore:
             _reason = cloud_sync_path_reason(self.config.vector_store_path)
             if _reason:
                 self._raise_unsupported_path(self.config.vector_store_path, _reason)
-
             try:
                 self.client = chromadb.PersistentClient(path=self.config.vector_store_path)
-
                 self.collection = self.client.get_or_create_collection(
                     name="axon", metadata={"hnsw:space": "cosine"}
                 )
-
             except Exception as e:
                 # Catch the specific WSL/SQLite readonly error (code 8).
                 # Surface the cloud-sync cause when the path matches too.
@@ -104,38 +86,28 @@ class OpenVectorStore:
                         "cloud sync, or network share)"
                     )
                     self._raise_unsupported_path(self.config.vector_store_path, _late_reason)
-
                 raise e
-
         elif self.provider == "qdrant":
             from qdrant_client import QdrantClient
 
             if getattr(self.config, "qdrant_url", ""):
                 logger.info(f"Initializing Qdrant (remote): {self.config.qdrant_url}")
-
                 self.client = QdrantClient(
                     url=self.config.qdrant_url,
                     api_key=self.config.qdrant_api_key or None,
                 )
-
             else:
                 logger.info(f"Initializing Qdrant (local): {self.config.vector_store_path}")
-
                 self.client = QdrantClient(path=self.config.vector_store_path)
-
         elif self.provider == "lancedb":
             import lancedb
 
             logger.info(f"Initializing LanceDB: {self.config.vector_store_path}")
-
             self.client = lancedb.connect(self.config.vector_store_path)
-
             try:
                 self.collection = self.client.open_table("axon")
-
             except Exception:
                 self.collection = None  # created lazily on first add()
-
         elif self.provider == "turboquantdb":
             # Lazy open: dimension is not known until first add(). If tqdb's own
             # manifest.json exists (from a prior session), open immediately.
@@ -167,7 +139,6 @@ class OpenVectorStore:
     @staticmethod
     def _raise_unsupported_path(path: str, reason: str) -> None:
         """Print a user-facing diagnosis and raise ``RuntimeError``.
-
         Called when Chroma's SQLite backend is being asked to live on a
         filesystem that cannot guarantee the locking / atomicity it needs
         (cloud sync, UNC share, WSL Windows mount).
@@ -200,29 +171,20 @@ class OpenVectorStore:
 
     def close(self):
         """Release any open file handles or database connections."""
-
         if self.provider == "chroma" and self.client:
             # ChromaDB 0.4.x+ uses a persistent client that should be closed if supported
-
             if hasattr(self.client, "close"):
                 try:
                     self.client.close()
-
                 except Exception:
                     pass
-
             self.client = None
-
             self.collection = None
-
         elif self.provider == "lancedb" and self.client:
             self.client = None
-
             self.collection = None
-
         elif self.provider == "qdrant" and self.client:
             self.client = None
-
         elif self.provider == "turboquantdb" and self.client:
             try:
                 if hasattr(self.client, "close"):
@@ -232,48 +194,32 @@ class OpenVectorStore:
             self.client = None
 
     # Chroma hard limit per collection.add() call.
-
     _CHROMA_MAX_BATCH = 5000
 
     @staticmethod
     def _sanitize_chroma_meta(metadatas: list[dict] | None) -> list[dict] | None:
         """Coerce metadata dicts to Chroma-safe scalar types.
-
         Chroma only accepts ``str | int | float | bool`` per field.
-
         - list  → pipe-joined string (e.g. imports, calls, env_vars)
-
         - None  → omitted
-
         - other → str(v)
-
         """
-
         if metadatas is None:
             return None
-
         result: list[dict] = []
-
         for meta in metadatas:
             sanitized: dict = {}
-
             for k, v in meta.items():
                 if isinstance(v, str | int | float | bool):
                     sanitized[k] = v
-
                 elif isinstance(v, list):
                     if v:
                         sanitized[k] = "|".join(str(x) for x in v)
-
                     # empty list → omit
-
                 elif v is not None:
                     sanitized[k] = str(v)
-
                 # None → omit
-
             result.append(sanitized)
-
         return result
 
     def add(
@@ -295,30 +241,19 @@ class OpenVectorStore:
             raise ValueError(
                 f"metadatas length mismatch: metadatas={len(metadatas)} vs ids={n_ids}"
             )
-
         if self.provider == "chroma":
             # Chroma enforces a hard per-call limit (~5461 rows). Slice into safe batches
-
             # so that large post-split payloads (e.g. long-contract corpora) do not crash.
-
             _bs = OpenVectorStore._CHROMA_MAX_BATCH
-
             _safe_meta = OpenVectorStore._sanitize_chroma_meta(metadatas)
-
             for _start in range(0, max(len(ids), 1), _bs):
                 _end = _start + _bs
-
                 _ids_b = ids[_start:_end]
-
                 _texts_b = texts[_start:_end]
-
                 _emb_b = embeddings[_start:_end]
-
                 _meta_b = _safe_meta[_start:_end] if _safe_meta is not None else None
-
                 if not _ids_b:
                     break
-
                 try:
                     self.collection.add(
                         ids=_ids_b,
@@ -326,11 +261,9 @@ class OpenVectorStore:
                         embeddings=_emb_b,
                         metadatas=_meta_b,
                     )
-
                 except Exception as e:
                     if "dimension" in str(e).lower():
                         _actual_dim = len(_emb_b[0]) if _emb_b and _emb_b[0] else "unknown"
-
                         logger.error(
                             "Embedding dimension mismatch in ChromaDB: model '%s' produced "
                             "%s-dim vectors but this collection was initialized with a "
@@ -339,23 +272,16 @@ class OpenVectorStore:
                             self.config.embedding_model,
                             _actual_dim,
                         )
-
                     raise
-
         elif self.provider == "qdrant":
             from qdrant_client.models import PointStruct
 
             # Build and upsert PointStructs incrementally per batch so peak
-
             # memory stays bounded to _CHROMA_MAX_BATCH rows, not O(N).
-
             _bs = OpenVectorStore._CHROMA_MAX_BATCH
-
             _n = max(len(ids), 1)
-
             for _start in range(0, _n, _bs):
                 _end = _start + _bs
-
                 _batch = [
                     PointStruct(
                         id=ids[i],
@@ -364,18 +290,13 @@ class OpenVectorStore:
                     )
                     for i in range(_start, min(_end, len(ids)))
                 ]
-
                 if not _batch:
                     break
-
                 self.client.upsert(collection_name="axon", points=_batch)
-
         elif self.provider == "lancedb":
             rows = []
-
             for i, (doc_id, emb, text) in enumerate(zip(ids, embeddings, texts)):
                 meta = metadatas[i] if metadatas else {}
-
                 rows.append(
                     {
                         "id": doc_id,
@@ -385,7 +306,6 @@ class OpenVectorStore:
                         "metadata_json": json.dumps(meta),
                     }
                 )
-
             if self.collection is None:
                 self.collection = self.client.create_table(
                     "axon",
@@ -395,7 +315,6 @@ class OpenVectorStore:
                 )
             else:
                 self.collection.add(rows)
-
             # Merge fragments and purge old versions to keep disk usage clean
             # Optimize periodically (every ~1000 ingested rows) to avoid write-amplification.
             _rows = len(rows) if rows else 0
@@ -413,7 +332,6 @@ class OpenVectorStore:
                     self._lancedb_rows_since_optimize = 0
                 except Exception:
                     pass
-
             # Auto-build IVF_PQ index once corpus is large enough (≥1000 vectors).
             # Only attempt once per process to avoid repeated rebuilds.
             if not getattr(self, "_lancedb_index_built", False):
@@ -435,11 +353,9 @@ class OpenVectorStore:
                         )
                 except Exception as e:
                     logger.debug(f"LanceDB: auto index build skipped — {e}")
-
         elif self.provider == "turboquantdb":
             if not ids:
                 return
-
             # Lazy open on first add() — detect dimension from the first embedding batch.
             if self.client is None:
                 import tqdb
@@ -461,7 +377,6 @@ class OpenVectorStore:
                     rerank_precision=getattr(self.config, "tqdb_rerank_precision", None),
                 )
                 # tqdb writes manifest.json on open — no sidecar needed.
-
             import numpy as np
 
             metas = metadatas if metadatas is not None else [{}] * len(ids)
@@ -469,7 +384,6 @@ class OpenVectorStore:
             vecs = np.array(embeddings, dtype=np.float32)
             self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
             self.client.flush()
-
             # Auto-build ANN index once corpus reaches 1000 vectors — but only once.
             # Phase 1 (hybrid dark-vector fix, tqdb ≥0.2.1) ensures post-index inserts
             # are found via the brute-force dark-slot scan, so a one-time build is correct.
@@ -489,75 +403,46 @@ class OpenVectorStore:
 
     def list_documents(self) -> list[dict[str, Any]]:
         """Return all unique source files stored in the knowledge base with chunk counts.
-
         Returns:
-
             List of dicts sorted by source name, each with keys:
-
                 - source (str): The metadata 'source' value, or 'unknown' if not set.
-
                 - chunks (int): Number of chunks stored for that source.
-
                 - doc_ids (List[str]): All chunk IDs belonging to this source.
-
         """
-
         if self.provider == "chroma":
             result = self.collection.get(include=["metadatas"])
-
             sources: dict[str, dict[str, Any]] = {}
-
             for doc_id, meta in zip(
                 result["ids"], result["metadatas"] or [{}] * len(result["ids"])
             ):
                 source = (meta or {}).get("source", "unknown")
-
                 if source not in sources:
                     sources[source] = {"source": source, "chunks": 0, "doc_ids": []}
-
                 sources[source]["chunks"] += 1
-
                 sources[source]["doc_ids"].append(doc_id)
-
             return sorted(sources.values(), key=lambda x: x["source"])
-
         elif self.provider == "qdrant":
             results, _ = self.client.scroll(collection_name="axon", limit=10000, with_payload=True)
-
             sources: dict[str, dict[str, Any]] = {}
-
             for point in results:
                 source = point.payload.get("source", "unknown")
-
                 if source not in sources:
                     sources[source] = {"source": source, "chunks": 0, "doc_ids": []}
-
                 sources[source]["chunks"] += 1
-
                 sources[source]["doc_ids"].append(str(point.id))
-
             return sorted(sources.values(), key=lambda x: x["source"])
-
         elif self.provider == "lancedb":
             if self.collection is None:
                 return []
-
             rows = self.collection.to_arrow().to_pydict()
-
             sources: dict[str, dict[str, Any]] = {}
-
             for doc_id, source in zip(rows.get("id", []), rows.get("source", [])):
                 src = source or "unknown"
-
                 if src not in sources:
                     sources[src] = {"source": src, "chunks": 0, "doc_ids": []}
-
                 sources[src]["chunks"] += 1
-
                 sources[src]["doc_ids"].append(doc_id)
-
             return sorted(sources.values(), key=lambda x: x["source"])
-
         elif self.provider == "turboquantdb":
             if self.client is None:
                 return []
@@ -573,7 +458,6 @@ class OpenVectorStore:
             except Exception as e:
                 logger.debug(f"TurboQuantDB list_documents failed: {e}")
                 return []
-
         return []
 
     def search(
@@ -597,12 +481,10 @@ class OpenVectorStore:
                 }
                 for i in range(len(results["ids"][0]))
             ]
-
         elif self.provider == "qdrant":
             results = self.client.search(
                 collection_name="axon", query_vector=query_embedding, limit=top_k
             )
-
             return [
                 {
                     "id": str(r.id),
@@ -612,13 +494,10 @@ class OpenVectorStore:
                 }
                 for r in results
             ]
-
         elif self.provider == "lancedb":
             if self.collection is None:
                 return []
-
             results = self.collection.search(query_embedding).limit(top_k).to_list()
-
             return [
                 {
                     "id": r["id"],
@@ -628,7 +507,6 @@ class OpenVectorStore:
                 }
                 for r in results
             ]
-
         elif self.provider == "turboquantdb":
             if self.client is None:
                 return []
@@ -661,14 +539,12 @@ class OpenVectorStore:
         filter_dict: dict | None = None,
     ) -> list[list[dict]]:
         """Search with multiple query embeddings in a single call where possible.
-
         Returns one result list per input embedding.  ChromaDB supports a true
         batch query in a single round-trip; all other backends run searches in
         parallel via a thread pool.
         """
         if not query_embeddings:
             return []
-
         if self.provider == "chroma":
             results = self.collection.query(
                 query_embeddings=query_embeddings,
@@ -687,7 +563,6 @@ class OpenVectorStore:
                 ]
                 for q in range(len(query_embeddings))
             ]
-
         # All other backends: run searches in parallel via thread pool.
         from concurrent.futures import ThreadPoolExecutor
 
@@ -697,35 +572,22 @@ class OpenVectorStore:
 
     def get_by_ids(self, ids: list[str]) -> list[dict]:
         """Fetch stored documents by their IDs (used by GraphRAG expansion).
-
         Returns a list of result dicts in the same format as search(), with score=1.0
-
         since these docs are fetched by exact ID (not scored).
-
         """
-
         if not ids:
             return []
-
         if self.provider == "chroma":
             result = self.collection.get(ids=ids, include=["documents", "metadatas"])
-
             result_ids = result.get("ids") or []
-
             result_docs = result.get("documents") or []
-
             result_metas = result.get("metadatas") or []
-
             num_ids = len(result_ids)
-
             if len(result_docs) < num_ids:
                 result_docs = list(result_docs) + [""] * (num_ids - len(result_docs))
-
             if len(result_metas) < num_ids:
                 result_metas = list(result_metas) + [{}] * (num_ids - len(result_metas))
-
             docs = []
-
             for i in range(num_ids):
                 docs.append(
                     {
@@ -735,9 +597,7 @@ class OpenVectorStore:
                         "metadata": result_metas[i] or {},
                     }
                 )
-
             return docs
-
         if self.provider == "qdrant":
             try:
                 points = self.client.retrieve(
@@ -745,7 +605,6 @@ class OpenVectorStore:
                     ids=ids,
                     with_payload=True,
                 )
-
                 return [
                     {
                         "id": str(p.id),
@@ -755,21 +614,15 @@ class OpenVectorStore:
                     }
                     for p in points
                 ]
-
             except Exception as e:
                 logger.debug(f"GraphRAG get_by_ids (Qdrant) failed: {e}")
-
                 return []
-
         if self.provider == "lancedb":
             if self.collection is None:
                 return []
-
             try:
                 id_str = ", ".join(f"'{_escape_sql_str(i)}'" for i in ids)
-
                 rows = self.collection.search().where(f"id IN ({id_str})", prefilter=True).to_list()
-
                 return [
                     {
                         "id": r["id"],
@@ -779,12 +632,9 @@ class OpenVectorStore:
                     }
                     for r in rows
                 ]
-
             except Exception as e:
                 logger.debug(f"GraphRAG get_by_ids (LanceDB) failed: {e}")
-
                 return []
-
         if self.provider == "turboquantdb":
             if self.client is None:
                 return []
@@ -803,44 +653,30 @@ class OpenVectorStore:
             except Exception as e:
                 logger.debug(f"GraphRAG get_by_ids (TurboQuantDB) failed: {e}")
                 return []
-
         return []
 
     def optimize_index(self) -> str:
         """Build or rebuild an ANN index on the LanceDB vector column.
-
         For LanceDB: creates an IVF_PQ index which dramatically reduces
-
         memory usage and speeds up search on large collections (>10k vectors).
-
         Requires at least 256 vectors; safe to call on smaller tables (no-op).
-
         For Chroma/Qdrant: returns an informational message (they manage
-
         their own indexes automatically).
-
         Returns:
-
             Status message describing what was done.
-
         """
-
         if self.provider == "lancedb":
             if self.collection is None:
                 return "LanceDB: no table exists yet — ingest some documents first."
-
             try:
                 count = self.collection.count_rows()
-
             except Exception:
                 count = len(self.collection.to_arrow())
-
             if count < 256:
                 return (
                     f"LanceDB: only {count} vectors — need ≥256 to build an IVF_PQ index. "
                     "Using flat (brute-force) search for now; re-run after more ingestion."
                 )
-
             try:
                 num_partitions = min(256, max(8, count // 500))
                 self.collection.create_index(
@@ -850,20 +686,15 @@ class OpenVectorStore:
                     num_sub_vectors=24,
                     replace=True,
                 )
-
                 return (
                     f"LanceDB: IVF_PQ index built on {count} vectors (partitions={num_partitions})."
                 )
-
             except Exception as e:
                 return f"LanceDB: index creation failed — {e}"
-
         elif self.provider == "chroma":
             return "ChromaDB manages its HNSW index automatically — no action needed."
-
         elif self.provider == "qdrant":
             return "Qdrant manages its HNSW index automatically — no action needed."
-
         elif self.provider == "turboquantdb":
             if self.client is None:
                 return "TurboQuantDB: no database open yet — ingest some documents first."
@@ -878,18 +709,14 @@ class OpenVectorStore:
                 return f"TurboQuantDB: ANN index built on {n} vectors."
             except Exception as e:
                 return f"TurboQuantDB: index creation failed — {e}"
-
         return "Unknown provider."
 
     def delete_by_ids(self, ids: list[str]) -> None:
         """Delete documents by ID from the vector store."""
-
         if not ids:
             return
-
         if self.provider == "chroma":
             self.collection.delete(ids=ids)
-
         elif self.provider == "qdrant":
             from qdrant_client.models import PointIdsList
 
@@ -897,15 +724,11 @@ class OpenVectorStore:
                 collection_name="axon",
                 points_selector=PointIdsList(points=list(ids)),
             )
-
         elif self.provider == "lancedb":
             if self.collection is None:
                 return
-
             id_str = ", ".join(f"'{_escape_sql_str(i)}'" for i in ids)
-
             self.collection.delete(f"id IN ({id_str})")
-
         elif self.provider == "turboquantdb":
             if self.client is None:
                 return
@@ -918,28 +741,16 @@ class OpenVectorStore:
 
 class MultiVectorStore:
     """Read-only fan-out wrapper over multiple OpenVectorStore instances.
-
-
     Used when a parent project is active: queries are dispatched to all
-
-
     descendant stores and the top-k results (by score) are returned merged.
-
-
     Writes are NOT supported — use the project's own OpenVectorStore for that.
-
-
     """
 
     def __init__(self, stores: list[OpenVectorStore]):
         self._stores = stores
-
         # Expose provider/collection from the first store so callers that
-
         # inspect brain.vector_store.provider / .collection still work.
-
         self.provider = stores[0].provider if stores else "chroma"
-
         self.collection = stores[0].collection if stores else None
 
     def search(
@@ -951,23 +762,19 @@ class MultiVectorStore:
         from concurrent.futures import ThreadPoolExecutor
 
         seen: dict[str, dict] = {}
-
         with ThreadPoolExecutor(max_workers=min(4, len(self._stores))) as ex:
             futures = [
                 ex.submit(store.search, query_embedding, top_k, filter_dict)
                 for store in self._stores
             ]
-
             for fut in futures:
                 try:
                     for doc in fut.result():
                         doc_id = doc["id"]
-
                         if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
                             seen[doc_id] = doc
                 except Exception as e:
                     logger.warning("MultiVectorStore: sub-store search failed, skipping: %s", e)
-
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
     def batch_search(
@@ -979,7 +786,6 @@ class MultiVectorStore:
         """Batch search across all child stores, merging results per query index."""
         if not query_embeddings:
             return []
-
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=min(4, len(self._stores))) as ex:
@@ -995,7 +801,6 @@ class MultiVectorStore:
                     logger.warning(
                         "MultiVectorStore.batch_search: sub-store failed, skipping: %s", e
                     )
-
         merged: list[list[dict]] = []
         for q in range(len(query_embeddings)):
             seen: dict[str, dict] = {}
@@ -1013,28 +818,21 @@ class MultiVectorStore:
 
     def list_documents(self) -> list[dict]:
         seen: dict[str, dict] = {}
-
         for store in self._stores:
             for doc in store.list_documents():
                 src = doc["source"]
-
                 if src not in seen:
                     seen[src] = doc.copy()
-
                 else:
                     seen[src]["chunks"] += doc["chunks"]
-
                     seen[src]["doc_ids"].extend(doc.get("doc_ids", []))
-
         return sorted(seen.values(), key=lambda x: x["source"])
 
     def get_by_ids(self, ids: list[str]) -> list[dict]:
         seen: dict[str, dict] = {}
-
         for store in self._stores:
             for doc in store.get_by_ids(ids):
                 seen[doc["id"]] = doc
-
         return list(seen.values())
 
     def delete_by_ids(self, ids: list[str]) -> None:
@@ -1046,14 +844,8 @@ class MultiVectorStore:
 
 class MultiBM25Retriever:
     """Read-only fan-out wrapper over multiple BM25Retriever instances.
-
-
     Merges BM25 results from all descendant stores and returns the top-k
-
-
     by score. Writes are NOT supported.
-
-
     """
 
     def __init__(self, retrievers: list) -> None:
@@ -1068,27 +860,22 @@ class MultiBM25Retriever:
         from concurrent.futures import ThreadPoolExecutor
 
         seen: dict[str, dict] = {}
-
         with ThreadPoolExecutor(max_workers=min(4, len(self._retrievers))) as ex:
             futures = [ex.submit(r.search, query, top_k) for r in self._retrievers]
-
             for fut in futures:
                 try:
                     for doc in fut.result():
                         doc_id = doc["id"]
-
                         if doc_id not in seen or doc["score"] > seen[doc_id]["score"]:
                             seen[doc_id] = doc
                 except Exception as e:
                     logger.warning(
                         "MultiBM25Retriever: sub-retriever search failed, skipping: %s", e
                     )
-
         return sorted(seen.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
     def delete_documents(self, doc_ids: list[str]) -> None:
         """Disallow deletes in merged read-only views."""
-
         raise RuntimeError(_MERGED_VIEW_WRITE_ERROR)
 
     def add_documents(self, *args, **kwargs):

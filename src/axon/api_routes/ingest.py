@@ -39,21 +39,17 @@ _PATH_ENRICHMENT_EXCLUDED_TYPES = frozenset(
 
 def _normalise_uploaded_filename(filename: str | None, index: int) -> str:
     """Return a safe basename for an uploaded file, preserving its extension."""
-
     raw_name = pathlib.Path(filename or "").name.strip()
     if not raw_name:
         raw_name = f"upload_{index}"
-
     safe_stem = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in raw_name)
     safe_stem = safe_stem.strip("._") or f"upload_{index}"
-
     return safe_stem
 
 
 @router.post("/ingest/refresh")
 async def refresh_docs(background_tasks: BackgroundTasks):
     """Re-ingest tracked files whose content has changed.
-
     Returns a job_id immediately; the refresh runs in the background.
     Poll ``GET /ingest/status/{job_id}`` until ``status == "completed"``.
     """
@@ -66,9 +62,7 @@ async def refresh_docs(background_tasks: BackgroundTasks):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-
     _enforce_write_access(brain, "refresh")
-
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc)
     _api._evict_old_jobs()
@@ -93,18 +87,15 @@ async def refresh_docs(background_tasks: BackgroundTasks):
         try:
             versions = brain.get_doc_versions() or {}
             loader = DirectoryLoader()
-
             for source_id, record in versions.items():
                 try:
                     src_path = pathlib.Path(source_id).expanduser().resolve()
                 except Exception:
                     job["errors"].append({"source": source_id, "error": "invalid source path"})
                     continue
-
                 if not src_path.exists():
                     job["missing"].append(source_id)
                     continue
-
                 try:
                     _validate_ingest_path(str(src_path))
                 except (ValueError, PermissionError) as e:
@@ -112,7 +103,6 @@ async def refresh_docs(background_tasks: BackgroundTasks):
                         "Refresh: skipping %s (path validation failed: %s)", source_id, e
                     )
                     continue
-
                 try:
                     suffix = os.path.splitext(str(src_path))[1].lower()
                     loader_instance = loader.loaders.get(suffix)
@@ -161,18 +151,14 @@ async def ingest_data(
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-
     validated_path = _validate_ingest_path(request.path)
-
     try:
         requested_path = pathlib.Path(os.path.realpath(validated_path))
         if not requested_path.exists():
             raise HTTPException(status_code=404, detail="Path does not exist")
     except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
-
     _enforce_write_access(brain, "ingest")
-
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc)
     _api._evict_old_jobs()
@@ -190,7 +176,6 @@ async def ingest_data(
         "documents_ingested": None,
         "error": None,
     }
-
     rid = getattr(req.state, "request_id", job_id)
     surface = getattr(req.state, "surface", "api")
 
@@ -215,7 +200,6 @@ async def ingest_data(
         job = _api._jobs.get(job_id)
         if job is None:
             return
-
         project = getattr(brain, "_active_project", "default")
         gov.emit(
             "ingest_started",
@@ -273,7 +257,6 @@ async def ingest_data(
             )
 
     background_tasks.add_task(process_ingestion)
-
     return {
         "message": f"Ingestion started for {validated_path}",
         "status": "processing",
@@ -287,7 +270,6 @@ async def get_ingest_status(job_id: str):
     from axon import api as _api
 
     brain = _api.brain
-
     job = _api._jobs.get(job_id)
     if job is None:
         raise HTTPException(
@@ -338,7 +320,6 @@ async def get_stale_docs(days: int = 7):
 
     if days < 0:
         raise HTTPException(status_code=400, detail="'days' must be >= 0.")
-
     cutoff = datetime.now(timezone.utc).timestamp() - days * 86_400
     stale: list[dict] = []
     for project_name, hashes in _api._source_hashes.items():
@@ -368,29 +349,22 @@ async def add_text(request: TextIngestRequest):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
-
     if not request.text or not request.text.strip():
         raise HTTPException(status_code=400, detail="Text must not be empty.")
-
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
     project_key = request.project or brain._active_project
-
     skip = _api._check_dedup(request.text, project_key)
     if skip:
         return {**skip, "doc_id": skip["doc_id"]}
-
     from axon.loaders import SmartTextLoader
 
     loader = SmartTextLoader()
     documents = loader.load_text(request.text, source=doc_id)
-
     if request.metadata:
         for doc in documents:
             doc["metadata"].update(request.metadata)
-
     try:
         await asyncio.to_thread(brain.ingest, documents)
         _api._record_dedup(request.text, doc_id, project_key)
@@ -413,14 +387,12 @@ async def add_texts(request: BatchTextIngestRequest):
 
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
-
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
     project_key = request.project or brain._active_project
     pending_records: list[tuple[str, str]] = []
     batch_hashes: dict[str, str] = {}
     loader = SmartTextLoader()
-
     for item in request.docs:
         doc_id = item.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
         skip = _api._check_dedup(item.text, project_key)
@@ -432,16 +404,13 @@ async def add_texts(request: BatchTextIngestRequest):
             results.append({"id": batch_hashes[content_hash], "status": "skipped", "error": None})
             continue
         batch_hashes[content_hash] = doc_id
-
         item_docs = loader.load_text(item.text, source=doc_id)
         if item.metadata:
             for d in item_docs:
                 d["metadata"].update(item.metadata)
-
         docs_to_ingest.extend(item_docs)
         pending_records.append((doc_id, item.text))
         results.append({"id": doc_id, "status": "created", "chunks": len(item_docs)})
-
     if docs_to_ingest:
         try:
             await asyncio.to_thread(brain.ingest, docs_to_ingest)
@@ -450,7 +419,6 @@ async def add_texts(request: BatchTextIngestRequest):
         except Exception as e:
             logger.error(f"Error batch-ingesting texts: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-
     return results
 
 
@@ -466,7 +434,6 @@ async def ingest_url(request: URLIngestRequest):
 
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
-
     loader = URLLoader()
     project_key = request.project or brain._active_project
     try:
@@ -476,25 +443,20 @@ async def ingest_url(request: URLIngestRequest):
     except Exception as exc:
         logger.error(f"Unexpected error fetching URL '{request.url}': {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
-
     if not docs:
         raise HTTPException(status_code=422, detail="No content could be extracted from the URL.")
-
     doc = docs[0]
     if request.metadata:
         doc["metadata"].update(request.metadata)
-
     skip = _api._check_dedup(doc["text"], project_key)
     if skip:
         return {**skip, "doc_id": skip["doc_id"], "url": request.url}
-
     try:
         await asyncio.to_thread(brain.ingest, [doc])
         _api._record_dedup(doc["text"], doc["id"], project_key)
     except Exception as exc:
         logger.error(f"Error ingesting URL content: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
-
     return {"status": "ingested", "doc_id": doc["id"], "url": request.url}
 
 
@@ -504,33 +466,26 @@ async def ingest_upload(
     project: str | None = Form(None),
 ):
     """Accept multipart file uploads, load them through the normal file loaders, and ingest."""
-
     from axon import api as _api
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-
     _enforce_project(project, brain)
     _enforce_write_access(brain, "ingest")
-
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
-
     from axon.loaders import DirectoryLoader
 
     loader_mgr = DirectoryLoader()
     docs_to_ingest: list[dict] = []
     results: list[dict] = []
     total_chunks = 0
-
     with tempfile.TemporaryDirectory(prefix="axon_upload_") as tmp_dir:
         temp_root = pathlib.Path(tmp_dir)
         used_names: set[str] = set()
-
         for index, upload in enumerate(files):
             safe_name = _normalise_uploaded_filename(upload.filename, index)
-
             candidate_name = safe_name
             stem = pathlib.Path(safe_name).stem
             suffix = pathlib.Path(safe_name).suffix
@@ -539,7 +494,6 @@ async def ingest_upload(
                 candidate_name = f"{stem}_{counter}{suffix}"
                 counter += 1
             used_names.add(candidate_name.lower())
-
             ext = pathlib.Path(candidate_name).suffix.lower()
             loader = loader_mgr.loaders.get(ext)
             if loader is None:
@@ -553,7 +507,6 @@ async def ingest_upload(
                 )
                 await upload.close()
                 continue
-
             temp_path = temp_root / candidate_name
             # Stream upload to disk in chunks to avoid reading entire file into memory.
             MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB per file cap
@@ -591,7 +544,6 @@ async def ingest_upload(
                     }
                 )
                 continue
-
             try:
                 docs = await asyncio.to_thread(loader.load, str(temp_path))
             except Exception as exc:
@@ -605,12 +557,10 @@ async def ingest_upload(
                     }
                 )
                 continue
-
             for doc in docs:
                 doc["metadata"]["source"] = candidate_name
                 if doc["metadata"].get("type") not in _PATH_ENRICHMENT_EXCLUDED_TYPES:
                     doc["text"] = f"[File Path: {candidate_name}]\n{doc['text']}"
-
             docs_to_ingest.extend(docs)
             total_chunks += len(docs)
             results.append(
@@ -621,7 +571,6 @@ async def ingest_upload(
                     "chunks": len(docs),
                 }
             )
-
         if not docs_to_ingest:
             raise HTTPException(status_code=400, detail="No supported files found in upload")
         try:
@@ -629,7 +578,6 @@ async def ingest_upload(
         except Exception as exc:
             logger.error("Error ingesting uploaded file batch: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
-
     return {
         "status": "success",
         "files": results,
@@ -658,7 +606,6 @@ async def delete_documents(
         existing_ids_set = {doc["id"] for doc in existing}
         existing_ids = [i for i in request.doc_ids if i in existing_ids_set]
         not_found = [i for i in request.doc_ids if i not in existing_ids_set]
-
         # Expand any not-found IDs that are source doc IDs (e.g. returned by
         # ingest_text) to their actual chunk IDs via the BM25 corpus, then
         # delete those expanded chunk IDs from both stores.
@@ -679,7 +626,6 @@ async def delete_documents(
                 brain.bm25.delete_documents(expanded)
                 existing_ids.extend(expanded)
                 not_found = [i for i in not_found if i not in resolved_sources]
-
         if existing_ids:
             # Delete chunk IDs that were found directly (not from source expansion)
             direct_ids = [i for i in existing_ids if i in existing_ids_set]
@@ -689,7 +635,6 @@ async def delete_documents(
                     brain.bm25.delete_documents(direct_ids)
             if brain._entity_graph:
                 brain._prune_entity_graph(set(existing_ids))
-
             from axon import api as _api
 
             _api._purge_dedup(existing_ids, project)

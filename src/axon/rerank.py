@@ -14,7 +14,6 @@ logger = logging.getLogger("Axon")
 
 class OpenReranker:
     """Document reranker supporting cross-encoder and pointwise LLM providers.
-
     When ``reranker_provider="cross-encoder"`` a sentence-transformers CrossEncoder
     scores each (query, document) pair.  When ``reranker_provider="llm"`` the
     active LLM rates each document on a 1–10 scale in parallel threads
@@ -47,32 +46,24 @@ class OpenReranker:
         """
         if not self.config.rerank or (not self.model and not self.llm) or not documents:
             return documents
-
         logger.info(f"Reranking {len(documents)} documents...")
-
         if self.config.reranker_provider == "llm" and self.llm:
             return self._llm_rerank(query, documents)
-
         # Cross-encoder pointwise scoring
         # Prepare pairs: (query, doc_text)
         pairs = [[query, doc["text"]] for doc in documents]
-
         # Get scores
         scores = self.model.predict(pairs)
-
         # Add scores to documents and sort
         for doc, score in zip(documents, scores):
             doc["rerank_score"] = float(score)
-
         # Sort by rerank score descending
         reranked_docs = sorted(documents, key=lambda x: x["rerank_score"], reverse=True)
-
         return reranked_docs
 
     def _llm_rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Pointwise LLM scoring implementation (scores each document independently on 1–10 scale)."""
         system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
-
         from concurrent.futures import ThreadPoolExecutor
 
         def score_doc(doc):
@@ -86,9 +77,7 @@ class OpenReranker:
         # Batch concurrent requests to reduce overall latency
         with ThreadPoolExecutor(max_workers=min(10, len(documents))) as executor:
             scores = list(executor.map(score_doc, documents))
-
         for doc, score in zip(documents, scores):
             doc["rerank_score"] = score
-
         reranked_docs = sorted(documents, key=lambda x: x["rerank_score"], reverse=True)
         return reranked_docs

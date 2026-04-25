@@ -41,14 +41,11 @@ async def query_brain(request: QueryRequest):
             "discussion_fallback": request.discuss,
             "llm_temperature": request.temperature,
         }
-
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = asyncio.get_event_loop()
-
         timeout = request.timeout or float(os.getenv("AXON_QUERY_TIMEOUT", "120"))
-
         if request.dry_run:
             # Dry-run must never trigger LLM calls. Force-disable all transforms that
             # cause model invocations (HyDE, multi-query, step-back, decomposition,
@@ -64,7 +61,6 @@ async def query_brain(request: QueryRequest):
                 "graph_rag",
             ):
                 dry_overrides[_k] = False
-
             try:
                 results, diag, _trace = await asyncio.wait_for(
                     loop.run_in_executor(
@@ -83,7 +79,6 @@ async def query_brain(request: QueryRequest):
                 "results": results,
                 "diagnostics": diag.to_dict(),
             }
-
         try:
             response = await asyncio.wait_for(
                 loop.run_in_executor(
@@ -99,7 +94,6 @@ async def query_brain(request: QueryRequest):
                 status_code=504,
                 detail=f"Query timed out after {timeout}s. Try disabling HyDE/Rerank or simplifying your query.",
             )
-
         cfg = brain._apply_overrides(overrides)
         settings = {
             "top_k": cfg.top_k,
@@ -149,7 +143,6 @@ async def query_brain_stream(request: QueryRequest):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(request.project, brain)
-
     overrides = {
         "top_k": request.top_k,
         "similarity_threshold": request.threshold,
@@ -269,7 +262,6 @@ async def clear_brain():
         _api._source_hashes.pop(project_key, None)
         if project_key == "default":
             _api._source_hashes.pop("_global", None)
-
         return {"status": "success", "message": "Collection cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

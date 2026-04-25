@@ -47,7 +47,6 @@ class GraphRagMixin:
 
     # Entity token index (inverted index: token -> set of entity names)
     # Not persisted; rebuilt from _entity_graph after load.
-
     @property
     def _entity_token_index(self) -> dict:
         """Lazy-initialised inverted token -> entity-name index."""
@@ -57,7 +56,6 @@ class GraphRagMixin:
 
     def _rebuild_entity_token_index(self) -> None:
         """Build (or rebuild) the token index from the current _entity_graph.
-
         Called once after loading the entity graph from disk so that subsequent
         queries can do token-based candidate lookups instead of O(|V|) full scans.
         """
@@ -99,7 +97,6 @@ class GraphRagMixin:
 
     def _flush_pending_saves(self) -> None:
         """Block until all background graph-persist operations have completed.
-
         Must be called before any operation that reads persisted files (e.g.
         reload) and before brain shutdown so that data is not lost.
         """
@@ -121,7 +118,6 @@ class GraphRagMixin:
     @property
     def _persist_executor(self) -> concurrent.futures.ThreadPoolExecutor:
         """Single-worker executor dedicated to background graph persistence I/O.
-
         Always uses a dedicated private pool so that every graph persist job
         (entity + relation + claims) is serialized.  This guarantees that the
         ``_gr_persist_hashes`` digest cache and the per-path temp-file writes
@@ -385,7 +381,6 @@ class GraphRagMixin:
                         tgt = entry.get("target", "")
                         if src and tgt:
                             raw_edges.append((src, tgt, float(entry.get("weight", 1) or 1)))
-
             min_freq_raw = getattr(self.config, "graph_rag_entity_min_frequency", 1)
             min_freq = int(min_freq_raw) if isinstance(min_freq_raw, int | float) else 1
             allowed_nodes = {
@@ -433,12 +428,10 @@ class GraphRagMixin:
                 G[src][tgt]["weight"] += weight
             else:
                 G.add_edge(src, tgt, weight=weight)
-
         # Post-process to add distance for Dijkstra (Epic 1/4)
         for _u, _v, d in G.edges(data=True):
             w = d.get("weight", 1.0)
             d["distance"] = 1.0 / (w + 1e-6)
-
         return G
 
     def _graph_rag_entity_cache_key(self, text: str) -> str:
@@ -461,7 +454,6 @@ class GraphRagMixin:
     ) -> tuple[list[tuple[str, list[dict]]], list[tuple[str, list[dict]]], list[dict], bool]:
         if not chunks_to_process:
             return [], [], [], False
-
         cache_enabled = bool(getattr(self.config, "graph_rag_extraction_cache", True))
         entity_by_doc: dict[str, list[dict]] = {}
         relation_by_doc: dict[str, list[dict]] = {}
@@ -504,7 +496,6 @@ class GraphRagMixin:
                 entity_by_doc[doc["id"]] = cached_entities
             else:
                 uncached_entity_docs.append(doc)
-
         if not relations_enabled:
             if uncached_entity_docs:
                 for doc_id, entities in self._executor.map(_proc_entities, uncached_entity_docs):
@@ -513,7 +504,6 @@ class GraphRagMixin:
                 (doc["id"], entity_by_doc.get(doc["id"], [])) for doc in chunks_to_process
             ]
             return entity_results, [], [], False
-
         pipeline_relations = relation_budget <= 0 or len(chunks_to_process) <= relation_budget
         if not pipeline_relations:
             if uncached_entity_docs:
@@ -553,7 +543,6 @@ class GraphRagMixin:
                     relation_by_doc[doc_id] = relations
             rel_results = [(doc["id"], relation_by_doc.get(doc["id"], [])) for doc in rel_chunks]
             return entity_results, rel_results, rel_chunks, False
-
         from concurrent.futures import as_completed
 
         use_fused_extraction = (
@@ -567,7 +556,6 @@ class GraphRagMixin:
             cached_entities = entity_by_doc.get(doc["id"])
             if cached_entities is not None:
                 _maybe_stage_relations(doc, cached_entities, rel_futures)
-
         entity_futures = {}
         bundled_futures = {}
         for doc in uncached_entity_docs:
@@ -579,7 +567,6 @@ class GraphRagMixin:
                 ] = doc
             else:
                 entity_futures[self._executor.submit(self._extract_entities, doc["text"])] = doc
-
         for future in as_completed(bundled_futures):
             doc = bundled_futures[future]
             doc_id = doc["id"]
@@ -594,10 +581,8 @@ class GraphRagMixin:
             entities = future.result()
             entity_by_doc[doc_id] = entities
             _maybe_stage_relations(doc, entities, rel_futures)
-
         for future in as_completed(rel_futures):
             relation_by_doc[rel_futures[future]] = future.result()
-
         entity_results = [
             (doc["id"], entity_by_doc.get(doc["id"], [])) for doc in chunks_to_process
         ]
@@ -879,7 +864,6 @@ class GraphRagMixin:
 
     def _load_entity_graph(self) -> dict:
         """Load persisted entity→doc_id graph from disk.
-
         Shape: {entity_lower: {"description": str, "chunk_ids": list[str]}}
         """
         self._flush_pending_saves()
@@ -901,7 +885,6 @@ class GraphRagMixin:
                     return normalized
             except Exception:
                 pass
-
         path = bm25_path / ".entity_graph.json"
         if path.exists():
             try:
@@ -1023,7 +1006,6 @@ class GraphRagMixin:
 
     def _load_relation_graph(self) -> dict:
         """Load persisted relation graph from disk.
-
         Shape: {source_entity_lower: [{target: str, relation: str, chunk_id: str}]}
         """
         self._flush_pending_saves()
@@ -1256,7 +1238,6 @@ class GraphRagMixin:
 
         bm25_path = pathlib.Path(rg_cfg["bm25_path"])
         path = bm25_path / ".relation_graph.json"
-
         if rg_cfg["shard_persist"]:
             shard_count = max(1, rg_cfg["shard_count"])
             src_keys = sorted(k for k in snapshot.keys() if isinstance(k, str))
@@ -1442,7 +1423,6 @@ class GraphRagMixin:
 
     def _load_community_levels(self) -> dict:
         """Load persisted hierarchical community levels from disk.
-
         Shape: {level_int: {entity_lower: community_id}}
         """
         import json
@@ -1472,7 +1452,6 @@ class GraphRagMixin:
 
     def _load_community_hierarchy(self) -> dict:
         """Load persisted community hierarchy from disk.
-
         Shape: {cluster_id_int: parent_cluster_id_int_or_None}
         """
         import json
@@ -1580,7 +1559,6 @@ class GraphRagMixin:
                     return raw_dict
             except Exception:
                 pass
-
         path = bm25_path / ".entity_embeddings.json"
         try:
             if path.exists():
@@ -1619,7 +1597,6 @@ class GraphRagMixin:
 
     def _load_claims_graph(self) -> dict:
         """Load persisted claims graph from disk.
-
         Shape: {chunk_id: [claim_dict, ...]}
         """
         import json
@@ -1654,7 +1631,6 @@ class GraphRagMixin:
     def _build_synthetic_community_hierarchy(community_levels: dict) -> tuple[dict, dict]:
         community_hierarchy: dict = {}
         community_children: dict = {}
-
         if len(community_levels) > 1:
             levels_sorted = sorted(community_levels.keys())
             for i in range(1, len(levels_sorted)):
@@ -1662,7 +1638,6 @@ class GraphRagMixin:
                 coarse_level = levels_sorted[i - 1]
                 fine_map = community_levels[fine_level]
                 coarse_map = community_levels[coarse_level]
-
                 for fine_cid in set(fine_map.values()):
                     fine_key = f"{fine_level}_{fine_cid}"
                     fine_members = [n for n, c in fine_map.items() if c == fine_cid]
@@ -1678,14 +1653,12 @@ class GraphRagMixin:
                         community_children.setdefault(parent_key, [])
                         if fine_key not in community_children[parent_key]:
                             community_children[parent_key].append(fine_key)
-
             for cid in set(community_levels[levels_sorted[0]].values()):
                 root_key = f"{levels_sorted[0]}_{cid}"
                 community_hierarchy.setdefault(root_key, None)
         else:
             for cid in set(community_levels[0].values()):
                 community_hierarchy[f"0_{cid}"] = None
-
         return community_hierarchy, community_children
 
     def _build_networkx_graph(self):
@@ -1693,10 +1666,8 @@ class GraphRagMixin:
         if not hasattr(self, "_nx_graph_dirty"):
             self._nx_graph_dirty = True
             self._nx_graph = None
-
         if not self._nx_graph_dirty and self._nx_graph is not None:
             return self._nx_graph
-
         nodes, edges = self._build_graph_edge_payload()
         self._nx_graph = self._build_networkx_graph_from_edges(nodes, edges)
         self._nx_graph_dirty = False
@@ -1713,13 +1684,11 @@ class GraphRagMixin:
         nodes, edges = self._build_graph_edge_payload()
         if len(nodes) < 2:
             return dict.fromkeys(nodes, 0)
-
         bridge = get_rust_bridge()
         if bridge.can_run_louvain():
             mapping = bridge.run_louvain(nodes, edges, resolution=1.0)
             if isinstance(mapping, dict):
                 return mapping
-
         try:
             import networkx.algorithms.community as nx_comm
         except ImportError:
@@ -1728,7 +1697,6 @@ class GraphRagMixin:
                 "Install with: pip install networkx"
             )
             return {}
-
         G = self._build_networkx_graph_from_edges(nodes, edges)
         try:
             communities = nx_comm.louvain_communities(G, seed=42)
@@ -1743,7 +1711,6 @@ class GraphRagMixin:
 
     def _run_hierarchical_community_detection(self) -> tuple:
         """Run hierarchical community detection.
-
         Returns:
             (community_levels, community_hierarchy, community_children)
             - community_levels: {level_int: {entity_lower: cluster_id}}
@@ -1755,7 +1722,6 @@ class GraphRagMixin:
         nodes, edges = self._build_graph_edge_payload()
         if len(nodes) < 2:
             return {0: dict.fromkeys(nodes, 0)}, {0: None}, {0: []}
-
         n_levels = max(1, getattr(self.config, "graph_rag_community_levels", 2))
         max_cluster_size = getattr(self.config, "graph_rag_community_max_cluster_size", 10)
         seed = getattr(self.config, "graph_rag_leiden_seed", 42)
@@ -1786,10 +1752,8 @@ class GraphRagMixin:
                 f"GraphRAG: clustering all {len(components)} connected components "
                 f"({len(working_nodes)} total nodes)"
             )
-
         _backend = getattr(self.config, "graph_rag_community_backend", "louvain")
         G = None
-
         # Tier-1: graspologic hierarchical Leiden — only attempted when backend="auto"
         # The import is probed inside a thread with a 10-second timeout to avoid hanging the
         # main process on Python 3.13+ where graspologic's numba/scipy initialisation can block.
@@ -1813,7 +1777,6 @@ class GraphRagMixin:
                 )
             except Exception:
                 pass
-
             if not _graspologic_available:
                 logger.warning(
                     "GraphRAG: graspologic not available — falling back to leidenalg/Louvain. "
@@ -1829,17 +1792,14 @@ class GraphRagMixin:
                 community_levels: dict = {}
                 community_hierarchy: dict = {}
                 community_children: dict = {}
-
                 for triple in partitions:
                     level = triple.level
                     entity = triple.node
                     cluster = triple.cluster
                     parent = getattr(triple, "parent_cluster", None)
-
                     if level not in community_levels:
                         community_levels[level] = {}
                     community_levels[level][entity] = cluster
-
                     if cluster not in community_hierarchy:
                         community_hierarchy[cluster] = parent
                     if parent is not None:
@@ -1847,7 +1807,6 @@ class GraphRagMixin:
                             community_children[parent] = []
                         if cluster not in community_children[parent]:
                             community_children[parent].append(cluster)
-
                 # Normalize Leiden hierarchy to level-qualified string keys to match Louvain format
                 # and avoid cross-level integer collisions.
                 normalized_hierarchy: dict = {}
@@ -1872,11 +1831,9 @@ class GraphRagMixin:
                             normalized_children[norm_parent] = []
                         if norm_key not in normalized_children[norm_parent]:
                             normalized_children[norm_parent].append(norm_key)
-
                 return community_levels, normalized_hierarchy, normalized_children
         else:
             logger.debug("GraphRAG: community backend='%s' — skipping graspologic.", _backend)
-
         # Tier-2: multi-resolution Leiden via leidenalg — used when backend="leidenalg" or
         # when backend="auto" and graspologic was unavailable
         if _backend in ("auto", "leidenalg"):
@@ -1891,7 +1848,6 @@ class GraphRagMixin:
                 except ImportError:
                     step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
                     resolutions = [0.5 + i * step for i in range(n_levels)]
-
                 if G is None:
                     G = self._build_networkx_graph_from_edges(working_nodes, working_edges)
                 _G_ig = _ig.Graph.from_networkx(G)
@@ -1916,7 +1872,6 @@ class GraphRagMixin:
                         community_levels[level_idx] = cmap
                     except Exception as _e:
                         logger.debug("leidenalg at resolution %s failed: %s", resolution, _e)
-
                 if community_levels:
                     # Build synthetic hierarchy (same approach as Louvain fallback below)
                     community_hierarchy: dict = {}
@@ -1962,7 +1917,6 @@ class GraphRagMixin:
                 )
         else:
             logger.debug("GraphRAG: community backend='%s' — skipping leidenalg.", _backend)
-
         try:
             import numpy as np
 
@@ -1970,10 +1924,8 @@ class GraphRagMixin:
         except ImportError:
             step = 1.0 / max(n_levels - 1, 1) if n_levels > 1 else 0
             resolutions = [0.5 + i * step for i in range(n_levels)]
-
         community_levels = {}
         bridge = get_rust_bridge()
-
         for level_idx, resolution in enumerate(resolutions):
             if bridge.can_run_louvain():
                 mapping = bridge.run_louvain(working_nodes, working_edges, resolution=resolution)
@@ -1993,10 +1945,8 @@ class GraphRagMixin:
                 community_levels[level_idx] = cmap
             except Exception as e:
                 logger.debug(f"Louvain at resolution {resolution} failed: {e}")
-
         if not community_levels:
             return {0: dict.fromkeys(working_nodes, 0)}, {0: None}, {0: []}
-
         community_hierarchy, community_children = self._build_synthetic_community_hierarchy(
             community_levels
         )
@@ -2059,7 +2009,6 @@ class GraphRagMixin:
 
     def finalize_graph(self, force: bool = False) -> None:
         """Explicitly trigger community rebuild.
-
         Use after batch ingest with ``graph_rag_community_defer=True`` to run
         community detection once when all documents have been ingested.
         Set ``force=True`` to rebuild even when the in-memory dirty flag is not
@@ -2075,7 +2024,6 @@ class GraphRagMixin:
                 raise
 
     # ── Graph visualization ──────────────────────────────────────────────────
-
     _VIZ_TYPE_COLORS: dict[str, str] = {
         "PERSON": "#4e79a7",
         "ORGANIZATION": "#f28e2b",
@@ -2088,7 +2036,6 @@ class GraphRagMixin:
 
     def _generate_community_summaries(self, query_hint: str = "") -> None:
         """Generate LLM summaries for each detected community cluster across all levels.
-
         When *query_hint* is provided (lazy mode), communities are ranked by relevance to
         the query first so the most useful ones get LLM treatment before the budget cap.
         The LLM cap is tightened to ``graph_rag_global_top_communities`` in lazy mode,
@@ -2108,11 +2055,9 @@ class GraphRagMixin:
 
         summaries = {}
         total_communities = sum(len(set(m.values())) for m in self._community_levels.values())
-
         _min_size = getattr(self.config, "graph_rag_community_min_size", 3)
         _top_n_per_level = getattr(self.config, "graph_rag_community_llm_top_n_per_level", 15)
         _max_total = getattr(self.config, "graph_rag_community_llm_max_total", 30)
-
         # Lazy mode: tighten cap to graph_rag_global_top_communities so only the most
         # query-relevant communities receive LLM treatment on the first global query.
         _lazy_cap = getattr(self.config, "graph_rag_global_top_communities", 0)
@@ -2126,7 +2071,6 @@ class GraphRagMixin:
             )
         else:
             logger.info("GraphRAG: Generating summaries for %d communities...", total_communities)
-
         # Pre-compute query relevance scores when a hint is provided.
         _query_words: set = set(query_hint.lower().split()) if query_hint else set()
 
@@ -2320,7 +2264,6 @@ class GraphRagMixin:
             community_entities: dict = defaultdict(list)
             for entity, cid in level_map.items():
                 community_entities[cid].append(entity)
-
             llm_items, template_items = [], []
             if query_hint:
                 # Prioritise query-relevant communities so they consume LLM budget first.
@@ -2335,7 +2278,6 @@ class GraphRagMixin:
                     key=lambda kv: _community_score(kv[1]),
                     reverse=True,
                 )
-
             for rank_pos, (cid, members) in enumerate(ranked):
                 summary_key = f"{level_idx}_{cid}"
                 new_hash = _member_hash(level_idx, members)
@@ -2356,7 +2298,6 @@ class GraphRagMixin:
                     continue
                 _llm_calls_issued += 1
                 llm_items.append((level_idx, cid, members))
-
             for args in template_items:
                 key, val = _template_summary(*args)
                 summaries[key] = val
@@ -2364,7 +2305,6 @@ class GraphRagMixin:
                 summaries[summary_key] = summary_dict
             # Make this level's summaries available before summarizing coarser levels
             self._community_summaries = dict(summaries)
-
         self._save_community_summaries()
         logger.info(f"GraphRAG: Community summaries generated for {len(summaries)} communities.")
 
@@ -2417,13 +2357,10 @@ class GraphRagMixin:
         import time as _time
 
         _t0_total = _time.perf_counter()
-
         if not self._community_summaries:
             return ""
-
         min_score = getattr(cfg, "graph_rag_global_min_score", 20)
         top_points = getattr(cfg, "graph_rag_global_top_points", 50)
-
         # Filter summaries to the target level
         target_level = getattr(cfg, "graph_rag_community_level", 0)
         target_level_prefix = f"{target_level}_"
@@ -2433,7 +2370,6 @@ class GraphRagMixin:
         # Fall back to all summaries if nothing matches the target level
         if not level_summaries:
             level_summaries = self._community_summaries
-
         # Dynamic community pre-filter — cheap token-overlap relevance score
         _top_n_communities = getattr(cfg, "graph_rag_global_top_communities", 0)
         if _top_n_communities > 0 and len(level_summaries) > _top_n_communities:
@@ -2451,7 +2387,6 @@ class GraphRagMixin:
             )
             level_summaries = dict(top_summaries)
             logger.debug("GraphRAG global: pre-filtered to top %d communities.", _top_n_communities)
-
         # Global answer cache: short-circuit repeated query+graph-signature requests.
         if bool(getattr(cfg, "graph_rag_global_answer_cache", True)):
             _sig_parts = []
@@ -2470,7 +2405,6 @@ class GraphRagMixin:
                 return _ans_cached
         else:
             _ans_key = None
-
         # Chunk reports so large reports don't get hard-truncated and later sections aren't lost
         _MAP_CHUNK_CHARS = int(getattr(cfg, "graph_rag_global_map_max_length", 500) or 500) * 4
 
@@ -2499,7 +2433,6 @@ class GraphRagMixin:
         self._gr_log_profile(
             "global_search.prepare_chunks", _time.perf_counter() - _t0_total, chunks=len(all_chunks)
         )
-
         # Token-level compression of community report chunks before LLM map phase
         if getattr(cfg, "graph_rag_report_compress", False) is True and all_chunks:
             _ratio = getattr(cfg, "graph_rag_report_compress_ratio", 0.5)
@@ -2571,7 +2504,6 @@ class GraphRagMixin:
 
         def _map_community_batch(args_list: list) -> list:
             """Process N community report chunks in a single LLM call.
-
             Returns a list of point-lists, one per input chunk (same order).
             """
             if not args_list:
@@ -2722,10 +2654,8 @@ class GraphRagMixin:
             heap_size=len(top_heap),
             workers=_map_workers_effective,
         )
-
         # Extract top points in descending score order
         top = _heapq.nlargest(top_points, top_heap, key=lambda x: x[0])
-
         if not top:
             return _GRAPHRAG_NO_DATA_ANSWER
         _skip_reduce_points_le = int(
@@ -2749,7 +2679,6 @@ class GraphRagMixin:
             if _ans_key is not None:
                 self._gr_cache_put("global_answer", _ans_key, out)
             return out
-
         # --- REDUCE PHASE: token-budget assembly ---
         _t0_reduce = _time.perf_counter()
         reduce_max_tokens = getattr(cfg, "graph_rag_global_reduce_max_tokens", 8000)
@@ -2762,10 +2691,8 @@ class GraphRagMixin:
             if token_estimate > reduce_max_tokens:
                 break
             analyst_lines.append(line)
-
         if not analyst_lines:
             return _GRAPHRAG_NO_DATA_ANSWER
-
         reduce_context = "\n\n".join(analyst_lines)
         reduce_max_length = getattr(cfg, "graph_rag_global_reduce_max_length", 500)
         reduce_prompt = (
@@ -2836,7 +2763,6 @@ class GraphRagMixin:
 
     def _local_search_context(self, query: str, matched_entities: list, cfg) -> str:
         """Build structured GraphRAG local context using unified candidate ranking.
-
         TASK 11: Replaces fixed 25/50/25 budget split with joint ranking across all
         artifact types, then greedy-fill up to total_budget tokens.
         """
@@ -2845,7 +2771,6 @@ class GraphRagMixin:
         _t0_total = _time.perf_counter()
         if not matched_entities:
             return ""
-
         import re as _re
 
         # --- Phase 1: Setup ---
@@ -2854,12 +2779,10 @@ class GraphRagMixin:
         top_k_entities = getattr(cfg, "graph_rag_local_top_k_entities", 10)
         top_k_relationships = getattr(cfg, "graph_rag_local_top_k_relationships", 10)
         include_weight = getattr(cfg, "graph_rag_local_include_relationship_weight", False)
-
         entity_weight = getattr(cfg, "graph_rag_local_entity_weight", 3.0)
         relation_weight = getattr(cfg, "graph_rag_local_relation_weight", 2.0)
         community_weight = getattr(cfg, "graph_rag_local_community_weight", 1.5)
         text_unit_weight = getattr(cfg, "graph_rag_local_text_unit_weight", 1.0)
-
         _query_tokens = set(query.lower().split()) | set(_re.split(r"[\s\W_]+", query.lower()))
         _boost = getattr(self.config, "graph_rag_exact_entity_boost", 3.0)
         _fast_degree = bool(getattr(cfg, "graph_rag_local_entity_degree_fast", True))
@@ -2882,13 +2805,11 @@ class GraphRagMixin:
         ranked_entities = sorted(matched_entities, key=_entity_raw, reverse=True)
         ranked_entities = ranked_entities[:top_k_entities]
         self._gr_log_profile("local_search.setup", _time.perf_counter() - _t0_setup)
-
         # --- Phase 2: Collect all candidates into a flat list ---
         _t0_collect = _time.perf_counter()
         # Store candidates as lightweight tuples to reduce per-candidate allocations:
         # (score, tokens, type, text)
         candidates: list[tuple[float, int, str, str]] = []
-
         # Entities
         raw_scores = [_entity_raw(e) for e in ranked_entities]
         max_raw = max(raw_scores, default=1.0) or 1.0
@@ -2900,7 +2821,6 @@ class GraphRagMixin:
                 continue
             line = f"  - {ent} [{ent_type}]: {desc}" if ent_type else f"  - {ent}: {desc}"
             candidates.append((entity_weight * (raw / max_raw), len(line) // 4 + 1, "entity", line))
-
         # Relations — collect outgoing (top 3/entity) + incoming (top 2/entity)
         _use_fast_rel_support = bool(getattr(cfg, "graph_rag_local_relation_support_fast", True))
         if _use_fast_rel_support:
@@ -2940,14 +2860,12 @@ class GraphRagMixin:
             out_scored.sort(key=lambda x: x[0], reverse=True)
             for mc, entry in out_scored[:3]:
                 rel_candidates_raw.append((mc, entry, ent))
-
             in_scored: list[tuple[float, dict]] = []
             for entry in self._get_incoming_relations(ent):
                 in_scored.append((_mutual_count(entry, ranked_entities), entry))
             in_scored.sort(key=lambda x: x[0], reverse=True)
             for mc, entry in in_scored[:2]:
                 rel_candidates_raw.append((mc, entry, ent))
-
         # Sort by mutual count, cap at top_k_relationships, normalize
         rel_candidates_raw.sort(key=lambda x: x[0], reverse=True)
         rel_candidates_raw = rel_candidates_raw[:top_k_relationships]
@@ -2967,7 +2885,6 @@ class GraphRagMixin:
             seen_rel_keys.add(rel_key)
             within = (mc + 1) / (max_mutual + 1)
             candidates.append((relation_weight * within, len(line) // 4 + 1, "relation", line))
-
         # Communities — finest level, deduplicated by summary_key
         if self._community_levels and self._community_summaries:
             finest = max(self._community_levels.keys()) if self._community_levels else None
@@ -3005,7 +2922,6 @@ class GraphRagMixin:
                 candidates.append(
                     (community_weight * within, len(ctext) // 4 + 1, "community", ctext)
                 )
-
         # Early cut-off: if current highest-scored candidates already fill budget and
         # all selected scores are strictly above max text-unit score, skip text-unit fetch.
         _skip_text_units = False
@@ -3033,7 +2949,6 @@ class GraphRagMixin:
                 and _min_score >= (text_unit_weight * (1.0 + _factor))
             ):
                 _skip_text_units = True
-
         # Text units — from entity chunk_ids, cap at 20, rank by relation count
         if not _skip_text_units:
             seen_chunks: set = set()
@@ -3107,7 +3022,6 @@ class GraphRagMixin:
                 except Exception:
                     pass
         self._gr_log_profile("local_search.collect", _time.perf_counter() - _t0_collect)
-
         # Claims — high-signal factual assertions, fixed score
         if self._claims_graph:
             claim_lines: list[str] = []
@@ -3121,7 +3035,6 @@ class GraphRagMixin:
                                 claim_lines.append(f"  - [{status}] {desc}")
             for line in claim_lines[:10]:
                 candidates.append((entity_weight * 1.0, len(line) // 4 + 1, "claim", line))
-
         # --- Phase 3: Sort and greedy-fill ---
         _t0_select = _time.perf_counter()
         candidates.sort(key=lambda c: c[0], reverse=True)
@@ -3133,7 +3046,6 @@ class GraphRagMixin:
                 used += c[1]
             # continue (not break) — smaller items later may still fit
         self._gr_log_profile("local_search.select", _time.perf_counter() - _t0_select)
-
         # --- Phase 4: Reassemble into section-formatted output ---
         by_type: dict[str, list[str]] = {
             "entity": [],
@@ -3144,7 +3056,6 @@ class GraphRagMixin:
         }
         for c in selected:
             by_type[c[2]].append(c[3])
-
         parts: list[str] = []
         if by_type["entity"]:
             parts.append("**Matched Entities:**\n" + "\n".join(by_type["entity"]))
@@ -3156,7 +3067,6 @@ class GraphRagMixin:
             parts.append("**Source Text Units:**\n" + "\n".join(by_type["text_unit"]))
         if by_type["claim"]:
             parts.append("**Claims / Facts:**\n" + "\n".join(by_type["claim"]))
-
         out = "\n\n".join(parts)
         self._gr_log_profile(
             "local_search.total",
@@ -3183,7 +3093,6 @@ class GraphRagMixin:
         return jaccard if jaccard >= 0.4 else 0.0
 
     _VALID_ENTITY_TYPES = {"PERSON", "ORGANIZATION", "GEO", "EVENT", "CONCEPT", "PRODUCT"}
-
     _HOLISTIC_KEYWORDS = frozenset(
         [
             "summarize",
@@ -3318,7 +3227,6 @@ class GraphRagMixin:
         cached = getattr(self, "_gliner_model", None)
         if cached is not None:
             return cached
-
         from gliner import GLiNER
 
         _model = getattr(self.config, "graph_rag_gliner_model", "urchade/gliner_medium-v2.1")
@@ -3350,7 +3258,6 @@ class GraphRagMixin:
         cached = getattr(self, "_rebel_pipeline", None)
         if cached is not None:
             return cached
-
         try:
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
             from transformers import pipeline as _hf_pipeline
@@ -3383,10 +3290,8 @@ class GraphRagMixin:
     @staticmethod
     def _parse_rebel_output(text: str) -> list[dict]:
         """Parse REBEL's ``<triplet> SUBJ <subj> OBJ <obj> REL`` output format.
-
         REBEL encodes triplets as:
             <triplet> head_entity <subj> tail_entity <obj> relation_type
-
         Returns a list of relation dicts compatible with ``_extract_relations``.
         """
         triplets: list[dict] = []
@@ -3502,7 +3407,6 @@ class GraphRagMixin:
 
     def _extract_entities_light(self, text: str) -> list[dict]:
         """Lightweight entity extraction using regex noun-phrase heuristics (no LLM).
-
         Picks capitalized multi-word phrases (2–4 tokens) from the text.
         Returns up to 20 entities with type=CONCEPT and empty description.
         """
@@ -3698,7 +3602,6 @@ class GraphRagMixin:
                 "extract_graph_bundle(fallback_backend)", _time.perf_counter() - _t0
             )
             return entities, relations
-
         prompt = (
             "Extract a knowledge graph bundle from the following text.\n"
             'Return strict JSON with exactly two top-level keys: "entities" and "relations".\n'
@@ -3757,7 +3660,6 @@ class GraphRagMixin:
 
     def _extract_entities(self, text: str) -> list[dict]:
         """Extract named entities from text using the LLM.
-
         Returns a list of dicts with shape:
           {"name": str, "type": str, "description": str}
         Returns an empty list on failure or when the LLM produces no output.
@@ -3773,21 +3675,18 @@ class GraphRagMixin:
             if _cached is not None:
                 self._gr_log_profile("extract_entities(cache_hit)", _time.perf_counter() - _t0)
                 return _cached
-
         # A3: light tier — skip LLM entirely
         if _depth == "light":
             _out = self._extract_entities_light(text)
             self._gr_cache_put("entities", _cache_key, _out)
             self._gr_log_profile("extract_entities(light)", _time.perf_counter() - _t0)
             return _out
-
         # GLiNER fast-path — skip LLM for NER when backend is "gliner"
         if _ner_backend == "gliner":
             _out = self._extract_entities_gliner(text)
             self._gr_cache_put("entities", _cache_key, _out)
             self._gr_log_profile("extract_entities(gliner)", _time.perf_counter() - _t0)
             return _out
-
         prompt = (
             "Extract the key named entities from the following text.\n"
             "For each entity output one line:\n"
@@ -3812,7 +3711,6 @@ class GraphRagMixin:
 
     def _extract_relations(self, text: str) -> list[dict]:
         """Extract SUBJECT | RELATION | OBJECT | description quads from text via the LLM.
-
         Returns up to 15 relation dicts with shape
         {"subject": str, "relation": str, "object": str, "description": str}.
         Returns an empty list on failure or when the LLM produces no output.
@@ -3828,20 +3726,17 @@ class GraphRagMixin:
             if _cached is not None:
                 self._gr_log_profile("extract_relations(cache_hit)", _time.perf_counter() - _t0)
                 return _cached
-
         # A3: light tier skips all relation extraction
         if _depth == "light":
             self._gr_cache_put("relations", _cache_key, [])
             self._gr_log_profile("extract_relations(light_skip)", _time.perf_counter() - _t0)
             return []
-
         # REBEL fast-path — skip LLM when backend is "rebel"
         if _rel_backend == "rebel":
             _out = self._extract_relations_rebel(text)
             self._gr_cache_put("relations", _cache_key, _out)
             self._gr_log_profile("extract_relations(rebel)", _time.perf_counter() - _t0)
             return _out
-
         prompt = (
             "Extract key relationships from the following text.\n"
             "For each relationship output one line:\n"
@@ -3976,12 +3871,10 @@ class GraphRagMixin:
 
     def _resolve_entity_aliases(self) -> int:
         """Merge semantically equivalent entity nodes into a single canonical node (P1).
-
         Uses cosine similarity on entity-name embeddings from the active embedding model.
         Entities whose name-embeddings exceed ``graph_rag_entity_resolve_threshold`` are
         grouped; within each group the node with the most chunk_ids becomes canonical and
         all alias nodes are merged into it (chunk_ids, description, relations).
-
         Returns the number of alias nodes merged (0 if nothing to merge).
         """
         threshold = getattr(self.config, "graph_rag_entity_resolve_threshold", 0.92)
@@ -3989,7 +3882,6 @@ class GraphRagMixin:
         backend = str(
             getattr(self.config, "graph_rag_entity_resolve_backend", "rust") or "rust"
         ).lower()
-
         keys = [k for k, v in self._entity_graph.items() if isinstance(v, dict)]
         n = len(keys)
         if n < 2:
@@ -4002,14 +3894,12 @@ class GraphRagMixin:
                 max_entities,
             )
             return 0
-
         # Embed entity names (not descriptions) — aliases share similar surface forms
         try:
             raw_emb = self.embedding.embed(keys)
         except Exception as exc:
             logger.warning("GraphRAG entity resolution: embedding failed (%s). Skipping.", exc)
             return 0
-
         groups: list[list[int]] = []
         if backend == "rust":
             try:
@@ -4029,7 +3919,6 @@ class GraphRagMixin:
                                 groups.append(clean_group)
             except Exception as exc:
                 logger.debug("GraphRAG entity resolution: Rust backend unavailable (%s).", exc)
-
         if not groups:
             import numpy as np
 
@@ -4037,7 +3926,6 @@ class GraphRagMixin:
             norms = np.linalg.norm(emb, axis=1, keepdims=True)
             norms = np.where(norms == 0, 1.0, norms)
             emb = emb / norms  # unit-normalise for cosine via dot product
-
             # Union-Find for grouping similar entities
             parent = list(range(n))
 
@@ -4058,12 +3946,10 @@ class GraphRagMixin:
                 for j in range(i + 1, n):
                     if sim[i, j] >= threshold:
                         _union(i, j)
-
             groups_by_root: dict[int, list[int]] = {}
             for i in range(n):
                 groups_by_root.setdefault(_find(i), []).append(i)
             groups = [members for members in groups_by_root.values() if len(members) >= 2]
-
         merged = 0
         with self._graph_lock:
             for members in groups:
@@ -4074,27 +3960,22 @@ class GraphRagMixin:
                 )
                 canon_key = keys[canon_idx]
                 canon_node = self._entity_graph[canon_key]
-
                 for idx in members:
                     if idx == canon_idx:
                         continue
                     alias_key = keys[idx]
                     alias_node = self._entity_graph[alias_key]
-
                     # Merge chunk_ids
                     for cid in alias_node.get("chunk_ids", []):
                         if cid not in canon_node["chunk_ids"]:
                             canon_node["chunk_ids"].append(cid)
-
                     # Inherit description if canonical has none
                     if not canon_node.get("description") and alias_node.get("description"):
                         canon_node["description"] = alias_node["description"]
-
                     # Migrate relation_graph entries keyed by the alias
                     if alias_key in self._relation_graph:
                         canon_rels = self._relation_graph.setdefault(canon_key, [])
                         canon_rels.extend(self._relation_graph.pop(alias_key))
-
                     # Rewrite subject/object references inside all relation lists
                     for rel_list in self._relation_graph.values():
                         for rel in rel_list:
@@ -4103,14 +3984,11 @@ class GraphRagMixin:
                                     rel["subject"] = canon_key
                                 if rel.get("object", "").lower() == alias_key:
                                     rel["object"] = canon_key
-
                     self._token_index_remove(alias_key)
                     del self._entity_graph[alias_key]
                     merged += 1
-
                 # Refresh frequency for canonical
                 canon_node["frequency"] = len(canon_node["chunk_ids"])
-
         if merged > 0:
             logger.info(
                 "GraphRAG entity resolution: merged %d alias nodes into canonical entities "
@@ -4120,7 +3998,6 @@ class GraphRagMixin:
                 len(self._entity_graph),
             )
             self._community_graph_dirty = True
-
         return merged
 
     def _canonicalize_entity_descriptions(self) -> None:
@@ -4133,7 +4010,6 @@ class GraphRagMixin:
         }
         if not to_canonicalize:
             return
-
         logger.info(f"GraphRAG: Canonicalizing descriptions for {len(to_canonicalize)} entities...")
 
         def _synthesize(args):
@@ -4218,7 +4094,6 @@ class GraphRagMixin:
 
     def _prune_entity_graph(self, deleted_ids: set) -> None:
         """Remove deleted chunk IDs from entity graph and relation graph.
-
         Entries that become empty are deleted entirely.  Persists changes to disk.
         """
         with self._graph_lock:
@@ -4238,7 +4113,6 @@ class GraphRagMixin:
                         del self._entity_graph[entity]
             if eg_changed:
                 self._save_entity_graph()
-
             rg_changed = False
             for src in list(self._relation_graph):
                 before = self._relation_graph[src]
@@ -4251,7 +4125,6 @@ class GraphRagMixin:
                         del self._relation_graph[src]
             if rg_changed:
                 self._save_relation_graph()
-
             # Prune claims graph (Item 11)
             if hasattr(self, "_claims_graph"):
                 claims_changed = False

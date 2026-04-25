@@ -62,7 +62,6 @@ _VERDICT_MEDIUM: float = 0.40
 @dataclass
 class RetrievalConfidence:
     """Confidence assessment for a single retrieval result set.
-
     ``score`` is a weighted average of five normalised signals in [0, 1].
     ``verdict`` is deterministic: ``"high"`` ≥ 0.70, ``"medium"`` ≥ 0.40,
     ``"low"`` < 0.40.
@@ -90,26 +89,21 @@ def assess_confidence(
     similarity_threshold: float,
 ) -> RetrievalConfidence:
     """Compute a retrieval-confidence assessment from the filtered result set.
-
     This function is *deterministic in heuristic mode* — the same inputs always
     produce the same output.  It never calls the LLM.
-
     Args:
         filtered_results:      Results that survived the similarity threshold.
         total_candidates:      Total dense+BM25 candidates before threshold
                                filtering (used to compute the pass-rate signal).
         similarity_threshold:  The configured threshold (used to normalise the
                                top-score signal relative to the threshold).
-
     Returns:
         A :class:`RetrievalConfidence` with score, verdict, and per-signal
         factor contributions.
     """
     n = len(filtered_results)
-
     # --- Signal 1: result count ---
     count_signal = min(1.0, n / _MIN_STRONG_RESULT_COUNT)
-
     # --- Signal 2: top score ---
     if n > 0:
         scores = [r.get("score", r.get("vector_score", 0.0)) for r in filtered_results]
@@ -121,27 +115,23 @@ def assess_confidence(
         scores = []
         top_score = 0.0
         top_score_signal = 0.0
-
     # --- Signal 3: score spread (differentiation quality) ---
     if n >= 2:
         spread = max(scores) - min(scores)
         spread_signal = min(1.0, spread / _GOOD_SPREAD)
     else:
         spread_signal = 0.0
-
     # --- Signal 4: source diversity ---
     unique_sources = len(
         {(r.get("metadata") or {}).get("source") or r.get("id") for r in filtered_results}
     )
     diversity_signal = min(1.0, unique_sources / _MIN_SOURCE_DIVERSITY)
-
     # --- Signal 5: threshold pass rate ---
     if total_candidates > 0:
         pass_rate = n / total_candidates
         pass_rate_signal = min(1.0, pass_rate / _GOOD_PASS_RATE)
     else:
         pass_rate_signal = 0.0 if n == 0 else 1.0
-
     factors = {
         "result_count": round(count_signal, 4),
         "top_score": round(top_score_signal, 4),
@@ -149,16 +139,13 @@ def assess_confidence(
         "source_diversity": round(diversity_signal, 4),
         "threshold_pass_rate": round(pass_rate_signal, 4),
     }
-
     score = sum(_WEIGHTS[k] * v for k, v in factors.items())
-
     if score >= _VERDICT_HIGH:
         verdict: Literal["high", "medium", "low"] = "high"
     elif score >= _VERDICT_MEDIUM:
         verdict = "medium"
     else:
         verdict = "low"
-
     return RetrievalConfidence(
         score=round(score, 4),
         verdict=verdict,
@@ -175,7 +162,6 @@ def assess_confidence(
 @dataclass
 class CorrectionDecision:
     """Output of :func:`evaluate_correction_policy`.
-
     ``trust_local`` — use the local retrieval results.
     ``trigger_web_fallback`` — escalate to web search (requires
         ``truth_grounding=True`` and a configured API key).
@@ -203,9 +189,7 @@ def evaluate_correction_policy(
     crag_lite_threshold: float = _VERDICT_MEDIUM,
 ) -> CorrectionDecision:
     """Decide whether to trust local retrieval or trigger web fallback.
-
     Policy rules (heuristic, first version — no LLM call):
-
     1. **No local results at all** → trigger web fallback if ``truth_grounding``
        is enabled (preserves existing behaviour).
     2. **CRAG-Lite low confidence** (score < ``crag_lite_threshold``) → even with
@@ -213,7 +197,6 @@ def evaluate_correction_policy(
        This is the key CRAG-Lite extension over the legacy hard-wired guard.
     3. **Medium confidence** → trust local; log a warning about shallow KB.
     4. **High confidence** → trust local silently.
-
     Args:
         confidence:               Confidence assessment from :func:`assess_confidence`.
         has_local_results:        True if any local results survived thresholding.
@@ -221,7 +204,6 @@ def evaluate_correction_policy(
         crag_lite_threshold:      Confidence score below which fallback is recommended
                                   even when some local results exist.  Defaults to the
                                   medium verdict boundary (0.40).
-
     Returns:
         A :class:`CorrectionDecision`.
     """
@@ -238,7 +220,6 @@ def evaluate_correction_policy(
             trigger_web_fallback=False,
             reason="no_local_results_no_web",
         )
-
     # Case 2: CRAG-Lite low-confidence — some results exist but quality is weak.
     if confidence.score < crag_lite_threshold:
         if truth_grounding_enabled:
@@ -253,7 +234,6 @@ def evaluate_correction_policy(
             trigger_web_fallback=False,
             reason=f"low_confidence_no_web({confidence.score:.2f})",
         )
-
     # Case 3: medium confidence — trust local but surface warning in diagnostics.
     if confidence.verdict == "medium":
         return CorrectionDecision(
@@ -261,7 +241,6 @@ def evaluate_correction_policy(
             trigger_web_fallback=False,
             reason="medium_confidence_local_trusted",
         )
-
     # Case 4: high confidence — trust local silently.
     return CorrectionDecision(
         trust_local=True,

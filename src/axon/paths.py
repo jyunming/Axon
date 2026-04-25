@@ -51,7 +51,6 @@ def _segments(p: str | os.PathLike[str]) -> list[str]:
 
 def is_cloud_sync_path(p: str | os.PathLike[str] | None) -> bool:
     """Return ``True`` when *p* is under a consumer cloud-sync folder.
-
     Matches OneDrive (Personal and Business), Dropbox, Google Drive (Mirror
     and Stream), and iCloud Drive.  Case-insensitive.  Does not hit the
     filesystem.
@@ -77,7 +76,6 @@ def is_unc_path(p: str | os.PathLike[str] | None) -> bool:
 
 def is_wsl_windows_mount_path(p: str | os.PathLike[str] | None) -> bool:
     """Return ``True`` for WSL-mounted Windows drives or Windows→WSL paths.
-
     Matches ``/mnt/<letter>/...`` (WSL seeing a Windows drive — POSIX locking
     broken) and ``//wsl$/<distro>/...`` / ``//wsl.localhost/<distro>/...``
     (Windows seeing a WSL distro — SMB redirector in between).
@@ -110,7 +108,6 @@ def cloud_sync_path_reason(p: str | os.PathLike[str] | None) -> str:
 
 def is_cloud_sync_or_mount_path(p: str | os.PathLike[str] | None) -> bool:
     """Return ``True`` for any path unsafe for SQLite-WAL or atomic rename.
-
     This is the single predicate callers should use: it unions cloud-sync
     folders, UNC / network shares, and WSL Windows mounts.
     """
@@ -119,11 +116,9 @@ def is_cloud_sync_or_mount_path(p: str | os.PathLike[str] | None) -> bool:
 
 def safe_local_path(p: Path | str) -> Path:
     """Coerce *p* into a guaranteed-local fallback path rooted at ``~/.axon/``.
-
     Used by components that want to move hot SQLite state off a synced /
     network path.  Returns ``~/.axon/{basename}`` when *p* is unsafe, else
     returns ``Path(p)`` unchanged.  The caller is responsible for ``mkdir``.
-
     Cross-platform basename extraction: ``Path("C:/...").name`` on Linux
     returns the whole string because Linux doesn't recognise ``C:\\`` as
     a path separator.  Normalise separators first so the basename is

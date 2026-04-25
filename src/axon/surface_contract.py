@@ -11,14 +11,8 @@ Tier 2 = required where practical; intentional exceptions are noted.
 
 
 Usage::
-
-
     from axon.surface_contract import REGISTRY, Tier, Surface
-
-
     tier1 = [c for c in REGISTRY if c.tier == Tier.ONE]
-
-
     repl_caps = [c for c in REGISTRY if Surface.REPL in c.supported_surfaces]
 
 
@@ -33,25 +27,17 @@ from enum import Enum
 
 class Tier(str, Enum):
     ONE = "tier1"  # required everywhere
-
     TWO = "tier2"  # required where practical
-
     API_ONLY = "api_only"  # intentionally API-only
 
 
 class Surface(str, Enum):
     API = "api"
-
     REPL = "repl"
-
     CLI = "cli"
-
     VSCODE = "vscode"
-
     # Streamlit web UI.  Intentionally a supplemental surface — destructive and
-
     # admin-oriented capabilities (graph, sharing, store) are not exposed there.
-
     WEBAPP = "webapp"
 
 
@@ -79,23 +65,14 @@ PRIMARY_SURFACES = frozenset({Surface.API, Surface.REPL, Surface.CLI, Surface.VS
 @dataclass(frozen=True)
 class Capability:
     id: str
-
     name: str
-
     category: str
-
     tier: Tier
-
     description: str
-
     supported_surfaces: frozenset[Surface]
-
     intentional_exceptions: dict[Surface, str] = field(default_factory=dict)
-
     api_route: str = ""
-
     docs_targets: tuple[str, ...] = ()
-
     test_targets: tuple[str, ...] = ()
 
 
@@ -472,43 +449,31 @@ REGISTRY: list[Capability] = [
 
 def capabilities_by_category() -> dict[str, list[Capability]]:
     """Return registry grouped by category."""
-
     groups: dict[str, list[Capability]] = {}
-
     for cap in REGISTRY:
         groups.setdefault(cap.category, []).append(cap)
-
     return groups
 
 
 def tier1_capabilities() -> list[Capability]:
     """Return all Tier 1 capabilities."""
-
     return [c for c in REGISTRY if c.tier == Tier.ONE]
 
 
 def surface_capabilities(surface: Surface) -> list[Capability]:
     """Return all capabilities supported on *surface*."""
-
     return [c for c in REGISTRY if surface in c.supported_surfaces]
 
 
 def unsupported_on(surface: Surface) -> list[tuple[Capability, str]]:
     """Return (capability, reason) pairs for capabilities NOT on *surface*.
-
     Only includes Tier 1 and Tier 2 capabilities — API-only items are excluded.
-
     """
-
     result = []
-
     for cap in REGISTRY:
         if cap.tier == Tier.API_ONLY:
             continue
-
         if surface not in cap.supported_surfaces:
             reason = cap.intentional_exceptions.get(surface, "no explicit exception documented")
-
             result.append((cap, reason))
-
     return result

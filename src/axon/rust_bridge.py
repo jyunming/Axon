@@ -22,7 +22,6 @@ class RustBridge:
         if self._attempted:
             return self._module
         self._attempted = True
-
         module_name = os.getenv("AXON_RUST_MODULE", "axon.axon_rust")
         try:
             self._module = importlib.import_module(module_name)

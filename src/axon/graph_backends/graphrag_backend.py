@@ -37,10 +37,8 @@ class GraphRagBackend:
     # ------------------------------------------------------------------
     # GraphBackend protocol
     # ------------------------------------------------------------------
-
     def ingest(self, chunks: list[dict]) -> IngestResult:
         """No-op adapter — extraction is performed by ``AxonBrain.ingest()``.
-
         Entity/relation extraction is deeply embedded in the main ingest
         pipeline.  This method records the chunk count for bookkeeping only;
         the actual graph update has already occurred.
@@ -57,11 +55,9 @@ class GraphRagBackend:
         existing_results: list[dict] | None = None,
     ) -> list[GraphContext]:
         """Delegate to ``_expand_with_entity_graph`` and convert to GraphContext.
-
         Passes *existing_results* to ``_expand_with_entity_graph`` so that
         already-retrieved chunks are not fetched again from the vector store.
         Only the newly-added chunks are returned as :class:`GraphContext` objects.
-
         Each context carries ``matched_entity_names`` — the entity names that
         matched the query and triggered graph expansion.  ``query_router`` uses
         these names to build the GraphRAG local-search context header.
@@ -93,7 +89,6 @@ class GraphRagBackend:
 
     def finalize(self, force: bool = False) -> FinalizationResult:
         """Trigger community detection on the attached brain.
-
         Delegates to ``AxonBrain.finalize_graph()`` which rebuilds community
         summaries when the graph is dirty or *force* is True.
         """
@@ -138,7 +133,6 @@ class GraphRagBackend:
         raw = self._brain.build_graph_payload()
         nodes: list[dict] = raw["nodes"]
         links: list[dict] = raw["links"]
-
         if filters is not None:
             if filters.entity_types:
                 allowed = set(filters.entity_types)
@@ -147,5 +141,4 @@ class GraphRagBackend:
                 nodes = [n for n in nodes if n.get("degree", 0) >= filters.min_degree]
             if filters.limit is not None:
                 nodes = nodes[: filters.limit]
-
         return GraphPayload(nodes=nodes, links=links)

@@ -82,7 +82,6 @@ _HEADER_STRUCT = struct.Struct(">4sBB10x")
 class SealedFormatError(Exception):
     """Raised when a sealed file's header is malformed, has the wrong
     magic, an unsupported schema version, or an unknown cipher ID.
-
     Distinct from :class:`cryptography.exceptions.InvalidTag` — that
     indicates the bytes were AES-GCM-validated against the wrong key
     (tamper / wrong-key), whereas ``SealedFormatError`` indicates the
@@ -132,7 +131,6 @@ def _unpack_header(header: bytes) -> tuple[int, int]:
 
 class SealedFile:
     """Atomic AES-256-GCM file wrapper.
-
     Both :meth:`write` and :meth:`read` operate on whole-file
     plaintext: there is no streaming API in v1 (decrypt-into-memory
     policy per the plan doc). Adding streaming is straightforward later
@@ -148,7 +146,6 @@ class SealedFile:
         aad: bytes = b"",
     ) -> None:
         """Encrypt *plaintext* with *key* and write to *path* atomically.
-
         Args:
             path: Destination file path.
             plaintext: Bytes to encrypt.
@@ -158,7 +155,6 @@ class SealedFile:
                 same AAD on read or :class:`InvalidTag` will be raised.
                 Recommended: ``key_id || file_relpath`` to prevent files
                 from being swapped between projects.
-
         The write is atomic — encrypted bytes are written to a sibling
         ``<name>.sealing`` file then renamed via :func:`os.replace` so a
         crash mid-write never leaves a half-sealed file at the live
@@ -184,7 +180,6 @@ class SealedFile:
         aad: bytes = b"",
     ) -> bytes:
         """Decrypt and return the plaintext content of *path*.
-
         Raises:
             SealedFormatError: file doesn't have an AXSL header, or has
                 an unsupported version / cipher.
@@ -217,7 +212,6 @@ def generate_dek() -> bytes:
 
 def derive_kek(token: bytes, key_id: str, *, info: bytes = b"axon-share-v1") -> bytes:
     """Derive a 256-bit Key Encryption Key from a share token via HKDF-SHA256.
-
     Args:
         token: The raw share token (32 random bytes from ``secrets``).
             Same token Axon already issues today via
@@ -229,7 +223,6 @@ def derive_kek(token: bytes, key_id: str, *, info: bytes = b"axon-share-v1") -> 
             this string breaks backwards compatibility, so it should
             change only when the wrapping scheme changes (e.g. v2
             switches to AES-XTS).
-
     Returns:
         32-byte KEK suitable for :func:`wrap_key`/:func:`unwrap_key`.
     """
@@ -248,7 +241,6 @@ def derive_kek(token: bytes, key_id: str, *, info: bytes = b"axon-share-v1") -> 
 
 def wrap_key(key: bytes, kek: bytes) -> bytes:
     """AES-256 Key Wrap (RFC 3394) of *key* under *kek*.
-
     Used to encrypt a 32-byte DEK with a 32-byte KEK; produces a
     40-byte wrapped output (8-byte integrity check + 32-byte ciphertext).
     """
@@ -272,7 +264,6 @@ def unwrap_key(wrapped: bytes, kek: bytes) -> bytes:
 
 def make_aad(key_id: str, relpath: str) -> bytes:
     """Recommended AAD for project files: ``key_id || NUL || relpath``.
-
     Binding both the share key and the in-project relative path into
     the GCM tag prevents a same-key attacker from swapping files
     between projects (e.g. moving an encrypted ``meta.json`` from
@@ -288,7 +279,6 @@ def make_aad(key_id: str, relpath: str) -> bytes:
 
 def _self_check() -> dict[str, Any]:
     """Round-trip a tiny payload to confirm the build is wired correctly.
-
     Returned as a dict so callers (e.g. ``axon doctor`` in a later
     phase) can include it in diagnostics output. Never raises — failures
     are reported in the dict.

@@ -35,11 +35,9 @@ class CodeGraphMixin:
 
     def _build_code_graph_from_chunks(self, chunks: list[dict]) -> None:
         """Build/update code graph nodes and CONTAINS/IMPORTS edges from codebase chunks.
-
         Nodes:
         - File node  — one per unique file_path
         - Symbol node — one per (file_path, symbol_name) with a real symbol_type
-
         Edges:
         - CONTAINS : File → Symbol
         - IMPORTS  : File → File  (resolved from imports metadata)
@@ -47,24 +45,20 @@ class CodeGraphMixin:
         nodes: dict = self._code_graph.setdefault("nodes", {})
         edges_list: list = self._code_graph.setdefault("edges", [])
         existing_edges: set = {(e["source"], e["target"], e["edge_type"]) for e in edges_list}
-
         file_nodes_seen: set = set()
         # Deferred IMPORTS: collected during pass 1, resolved in pass 2 after all
         # file nodes exist so forward-referenced files are resolvable.
         deferred_imports: list[tuple[str, str, str]] = []  # (file_node_id, stmt, chunk_id)
-
         for chunk in chunks:
             meta = chunk.get("metadata", {})
             if meta.get("source_class") != "code":
                 continue
-
             file_path = meta.get("file_path") or meta.get("source", "")
             language = meta.get("language", "unknown")
             symbol_type = meta.get("symbol_type", "block")
             symbol_name = meta.get("symbol_name", "")
             chunk_id = chunk.get("id", "")
             file_node_id = file_path
-
             # ── File node ───────────────────────────────────────────────────
             if file_path and file_path not in file_nodes_seen:
                 file_nodes_seen.add(file_path)
@@ -80,12 +74,10 @@ class CodeGraphMixin:
                         "start_line": None,
                         "end_line": None,
                     }
-
             if file_path and chunk_id:
                 cids = nodes[file_node_id]["chunk_ids"]
                 if chunk_id not in cids:
                     cids.append(chunk_id)
-
             # ── Symbol node ──────────────────────────────────────────────────
             if symbol_type not in ("block", "") and symbol_name and file_path:
                 sym_node_id = f"{file_path}::{symbol_name}"
@@ -104,7 +96,6 @@ class CodeGraphMixin:
                 else:
                     if chunk_id and chunk_id not in nodes[sym_node_id]["chunk_ids"]:
                         nodes[sym_node_id]["chunk_ids"].append(chunk_id)
-
                 # CONTAINS edge: File → Symbol
                 ek = (file_node_id, sym_node_id, "CONTAINS")
                 if ek not in existing_edges and file_path:
@@ -117,7 +108,6 @@ class CodeGraphMixin:
                         }
                     )
                     existing_edges.add(ek)
-
             # ── IMPORTS edges ────────────────────────────────────────────────
             imports_raw = meta.get("imports", "")
             if isinstance(imports_raw, str):
@@ -126,10 +116,8 @@ class CodeGraphMixin:
                 import_stmts = imports_raw
             else:
                 import_stmts = []
-
             for stmt in import_stmts:
                 deferred_imports.append((file_node_id, stmt.strip(), chunk_id))
-
         # Pass 2: resolve IMPORTS edges now that all file nodes are present.
         for file_node_id, stmt, chunk_id in deferred_imports:
             target_file_id = self._resolve_import_to_file(stmt)

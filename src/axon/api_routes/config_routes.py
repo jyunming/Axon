@@ -145,25 +145,20 @@ _DOT_TO_FLAT: dict[str, str] = {
 
 class ConfigSetRequest(BaseModel):
     key: str  # dot-notation: "chunk.strategy", "llm.model"
-
     value: Any
-
     persist: bool = True
 
 
 def _reinitialize_runtime_components(brain, changed_keys: set[str]) -> None:
     """Apply runtime side effects for config changes that affect live services."""
-
     if changed_keys & {"llm_provider", "llm_model"}:
         from axon.llm import OpenLLM
 
         brain.llm = OpenLLM(brain.config)
-
     if changed_keys & {"embedding_provider", "embedding_model"}:
         from axon.embeddings import OpenEmbedding
 
         brain.embedding = OpenEmbedding(brain.config)
-
     if changed_keys & {"rerank", "reranker_model"} and getattr(brain.config, "rerank", False):
         from axon.rerank import OpenReranker
 
@@ -182,25 +177,17 @@ def _reinitialize_runtime_components(brain, changed_keys: set[str]) -> None:
 @router.get("/config/validate")
 async def validate_config():
     """Validate the current config.yaml and return a structured list of issues."""
-
     from axon import api as _api
     from axon.config import AxonConfig
 
     brain = _api.brain
-
     # Determine path: use brain's loaded path when available
-
     config_path: str | None = None
-
     if brain is not None and brain.config is not None:
         config_path = getattr(brain.config, "_loaded_path", None)
-
     issues = AxonConfig.validate(config_path)
-
     issue_dicts = [i.to_dict() for i in issues]
-
     has_errors = any(i.level == "error" for i in issues)
-
     return {
         "valid": not has_errors,
         "issue_count": len(issues),
@@ -211,63 +198,37 @@ async def validate_config():
 @router.post("/config/reset")
 async def reset_config():
     """Reset config.yaml to built-in defaults.
-
-
     Writes the default config template to the user config path and returns the
-
-
     path that was written.  The running brain is NOT reloaded — restart or call
-
-
     POST /config/update to apply the new values.
-
-
     """
-
     import os
     from pathlib import Path
 
     from axon.config import _DEFAULT_CONFIG_YAML, _USER_CONFIG_PATH
 
     target = str(_USER_CONFIG_PATH)
-
     os.makedirs(os.path.dirname(target), exist_ok=True)
-
     Path(target).write_text(_DEFAULT_CONFIG_YAML, encoding="utf-8")
-
     logger.info("Config reset to defaults at %s", target)
-
     return {"written_to": target}
 
 
 @router.post("/config/set")
 async def set_config_field(request: ConfigSetRequest):
     """Set a single config field using dot-notation (e.g. chunk.strategy).
-
-
     The dot key is mapped to the flat dataclass attribute name via
-
-
     ``_DOT_TO_FLAT``.  Pass ``persist: true`` to also save the change to
-
-
     config.yaml on disk.
-
-
     """
-
     from axon import api as _api
 
     brain = _api.brain
-
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-
     flat_key = _DOT_TO_FLAT.get(request.key)
-
     if flat_key is None:
         raise HTTPException(status_code=400, detail=f"Unknown config key: {request.key!r}")
-
     if not hasattr(brain.config, flat_key):
         raise HTTPException(
             status_code=400,
@@ -276,16 +237,11 @@ async def set_config_field(request: ConfigSetRequest):
                 f"Known dot-notation keys: {sorted(_DOT_TO_FLAT.keys())}"
             ),
         )
-
     old_value = getattr(brain.config, flat_key)
-
     setattr(brain.config, flat_key, request.value)
-
     _reinitialize_runtime_components(brain, {flat_key})
-
     if request.persist:
         brain.config.save()
-
     return {
         "status": "success",
         "key": request.key,

@@ -24,14 +24,12 @@ The integration is gated on ``brain._sparse_retriever is not None`` so existing
 behaviour is unaffected until a real implementation is registered:
 
 .. code-block:: python
-
     # query_router.py — inside _execute_retrieval(), after BM25 fusion:
     if getattr(self, "_sparse_retriever", None) is not None:
         from axon.sparse_retrieval import fuse_sparse
         results = fuse_sparse(self._sparse_retriever, query, results, top_k=cfg.top_k)
 
 ``AxonBrain.__init__`` should initialise the slot::
-
     self._sparse_retriever: SparseRetriever | None = None
 
 Deferred items (out of scope for Story 4.3)
@@ -59,7 +57,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SparseVector:
     """A learned sparse embedding in coordinate-list format.
-
     Attributes
     ----------
     indices:
@@ -108,13 +105,10 @@ def empty_sparse_vector(dim: int = 0, model: str = "") -> SparseVector:
 @runtime_checkable
 class SparseRetriever(Protocol):
     """Protocol for learned sparse retrieval backends.
-
     Any class that implements :meth:`search` satisfies this protocol and can
     be assigned to ``brain._sparse_retriever`` without inheriting from a base
     class.  This keeps the interface open for third-party implementations.
-
     Example future implementations:
-
     - ``BgeSparseRetriever`` — uses the sparse head of BGE-M3 via FastEmbed
     - ``SpladeRetriever`` — uses a standalone SPLADE checkpoint
     - ``QdrantSparseRetriever`` — delegates to Qdrant's native sparse-vector support
@@ -122,12 +116,10 @@ class SparseRetriever(Protocol):
 
     def encode_query(self, query: str) -> SparseVector:
         """Encode a query string into a sparse vector.
-
         Parameters
         ----------
         query:
             Raw query text.
-
         Returns
         -------
         SparseVector
@@ -142,11 +134,8 @@ class SparseRetriever(Protocol):
         filter_dict: dict | None = None,
     ) -> list[dict]:
         """Retrieve the top-k documents most relevant to *query_vector*.
-
         The return format mirrors :meth:`~axon.vector_store.OpenVectorStore.search`::
-
             [{"id": str, "text": str, "score": float, "metadata": dict}, ...]
-
         Parameters
         ----------
         query_vector:
@@ -155,7 +144,6 @@ class SparseRetriever(Protocol):
             Maximum number of results to return.
         filter_dict:
             Optional metadata filters (same semantics as dense search).
-
         Returns
         -------
         list[dict]
@@ -179,10 +167,8 @@ def fuse_sparse(
     filter_dict: dict | None = None,
 ) -> list[dict]:
     """Fuse dense-retrieval results with a sparse retriever via weighted score fusion.
-
     Designed to be called from :meth:`~axon.query_router.QueryRouterMixin._execute_retrieval`
     as a drop-in extension after the existing BM25 fusion step.
-
     Parameters
     ----------
     retriever:
@@ -198,7 +184,6 @@ def fuse_sparse(
         Dense scores receive weight ``1 - sparse_weight``.
     filter_dict:
         Forwarded to the sparse retriever's :meth:`~SparseRetriever.search` call.
-
     Returns
     -------
     list[dict]
@@ -211,12 +196,10 @@ def fuse_sparse(
         # Sparse retrieval failure must never degrade the main path.
         logger.warning("sparse retrieval failed, falling back to dense-only: %s", exc)
         return dense_results
-
     # Build unified score map from dense results
     merged: dict[str, dict] = {r["id"]: dict(r) for r in dense_results}
     dense_max = max((r["score"] for r in dense_results), default=1.0) or 1.0
     sparse_max = max((r["score"] for r in sparse_hits), default=1.0) or 1.0
-
     for hit in sparse_hits:
         doc_id = hit["id"]
         sparse_norm = hit["score"] / sparse_max
@@ -235,7 +218,6 @@ def fuse_sparse(
             entry.setdefault("metadata", {})
             entry["metadata"]["sparse_score"] = round(sparse_norm, 4)
             merged[doc_id] = entry
-
     return sorted(merged.values(), key=lambda d: d["score"], reverse=True)[:top_k]
 
 
@@ -246,7 +228,6 @@ def fuse_sparse(
 
 class _NoOpSparseRetriever:
     """Pass-through implementation used in unit tests.
-
     Always returns an empty result list so the fusion path can be exercised
     without a real sparse index.
     """

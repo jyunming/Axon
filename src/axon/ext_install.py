@@ -39,21 +39,17 @@ def _find_code_cmd() -> str | None:
 def install_vscode_extension() -> None:
     """Entry point for the `axon-ext` CLI command."""
     args = sys.argv[1:]
-
     try:
         vsix_path = _find_vsix()
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
-
     if "--path" in args:
         print(vsix_path)
         return
-
     if "--version" in args:
         print(vsix_path.stem.removeprefix("axon-copilot-"))
         return
-
     code_cmd = _find_code_cmd()
     if not code_cmd:
         print(
@@ -63,7 +59,6 @@ def install_vscode_extension() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-
     print(f"Installing Axon Copilot extension from {vsix_path} ...")
     result = subprocess.run(
         [code_cmd, "--install-extension", str(vsix_path)],

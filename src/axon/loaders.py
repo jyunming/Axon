@@ -33,17 +33,14 @@ def _check_file_size(path: str) -> None:
 
 def _rewrite_github_url(url: str) -> str:
     """Rewrite GitHub web URLs to their raw/fetchable equivalents.
-
     Supported rewrites:
     - ``github.com/<owner>/<repo>/blob/<ref>/<path>``
       → ``raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>``
     - ``gist.github.com/<user>/<gist_id>``
       → ``gist.githubusercontent.com/<user>/<gist_id>/raw``
-
     Raises ``ValueError`` for GitHub tree (directory listing) URLs because they
     cannot be fetched as a single document.  Use a specific file URL
     (``/blob/...``) or clone the repo and use ``ingest_path`` instead.
-
     All other URLs are returned unchanged.
     """
     # github.com blob URL → raw URL
@@ -53,7 +50,6 @@ def _rewrite_github_url(url: str) -> str:
     if blob_match:
         owner, repo, ref, path = blob_match.groups()
         return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
-
     # github.com tree URL → helpful error (directory listings can't be one doc)
     if re.match(r"^https?://github\.com/[^/]+/[^/]+/tree/", url, re.IGNORECASE):
         raise ValueError(
@@ -61,13 +57,11 @@ def _rewrite_github_url(url: str) -> str:
             "Provide a specific file URL ending in /blob/<ref>/<file>, or clone "
             "the repository locally and use ingest_path instead."
         )
-
     # gist.github.com URL → raw gist URL
     gist_match = re.match(r"^https?://gist\.github\.com/([^/]+)/([a-f0-9]+)/?$", url, re.IGNORECASE)
     if gist_match:
         user, gist_id = gist_match.groups()
         return f"https://gist.githubusercontent.com/{user}/{gist_id}/raw"
-
     return url
 
 
@@ -137,7 +131,6 @@ class FlexibleTableLoader(BaseLoader):
         from axon.splitters import TableSplitter
 
         sample = text[:8192]
-
         # Detect delimiter
         try:
             # Priority 1: Sniffer
@@ -150,23 +143,18 @@ class FlexibleTableLoader(BaseLoader):
             # If everything is 0, default to comma
             if counts[delimiter] == 0:
                 delimiter = ","
-
         # Detect header
         try:
             has_header = csv.Sniffer().has_header(sample)
         except Exception:
             has_header = True
-
         f = io.StringIO(text)
         reader = csv.reader(f, delimiter=delimiter)
         all_rows = [r for r in reader if r]  # Skip empty rows
-
         if not all_rows:
             return []
-
         # Find the max column count across ALL rows
         max_cols = max(len(row) for row in all_rows)
-
         # Determine headers and data
         if has_header:
             base_headers = all_rows[0]
@@ -174,14 +162,12 @@ class FlexibleTableLoader(BaseLoader):
         else:
             base_headers = [f"Col_{i}" for i in range(len(all_rows[0]))]
             data_rows = all_rows
-
         # Ensure header count matches max_cols
         headers = list(base_headers)
         while len(headers) < max_cols:
             headers.append(f"Extra_Col_{len(headers)}")
         # If actual headers were shorter than row 0, handle that
         headers = headers[:max_cols]
-
         final_rows = []
         for row in data_rows:
             row_dict = {}
@@ -189,11 +175,9 @@ class FlexibleTableLoader(BaseLoader):
                 if i < len(headers):
                     row_dict[headers[i]] = val.strip()
             final_rows.append(row_dict)
-
         table_name = os.path.basename(source)
         splitter = TableSplitter(table_name=table_name)
         chunks = splitter.transform_rows(final_rows, headers)
-
         # Include table_name in the hash so that multiple tables from the same source
         # file (e.g. multiple sheets) get distinct IDs and do not collide.
         source_key = f"{source}::{table_name}"
@@ -234,14 +218,12 @@ class SmartTextLoader(BaseLoader):
         lines = sample.strip().split("\n")
         tab_count = sample.count("\t")
         comma_count = sample.count(",")
-
         is_likely_table = False
         if len(lines) > 1:
             avg_tabs = tab_count / len(lines)
             avg_commas = comma_count / len(lines)
             if avg_tabs > 1.5 or avg_commas > 2.0:
                 is_likely_table = True
-
         if is_likely_table:
             return FlexibleTableLoader().load_text(text, source=source)
         else:
@@ -276,7 +258,6 @@ class TextLoader(BaseLoader):
 
 class CodeFileLoader(BaseLoader):
     """Loader for source code files.
-
     Sets ``type="code"`` in metadata so the ``DirectoryLoader`` path-enrichment
     step skips prepending a ``[File Path: ...]`` prefix into the raw text.
     Keeping the prefix out of code text is required so that AST-based chunkers
@@ -316,11 +297,9 @@ class TSVLoader(BaseLoader):
             headers = list(reader.fieldnames or [])
             for row in reader:
                 rows.append(row)
-
         table_name = os.path.basename(path)
         splitter = TableSplitter(table_name=table_name)
         chunks = splitter.transform_rows(rows, headers)
-
         stable_base = _stable_file_id(path, "tsv")
         documents = []
         for i, text in enumerate(chunks):
@@ -355,7 +334,6 @@ class JSONLoader(BaseLoader):
             except json.JSONDecodeError as exc:
                 logger.warning(f"Skipping malformed JSON file {path}: {exc}")
                 return []
-
         if isinstance(data, list):
             documents = []
             for i, item in enumerate(data):
@@ -395,11 +373,9 @@ class CSVLoader(BaseLoader):
             headers = list(reader.fieldnames or [])
             for row in reader:
                 rows.append(row)
-
         table_name = os.path.basename(path)
         splitter = TableSplitter(table_name=table_name)
         chunks = splitter.transform_rows(rows, headers)
-
         stable_base = _stable_file_id(path, "csv")
         documents = []
         for i, text in enumerate(chunks):
@@ -432,10 +408,8 @@ class HTMLLoader(BaseLoader):
 
 class URLLoader(BaseLoader):
     """Loader for HTTP/HTTPS URLs with SSRF mitigations.
-
     Fetches the URL using httpx (already in project deps), strips HTML if the
     response is text/html, and returns a single document dict.
-
     Security:
     - Only http/https schemes are accepted; all others raise ValueError.
     - Resolved IP addresses are checked against blocked private/internal ranges
@@ -484,7 +458,6 @@ class URLLoader(BaseLoader):
 
     def load(self, url: str) -> list[dict[str, Any]]:
         """Fetch *url* and return its text content as a single document.
-
         GitHub ``/blob/`` URLs are automatically rewritten to
         ``raw.githubusercontent.com`` before any network contact is made.
         GitHub Gist URLs are rewritten to their raw form.
@@ -503,27 +476,22 @@ class URLLoader(BaseLoader):
             raise ValueError(f"Too many redirects fetching '{url}'.")
         except httpx.RequestError as exc:
             raise ValueError(f"Failed to fetch '{url}': {exc}")
-
         # Re-validate after redirects to prevent SSRF bypass via 301/302 redirect chains
         final_url = str(resp.url)
         if final_url != url:
             self._check_ssrf(final_url)
-
         if resp.status_code != 200:
             raise ValueError(f"'{url}' returned HTTP {resp.status_code}.")
-
         content_type = resp.headers.get("content-type", "")
         if not content_type.startswith("text/"):
             raise ValueError(
                 f"Non-text content type '{content_type}' for '{url}'. Only text/* is accepted."
             )
-
         raw = resp.text
         if len(raw.encode("utf-8")) > _MAX_FILE_BYTES:
             raise ValueError(
                 f"URL content exceeds the {_MAX_FILE_BYTES // (1024 * 1024)} MB limit."
             )
-
         text = _extract_html_text(raw) if "html" in content_type else raw
         import hashlib as _hl
 
@@ -547,11 +515,9 @@ class DOCXLoader(BaseLoader):
         except ImportError:
             logger.error("python-docx not installed. Install with: pip install python-docx")
             return []
-
         doc = Document(path)
         paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
         text = "\n\n".join(paragraphs)
-
         return [
             {
                 "id": _stable_file_id(path, "docx"),
@@ -571,7 +537,6 @@ class PPTXLoader(BaseLoader):
         except ImportError:
             logger.error("python-pptx not installed. Install with: pip install python-pptx")
             return []
-
         prs = Presentation(path)
         text_runs = []
         for slide in prs.slides:
@@ -579,7 +544,6 @@ class PPTXLoader(BaseLoader):
                 if hasattr(shape, "text"):
                     text_runs.append(shape.text.strip())
         text = "\n\n".join([t for t in text_runs if t])
-
         return [
             {
                 "id": _stable_file_id(path, "pptx"),
@@ -592,7 +556,6 @@ class PPTXLoader(BaseLoader):
 class ImageLoader(BaseLoader):
     """
     Loader for raster images (BMP, PNG, JPG, TIF/TIFF, PGM) using Ollama VLM for captioning.
-
     Images are converted to PNG bytes via Pillow before being sent to the VLM so that
     all formats — including exotic ones like PGM — are handled uniformly.
     """
@@ -617,7 +580,6 @@ class ImageLoader(BaseLoader):
     def load(self, path: str) -> list[dict[str, Any]]:
         if self._pil is None or self.ollama is None:
             return []
-
         if os.getenv("AXON_DRY_RUN"):
             logger.info(f"🖼️ [DRY RUN] Skipping image processing: {path}")
             return [
@@ -631,27 +593,21 @@ class ImageLoader(BaseLoader):
                     },
                 }
             ]
-
         logger.info(f"🖼️ Processing image: {path} with {self.ollama_model}...")
-
         try:
             # Normalize to PNG bytes via Pillow for maximum VLM compatibility
             img = self._pil.open(path).convert("RGB")
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             image_data = buf.getvalue()
-
             fmt = Path(path).suffix.lstrip(".").lower()
-
             # Call Ollama VLM
             response = self.ollama.generate(
                 model=self.ollama_model,
                 prompt="Describe this image in detail. Mention any text, objects, people, or patterns visible.",
                 images=[image_data],
             )
-
             description = response["response"]
-
             return [
                 {
                     "id": _stable_file_id(path, "image"),
@@ -729,7 +685,6 @@ class PDFLoader(BaseLoader):
             return documents
         except ImportError:
             pass
-
         try:
             import pypdf
 
@@ -753,7 +708,6 @@ class PDFLoader(BaseLoader):
             return documents
         except ImportError:
             pass
-
         logger.error(
             "Neither PyMuPDF (fitz) nor pypdf is installed. "
             "Install with: pip install pymupdf>=1.24.0 or pypdf>=4.0.0"
@@ -803,7 +757,6 @@ class NotebookLoader(BaseLoader):
             except json.JSONDecodeError as exc:
                 logger.warning(f"Skipping malformed notebook {path}: {exc}")
                 return []
-
         stable_base = _stable_file_id(path, "notebook")
         documents = []
         for i, cell in enumerate(nb.get("cells", [])):
@@ -848,7 +801,6 @@ class ExcelLoader(BaseLoader):
         except Exception as exc:
             logger.warning(f"Could not open Excel file {path}: {exc}")
             return []
-
         from axon.splitters import TableSplitter
 
         stable_base = _stable_file_id(path, "excel")
@@ -900,7 +852,6 @@ class ParquetLoader(BaseLoader):
         except Exception as exc:
             logger.warning(f"Could not read Parquet file {path}: {exc}")
             return []
-
         from axon.splitters import TableSplitter
 
         stable_base = _stable_file_id(path, "parquet")
@@ -932,7 +883,6 @@ class EPUBLoader(BaseLoader):
         except Exception as exc:
             logger.warning(f"Could not read EPUB {path}: {exc}")
             return []
-
         stable_base = _stable_file_id(path, "epub")
         documents = []
         for i, item in enumerate(book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
@@ -1004,7 +954,6 @@ class XMLLoader(BaseLoader):
                     "metadata": {"source": path, "type": "xml"},
                 }
             ]
-
         root = tree.getroot()
         parts: list[str] = []
 
@@ -1049,17 +998,14 @@ class SQLLoader(BaseLoader):
         _check_file_size(path)
         with open(path, encoding="utf-8", errors="ignore") as f:
             content = f.read()
-
         # Split on statement boundaries (semicolons followed by whitespace/newline)
         raw_stmts = re.split(r";\s*\n", content)
         stable_base = _stable_file_id(path, "sql")
         documents = []
-
         for i, stmt in enumerate(raw_stmts):
             stmt = stmt.strip()
             if not stmt or stmt.startswith("--"):
                 continue
-
             # Extract comments preceding the statement as context
             comment_lines = [
                 line.lstrip("- ").strip()
@@ -1071,7 +1017,6 @@ class SQLLoader(BaseLoader):
             ).strip()
             if not code:
                 continue
-
             # Build a natural-language header from the first keyword + object name
             m = self._STMT_RE.match(code)
             if m:
@@ -1079,10 +1024,8 @@ class SQLLoader(BaseLoader):
                 header = f"SQL statement: {first_line.strip()}"
             else:
                 header = "SQL statement"
-
             comment_text = " ".join(comment_lines)
             text = f"{header}\n{comment_text}\n\n{code}".strip()
-
             documents.append(
                 {
                     "id": f"{stable_base}_stmt_{i}",
@@ -1090,7 +1033,6 @@ class SQLLoader(BaseLoader):
                     "metadata": {"source": path, "type": "sql", "statement_index": i},
                 }
             )
-
         # If no semicolon-delimited statements found, return the whole file
         if not documents:
             return [
@@ -1100,7 +1042,6 @@ class SQLLoader(BaseLoader):
                     "metadata": {"source": path, "type": "sql"},
                 }
             ]
-
         return documents
 
 
@@ -1114,12 +1055,10 @@ class EMLLoader(BaseLoader):
 
         with open(path, "rb") as f:
             msg = _email.message_from_binary_file(f, policy=email.policy.default)
-
         from_addr = str(msg.get("From", ""))
         to_addr = str(msg.get("To", ""))
         subject = str(msg.get("Subject", ""))
         date = str(msg.get("Date", ""))
-
         # Extract body: prefer text/plain, fallback to text/html
         body = ""
         if msg.is_multipart():
@@ -1144,7 +1083,6 @@ class EMLLoader(BaseLoader):
                 body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
             if msg.get_content_type() == "text/html":
                 body = _extract_html_text(body)
-
         text = (
             f"From: {from_addr}\nTo: {to_addr}\nSubject: {subject}\nDate: {date}\n\n{body}".strip()
         )
@@ -1179,7 +1117,6 @@ class MSGLoader(BaseLoader):
         except Exception as exc:
             logger.warning(f"Could not open MSG file {path}: {exc}")
             return []
-
         from_addr = msg.sender or ""
         to_addr = msg.to or ""
         subject = msg.subject or ""
@@ -1191,7 +1128,6 @@ class MSGLoader(BaseLoader):
                 if isinstance(msg.htmlBody, bytes)
                 else msg.htmlBody
             )
-
         text = (
             f"From: {from_addr}\nTo: {to_addr}\nSubject: {subject}\nDate: {date}\n\n{body}".strip()
         )
@@ -1213,7 +1149,6 @@ class MSGLoader(BaseLoader):
 
 class LaTeXLoader(BaseLoader):
     """Loader for LaTeX .tex files. Strips commands and extracts prose content.
-
     Note: Mathematical equation content is intentionally discarded as it is
     not natural-language searchable. Use this loader for prose-heavy papers.
     """
@@ -1246,7 +1181,6 @@ class LaTeXLoader(BaseLoader):
         _check_file_size(path)
         with open(path, encoding="utf-8", errors="ignore") as f:
             content = f.read()
-
         # Pass 1: strip comments (% to EOL, but not \%)
         content = re.sub(r"(?<!\\)%[^\n]*", "", content)
         # Pass 2: strip preamble (everything before \begin{document})
@@ -1269,7 +1203,6 @@ class LaTeXLoader(BaseLoader):
         content = re.sub(r"\n{3,}", "\n\n", content)
         content = re.sub(r"[ \t]+", " ", content)
         text = content.strip()
-
         return [
             {
                 "id": _stable_file_id(path, "latex"),
@@ -1287,7 +1220,6 @@ class DirectoryLoader:
             _image_loader = CustomImageLoader(vision_fn=vision_fn)
         else:
             _image_loader = ImageLoader(ollama_model=vlm_model)
-
         _excel_loader = ExcelLoader()
         _code_loader = CodeFileLoader()
         self.loaders = {
@@ -1354,7 +1286,6 @@ class DirectoryLoader:
     def load(self, directory: str) -> list[dict[str, Any]]:
         all_documents = []
         path = Path(directory)
-
         for file_path in path.rglob("*"):
             if file_path.suffix.lower() in self.loaders:
                 loader = self.loaders[file_path.suffix.lower()]
@@ -1378,7 +1309,6 @@ class DirectoryLoader:
                     all_documents.extend(docs)
                 except Exception as e:
                     logger.error(f"Failed to load {file_path}: {e}")
-
         return all_documents
 
     async def aload(self, directory: str) -> list[dict[str, Any]]:
@@ -1398,10 +1328,8 @@ class DirectoryLoader:
                 loader = self.loaders[suffix]
                 tasks.append(_load_with_semaphore(loader, str(file_path)))
                 file_paths_for_tasks.append(file_path)
-
         if not tasks:
             return []
-
         results = await asyncio.gather(*tasks, return_exceptions=True)
         all_documents = []
         for file_path, res in zip(file_paths_for_tasks, results):
@@ -1415,5 +1343,4 @@ class DirectoryLoader:
                     rel_path = os.path.relpath(str(file_path), directory)
                     doc["text"] = f"[File Path: {rel_path}]\n{doc['text']}"
             all_documents.extend(res)
-
         return all_documents

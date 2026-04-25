@@ -31,7 +31,6 @@ _KNOWN_DIMS: dict[str, int] = {
 
 class OpenEmbedding:
     """Unified embedding client supporting sentence_transformers, ollama, fastembed, and openai.
-
     Embedding dimensions for known models are resolved via :data:`_KNOWN_DIMS`
     without requiring a model download (useful for Ollama and FastEmbed).
     """
@@ -56,7 +55,6 @@ class OpenEmbedding:
                 getattr(self.config, "embedding_dim", 0)
                 or self.model.get_sentence_embedding_dimension()
             )
-
         elif self.provider == "ollama":
             logger.info(f"Using Ollama Embedding: {self.config.embedding_model}")
             _cfg_dim = getattr(self.config, "embedding_dim", 0)
@@ -70,7 +68,6 @@ class OpenEmbedding:
                         self.config.embedding_model,
                     )
                 self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 768)
-
         elif self.provider == "fastembed":
             try:
                 from fastembed import TextEmbedding
@@ -78,7 +75,6 @@ class OpenEmbedding:
                 raise ImportError(
                     "FastEmbed is not installed. " "Install it with: pip install 'axon[fastembed]'"
                 ) from exc
-
             _kwargs: dict = {"model_name": self.config.embedding_model}
             if _model_path:
                 _kwargs["cache_dir"] = _model_path
@@ -103,7 +99,6 @@ class OpenEmbedding:
                     self.dimension,
                     self.config.embedding_model,
                 )
-
         elif self.provider == "openai":
             from openai import OpenAI
 
@@ -129,20 +124,17 @@ class OpenEmbedding:
                         self.config.embedding_model,
                     )
                 self.dimension = _KNOWN_DIMS.get(self.config.embedding_model, 1536)
-
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if os.getenv("AXON_DRY_RUN"):
             return [[0.0] * self.dimension for _ in texts]
-
         if self.provider == "sentence_transformers":
             embeddings = self.model.encode(texts, show_progress_bar=False)
             if hasattr(embeddings, "tolist"):
                 return embeddings.tolist()
             return list(embeddings)
-
         elif self.provider == "ollama":
             from ollama import Client
 
@@ -158,15 +150,12 @@ class OpenEmbedding:
                     response = client.embeddings(model=self.config.embedding_model, prompt=text)
                     embeddings.append(response["embedding"])
                 return embeddings
-
         elif self.provider == "fastembed":
             embeddings = list(self.model.embed(texts))
             return [e.tolist() for e in embeddings]
-
         elif self.provider == "openai":
             response = self.model.embeddings.create(input=texts, model=self.config.embedding_model)
             return [data.embedding for data in response.data]
-
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")
 

@@ -50,7 +50,6 @@ st.markdown(
     [data-testid="stDecoration"],
     [data-testid="stSidebarCollapseButton"],
     [data-testid="collapsedControl"] { display: none !important; }
-
     /* ── Sidebar: fixed width, pinned, no collapse ── */
     [data-testid="stSidebar"] {
         min-width: 272px !important;
@@ -65,7 +64,6 @@ st.markdown(
     [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
         gap: 0.3rem !important;
     }
-
     /* ── Sidebar section headers ── */
     .sb-section {
         font-size: 0.68rem;
@@ -77,7 +75,6 @@ st.markdown(
         padding-top: 12px;
         border-top: 1px solid rgba(255,255,255,0.10);
     }
-
     /* ── All sidebar buttons: list-row style ── */
     [data-testid="stSidebar"] .stButton > button {
         text-align: left !important;
@@ -99,7 +96,6 @@ st.markdown(
         transform: none !important;
         box-shadow: none !important;
     }
-
     /* ── Active session: primary button styled as highlighted row ── */
     [data-testid="stSidebar"] .stButton > button[kind="primary"] {
         background: rgba(139,92,246,0.18) !important;
@@ -112,7 +108,6 @@ st.markdown(
     [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
         background: rgba(139,92,246,0.25) !important;
     }
-
     /* ── New Chat: secondary button gets a subtle outline ── */
     [data-testid="stSidebar"] .stButton > button[kind="secondary"] {
         background: rgba(139,92,246,0.12) !important;
@@ -129,7 +124,6 @@ st.markdown(
         border-color: rgba(139,92,246,0.55) !important;
         color: #ddd6fe !important;
     }
-
     /* ── Small action buttons (Clear, Delete, Summarize) ── */
     [data-testid="stSidebar"] .stButton > button[kind="tertiary"] {
         font-size: 0.77rem !important;
@@ -143,7 +137,6 @@ st.markdown(
         color: rgba(228,228,231,0.92) !important;
         background: rgba(255,255,255,0.07) !important;
     }
-
     /* ── Sidebar widget labels — compact, readable ── */
     [data-testid="stSidebar"] label,
     [data-testid="stSidebar"] .stWidgetLabel p {
@@ -151,7 +144,6 @@ st.markdown(
         color: rgba(228,228,231,0.65) !important;
         margin-bottom: 2px !important;
     }
-
     /* ── Sidebar expanders ── */
     [data-testid="stSidebar"] [data-testid="stExpander"] {
         border: none !important;
@@ -166,7 +158,6 @@ st.markdown(
     [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
         color: rgba(228,228,231,0.92) !important;
     }
-
     /* ── Sidebar widgets: match sidebar background (#1c1c2a) ── */
     [data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {
         background-color: #1c1c2a !important;
@@ -189,7 +180,6 @@ st.markdown(
     [data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
         background-color: transparent !important;
     }
-
     /* ── Chat messages — glassmorphism card style ── */
     [data-testid="stChatMessage"] {
         backdrop-filter: blur(12px) !important;
@@ -202,16 +192,13 @@ st.markdown(
         box-shadow: 0 2px 12px rgba(139, 92, 246, 0.06) !important;
     }
     [data-testid="stChatMessage"] p { line-height: 1.7 !important; }
-
     /* ── Code colour ── */
     code { color: #a78bfa !important; }
-
     /* ── Custom scrollbar ── */
     ::-webkit-scrollbar { width: 4px; height: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: #71717a; }
-
     /* ── Status bar padding — avoid overlap ── */
     .main .block-container { padding-bottom: 48px !important; }
     </style>
@@ -344,7 +331,6 @@ def _render_source_card(i: int, doc: dict):
 # ---------------------------------------------------------------------------
 if "sessions" not in st.session_state:
     st.session_state.sessions = load_sessions()
-
     if not st.session_state.sessions:
         default_id = str(uuid.uuid4())
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -402,18 +388,15 @@ if "brain" not in st.session_state:
 
 with st.sidebar:
     config = st.session_state.brain.config
-
     # ── App title ──
     st.markdown(
         '<div style="font-size:1rem;font-weight:700;color:#e4e4e7;margin-bottom:8px;">🧠 Axon</div>',
         unsafe_allow_html=True,
     )
-
     # =========================================================================
     # PROJECT HUB
     # =========================================================================
     st.markdown('<div class="sb-section">Projects</div>', unsafe_allow_html=True)
-
     # Load project list (cached, TTL=5s)
     all_projects = _cached_list_projects()
     project_names = [p["name"] for p in all_projects]
@@ -421,10 +404,8 @@ with st.sidebar:
         project_names = ["default"]
     if "default" not in project_names:
         project_names = ["default"] + project_names
-
     active_proj = st.session_state.get("active_project", "default")
     active_proj_idx = project_names.index(active_proj) if active_proj in project_names else 0
-
     selected_proj = st.selectbox(
         "Project",
         options=project_names,
@@ -432,7 +413,6 @@ with st.sidebar:
         label_visibility="collapsed",
         key="project_selectbox",
     )
-
     # Switch project on change
     if selected_proj != active_proj:
         try:
@@ -443,7 +423,6 @@ with st.sidebar:
             st.rerun()
         except Exception as e:
             st.error(f"Failed to switch project: {e}")
-
     # Maintenance state banner
     if active_proj != "default":
         try:
@@ -466,14 +445,12 @@ with st.sidebar:
                 "🚫 **Offline** — this project is under maintenance. " "All operations are blocked.",
                 icon=None,
             )
-
     # New / Delete project buttons
     ph_col1, ph_col2 = st.columns(2)
     with ph_col1:
         if st.button("＋ New", use_container_width=True, type="tertiary", key="toggle_new_project"):
             st.session_state.show_new_project = not st.session_state.show_new_project
             st.session_state.confirm_delete_project = False
-
     with ph_col2:
         delete_disabled = active_proj == "default"
         if st.button(
@@ -485,7 +462,6 @@ with st.sidebar:
         ):
             st.session_state.confirm_delete_project = not st.session_state.confirm_delete_project
             st.session_state.show_new_project = False
-
     # New project form
     if st.session_state.show_new_project:
         new_proj_name = st.text_input(
@@ -516,7 +492,6 @@ with st.sidebar:
                     st.error(f"Could not create project: {e}")
             else:
                 st.warning("Please enter a project name.")
-
     # Delete project confirmation
     if st.session_state.confirm_delete_project and active_proj != "default":
         st.warning(f"Delete project '{active_proj}' and all its data?")
@@ -539,12 +514,10 @@ with st.sidebar:
         if dc2.button("No", use_container_width=True, type="tertiary", key="confirm_del_no"):
             st.session_state.confirm_delete_project = False
             st.rerun()
-
     # =========================================================================
     # CONVERSATIONS
     # =========================================================================
     st.markdown('<div class="sb-section">Conversations</div>', unsafe_allow_html=True)
-
     if st.button("＋  New Chat", use_container_width=True, type="secondary", key="new_chat"):
         new_id = str(uuid.uuid4())
         st.session_state.sessions[new_id] = {
@@ -555,7 +528,6 @@ with st.sidebar:
         save_sessions(st.session_state.sessions)
         st.session_state.current_session_id = new_id
         st.rerun()
-
     # Session list — newest first
     for sid, sess in reversed(list(st.session_state.sessions.items())):
         label = sess["name"] if len(sess["name"]) <= 27 else sess["name"][:24] + "…"
@@ -565,7 +537,6 @@ with st.sidebar:
             if not is_active:
                 st.session_state.current_session_id = sid
                 st.rerun()
-
     # Active session actions — Clear, Summarize, Delete
     if st.session_state.confirm_clear:
         st.caption("Clear all messages?")
@@ -613,7 +584,6 @@ with st.sidebar:
                     st.rerun()
                 else:
                     st.warning("Cannot delete the only session.")
-
     # =========================================================================
     # MODEL & SETTINGS (collapsed — show active model as status line)
     # =========================================================================
@@ -627,7 +597,6 @@ with st.sidebar:
     }
     _model_short = config.llm_model[:22] + "…" if len(config.llm_model) > 22 else config.llm_model
     st.caption(f"{provider_labels.get(config.llm_provider, config.llm_provider)} · {_model_short}")
-
     with st.expander("⚙ Model & Settings"):
         st.caption("LLM")
         llm_providers = list(provider_labels.keys())
@@ -641,7 +610,6 @@ with st.sidebar:
             index=current_provider_idx,
             label_visibility="collapsed",
         )
-
         if config.llm_provider == "ollama":
             config.ollama_base_url = st.text_input(
                 "Ollama URL",
@@ -662,7 +630,6 @@ with st.sidebar:
                 ]
             except Exception as exc:
                 ollama_conn_error = str(exc)
-
             if ollama_models:
                 current_idx = (
                     ollama_models.index(config.llm_model)
@@ -687,7 +654,6 @@ with st.sidebar:
                     )
                 else:
                     st.warning("No models found. Pull a model with: `ollama pull llama3.2:3b`")
-
             with st.expander("⬇ Pull model"):
                 pull_name = st.text_input(
                     "Model name",
@@ -715,7 +681,6 @@ with st.sidebar:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Pull failed: {e}")
-
         elif config.llm_provider == "gemini":
             config.gemini_api_key = st.text_input(
                 "API Key",
@@ -735,7 +700,6 @@ with st.sidebar:
                     else gemini_models.index(config.llm_model)
                 ),
             )
-
         elif config.llm_provider == "ollama_cloud":
             config.ollama_cloud_key = st.text_input(
                 "API Key",
@@ -768,7 +732,6 @@ with st.sidebar:
                     st.session_state["_ollama_cloud_models"],
                     label_visibility="collapsed",
                 )
-
         elif config.llm_provider == "openai":
             config.api_key = st.text_input(
                 "API Key",
@@ -783,7 +746,6 @@ with st.sidebar:
                 label_visibility="collapsed",
                 placeholder="e.g. gpt-4o",
             )
-
         elif config.llm_provider == "vllm":
             config.vllm_base_url = st.text_input(
                 "Base URL",
@@ -797,7 +759,6 @@ with st.sidebar:
                 label_visibility="collapsed",
                 placeholder="e.g. mistralai/Mistral-7B-Instruct-v0.2",
             )
-
         elif config.llm_provider == "github_copilot":
             _pat = st.text_input(
                 "GitHub OAuth Token",
@@ -814,7 +775,6 @@ with st.sidebar:
                     _brain.llm._openai_clients.pop("_copilot", None)
                 # Invalidate cached model list so we re-fetch with the new token
                 st.session_state.pop("_copilot_model_list", None)
-
             # Fetch the live model list once per session (or after PAT change).
             if "_copilot_model_list" not in st.session_state:
                 if config.copilot_pat:
@@ -827,7 +787,6 @@ with st.sidebar:
                             )
                         except Exception:
                             st.session_state["_copilot_model_list"] = None
-
             from axon.main import _COPILOT_MODELS_FALLBACK
 
             _copilot_models = st.session_state.get("_copilot_model_list") or list(
@@ -849,7 +808,6 @@ with st.sidebar:
                 from axon.main import OpenLLM
 
                 st.session_state.brain.llm = OpenLLM(config)
-
         # ── Embedding ──
         st.caption("Embedding")
         _EMB_PROVIDER_LABELS = {
@@ -905,7 +863,6 @@ with st.sidebar:
             config.embedding_model = st.text_input(
                 "Embedding model", value=config.embedding_model, label_visibility="collapsed"
             )
-
         # Hot-swap brain.embedding when provider or model changes
         _prev_emb_provider = st.session_state.get("_emb_provider", config.embedding_provider)
         _prev_emb_model = st.session_state.get("_emb_model", config.embedding_model)
@@ -929,7 +886,6 @@ with st.sidebar:
                     st.error(f"Failed to load embedding model: {e}")
                     config.embedding_provider = _prev_emb_provider
                     config.embedding_model = _prev_emb_model
-
     # ── Temperature & Web search — visible below model status ──
     _t_col, _t_val = st.columns([3, 1])
     with _t_col:
@@ -943,7 +899,6 @@ with st.sidebar:
         )
     with _t_val:
         st.caption(f"{config.llm_temperature:.2f}")
-
     _ws_col, _ws_lbl = st.columns([1, 4])
     with _ws_col:
         config.truth_grounding = st.checkbox(
@@ -959,12 +914,10 @@ with st.sidebar:
             label_visibility="collapsed",
             placeholder="Brave API key",
         )
-
     # =========================================================================
     # RAG INTELLIGENCE
     # =========================================================================
     st.markdown('<div class="sb-section">⚡ RAG Intelligence</div>', unsafe_allow_html=True)
-
     # Always-visible basics
     config.hybrid_search = st.checkbox("Hybrid search", config.hybrid_search)
     config.top_k = st.slider("Top-K", 1, 20, config.top_k)
@@ -979,7 +932,6 @@ with st.sidebar:
             ["cross-encoder", "llm"],
             index=0 if config.reranker_provider == "cross-encoder" else 1,
         )
-
     # Advanced query transformations — collapsed by default
     with st.expander("Advanced retrieval"):
         config.multi_query = st.checkbox(
@@ -1017,12 +969,10 @@ with st.sidebar:
             config.graph_rag,
             help="Extract entities during ingest and expand retrieval results via entity-linked documents",
         )
-
     # =========================================================================
     # KNOWLEDGE HUB
     # =========================================================================
     st.markdown('<div class="sb-section">📚 Knowledge Hub</div>', unsafe_allow_html=True)
-
     # ── DOCUMENTS (collapsed) ──
     with st.expander("📥 Documents"):
         if "ingested_files" not in st.session_state:
@@ -1031,7 +981,6 @@ with st.sidebar:
             st.caption(
                 "Recent: " + ", ".join(f"`{f}`" for f in st.session_state.ingested_files[-3:])
             )
-
         uploaded_file = st.file_uploader(
             "File",
             type=["txt", "md", "pdf", "csv", "json"],
@@ -1076,7 +1025,6 @@ with st.sidebar:
                 finally:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
-
         ingest_dir = st.text_input(
             "Directory", placeholder="/my/docs", label_visibility="collapsed"
         )
@@ -1117,7 +1065,6 @@ with st.sidebar:
                 st.toast(f"✅ {len(all_docs)} chunks ingested")
             else:
                 st.error("Invalid directory path.")
-
     # ── KNOWLEDGE BASE VIEWER (collapsed) ──
     with st.expander("📚 Knowledge Base"):
         brain_obj = st.session_state.get("brain")
@@ -1126,7 +1073,6 @@ with st.sidebar:
         else:
             if st.button("🔄 Refresh", use_container_width=True, type="tertiary", key="kb_refresh"):
                 st.session_state.pop("kb_docs_cache", None)
-
             if "kb_docs_cache" not in st.session_state:
                 with st.spinner("Loading…"):
                     try:
@@ -1134,10 +1080,8 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"Could not load knowledge base: {e}")
                         st.session_state.kb_docs_cache = []
-
             docs_cache = st.session_state.get("kb_docs_cache", [])
             total_chunks = sum(d["chunks"] for d in docs_cache)
-
             if not docs_cache:
                 st.caption("📭 Knowledge base is empty.")
             else:
@@ -1165,20 +1109,17 @@ st.markdown(
 for message in messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-
         # Timing caption for assistant messages
         if message["role"] == "assistant":
             ttft = message.get("ttft")
             elapsed = message.get("elapsed")
             if ttft is not None and elapsed is not None:
                 st.caption(f"⏱ {ttft:.1f}s TTFT · {elapsed:.1f}s total")
-
         # Sources expander
         if message.get("sources"):
             with st.expander(f"📚 Sources ({len(message['sources'])})"):
                 for i, doc in enumerate(message["sources"]):
                     _render_source_card(i, doc)
-
         # Brain Thoughts expander
         if message.get("thoughts"):
             with st.expander("🧠 Brain Thoughts"):
@@ -1197,19 +1138,15 @@ for message in messages:
 # Chat input
 if prompt := st.chat_input("Ask me anything about your documents…"):
     chat_history_snapshot = messages.copy()
-
     if len(messages) == 0:
         session_title = prompt[:30] + ("…" if len(prompt) > 30 else "")
         st.session_state.sessions[current_session_id]["name"] = session_title
-
     st.session_state.sessions[current_session_id]["messages"].append(
         {"role": "user", "content": prompt}
     )
     save_sessions(st.session_state.sessions)
-
     with st.chat_message("user"):
         st.markdown(prompt)
-
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
         sources_placeholder = st.empty()
@@ -1217,7 +1154,6 @@ if prompt := st.chat_input("Ask me anything about your documents…"):
         timing_placeholder = st.empty()
         full_response = ""
         sources = []
-
         # Snapshot active RAG flags for Brain Thoughts
         _active_flags = []
         for flag_name, flag_label in [
@@ -1235,11 +1171,9 @@ if prompt := st.chat_input("Ask me anything about your documents…"):
         ]:
             if getattr(config, flag_name, False):
                 _active_flags.append(flag_label)
-
         t_start = time.time()
         first_token = True
         ttft = None
-
         with st.spinner("Thinking…"):
             for chunk in st.session_state.brain.query_stream(
                 prompt, chat_history=chat_history_snapshot
@@ -1252,20 +1186,16 @@ if prompt := st.chat_input("Ask me anything about your documents…"):
                     first_token = False
                 full_response += chunk
                 response_placeholder.markdown(full_response + "▌")
-
         elapsed = time.time() - t_start
         response_placeholder.markdown(full_response)
-
         # Timing caption
         if ttft is not None:
             timing_placeholder.caption(f"⏱ {ttft:.1f}s TTFT · {elapsed:.1f}s total")
-
         # Sources
         if sources:
             with sources_placeholder.expander(f"📚 Sources ({len(sources)})"):
                 for i, doc in enumerate(sources):
                     _render_source_card(i, doc)
-
         # Brain Thoughts
         thoughts = {
             "active_flags": _active_flags,
@@ -1279,7 +1209,6 @@ if prompt := st.chat_input("Ask me anything about your documents…"):
                 st.caption("No advanced RAG features active.")
             st.caption(f"Sources retrieved: {len(sources)}")
             st.caption(f"Generation time: {elapsed:.1f}s")
-
     # Persist message with timing and thoughts metadata
     st.session_state.sessions[current_session_id]["messages"].append(
         {
@@ -1346,7 +1275,6 @@ def main_ui():
             file=sys.stderr,
         )
         sys.exit(1)
-
     app_path = os.path.abspath(__file__)
     subprocess.run(["streamlit", "run", app_path])
 

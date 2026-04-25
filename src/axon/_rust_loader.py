@@ -38,11 +38,9 @@ def _preferred_dev_artifact(package_dir: Path) -> Path | None:
     artifact = package_dir / "target" / "release" / _platform_dev_artifact_name()
     if not artifact.is_file():
         return None
-
     bundled = _bundled_extension_artifacts(package_dir)
     if not bundled:
         return artifact
-
     newest_bundled_mtime = max(path.stat().st_mtime for path in bundled)
     if artifact.stat().st_mtime >= newest_bundled_mtime:
         return artifact
@@ -83,21 +81,17 @@ def _patch_loaded_module(module: ModuleType) -> ModuleType:
 
 def bootstrap_dev_rust_module(package_name: str, package_dir: Path) -> bool:
     """Prefer a fresh cargo-built Rust artifact over a stale bundled extension.
-
     In editable/source-tree workflows the checked-in ``axon_rust*.pyd`` may lag
     behind ``target/release`` after new Rust functions are added. When a newer
     cargo build artifact exists, preload it into ``sys.modules`` so subsequent
     ``import axon.axon_rust`` resolves to the current native code.
     """
-
     module_name = f"{package_name}.axon_rust"
     if module_name in sys.modules:
         return False
-
     artifact = _preferred_dev_artifact(package_dir)
     if artifact is None:
         return False
-
     try:
         module = _load_extension_module(module_name, artifact)
         _patch_loaded_module(module)

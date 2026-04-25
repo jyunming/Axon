@@ -47,12 +47,10 @@ def materialize_for_read(
     dek: bytes | None = None,
 ) -> SealedCache:
     """Decrypt a sealed project into an ephemeral cache + return the handle.
-
     The returned :class:`SealedCache` exposes ``cache.path`` — point
     every backend constructor at that path instead of *project_dir*.
     Call :func:`release_cache` (or use the cache as a context manager)
     when the brain closes the project to wipe the plaintext.
-
     Args:
         project_dir: The on-disk project directory to materialise (the
             owner's path; for grantees this is the path under their
@@ -67,13 +65,11 @@ def materialize_for_read(
             the master-key + ``get_project_dek`` lookup. Used by the
             grantee path to pass in a DEK fetched from the OS keyring
             via :func:`axon.security.share.get_grantee_dek`.
-
     Returns:
         A live :class:`SealedCache` whose ``path`` contains plaintext
         copies of every sealed content file plus the project's
         passthrough plaintext files (``version.json``, ``store_meta.json``,
         ``.security/`` contents).
-
     Raises:
         SecurityError: project is not sealed, or the store is locked,
             or the sealed marker is missing/malformed, or any underlying
@@ -82,14 +78,12 @@ def materialize_for_read(
     """
     project_dir = Path(project_dir)
     user_dir = Path(user_dir)
-
     if not is_project_sealed(project_dir):
         raise SecurityError(
             f"materialize_for_read called on a non-sealed project at "
             f"{project_dir}. Call this only after is_project_sealed "
             "returns True."
         )
-
     marker = read_sealed_marker(project_dir)
     if marker is None:
         # Defensive — is_project_sealed was True so the marker file
@@ -101,7 +95,6 @@ def materialize_for_read(
             f"Sealed marker at {project_dir} has no seal_id; refusing to mount. "
             "The project may have been sealed by an older incompatible version."
         )
-
     if dek is not None:
         # Grantee path: caller supplied the DEK from the OS keyring.
         # Skip the read-only get_project_dek lookup — grantees never
@@ -117,7 +110,6 @@ def materialize_for_read(
         # permanently undecryptable. Raises SecurityError on locked
         # store OR on missing DEK file.
         dek = get_project_dek(user_dir, project_dir)
-
     try:
         cache = SealedCache.create(
             project_dir,
@@ -132,7 +124,6 @@ def materialize_for_read(
         raise SecurityError(
             f"Failed to materialise sealed project {project_dir}: " f"{type(exc).__name__}: {exc}"
         ) from exc
-
     logger.info(
         "materialize_for_read: %s mounted at %s (seal_id=%s)",
         project_dir,
@@ -144,7 +135,6 @@ def materialize_for_read(
 
 def release_cache(cache: SealedCache | None) -> None:
     """Securely wipe *cache* if it exists; safe on ``None``.
-
     Convenience wrapper so ``AxonBrain.close`` and similar callers can
     do ``release_cache(self._sealed_cache)`` without a None-guard.
     """

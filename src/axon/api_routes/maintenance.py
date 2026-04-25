@@ -32,18 +32,15 @@ async def copilot_agent_handler(
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-
     user_query = body.messages[-1].content if body.messages else ""
     if not user_query:
         return JSONResponse({"error": "Empty query"}, status_code=400)
-
     parts = user_query.strip().split(maxsplit=1)
     command = parts[0].lower() if parts[0].startswith("/") else None
     args = parts[1] if len(parts) > 1 else ""
 
     async def response_stream():
         yield f"data: {json.dumps({'type': 'created', 'id': body.agent_request_id})}\n\n"
-
         try:
             if command == "/search":
                 yield f"data: {json.dumps({'type': 'text', 'content': f'🔍 Searching Axon for: {args}...'})}\n\n"
@@ -57,7 +54,6 @@ async def copilot_agent_handler(
                         content += f"**{i+1}. {os.path.basename((r.get('metadata') or {}).get('source', 'unknown'))}** (Score: {r['score']:.2f})\n"
                         content += f"> {r['text'][:200]}...\n\n"
                 yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
-
             elif command == "/ingest":
                 yield f"data: {json.dumps({'type': 'text', 'content': f'📥 Ingesting URL: {args}...'})}\n\n"
                 from axon.loaders import URLLoader
@@ -69,14 +65,12 @@ async def copilot_agent_handler(
                     yield f"data: {json.dumps({'type': 'text', 'content': f'✅ Successfully ingested: {args}'})}\n\n"
                 else:
                     yield f"data: {json.dumps({'type': 'text', 'content': f'❌ Failed to ingest: {args}'})}\n\n"
-
             elif command == "/projects":
                 projects = _list_projects()
                 content = "### Available Axon Projects\n\n"
                 for p in projects:
                     content += f"- **{p['name']}**: {p.get('description', 'No description')}\n"
                 yield f"data: {json.dumps({'type': 'text', 'content': content})}\n\n"
-
             else:
                 answer = await asyncio.to_thread(
                     brain.query,
@@ -88,11 +82,9 @@ async def copilot_agent_handler(
                 if isinstance(answer, dict):
                     answer = answer.get("response", answer.get("answer", str(answer)))
                 yield f"data: {json.dumps({'type': 'text', 'content': answer})}\n\n"
-
         except Exception as e:
             logger.error(f"Copilot Agent error: {e}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(response_stream(), media_type="text/event-stream")

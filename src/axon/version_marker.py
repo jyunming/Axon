@@ -6,7 +6,6 @@ on a TTL background poll) so they can detect when the owner has re-
 indexed while they were idle and avoid serving stale query results.
 
 Marker schema (v1)::
-
     {
         "schema_version": 1,
         "seq": 42,                     # monotonic per-ingest counter
@@ -63,7 +62,6 @@ class MountSyncPendingError(RuntimeError):
     index files haven't fully synced to this grantee yet — typically because
     the owner's ``version.json`` arrived first (it's tiny) and the larger
     index files are still in flight on the cloud-sync client.
-
     Callers should surface this to the user as a transient "sync in progress"
     condition (e.g. HTTP 503 with ``X-Axon-Mount-Sync-Pending: true``) rather
     than treat it as a hard failure.
@@ -107,7 +105,6 @@ def rollup_hashes(
     hash_algo: str = "sha256",
 ) -> dict[str, str]:
     """Hash every existing manifest file and return ``{relpath: hexdigest}``.
-
     Missing files are silently skipped — their absence is information
     too: the grantee compares the dicts directly, so a key disappearing
     counts as a change.
@@ -137,7 +134,6 @@ def bump(
     hash_algo: str = "sha256",
 ) -> dict[str, Any]:
     """Compute and persist a fresh version marker.
-
     Args:
         project_dir: The project root (one level above ``bm25_index``
             and ``vector_store_data``).
@@ -145,21 +141,17 @@ def bump(
             tests.  Production callers should leave this ``None``.
         hash_algo: ``hashlib`` algorithm name.  Defaults to SHA-256;
             BLAKE3 (faster) is a future option once we add the dep.
-
     Returns:
         The marker dict that was written to disk.
-
     The write is atomic: we serialise to ``version.json.tmp`` first
     and then ``os.replace`` over the live name, so concurrent readers
     never observe a half-written file.
     """
     project_dir = Path(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
-
     if seq is None:
         prev = read(project_dir)
         seq = (prev.get("seq", 0) + 1) if prev else 1
-
     marker = {
         "schema_version": SCHEMA_VERSION,
         "seq": int(seq),
@@ -168,7 +160,6 @@ def bump(
         "hash_algo": hash_algo,
         "artifacts": rollup_hashes(project_dir, hash_algo=hash_algo),
     }
-
     target = project_dir / VERSION_MARKER_FILENAME
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(marker, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -178,14 +169,12 @@ def bump(
 
 def _atomic_replace(src: Path, dst: Path) -> None:
     """``os.replace`` with a copy+unlink fallback for transient locks.
-
     On Windows + cloud-sync paths (OneDrive, network shares), the live
     target file can be briefly held open by the sync client / file
     indexer, causing ``os.replace`` to raise ``PermissionError`` or
     ``OSError``. The fallback copies the temp file's bytes over the
     live target then unlinks the temp — slower but resilient. Same
     pattern as ``BM25Retriever.save()``.
-
     On the unlikely path that even the fallback fails, we re-raise the
     original ``os.replace`` error and clean up the orphan ``.tmp`` so
     we don't leave junk behind.
@@ -216,7 +205,6 @@ def _atomic_replace(src: Path, dst: Path) -> None:
 
 def read(project_dir: Path | str) -> dict[str, Any] | None:
     """Return the marker dict at ``project_dir/version.json`` or ``None``.
-
     Missing or unreadable files return ``None`` (callers treat this as
     "no marker present" — typical for a freshly-created project that
     has not yet been ingested).
@@ -236,13 +224,11 @@ def read(project_dir: Path | str) -> dict[str, Any] | None:
 
 def artifacts_match(project_dir: Path | str, marker: dict[str, Any] | None) -> bool:
     """Return True iff every artifact hash in *marker* matches the on-disk file.
-
     Used by the grantee-side refresh path to detect the **mid-sync** race:
     the marker says ``seq=N`` but the index files are still at ``seq=N-1``
     because they haven't fully replicated yet. Re-hashing the actual files
     catches this; ``True`` means we're safe to reopen handles, ``False``
     means we should wait + retry (or surface ``MountSyncPendingError``).
-
     A marker with no artifacts (e.g. very early bump on an empty project)
     trivially matches.
     """
@@ -258,7 +244,6 @@ def artifacts_match(project_dir: Path | str, marker: dict[str, Any] | None) -> b
 
 def is_newer_than(current: dict[str, Any] | None, cached: dict[str, Any] | None) -> bool:
     """Return True iff ``current`` represents an ingest later than ``cached``.
-
     Comparison rule:
       - If we have no cached marker but a current one exists, that's newer.
       - If sequence advanced, that's newer.

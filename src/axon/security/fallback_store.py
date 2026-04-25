@@ -64,7 +64,6 @@ def is_present(user_dir: Path | str) -> bool:
 
 def read_master_record(user_dir: Path | str) -> str | None:
     """Return the raw JSON string from the fallback file, or None.
-
     Returns ``None`` ONLY when the file does not exist (analogous to
     :func:`axon.security.keyring.get_secret` returning None). When the
     file exists but cannot be read (permission denied, EIO, etc.), the
@@ -93,7 +92,6 @@ def read_master_record(user_dir: Path | str) -> str | None:
 
 def write_master_record(user_dir: Path | str, payload: str) -> None:
     """Persist *payload* atomically to the fallback file.
-
     Validates that *payload* parses as JSON before writing — catches
     obvious caller bugs without involving the master keyring layer.
     """
@@ -103,7 +101,6 @@ def write_master_record(user_dir: Path | str, payload: str) -> None:
         json.loads(payload)
     except json.JSONDecodeError as exc:
         raise ValueError(f"payload must be valid JSON: {exc}") from exc
-
     path = fallback_master_path(user_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".write")
@@ -116,7 +113,6 @@ def write_master_record(user_dir: Path | str, payload: str) -> None:
         except OSError:
             pass
         raise
-
     # Lock down — only this user needs to read it. No-op on Windows
     # where ACL inheritance protects.
     try:

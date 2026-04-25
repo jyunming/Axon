@@ -96,7 +96,6 @@ _SALT_LEN: int = 32  # 256 bits of salt entropy
 class BadPassphraseError(SecurityError):
     """Raised when ``unlock_store`` or ``change_passphrase`` is given a
     passphrase that does not unwrap the stored master key.
-
     Distinct from generic ``SecurityError`` so callers (REPL, REST,
     MCP) can show a focused "wrong passphrase" message without
     swallowing actual configuration / I/O errors.
@@ -115,7 +114,6 @@ _unlocked_masters: dict[str, bytes] = {}
 
 def _owner_from_user_dir(user_dir: Path) -> str:
     """The "owner" identity in the keyring service-name.
-
     Uses the user_dir basename — matches the AxonStore convention
     (``~/.axon/AxonStore/<owner>/...``). Tests can pass any user_dir.
     """
@@ -154,13 +152,11 @@ def _derive_kek(passphrase: str, salt: bytes) -> bytes:
 
 def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
     """Read the JSON master record from the keyring or fallback file.
-
     Resolution order:
     1. OS keyring (DPAPI / Keychain / Secret Service).
     2. ``<user_dir>/.security/master.enc`` fallback (Phase 6) — used
        when the keyring is unavailable (headless Linux servers,
        stripped containers).
-
     Raises ``SecurityError`` if the record exists but is malformed —
     a defence-in-depth signal that the storage layer may have been
     tampered with.
@@ -175,7 +171,6 @@ def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
             source = f"keyring service {_service(user_dir)!r}"
     except _kr.KeyringUnavailableError:
         raw = None  # fall through to file fallback
-
     if raw is None:
         # File fallback. Read only when the keyring is unavailable OR
         # when the keyring returned no record (the keyring is preferred
@@ -189,7 +184,6 @@ def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
             raise SecurityError(str(exc)) from exc
         if raw is not None:
             source = f"fallback file {_fb.fallback_master_path(user_dir)}"
-
     if raw is None:
         return None
     try:
@@ -210,7 +204,6 @@ def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
 
 def _write_keyring_record(user_dir: Path, *, salt: bytes, wrapped_master: bytes) -> None:
     """Persist the master record to the keyring or fallback file.
-
     Routes to the file fallback when the OS keyring is unavailable.
     The wrapped master is identical in both stores — only the location
     differs.
@@ -252,13 +245,11 @@ def is_bootstrapped(user_dir: Path) -> bool:
 
 def bootstrap_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
     """Initial setup — generate the master + persist its passphrase-wrapped form.
-
     Raises:
         SecurityError: the store is already bootstrapped (use
             :func:`change_passphrase` to rotate, or wipe the keyring
             entry first if you really mean to start over).
         BadPassphraseError: the supplied passphrase is empty.
-
     Returns a status dict with ``{"initialized": True, "owner": ...}``.
     """
     if not passphrase:
@@ -269,18 +260,15 @@ def bootstrap_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
             "Use change_passphrase to rotate, or delete the keyring entry "
             "manually if you really mean to discard the master key."
         )
-
     master = generate_dek()  # 32 random bytes — never persisted in plaintext
     salt = os.urandom(_SALT_LEN)
     kek = _derive_kek(passphrase, salt)
     wrapped = aes_key_wrap(kek, master)
     _write_keyring_record(user_dir, salt=salt, wrapped_master=wrapped)
-
     # Cache the master so the bootstrapping process is immediately
     # unlocked — no need for the caller to re-supply the passphrase.
     with _unlock_lock:
         _unlocked_masters[_service(user_dir)] = master
-
     logger.info(
         "Sealed-store bootstrapped for owner=%s (keyring service=%s)",
         _owner_from_user_dir(user_dir),
@@ -308,10 +296,8 @@ def unlock_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
         master = aes_key_unwrap(kek, wrapped)
     except InvalidUnwrap as exc:
         raise BadPassphraseError(f"Wrong passphrase for store {_service(user_dir)}.") from exc
-
     with _unlock_lock:
         _unlocked_masters[_service(user_dir)] = master
-
     return {
         "unlocked": True,
         "owner": _owner_from_user_dir(user_dir),
@@ -321,7 +307,6 @@ def unlock_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
 
 def lock_store(user_dir: Path) -> dict[str, Any]:
     """Clear the in-memory cached master for this owner.
-
     Subsequent DEK lookups will raise ``SecurityError("locked")`` until
     :func:`unlock_store` is called again.
     """
@@ -342,7 +327,6 @@ def is_unlocked(user_dir: Path) -> bool:
 
 def change_passphrase(user_dir: Path, old_passphrase: str, new_passphrase: str) -> dict[str, Any]:
     """Re-wrap the master under a fresh KEK derived from *new_passphrase*.
-
     Project DEKs are NOT touched — they're wrapped under the master,
     not the passphrase, so passphrase rotation costs O(1) regardless
     of how many sealed projects the owner has.
@@ -361,17 +345,14 @@ def change_passphrase(user_dir: Path, old_passphrase: str, new_passphrase: str) 
         raise BadPassphraseError(
             f"Old passphrase did not unlock store {_service(user_dir)}."
         ) from exc
-
     new_salt = os.urandom(_SALT_LEN)
     kek_new = _derive_kek(new_passphrase, new_salt)
     new_wrapped = aes_key_wrap(kek_new, master)
     _write_keyring_record(user_dir, salt=new_salt, wrapped_master=new_wrapped)
-
     # Refresh in-memory cache (master is unchanged but the cache may
     # have been cleared between unlock and change).
     with _unlock_lock:
         _unlocked_masters[_service(user_dir)] = master
-
     return {
         "rotated": True,
         "owner": _owner_from_user_dir(user_dir),
@@ -380,7 +361,6 @@ def change_passphrase(user_dir: Path, old_passphrase: str, new_passphrase: str) 
 
 def get_master_key(user_dir: Path) -> bytes:
     """Return the cached unlocked master key.
-
     Raises:
         SecurityError: the store is locked; call :func:`unlock_store`
             first.
@@ -403,12 +383,10 @@ def _project_dek_path(project_dir: Path) -> Path:
 
 def get_or_create_project_dek(user_dir: Path, project_dir: Path) -> bytes:
     """Return the per-project DEK; create + persist on first call.
-
     Reads ``<project_dir>/.security/dek.wrapped`` if present; unwraps
     with the cached master and returns the 32-byte DEK. If absent,
     generates a fresh DEK, wraps it under the master, writes the wrap
     to disk atomically, and returns the new DEK.
-
     Raises:
         SecurityError: store is locked, or wrapped DEK exists but won't
             unwrap (likely keyring/passphrase mismatch — the project
@@ -416,7 +394,6 @@ def get_or_create_project_dek(user_dir: Path, project_dir: Path) -> bytes:
     """
     master = get_master_key(user_dir)
     wrap_path = _project_dek_path(project_dir)
-
     if wrap_path.is_file():
         try:
             dek: bytes = aes_key_unwrap(master, wrap_path.read_bytes())
@@ -432,7 +409,6 @@ def get_or_create_project_dek(user_dir: Path, project_dir: Path) -> bytes:
                 f"(expected {DEK_LEN}); manifest may be corrupted."
             )
         return dek
-
     # No DEK yet — mint one, persist, return.
     dek = generate_dek()
     wrapped = wrap_key(dek, master)
@@ -456,7 +432,6 @@ def get_or_create_project_dek(user_dir: Path, project_dir: Path) -> bytes:
 
 def get_project_dek(user_dir: Path, project_dir: Path) -> bytes:
     """Read the existing wrapped DEK; raise if it doesn't exist.
-
     Use this on the read path (mount / open) where creating a new DEK
     silently would be a bug — if the project file is gone the caller
     needs to know.
@@ -484,7 +459,6 @@ def get_project_dek(user_dir: Path, project_dir: Path) -> bytes:
 
 def _self_check(user_dir: Path | None = None) -> dict[str, Any]:
     """Diagnostic round-trip used by future ``axon doctor`` output.
-
     Uses an isolated temp dir + a synthetic owner so the user's real
     keyring is not touched. Never raises.
     """
@@ -498,7 +472,6 @@ def _self_check(user_dir: Path | None = None) -> dict[str, Any]:
             # Use a unique service to avoid stomping a real user's keyring
             # entry — same code path but different keyring slot.
             unique_service = f"axon.master.__selfcheck_{os.getpid()}"
-
             # Stash the original master_service to restore later.
             original = _kr.master_service
             _kr.master_service = lambda owner: unique_service
