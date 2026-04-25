@@ -864,3 +864,160 @@ class TestExtendShareKey:
             shares.extend_share_key(owner_dir, gen["key_id"], ttl_days=0)
         with pytest.raises(ValueError, match="positive integer"):
             shares.extend_share_key(owner_dir, gen["key_id"], ttl_days=-1)
+
+
+class TestListSharesExpiryFields:
+    """list_shares() must surface expires_at + a derived "expired" boolean
+    so REPL/REST/MCP consumers can render share state without re-implementing
+    the past-vs-future check."""
+
+    def test_no_ttl_share_listed_with_null_expiry(self, tmp_path):
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        shares.generate_share_key(owner_dir, "myproject", "bob")
+        result = shares.list_shares(owner_dir)
+        rec = result["sharing"][0]
+        assert rec["expires_at"] is None
+        assert rec["expired"] is False
+
+    def test_ttl_share_listed_with_future_expiry(self, tmp_path):
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        shares.generate_share_key(owner_dir, "myproject", "bob", ttl_days=30)
+        rec = shares.list_shares(owner_dir)["sharing"][0]
+        assert rec["expires_at"]
+        assert rec["expired"] is False
+
+    def test_past_expiry_marked_expired(self, tmp_path):
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        shares.generate_share_key(owner_dir, "myproject", "bob", ttl_days=1)
+        # Force expiry in the private keys file (list_shares reads the
+        # private keys, not the public manifest).
+        keys_path = owner_dir / ".shares" / ".share_keys.json"
+        keys = json.loads(keys_path.read_text())
+        keys["issued"][0]["expires_at"] = "2020-01-01T00:00:00+00:00"
+        keys_path.write_text(json.dumps(keys))
+        rec = shares.list_shares(owner_dir)["sharing"][0]
+        assert rec["expired"] is True
+
+
+class TestCheckMountRevocationExpiryBranch:
+    """QueryRouterMixin._check_mount_revocation enforces revocation AND
+    expiry on the per-query path (#54). Revocation was tested before; the
+    expiry branch is new."""
+
+    def _stub_brain(self, manifest_path: Path, key_id: str = "sk_a"):
+        from types import MethodType, SimpleNamespace
+
+        from axon.query_router import QueryRouterMixin
+
+        stub = SimpleNamespace(
+            _active_project_kind="mounted",
+            _active_mount_descriptor={
+                "project": "myproject",
+                "owner_user_dir": str(manifest_path.parent.parent),
+                "share_key_id": key_id,
+            },
+        )
+        stub._check_mount_revocation = MethodType(QueryRouterMixin._check_mount_revocation, stub)
+        return stub
+
+    def test_expired_share_raises_permission_error(self, tmp_path):
+        manifest_dir = tmp_path / "alice" / ".shares"
+        manifest_dir.mkdir(parents=True)
+        manifest_path = manifest_dir / ".share_manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "issued": [
+                        {
+                            "key_id": "sk_a",
+                            "project": "myproject",
+                            "grantee": "bob",
+                            "revoked": False,
+                            "expires_at": "2020-01-01T00:00:00+00:00",
+                        }
+                    ]
+                }
+            )
+        )
+        stub = self._stub_brain(manifest_path)
+        with pytest.raises(PermissionError, match="expired"):
+            stub._check_mount_revocation()
+
+    def test_active_share_no_expiry_passes(self, tmp_path):
+        manifest_dir = tmp_path / "alice" / ".shares"
+        manifest_dir.mkdir(parents=True)
+        manifest_path = manifest_dir / ".share_manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "issued": [
+                        {
+                            "key_id": "sk_a",
+                            "project": "myproject",
+                            "grantee": "bob",
+                            "revoked": False,
+                            "expires_at": None,
+                        }
+                    ]
+                }
+            )
+        )
+        stub = self._stub_brain(manifest_path)
+        # Should NOT raise.
+        stub._check_mount_revocation()
+
+    def test_active_share_future_expiry_passes(self, tmp_path):
+        manifest_dir = tmp_path / "alice" / ".shares"
+        manifest_dir.mkdir(parents=True)
+        manifest_path = manifest_dir / ".share_manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "issued": [
+                        {
+                            "key_id": "sk_a",
+                            "project": "myproject",
+                            "grantee": "bob",
+                            "revoked": False,
+                            "expires_at": "2099-01-01T00:00:00+00:00",
+                        }
+                    ]
+                }
+            )
+        )
+        stub = self._stub_brain(manifest_path)
+        stub._check_mount_revocation()
+
+
+class TestGovernanceShareExtendedAction:
+    """share_extended joined VALID_ACTIONS in #54 — verify it round-trips
+    through emit() / query() without being silently dropped."""
+
+    def test_share_extended_in_valid_actions(self):
+        from axon.governance import VALID_ACTIONS
+
+        assert "share_extended" in VALID_ACTIONS
+
+    def test_share_extended_event_round_trips_through_store(self, tmp_path):
+        from axon.governance import AuditEvent, AuditStore
+
+        store = AuditStore(tmp_path / "gov.db")
+        store.append(
+            AuditEvent(
+                action="share_extended",
+                target_type="share",
+                target_id="sk_a",
+                project="myproject",
+                details={"new_expires_at": "2099-01-01T00:00:00+00:00"},
+            )
+        )
+        results = store.query(action="share_extended")
+        assert len(results) == 1
+        assert results[0].target_id == "sk_a"
+        assert results[0].details["new_expires_at"] == "2099-01-01T00:00:00+00:00"

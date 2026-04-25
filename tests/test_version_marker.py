@@ -263,6 +263,70 @@ class TestRefreshMount:
         assert switch_calls == []
 
 
+class TestMaybeRefreshMount:
+    """QueryRouterMixin._maybe_refresh_mount() per-query hook (#53)."""
+
+    def _stub(self, mode: str, refresh_side_effect=None):
+        from types import MethodType, SimpleNamespace
+
+        from axon.query_router import QueryRouterMixin
+
+        cfg = SimpleNamespace(mount_refresh_mode=mode)
+        refresh = MagicMockCallable(side_effect=refresh_side_effect)
+        stub = SimpleNamespace(
+            config=cfg,
+            refresh_mount=refresh,
+        )
+        stub._maybe_refresh_mount = MethodType(QueryRouterMixin._maybe_refresh_mount, stub)
+        return stub, refresh
+
+    def test_off_mode_does_not_refresh(self):
+        stub, refresh = self._stub("off")
+        stub._maybe_refresh_mount()
+        assert refresh.call_count == 0
+
+    def test_switch_mode_does_not_refresh(self):
+        stub, refresh = self._stub("switch")
+        stub._maybe_refresh_mount()
+        assert refresh.call_count == 0
+
+    def test_per_query_mode_calls_refresh(self):
+        stub, refresh = self._stub("per_query")
+        stub._maybe_refresh_mount()
+        assert refresh.call_count == 1
+
+    def test_sync_pending_propagates(self):
+        from axon.version_marker import MountSyncPendingError
+
+        stub, _refresh = self._stub("per_query", refresh_side_effect=MountSyncPendingError("x"))
+        import pytest as _pytest
+
+        with _pytest.raises(MountSyncPendingError):
+            stub._maybe_refresh_mount()
+
+    def test_other_exceptions_swallowed(self):
+        stub, _refresh = self._stub("per_query", refresh_side_effect=RuntimeError("transient"))
+        # Must NOT raise — refresh-machinery bugs should never break a retrieval.
+        stub._maybe_refresh_mount()
+
+
+class MagicMockCallable:
+    """Tiny callable mock that supports side_effect=Exception."""
+
+    def __init__(self, side_effect=None):
+        self.side_effect = side_effect
+        self.call_count = 0
+
+    def __call__(self, *args, **kwargs):
+        self.call_count += 1
+        if self.side_effect is not None:
+            if isinstance(self.side_effect, BaseException) or (
+                isinstance(self.side_effect, type) and issubclass(self.side_effect, BaseException)
+            ):
+                raise self.side_effect
+        return None
+
+
 class TestMarkerJsonShape:
     """The on-disk JSON shape is a compatibility surface for grantees on
     different Axon versions — pin it down."""

@@ -573,3 +573,102 @@ def test_query_knowledge_top_k_zero_raises():
             assert "top_k" in str(exc)
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Share-mount tools (#51–#54): proxy behavior
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_mount_proxies_to_mount_refresh_endpoint():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import refresh_mount
+
+    async def _run():
+        rv = {"status": "success", "refreshed": True, "seq": 7}
+        mock = _mock_post(rv)
+        with patch("httpx.AsyncClient.post", mock):
+            result = await refresh_mount()
+        assert result == rv
+        # POST goes to /mount/refresh with an empty body.
+        args, kwargs = mock.call_args
+        assert args[0].endswith("/mount/refresh")
+        assert kwargs.get("json") == {}
+
+    asyncio.run(_run())
+
+
+def test_share_project_passes_ttl_days_when_set():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import share_project
+
+    async def _run():
+        rv = {"key_id": "sk_x", "share_string": "abc", "expires_at": "2099-01-01T00:00:00+00:00"}
+        mock = _mock_post(rv)
+        with patch("httpx.AsyncClient.post", mock):
+            await share_project(project="p", grantee="bob", ttl_days=14)
+        args, kwargs = mock.call_args
+        assert args[0].endswith("/share/generate")
+        body = kwargs["json"]
+        assert body == {"project": "p", "grantee": "bob", "ttl_days": 14}
+
+    asyncio.run(_run())
+
+
+def test_share_project_omits_ttl_days_when_none():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import share_project
+
+    async def _run():
+        mock = _mock_post({"key_id": "sk_x"})
+        with patch("httpx.AsyncClient.post", mock):
+            await share_project(project="p", grantee="bob")
+        args, kwargs = mock.call_args
+        body = kwargs["json"]
+        # ttl_days omitted entirely when None — preserves the legacy wire format.
+        assert "ttl_days" not in body
+        assert body == {"project": "p", "grantee": "bob"}
+
+    asyncio.run(_run())
+
+
+def test_extend_share_proxies_with_key_id_and_ttl():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import extend_share
+
+    async def _run():
+        rv = {"key_id": "sk_a", "expires_at": "2099-01-01T00:00:00+00:00"}
+        mock = _mock_post(rv)
+        with patch("httpx.AsyncClient.post", mock):
+            result = await extend_share(key_id="sk_a", ttl_days=30)
+        assert result == rv
+        args, kwargs = mock.call_args
+        assert args[0].endswith("/share/extend")
+        assert kwargs["json"] == {"key_id": "sk_a", "ttl_days": 30}
+
+    asyncio.run(_run())
+
+
+def test_extend_share_passes_null_ttl_to_clear_expiry():
+    import asyncio
+    from unittest.mock import patch
+
+    from axon.mcp_server import extend_share
+
+    async def _run():
+        mock = _mock_post({"expires_at": None})
+        with patch("httpx.AsyncClient.post", mock):
+            await extend_share(key_id="sk_a", ttl_days=None)
+        args, kwargs = mock.call_args
+        # null ttl_days IS forwarded — REST semantics treat it as "clear expiry".
+        assert kwargs["json"] == {"key_id": "sk_a", "ttl_days": None}
+
+    asyncio.run(_run())
