@@ -739,6 +739,123 @@ async def init_store(base_path: str, persist: bool = False) -> Any:
     return await _post("/store/init", {"base_path": base_path, "persist": persist})
 
 
+# ---------------------------------------------------------------------------
+# Sealed-store tools (Phase 2 of #SEALED).
+# Mirror the /security/* REST endpoints so MCP clients can manage the
+# encryption-at-rest store without poking the HTTP API directly.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def security_status() -> Any:
+    """Return current sealed-store status (initialized + unlocked flags).
+
+    Use this on startup to decide whether to prompt for ``security_bootstrap``
+    (first-time setup) or ``security_unlock`` (existing user). Returns
+    ``initialized: false`` on a fresh install, ``initialized: true,
+    unlocked: false`` after bootstrap until the next unlock.
+    """
+
+    return await _get("/security/status")
+
+
+@mcp.tool()
+async def security_bootstrap(passphrase: str) -> Any:
+    """Initialise the sealed-store with a passphrase (one-time setup).
+
+    Generates a fresh master key, wraps it under a passphrase-derived
+    KEK, and stores the wrapped record in the OS keyring. After this
+    succeeds the store is automatically unlocked for the rest of this
+    process; the passphrase is required for every subsequent unlock.
+
+    Args:
+        passphrase: The user's chosen passphrase. Cannot be empty.
+            There is NO recovery — losing this passphrase means losing
+            access to every project sealed under this master.
+    """
+
+    return await _post("/security/bootstrap", {"passphrase": passphrase})
+
+
+@mcp.tool()
+async def security_unlock(passphrase: str) -> Any:
+    """Unlock the sealed-store so sealed projects can be queried.
+
+    Required after every process restart before ``project_seal`` or any
+    sealed-project switch will work. Rate-limited: 5 wrong attempts
+    inside 5 minutes triggers a 429 lockout per client IP.
+
+    Args:
+        passphrase: The passphrase supplied at ``security_bootstrap``
+            time (or the current passphrase after a rotation).
+    """
+
+    return await _post("/security/unlock", {"passphrase": passphrase})
+
+
+@mcp.tool()
+async def security_lock() -> Any:
+    """Clear the in-process master key cache.
+
+    Subsequent sealed-project queries will fail with a "store is locked"
+    error until ``security_unlock`` is called again. Use before walking
+    away from the machine; the orphan-cleanup hook will wipe any
+    plaintext mount caches on next process boot.
+    """
+
+    return await _post("/security/lock", {})
+
+
+@mcp.tool()
+async def security_change_passphrase(old_passphrase: str, new_passphrase: str) -> Any:
+    """Re-wrap the master key under a new passphrase.
+
+    Project DEKs are not touched (they're wrapped under the master, not
+    the passphrase), so this is O(1) regardless of how many sealed
+    projects you have. The new passphrase is required for every future
+    ``security_unlock`` call.
+
+    Args:
+        old_passphrase: The current passphrase. Required to unwrap the
+            existing master before re-wrapping.
+        new_passphrase: The new passphrase. Cannot be empty.
+    """
+
+    return await _post(
+        "/security/change-passphrase",
+        {"old_passphrase": old_passphrase, "new_passphrase": new_passphrase},
+    )
+
+
+@mcp.tool()
+async def seal_project(project_name: str, migration_mode: str = "in_place") -> Any:
+    """Encrypt every content file in a project in place (one-shot).
+
+    Walks the project directory and rewrites ``meta.json`` plus every
+    file under ``bm25_index/`` and ``vector_store_data/`` as AXSL-sealed
+    AES-256-GCM ciphertext. Each file is replaced atomically (tempfile
+    + os.replace), so a crash mid-seal leaves the original or the new
+    sealed version on disk but never a partial write.
+
+    Idempotent — re-sealing an already-sealed project is a no-op
+    (returns ``status="already_sealed"``).
+
+    Requires the sealed-store to be unlocked (see ``security_unlock``).
+    The active project switches to "default" during the operation and
+    switches back when done.
+
+    Args:
+        project_name: Name of the open project to seal. Must exist.
+        migration_mode: Reserved for future variants; only ``"in_place"``
+            is implemented in v1.
+    """
+
+    return await _post(
+        "/project/seal",
+        {"project_name": project_name, "migration_mode": migration_mode},
+    )
+
+
 @mcp.tool()
 async def graph_status() -> Any:
     """Return current GraphRAG knowledge-graph status.

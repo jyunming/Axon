@@ -588,6 +588,50 @@ def main():
         help="Initialise AxonStore multi-user mode at PATH (e.g. ~/axon_data), then exit",
     )
 
+    # ── Sealed-store (Phase 2 of #SEALED) ────────────────────────────────────
+
+    parser.add_argument(
+        "--store-status",
+        action="store_true",
+        help="Show sealed-store init/unlock state, then exit",
+    )
+
+    parser.add_argument(
+        "--store-bootstrap",
+        metavar="PASSPHRASE",
+        help="One-time sealed-store init with PASSPHRASE, then exit. "
+        "Generates the master key, wraps it, persists to OS keyring. "
+        "Lose this passphrase = lose every sealed project. No recovery.",
+    )
+
+    parser.add_argument(
+        "--store-unlock",
+        metavar="PASSPHRASE",
+        help="Unlock the sealed-store for sealed-project queries, then exit. "
+        "Required after every process restart before --project-seal works.",
+    )
+
+    parser.add_argument(
+        "--store-lock",
+        action="store_true",
+        help="Clear the in-process master cache, then exit",
+    )
+
+    parser.add_argument(
+        "--store-change-passphrase",
+        nargs=2,
+        metavar=("OLD", "NEW"),
+        help="Rotate the sealed-store passphrase, then exit. "
+        "Project DEKs are not touched (O(1) regardless of project count).",
+    )
+
+    parser.add_argument(
+        "--project-seal",
+        metavar="NAME",
+        help="Encrypt every content file in project NAME at rest, then exit. "
+        "Requires the sealed-store to be unlocked (--store-unlock first).",
+    )
+
     # ── Config validator / wizard ────────────────────────────────────────────
 
     parser.add_argument(
@@ -1030,6 +1074,12 @@ def main():
         and not getattr(args, "delete_doc", None)
         and not getattr(args, "delete_doc_id", None)
         and not getattr(args, "store_init", None)
+        and not getattr(args, "store_status", False)
+        and not getattr(args, "store_bootstrap", None)
+        and not getattr(args, "store_unlock", None)
+        and not getattr(args, "store_lock", False)
+        and not getattr(args, "store_change_passphrase", None)
+        and not getattr(args, "project_seal", None)
         and not getattr(args, "share_list", False)
         and not getattr(args, "share_generate", None)
         and not getattr(args, "share_redeem", None)
@@ -1271,6 +1321,77 @@ def main():
 
                 sys.exit(1)
 
+            return
+
+        if args.store_status:
+            from axon import security as _security
+
+            try:
+                st = _security.store_status(Path(config.projects_root))
+            except Exception as exc:
+                print(f"  Sealed-store status unavailable: {exc}")
+                sys.exit(1)
+            print(f"  Initialized:  {st.get('initialized', False)}")
+            print(f"  Unlocked:     {st.get('unlocked', False)}")
+            print(f"  Cipher suite: {st.get('cipher_suite', '') or '(none)'}")
+            return
+
+        if args.store_bootstrap:
+            from axon import security as _security
+
+            try:
+                _security.bootstrap_store(Path(config.projects_root), args.store_bootstrap)
+                print("  Sealed-store bootstrapped and unlocked.")
+            except _security.SecurityError as exc:
+                print(f"  Bootstrap failed: {exc}")
+                sys.exit(1)
+            return
+
+        if args.store_unlock:
+            from axon import security as _security
+
+            try:
+                _security.unlock_store(Path(config.projects_root), args.store_unlock)
+                print("  Sealed-store unlocked.")
+            except _security.SecurityError as exc:
+                print(f"  Unlock failed: {exc}")
+                sys.exit(1)
+            return
+
+        if args.store_lock:
+            from axon import security as _security
+
+            try:
+                _security.lock_store(Path(config.projects_root))
+                print("  Sealed-store locked.")
+            except _security.SecurityError as exc:
+                print(f"  Lock failed: {exc}")
+                sys.exit(1)
+            return
+
+        if args.store_change_passphrase:
+            from axon import security as _security
+
+            old_pp, new_pp = args.store_change_passphrase
+            try:
+                _security.change_passphrase(Path(config.projects_root), old_pp, new_pp)
+                print("  Sealed-store passphrase rotated.")
+            except _security.SecurityError as exc:
+                print(f"  Passphrase rotation failed: {exc}")
+                sys.exit(1)
+            return
+
+        if args.project_seal:
+            from axon import security as _security
+
+            try:
+                result = _security.project_seal(args.project_seal, Path(config.projects_root))
+                status = result.get("status", "sealed")
+                files = result.get("files_sealed", 0)
+                print(f"  Project '{args.project_seal}': {status} ({files} files)")
+            except _security.SecurityError as exc:
+                print(f"  Seal failed: {exc}")
+                sys.exit(1)
             return
 
         # Lightweight 'list' command: avoid full AxonBrain init by reading doc_versions metadata

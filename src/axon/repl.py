@@ -3277,12 +3277,18 @@ def _interactive_repl(
                         "    Share strings are base64-encoded payloads; send them out-of-band.\n"
                         "    Mounted shares appear under mounts/ in your project list and can be\n"
                         "    switched to with /project switch mounts/<name>.",
-                        "store": "    /store whoami                  show store identity and active project\n"
-                        "    /store init <base_path>        change the store base path (e.g. to a shared drive)\n"
+                        "store": "    /store whoami                            show store identity and active project\n"
+                        "    /store init <base_path>                  change the store base path\n"
+                        "    /store status                            show sealed-store init/unlock state\n"
+                        "    /store bootstrap <passphrase>            one-time sealed-store init\n"
+                        "    /store unlock <passphrase>               unlock for sealed-project queries\n"
+                        "    /store lock                              clear in-process master cache\n"
+                        "    /store change-passphrase <old> <new>     rotate the sealed-store passphrase\n"
                         "\n"
                         "    Example: /store init ~/axon_data\n"
                         "    Moves data to: <base_path>/AxonStore/<username>/\n"
-                        "    Config is updated and persisted to ~/.config/axon/config.yaml.",
+                        "    Config is updated and persisted to ~/.config/axon/config.yaml.\n"
+                        "    Sealed-store sub-commands require the [sealed] extra installed.",
                         "graph": "    /graph status                  show entity count, edges, community summaries\n"
                         "    /graph finalize                trigger community detection rebuild\n"
                         "    /graph viz [path]              export graph as HTML (opens in browser)\n"
@@ -4163,8 +4169,11 @@ def _interactive_repl(
                         "    /project refresh                         re-read mount version marker"
                     )
 
+                    print("    /project folder                          open active project folder")
+
                     print(
-                        "    /project folder                          open active project folder\n"
+                        "    /project seal <name>                     encrypt at rest "
+                        "(requires /store unlock)\n"
                     )
 
                 elif sub == "new":
@@ -4335,9 +4344,39 @@ def _interactive_repl(
                         except Exception:
                             pass
 
+                elif sub == "seal":
+                    # Encrypt every content file in the project in place.
+                    # Requires the [sealed] extra and an unlocked store.
+                    if not sub_arg:
+                        print("    Usage: /project seal <name>")
+                    else:
+                        from axon import security as _security
+
+                        seal_name = sub_arg.strip().lower()
+                        previously_active = brain._active_project
+                        needs_switch_back = previously_active == seal_name
+                        if needs_switch_back:
+                            brain.switch_project("default")
+                        try:
+                            result = _security.project_seal(
+                                seal_name,
+                                Path(brain.config.projects_root),
+                                config=brain.config,
+                                embedding=brain.embedding,
+                            )
+                            status = result.get("status", "sealed")
+                            files = result.get("files_sealed", 0)
+                            print(f"    Project '{seal_name}': {status} ({files} files)")
+                        except _security.SecurityError as exc:
+                            print(f"    Seal failed: {exc}")
+                        finally:
+                            if needs_switch_back:
+                                brain.switch_project(previously_active)
+
                 else:
                     print(
-                        f"    Unknown sub-command '{sub}'. Try: list, new, switch, delete, folder"
+                        f"    Unknown sub-command '{sub}'. "
+                        "Try: list, new, switch, delete, folder, seal"
                     )
 
             elif cmd == "/retry":
@@ -4766,10 +4805,81 @@ def _interactive_repl(
                         except Exception as e:
                             print(f"    Store init failed: {e}")
 
+                elif sub == "status":
+                    from axon import security as _security
+
+                    user_dir = Path(brain.config.projects_root)
+                    try:
+                        st = _security.store_status(user_dir)
+                    except Exception as exc:
+                        print(f"    Sealed-store status unavailable: {exc}")
+                    else:
+                        print(f"\n    Initialized:  {st.get('initialized', False)}")
+                        print(f"    Unlocked:     {st.get('unlocked', False)}")
+                        print(f"    Cipher suite: {st.get('cipher_suite', '') or '(none)'}\n")
+
+                elif sub == "bootstrap":
+                    from axon import security as _security
+
+                    if not sub_arg:
+                        print("    Usage: /store bootstrap <passphrase>")
+                    else:
+                        try:
+                            _security.bootstrap_store(
+                                Path(brain.config.projects_root), sub_arg.strip()
+                            )
+                            print("    Sealed-store bootstrapped and unlocked.")
+                        except _security.SecurityError as exc:
+                            print(f"    Bootstrap failed: {exc}")
+
+                elif sub == "unlock":
+                    from axon import security as _security
+
+                    if not sub_arg:
+                        print("    Usage: /store unlock <passphrase>")
+                    else:
+                        try:
+                            _security.unlock_store(
+                                Path(brain.config.projects_root), sub_arg.strip()
+                            )
+                            print("    Sealed-store unlocked.")
+                        except _security.SecurityError as exc:
+                            print(f"    Unlock failed: {exc}")
+
+                elif sub == "lock":
+                    from axon import security as _security
+
+                    try:
+                        _security.lock_store(Path(brain.config.projects_root))
+                        print("    Sealed-store locked.")
+                    except _security.SecurityError as exc:
+                        print(f"    Lock failed: {exc}")
+
+                elif sub == "change-passphrase":
+                    from axon import security as _security
+
+                    parts = sub_arg.split(maxsplit=1) if sub_arg else []
+                    if len(parts) != 2:
+                        print("    Usage: /store change-passphrase <old> <new>")
+                    else:
+                        try:
+                            _security.change_passphrase(
+                                Path(brain.config.projects_root),
+                                parts[0].strip(),
+                                parts[1].strip(),
+                            )
+                            print("    Sealed-store passphrase rotated.")
+                        except _security.SecurityError as exc:
+                            print(f"    Passphrase rotation failed: {exc}")
+
                 else:
                     print(f"    Unknown sub-command '{sub}'.")
 
-                    print("    Usage: /store whoami | /store init <base_path>")
+                    print(
+                        "    Usage: /store whoami | /store init <base_path> | "
+                        "/store status | /store bootstrap <pp> | /store unlock <pp> | "
+                        "/store lock | /store change-passphrase <old> <new>"
+                    )
 
             elif cmd == "/refresh":
                 # ── /refresh — re-ingest changed documents ───────────────────────

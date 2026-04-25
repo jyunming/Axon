@@ -57,6 +57,13 @@ EXPECTED_MCP_TOOL_NAMES = {
     "list_shares",
     "init_store",
     "get_store_status",
+    # Sealed-store (Phase 2 of #SEALED)
+    "security_status",
+    "security_bootstrap",
+    "security_unlock",
+    "security_lock",
+    "security_change_passphrase",
+    "seal_project",
     # Graph
     "graph_status",
     "graph_finalize",
