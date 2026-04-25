@@ -10,6 +10,7 @@ Skips when the ``cryptography`` / ``keyring`` packages aren't installed.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -217,3 +218,59 @@ class TestKeyringStillPreferredWhenAvailable:
         bootstrap_store(user_dir, "with-keyring-pp")
         # Master in keyring; file fallback not touched.
         assert _fb.is_present(user_dir) is False
+
+
+# ---------------------------------------------------------------------------
+# Defensive error handling — file unreadable, error sourcing
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackErrorSurfacing:
+    def test_unreadable_file_raises_security_error_not_silent_none(self, kr_unavailable, user_dir):
+        """If the fallback file exists but read_text raises OSError,
+        master must surface as SecurityError — NOT return None which
+        would let the user think 'not bootstrapped' and re-bootstrap
+        (overwriting the existing wrap)."""
+        # Bootstrap so the file exists.
+        bootstrap_store(user_dir, "headless-pp")
+        lock_store(user_dir)
+        # Patch read_text on the fallback file to raise.
+        original_read_text = Path.read_text
+
+        def boom_on_master(self, *args, **kwargs):
+            if self.name == "master.enc":
+                raise PermissionError("simulated EACCES")
+            return original_read_text(self, *args, **kwargs)
+
+        with patch.object(Path, "read_text", boom_on_master):
+            with pytest.raises(SecurityError, match="unreadable"):
+                unlock_store(user_dir, "headless-pp")
+
+    def test_corrupted_fallback_error_message_cites_file_not_keyring(
+        self, kr_unavailable, user_dir
+    ):
+        """When the fallback file holds bad JSON, the SecurityError
+        message must point at the FILE path (not the keyring service
+        name) so headless-server users can find what to fix."""
+        # Write garbage directly to the fallback path.
+        _fb.write_master_record(user_dir, '{"not": "the right shape"}')
+        with pytest.raises(SecurityError) as excinfo:
+            unlock_store(user_dir, "anything")
+        msg = str(excinfo.value)
+        assert "master.enc" in msg or "fallback file" in msg
+        # Should NOT be quoting only the keyring service name as the source.
+        assert "keyring service" not in msg
+
+    def test_corrupted_keyring_error_message_cites_keyring(self, kr_available, user_dir):
+        """Symmetric: when the bytes came from the keyring, the
+        message points at the keyring service name."""
+        bootstrap_store(user_dir, "with-keyring-pp")
+        # Stomp the keyring entry with garbage.
+        kr_available.set_password(f"axon.master.{user_dir.name}", "master", '{"not": "right"}')
+        from axon.security import master as _master_mod
+
+        _master_mod._unlocked_masters.clear()
+        with pytest.raises(SecurityError) as excinfo:
+            unlock_store(user_dir, "with-keyring-pp")
+        msg = str(excinfo.value)
+        assert "keyring service" in msg

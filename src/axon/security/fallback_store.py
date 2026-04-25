@@ -65,9 +65,13 @@ def is_present(user_dir: Path | str) -> bool:
 def read_master_record(user_dir: Path | str) -> str | None:
     """Return the raw JSON string from the fallback file, or None.
 
-    Mirrors :func:`axon.security.keyring.get_secret` semantics — the
-    caller (``master.py``) parses the JSON the same way it parses
-    the keyring blob.
+    Returns ``None`` ONLY when the file does not exist (analogous to
+    :func:`axon.security.keyring.get_secret` returning None). When the
+    file exists but cannot be read (permission denied, EIO, etc.), the
+    underlying ``OSError`` is wrapped in ``IOError`` and re-raised —
+    swallowing it would let the caller treat the store as "not
+    bootstrapped" and offer to re-bootstrap, which would overwrite the
+    existing master record (lockout / data-loss footgun).
     """
     path = fallback_master_path(user_dir)
     if not path.is_file():
@@ -75,11 +79,16 @@ def read_master_record(user_dir: Path | str) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
-        # Surface as None so the caller's "not bootstrapped" path
-        # fires; an explicit raise here would crash any operation
-        # that probes ``is_bootstrapped`` defensively.
-        logger.warning("Could not read fallback master file %s: %s", path, exc)
-        return None
+        # Re-raise wrapped so callers know the store IS bootstrapped
+        # but the file is currently inaccessible. master.py converts
+        # this to SecurityError; is_bootstrapped() catches it and
+        # treats the store as bootstrapped-but-broken (matches the
+        # "malformed JSON" behavior).
+        raise OSError(
+            f"Fallback master file at {path} exists but is unreadable ({exc}). "
+            "Fix the permission / I/O issue rather than re-bootstrapping — "
+            "that would overwrite the existing wrapped master."
+        ) from exc
 
 
 def write_master_record(user_dir: Path | str, payload: str) -> None:

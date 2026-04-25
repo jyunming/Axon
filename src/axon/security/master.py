@@ -168,17 +168,27 @@ def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
     from . import fallback_store as _fb
 
     raw: str | None = None
+    source: str = ""
     try:
         raw = _kr.get_secret(_service(user_dir), MASTER_USERNAME)
+        if raw is not None:
+            source = f"keyring service {_service(user_dir)!r}"
     except _kr.KeyringUnavailableError:
         raw = None  # fall through to file fallback
 
     if raw is None:
-        # File fallback. Used when keyring backend is missing OR when
-        # the keyring is healthy but holds nothing yet (so the file
-        # was the bootstrap target). Either way, prefer the file's
-        # content if it exists.
-        raw = _fb.read_master_record(user_dir)
+        # File fallback. Read only when the keyring is unavailable OR
+        # when the keyring returned no record (the keyring is preferred
+        # whenever it has the answer — so the typical Windows/macOS
+        # box never reads the file). Re-raise OSError as SecurityError
+        # so the caller doesn't mistake "file unreadable" for "not
+        # bootstrapped" and offer to re-bootstrap (which would overwrite).
+        try:
+            raw = _fb.read_master_record(user_dir)
+        except OSError as exc:
+            raise SecurityError(str(exc)) from exc
+        if raw is not None:
+            source = f"fallback file {_fb.fallback_master_path(user_dir)}"
 
     if raw is None:
         return None
@@ -186,13 +196,14 @@ def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
         record: dict[str, Any] = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise SecurityError(
-            f"keyring/fallback master record at {_service(user_dir)} is unparseable "
-            f"JSON ({exc}). Manual recovery may be needed."
+            f"Master record at {source} is unparseable JSON ({exc}). "
+            "Manual recovery may be needed."
         ) from exc
     if not isinstance(record, dict) or record.get("v") != SCHEMA_VERSION:
         raise SecurityError(
-            f"master record schema_version mismatch (expected {SCHEMA_VERSION}, "
-            f"got {record.get('v') if isinstance(record, dict) else type(record).__name__})."
+            f"Master record at {source} has schema_version mismatch "
+            f"(expected {SCHEMA_VERSION}, got "
+            f"{record.get('v') if isinstance(record, dict) else type(record).__name__})."
         )
     return record
 
