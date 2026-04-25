@@ -1,12 +1,51 @@
-"""Minimal security stub for sealed-store / passphrase management."""
+"""Security primitives for Axon — sealed shares + (Phase 1) crypto foundations.
+
+Top-level package keeps the **existing public stub interface** intact so
+every caller that imports from ``axon.security`` continues to work
+exactly as before. New cryptographic primitives live in
+:mod:`axon.security.crypto` and are imported lazily so users on minimal
+installs (no ``cryptography``/``keyring`` packages) keep the existing
+behaviour — the sealed-share helpers in this file still raise
+``SecurityError("not configured")``.
+
+The plan landing this work in phases is in
+``docs/SHARE_MOUNT_SEALED.md``. **Phase 1 (this commit) ships the
+crypto + keyring primitives only — no code outside this package uses
+them yet.** Behaviour for existing projects is unchanged.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
+__all__ = [
+    "SecurityError",
+    "store_status",
+    "bootstrap_store",
+    "unlock_store",
+    "lock_store",
+    "change_passphrase",
+    "is_unlocked",
+    "get_sealed_project_record",
+    "generate_sealed_share",
+    "redeem_sealed_share",
+    "validate_received_sealed_shares",
+    "list_sealed_shares",
+    "resolve_owned_sealed_project_path",
+    "project_rotate_keys",
+    "project_seal",
+]
+
 
 class SecurityError(Exception):
     """Raised for security operation failures."""
+
+
+# ---------------------------------------------------------------------------
+# Existing stub interface — preserved verbatim from the previous
+# axon/security.py module so every existing caller continues to work.
+# Real implementations land in later phases per docs/SHARE_MOUNT_SEALED.md.
+# ---------------------------------------------------------------------------
 
 
 def store_status(user_dir: Path) -> dict[str, Any]:

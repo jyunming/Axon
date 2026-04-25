@@ -94,6 +94,14 @@ loaders = [
 eval = [
     "deepeval>=0.21.0",
 ]
+sealed = [
+    # Phase 1 of the sealed-mount design (docs/SHARE_MOUNT_SEALED.md):
+    # cryptography ships AES-256-GCM, AES-KW (RFC 3394/5649), and HKDF-SHA256
+    # natively and is well-audited. keyring abstracts DPAPI / Keychain /
+    # Secret Service for the owner master key + grantee per-share DEK.
+    "cryptography>=42.0.0",
+    "keyring>=24.0.0",
+]
 dev = [
     "pytest>=7.4.0,<8.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",
