@@ -1,11 +1,14 @@
 # SHARE_MOUNT_SEALED — plan for encrypted-at-rest share mounts
 
-> **Status:** Plan / design proposal. **No implementation yet.** This doc
-> exists to drive a decision on the open questions in §5 before any
-> code is written. Supersedes the rejected `SHARE_MOUNT_REMOTE.md`
-> (server-mediated mounts) — that approach required the owner to run a
-> long-lived `axon-api` reachable by grantees, which broke the
-> offline-owner workflow.
+> **Status:** Plan + design proposal. **Phase 1 (crypto + keyring
+> primitives) shipped on 2026-04-25** as PR #56 / branch
+> `feat/sealed-mount-phase-1`. The four §5 design decisions were
+> locked the same day — see §5 for the resolved options. Phases 2–7
+> are the next code work; each opens its own GitHub issue.
+> Supersedes the rejected `SHARE_MOUNT_REMOTE.md` (server-mediated
+> mounts) — that approach required the owner to run a long-lived
+> `axon-api` reachable by grantees, which broke the offline-owner
+> workflow.
 >
 > Builds on the four shipped fixes from `fix/share-mount-sqlite-wal-safety`
 > (issues #51–#54): cloud-sync path classifier, WAL→DELETE journal
@@ -185,28 +188,51 @@ axon share revoke sk_a1b2c3d4 --rotate
   → revoked grantee's cached DEK is now useless: all on-disk files use new_DEK
 ```
 
-### 4.4 Mmap policy — decrypt-into-memory at open
+### 4.4 Mmap policy — ephemeral plaintext cache (decision locked 2026-04-25)
 
 mmap on encrypted bytes is impossible without a transparent decryption
 layer (FUSE on Linux, WinFsp/Dokany on Windows — operationally complex,
 extra dependency, breaks the "no special install" property).
 
-**v1 policy: decrypt the whole file into RAM at `open()`.** Costs:
-- 1 GB vector store on a 16 GB grantee: fine.
-- 10 GB on an 8 GB grantee: out of memory. Document the limit.
+**v1 policy: ephemeral plaintext cache in OS temp dir, mmap'd by
+backends, wiped on close.** Decided over the simpler "decrypt-into-RAM
+at open" alternative because:
 
-**v2 (deferred):** ephemeral plaintext cache in `tempfile.mkdtemp()` /
-`%TEMP%`, mmap the cache, wipe on close. Re-introduces a session-bounded
-plaintext footprint, but bounded in time.
+- mmap continues to work natively → TurboQuantDB and LanceDB perf is
+  unchanged from plaintext mode.
+- No RAM bound — works on 10 GB+ projects on a 4 GB grantee.
+- **Collapses backend integration cost**: with the cache approach the
+  layer is "decrypt to cache, point backend at cache path" — works
+  identically for TQDB and LanceDB. (This is what made the wider
+  backend scope in §5.4 affordable.)
 
-### 4.5 Backend compatibility
+Cost: a session-bounded plaintext footprint on disk. Mitigations
+(Phase 2 work):
+
+- **Cache location**: `tempfile.mkdtemp(prefix="axon-sealed-")` on
+  Linux/macOS; `%LOCALAPPDATA%\Temp\axon-sealed-<uuid>` on Windows.
+  Per-mount; never shared between projects.
+- **Wipe on close**: secure delete (overwrite with zeros, then
+  unlink) so the OS doesn't leave plaintext blocks in unallocated
+  space. Implemented in pure Python — no `srm`/`cipher` dep.
+- **Crash recovery**: a startup scanner (run from `AxonBrain.__init__`)
+  walks the temp dir for `axon-sealed-*` prefixes whose owner process
+  is no longer alive (PID-based heuristic) and wipes them.
+- **Capacity check**: before decrypting, verify free disk space ≥
+  project size + 10% headroom; refuse with a clear error otherwise.
+
+### 4.5 Backend compatibility (decision locked 2026-04-25: TQDB + LanceDB together)
+
+With the ephemeral-cache decision (§4.4), backend integration is
+backend-agnostic — both TQDB and LanceDB just read from the cache
+directory the seal layer prepares for them. Both ship in v1.
 
 | Backend | v1 plan | Why |
 |---|---|---|
-| **TurboQuantDB** (default) | Supported | Manifest + segment files + WAL log all wrappable. Decrypt-into-memory at `Database.open()`. |
-| **LanceDB** | Phase 3 (after TQDB stable) | Append-only fragments make encryption clean. Compaction needs to re-encrypt. |
-| **Chroma** (SQLite) | NOT supported in sealed mode (v1) | SQLite needs random in-place writes; whole-file encryption defeats it. SQLCipher is the right answer but is a separate, bigger effort. Preflight (#52) extended to also reject sealed+Chroma. |
-| **BM25** (msgpack/JSONL) | Supported | Small files, naive read-all-decrypt-all is fine. |
+| **TurboQuantDB** (default) | Supported in v1 (Phase 2) | Backend opens the cache dir as if it were a normal project. Manifest + segment + WAL files all decrypted into the cache. |
+| **LanceDB** | Supported in v1 (Phase 2) | Append-only fragments + manifest decrypted into the cache; fragments stay immutable so the cache is mostly write-once. Compaction (`optimize`) needs to re-encrypt → re-cache. |
+| **Chroma** (SQLite) | NOT supported in sealed mode (v1) | SQLite needs random in-place writes; whole-file encryption + cache writeback model is a poor fit. SQLCipher integration is a separate, bigger effort. Preflight (#52) extended to also reject sealed+Chroma. |
+| **BM25** (msgpack/JSONL) | Supported in v1 | Small files, fits the cache model trivially. |
 | **DynamicGraphBackend** | Snapshot file encrypted; owner DB stays local-only (already done in #51) | The grantee only ever reads the snapshot, which is a small JSON. |
 | **Governance audit DB** | Use the existing JSONL fallback (#51); JSONL lines are individually encrypted so partial-sync corruption is bounded | SQLite-WAL on encrypted bytes is double-bad |
 
@@ -238,49 +264,32 @@ need to be able to detect "owner has re-ingested" before they bother
 fetching the DEK and decrypting. The marker contains only hashes of
 the (encrypted) files, which leaks change-frequency but not content.
 
-## 5. Decisions needed before code
+## 5. Decisions — LOCKED 2026-04-25
 
-I have a recommendation for each. Confirm or override.
+The four open decisions were resolved on 2026-04-25 after Phase 1
+landed. The original recommendations are kept in the table below for
+context; the **Decision** column is authoritative going forward.
 
-### 5.1 Mmap policy
-- Option A: **Decrypt-into-memory at open (RAM-bounded).** Simple, no temp files, works the same on Linux/Windows.
-- Option B: Decrypt to ephemeral plaintext cache, mmap the cache.
+| § | Question | Decision | Notes |
+|---|---|---|---|
+| **5.1** | Mmap policy | **Ephemeral plaintext cache in OS temp dir** | NOT decrypt-into-RAM. Cache wipe on close; PID-based crash-recovery scanner; capacity check. Backends mmap the cache directly so perf is unchanged. See §4.4. |
+| **5.2** | Crypto library | **`cryptography` PyPI** | Shipped Phase 1 (PR #56). |
+| **5.3** | Grantee key storage | **OS keyring (Phase 1) + passphrase fallback (Phase 2)** | Phase 1 shipped. Headless-Linux fallback is Phase 2. |
+| **5.4** | Backend scope v1 | **TurboQuantDB + LanceDB simultaneously** | NOT TQDB-only. Affordable because the cache decision (5.1) makes the integration backend-agnostic. Chroma still deferred (needs SQLCipher). See §4.5. |
+| **5.5** | Revocation cost UX | **Both soft + hard, soft default, `--rotate` for hard** | `revoke` = manifest mark, fast, doesn't invalidate cached bytes (loud warning). `revoke --rotate` = DEK rotate + re-encrypt; cached bytes become useless. See §4.3. |
+| **5.6** | Migration approach | **In-place `axon project seal`** | Atomic per-file (`.sealing` sibling + fsync + rename); recovery scanner for crashed migrations. NOT force re-ingest — preserves user's RAPTOR / GraphRAG / dynamic-graph state. |
 
-**Recommendation:** A for v1. Add B as an optimization if users hit RAM limits on >5GB projects.
+**Knock-on effects for the phase plan (§6 below):**
 
-### 5.2 Crypto library
-- Option A: **`cryptography` PyPI package** (~1 MB, well-audited, AES-256-GCM + AES-KW native). Already a transitive dep of `langchain` and several other things in our extras.
-- Option B: stdlib only (no AES-GCM directly — would need to build on `secrets` + a pure-Python AES; slow + risky).
-- Option C: Rust extension via the existing `axon_rust` module.
-
-**Recommendation:** A. Mature, audited, fast enough. Rust route only if benchmarking shows `cryptography` is the bottleneck.
-
-### 5.3 Key storage on the grantee side
-- Option A: **OS keyring** (`keyring` PyPI package — DPAPI on Windows, Keychain on macOS, Secret Service on Linux). User-friendly; key follows the user's OS account.
-- Option B: Passphrase-protected file (`~/.axon/.security/grantee.enc`). User types passphrase at switch time.
-- Option C: Both — keyring with passphrase fallback when keyring is unavailable.
-
-**Recommendation:** C. Keyring as default, passphrase as graceful fallback (e.g. headless servers without Secret Service).
-
-### 5.4 Backend scope for v1
-- Option A: **TurboQuantDB only.** Document Chroma+sealed as unsupported (extend preflight). LanceDB in Phase 3.
-- Option B: TQDB + LanceDB simultaneously.
-- Option C: All three including Chroma via SQLCipher.
-
-**Recommendation:** A. TQDB is the default backend; covers most users. LanceDB is one more phase. Chroma requires SQLCipher work that should be its own decision.
-
-### 5.5 Revocation cost — soft vs hard
-- Both available, with clear UX:
-  - `axon share revoke sk_xxx` (soft) — fast; manifest mark only; does NOT invalidate cached bytes; explicit warning in the output
-  - `axon share revoke sk_xxx --rotate` (hard) — slow; rotates DEK + re-encrypts; cached bytes become useless
-
-**Recommendation:** Ship both, default to soft, require `--rotate` to be explicit. The doc + REPL output spell out exactly what each means.
-
-### 5.6 Migration of existing plaintext projects
-- Option A: `axon project seal <name>` — encrypts in place. Atomic per-file (write to `.sealing` sibling, fsync, rename). On crash, recovery scans for `.sealing` files and resumes.
-- Option B: Force a fresh re-ingest into a sealed project (no migration).
-
-**Recommendation:** A. Re-ingest is too painful for users with hours of LLM work invested.
+- **Phase 2 grows** to cover both TQDB and LanceDB integration. Same
+  PR — both backends share the cache layer so the diff is mostly
+  one-time work plus a thin per-backend mount hook each.
+- **Phase 4 (revocation) splits into two flows**: `revoke` (cheap,
+  manifest-only) and `revoke --rotate` (expensive, full project
+  re-encrypt). Each needs its own progress UX + audit-log entry.
+- **The "ephemeral cache" subsystem becomes a Phase 2 building
+  block** — design it before the backend integration so both TQDB
+  and LanceDB can reuse it.
 
 ## 6. Phased implementation
 
@@ -288,16 +297,16 @@ Each phase = one focused PR. Phases 1–2 are the MVP that delivers
 end-to-end encryption for a single backend (TQDB) on a single owner;
 later phases add reach and polish.
 
-| Phase | Deliverable | Why this order |
+| Phase | Deliverable | Status |
 |---|---|---|
-| **0** | This doc + decisions in §5 finalised + opens GitHub issue per phase | Don't start coding until §5 is locked |
-| **1** | Crypto foundations: `axon.security.crypto` module (`SealedFile.{open,write}`, AES-KW wrap/unwrap, KEK derivation), master keyring integration, tests on synthetic data. **Zero behavior change for existing projects.** | Lays the cryptographic primitives all later phases use |
-| **2** | TurboQuantDB sealed read/write path — `axon project seal` works for a single TQDB project; owner can open/query their own sealed project; tests | First end-to-end flow; proves the design |
-| **3** | Sealed-share generation + redemption + mount flow — wire `generate_sealed_share` / `redeem_sealed_share` (currently stubs); grantee can query a sealed project on a shared filesystem | Closes the user-visible loop; manual two-machine smoke runnable |
-| **4** | Soft + hard revocation — `axon share revoke [--rotate]`; rotation re-encrypts; cached bytes invalidated; tests | Closes the security promise |
-| **5** | Cross-interface surfaces (REST `/store/seal`, `/share/generate?sealed=true`, `/share/revoke?rotate=true`; MCP tools; REPL `/store seal`, `/share generate --sealed`, `/share revoke --rotate`; CLI flags); docs (`SHARE_MOUNT.md` rewrite) | Cross-interface parity rule |
-| **6** | LanceDB sealed support; preflight extends to reject sealed+Chroma loudly | Second backend |
-| **7** | Verification: extend `SHARE_MOUNT_SMOKE.md` with sealed-store steps; real two-machine OneDrive run before tagging | Empirical proof on the actual target environment |
+| **0** | This doc + §5 decisions locked + per-phase GitHub issues opened | ✅ doc landed, decisions locked 2026-04-25 |
+| **1** | Crypto foundations: `axon.security.crypto` module (`SealedFile.{write,read}`, AES-KW wrap/unwrap, KEK derivation, `make_aad`), keyring integration with `KeyringUnavailableError`, tests on synthetic data. **Zero behavior change for existing projects.** | ✅ **SHIPPED** — PR #56 / `feat/sealed-mount-phase-1` (2026-04-25) |
+| **2** | **Ephemeral cache subsystem** + **TQDB sealed read** + **LanceDB sealed read** — owner can `axon project seal <name>` on either backend; mount flow reads from the cache; cache wiped on close; PID-based crash recovery. Both backends in one PR (cache makes them backend-agnostic). | Open |
+| **3** | Sealed-share generation + redemption flow — fill in `generate_sealed_share` / `redeem_sealed_share` stubs; grantee can query a sealed project on a shared filesystem | Open |
+| **4** | Revocation: soft `revoke` (manifest mark) + hard `revoke --rotate` (re-encrypt + per-share KEK regeneration); progress UX for hard; tests covering both flows + cached-bytes-after-rotate negative case | Open |
+| **5** | Cross-interface surfaces — REST `/store/seal`, `/share/generate?sealed=true&ttl_days=N`, `/share/revoke?rotate=true`; MCP tools (`seal_project`, `share_project sealed=true`, `revoke_share rotate=true`); REPL `/store seal <name>`, `/share generate --sealed`, `/share revoke --rotate`; CLI flags; docs (`SHARE_MOUNT.md` rewrite + cross-link) | Open |
+| **6** | Passphrase fallback for headless / no-keyring environments (Phase 1 deferred from §5.3) | Open |
+| **7** | Verification: extend `SHARE_MOUNT_SMOKE.md` with sealed-store steps; real two-machine OneDrive run before tagging | Open |
 
 Each phase has its own GitHub issue (templated after #51–#54).
 Total estimated work: ~3–5 weeks of focused effort across the 7
@@ -357,9 +366,10 @@ the default; until then both recipes coexist.
 
 ## 10. Pre-implementation checklist
 
-- [ ] §5 decisions confirmed (5.1 through 5.6) by user
-- [ ] Open GitHub issues for Phases 1–7 with this plan linked
-- [ ] Add `cryptography` and `keyring` to `pyproject.toml` `[project.optional-dependencies]` under a new `sealed` extra
-- [ ] Settle naming: "sealed share" vs "encrypted share" — current code uses "sealed", this plan follows that
-- [ ] Confirm `src/axon/security.py` is the canonical home (rename or move if not)
-- [ ] Decide on AAD content for AES-GCM (recommend: `key_id || file_relpath` so files can't be swapped between projects)
+- [x] §5 decisions confirmed (locked 2026-04-25)
+- [x] Add `cryptography` and `keyring` to `pyproject.toml` `[project.optional-dependencies]` under a new `sealed` extra (Phase 1 / PR #56)
+- [x] Settle naming: "sealed share" — current code uses it, this plan follows
+- [x] `src/axon/security/` is the canonical home (Phase 1 converted `security.py` to a package)
+- [x] AAD content for AES-GCM = `key_id || NUL || file_relpath` via `make_aad()` (Phase 1)
+- [ ] Open GitHub issue for Phase 2 (cache subsystem + TQDB + LanceDB sealed read paths)
+- [ ] Open GitHub issues for Phases 3–7
