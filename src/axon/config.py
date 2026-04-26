@@ -266,6 +266,12 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
     },
     "context_compression": {"enabled", "strategy", "token_budget"},
     "advanced": {"raptor", "graph_rag", "graph_rag_community"},
+    "security": {
+        "mount_refresh_mode",
+        "mount_refresh_ttl_s",
+        "mount_sync_retry_max",
+        "mount_sync_retry_backoff_s",
+    },
 }
 
 
@@ -825,12 +831,18 @@ class AxonConfig:
     # below control whether — and how often — the grantee re-checks that
     # marker to detect the owner re-ingesting while the grantee was idle.
     # "off"        → never auto-refresh; user must `/project switch` again.
-    # "switch"     → cache the marker on switch; no further auto-refresh
-    #                (default — minimal overhead, manual refresh via
-    #                 explicit re-switch only).
+    # "switch"     → re-reads the marker once per TTL interval during queries
+    #                (default — low overhead; set mount_refresh_ttl_s=0 to
+    #                 disable TTL and require an explicit re-switch).
     # "per_query"  → re-read the marker before every retrieval; on a newer
     #                marker, re-open project handles. Adds ~1ms/query.
     mount_refresh_mode: Literal["off", "switch", "per_query"] = "switch"
+    # Seconds before a "switch"-mode mount auto-refreshes during a query.
+    # When ``mount_refresh_mode == "switch"`` and the elapsed time since the
+    # last successful marker check exceeds this value, the grantee re-reads
+    # the owner's version marker (and reopens handles if it has advanced).
+    # Set to 0 to disable TTL-based auto-refresh entirely in switch mode.
+    mount_refresh_ttl_s: int = 300
     # Maximum mid-sync retry attempts before raising MountSyncPendingError.
     # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
     mount_sync_retry_max: int = 5
@@ -1030,6 +1042,16 @@ class AxonConfig:
                 config_dict["max_upload_bytes"] = int(api_section["max_upload_bytes"])
             if "max_files_per_request" in api_section:
                 config_dict["max_files_per_request"] = int(api_section["max_files_per_request"])
+        if "security" in data and isinstance(data["security"], dict):
+            sec = data["security"]
+            if "mount_refresh_mode" in sec:
+                config_dict["mount_refresh_mode"] = sec["mount_refresh_mode"]
+            if "mount_refresh_ttl_s" in sec:
+                config_dict["mount_refresh_ttl_s"] = int(sec["mount_refresh_ttl_s"])
+            if "mount_sync_retry_max" in sec:
+                config_dict["mount_sync_retry_max"] = int(sec["mount_sync_retry_max"])
+            if "mount_sync_retry_backoff_s" in sec:
+                config_dict["mount_sync_retry_backoff_s"] = float(sec["mount_sync_retry_backoff_s"])
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -1151,6 +1173,11 @@ class AxonConfig:
                 "max_files_per_request": flat["max_files_per_request"],
             },
             "projects_root": flat["projects_root"],
+        }
+        # Persist security/mount-refresh settings so `config get/set` round-trips work.
+        data["security"] = {
+            "mount_refresh_mode": flat["mount_refresh_mode"],
+            "mount_refresh_ttl_s": flat["mount_refresh_ttl_s"],
         }
         if flat.get("axon_store_base"):
             data["store"] = {"base": flat["axon_store_base"]}

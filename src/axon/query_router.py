@@ -759,33 +759,56 @@ class QueryRouterMixin:
                 )
 
     def _maybe_refresh_mount(self) -> None:
-        """When ``cfg.mount_refresh_mode == "per_query"``, re-check the
-        owner's version marker before retrieval and reopen handles if the
-        owner has re-ingested.
+        """Re-check the owner's version marker before retrieval and reopen
+        handles if the owner has re-ingested.
+
+        Two modes trigger an actual check:
+
+        * ``"per_query"`` -- always checks on every call.
+        * ``"switch"``    -- checks when ``time.monotonic()`` has advanced
+          past ``_last_mount_check_ts + cfg.mount_refresh_ttl_s``.  This
+          provides a TTL-based background refresh without the overhead of
+          per-query disk I/O when the TTL has not expired yet.
+
         ``MountSyncPendingError`` is allowed to propagate so callers (REST
         API, REPL, MCP) can surface a transient "sync in progress" signal
-        instead of returning stale results.
+        instead of returning stale results.  The TTL timestamp is NOT
+        advanced on a ``MountSyncPendingError`` so the next query retries
+        immediately rather than waiting out the full TTL interval.
         """
-        mode = getattr(self.config, "mount_refresh_mode", "switch")
-        if mode != "per_query":
+        from axon.version_marker import MountSyncPendingError
+
+        mode = self.config.mount_refresh_mode
+        if mode == "off":
             return
+
+        should_check = False
+        if mode == "per_query":
+            should_check = True
+        elif mode == "switch":
+            ttl = self.config.mount_refresh_ttl_s
+            if ttl > 0:
+                last = getattr(self, "_last_mount_check_ts", 0.0)
+                should_check = (time.monotonic() - last) >= ttl
+
+        if not should_check:
+            return
+
         try:
             self.refresh_mount()
-        except Exception:
-            # MountSyncPendingError propagates; everything else (path
-            # missing, race during owner shutdown, etc.) is logged-and-
-            # continue so a retrieval is never lost to refresh-machinery
-            # bugs.
-            import sys as _sys
+        except MountSyncPendingError:
+            # Propagate without updating the timestamp so the next query
+            # retries immediately instead of waiting out the TTL.
+            raise
+        except Exception as exc:
+            # Path missing, race during owner shutdown, etc. — log and
+            # continue so a retrieval is never lost to refresh-machinery bugs.
+            logging.getLogger("Axon").debug("refresh_mount failed (non-fatal): %s", exc)
 
-            from axon.version_marker import MountSyncPendingError
-
-            _exc = _sys.exc_info()[1]
-            if isinstance(_exc, MountSyncPendingError):
-                raise
-            import logging as _logging
-
-            _logging.getLogger("Axon").debug("refresh_mount failed (non-fatal): %s", _exc)
+        # Update timestamp only on the non-re-raising paths (success or
+        # swallowed non-fatal exception) so switch-mode TTL resets correctly.
+        if mode == "switch":
+            self._last_mount_check_ts = time.monotonic()
 
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
