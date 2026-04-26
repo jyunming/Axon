@@ -730,7 +730,7 @@ YAML section: `rag:` (graph_rag_* keys)
 | `rag.graph_rag_ner_backend` | str | `llm` | NER backend: `llm` (default) or `gliner` (no LLM for entity extraction) |
 | `rag.graph_rag_relation_backend` | str | `llm` | Relation extraction backend: `llm` or `rebel` |
 | `rag.graph_rag_entity_resolve` | bool | `false` | Merge near-duplicate entity names via cosine similarity |
-| `rag.graph_backend` | str | `graphrag` | Graph backend: `graphrag` (default) or `dynamic` (SQLite-WAL temporal graph) |
+| `rag.graph_backend` | str | `graphrag` | Graph backend: `graphrag` (default) or `dynamic` (SQLite with DELETE journal mode temporal graph) |
 | `rag.code_graph` | bool | `false` | Build File/Symbol nodes with CONTAINS/IMPORTS edges from code chunk metadata |
 | `rag.code_graph_bridge` | bool | `false` | Add MENTIONED_IN edges linking prose chunks to code symbols |
 
