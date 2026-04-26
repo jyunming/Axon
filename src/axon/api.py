@@ -280,11 +280,52 @@ async def add_request_id(request: Request, call_next):
 
 
 @app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    """Record request count + latency in the Prometheus exporter.
+
+    No-op when prometheus-client is not installed (the helper functions
+    short-circuit). Lives next to add_request_id so both observability
+    middlewares run on every request.
+    """
+    import time as _time
+
+    from axon.api_routes import metrics as _metrics
+
+    started = _time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        duration = _time.perf_counter() - started
+        # Use route template when available so high-cardinality dynamic
+        # path segments (e.g. /projects/{name}) collapse into one series.
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+        _metrics.record_request(
+            path=path,
+            method=request.method,
+            status=status,
+            duration_seconds=duration,
+        )
+
+
+# Paths that bypass the X-API-Key check.
+# /health{,/live,/ready}: liveness probes must not fail when the API key rotates.
+# /metrics: standard Prometheus scrapers don't ship secrets; operators who need
+#   metrics auth should use a reverse-proxy (e.g. nginx basic-auth) or a network
+#   firewall — not the application-level X-API-Key.
+_AUTH_BYPASS_EXACT = frozenset({"/health", "/health/live", "/health/ready", "/metrics", "/gui"})
+_AUTH_BYPASS_PREFIX = ("/v1/health", "/v1/metrics", "/gui/")
+
+
+@app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     """Enforce X-API-Key header when RAG_API_KEY is configured."""
     if _RAG_API_KEY:
         path = request.url.path
-        if path == "/health" or path == "/gui" or path.startswith("/gui/"):
+        if path in _AUTH_BYPASS_EXACT or path.startswith(_AUTH_BYPASS_PREFIX):
             return await call_next(request)
         provided = request.headers.get("X-API-Key")
         if not hmac.compare_digest(provided or "", _RAG_API_KEY):
@@ -319,8 +360,10 @@ if gui_dir.exists():
 from axon.api_routes.config_routes import router as _config_router  # noqa: E402
 from axon.api_routes.governance import router as _governance_router  # noqa: E402
 from axon.api_routes.graph import router as _graph_router  # noqa: E402
+from axon.api_routes.health import router as _health_router  # noqa: E402
 from axon.api_routes.ingest import router as _ingest_router  # noqa: E402
 from axon.api_routes.maintenance import router as _maintenance_router  # noqa: E402
+from axon.api_routes.metrics import router as _metrics_router  # noqa: E402
 from axon.api_routes.projects import router as _projects_router  # noqa: E402
 from axon.api_routes.query import router as _query_router  # noqa: E402
 from axon.api_routes.registry import router as _registry_router  # noqa: E402
@@ -328,6 +371,8 @@ from axon.api_routes.security_routes import router as _security_router  # noqa: 
 from axon.api_routes.shares import router as _shares_router  # noqa: E402
 
 _ROUTERS = (
+    _health_router,
+    _metrics_router,
     _config_router,
     _query_router,
     _ingest_router,
