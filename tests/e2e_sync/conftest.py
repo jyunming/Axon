@@ -129,9 +129,13 @@ def nextcloud_stack() -> Iterator[str]:
     # Best-effort cleanup of any orphaned container from a prior run.
     # Suppress all subprocess errors here — this is a defensive cleanup
     # before the real "up" call below, which is where we surface skips.
+    # ``subprocess.TimeoutExpired`` shows up routinely on Windows GitHub
+    # runners because Docker Desktop's compose-down can take >30s on a
+    # cold daemon; let it slide and let the real up call surface a skip
+    # if the daemon is genuinely unusable.
     try:
         _compose("down", "-v", check=False, timeout=30)
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
 
     try:
