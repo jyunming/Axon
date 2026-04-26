@@ -406,8 +406,10 @@ class TestB1ParitySweep:
         """/governance and /mount-refresh are present in repl.py."""
         from axon.repl import _SLASH_COMMANDS
 
-        assert "/governance" in _SLASH_COMMANDS, "Missing /governance in _SLASH_COMMANDS"
-        assert "/mount-refresh" in _SLASH_COMMANDS, "Missing /mount-refresh in _SLASH_COMMANDS"
+        # Entries may have trailing spaces (e.g. "/governance " for subcommand completion)
+        slash_cmd_prefixes = {c.strip() for c in _SLASH_COMMANDS}
+        assert "/governance" in slash_cmd_prefixes, "Missing /governance in _SLASH_COMMANDS"
+        assert "/mount-refresh" in slash_cmd_prefixes, "Missing /mount-refresh in _SLASH_COMMANDS"
         # Verify handlers exist via source (broad search, not quote-style-sensitive)
         repl_src = _repl_source()
         assert "governance" in repl_src, "Missing /governance handler body in repl.py"
