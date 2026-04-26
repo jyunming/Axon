@@ -13,6 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Reque
 
 from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
+from axon.api_routes._rate_limit import enforce_rate_limit
 from axon.api_schemas import (
     BatchTextIngestRequest,
     DeleteRequest,
@@ -457,11 +458,12 @@ async def add_texts(request: BatchTextIngestRequest):
 
 
 @router.post("/ingest_url")
-async def ingest_url(request: URLIngestRequest):
+async def ingest_url(request: URLIngestRequest, req: Request):
     """Fetch an HTTP/HTTPS URL and ingest its text content."""
     from axon import api as _api
     from axon.api_routes import metrics as _metrics
 
+    enforce_rate_limit(req, bucket="ingest_url", max_hits=20, window_seconds=60.0)
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
@@ -501,6 +503,7 @@ async def ingest_url(request: URLIngestRequest):
 
 @router.post("/ingest/upload")
 async def ingest_upload(
+    req: Request,
     files: list[UploadFile] = File(...),
     project: str | None = Form(None),
 ):
@@ -508,6 +511,7 @@ async def ingest_upload(
     from axon import api as _api
     from axon.api_routes import metrics as _metrics
 
+    enforce_rate_limit(req, bucket="ingest_upload", max_hits=30, window_seconds=60.0)
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
