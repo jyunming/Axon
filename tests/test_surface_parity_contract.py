@@ -125,12 +125,12 @@ class TestVsCodeManifestContract:
             pytest.skip("VS Code extension directory not found")
 
     def test_manifest_tool_count(self):
-        """Extension manifest should declare 34 tools (32 original + config_validate + config_set)."""
+        """Extension manifest should declare 37 tools (34 original + seal_project + extend_share + store_whoami)."""
         manifest = _extension_manifest()
         tools = manifest["contributes"]["languageModelTools"]
         assert (
-            len(tools) == 34
-        ), f"Expected 34 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+            len(tools) == 37
+        ), f"Expected 37 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
     def test_tier1_vscode_capabilities_in_manifest(self):
         """Every Tier 1 capability with VS Code support has a corresponding manifest tool."""
@@ -376,3 +376,78 @@ class TestRegistrySurfaceGapCoherence:
                         f"Tier 2 capability '{cap.id}' is not on {surface} "
                         f"but no documented exception reason exists"
                     )
+
+
+# ---------------------------------------------------------------------------
+# SP-B1 parity sweep: new capabilities added in the batch
+# ---------------------------------------------------------------------------
+class TestB1ParitySweep:
+
+    """New capabilities from the B1 parity sweep are present in all required surfaces."""
+
+    def test_b1_capabilities_in_registry(self):
+        """All 7 new SP-B1 capability IDs are present in the registry."""
+        from axon.surface_contract import REGISTRY
+
+        expected = {
+            "share_extend",
+            "store_whoami",
+            "seal_project",
+            "mount_refresh",
+            "governance_overview",
+            "governance_audit",
+            "governance_projects",
+        }
+        registered = {c.id for c in REGISTRY}
+        missing = expected - registered
+        assert not missing, f"SP-B1 capabilities missing from registry: {missing}"
+
+    def test_governance_commands_in_repl(self):
+        """/governance and /mount-refresh are present in repl.py."""
+        from axon.repl import _SLASH_COMMANDS
+
+        # Entries may have trailing spaces (e.g. "/governance " for subcommand completion)
+        slash_cmd_prefixes = {c.strip() for c in _SLASH_COMMANDS}
+        assert "/governance" in slash_cmd_prefixes, "Missing /governance in _SLASH_COMMANDS"
+        assert "/mount-refresh" in slash_cmd_prefixes, "Missing /mount-refresh in _SLASH_COMMANDS"
+        # Verify handlers exist via source (broad search, not quote-style-sensitive)
+        repl_src = _repl_source()
+        assert "governance" in repl_src, "Missing /governance handler body in repl.py"
+        assert "mount-refresh" in repl_src, "Missing /mount-refresh handler body in repl.py"
+
+    def test_governance_flags_in_cli(self):
+        """--governance, --share-extend, --store-whoami, --mount-refresh are in cli.py."""
+        cli_src = _cli_source()
+        for flag in ("--governance", "--share-extend", "--store-whoami", "--mount-refresh"):
+            assert flag in cli_src, f"Missing CLI flag: {flag}"
+
+    def test_new_vscode_tools_in_manifest(self):
+        """seal_project, extend_share, store_whoami tools are in package.json."""
+        if not _extension_root().exists():
+            pytest.skip("VS Code extension directory not found")
+        manifest = _extension_manifest()
+        tool_names = {t["name"] for t in manifest["contributes"]["languageModelTools"]}
+        for tool in ("seal_project", "extend_share", "store_whoami"):
+            assert tool in tool_names, f"VS Code manifest missing tool: {tool}"
+
+    def test_share_extend_in_repl(self):
+        """/share extend handler is present in repl.py."""
+        repl_src = _repl_source()
+        # Check for the handler by presence of the sub-command keyword (not quote-style-sensitive)
+        assert (
+            '"extend"' in repl_src or "'extend'" in repl_src
+        ), "Missing /share extend handler in repl.py"
+
+    def test_governance_on_primary_surfaces(self):
+        """governance_overview and governance_audit are declared on API, REPL, CLI, VSCODE."""
+        from axon.surface_contract import REGISTRY, Surface
+
+        target_ids = {"governance_overview", "governance_audit", "governance_projects"}
+        for cap in REGISTRY:
+            if cap.id not in target_ids:
+                continue
+            for surface in (Surface.API, Surface.REPL, Surface.CLI, Surface.VSCODE):
+                assert surface in cap.supported_surfaces, (
+                    f"Capability '{cap.id}' is missing from {surface} "
+                    f"(expected PRIMARY_SURFACES coverage)"
+                )

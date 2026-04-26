@@ -155,6 +155,60 @@ export class AxonGetStoreStatusTool implements vscode.LanguageModelTool<any> {
 
 }
 
+export class AxonExtendShareTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Extending share key ${options.input?.key_id}…` };
+  }
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { key_id, ttl_days } = options.input ?? {};
+    try {
+      const result = await httpPost(
+        `${apiBase}/share/extend`,
+        { key_id, ttl_days: ttl_days ?? null },
+        apiKey,
+      );
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Extend failed: ${formatDetail(data, result.body)}`)]);
+      }
+      const newExp = data.expires_at ?? '(no expiry)';
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Share '${data.key_id}' expiry updated → ${newExp}`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
+
+}
+
+export class AxonStoreWhoamiTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: 'Checking current user identity and store path…' };
+  }
+  async invoke(_options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    try {
+      const result = await httpGet(`${apiBase}/store/whoami`, apiKey);
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Store whoami failed: ${formatDetail(data, result.body)}`)]);
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `User: ${data.username}\nStore path: ${data.store_path ?? '(default)'}\nActive project: ${data.active_project ?? 'default'}`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
+
+}
+
 // ---------------------------------------------------------------------------
 
 // VS Code command implementations

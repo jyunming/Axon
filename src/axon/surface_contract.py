@@ -445,6 +445,97 @@ REGISTRY: list[Capability] = [
         },
         api_route="/project/maintenance",
     ),
+    # ── Share extend (SP-B1 parity sweep) ────────────────────────────────────
+    Capability(
+        id="share_extend",
+        name="Extend share expiry",
+        category="share",
+        tier=Tier.TWO,
+        description="Renew or clear a share key's TTL so it stays valid without revoking and re-issuing.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Share lifecycle management not exposed in Streamlit UI",
+        },
+        api_route="/share/extend",
+    ),
+    # ── Store whoami (SP-B1 parity sweep) ────────────────────────────────────
+    Capability(
+        id="store_whoami",
+        name="Store identity",
+        category="store",
+        tier=Tier.TWO,
+        description="Return the current user's OS identity, store path, user directory, and active project.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Store identity inspection not exposed in Streamlit UI",
+        },
+        api_route="/store/whoami",
+    ),
+    # ── Seal project (SP-B1 parity sweep) ────────────────────────────────────
+    Capability(
+        id="seal_project",
+        name="Seal project",
+        category="security",
+        tier=Tier.TWO,
+        description="Encrypt every content file in a project at rest using AES-256-GCM.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Destructive encryption operation not exposed in Streamlit UI",
+        },
+        api_route="/project/seal",
+    ),
+    # ── Mount refresh (SP-B1 parity sweep) ───────────────────────────────────
+    Capability(
+        id="mount_refresh",
+        name="Refresh mount",
+        category="project",
+        tier=Tier.TWO,
+        description="Re-read the owner's version marker for an active mounted share and reopen project handles.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Mount lifecycle management not exposed in Streamlit UI",
+        },
+        api_route="/mount/refresh",
+    ),
+    # ── Governance overview (SP-B1 parity sweep) ─────────────────────────────
+    Capability(
+        id="governance_overview",
+        name="Governance overview",
+        category="governance",
+        tier=Tier.TWO,
+        description="Return aggregated operator status: projects, graph, write-leases, shares, and Copilot sessions.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Operator console not exposed in Streamlit UI",
+        },
+        api_route="/governance/overview",
+    ),
+    # ── Governance audit (SP-B1 parity sweep) ────────────────────────────────
+    Capability(
+        id="governance_audit",
+        name="Governance audit log",
+        category="governance",
+        tier=Tier.TWO,
+        description="Return filtered audit log entries for operator review.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Operator console not exposed in Streamlit UI",
+        },
+        api_route="/governance/audit",
+    ),
+    # ── Governance projects (SP-B1 parity sweep) ─────────────────────────────
+    Capability(
+        id="governance_projects",
+        name="Governance project list",
+        category="governance",
+        tier=Tier.TWO,
+        description="Return all projects with maintenance state and graph statistics for operator review.",
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Operator console not exposed in Streamlit UI",
+        },
+        api_route="/governance/projects",
+    ),
 ]
 
 

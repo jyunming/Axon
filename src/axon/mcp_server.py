@@ -729,20 +729,21 @@ async def governance_audit(
         since: ISO-8601 lower bound for the event timestamp, e.g. ``"2026-01-01T00:00:00"``.
         limit: Maximum events to return (1-1000, default 50).
     """
-    params: list[str] = []
+    from urllib.parse import urlencode
+
+    params: dict[str, str | int] = {}
     if project:
-        params.append(f"project={project}")
+        params["project"] = project
     if action:
-        params.append(f"action={action}")
+        params["action"] = action
     if surface:
-        params.append(f"surface={surface}")
+        params["surface"] = surface
     if status:
-        params.append(f"status={status}")
+        params["status"] = status
     if since:
-        params.append(f"since={since}")
-    params.append(f"limit={limit}")
-    qs = "&".join(params)
-    return await _get(f"/governance/audit?{qs}")
+        params["since"] = since
+    params["limit"] = limit
+    return await _get(f"/governance/audit?{urlencode(params)}")
 
 
 @mcp.tool()

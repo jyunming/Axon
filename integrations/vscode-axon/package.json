@@ -754,6 +754,54 @@
             "changes"
           ]
         }
+      },
+      {
+        "name": "seal_project",
+        "displayName": "Axon: Seal Project",
+        "modelDescription": "Encrypt every content file in a project at rest (one-shot). Idempotent — re-sealing an already-sealed project is a no-op. Requires the sealed-store to be unlocked first (security_unlock).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project_name": {
+              "type": "string",
+              "description": "Name of the open project to seal. Must exist."
+            },
+            "migration_mode": {
+              "type": "string",
+              "description": "Reserved for future variants; only 'in_place' is implemented.",
+              "default": "in_place"
+            }
+          },
+          "required": ["project_name"]
+        }
+      },
+      {
+        "name": "extend_share",
+        "displayName": "Axon: Extend Share",
+        "modelDescription": "Renew a share key's expiry, or clear it (ttl_days=null). Pairs with share_project(ttl_days=...) to keep an active share alive on demand.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "key_id": {
+              "type": "string",
+              "description": "The key ID of the share to extend (from list_shares)."
+            },
+            "ttl_days": {
+              "type": ["integer", "null"],
+              "description": "New time-to-live in days from now. null clears the expiry entirely."
+            }
+          },
+          "required": ["key_id"]
+        }
+      },
+      {
+        "name": "store_whoami",
+        "displayName": "Axon: Store Whoami",
+        "modelDescription": "Show current user identity and AxonStore path. Returns username, store_path, user_dir, and active_project.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
       }
     ],
     "commands": [

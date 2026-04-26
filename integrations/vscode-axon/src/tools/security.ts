@@ -293,3 +293,39 @@ export async function changeSecurityPassphrase(apiBase: string): Promise<void> {
     vscode.window.showErrorMessage(`Axon: Failed to change passphrase. ${apiConnectionError(err)}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// seal_project LM tool (SP-B1 parity sweep)
+// ---------------------------------------------------------------------------
+
+export class AxonSealProjectTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: `Sealing project "${options.input?.project_name}"…` };
+  }
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const { project_name, migration_mode } = options.input ?? {};
+    try {
+      const result = await httpPost(
+        `${apiBase}/project/seal`,
+        { project_name, migration_mode: migration_mode ?? 'in_place' },
+        apiKey,
+      );
+      const data = parseJsonSafe(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+          `Seal failed: ${formatDetail(data, result.body)}`
+        )]);
+      }
+      const status = data.status ?? 'sealed';
+      const files = data.files_sealed ?? 0;
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(
+        `Project '${project_name}': ${status} (${files} files encrypted at rest).`
+      )]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
+}
