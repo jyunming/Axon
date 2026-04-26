@@ -189,5 +189,6 @@ async def metrics_endpoint():
     from axon import api as _api
 
     update_brain_ready(_api.brain is not None)
-    payload = generate_latest(REGISTRY)  # type: ignore[misc]
+    assert REGISTRY is not None  # guaranteed by PROMETHEUS_AVAILABLE guard above
+    payload = generate_latest(REGISTRY)  # type: ignore[arg-type]
     return Response(content=payload, media_type=CONTENT_TYPE)
