@@ -11,8 +11,8 @@ Verifies:
   ``AxonConfig.max_files_per_request`` files are submitted at once.
 * ``SecurityBootstrapRequest.passphrase``, ``SecurityUnlockRequest.passphrase``,
   ``SecurityChangePassphraseRequest.{old,new}_passphrase`` are wrapped in
-  ``pydantic.SecretStr`` so the raw value never appears in ``repr()`` or
-  in FastAPI's validation error responses.
+  ``pydantic.SecretStr`` so the raw value is hidden in ``repr()`` and log
+  output (Pydantic v2 may still include input in validation error messages).
 """
 
 from __future__ import annotations

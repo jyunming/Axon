@@ -252,7 +252,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
     "web_search": {"enabled", "brave_api_key", "num_results", "safe_search"},
     "store": {"base"},
     "repl": {"shell_passthrough"},
-    "api": {"key", "allow_origins"},
+    "api": {"key", "allow_origins", "max_upload_bytes", "max_files_per_request"},
     "bm25": {"path"},
     "query_transformations": {
         "multi_query",
@@ -1012,6 +1012,10 @@ class AxonConfig:
                 config_dict["api_key"] = api_section["key"]
             if "allow_origins" in api_section:
                 config_dict["api_allow_origins"] = api_section["allow_origins"] or []
+            if "max_upload_bytes" in api_section:
+                config_dict["max_upload_bytes"] = int(api_section["max_upload_bytes"])
+            if "max_files_per_request" in api_section:
+                config_dict["max_files_per_request"] = int(api_section["max_files_per_request"])
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -1126,6 +1130,8 @@ class AxonConfig:
             "api": {
                 "key": flat["api_key"],
                 "allow_origins": flat["api_allow_origins"],
+                "max_upload_bytes": flat["max_upload_bytes"],
+                "max_files_per_request": flat["max_files_per_request"],
             },
             "projects_root": flat["projects_root"],
         }

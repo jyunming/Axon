@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field, SecretStr
 # embedding / loader work is performed.  Bulk uploads should use /ingest/upload
 # (which has its own byte cap) or the file-path-based /ingest endpoint.
 MAX_QUERY_FIELD_CHARS = 8192  # characters — generous for any realistic question
-MAX_TEXT_FIELD_CHARS = 10_000_000  # 10 MB of text — matches /ingest/upload per-file cap
+MAX_TEXT_FIELD_CHARS = (
+    10_000_000  # characters — ~10 MB of ASCII text; /ingest/upload enforces a separate byte cap
+)
 MAX_URL_FIELD_CHARS = 2048  # characters — RFC 7230 practical maximum
 
 # ---------------------------------------------------------------------------
@@ -411,10 +413,9 @@ class MaintenanceStateRequest(BaseModel):
 
 
 class SecurityBootstrapRequest(BaseModel):
-    # SecretStr ensures the passphrase is never echoed in __repr__ /
-    # FastAPI validation error responses. Route handlers must call
-    # ``.get_secret_value()`` before passing the raw string to the
-    # security backend.
+    # SecretStr hides the passphrase in __repr__ and logging output.
+    # Route handlers must call ``.get_secret_value()`` to retrieve the
+    # plain string before passing it to the security backend.
     passphrase: SecretStr = Field(
         ..., description="Passphrase to bootstrap the security store with."
     )
