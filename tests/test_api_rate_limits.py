@@ -166,7 +166,7 @@ class TestEnforceRateLimit:
                         req, bucket="test_threads", max_hits=100, window_seconds=60.0
                     )
             except HTTPException:
-                pass  # 429 is expected once limit hit — not a bug
+                pass  # max_hits=100 > 5 hits, so 429 won't fire; caught defensively
             except Exception as exc:
                 errors.append(exc)
 
