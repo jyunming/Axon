@@ -434,7 +434,9 @@ class TestB1ParitySweep:
         """/share extend handler is present in repl.py."""
         repl_src = _repl_source()
         # Check for the handler by presence of the sub-command keyword (not quote-style-sensitive)
-        assert '"extend"' in repl_src or "'extend'" in repl_src, "Missing /share extend handler in repl.py"
+        assert (
+            '"extend"' in repl_src or "'extend'" in repl_src
+        ), "Missing /share extend handler in repl.py"
 
     def test_governance_on_primary_surfaces(self):
         """governance_overview and governance_audit are declared on API, REPL, CLI, VSCODE."""
