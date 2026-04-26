@@ -10,7 +10,15 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
+
+# Default upper bounds applied to free-form text fields exposed by the REST API.
+# These guard against accidental or malicious oversized payloads before any
+# embedding / loader work is performed.  Bulk uploads should use /ingest/upload
+# (which has its own byte cap) or the file-path-based /ingest endpoint.
+MAX_QUERY_FIELD_CHARS = 8192  # characters — generous for any realistic question
+MAX_TEXT_FIELD_CHARS = 10_000_000  # 10 MB of text — matches /ingest/upload per-file cap
+MAX_URL_FIELD_CHARS = 2048  # characters — RFC 7230 practical maximum
 
 # ---------------------------------------------------------------------------
 
@@ -95,7 +103,11 @@ def _compute_content_hash(text: str) -> str:
 
 
 class QueryRequest(BaseModel):
-    query: str = Field(..., description="The question or prompt to ask the brain")
+    query: str = Field(
+        ...,
+        max_length=MAX_QUERY_FIELD_CHARS,
+        description="The question or prompt to ask the brain",
+    )
     project: str | None = Field(
         None,
         description=(
@@ -180,7 +192,11 @@ class IngestRequest(BaseModel):
 
 
 class TextIngestRequest(BaseModel):
-    text: str = Field(..., description="The content to ingest")
+    text: str = Field(
+        ...,
+        max_length=MAX_TEXT_FIELD_CHARS,
+        description="The content to ingest",
+    )
     metadata: dict[str, Any] | None = Field(
         default_factory=dict, description="Metadata for the document"
     )
@@ -194,7 +210,11 @@ class TextIngestRequest(BaseModel):
 class BatchDocItem(BaseModel):
     """A single item within a batch ingest request."""
 
-    text: str = Field(..., description="The content to ingest")
+    text: str = Field(
+        ...,
+        max_length=MAX_TEXT_FIELD_CHARS,
+        description="The content to ingest",
+    )
     doc_id: str | None = Field(
         None, description="Optional unique ID; a UUID4 prefix is assigned if omitted"
     )
@@ -212,7 +232,11 @@ class BatchTextIngestRequest(BaseModel):
 
 
 class URLIngestRequest(BaseModel):
-    url: str = Field(..., description="HTTP or HTTPS URL to fetch and ingest")
+    url: str = Field(
+        ...,
+        max_length=MAX_URL_FIELD_CHARS,
+        description="HTTP or HTTPS URL to fetch and ingest",
+    )
     metadata: dict[str, Any] | None = Field(
         default_factory=dict,
         description="Optional extra metadata merged with the loader's source metadata",
@@ -387,16 +411,22 @@ class MaintenanceStateRequest(BaseModel):
 
 
 class SecurityBootstrapRequest(BaseModel):
-    passphrase: str = Field(..., description="Passphrase to bootstrap the security store with.")
+    # SecretStr ensures the passphrase is never echoed in __repr__ /
+    # FastAPI validation error responses. Route handlers must call
+    # ``.get_secret_value()`` before passing the raw string to the
+    # security backend.
+    passphrase: SecretStr = Field(
+        ..., description="Passphrase to bootstrap the security store with."
+    )
 
 
 class SecurityUnlockRequest(BaseModel):
-    passphrase: str = Field(..., description="Passphrase to unlock the security store.")
+    passphrase: SecretStr = Field(..., description="Passphrase to unlock the security store.")
 
 
 class SecurityChangePassphraseRequest(BaseModel):
-    old_passphrase: str = Field(..., description="Current passphrase.")
-    new_passphrase: str = Field(..., description="New passphrase to set.")
+    old_passphrase: SecretStr = Field(..., description="Current passphrase.")
+    new_passphrase: SecretStr = Field(..., description="New passphrase to set.")
 
 
 class ProjectRotateKeysRequest(BaseModel):

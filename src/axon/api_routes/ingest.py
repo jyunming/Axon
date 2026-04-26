@@ -25,6 +25,12 @@ from axon.api_schemas import (
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
+# Module-level fallback caps used before the brain config is available.
+# Real values come from AxonConfig.max_upload_bytes / .max_files_per_request
+# which are proper dataclass fields (not getattr defaults).
+MAX_UPLOAD_BYTES: int = 500 * 1024 * 1024  # 500 MiB per file
+MAX_FILES_PER_REQUEST: int = 1000
+
 _PATH_ENRICHMENT_EXCLUDED_TYPES = frozenset(
     {
         "csv",
@@ -481,6 +487,21 @@ async def ingest_upload(
     _enforce_write_access(brain, "ingest")
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
+    # Defence in depth: reject obviously oversized batches before any I/O.
+    # Caps are real AxonConfig dataclass fields; fall back to the module
+    # constants when the config is shaped differently (unit tests with mocks).
+    _cfg_max_files = getattr(brain.config, "max_files_per_request", None)
+    max_files: int = _cfg_max_files if isinstance(_cfg_max_files, int) else MAX_FILES_PER_REQUEST
+    _cfg_max_bytes = getattr(brain.config, "max_upload_bytes", None)
+    max_upload_bytes: int = _cfg_max_bytes if isinstance(_cfg_max_bytes, int) else MAX_UPLOAD_BYTES
+    if len(files) > max_files:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Too many files in one request: {len(files)} > {max_files}. "
+                "Split the upload into smaller batches."
+            ),
+        )
     from axon.loaders import DirectoryLoader
 
     loader_mgr = DirectoryLoader()
@@ -515,7 +536,8 @@ async def ingest_upload(
                 continue
             temp_path = temp_root / candidate_name
             # Stream upload to disk in chunks to avoid reading entire file into memory.
-            MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB per file cap
+            # Per-file size cap is sourced from AxonConfig.max_upload_bytes
+            # so deployments can tune it without a code change.
             total_written = 0
             try:
                 with open(temp_path, "wb") as _out:
@@ -525,11 +547,14 @@ async def ingest_upload(
                             break
                         _out.write(chunk)
                         total_written += len(chunk)
-                        if total_written > MAX_UPLOAD_BYTES:
+                        if total_written > max_upload_bytes:
                             await upload.close()
                             raise HTTPException(
                                 status_code=413,
-                                detail=f"File '{candidate_name}' exceeds the allowed size of {MAX_UPLOAD_BYTES} bytes",
+                                detail=(
+                                    f"File '{candidate_name}' exceeds the allowed "
+                                    f"size of {max_upload_bytes} bytes"
+                                ),
                             )
                 await upload.close()
             except HTTPException:

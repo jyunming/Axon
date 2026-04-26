@@ -821,6 +821,17 @@ class AxonConfig:
     # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
     mount_sync_retry_max: int = 5
     mount_sync_retry_backoff_s: float = 0.5
+    # ── API request size limits (audit A2) ─────────────────────────────────
+    # Per-file size cap on multipart uploads to /ingest/upload. Files
+    # exceeding this byte count receive HTTP 413. 500 MiB is a generous
+    # default; tighten in deployments that front-end with a smaller proxy
+    # body limit. Pydantic schemas independently cap free-form text fields
+    # (text, query) at MAX_TEXT_FIELD_CHARS / MAX_QUERY_FIELD_CHARS.
+    max_upload_bytes: int = 500 * 1024 * 1024
+    # Maximum number of files accepted in a single /ingest/upload request.
+    # Requests exceeding this list length receive HTTP 422. Prevents
+    # accidental directory dumps from saturating the worker pool.
+    max_files_per_request: int = 1000
 
     @classmethod
     def load(cls, path: str | None = None) -> "AxonConfig":
