@@ -162,39 +162,59 @@ async def query_brain_stream(request: QueryRequest):
     # ``list(brain.query_stream(...))`` collected the entire response
     # before yielding the first SSE event, defeating the whole point of
     # /query/stream (audit P1).
+    #
+    # Drive the entire generator on ONE dedicated worker thread so
+    # successive next() calls share the same TLS / streaming-client
+    # state — the default executor pool would hop threads between
+    # iterations and could race per-thread provider clients.
     async def generate():
+        from concurrent.futures import ThreadPoolExecutor
+
         loop = asyncio.get_running_loop()
         sentinel = object()
+        it: Any = None
 
-        def _next(it):
+        def _next(iterator):
             try:
-                return next(it)
+                return next(iterator)
             except StopIteration:
                 return sentinel
 
-        try:
-            it = await asyncio.to_thread(
-                lambda: iter(
-                    brain.query_stream(request.query, filters=request.filters, overrides=overrides)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="axon-stream") as pump:
+            try:
+                it = await loop.run_in_executor(
+                    pump,
+                    lambda: iter(
+                        brain.query_stream(
+                            request.query, filters=request.filters, overrides=overrides
+                        )
+                    ),
                 )
-            )
-            while True:
-                chunk = await loop.run_in_executor(None, _next, it)
-                if chunk is sentinel:
-                    return
-                if isinstance(chunk, dict):
-                    # Add type field if not present to help frontend dispatching
-                    if "type" not in chunk:
-                        chunk["type"] = "sources"
-                    yield f"data: {json.dumps(chunk)}\n\n"
-                else:
-                    if isinstance(chunk, str) and chunk.startswith("[ERROR]"):
-                        content = chunk.replace("[ERROR]", "", 1).strip()
-                        yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
+                while True:
+                    chunk = await loop.run_in_executor(pump, _next, it)
+                    if chunk is sentinel:
                         return
-                    yield f"data: {chunk}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+                    if isinstance(chunk, dict):
+                        # Add type field if not present to help frontend dispatching
+                        if "type" not in chunk:
+                            chunk["type"] = "sources"
+                        yield f"data: {json.dumps(chunk)}\n\n"
+                    else:
+                        if isinstance(chunk, str) and chunk.startswith("[ERROR]"):
+                            content = chunk.replace("[ERROR]", "", 1).strip()
+                            yield (f"data: {json.dumps({'type': 'error', 'content': content})}\n\n")
+                            return
+                        yield f"data: {chunk}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            finally:
+                # Close the generator so any open provider streams release
+                # their resources promptly when the client disconnects.
+                if it is not None:
+                    try:
+                        await loop.run_in_executor(pump, it.close)
+                    except Exception:
+                        pass
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

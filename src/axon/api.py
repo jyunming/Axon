@@ -217,15 +217,37 @@ app = FastAPI(
 # the dataclass field accepted the value, but no middleware enforced it,
 # so cross-origin browser callers (e.g. the VS Code panel webview) saw
 # blocked responses regardless of configuration.
+#
+# Read directly from the YAML file (not via AxonConfig.load(), which
+# materialises a default config on disk if none exists). This avoids
+# import-time filesystem side effects and lets late-set
+# ``AXON_CONFIG_PATH`` env vars in tests still be honoured by the
+# lifespan handler — CORS just defaults to "no origins" when the file
+# isn't present, which matches the dataclass default.
 try:
     from fastapi.middleware.cors import CORSMiddleware as _CORSMiddleware
 
-    _cors_origins: list[str] = []
-    try:
-        _cfg_path = os.getenv("AXON_CONFIG_PATH")
-        _cors_origins = list(getattr(AxonConfig.load(_cfg_path), "api_allow_origins", []) or [])
-    except Exception as _cors_exc:  # pragma: no cover — defensive
-        logger.debug("Could not load CORS config, allow_origins=[]: %s", _cors_exc)
+    def _load_cors_origins_from_disk() -> list[str]:
+        from axon.config import _USER_CONFIG_PATH
+
+        cfg_path = os.getenv("AXON_CONFIG_PATH") or str(_USER_CONFIG_PATH)
+        if not os.path.isfile(cfg_path):
+            return []
+        try:
+            import yaml as _yaml
+
+            with open(cfg_path, encoding="utf-8") as fh:
+                raw = _yaml.safe_load(fh) or {}
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("Could not parse %s for CORS: %s", cfg_path, exc)
+            return []
+        api_section = raw.get("api") if isinstance(raw, dict) else None
+        if not isinstance(api_section, dict):
+            return []
+        origins = api_section.get("allow_origins") or []
+        return [str(o) for o in origins if o]
+
+    _cors_origins = _load_cors_origins_from_disk()
     if _cors_origins:
         app.add_middleware(
             _CORSMiddleware,
