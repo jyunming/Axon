@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **31 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **46 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -14,7 +14,7 @@ Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **31 tools*
 
 ### `ingest_text`
 
-Ingest a single text string. Prefer `ingest_texts` for multiple documents — it uses one embedding call.
+Ingest a single text document into the Axon knowledge base. Prefer `ingest_texts` for multiple documents — it uses one embedding call. Duplicate content (same SHA-256) is silently skipped.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -79,7 +79,7 @@ Poll the status of an async ingest job started by `ingest_path` or `refresh_inge
 
 ---
 
-## Search & Query (2)
+## Search & Query (3)
 
 ### `search_knowledge`
 
@@ -106,6 +106,19 @@ Full RAG query — retrieval + generation in one call. Use `search_knowledge` if
 | `project` | string | `null` | Expected active project — returns 409 on mismatch; use `switch_project` to change |
 
 **Returns:** `{"response": "...", "provenance": {"answer_source": "...", "retrieved_count": N}, "settings": {...}}`
+
+### `query_stream`
+
+Ask a question and receive a full streamed answer accumulated into one response. Internally calls the `/query/stream` SSE endpoint and collects all tokens. Use `query_knowledge` for a short blocking query; use this when the response is expected to be long (> 1000 tokens) or when the provider has high first-token latency.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | required | The question to ask |
+| `top_k` | int | `null` | Number of chunks to retrieve (overrides global setting) |
+| `filters` | dict | `null` | Optional metadata filters for retrieval |
+| `project` | string | `null` | Expected active project — returns 409 on mismatch; use `switch_project` first |
+
+**Returns:** `{"answer": "...", "streamed": true}`
 
 ---
 
@@ -151,7 +164,7 @@ List active write-lease counts per project. Use to check whether it is safe to p
 
 ---
 
-## Project Management (4)
+## Project Management (5)
 
 ### `list_projects`
 
@@ -190,6 +203,17 @@ Delete a project and all its stored data permanently. **Irreversible.**
 
 **Returns:** `{"status": "deleted"}`
 
+### `seal_project`
+
+Encrypt every content file in a project in place (one-shot migration). Walks the project directory and rewrites all index files as AXSL-sealed AES-256-GCM ciphertext. Each file is replaced atomically. Idempotent — re-sealing an already-sealed project returns `status="already_sealed"`. Requires the sealed-store to be unlocked first (`security_unlock`).
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project_name` | string | required | Name of the open project to seal (must exist) |
+| `migration_mode` | string | `"in_place"` | Reserved for future variants; only `"in_place"` is implemented |
+
+**Returns:** `{"status": "sealed"|"already_sealed"}`
+
 ---
 
 ## Settings (2)
@@ -202,7 +226,7 @@ Return active RAG flags, model config, and runtime settings. No parameters.
 
 ### `update_settings`
 
-Toggle RAG flags and model settings at runtime. Changes are session-scoped and not persisted to `config.yaml`.
+Toggle RAG flags and model settings at runtime. Changes are session-scoped and not persisted to `config.yaml` unless `persist=True`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -225,6 +249,7 @@ Toggle RAG flags and model settings at runtime. Changes are session-scoped and n
 | `truth_grounding` | bool | `null` | Truth-grounding enforcement on retrieved chunks |
 | `discussion_fallback` | bool | `null` | Allow general-knowledge fallback when no chunks found |
 | `cite` | bool | `null` | Inline source citations in generated answers |
+| `persist` | bool | `false` | Save settings to `config.yaml` so they survive restarts |
 
 **Returns:** `{"status": "updated"}`
 
@@ -250,15 +275,11 @@ Retrieve a full session transcript by ID.
 
 ---
 
-## AxonStore & Sharing (6)
+## AxonStore & Sharing (9)
 
 ### `get_store_status`
 
-Check whether the AxonStore has been initialised on this machine. Returns store metadata when ready,
-
-or `{"initialized": false}` on a fresh install. Call this before any other tool on first use to
-
-decide whether to prompt the user to run `init_store`.
+Check whether the AxonStore has been initialised on this machine. Returns store metadata when ready, or `{"initialized": false}` on a fresh install. Call this before any other tool on first use to decide whether to prompt the user to run `init_store`.
 
 **No parameters.**
 
@@ -268,7 +289,7 @@ decide whether to prompt the user to run `init_store`.
 
 ### `init_store`
 
-Move the store to a different base path (e.g. a shared network drive). Your data always uses the AxonStore directory structure — call this only when changing where it lives. Safe to call repeatedly.
+Move the store to a different base path (e.g. a shared network drive). Call only when changing where the store lives. Safe to call repeatedly.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -279,18 +300,19 @@ Move the store to a different base path (e.g. a shared network drive). Your data
 
 ### `share_project`
 
-Generate a read-only share key for a project. Returns a `share_string` to send to the recipient out-of-band.
+Generate a share key allowing another user to access one of your projects. The returned `share_string` should be sent to the recipient out-of-band. All shares are read-only. Sealed-share auto-detection: if the project was encrypted via `seal_project`, returns a `SEALED1:` envelope.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `project` | string | required | Project to share (must exist) |
 | `grantee` | string | required | OS username of the recipient |
+| `ttl_days` | int | `null` | Optional time-to-live in days; `null` means no expiry |
 
 **Returns:** `{"share_string": "axon-share:v1:...", "key_id": "..."}`
 
 ### `redeem_share`
 
-Mount a shared project using a share string (read-only). After redemption the project appears as `mounts/{owner}_{project}`.
+Mount a shared project using a share string (read-only). After redemption the project appears as `mounts/{owner}_{project}`. Sealed-share auto-detection: a `SEALED1:` prefix routes through the encryption-at-rest redeem path and persists the DEK in the OS keyring.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -306,13 +328,42 @@ List outgoing shares (projects this user has shared, with revocation status) and
 
 ### `revoke_share`
 
-Revoke a previously generated share key, cutting off the grantee's access immediately.
+Revoke a previously generated share key. For legacy plaintext shares (`sk_` prefix): cuts off access on the next project-list or switch attempt. For sealed shares (`ssk_` prefix): soft revoke deletes the wrap file; hard revoke (`rotate=True`) rotates the DEK and re-encrypts every content file.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `key_id` | string | required | Key ID from the `share_string` or `list_shares` output |
+| `project` | string | `null` | Project name — required for sealed shares, ignored for legacy |
+| `rotate` | bool | `false` | Hard revoke for sealed shares: rotates DEK and invalidates all share wraps |
 
 **Returns:** `{"status": "revoked", "key_id": "..."}`
+
+### `extend_share`
+
+Renew a share key's expiry, or clear it (`ttl_days=null`). Pairs with `share_project(ttl_days=...)` to give owners a hard cutoff for forgotten shares.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `key_id` | string | required | Key ID of the share to extend (from `list_shares`) |
+| `ttl_days` | int | `null` | New time-to-live in days from now; `null` clears the expiry entirely |
+
+**Returns:** `{"status": "extended", "key_id": "...", "expires_at": "..."}`
+
+### `refresh_mount`
+
+Re-read the owner's version marker for the currently active mounted share and reopen project handles if the owner has re-ingested. No-op when the active project is not a mount. On a cloud-sync mid-replication race the API may return HTTP 503 + `X-Axon-Mount-Sync-Pending: true`; retry after a few seconds. No parameters.
+
+**Returns:** `{"status": "success", "refreshed": bool, "seq": int|null}` or `{"status": "sync_pending", ...}`
+
+### `mount_refresh`
+
+Re-read the owner's version marker for a mounted share project, optionally switching to a specific mount first. Use after the owner has re-ingested and synced the share directory.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | `null` | The mount project to refresh, e.g. `"mounts/alice_research"` — omit to refresh the currently active mount |
+
+**Returns:** `{"status": "success", "refreshed": bool, "seq": int|null}`
 
 ---
 
@@ -344,9 +395,103 @@ Return the active graph backend's type and health metrics. Distinguishes between
 
 ---
 
+## Governance (5)
+
+### `governance_overview`
+
+Return aggregated operator status: projects, graph, write-leases, shares, and Copilot. Use as a single-call health snapshot before performing administrative operations such as maintenance-state changes, graph rebuilds, or share revocations. No parameters.
+
+**Returns:** `{"projects": [...], "graph": {...}, "leases": {...}, "shares": {...}}`
+
+### `governance_audit`
+
+Return audit log entries matching the given filters, newest first.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `project` | string | `null` | Filter by project name (exact match) |
+| `action` | string | `null` | Filter by action string, e.g. `"ingest"` or `"share_generate"` |
+| `surface` | string | `null` | Filter by surface, e.g. `"api"`, `"mcp"`, `"repl"` |
+| `status` | string | `null` | Filter by status, e.g. `"success"` or `"error"` |
+| `since` | string | `null` | ISO-8601 lower bound for event timestamp, e.g. `"2026-01-01T00:00:00"` |
+| `limit` | int | `50` | Maximum events to return (1–1000) |
+
+**Returns:** `[{"id": "...", "timestamp": "...", "action": "...", "project": "...", "surface": "...", "status": "..."}]`
+
+### `governance_sessions`
+
+Return active and recent Copilot bridge sessions. Useful for diagnosing stuck or orphaned Copilot agent sessions.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | `20` | Maximum number of recent sessions to return (max 100) |
+
+**Returns:** `[{"session_id": "...", "started_at": "...", "status": "..."}]`
+
+### `governance_projects`
+
+Return all projects with their maintenance state and graph statistics. Includes `active_leases`, `maintenance_state`, `entity_count`, and `community_count` for each project. No parameters.
+
+**Returns:** `[{"name": "...", "maintenance_state": "normal", "active_leases": 0, "entity_count": N}]`
+
+### `governance_graph_rebuild`
+
+Trigger an audited graph community rebuild via the governance operator endpoint. Equivalent to `graph_finalize` but writes an audit-log entry and enforces write-lease checks. Prefer this over `graph_finalize` in automated operator pipelines. No parameters.
+
+**Returns:** `{"communities_built": N, "audit_id": "..."}`
+
+---
+
+## Sealed-Store Security (5)
+
+### `security_status`
+
+Return current sealed-store status (initialized and unlocked flags). Use on startup to decide whether to call `security_bootstrap` (first-time setup) or `security_unlock` (existing user). No parameters.
+
+**Returns:** `{"initialized": false}` or `{"initialized": true, "unlocked": false}` or `{"initialized": true, "unlocked": true}`
+
+### `security_bootstrap`
+
+Initialise the sealed-store with a passphrase (one-time setup). Generates a fresh master key, wraps it under a passphrase-derived KEK, and stores it in the OS keyring. **There is NO recovery** — losing the passphrase means losing access to every project sealed under this master.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `passphrase` | string | required | Chosen passphrase; cannot be empty |
+
+**Returns:** `{"status": "bootstrapped"}`
+
+### `security_unlock`
+
+Unlock the sealed-store so sealed projects can be queried. Required after every process restart before `seal_project` or any sealed-project switch. Rate-limited: 5 wrong attempts within 5 minutes triggers a 429 lockout.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `passphrase` | string | required | The passphrase supplied at `security_bootstrap` time |
+
+**Returns:** `{"status": "unlocked"}`
+
+### `security_lock`
+
+Clear the in-process master key cache. Subsequent sealed-project queries will fail until `security_unlock` is called again. Use before walking away from the machine. No parameters.
+
+**Returns:** `{"status": "locked"}`
+
+### `security_change_passphrase`
+
+Re-wrap the master key under a new passphrase. Project DEKs are not touched (they are wrapped under the master, not the passphrase), so this is O(1) regardless of how many sealed projects exist.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `old_passphrase` | string | required | The current passphrase (required to unwrap the existing master) |
+| `new_passphrase` | string | required | The new passphrase; cannot be empty |
+
+**Returns:** `{"status": "passphrase_changed"}`
+
+---
+
 ## Usage Notes
 
-- All tools operate on the **active project**. Most ingest, search, and query tools accept an optional `project` parameter validated against the active project (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `revoke_share`, `graph_backend_status`. Use `switch_project` to change the active project.
+- All tools operate on the **active project**. Most ingest, search, and query tools accept an optional `project` parameter validated against the active project (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `revoke_share`, `graph_backend_status`, `refresh_mount`. Use `switch_project` to change the active project.
 
 - `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
 
@@ -354,6 +499,10 @@ Return the active graph backend's type and health metrics. Distinguishes between
 
 - Mounted shares (via `redeem_share`) are always **read-only**. Ingest calls against a mount return an error.
 
-- `update_settings` changes are scoped to the current session and are not persisted to `config.yaml`.
+- `update_settings` changes are scoped to the current session by default. Pass `persist=True` to write to `config.yaml`.
 
 - AxonStore tools (`init_store`, `share_project`, `redeem_share`, `list_shares`) are always available. Call `init_store` only if you want to move the store to a shared drive.
+
+- Sealed-store tools (`security_*`, `seal_project`) require Phase 1 bootstrap (`security_bootstrap`) before use. The store must be unlocked (`security_unlock`) after every process restart before sealed projects can be accessed.
+
+- `mount_refresh` and `refresh_mount` serve different use cases: `refresh_mount` (no parameters) refreshes the currently active mount; `mount_refresh` accepts an optional `project` to target a specific mount and switch to it first if needed.

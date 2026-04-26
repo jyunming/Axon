@@ -99,8 +99,8 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 ### 🛡️ Governance & Agents
 - **Governance Console** — full audit trail of every query
 - Graceful maintenance states: `normal → draining → readonly → offline`
-- **REST API** — 66 endpoints with Swagger docs at `/docs`
-- **MCP server** — 39 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- **REST API** — 68 endpoints with Swagger docs at `/docs`
+- **MCP server** — 46 tools for Claude Code, Codex, Gemini, Cursor, Copilot
 - **`@axon`** VS Code chat participant with Graph and Governance panels
 
 </td>
@@ -154,7 +154,7 @@ Extensions panel  →  "..."  →  Install from VSIX...
 →  run `axon-ext`  (or install from VSIX manually)
 ```
 
-Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 39 tools appear in the agent hammer menu automatically.
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 46 tools appear in the agent hammer menu automatically.
 
 > The VS Code extension surfaces **35 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
 
@@ -179,7 +179,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 🔑 | **[Admin Reference](https://github.com/jyunming/Axon/blob/main/docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
 | ⚡ | **[Quick Reference](https://github.com/jyunming/Axon/blob/main/docs/QUICKREF.md)** | Commands and flags at a glance |
 | 📡 | **[API Reference](https://github.com/jyunming/Axon/blob/main/docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
-| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 39 MCP tool signatures with parameter defaults |
+| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 46 MCP tool signatures with parameter defaults |
 
 **Deep dives**
 
