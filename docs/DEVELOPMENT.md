@@ -256,8 +256,8 @@ make lint
 
 ## Resources
 
-- [Contributing Guide](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
+- [Contributing Guide](../CONTRIBUTING.md)
+- [Security Policy](../SECURITY.md)
 
 ## Getting Help
 

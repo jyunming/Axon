@@ -503,7 +503,7 @@ class AxonConfig:
     # Saves ~6 MB RAM at 100k docs at the cost of a ~0.1% false-positive rate
     # (a chunk that was never ingested may be silently skipped). Opt-in; disabled by default.
     bloom_filter_hash_store: bool = False
-    # Graph backend selector: "graphrag" (default) or "dynamic" (SQLite-WAL temporal graph)
+    # Graph backend selector: "graphrag" (default) or "dynamic" (SQLite temporal graph, DELETE journal mode)
     graph_backend: str = "graphrag"
     # Rust engine selectors (per pipeline stage)
     ingest_engine: str = "python"

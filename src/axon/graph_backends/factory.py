@@ -7,7 +7,7 @@ Usage::
 
 The backend type is determined by ``brain.config.graph_backend``:
   - ``"graphrag"`` (default) → :class:`GraphRagBackend`
-  - ``"dynamic_graph"`` → :class:`DynamicGraphBackend` (SQLite-WAL, v0.3)
+  - ``"dynamic_graph"`` → :class:`DynamicGraphBackend` (SQLite, DELETE journal mode, v0.3)
 
 Adding a new backend type: register it in ``_BACKEND_REGISTRY`` below.
 """

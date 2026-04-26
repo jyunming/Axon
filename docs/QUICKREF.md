@@ -638,7 +638,7 @@ echo "Setup complete! Edit .env and run: make test"
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file.
+MIT License - See [LICENSE](../LICENSE) file.
 
 ---
 

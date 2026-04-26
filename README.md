@@ -99,8 +99,8 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 ### 🛡️ Governance & Agents
 - **Governance Console** — full audit trail of every query
 - Graceful maintenance states: `normal → draining → readonly → offline`
-- **REST API** — 54 endpoints with Swagger docs at `/docs`
-- **MCP server** — 31 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- **REST API** — 66 endpoints with Swagger docs at `/docs`
+- **MCP server** — 39 tools for Claude Code, Codex, Gemini, Cursor, Copilot
 - **`@axon`** VS Code chat participant with Graph and Governance panels
 
 </td>
@@ -154,9 +154,9 @@ Extensions panel  →  "..."  →  Install from VSIX...
 →  run `axon-ext`  (or install from VSIX manually)
 ```
 
-Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 31 tools appear in the agent hammer menu automatically.
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 39 tools appear in the agent hammer menu automatically.
 
-> The VS Code extension surfaces **35 LM tools** to Copilot Chat (a superset of the 31 MCP tools, adding VS Code–specific helpers like `show_graph`).
+> The VS Code extension surfaces **35 LM tools** to Copilot Chat (a superset of the 39 MCP tools, adding VS Code–specific helpers like `show_graph`).
 
 **[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 
@@ -179,7 +179,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 🔑 | **[Admin Reference](https://github.com/jyunming/Axon/blob/main/docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
 | ⚡ | **[Quick Reference](https://github.com/jyunming/Axon/blob/main/docs/QUICKREF.md)** | Commands and flags at a glance |
 | 📡 | **[API Reference](https://github.com/jyunming/Axon/blob/main/docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
-| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 31 MCP tool signatures with parameter defaults |
+| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 39 MCP tool signatures with parameter defaults |
 
 **Deep dives**
 
@@ -194,6 +194,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 📦 | **[Share Mount Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT.md)** | Which filesystems work for cross-machine sharing (and which corrupt) |
 | 🧪 | **[Share Mount Smoke](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SMOKE.md)** | Manual two-machine OneDrive verification recipe (run before each share-mount release) |
 | 🔐 | **[Share Mount Sealed (plan)](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SEALED.md)** | Encrypted-at-rest share mounts — the next big design change for OneDrive-safe sharing |
+| 🔬 | **[Share Mount Sealed Smoke](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SEALED_SMOKE.md)** | Manual verification recipe for sealed-store two-machine runs |
 | 📊 | **[Governance Console](https://github.com/jyunming/Axon/blob/main/docs/GOVERNANCE_CONSOLE.md)** | Audit trail, maintenance runbook, session management |
 | 📈 | **[Evaluation Guide](https://github.com/jyunming/Axon/blob/main/docs/EVALUATION.md)** | RAGAS metrics, running evals, building testsets |
 | 🛠️ | **[Development Guide](https://github.com/jyunming/Axon/blob/main/docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks, packaging & release |

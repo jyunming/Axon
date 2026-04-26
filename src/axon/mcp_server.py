@@ -681,7 +681,7 @@ async def graph_backend_status() -> Any:
     Reports which backend is active (graphrag or dynamic), whether it is
     ready, and backend-specific health metrics (entity count, edge count,
     node counts, etc.).  Use this to distinguish between the GraphRAG
-    community-graph backend and the dynamic SQLite-WAL graph backend.
+    community-graph backend and the dynamic SQLite graph backend.
     """
     return await _get("/graph/backend/status")
 
@@ -695,6 +695,154 @@ async def get_active_leases() -> Any:
     state (wait for active_leases to reach 0 first).
     """
     return await _get("/registry/leases")
+
+
+# ---------------------------------------------------------------------------
+# Governance tools (SP-B1 parity sweep — previously REST/VS Code panel only)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def governance_overview() -> Any:
+    """Return aggregated operator status: projects, graph, write-leases, shares, and Copilot.
+    Use this as a single-call health snapshot before performing administrative operations
+    such as maintenance-state changes, graph rebuilds, or share revocations.
+    """
+    return await _get("/governance/overview")
+
+
+@mcp.tool()
+async def governance_audit(
+    project: str | None = None,
+    action: str | None = None,
+    surface: str | None = None,
+    status: str | None = None,
+    since: str | None = None,
+    limit: int = 50,
+) -> Any:
+    """Return audit log entries matching the given filters, newest first.
+    Args:
+        project: Filter by project name (exact match).
+        action: Filter by action string, e.g. ``"ingest"`` or ``"share_generate"``.
+        surface: Filter by surface, e.g. ``"api"``, ``"mcp"``, ``"repl"``.
+        status: Filter by status, e.g. ``"success"`` or ``"error"``.
+        since: ISO-8601 lower bound for the event timestamp, e.g. ``"2026-01-01T00:00:00"``.
+        limit: Maximum events to return (1-1000, default 50).
+    """
+    params: list[str] = []
+    if project:
+        params.append(f"project={project}")
+    if action:
+        params.append(f"action={action}")
+    if surface:
+        params.append(f"surface={surface}")
+    if status:
+        params.append(f"status={status}")
+    if since:
+        params.append(f"since={since}")
+    params.append(f"limit={limit}")
+    qs = "&".join(params)
+    return await _get(f"/governance/audit?{qs}")
+
+
+@mcp.tool()
+async def governance_sessions(limit: int = 20) -> Any:
+    """Return active and recent Copilot bridge sessions.
+    Useful for diagnosing stuck or orphaned Copilot agent sessions.
+    Args:
+        limit: Maximum number of recent sessions to return (default 20, max 100).
+    """
+    return await _get(f"/governance/copilot/sessions?limit={limit}")
+
+
+@mcp.tool()
+async def governance_projects() -> Any:
+    """Return all projects with their maintenance state and graph statistics.
+    Includes active_leases, maintenance_state, entity_count, and community_count
+    for each project. Use before entering maintenance mode to confirm leases are drained.
+    """
+    return await _get("/governance/projects")
+
+
+@mcp.tool()
+async def governance_graph_rebuild() -> Any:
+    """Trigger an audited graph community rebuild via the governance operator endpoint.
+    Equivalent to graph_finalize() but writes an audit-log entry and enforces write-lease
+    checks. Prefer this over graph_finalize() in automated operator pipelines.
+    Returns job metadata including the number of community summaries produced.
+    """
+    return await _post("/governance/graph/rebuild", {})
+
+
+# ---------------------------------------------------------------------------
+# Streaming query (SP-B1 parity sweep — previously REST/CLI only)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def query_stream(
+    query: str,
+    top_k: int | None = None,
+    filters: dict | None = None,
+    project: str | None = None,
+) -> Any:
+    """Ask a question and receive a full streamed answer accumulated into one response.
+    Internally calls the ``/query/stream`` SSE endpoint and collects all tokens
+    before returning, so MCP clients that do not support incremental delivery still
+    receive the complete answer in a single tool result.
+    Use ``query_knowledge`` for a blocking single-round-trip query; use this tool
+    when the server response is expected to be long (> 1000 tokens) or when the
+    LLM provider has a long first-token latency and you want a progress signal.
+    Args:
+        query: The question to ask.
+        top_k: Number of chunks to retrieve for context (overrides global setting).
+        filters: Optional metadata filters for retrieval.
+        project: Expected active project. Returns 409 if it does not match
+            the brain's current active project. Use switch_project first.
+    """
+    if top_k is not None and top_k < 1:
+        raise ValueError("top_k must be >= 1")
+    body: dict = {"query": query}
+    if top_k is not None:
+        body["top_k"] = top_k
+    if filters:
+        body["filters"] = filters
+    if project:
+        body["project"] = project
+    # Use a longer timeout for streaming; accumulate SSE chunks.
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        accumulated: list[str] = []
+        async with client.stream(
+            "POST", f"{API_BASE}/query/stream", json=body, headers=_headers()
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if line.startswith("data:"):
+                    chunk = line[5:].strip()
+                    if chunk and chunk != "[DONE]":
+                        accumulated.append(chunk)
+    return {"answer": "".join(accumulated), "streamed": True}
+
+
+# ---------------------------------------------------------------------------
+# Mount refresh with project targeting (SP-B1 parity sweep)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def mount_refresh(project: str | None = None) -> Any:
+    """Re-read the owner's version marker for a mounted share project.
+    If *project* is supplied and the active project differs, switches to *project*
+    first. No-op when the target project is not a mount (``mounts/<name>``).
+    Use after the owner has re-ingested content and synced the share directory,
+    to make queries reflect the latest knowledge without restarting the server.
+    Args:
+        project: The mount project to refresh, e.g. ``"mounts/alice_research"``.
+            Omit to refresh the currently active project (must already be a mount).
+    """
+    if project:
+        await _post("/project/switch", {"project_name": project})
+    return await _post("/mount/refresh", {})
 
 
 # ---------------------------------------------------------------------------
