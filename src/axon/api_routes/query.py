@@ -157,14 +157,31 @@ async def query_brain_stream(request: QueryRequest):
         "llm_temperature": request.temperature,
     }
 
+    # Bridge the sync generator into the async event loop one chunk at
+    # a time so the client sees tokens as they arrive — the previous
+    # ``list(brain.query_stream(...))`` collected the entire response
+    # before yielding the first SSE event, defeating the whole point of
+    # /query/stream (audit P1).
     async def generate():
+        loop = asyncio.get_running_loop()
+        sentinel = object()
+
+        def _next(it):
+            try:
+                return next(it)
+            except StopIteration:
+                return sentinel
+
         try:
-            chunks = await asyncio.to_thread(
-                lambda: list(
+            it = await asyncio.to_thread(
+                lambda: iter(
                     brain.query_stream(request.query, filters=request.filters, overrides=overrides)
                 )
             )
-            for chunk in chunks:
+            while True:
+                chunk = await loop.run_in_executor(None, _next, it)
+                if chunk is sentinel:
+                    return
                 if isinstance(chunk, dict):
                     # Add type field if not present to help frontend dispatching
                     if "type" not in chunk:

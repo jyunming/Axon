@@ -477,7 +477,7 @@ llm:
   temperature: 0.7
   max_tokens: 2048
 vector_store:
-  provider: lancedb   # path derived automatically from store.base
+  provider: turboquantdb   # default; path derived automatically from store.base
 rag:
   top_k: 10
   similarity_threshold: 0.3
@@ -502,7 +502,7 @@ llm:
   temperature: 0.7
   max_tokens: 2048
 vector_store:
-  provider: lancedb   # path derived automatically from store.base
+  provider: turboquantdb   # default; path derived automatically from store.base
 rag:
   top_k: 10
   similarity_threshold: 0.3

@@ -64,18 +64,34 @@ class OpenReranker:
     def _llm_rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Pointwise LLM scoring implementation (scores each document independently on 1–10 scale)."""
         system_prompt = "You are an expert relevance ranker. Rate the relevance of the document to the query on a scale from 1 to 10. Output ONLY the integer score."
+        # Tolerant parser: pulls the first integer-or-float run out of
+        # the model's response. The previous ``response.replace(".", "",
+        # 1).isdigit()`` returned 0.0 for anything that wasn't a bare
+        # number — so a perfectly valid ``"Score: 8"`` reply scored 0,
+        # making the rerank output useless. (audit P2)
+        import re as _re
         from concurrent.futures import ThreadPoolExecutor
+
+        _SCORE_RE = _re.compile(r"-?\d+(?:\.\d+)?")
 
         def score_doc(doc):
             prompt = f"Query: {query}\n\nDocument: {doc['text']}\n\nScore (1-10):"
             try:
                 response = self.llm.complete(prompt, system_prompt=system_prompt).strip()
-                return float(response) if response.replace(".", "", 1).isdigit() else 0.0
+                m = _SCORE_RE.search(response)
+                if not m:
+                    return 0.0
+                try:
+                    return max(0.0, min(10.0, float(m.group(0))))
+                except ValueError:
+                    return 0.0
             except Exception:
                 return 0.0
 
+        if not documents:
+            return documents
         # Batch concurrent requests to reduce overall latency
-        with ThreadPoolExecutor(max_workers=min(10, len(documents))) as executor:
+        with ThreadPoolExecutor(max_workers=max(1, min(10, len(documents)))) as executor:
             scores = list(executor.map(score_doc, documents))
         for doc, score in zip(documents, scores):
             doc["rerank_score"] = score

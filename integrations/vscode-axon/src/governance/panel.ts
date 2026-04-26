@@ -208,11 +208,23 @@ export class AxonGovernancePanel {
     const maintColor = maintState === 'normal' ? '#4ec9b0'
       : maintState === 'draining' ? '#dcdcaa'
       : '#f44747';
+    // Per-render nonce — replaces the previous ``script-src 'unsafe-inline'``
+    // CSP that allowed any injected script to execute. Inline onclick=
+    // handlers were also moved to addEventListener so they aren't
+    // categorised as inline scripts by the CSP.
+    const nonce = (() => {
+      let s = '';
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      for (let i = 0; i < 32; i++) {
+        s += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+      }
+      return s;
+    })();
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
   :root {
     --bg: var(--vscode-editor-background, #1e1e1e);
@@ -277,15 +289,20 @@ export class AxonGovernancePanel {
 </div>
 
 <div class="actions">
-  <button onclick="vscode.postMessage({command:'rebuildGraph'})">Rebuild Graph</button>
-  <button onclick="vscode.postMessage({command:'setMaintenance'})">Set Maintenance</button>
-  <button onclick="vscode.postMessage({command:'refresh'})">Refresh Now</button>
+  <button data-command="rebuildGraph">Rebuild Graph</button>
+  <button data-command="setMaintenance">Set Maintenance</button>
+  <button data-command="refresh">Refresh Now</button>
 </div>
 
 <div class="footer">Auto-refreshes every 30s. Last update: ${new Date().toLocaleTimeString()}</div>
 
-<script>
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
+  document.querySelectorAll('button[data-command]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      vscode.postMessage({ command: btn.getAttribute('data-command') });
+    });
+  });
 </script>
 </body>
 </html>`;

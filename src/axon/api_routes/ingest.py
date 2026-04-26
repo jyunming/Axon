@@ -118,8 +118,14 @@ async def refresh_docs(background_tasks: BackgroundTasks):
                         )
                         continue
                     combined = "".join(d.get("text", "") for d in docs)
+                    # NOTE: MD5 retained here for backwards compatibility
+                    # with the on-disk ``content_hash`` records persisted
+                    # by earlier releases. Switching to SHA-256 would
+                    # invalidate every existing dedup record and force a
+                    # full re-ingest on first refresh after upgrade.
+                    # Tracked for the next major version bump.
                     current_hash = _hashlib.md5(
-                        combined.encode("utf-8", errors="replace")
+                        combined.encode("utf-8", errors="replace"), usedforsecurity=False
                     ).hexdigest()
                     if current_hash == record.get("content_hash"):
                         job["skipped"].append(source_id)

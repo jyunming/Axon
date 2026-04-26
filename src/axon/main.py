@@ -30,6 +30,7 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
 
+import concurrent.futures  # noqa: E402
 import hashlib  # noqa: E402
 import logging  # noqa: E402
 import math  # noqa: E402
@@ -488,6 +489,17 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._query_cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
+        # Eagerly initialise mixin state that would otherwise be created lazily
+        # via @property getters. Lazy init in those getters has a TOCTOU race
+        # under concurrent first-access (two threads both pass the hasattr
+        # check, both create a new lock, one overwrites the other — leaving
+        # threads holding "different" locks for the same critical section).
+        # Doing it once here, single-threaded in __init__, removes the race.
+        self._graph_lock_internal: threading.RLock = threading.RLock()
+        self._traversal_cache_lock_internal: threading.Lock = threading.Lock()
+        self._entity_token_index_internal: dict[str, set[str]] = {}
+        self._pending_persist_futures_internal: list[concurrent.futures.Future] = []
+        self._persist_executor_internal: concurrent.futures.ThreadPoolExecutor | None = None
         # BFS traversal cache for GraphRAG multi-hop expansion (LRU + TTL).
         # Keyed by (frozenset(matched_entities), max_hops, hop_decay); stores
         # {chunk_id: hop_score} dicts discovered by BFS.  Invalidated whenever
@@ -613,8 +625,25 @@ Your primary goal is to help the user by answering questions based on the provid
             self._flush_pending_saves()
         except Exception as e:
             logger.debug("Could not flush pending graph saves on close: %s", e)
+        # Wait briefly for in-flight tasks instead of abandoning futures.
+        # Long-running tasks (>30s) will still be cancelled when the process
+        # exits, but the common case (single-second persists, embedding flushes)
+        # gets a chance to finish so we don't silently drop user data.
         if hasattr(self, "_executor") and self._executor:
-            self._executor.shutdown(wait=False)
+            try:
+                # cancel_futures requires Python 3.9+; we're on 3.11+.
+                self._executor.shutdown(wait=True, cancel_futures=True)
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.debug("Shared executor shutdown raised: %s", exc)
+        # Shut down the dedicated graph-persist executor too. Without this it
+        # leaks one thread per switch_project / brain instance.
+        persist_exec = getattr(self, "_persist_executor_internal", None)
+        if persist_exec is not None:
+            try:
+                persist_exec.shutdown(wait=True, cancel_futures=False)
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.debug("Persist executor shutdown raised: %s", exc)
+            self._persist_executor_internal = None
         # Close all unique store objects to avoid double-closure
         seen_stores: set[int] = set()
         for attr in ("vector_store", "_own_vector_store", "bm25", "_own_bm25"):

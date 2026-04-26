@@ -225,23 +225,113 @@ def revoke_sealed_share(
 
 
 def validate_received_sealed_shares(user_dir: Path) -> list[str]:
-    """Validate all received sealed shares and remove stale ones."""
-    return []
+    """Validate every received sealed mount; remove ones whose owner-side
+    wrap file has disappeared (soft-revoked) or whose target project is
+    no longer accessible.
+    Returns the list of mount names that were removed.
+    """
+    try:
+        from axon.mounts import (
+            list_mount_descriptors,
+            remove_mount_descriptor,
+            validate_mount_descriptor,
+        )
+    except ImportError:
+        return []
+    removed: list[str] = []
+    for desc in list_mount_descriptors(user_dir):
+        if desc.get("mount_type") != "sealed":
+            continue
+        ok, _reason = validate_mount_descriptor(desc)
+        if ok:
+            # Also verify the per-share wrap still exists in the owner
+            # project — soft-revoke deletes the wrap file in place.
+            target = desc.get("target_project_dir", "")
+            key_id = desc.get("share_key_id", "")
+            if target and key_id:
+                wrap = Path(target) / ".security" / "shares" / f"{key_id}.wrapped"
+                if not wrap.is_file():
+                    ok = False
+        if not ok:
+            mount_name = desc.get("mount_name") or desc.get("name") or ""
+            if mount_name and remove_mount_descriptor(user_dir, mount_name):
+                removed.append(mount_name)
+    return removed
 
 
 def list_sealed_shares(user_dir: Path) -> dict[str, list[dict[str, Any]]]:
-    """List all sealed shares (sharing + shared)."""
-    return {"sharing": [], "shared": []}
+    """List sealed shares: ``sharing`` (this user's wraps) + ``shared``
+    (sealed mounts redeemed by this user).
+    """
+    sharing: list[dict[str, Any]] = []
+    shared: list[dict[str, Any]] = []
+    # ── sharing: walk every owned project under user_dir, list its wraps ──
+    try:
+        from .share import list_sealed_share_key_ids
+    except ImportError:
+        list_sealed_share_key_ids = None  # type: ignore[assignment]
+    if list_sealed_share_key_ids is not None and user_dir.is_dir():
+
+        def _walk_owned(root: Path, name_segments: list[str]) -> None:
+            sealed_marker = root / ".security" / ".sealed"
+            if sealed_marker.is_file() and name_segments:
+                project_name = "/".join(name_segments)
+                for kid in list_sealed_share_key_ids(root):
+                    sharing.append({"project": project_name, "key_id": kid})
+            subs = root / "subs"
+            if subs.is_dir():
+                for child in subs.iterdir():
+                    if child.is_dir():
+                        _walk_owned(child, name_segments + [child.name])
+
+        for entry in user_dir.iterdir():
+            if entry.is_dir() and not entry.name.startswith("."):
+                _walk_owned(entry, [entry.name])
+    # ── shared: list_mount_descriptors filtered to sealed mounts ──
+    try:
+        from axon.mounts import list_mount_descriptors
+
+        for desc in list_mount_descriptors(user_dir):
+            if desc.get("mount_type") == "sealed":
+                shared.append(desc)
+    except ImportError:
+        pass
+    return {"sharing": sharing, "shared": shared}
 
 
 def resolve_owned_sealed_project_path(project_name: str, user_dir: Path) -> Path:
-    """Resolve the on-disk path for a sealed project owned by this user."""
-    raise SecurityError(f"Sealed project '{project_name}' not found")
+    """Resolve the on-disk path for a sealed project owned by this user.
+    Raises :class:`SecurityError` if no such sealed project exists.
+    """
+    try:
+        from .share import _resolve_owned_project_dir
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. Install with: pip install axon-rag[sealed]"
+        ) from exc
+    project_dir = _resolve_owned_project_dir(project_name, user_dir)
+    if not (project_dir / ".security" / ".sealed").is_file():
+        raise SecurityError(f"Sealed project '{project_name}' not found")
+    return project_dir
 
 
 def project_rotate_keys(project_root: Path) -> dict[str, Any]:
-    """Rotate the keys for a sealed project."""
-    raise SecurityError("project_rotate_keys not configured")
+    """Rotate the project DEK; re-encrypt every sealed file; invalidate
+    every existing share wrap. Equivalent to a hard-revoke without a
+    specific key_id — surviving grantees must re-redeem.
+    """
+    try:
+        from .share import _hard_revoke
+    except ImportError as exc:
+        raise SecurityError(
+            "Sealed-store support is not installed. Install with: pip install axon-rag[sealed]"
+        ) from exc
+    # owner_user_dir is the parent of the project root in the AxonStore
+    # layout. project name is the trailing segment for the marker / log
+    # message — the actual rotation is keyed on project_dir + DEK only.
+    owner_user_dir = project_root.parent
+    project_name = project_root.name
+    return _hard_revoke(owner_user_dir, project_name, project_root, key_id="")
 
 
 def project_seal(

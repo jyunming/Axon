@@ -171,7 +171,12 @@ async def lifespan(app: FastAPI):
         brain = AxonBrain(config)
         logger.info("Axon initialized successfully")
     except Exception as e:
+        # Re-raise so the server fails fast rather than serving every
+        # request with brain=None and 503-ing the user. Previously this
+        # was a silent log-and-continue, which masked config errors and
+        # surfaced as confusing "Brain not initialized" everywhere.
         logger.error(f"Failed to initialize Axon: {e}")
+        raise
     yield
     if brain:
         brain.close()
@@ -206,6 +211,33 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+# Apply CORS based on AxonConfig.api_allow_origins. Without this, the
+# ``api.allow_origins`` config knob was silently dead — the YAML loaded,
+# the dataclass field accepted the value, but no middleware enforced it,
+# so cross-origin browser callers (e.g. the VS Code panel webview) saw
+# blocked responses regardless of configuration.
+try:
+    from fastapi.middleware.cors import CORSMiddleware as _CORSMiddleware
+
+    _cors_origins: list[str] = []
+    try:
+        _cfg_path = os.getenv("AXON_CONFIG_PATH")
+        _cors_origins = list(getattr(AxonConfig.load(_cfg_path), "api_allow_origins", []) or [])
+    except Exception as _cors_exc:  # pragma: no cover — defensive
+        logger.debug("Could not load CORS config, allow_origins=[]: %s", _cors_exc)
+    if _cors_origins:
+        app.add_middleware(
+            _CORSMiddleware,
+            allow_origins=_cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID", "X-Axon-Mount-Sync-Pending"],
+        )
+        logger.info("CORS enabled for origins: %s", _cors_origins)
+except ImportError:  # pragma: no cover — fastapi installed implies starlette
+    pass
 
 # Optional API key authentication
 

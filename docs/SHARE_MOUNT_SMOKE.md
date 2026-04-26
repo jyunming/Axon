@@ -353,7 +353,8 @@ After running, paste the result into the release PR (or the next
 > verification that share-mount works on real OneDrive. The CI
 > coverage in `tests/test_share_mount_sync_reorder.py` exercises the
 > *mechanism* on synthetic local tmpdirs — useful but not equivalent.
-> If we ever ship the **remote-mount design** in
-> [SHARE_MOUNT_REMOTE.md](SHARE_MOUNT_REMOTE.md), this smoke becomes
-> obsolete for the grantee path (no shared filesystem at all). Until
-> then, run it before each release that touches share-mount code.
+> The server-mediated remote-mount design was explicitly rejected in
+> favour of the [sealed-mount approach](SHARE_MOUNT_SEALED.md), which
+> keeps the shared-filesystem model and adds encryption-at-rest. Until
+> sealed-mount lands universally, run this smoke before each release
+> that touches share-mount code.

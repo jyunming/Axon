@@ -6,11 +6,55 @@ OpenEmbedding client extracted from main.py for Phase 2 of the Axon refactor.
 
 import logging
 import os
-from typing import Any
+import random
+import time
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from axon.config import AxonConfig
 
 logger = logging.getLogger("Axon")
+
+_T = TypeVar("_T")
+
+
+def _retry_call(
+    fn: Callable[[], _T],
+    *,
+    attempts: int = 3,
+    base_delay: float = 0.5,
+    max_delay: float = 4.0,
+) -> _T:
+    """Call *fn* with exponential backoff + jitter.
+    Retries on any exception except those signalling a permanent failure
+    (TypeError / AttributeError / ValueError) — those bubble up so a
+    typo in the call site doesn't get hidden behind 3 retries (audit
+    P1: previously zero retry framework, transient 503s killed long
+    ingests).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except (TypeError, AttributeError, ValueError):
+            raise
+        except Exception as exc:  # network / provider transient failure
+            last_exc = exc
+            if attempt == attempts:
+                break
+            sleep_s = min(max_delay, base_delay * (2 ** (attempt - 1)))
+            sleep_s += random.uniform(0, sleep_s * 0.1)
+            logger.debug(
+                "Provider call attempt %d/%d failed (%s); sleeping %.2fs",
+                attempt,
+                attempts,
+                exc,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+    assert last_exc is not None
+    raise last_exc
+
 
 _KNOWN_DIMS: dict[str, int] = {
     "BAAI/bge-large-en-v1.5": 1024,
@@ -141,20 +185,30 @@ class OpenEmbedding:
             client = Client(host=self.config.ollama_base_url)
             try:
                 # Batch API (ollama-python >= 0.4): single round-trip for all texts.
-                response = client.embed(model=self.config.embedding_model, input=texts)
+                response = _retry_call(
+                    lambda: client.embed(model=self.config.embedding_model, input=texts),
+                )
                 return response["embeddings"]
             except (AttributeError, TypeError):
                 # Older client without batch embed — fall back to sequential calls.
                 embeddings = []
                 for text in texts:
-                    response = client.embeddings(model=self.config.embedding_model, prompt=text)
+                    response = _retry_call(
+                        lambda t=text: client.embeddings(
+                            model=self.config.embedding_model, prompt=t
+                        ),
+                    )
                     embeddings.append(response["embedding"])
                 return embeddings
         elif self.provider == "fastembed":
             embeddings = list(self.model.embed(texts))
             return [e.tolist() for e in embeddings]
         elif self.provider == "openai":
-            response = self.model.embeddings.create(input=texts, model=self.config.embedding_model)
+            response = _retry_call(
+                lambda: self.model.embeddings.create(
+                    input=texts, model=self.config.embedding_model
+                ),
+            )
             return [data.embedding for data in response.data]
         else:
             raise ValueError(f"Unknown embedding provider: {self.provider}")

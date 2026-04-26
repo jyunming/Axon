@@ -207,7 +207,9 @@ class ContextCompressor:
                 logger.debug("Sentence compression failed for %s: %s", chunk.get("id"), exc)
             return chunk
 
-        with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as pool:
+        if not chunks:
+            return chunks
+        with ThreadPoolExecutor(max_workers=max(1, min(len(chunks), 4))) as pool:
             return list(pool.map(_compress_one, chunks))
 
     # ------------------------------------------------------------------

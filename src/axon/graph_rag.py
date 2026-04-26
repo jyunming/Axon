@@ -39,10 +39,18 @@ _GRAPHRAG_NO_DATA_ANSWER = (
 
 
 class GraphRagMixin:
+    # Class-level guard for the rare case where mixin state is touched before
+    # AxonBrain.__init__ ran (standalone mixin tests). Production goes through
+    # __init__ which initialises everything single-threaded, so this lock is
+    # almost never contended.
+    _lazy_init_lock: threading.Lock = threading.Lock()
+
     @property
     def _graph_lock(self) -> threading.RLock:
         if not hasattr(self, "_graph_lock_internal"):
-            self._graph_lock_internal = threading.RLock()
+            with GraphRagMixin._lazy_init_lock:
+                if not hasattr(self, "_graph_lock_internal"):
+                    self._graph_lock_internal = threading.RLock()
         return self._graph_lock_internal
 
     # Entity token index (inverted index: token -> set of entity names)
@@ -51,7 +59,9 @@ class GraphRagMixin:
     def _entity_token_index(self) -> dict:
         """Lazy-initialised inverted token -> entity-name index."""
         if not hasattr(self, "_entity_token_index_internal"):
-            self._entity_token_index_internal: dict[str, set[str]] = {}
+            with GraphRagMixin._lazy_init_lock:
+                if not hasattr(self, "_entity_token_index_internal"):
+                    self._entity_token_index_internal: dict[str, set[str]] = {}
         return self._entity_token_index_internal
 
     def _rebuild_entity_token_index(self) -> None:
@@ -90,7 +100,9 @@ class GraphRagMixin:
     def _track_persist_future(self, future: concurrent.futures.Future) -> None:
         """Append *future* to the pending list, pruning already-done entries."""
         if not hasattr(self, "_pending_persist_futures_internal"):
-            self._pending_persist_futures_internal: list[concurrent.futures.Future] = []
+            with GraphRagMixin._lazy_init_lock:
+                if not hasattr(self, "_pending_persist_futures_internal"):
+                    self._pending_persist_futures_internal: list[concurrent.futures.Future] = []
         lst = self._pending_persist_futures_internal
         lst[:] = [f for f in lst if not f.done()]
         lst.append(future)
@@ -128,9 +140,14 @@ class GraphRagMixin:
             not hasattr(self, "_persist_executor_internal")
             or self._persist_executor_internal is None
         ):
-            self._persist_executor_internal = concurrent.futures.ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="axon-persist"
-            )
+            with GraphRagMixin._lazy_init_lock:
+                if (
+                    not hasattr(self, "_persist_executor_internal")
+                    or self._persist_executor_internal is None
+                ):
+                    self._persist_executor_internal = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=1, thread_name_prefix="axon-persist"
+                    )
         return self._persist_executor_internal
 
     # Share heavyweight local model instances across threads and brain instances.
@@ -614,11 +631,18 @@ class GraphRagMixin:
         return _out
 
     def _gr_write_json_if_changed(self, path, payload, *, sort_keys: bool = False) -> bool:
-        """Atomically write JSON only when content changed. Returns True if written."""
+        """Atomically write JSON only when content changed. Returns True if written.
+
+        Uses ``axon.version_marker._atomic_replace`` so the rename
+        survives Windows / OneDrive / cloud-sync transient locks
+        (audit P1: graph_rag bytes/json writers were missing this
+        fallback that ``dynamic_graph_backend`` already implements).
+        """
         import hashlib as _hashlib
         import json as _json
-        import os as _os
         import pathlib as _pathlib
+
+        from axon.version_marker import _atomic_replace as _safe_replace
 
         p = _pathlib.Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -644,15 +668,20 @@ class GraphRagMixin:
                 pass
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(text, encoding="utf-8")
-        _os.replace(tmp, p)
+        _safe_replace(tmp, p)
         cache[p_key] = digest
         return True
 
     def _gr_write_bytes_if_changed(self, path, payload: bytes) -> bool:
-        """Atomically write bytes only when content changed. Returns True if written."""
+        """Atomically write bytes only when content changed. Returns True if written.
+
+        Same Windows / cloud-sync fallback as
+        :meth:`_gr_write_json_if_changed`.
+        """
         import hashlib as _hashlib
-        import os as _os
         import pathlib as _pathlib
+
+        from axon.version_marker import _atomic_replace as _safe_replace
 
         p = _pathlib.Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -674,7 +703,7 @@ class GraphRagMixin:
                 pass
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_bytes(payload)
-        _os.replace(tmp, p)
+        _safe_replace(tmp, p)
         cache[p_key] = digest
         return True
 
@@ -926,7 +955,11 @@ class GraphRagMixin:
             if raw is not None:
                 mp_path = bm25_path / ".entity_graph.msgpack"
                 try:
-                    mp_path.write_bytes(raw)
+                    # Atomic + cloud-sync-safe: write tempfile, fsync,
+                    # _atomic_replace (audit P1: a SIGINT or crash
+                    # mid-write_bytes() previously zeroed the entity
+                    # graph because there was no temp + replace).
+                    self._gr_write_bytes_if_changed(mp_path, raw)
                     old = bm25_path / ".entity_graph.json"
                     if old.exists():
                         old.unlink(missing_ok=True)
@@ -3383,9 +3416,16 @@ class GraphRagMixin:
             return []
 
     def _extract_entities_gliner(self, text: str) -> list[dict]:
-        """Extract entities using GLiNER (TASK 14 — NER-only; no LLM call)."""
-        model = self._ensure_gliner()
+        """Extract entities using GLiNER (TASK 14 — NER-only; no LLM call).
+
+        Audit P1: ``_ensure_gliner()`` was called OUTSIDE the
+        ``except Exception`` block, so an ``ImportError`` (gliner
+        package not installed) propagated all the way out and
+        crashed the query. Move the import + model load INSIDE the
+        try and catch ``ImportError`` explicitly with a clear hint.
+        """
         try:
+            model = self._ensure_gliner()
             preds = model.predict_entities(text[:3000], self._GLINER_LABELS, threshold=0.5)
             seen: set = set()
             entities = []
@@ -3402,6 +3442,13 @@ class GraphRagMixin:
                     }
                 )
             return entities[:20]
+        except ImportError:
+            logger.warning(
+                "graph_rag_ner_backend='gliner' but the 'gliner' package is not "
+                "installed. Install with: pip install axon-rag[gliner] (or set "
+                "graph_rag_ner_backend='light' to use the regex fallback)."
+            )
+            return []
         except Exception:
             return []
 

@@ -21,6 +21,8 @@ Design constraints
 """
 from __future__ import annotations
 
+import atexit
+import concurrent.futures
 import json
 import logging
 import os
@@ -33,6 +35,25 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Single, process-wide pool for fire-and-forget audit writes. Replaces the
+# previous "one thread per emit()" pattern that could create thousands of
+# short-lived threads under load and starve the OS thread limit.
+_AUDIT_EXECUTOR: concurrent.futures.ThreadPoolExecutor | None = None
+_AUDIT_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_audit_executor() -> concurrent.futures.ThreadPoolExecutor:
+    global _AUDIT_EXECUTOR
+    if _AUDIT_EXECUTOR is None:
+        with _AUDIT_EXECUTOR_LOCK:
+            if _AUDIT_EXECUTOR is None:
+                _AUDIT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="axon-audit"
+                )
+                atexit.register(_AUDIT_EXECUTOR.shutdown, wait=False)
+    return _AUDIT_EXECUTOR
+
 
 # ---------------------------------------------------------------------------
 # Action vocabulary
@@ -483,7 +504,6 @@ def emit(
             details=details or {},
             request_id=request_id,
         )
-        t = threading.Thread(target=get_store().append, args=(event,), daemon=True)
-        t.start()
+        _get_audit_executor().submit(get_store().append, event)
     except Exception as exc:
         logger.debug("emit() failed: %s", exc)
