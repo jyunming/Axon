@@ -180,7 +180,57 @@ response includes a `diagnostics` object containing `confidence`, `fallback_trig
 
 ---
 
-## 10. RAPTOR — Hierarchical Clustering Summaries
+## 10. Sparse Retrieval (SPLADE)
+
+**Config:** `retrieval.sparse_retrieval: true`
+
+SPLADE (SParse Lexical AnD Expansion) is a learned sparse neural retrieval method that
+complements the existing dense (embedding) + BM25 hybrid by capturing exact lexical matches
+that dense vectors can miss. Where a dense vector summarises meaning holistically, SPLADE
+produces a high-dimensional sparse vector over the full vocabulary — each non-zero dimension
+corresponds to a vocabulary token weighted by its relevance to the passage. Queries and
+documents are matched by dot product over these sparse vectors.
+
+**When to use:** Queries that use domain-specific terminology, product names, acronyms, or
+rare tokens that embeddings may not capture reliably. Technical and code-heavy corpora
+where exact token overlap is a strong relevance signal.
+
+**How to enable (`config.yaml`):**
+```yaml
+retrieval:
+  sparse_retrieval: true
+  sparse_model: "naver/splade-cocondenser-ensembledistil"  # default
+  sparse_weight: 0.3  # weight in score fusion (0.0–1.0)
+```
+
+`sparse_weight` controls the blend between dense and sparse scores during fusion.
+A value of `0.3` means 30% sparse, 70% dense. Increase toward `0.5` if exact-term
+precision matters more; decrease toward `0.1` for general prose corpora.
+
+**Requirements:**
+
+```bash
+pip install "axon-rag[sparse]"
+```
+
+This installs `transformers>=4.40` and `torch>=2.0`. `torch` is unpinned so your
+environment can select the correct CPU, CUDA, or ROCm wheel.
+
+**Performance note:** The first query (or the first `add` call at ingest time) loads the
+SPLADE checkpoint from HuggingFace Hub into memory — approximately 500 MB. Subsequent
+queries are fast. The model is cached in the default HuggingFace Hub location
+(`~/.cache/huggingface/hub`). If `transformers` or `torch` are not installed, Axon logs
+a warning and the pipeline falls back to dense + BM25 without raising an error.
+
+**Accuracy note:** SPLADE provides the most benefit on technical or code corpora where
+queries contain specific tokens (model names, API identifiers, error codes). The marginal
+benefit on general prose is smaller because dense embeddings already capture paraphrasing
+and synonymy well. Profile A and B configurations (see §13) do not need sparse retrieval;
+it is worth adding when exact-term recall is demonstrably low.
+
+---
+
+## 11. RAPTOR — Hierarchical Clustering Summaries
 
 **Flag:** `raptor: true` (also set at ingest time)
 **CLI:** `axon --raptor --ingest ./docs/`
@@ -207,7 +257,7 @@ Query time cost is negligible.
 
 ---
 
-## 11. GraphRAG — Entity Graph with Community Summaries
+## 12. GraphRAG — Entity Graph with Community Summaries
 
 **Flag:** `graph_rag: true` (also set at ingest time)
 **CLI:** `axon --graph-rag "your query"`
@@ -258,7 +308,7 @@ low (graph lookup + community snippet injection).
 
 ---
 
-## 12. Recommended Configurations
+## 13. Recommended Configurations
 
 ### Profile A — Default (fastest, no graph overhead)
 
@@ -372,7 +422,7 @@ where answer quality is paramount over latency.*
 
 ---
 
-## 13. Smart Query Routing
+## 14. Smart Query Routing
 
 **Config:** `query_router: heuristic` (default) or `query_router: llm`
 

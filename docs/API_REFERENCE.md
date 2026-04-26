@@ -13,7 +13,31 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Returns `{"status": "ok", "project": "<active-project>"}` — use for liveness probes; returns `503` while the brain is initialising |
+| `GET` | `/health/live` | Liveness probe — returns `{"status": "alive"}` with `200` as long as the ASGI process is responding; does **not** check whether the brain is initialised |
+| `GET` | `/health/ready` | Readiness probe — returns `{"status": "ok", "project": "<active-project>"}` with `200` only when the brain is fully initialised; returns `{"status": "initializing"}` with `503` during cold start |
+| `GET` | `/health` | Backward-compatible alias for `/health/ready` — returns the same payload; preserved so existing uptime checkers and VS Code extension probes continue to work |
+
+> **Kubernetes usage:** point `livenessProbe` at `/health/live` (restart only on a fully wedged process) and `readinessProbe` at `/health/ready` (hold traffic until the brain and vector store are ready).
+
+---
+
+## Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/metrics` | Prometheus exposition format metrics (`text/plain; version=0.0.4`) — returns `503` with a plain message if `prometheus-client` is not installed |
+
+**Exposed metrics:**
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `axon_requests_total` | Counter | `path`, `method`, `status` | Total HTTP requests handled; lets operators alert on 5xx spikes per route |
+| `axon_request_duration_seconds` | Histogram | `path`, `method` | Wall-clock request latency; enables p50/p95 dashboards |
+| `axon_query_total` | Counter | `project`, `surface` | Total RAG queries; tracks volume per project and calling surface (`api`, `mcp`, `repl`, etc.) |
+| `axon_ingest_total` | Counter | `project`, `surface` | Total ingest requests per project and surface |
+| `axon_brain_ready` | Gauge | — | `1` when `axon.api.brain` is initialised, `0` otherwise; refreshed on every scrape |
+
+`prometheus-client` ships in the base `axon-rag` dependency set (`>=0.20`), so the `503` fallback is not expected under normal install conditions.
 
 ---
 

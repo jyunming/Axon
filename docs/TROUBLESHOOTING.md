@@ -274,6 +274,76 @@ llm:
 
 ---
 
+## API: HTTP 429 Too Many Requests
+
+**Error:**
+```
+Error: HTTP 429 Too Many Requests
+{"detail": "Rate limit exceeded. Retry after 60s."}
+```
+
+**Cause:** Per-IP rate limiting is enforced on `/share/*`, `/ingest/*`, and `/security/*`
+endpoints. The default limit is 10 requests per 60-second window. Bulk operations that
+send many requests in a short period will trigger this limit.
+
+**Fix:**
+- Wait 60 seconds before retrying.
+- For bulk ingest operations, use the batched ingest endpoint to send multiple files in a
+  single request rather than one request per file.
+- To raise the default limits for trusted environments, increase them in `config.yaml`:
+  ```yaml
+  api:
+    rate_limit_requests: 50      # requests per window (default: 10)
+    rate_limit_window_seconds: 60
+  ```
+
+---
+
+## API: HTTP 413 Request Entity Too Large
+
+**Error:**
+```
+Error: HTTP 413 Request Entity Too Large
+{"detail": "Upload exceeds maximum size of 500 MiB"}
+```
+
+**Cause:** The uploaded file or batch exceeds `max_upload_bytes` (default 500 MiB) or
+`max_files_per_request` (default 1000 files). Both limits were added to harden the ingest
+API against oversized payloads.
+
+**Fix:**
+- Split large batches into smaller ones below the 500 MiB threshold.
+- To raise the limits for trusted environments, adjust them in `config.yaml`:
+  ```yaml
+  api:
+    max_upload_bytes: 1073741824   # 1 GiB
+    max_files_per_request: 5000
+  ```
+
+---
+
+## API: HTTP 422 Unprocessable Entity on Long Queries
+
+**Error:**
+```
+Error: HTTP 422 Unprocessable Entity
+{"detail": [{"loc": ["body", "query"], "msg": "ensure this value has at most 4096 characters"}]}
+```
+
+**Cause:** The query text exceeds the `max_length` field validation added to the request
+schema. This prevents excessively long strings from being passed through the pipeline.
+
+**Fix:**
+- Shorten the query to under 4096 characters, or rephrase it as a more focused question.
+- For programmatic use cases that genuinely need longer input, increase the field limit
+  in `config.yaml`:
+  ```yaml
+  api:
+    max_query_length: 8192   # characters (default: 4096)
+  ```
+
+---
+
 ## `pip install axon[graphrag]` fails with `gensim` build error
 
 **Error:**

@@ -56,7 +56,7 @@ Axon/
 ├── src/axon/          # Main package
 │   ├── main.py             # Core RAG engine
 │   ├── api.py              # FastAPI app factory and route registration
-│   ├── api_routes/         # Route handlers (54 endpoints across 8 files)
+│   ├── api_routes/         # Route handlers (68 endpoints across 12 files)
 │   ├── webapp.py           # Streamlit UI
 │   ├── loaders.py          # Document loaders
 │   ├── retrievers.py       # Search implementations
