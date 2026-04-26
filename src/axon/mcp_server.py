@@ -706,6 +706,9 @@ async def get_active_leases() -> Any:
 
 def main() -> None:
     """Entry point for the axon-mcp console script."""
+    from axon.logging_setup import configure_logging
+
+    configure_logging()
     mcp.run()
 
 
