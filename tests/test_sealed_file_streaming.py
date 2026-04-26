@@ -268,7 +268,7 @@ class TestWriteStreamAadEnforcement:
         with pytest.raises(InvalidTag):
             SealedFile.read(path, key)  # missing AAD
 
-    def test_aad_written_no_aad_read_raises(self, tmp_path):
+    def test_no_aad_on_write_aad_on_read_raises(self, tmp_path):
         from cryptography.exceptions import InvalidTag
 
         key = generate_dek()

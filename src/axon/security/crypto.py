@@ -215,8 +215,9 @@ class SealedFile:
 
         Streams the encryption with the lower-level
         :class:`cryptography.hazmat.primitives.ciphers.Cipher` API so
-        only one chunk of plaintext + ciphertext is resident in memory
-        at any time. The on-disk layout is identical to :meth:`write`
+        only one caller-supplied chunk of plaintext + ciphertext is resident
+        in memory at a time. Memory use is bounded by the caller's chunk size;
+        :meth:`write_stream_from_path` reads in ``chunk_size``-byte blocks. The on-disk layout is identical to :meth:`write`
         (``MAGIC + header + nonce + ciphertext + tag``); files written
         by either method are interchangeable on read.
 
