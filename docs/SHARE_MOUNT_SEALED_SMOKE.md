@@ -230,8 +230,188 @@ To recover, the OWNER re-issues a NEW share with a fresh `key_id`, the GRANTEE r
 
 ## When this recipe must run
 
-- Before tagging any release that touches `axon/security/` (Phases 2–6).
+- Before tagging any release that touches `axon/security/` (Phases 2–7).
 - After cloud-sync app updates (OneDrive feature changes can break Files-On-Demand assumptions).
 - When the user or the issue tracker reports a "works locally, fails on OneDrive" symptom.
 
 Otherwise rely on the chaos suite (`tests/sync/`) for per-PR coverage.
+
+---
+
+## § Phase 7: Two-Machine OneDrive / Google Drive Verification
+
+This section is the formal Phase 7 deliverable. It translates the end-to-end
+encrypted-share lifecycle into a concrete two-machine checklist, covering the
+real cloud-sync edge cases that automated tests (Nextcloud-in-Docker, FS chaos)
+cannot reach.
+
+### Prerequisites
+
+- **Two machines** — label them `OWNER` and `GRANTEE`.
+- A **shared sync folder** that both machines can write to and sync through:
+  OneDrive Personal/Business, Google Drive Desktop in **Mirror** mode, Dropbox,
+  or an SMB share. Note the local path on each machine — they may differ.
+- Python ≥ 3.11 and `pip install "axon-rag[sealed]"` on both machines.
+- Enough free disk space on GRANTEE for the project's plaintext footprint
+  (Axon decrypts into a temp dir; `%LOCALAPPDATA%\Temp\axon-sealed-*` on
+  Windows, `/tmp/axon-sealed-*` on Linux/macOS).
+
+Setup convention used below:
+
+```
+OWNER  : C:\Users\alice\OneDrive\AxonStore\alice\
+GRANTEE: C:\Users\bob\OneDrive\AxonStore\alice\
+```
+
+### 1 — Owner setup
+
+```bash
+# OWNER machine
+axon --store-init "C:\Users\alice\OneDrive"
+axon --store-bootstrap "choose-a-strong-passphrase"
+axon --project-new research
+axon --project research --ingest "C:\path\to\some\docs"
+axon --project-seal research
+axon --store-status
+```
+
+**Expected:** `Project 'research': sealed (N files)`. Verify on disk:
+
+```powershell
+# The sealed marker must exist.
+Test-Path "C:\Users\alice\OneDrive\AxonStore\alice\research\.security\.sealed"
+# → True
+
+# Content files must carry the AXSL header.
+[System.Text.Encoding]::ASCII.GetString(
+    (Get-Content -AsByteStream -TotalCount 4 "...\research\meta.json"))
+# → AXSL
+```
+
+`axon project list` should show `[sealed]` next to `research`.
+
+### 2 — Wait for sync
+
+Watch the OneDrive / Google Drive system-tray icon until the upload is
+complete. Do not proceed until the `.security/.sealed` marker file is
+confirmed on GRANTEE's local path.
+
+```bash
+# GRANTEE machine — confirm marker file arrived
+Test-Path "C:\Users\bob\OneDrive\AxonStore\alice\research\.security\.sealed"
+# → True
+```
+
+### 3 — Generate a sealed share
+
+```bash
+# OWNER machine
+axon share generate --project research --grantee bob --ttl-days 30
+```
+
+**Expected output** (JSON or REPL line):
+
+```
+share_string: SEALED1:<base64-envelope>
+key_id: ssk_xxxxxxxx
+```
+
+Transmit `share_string` to GRANTEE out-of-band (Slack, Signal, paper — never
+through the synced folder, which a passive OneDrive collaborator could read).
+
+### 4 — Wait for sync (wrap file)
+
+The owner just wrote `research/.security/shares/<key_id>.wrapped` (40 bytes).
+Wait for it to upload before the grantee redeems, otherwise the redeem step
+will fail with "wrap file missing — not yet synced".
+
+### 5 — Grantee: redeem and query
+
+```bash
+# GRANTEE machine
+axon --share-redeem "<paste share_string here>"
+```
+
+**Expected:** `Share redeemed. Mount: mounts/alice_research`.
+
+```bash
+# Inspect the mount descriptor.
+type "C:\Users\bob\OneDrive\AxonStore\bob\mounts\alice_research\mount.json"
+# → must contain  "mount_type": "sealed"  and  "share_key_id": "ssk_xxx"
+
+# Query the sealed mount.
+axon --project mounts/alice_research "summarise the corpus"
+```
+
+**Expected:** A real answer drawn from the owner's encrypted corpus. Behind
+the scenes `switch_project` reads the mount descriptor, fetches the DEK from
+the OS keyring, decrypts into `%LOCALAPPDATA%\Temp\axon-sealed-*`, and runs
+the standard query path against the cache.
+
+After exiting Axon, verify the cache was wiped:
+
+```powershell
+Get-ChildItem "$env:LOCALAPPDATA\Temp\axon-sealed-*" -ErrorAction SilentlyContinue
+# → no output (directory removed)
+```
+
+### 6 — Revocation
+
+**Soft revoke (fast — does not invalidate the grantee's cached DEK):**
+
+```bash
+# OWNER machine
+axon share revoke ssk_xxx --project research
+```
+
+**Expected:** `{"status": "soft_revoked", "wrap_deleted": true}`.
+
+After sync, the grantee's *existing* mount still answers queries (DEK is cached
+in their OS keyring) — this is documented soft-revoke behaviour (Phase 4 design).
+A fresh `axon --share-redeem <same share_string>` on GRANTEE fails:
+
+```
+Sealed-share wrap file missing at .../shares/ssk_xxx.wrapped — owner has revoked.
+```
+
+**Hard revoke (slow — rotates DEK, invalidates cached bytes):**
+
+```bash
+# OWNER machine
+axon share revoke ssk_xxx --project research --rotate
+```
+
+**Expected:** `{"status": "hard_revoked", "files_resealed": N, "invalidated_share_key_ids": [...]}`.
+
+Wait for OneDrive to upload the re-encrypted files. Then on GRANTEE:
+
+```bash
+axon --project mounts/alice_research "still answering?"
+# → Error: InvalidTag — the cached DEK no longer matches the new ciphertext.
+```
+
+To restore access: OWNER generates a new share (`ssk_yyy`), GRANTEE redeems it.
+
+### 7 — Platform notes
+
+| Platform | Note |
+|---|---|
+| **OneDrive Files-On-Demand (Windows)** | Pin the owner's project folder to "Always keep on this device" before running; placeholder files cause `FileNotFoundError` during materialise. |
+| **Google Drive Desktop** | Use **Mirror** mode, not **Stream** (Stream uses virtual files similar to OneDrive Files-On-Demand and can cause the same issue). |
+| **Windows DPAPI keyring** | No passphrase needed; the OS keyring is unlocked at login. `axon share redeem` stores the unwrapped DEK silently. |
+| **macOS Keychain** | The first query after `redeem` prompts "axon wants to use the login keychain" — click **Allow**. The second and subsequent queries are silent. |
+| **Linux headless / no-keyring** | Set `AXON_KEYRING_BACKEND=file` before running Axon. The file-backed keyring stores the DEK in `~/.axon-keyring` (mode 0600). |
+| **SMB share** | No special handling needed; Axon sees it as a normal POSIX path. NTFS semantics on SMB can cause rename-over-existing to fail — Axon retries with a delete-then-rename fallback. |
+
+### 8 — CI equivalent
+
+`tests/e2e_sync/test_sealed_share_sync_roundtrip.py` covers this procedure
+with a Nextcloud instance running in Docker: owner seals + shares, grantee
+redeems + queries, both soft and hard revocation paths are exercised.
+
+The CI suite runs this on the Ubuntu matrix cell on every PR that touches
+`src/axon/security/`. To run it locally (requires Docker):
+
+```bash
+pytest tests/e2e_sync/ -v --no-cov -k "sealed_share_sync"
+```
