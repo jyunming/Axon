@@ -4100,8 +4100,10 @@ def _interactive_repl(
                 sub_parts = arg.split(maxsplit=1) if arg else []
                 sub = sub_parts[0].lower() if sub_parts else "overview"
                 sub_arg = sub_parts[1] if len(sub_parts) > 1 else ""
-                _gov_base = f"http://127.0.0.1:{getattr(brain.config, 'api_port', 8000)}"
+                _gov_host = getattr(brain.config, "api_host", "127.0.0.1") or "127.0.0.1"
+                _gov_base = f"http://{_gov_host}:{getattr(brain.config, 'api_port', 8000)}"
                 try:
+                    import urllib.parse as _up_gov
                     import urllib.request as _ur_gov
 
                     if sub in ("", "overview"):
@@ -4110,9 +4112,10 @@ def _interactive_repl(
                         print("\n    === Governance Overview ===")
                         print(_json_gov.dumps(_gd, indent=4))
                     elif sub == "audit":
-                        _gurl = f"{_gov_base}/governance/audit?limit=20"
-                        if sub_arg:
-                            _gurl += f"&action={sub_arg}"
+                        _qs = _up_gov.urlencode(
+                            {"limit": 20, "action": sub_arg} if sub_arg else {"limit": 20}
+                        )
+                        _gurl = f"{_gov_base}/governance/audit?{_qs}"
                         with _ur_gov.urlopen(_gurl, timeout=10) as _gr:
                             _gd = _json_gov.loads(_gr.read())
                         events = _gd.get("events", [])
