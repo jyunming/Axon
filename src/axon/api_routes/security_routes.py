@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+from axon.api_routes._rate_limit import enforce_rate_limit
 from axon.api_schemas import (
     SecurityBootstrapRequest,
     SecurityChangePassphraseRequest,
@@ -71,9 +72,10 @@ async def security_status():
 
 
 @router.post("/security/bootstrap")
-async def security_bootstrap(request: SecurityBootstrapRequest):
+async def security_bootstrap(request: SecurityBootstrapRequest, req: Request):
     from axon import security as _security
 
+    enforce_rate_limit(req, bucket="security_bootstrap", max_hits=10, window_seconds=60.0)
     try:
         return _security.bootstrap_store(_current_user_dir(), request.passphrase)
     except _security.SecurityError as exc:
@@ -124,9 +126,10 @@ async def security_lock():
 
 
 @router.post("/security/change-passphrase")
-async def security_change_passphrase(request: SecurityChangePassphraseRequest):
+async def security_change_passphrase(request: SecurityChangePassphraseRequest, req: Request):
     from axon import security as _security
 
+    enforce_rate_limit(req, bucket="security_change_passphrase", max_hits=10, window_seconds=60.0)
     try:
         return _security.change_passphrase(
             _current_user_dir(),
