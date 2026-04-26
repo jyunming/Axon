@@ -566,7 +566,11 @@ class OpenVectorStore:
         # All other backends: run searches in parallel via thread pool.
         from concurrent.futures import ThreadPoolExecutor
 
-        with ThreadPoolExecutor(max_workers=min(8, len(query_embeddings))) as ex:
+        # max(1, ...) — Python's ThreadPoolExecutor raises ValueError on
+        # max_workers=0, which the inner min() would produce on an empty
+        # list. The early-return above already covers the empty case but
+        # we belt+brace the math (audit P1).
+        with ThreadPoolExecutor(max_workers=max(1, min(8, len(query_embeddings)))) as ex:
             futures = [ex.submit(self.search, emb, top_k, filter_dict) for emb in query_embeddings]
             return [fut.result() for fut in futures]
 
@@ -762,7 +766,7 @@ class MultiVectorStore:
         from concurrent.futures import ThreadPoolExecutor
 
         seen: dict[str, dict] = {}
-        with ThreadPoolExecutor(max_workers=min(4, len(self._stores))) as ex:
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(self._stores)))) as ex:
             futures = [
                 ex.submit(store.search, query_embedding, top_k, filter_dict)
                 for store in self._stores
@@ -788,7 +792,7 @@ class MultiVectorStore:
             return []
         from concurrent.futures import ThreadPoolExecutor
 
-        with ThreadPoolExecutor(max_workers=min(4, len(self._stores))) as ex:
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(self._stores)))) as ex:
             store_futures = [
                 ex.submit(store.batch_search, query_embeddings, top_k, filter_dict)
                 for store in self._stores
@@ -860,7 +864,7 @@ class MultiBM25Retriever:
         from concurrent.futures import ThreadPoolExecutor
 
         seen: dict[str, dict] = {}
-        with ThreadPoolExecutor(max_workers=min(4, len(self._retrievers))) as ex:
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(self._retrievers)))) as ex:
             futures = [ex.submit(r.search, query, top_k) for r in self._retrievers]
             for fut in futures:
                 try:

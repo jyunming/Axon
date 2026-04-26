@@ -171,7 +171,12 @@ async def lifespan(app: FastAPI):
         brain = AxonBrain(config)
         logger.info("Axon initialized successfully")
     except Exception as e:
+        # Re-raise so the server fails fast rather than serving every
+        # request with brain=None and 503-ing the user. Previously this
+        # was a silent log-and-continue, which masked config errors and
+        # surfaced as confusing "Brain not initialized" everywhere.
         logger.error(f"Failed to initialize Axon: {e}")
+        raise
     yield
     if brain:
         brain.close()
@@ -206,6 +211,55 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+# Apply CORS based on AxonConfig.api_allow_origins. Without this, the
+# ``api.allow_origins`` config knob was silently dead — the YAML loaded,
+# the dataclass field accepted the value, but no middleware enforced it,
+# so cross-origin browser callers (e.g. the VS Code panel webview) saw
+# blocked responses regardless of configuration.
+#
+# Read directly from the YAML file (not via AxonConfig.load(), which
+# materialises a default config on disk if none exists). This avoids
+# import-time filesystem side effects and lets late-set
+# ``AXON_CONFIG_PATH`` env vars in tests still be honoured by the
+# lifespan handler — CORS just defaults to "no origins" when the file
+# isn't present, which matches the dataclass default.
+try:
+    from fastapi.middleware.cors import CORSMiddleware as _CORSMiddleware
+
+    def _load_cors_origins_from_disk() -> list[str]:
+        from axon.config import _USER_CONFIG_PATH
+
+        cfg_path = os.getenv("AXON_CONFIG_PATH") or str(_USER_CONFIG_PATH)
+        if not os.path.isfile(cfg_path):
+            return []
+        try:
+            import yaml as _yaml  # type: ignore[import-untyped]
+
+            with open(cfg_path, encoding="utf-8") as fh:
+                raw = _yaml.safe_load(fh) or {}
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.debug("Could not parse %s for CORS: %s", cfg_path, exc)
+            return []
+        api_section = raw.get("api") if isinstance(raw, dict) else None
+        if not isinstance(api_section, dict):
+            return []
+        origins = api_section.get("allow_origins") or []
+        return [str(o) for o in origins if o]
+
+    _cors_origins = _load_cors_origins_from_disk()
+    if _cors_origins:
+        app.add_middleware(
+            _CORSMiddleware,
+            allow_origins=_cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID", "X-Axon-Mount-Sync-Pending"],
+        )
+        logger.info("CORS enabled for origins: %s", _cors_origins)
+except ImportError:  # pragma: no cover — fastapi installed implies starlette
+    pass
 
 # Optional API key authentication
 

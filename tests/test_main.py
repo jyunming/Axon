@@ -11388,7 +11388,10 @@ class TestClose:
     def test_close_shuts_down_executor(self, brain):
         brain._executor = MagicMock()
         brain.close()
-        brain._executor.shutdown.assert_called_once_with(wait=False)
+        # close() now waits for in-flight tasks and cancels still-pending
+        # ones (audit P1: previously ``wait=False`` silently dropped
+        # background graph persists).
+        brain._executor.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
 
     def test_close_calls_vector_store_close(self, brain):
         brain._executor = MagicMock()

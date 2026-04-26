@@ -59,6 +59,11 @@ import {
 
 import { AxonConfigValidateTool, AxonConfigSetTool, runConfigSetupWizard } from './tools/config';
 
+import {
+  AxonSecurityStatusTool, AxonSecurityBootstrapTool, AxonSecurityUnlockTool,
+  AxonSecurityLockTool, AxonSecurityChangePassphraseTool,
+} from './tools/security';
+
 import { showGovernancePanel } from './governance/panel';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -163,6 +168,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('axonConfigValidate', new AxonConfigValidateTool()),
         (vscode as any).lm.registerTool('axon_config_set', new AxonConfigSetTool()),
         (vscode as any).lm.registerTool('axonConfigSet', new AxonConfigSetTool()),
+        (vscode as any).lm.registerTool('security_status', new AxonSecurityStatusTool()),
+        (vscode as any).lm.registerTool('security_bootstrap', new AxonSecurityBootstrapTool()),
+        (vscode as any).lm.registerTool('security_unlock', new AxonSecurityUnlockTool()),
+        (vscode as any).lm.registerTool('security_lock', new AxonSecurityLockTool()),
+        (vscode as any).lm.registerTool('security_change_passphrase', new AxonSecurityChangePassphraseTool()),
       );
       state.outputChannel.appendLine('Successfully registered all Axon tools.');
     } else {

@@ -38,6 +38,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -223,6 +224,11 @@ class SealedCache:
     def __init__(self, cache_dir: Path) -> None:
         self._path = cache_dir
         self._wiped = False
+        # wipe() is idempotent in intent but the disk-walk + os.remove loop
+        # was not concurrency-safe — two threads wiping at once could each
+        # iterate the same files and trigger ``FileNotFoundError`` on the
+        # loser. Serialize wipes per-cache.
+        self._wipe_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Construction
@@ -285,6 +291,13 @@ class SealedCache:
                 if not src.is_file():
                     continue
                 rel = src.relative_to(sealed_dir)
+                # Skip the .security/ subtree — it holds key wraps and
+                # rotation receipts that backends never read at query time
+                # and that, if mirrored into the plaintext cache, would
+                # leak wrap material into the OS temp dir on every mount.
+                rel_parts = rel.parts
+                if rel_parts and rel_parts[0] == ".security":
+                    continue
                 dst = cache_dir / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 if is_sealed_file(src):
@@ -322,11 +335,14 @@ class SealedCache:
     def wipe(self) -> None:
         """Securely delete every cache file, then remove the cache dir.
         Idempotent — calling on an already-wiped cache is a no-op.
+        Thread-safe — concurrent wipes serialise on ``_wipe_lock`` so the
+        on-disk walk doesn't race itself into a ``FileNotFoundError``.
         """
-        if self._wiped:
-            return
-        _wipe_dir_contents(self._path)
-        self._wiped = True
+        with self._wipe_lock:
+            if self._wiped:
+                return
+            _wipe_dir_contents(self._path)
+            self._wiped = True
 
     # ------------------------------------------------------------------
     # Context-manager protocol

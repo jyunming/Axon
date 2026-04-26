@@ -196,8 +196,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 🔐 | **[Share Mount Sealed (plan)](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SEALED.md)** | Encrypted-at-rest share mounts — the next big design change for OneDrive-safe sharing |
 | 📊 | **[Governance Console](https://github.com/jyunming/Axon/blob/main/docs/GOVERNANCE_CONSOLE.md)** | Audit trail, maintenance runbook, session management |
 | 📈 | **[Evaluation Guide](https://github.com/jyunming/Axon/blob/main/docs/EVALUATION.md)** | RAGAS metrics, running evals, building testsets |
-| 🛠️ | **[Development Guide](https://github.com/jyunming/Axon/blob/main/docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks |
-| 📦 | **[Packaging & Release](https://github.com/jyunming/Axon/blob/main/docs/packaging_release.md)** | Single-package PyPI release with optional Rust acceleration |
+| 🛠️ | **[Development Guide](https://github.com/jyunming/Axon/blob/main/docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks, packaging & release |
 
 ---
 

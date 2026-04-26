@@ -741,6 +741,47 @@ class AxonConfig:
     graph_rag_llmlingua_model: str = (
         "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank"
     )
+    # ── GraphRAG cache + persistence knobs ─────────────────────────────────
+    # Audit P1: previously read via getattr(cfg, "...", default) which
+    # silently bypassed YAML loading and the config-validation API. Each
+    # of these is now a real dataclass field so config.yaml entries take
+    # effect and are visible to /config/get + /config/update.
+    graph_rag_profile: bool = False
+    graph_rag_extraction_cache: bool = True
+    graph_rag_extraction_cache_size: int = 5000
+    graph_rag_global_answer_cache: bool = True
+    graph_rag_global_answer_cache_size: int = 500
+    graph_rag_global_map_cache: bool = True
+    graph_rag_global_map_cache_size: int = 2000
+    graph_rag_global_max_map_chunks: int = 200
+    graph_rag_global_reduce_skip_if_top_points_le: int = 0
+    graph_rag_global_reduce_skip_if_top_score_gte: int = 0
+    graph_rag_llm_cache: bool = True
+    graph_rag_llm_cache_size: int = 2000
+    graph_rag_local_batch_fetch: bool = True
+    graph_rag_local_cached_incoming: bool = True
+    graph_rag_local_cached_incoming_counts: bool = True
+    graph_rag_local_early_cutoff: bool = True
+    graph_rag_local_early_cutoff_factor: float = 1.5
+    graph_rag_local_entity_degree_fast: bool = True
+    graph_rag_local_relation_support_fast: bool = True
+    graph_rag_map_auto_workers: bool = True
+    graph_rag_map_use_dedicated_pool: bool = False
+    graph_rag_rebuild_skip_if_unchanged: bool = True
+    graph_rag_relation_compact_persist: bool = True
+    graph_rag_relation_pickle_cache: bool = False
+    graph_rag_relation_pickle_cache_protocol: int = 4
+    graph_rag_relation_shard_count: int = 16
+    graph_rag_relation_shard_list_manifest: bool = True
+    graph_rag_relation_shard_load_workers: int = 4
+    graph_rag_relation_shard_parallel_load: bool = True
+    graph_rag_relation_shard_parallel_signatures: bool = True
+    graph_rag_relation_shard_parallel_writes: bool = True
+    graph_rag_relation_shard_persist: bool = False
+    graph_rag_relation_shard_selective_rewrite: bool = True
+    graph_rag_relation_shard_signature_workers: int = 4
+    graph_rag_relation_shard_write_workers: int = 4
+    graph_rag_community_summary_compact_persist: bool = True
     # LLM request timeout in seconds (applied where the provider client supports it)
     llm_timeout: int = 60
     # REPL shell passthrough policy for `!command`.

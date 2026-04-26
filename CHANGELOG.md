@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.2.1] - 2026-04-25
+
+### ✨ New Features
+
+- **Sealed-mount stack**: Encrypted-at-rest project sharing via AES-256-GCM + per-share AES-KW key wrap; works on cloud-sync mounts (OneDrive, Dropbox, Google Drive) without any server. Adds `/security/{status,bootstrap,unlock,lock,change-passphrase}` REST routes, matching MCP / VS Code LM tools, and `axon /store` REPL commands.
+- **Cross-machine staleness detection**: Owner writes `version.json` after each ingest; grantees auto-detect re-indexes via marker bump (or per-query polling when `mount_refresh_mode=per_query`).
+- **Three-tier sync test strategy**: Unit (mock filesystem), integration (real WebDAV via Nextcloud-in-Docker), smoke (manual OneDrive recipe in `docs/SHARE_MOUNT_SMOKE.md`).
+- **Single-PR release automation**: `scripts/bump_version.py` bumps `pyproject.toml`, rebuilds + bundles VSIX, refreshes `Cargo.lock`, and runs `audit_packaging.py` in one command.
+
+### 🐛 Bug Fixes
+
+- **Sealed-share lifecycle**: Hard-revoke now bulk-deletes share wraps BEFORE promoting the rotated DEK so a crash mid-revoke can never leave grantees with mismatched keys; bumps `version.json` so mounted grantees notice. `_executor.shutdown(wait=False)` now waits on submitted futures so background graph persists are not silently dropped on close.
+- **Concurrency hardening**: TOCTOU races on lazy-initialised `_graph_lock` / `_traversal_cache_lock` / `_persist_executor` properties closed via eager init in `AxonBrain.__init__` plus DCL fallback in mixins; `SealedCache.wipe()` is now thread-safe; `governance.emit()` reuses a singleton thread pool instead of spawning a daemon per audit event.
+- **API hardening**: `/query/stream` now yields tokens incrementally (was buffering full response); CORS middleware actually applies `api.allow_origins` from config; lifespan re-raises so brain init failures fail fast; `_unlock_failures` rate-limit dict no longer grows unbounded and only ticks on credential failures.
+- **Loaders SSRF**: URL loader now SSRF-checks every redirect hop (was only initial + final URL); pre-checks Content-Length to avoid OOM on hostile origins. `_hashlib.md5(..., usedforsecurity=False)` annotation on the ingest-refresh dedup hash so FIPS-mode runtimes don't reject it.
+- **Rerank**: Tolerant LLM score parser pulls the first numeric run from the response (previously returned 0.0 on `"Score: 8"`-style replies, making rerank useless).
+- **Empty-list ValueError**: `ThreadPoolExecutor(max_workers=min(N, len(...)))` calls now `max(1, ...)` so empty result lists don't crash MultiVectorStore / MultiBM25Retriever / compression / rerank.
+- **Atomic + cloud-sync-safe writes**: `_save_code_graph`, `_do_save_entity_graph`, and graph-rag JSON/bytes writers now use `_atomic_replace` with a copy+unlink fallback for transient cloud-sync locks.
+- **GLiNER NER backend**: `_extract_entities_gliner` now traps `ImportError` and surfaces a clear "install with `pip install axon-rag[gliner]`" hint instead of failing silently.
+- **`graph_rag_*` config knobs**: ~30 knobs that were read via `getattr(cfg, …, default)` are now declared `AxonConfig` dataclass fields so they round-trip through YAML, validation, and `/config/get`.
+
+### 🔒 Security
+
+- **Sealed cache `.security/` skip**: Plaintext cache no longer mirrors the wrap-material directory into the OS temp dir.
+- **Governance panel CSP**: Replaced `script-src 'unsafe-inline'` with a per-render nonce; inline `onclick` handlers moved to `addEventListener`.
+- **Embedding retry framework**: `_retry_call` wraps Ollama / OpenAI embedding calls with exponential-backoff + jitter so transient 5xx no longer kills long ingests.
+
+### 📚 Docs
+
+- New: `docs/SHARE_MOUNT_SEALED.md`, `docs/SHARE_MOUNT_SMOKE.md`, `docs/AUDIT_2026_04_26.md`.
+- README + `docs/SETUP.md`: vector store default updated to TurboQuantDB; tool / endpoint counts corrected.
+- `CLAUDE.md`: bumped current version pointer.
+
 ## [0.2.0] - 2026-04-22
 
 ### ✨ New Features

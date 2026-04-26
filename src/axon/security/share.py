@@ -899,22 +899,16 @@ def _hard_revoke(
                 pass
             raise SecurityError(f"hard_revoke failed to atomically replace {src}: {exc}") from exc
         files_resealed += 1
-    # Promote staged DEK over the live one. The staged DEK is identical
-    # to what we'd compute now; using it ensures a crash-safe ordering.
-    dek_wrap_path = project_dir / ".security" / "dek.wrapped"
-    try:
-        os.replace(_rotation_dek_path(project_dir), dek_wrap_path)
-    except OSError as exc:
-        raise SecurityError(
-            f"hard_revoke failed to promote staged DEK at {dek_wrap_path}: {exc}"
-        ) from exc
     # Track which specific key_id was wrap-deleted before the bulk-delete.
     wrap_existed = share_wrap_path(project_dir, key_id).is_file() if key_id else False
-    # Nuke every share wrap — surviving grantees re-redeem to pick up
-    # the new DEK. (Persisting per-share KEKs encrypted under the
-    # master so we can re-wrap surviving shares without the original
-    # token is a future enhancement; for v1, all-shares-invalidated
-    # matches the "compromised master" UX.)
+    # Nuke every share wrap BEFORE promoting the staged DEK. If we
+    # crashed in the OPPOSITE order (promote-then-delete), surviving
+    # wraps would still encode the OLD DEK while the project files were
+    # already encrypted under the NEW DEK — grantees would silently get
+    # decryption failures. Deleting wraps first means the worst-case
+    # crash window leaves "no shares + project still on the new DEK"
+    # which is recoverable by re-issuing shares; the original ordering
+    # could leave surviving shares irrecoverably broken.
     invalidated: list[str] = list_sealed_share_key_ids(project_dir)
     shares_dir = project_dir / SHARE_DIR_NAME
     if shares_dir.is_dir():
@@ -924,6 +918,15 @@ def _hard_revoke(
                     entry.unlink()
                 except OSError as exc:
                     logger.debug("Could not delete share wrap %s: %s", entry, exc)
+    # Promote staged DEK over the live one. The staged DEK is identical
+    # to what we'd compute now; using it ensures a crash-safe ordering.
+    dek_wrap_path = project_dir / ".security" / "dek.wrapped"
+    try:
+        os.replace(_rotation_dek_path(project_dir), dek_wrap_path)
+    except OSError as exc:
+        raise SecurityError(
+            f"hard_revoke failed to promote staged DEK at {dek_wrap_path}: {exc}"
+        ) from exc
     # Refresh the sealed marker to carry the new seal_id.
     _write_sealed_marker(
         project_dir,
@@ -933,6 +936,17 @@ def _hard_revoke(
     )
     # Rotation complete — clear the staging context.
     _clear_rotation_context(project_dir)
+    # Bump the cross-machine staleness marker so any grantee still
+    # holding open file handles to the old DEK detects the rotation
+    # on next mount-switch and refreshes (audit P1: previously, the
+    # marker was only bumped by ingest, so a quiet rotation could go
+    # undetected by mounted grantees).
+    try:
+        from axon.version_marker import bump as _vm_bump
+
+        _vm_bump(project_dir)
+    except Exception as _vm_exc:  # pragma: no cover — defensive
+        logger.debug("hard_revoke: version_marker bump raised: %s", _vm_exc)
     logger.info(
         "Hard-revoked sealed project '%s': rotated DEK, resealed %d files "
         "(%d already rotated by prior crashed run), invalidated %d share(s) "

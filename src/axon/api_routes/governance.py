@@ -253,7 +253,11 @@ async def governance_set_maintenance(
     state: str,
     req: Request,
 ):
-    """Audited operator wrapper: set project maintenance state."""
+    """Audited operator wrapper: set project maintenance state.
+    Lives at ``POST /governance/project/maintenance`` (router prefix
+    ``/governance``); the JSON-body sibling at ``POST /project/maintenance``
+    is on the maintenance router. Both audit via ``gov.emit``.
+    """
     from axon import governance as gov
     from axon.api_schemas import _VALID_PROJECT_NAME_RE
     from axon.maintenance import apply_maintenance_state

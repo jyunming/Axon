@@ -411,9 +411,18 @@ export async function ingestCurrentFile(apiBase: string): Promise<void> {
   const text = editor.document.getText();
   const source = path.basename(filePath);
   try {
-    await httpPost(`${apiBase}/add_texts`, {
+    // Inspect the response status — httpPost only throws on transport
+    // errors, so a 4xx/5xx (project not found, store locked, etc.)
+    // would silently flash a "success" toast (audit P1).
+    const result = await httpPost(`${apiBase}/add_texts`, {
       docs: [{ text, metadata: { source: filePath } }],
     }, apiKey);
+    if (result.status !== 200) {
+      let detail = result.body;
+      try { detail = formatDetail(JSON.parse(result.body), result.body); } catch { /* keep raw */ }
+      vscode.window.showErrorMessage(`Axon: Ingest failed (${result.status}) — ${detail}`);
+      return;
+    }
     vscode.window.showInformationMessage(`Axon: Ingested "${source}" into the knowledge base.`);
     state.outputChannel.appendLine(`Ingested file: ${filePath}`);
   } catch (err) {

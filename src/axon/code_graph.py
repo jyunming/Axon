@@ -25,13 +25,22 @@ class CodeGraphMixin:
         return {"nodes": {}, "edges": []}
 
     def _save_code_graph(self) -> None:
-        """Persist code graph to disk."""
+        """Persist code graph to disk.
+
+        Atomic + cloud-sync-safe: writes to a sibling ``.tmp`` first
+        and uses :func:`axon.version_marker._atomic_replace` so a
+        crash mid-write doesn't zero ``.code_graph.json`` (audit P1).
+        """
         import json
         import pathlib
 
+        from axon.version_marker import _atomic_replace as _safe_replace
+
         path = pathlib.Path(self.config.bm25_path) / ".code_graph.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self._code_graph), encoding="utf-8")
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self._code_graph), encoding="utf-8")
+        _safe_replace(tmp, path)
 
     def _build_code_graph_from_chunks(self, chunks: list[dict]) -> None:
         """Build/update code graph nodes and CONTAINS/IMPORTS edges from codebase chunks.

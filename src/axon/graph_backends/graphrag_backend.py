@@ -91,31 +91,51 @@ class GraphRagBackend:
         """Trigger community detection on the attached brain.
         Delegates to ``AxonBrain.finalize_graph()`` which rebuilds community
         summaries when the graph is dirty or *force* is True.
+
+        Failures are logged + propagated so a broken Leiden detector
+        cannot return ``FinalizationResult`` claiming success (audit
+        P1: previously swallowed all exceptions silently).
         """
         try:
             self._brain.finalize_graph(force=force)
         except Exception:
-            pass
+            import logging
+
+            logging.getLogger("Axon").exception(
+                "graphrag finalize failed (force=%s); state may be partially rebuilt", force
+            )
+            raise
         n_communities = len(getattr(self._brain, "_community_summaries", {}))
         return FinalizationResult(communities_built=n_communities, backend_id=BACKEND_ID)
 
     def clear(self) -> None:
-        """Clear all GraphRAG state from the attached brain."""
-        self._brain._entity_graph.clear()
-        self._brain._relation_graph.clear()
-        self._brain._community_levels.clear()
-        self._brain._community_summaries.clear()
+        """Clear all GraphRAG state from the attached brain.
+
+        Holds ``_graph_lock`` to prevent concurrent ``/graph/data``
+        readers from iterating mid-clear (audit P1: previously
+        unlocked, would crash readers with ``RuntimeError: dictionary
+        changed size during iteration``).
+        """
+        with self._brain._graph_lock:
+            self._brain._entity_graph.clear()
+            self._brain._relation_graph.clear()
+            self._brain._community_levels.clear()
+            self._brain._community_summaries.clear()
 
     def delete_documents(self, chunk_ids: list[str]) -> None:
-        """Remove chunk IDs from entity graph; drop entities that become empty."""
+        """Remove chunk IDs from entity graph; drop entities that become empty.
+
+        Holds ``_graph_lock`` for the same reason as :meth:`clear`.
+        """
         chunk_id_set = set(chunk_ids)
-        for entity in list(self._brain._entity_graph):
-            node = self._brain._entity_graph[entity]
-            if not isinstance(node, dict):
-                continue
-            node["chunk_ids"] = [c for c in node.get("chunk_ids", []) if c not in chunk_id_set]
-            if not node["chunk_ids"]:
-                del self._brain._entity_graph[entity]
+        with self._brain._graph_lock:
+            for entity in list(self._brain._entity_graph):
+                node = self._brain._entity_graph[entity]
+                if not isinstance(node, dict):
+                    continue
+                node["chunk_ids"] = [c for c in node.get("chunk_ids", []) if c not in chunk_id_set]
+                if not node["chunk_ids"]:
+                    del self._brain._entity_graph[entity]
 
     def status(self) -> dict:
         """Return lightweight graph statistics (no side effects)."""

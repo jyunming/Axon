@@ -62,16 +62,25 @@ _ROUTE_PROFILES: dict = {
 
 
 class QueryRouterMixin:
+    # Class-level guard — same TOCTOU rationale as GraphRagMixin._lazy_init_lock.
+    # Production code goes through AxonBrain.__init__ which initialises every
+    # internal eagerly, so this lock is almost never contended.
+    _lazy_init_lock: threading.Lock = threading.Lock()
+
     @property
     def _graph_lock(self) -> threading.RLock:
         if not hasattr(self, "_graph_lock_internal"):
-            self._graph_lock_internal = threading.RLock()
+            with QueryRouterMixin._lazy_init_lock:
+                if not hasattr(self, "_graph_lock_internal"):
+                    self._graph_lock_internal = threading.RLock()
         return self._graph_lock_internal
 
     @property
     def _traversal_cache_lock(self) -> threading.Lock:
         if not hasattr(self, "_traversal_cache_lock_internal"):
-            self._traversal_cache_lock_internal = threading.Lock()
+            with QueryRouterMixin._lazy_init_lock:
+                if not hasattr(self, "_traversal_cache_lock_internal"):
+                    self._traversal_cache_lock_internal = threading.Lock()
         return self._traversal_cache_lock_internal
 
     @property
@@ -80,7 +89,9 @@ class QueryRouterMixin:
         GraphRagMixin overrides this with the real lazy-initialised index.
         """
         if not hasattr(self, "_entity_token_index_internal"):
-            self._entity_token_index_internal: dict = {}
+            with QueryRouterMixin._lazy_init_lock:
+                if not hasattr(self, "_entity_token_index_internal"):
+                    self._entity_token_index_internal: dict = {}
         return self._entity_token_index_internal
 
     def _rebuild_entity_token_index(self) -> None:

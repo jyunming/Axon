@@ -467,25 +467,49 @@ class URLLoader(BaseLoader):
 
         url = _rewrite_github_url(url)  # Gap-5: rewrite before SSRF check
         self._check_ssrf(url)
+        # Disable httpx's auto-redirect and walk the chain manually so
+        # that EVERY intermediate hop is SSRF-checked (audit P1: a 302
+        # to ``http://169.254.169.254/`` would previously be followed
+        # silently because the SSRF check only ran on the initial URL
+        # and the final URL — never the hops in between).
         try:
-            with httpx.Client(timeout=30.0, follow_redirects=True, max_redirects=5) as client:
-                resp = client.get(url)
+            with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+                current = url
+                for _hop in range(6):  # initial + up to 5 redirects
+                    resp = client.get(current)
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        loc = resp.headers.get("location")
+                        if not loc:
+                            raise ValueError(f"Redirect from '{current}' missing Location header.")
+                        # httpx accepts relative redirects; resolve before SSRF check.
+                        current = str(httpx.URL(current).join(loc))
+                        self._check_ssrf(current)
+                        continue
+                    break
+                else:
+                    raise ValueError(f"Too many redirects fetching '{url}'.")
         except httpx.TimeoutException:
             raise ValueError(f"Request to '{url}' timed out.")
-        except httpx.TooManyRedirects:
-            raise ValueError(f"Too many redirects fetching '{url}'.")
         except httpx.RequestError as exc:
             raise ValueError(f"Failed to fetch '{url}': {exc}")
-        # Re-validate after redirects to prevent SSRF bypass via 301/302 redirect chains
-        final_url = str(resp.url)
-        if final_url != url:
-            self._check_ssrf(final_url)
         if resp.status_code != 200:
             raise ValueError(f"'{url}' returned HTTP {resp.status_code}.")
         content_type = resp.headers.get("content-type", "")
         if not content_type.startswith("text/"):
             raise ValueError(
                 f"Non-text content type '{content_type}' for '{url}'. Only text/* is accepted."
+            )
+        # Cheap pre-check: trust the server's Content-Length when present
+        # so a hostile origin can't pre-emptively OOM us by streaming
+        # gigabytes (the loop below also enforces the cap, but bailing
+        # before reading saves bandwidth).
+        try:
+            advertised = int(resp.headers.get("content-length", "0") or "0")
+        except ValueError:
+            advertised = 0
+        if advertised > _MAX_FILE_BYTES:
+            raise ValueError(
+                f"URL content exceeds the {_MAX_FILE_BYTES // (1024 * 1024)} MB limit."
             )
         raw = resp.text
         if len(raw.encode("utf-8")) > _MAX_FILE_BYTES:

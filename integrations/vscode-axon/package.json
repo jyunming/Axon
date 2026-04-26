@@ -832,6 +832,10 @@
       {
         "command": "axon.configSetup",
         "title": "Axon: Config Setup Wizard"
+      },
+      {
+        "command": "axon.showGovernancePanel",
+        "title": "Axon: Open Governance Panel"
       }
     ],
     "configuration": {
