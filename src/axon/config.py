@@ -220,6 +220,9 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "discussion_fallback",
         "hybrid_weight",
         "hybrid_mode",
+        "sparse_retrieval",
+        "sparse_model",
+        "sparse_weight",
         "raptor_chunk_group_size",
         "dedup_on_ingest",
         "graph_backend",
@@ -355,6 +358,10 @@ class AxonConfig:
 
     def __post_init__(self) -> None:
         """Populate fields from environment variables and resolve storage paths."""
+        # Validate sparse_weight is in [0.0, 1.0] — values outside this range
+        # produce negative or >1 blended scores in fuse_sparse.
+        if not (0.0 <= self.sparse_weight <= 1.0):
+            raise ValueError(f"sparse_weight must be between 0.0 and 1.0, got {self.sparse_weight}")
         # 1. API Keys and URLs
         if not self.api_key:
             self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
@@ -427,6 +434,13 @@ class AxonConfig:
     hybrid_search: bool = True
     hybrid_weight: float = 0.7  # 1.0 = Pure Semantic, 0.0 = Pure Keyword
     hybrid_mode: Literal["weighted", "rrf"] = "rrf"  # Hybrid fusion mode (rrf is more robust)
+    # Learned sparse retrieval (Phase 1 — SPLADE).
+    # Off by default; requires `pip install axon-rag[sparse]` (transformers + torch).
+    # When enabled, AxonBrain initialises a SpladeSparseRetriever and merges its
+    # results into the hybrid pipeline via axon.sparse_retrieval.fuse_sparse.
+    sparse_retrieval: bool = False
+    sparse_model: str = "naver/splade-cocondenser-ensembledistil"
+    sparse_weight: float = 0.3  # Weight applied to sparse scores during fusion (0.0–1.0)
     # Chunking
     chunk_strategy: Literal["recursive", "semantic", "markdown", "cosine_semantic"] = "semantic"
     chunk_size: int = 1000
@@ -1075,6 +1089,9 @@ class AxonConfig:
                 "similarity_threshold": flat["similarity_threshold"],
                 "hybrid_search": flat["hybrid_search"],
                 "hybrid_weight": flat["hybrid_weight"],
+                "sparse_retrieval": flat["sparse_retrieval"],
+                "sparse_model": flat["sparse_model"],
+                "sparse_weight": flat["sparse_weight"],
                 "parent_chunk_size": flat["parent_chunk_size"],
                 "raptor": flat["raptor"],
                 "raptor_chunk_group_size": flat["raptor_chunk_group_size"],
