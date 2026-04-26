@@ -975,4 +975,4 @@ curl -X POST http://localhost:8000/graph/finalize
 *See [GOVERNANCE_CONSOLE.md](GOVERNANCE_CONSOLE.md) for the full audit and monitoring runbook.*
 *See [EVALUATION.md](EVALUATION.md) for RAGAS metrics, smoke tests, and building testsets.*
 *See [OFFLINE_GUIDE.md](OFFLINE_GUIDE.md) for air-gap setup, model pre-download, and local-assets-only mode.*
-*See [SHARE_MOUNT_SEALED.md](SHARE_MOUNT_SEALED.md) for the sealed-mount encrypted-at-rest sharing system.*
+*See [SHARING.md](SHARING.md) for plaintext and sealed sharing setup, OneDrive/Dropbox/Google Drive walkthroughs, and the filesystem compatibility matrix.*

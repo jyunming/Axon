@@ -490,7 +490,7 @@ $EDITOR ~/.config/axon/config.yaml
 notepad $env:USERPROFILE\.config\axon\config.yaml
 ```
 
-> **Data storage:** Your knowledge base always uses the AxonStore structure at `~/.axon/AxonStore/<username>/` by default. To move it to a shared drive or different disk, set `store.base` in `config.yaml` or the `AXON_STORE_BASE` env var — see [AXON_STORE.md](AXON_STORE.md). **Do not** point `store.base` at a OneDrive / Dropbox / Google Drive folder — SQLite-backed components corrupt on cloud sync. See [SHARE_MOUNT.md](SHARE_MOUNT.md) for the supported-filesystem matrix.
+> **Data storage:** Your knowledge base always uses the AxonStore structure at `~/.axon/AxonStore/<username>/` by default. To move it to a shared drive or different disk, set `store.base` in `config.yaml` or the `AXON_STORE_BASE` env var — see [AXON_STORE.md](AXON_STORE.md). For plaintext mode, **do not** point `store.base` at a OneDrive / Dropbox / Google Drive folder — SQLite-backed components corrupt on cloud sync. If you need a cloud-sync path, use sealed sharing instead. See [SHARING.md](SHARING.md) for the full filesystem matrix and OneDrive/Dropbox/Google Drive setup.
 
 Here are complete configurations for each tier:
 

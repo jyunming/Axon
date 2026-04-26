@@ -3,7 +3,7 @@
 When an owner queries a sealed project, the on-disk files are AES-GCM
 ciphertext. Backends like TurboQuantDB / LanceDB / BM25 mmap their data
 files for performance — and mmap can't see through encryption. The
-v1 policy (decision §5.1 in ``docs/SHARE_MOUNT_SEALED.md``, locked
+v1 policy (decision §5.1 in ``docs/architecture/SEALED_SHARING_DESIGN.md``, locked
 2026-04-25) is to **decrypt the whole project into an ephemeral
 plaintext cache** in the OS temp dir at mount time, point the backend
 at the cache path, and wipe the cache on close. Backends mmap the

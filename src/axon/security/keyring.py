@@ -13,7 +13,7 @@ The wrapper:
   DEKs.
 
 The **passphrase fallback** for headless / no-keyring environments is
-out of scope for Phase 1 (per ``docs/SHARE_MOUNT_SEALED.md`` §6 phase
+out of scope for Phase 1 (per ``docs/architecture/SEALED_SHARING_DESIGN.md`` §6 phase
 list — keyring + passphrase fallback together are a Phase 2
 deliverable). For now, callers on a no-keyring machine will see a
 clear ``KeyringUnavailableError`` and can choose between installing a
@@ -58,7 +58,7 @@ class KeyringUnavailableError(RuntimeError):
       - WSL distro that hasn't been configured for Linux Secret Service.
       - A ``keyring`` install that defaulted to the no-op ``keyring.backends.fail``
         backend.
-    The Phase 2 work in ``docs/SHARE_MOUNT_SEALED.md`` will add a
+    The Phase 2 work in ``docs/architecture/SEALED_SHARING_DESIGN.md`` will add a
     passphrase-protected file fallback for these cases. Until then,
     install one of:
       - Linux: ``apt install gnome-keyring`` (requires a D-Bus session)

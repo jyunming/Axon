@@ -1,4 +1,4 @@
-# SHARE_MOUNT_SEALED — plan for encrypted-at-rest share mounts
+# SEALED_SHARING_DESIGN — plan for encrypted-at-rest share mounts
 
 > **Status:** Phases 1–6 shipped; Phase 7 (smoke verification) shipped.
 > All cryptographic code, key-management, share lifecycle, ephemeral
@@ -306,7 +306,7 @@ later phases add reach and polish.
 | **4** | Revocation: soft `revoke` (manifest mark) + hard `revoke --rotate` (re-encrypt + per-share KEK regeneration); progress UX for hard; tests covering both flows + cached-bytes-after-rotate negative case | ✅ **SHIPPED** (`share.py` `revoke_sealed_share`, PR #75) |
 | **5** | Cross-interface surfaces — REST `/store/seal`, `/share/generate?sealed=true&ttl_days=N`, `/share/revoke?rotate=true`; MCP tools (`seal_project`, `share_project sealed=true`, `revoke_share rotate=true`); REPL `/store seal <name>`, `/share generate --sealed`, `/share revoke --rotate`; CLI flags; docs (`SHARE_MOUNT.md` rewrite + cross-link) | ✅ **SHIPPED** |
 | **6** | Passphrase fallback for headless / no-keyring environments (Phase 1 deferred from §5.3) | ✅ **SHIPPED** |
-| **7** | Verification: extend `SHARE_MOUNT_SMOKE.md` with sealed-store steps; real two-machine OneDrive run before tagging | ✅ **SHIPPED** (`docs/SHARE_MOUNT_SEALED_SMOKE.md` §"Phase 7" + `tests/test_sealed_switch_project.py`) |
+| **7** | Verification: extend `scripts/qa/SEALED_SHARE_SMOKE.md` with sealed-store steps; real two-machine OneDrive run before tagging | ✅ **SHIPPED** (`scripts/qa/SEALED_SHARE_SMOKE.md` §"Phase 7" + `tests/test_sealed_switch_project.py`) |
 
 Each phase has its own GitHub issue (templated after #51–#54).
 Total estimated work: ~3–5 weeks of focused effort across the 7
@@ -327,7 +327,7 @@ What CI cannot cover:
 - Real OS keyring on every platform
 - Real two-machine clock skew
 
-Those go in **`SHARE_MOUNT_SMOKE.md` v2** — extended with sealed-store
+Those go in **`scripts/qa/SEALED_SHARE_SMOKE.md`** — extended with sealed-store
 steps, run before any release that touches `axon.security`. The
 existing smoke recipe (Path A) becomes obsolete once sealed mode is
 the default; until then both recipes coexist.
