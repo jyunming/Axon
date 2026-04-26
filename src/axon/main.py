@@ -453,6 +453,38 @@ Your primary goal is to help the user by answering questions based on the provid
         # so ingest(), dedup, and GraphRAG always write to the right place.
         self._own_vector_store: OpenVectorStore = self.vector_store
         self._own_bm25 = self.bm25
+        # Optional learned-sparse retriever (Phase 1 — SPLADE).
+        # Gated on cfg.sparse_retrieval; the SPLADE model + transformers/torch are
+        # only imported here to keep startup fast and the dep optional.
+        self._sparse_retriever = None
+        if getattr(self.config, "sparse_retrieval", False):
+            try:
+                from axon.sparse_retrieval import SpladeSparseRetriever
+
+                _sparse_dir = os.path.join(self.config.bm25_path, "sparse_index")
+                self._sparse_retriever = SpladeSparseRetriever(
+                    storage_path=_sparse_dir,
+                    model=getattr(
+                        self.config,
+                        "sparse_model",
+                        "naver/splade-cocondenser-ensembledistil",
+                    ),
+                )
+            except ImportError as exc:
+                logger.warning(
+                    "Sparse retrieval requested but optional dep is missing (%s). "
+                    "Install with: pip install axon-rag[sparse]. "
+                    "Falling back to dense+BM25 only.",
+                    exc,
+                )
+                self._sparse_retriever = None
+            except Exception as exc:
+                logger.warning(
+                    "Failed to initialise SpladeSparseRetriever: %s. "
+                    "Falling back to dense+BM25 only.",
+                    exc,
+                )
+                self._sparse_retriever = None
         try:
             if self.config.chunk_strategy == "semantic":
                 from axon.splitters import SemanticTextSplitter
@@ -894,6 +926,10 @@ Your primary goal is to help the user by answering questions based on the provid
             return False
         cached = getattr(self, "_mount_version_marker", None)
         current = _read_marker(target)
+        # Stamp the last-refresh time even when nothing changed so the
+        # "switch + TTL" path (see :meth:`QueryRouterMixin._maybe_refresh_mount`)
+        # doesn't keep re-checking on every query after a no-op tick.
+        self._mount_last_refresh_ts = _time.monotonic()
         if not is_newer_than(current, cached):
             return False
         # Mid-sync mismatch protection: re-hash the actual files and compare
@@ -1096,6 +1132,13 @@ Your primary goal is to help the user by answering questions based on the provid
             except Exception as _vm_exc:
                 logger.debug("Could not read mount version marker: %s", _vm_exc)
                 self._mount_version_marker = None
+            # Anchor the TTL clock at switch time so "switch + TTL" mode
+            # only re-checks once *ttl_s* seconds have elapsed since the
+            # mount became active. ``time.monotonic`` is immune to wall-
+            # clock jumps (DST, NTP), which matters on long-lived REPLs.
+            import time as _time_mod
+
+            self._mount_last_refresh_ts = _time_mod.monotonic()
         elif name == "default":
             self.config.vector_store_path = self._base_vector_store_path
             self.config.bm25_path = self._base_bm25_path
@@ -1577,6 +1620,9 @@ Your primary goal is to help the user by answering questions based on the provid
             if self._own_bm25:
                 self._own_bm25.flush()
                 logger.info("finalize_ingest: BM25 corpus flushed.")
+            if getattr(self, "_sparse_retriever", None) is not None:
+                self._sparse_retriever.save()
+                logger.info("finalize_ingest: sparse index flushed.")
             self._save_entity_graph()
             self._save_relation_graph()
             if getattr(self, "_claims_graph", None):
@@ -2361,6 +2407,14 @@ Your primary goal is to help the user by answering questions based on the provid
         n_chunks = len(documents)
         if self._own_bm25:
             self._own_bm25.add_documents(documents, save_deferred=_defer_saves)
+        # Optional learned-sparse index (Phase 1 — SPLADE).
+        # Populated only when cfg.sparse_retrieval is true; failures are logged
+        # but never abort the ingest pipeline.
+        if getattr(self, "_sparse_retriever", None) is not None:
+            try:
+                self._sparse_retriever.add(documents, save=not _defer_saves)
+            except Exception as exc:
+                logger.warning("Sparse retriever add() failed: %s", exc)
         ids = [d["id"] for d in documents]
         texts = [d["text"] for d in documents]
         metadatas = [d.get("metadata", {}) for d in documents]

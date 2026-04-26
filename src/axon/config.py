@@ -220,6 +220,9 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "discussion_fallback",
         "hybrid_weight",
         "hybrid_mode",
+        "sparse_retrieval",
+        "sparse_model",
+        "sparse_weight",
         "raptor_chunk_group_size",
         "dedup_on_ingest",
         "graph_backend",
@@ -252,7 +255,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
     "web_search": {"enabled", "brave_api_key", "num_results", "safe_search"},
     "store": {"base"},
     "repl": {"shell_passthrough"},
-    "api": {"key", "allow_origins"},
+    "api": {"key", "allow_origins", "max_upload_bytes", "max_files_per_request"},
     "bm25": {"path"},
     "query_transformations": {
         "multi_query",
@@ -355,6 +358,10 @@ class AxonConfig:
 
     def __post_init__(self) -> None:
         """Populate fields from environment variables and resolve storage paths."""
+        # Validate sparse_weight is in [0.0, 1.0] — values outside this range
+        # produce negative or >1 blended scores in fuse_sparse.
+        if not (0.0 <= self.sparse_weight <= 1.0):
+            raise ValueError(f"sparse_weight must be between 0.0 and 1.0, got {self.sparse_weight}")
         # 1. API Keys and URLs
         if not self.api_key:
             self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))
@@ -427,6 +434,13 @@ class AxonConfig:
     hybrid_search: bool = True
     hybrid_weight: float = 0.7  # 1.0 = Pure Semantic, 0.0 = Pure Keyword
     hybrid_mode: Literal["weighted", "rrf"] = "rrf"  # Hybrid fusion mode (rrf is more robust)
+    # Learned sparse retrieval (Phase 1 — SPLADE).
+    # Off by default; requires `pip install axon-rag[sparse]` (transformers + torch).
+    # When enabled, AxonBrain initialises a SpladeSparseRetriever and merges its
+    # results into the hybrid pipeline via axon.sparse_retrieval.fuse_sparse.
+    sparse_retrieval: bool = False
+    sparse_model: str = "naver/splade-cocondenser-ensembledistil"
+    sparse_weight: float = 0.3  # Weight applied to sparse scores during fusion (0.0–1.0)
     # Chunking
     chunk_strategy: Literal["recursive", "semantic", "markdown", "cosine_semantic"] = "semantic"
     chunk_size: int = 1000
@@ -821,6 +835,17 @@ class AxonConfig:
     # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
     mount_sync_retry_max: int = 5
     mount_sync_retry_backoff_s: float = 0.5
+    # ── API request size limits (audit A2) ─────────────────────────────────
+    # Per-file size cap on multipart uploads to /ingest/upload. Files
+    # exceeding this byte count receive HTTP 413. 500 MiB is a generous
+    # default; tighten in deployments that front-end with a smaller proxy
+    # body limit. Pydantic schemas independently cap free-form text fields
+    # (text, query) at MAX_TEXT_FIELD_CHARS / MAX_QUERY_FIELD_CHARS.
+    max_upload_bytes: int = 500 * 1024 * 1024
+    # Maximum number of files accepted in a single /ingest/upload request.
+    # Requests exceeding this list length receive HTTP 422. Prevents
+    # accidental directory dumps from saturating the worker pool.
+    max_files_per_request: int = 1000
 
     @classmethod
     def load(cls, path: str | None = None) -> "AxonConfig":
@@ -1001,6 +1026,10 @@ class AxonConfig:
                 config_dict["api_key"] = api_section["key"]
             if "allow_origins" in api_section:
                 config_dict["api_allow_origins"] = api_section["allow_origins"] or []
+            if "max_upload_bytes" in api_section:
+                config_dict["max_upload_bytes"] = int(api_section["max_upload_bytes"])
+            if "max_files_per_request" in api_section:
+                config_dict["max_files_per_request"] = int(api_section["max_files_per_request"])
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -1060,6 +1089,9 @@ class AxonConfig:
                 "similarity_threshold": flat["similarity_threshold"],
                 "hybrid_search": flat["hybrid_search"],
                 "hybrid_weight": flat["hybrid_weight"],
+                "sparse_retrieval": flat["sparse_retrieval"],
+                "sparse_model": flat["sparse_model"],
+                "sparse_weight": flat["sparse_weight"],
                 "parent_chunk_size": flat["parent_chunk_size"],
                 "raptor": flat["raptor"],
                 "raptor_chunk_group_size": flat["raptor_chunk_group_size"],
@@ -1115,6 +1147,8 @@ class AxonConfig:
             "api": {
                 "key": flat["api_key"],
                 "allow_origins": flat["api_allow_origins"],
+                "max_upload_bytes": flat["max_upload_bytes"],
+                "max_files_per_request": flat["max_files_per_request"],
             },
             "projects_root": flat["projects_root"],
         }
