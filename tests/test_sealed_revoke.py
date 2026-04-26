@@ -24,6 +24,7 @@ from axon.security.share import (  # noqa: E402
     list_sealed_share_key_ids,
     redeem_sealed_share,
     revoke_sealed_share,
+    share_kek_path,
     share_wrap_path,
 )
 
@@ -205,19 +206,22 @@ class TestHardRevoke:
         marker_after = read_sealed_marker(proj)
         assert marker_after["seal_id"] == result["new_seal_id"]
 
-    def test_invalidates_all_shares_not_just_revoked(self, kr_backend, owner_user_dir):
+    def test_invalidates_only_revoked_share_survivors_rewrapped(self, kr_backend, owner_user_dir):
+        """Hard revoke only invalidates the trigger share (+ legacy
+        survivors without .kek files). Surviving shares that have .kek
+        files are selectively re-wrapped: their wraps survive under the
+        new DEK, so grantees do NOT need to re-redeem."""
         proj = _populate_and_seal(owner_user_dir)
         for kid in ("ssk_h_a", "ssk_h_b", "ssk_h_c"):
             generate_sealed_share(owner_user_dir, "research", kid, key_id=kid)
         result = revoke_sealed_share(owner_user_dir, "research", "ssk_h_a", rotate=True)
-        # Caller knows exactly which key_ids need re-issuing.
-        assert sorted(result["invalidated_share_key_ids"]) == [
-            "ssk_h_a",
-            "ssk_h_b",
-            "ssk_h_c",
-        ]
-        # Every wrap is gone.
-        assert list_sealed_share_key_ids(proj) == []
+        # Only the revoked key_id needs re-issuing (others were re-wrapped).
+        assert result["invalidated_share_key_ids"] == ["ssk_h_a"]
+        # The revoked wrap is gone; survivors' wraps are still present.
+        assert not share_wrap_path(proj, "ssk_h_a").is_file()
+        assert share_wrap_path(proj, "ssk_h_b").is_file()
+        assert share_wrap_path(proj, "ssk_h_c").is_file()
+        assert sorted(list_sealed_share_key_ids(proj)) == ["ssk_h_b", "ssk_h_c"]
 
     def test_existing_share_string_no_longer_redeems(
         self, kr_backend, owner_user_dir, grantee_user_dir
@@ -319,6 +323,116 @@ class TestHardRevoke:
         # Grantee can now decrypt with the new DEK.
         new_dek = get_grantee_dek("ssk_replacement")
         assert len(new_dek) == 32
+
+
+# ---------------------------------------------------------------------------
+# Per-share KEK persistence (audit C1)
+# ---------------------------------------------------------------------------
+
+
+class TestShareKekPersistence:
+    """Verify that generate_sealed_share writes a .kek sidecar and that
+    hard revoke uses it to selectively re-wrap surviving shares."""
+
+    def test_kek_file_created_at_generate_time(self, kr_backend, owner_user_dir):
+        """generate_sealed_share must write <key_id>.kek alongside the wrap."""
+        proj = _populate_and_seal(owner_user_dir)
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_kek01")
+        kek_path = share_kek_path(proj, "ssk_kek01")
+        assert kek_path.is_file(), ".kek sidecar must exist after generate_sealed_share"
+        # The wrapped KEK is 40 bytes (AES-KW of a 32-byte key).
+        assert kek_path.stat().st_size == 40
+
+    def test_surviving_share_can_decrypt_after_hard_revoke(
+        self, kr_backend, owner_user_dir, grantee_user_dir
+    ):
+        """After hard-revoking one share, a surviving share's wrap is
+        re-encrypted under the new DEK so the grantee can still redeem
+        without re-issuing the share.
+        This is the core guarantee of per-share KEK persistence."""
+        _populate_and_seal(owner_user_dir)
+        # Bob is the victim; Carol is a surviving grantee.
+        share_carol = generate_sealed_share(owner_user_dir, "research", "carol", key_id="ssk_carol")
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_bob")
+
+        # Carol redeems before the revocation.
+        redeem_sealed_share(grantee_user_dir, share_carol["share_string"])
+        carol_dek_before = get_grantee_dek("ssk_carol")
+
+        # Bob's share is hard-revoked.
+        result = revoke_sealed_share(owner_user_dir, "research", "ssk_bob", rotate=True)
+        assert result["status"] == "hard_revoked"
+        # Carol is NOT in invalidated_share_key_ids (she was re-wrapped).
+        assert "ssk_carol" not in result["invalidated_share_key_ids"]
+        # Bob is invalidated.
+        assert "ssk_bob" in result["invalidated_share_key_ids"]
+
+        # Carol's wrap file still exists (replaced with the re-wrapped version).
+        proj = owner_user_dir / "research"
+        assert share_wrap_path(proj, "ssk_carol").is_file()
+        # Bob's wrap file is gone.
+        assert not share_wrap_path(proj, "ssk_bob").is_file()
+
+        # Carol's old share_string still redeems (same key_id, new wrapped DEK).
+        # We need to clear her cached DEK first to force a fresh unwrap.
+        from axon.security.share import delete_grantee_dek
+
+        delete_grantee_dek("ssk_carol")
+        redeem_result = redeem_sealed_share(grantee_user_dir, share_carol["share_string"])
+        assert redeem_result["sealed"] is True
+        carol_dek_after = get_grantee_dek("ssk_carol")
+        # The DEK changed (DEK was rotated).
+        assert carol_dek_after != carol_dek_before
+        assert len(carol_dek_after) == 32
+
+    def test_kek_file_deleted_on_soft_revoke(self, kr_backend, owner_user_dir):
+        """Soft revoke must clean up the .kek sidecar alongside the wrap."""
+        proj = _populate_and_seal(owner_user_dir)
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_soft_kek")
+        kek_path = share_kek_path(proj, "ssk_soft_kek")
+        assert kek_path.is_file()
+        revoke_sealed_share(owner_user_dir, "research", "ssk_soft_kek")
+        assert not kek_path.is_file(), ".kek sidecar must be deleted on soft revoke"
+
+    def test_missing_kek_fallback_invalidates_survivor(self, kr_backend, owner_user_dir):
+        """If a surviving share has no .kek file (legacy project), the
+        surviving share is invalidated (listed in invalidated_share_key_ids)
+        rather than aborting the whole revoke operation."""
+        proj = _populate_and_seal(owner_user_dir)
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_revoke_me")
+        generate_sealed_share(owner_user_dir, "research", "carol", key_id="ssk_legacy")
+
+        # Simulate a legacy share by deleting Carol's .kek sidecar.
+        kek_path = share_kek_path(proj, "ssk_legacy")
+        kek_path.unlink()
+        assert not kek_path.is_file()
+
+        result = revoke_sealed_share(owner_user_dir, "research", "ssk_revoke_me", rotate=True)
+        assert result["status"] == "hard_revoked"
+        # Both the revoked share AND the legacy-fallback share appear in
+        # invalidated_share_key_ids.
+        assert "ssk_revoke_me" in result["invalidated_share_key_ids"]
+        assert "ssk_legacy" in result["invalidated_share_key_ids"]
+        # Both wraps are gone (legacy share was invalidated, not re-wrapped).
+        assert not share_wrap_path(proj, "ssk_revoke_me").is_file()
+        assert not share_wrap_path(proj, "ssk_legacy").is_file()
+
+    def test_multiple_survivors_all_rewrapped(self, kr_backend, owner_user_dir, grantee_user_dir):
+        """All surviving shares with .kek files are re-wrapped in a single
+        hard-revoke call — no limit on how many can survive."""
+        proj = _populate_and_seal(owner_user_dir)
+        survivors = ["ssk_s1", "ssk_s2", "ssk_s3"]
+        for kid in survivors:
+            generate_sealed_share(owner_user_dir, "research", kid, key_id=kid)
+        generate_sealed_share(owner_user_dir, "research", "victim", key_id="ssk_victim")
+
+        result = revoke_sealed_share(owner_user_dir, "research", "ssk_victim", rotate=True)
+        assert result["status"] == "hard_revoked"
+        assert result["invalidated_share_key_ids"] == ["ssk_victim"]
+        # All survivors are still present.
+        for kid in survivors:
+            assert share_wrap_path(proj, kid).is_file(), f"Wrap missing for survivor {kid}"
+        assert sorted(list_sealed_share_key_ids(proj)) == sorted(survivors)
 
 
 # ---------------------------------------------------------------------------

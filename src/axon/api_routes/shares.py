@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+from axon.api_routes._rate_limit import enforce_rate_limit
 from axon.api_schemas import (
     _VALID_PROJECT_NAME_RE,
     ShareExtendRequest,
@@ -169,6 +170,7 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
     from axon import security as _security
     from axon import shares as _shares
 
+    enforce_rate_limit(req, bucket="share_generate", max_hits=10, window_seconds=60.0)
     if not _VALID_PROJECT_NAME_RE.match(request.project):
         raise HTTPException(
             status_code=422,
@@ -247,6 +249,7 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
     from axon import security as _security
     from axon import shares as _shares
 
+    enforce_rate_limit(req, bucket="share_redeem", max_hits=10, window_seconds=60.0)
     user_dir = _api._get_user_dir()
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")

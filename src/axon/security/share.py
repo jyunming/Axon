@@ -75,7 +75,7 @@ import re as _re
 from . import SecurityError
 from . import keyring as _kr
 from .crypto import DEK_LEN
-from .master import get_project_dek
+from .master import get_master_key, get_project_dek
 from .seal import is_project_sealed
 
 _KEY_ID_PATTERN = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -87,11 +87,13 @@ __all__ = [
     "SHARE_KEYRING_PREFIX",
     "SHARE_DIR_NAME",
     "WRAP_FILENAME_FORMAT",
+    "KEK_FILENAME_FORMAT",
     "generate_sealed_share",
     "redeem_sealed_share",
     "get_grantee_dek",
     "delete_grantee_dek",
     "share_wrap_path",
+    "share_kek_path",
     "list_sealed_share_key_ids",
     "revoke_sealed_share",
 ]
@@ -104,6 +106,7 @@ SEALED_SHARE_PREFIX: str = "SEALED1"
 SHARE_KEYRING_PREFIX: str = "axon.share"  # service = "axon.share.<key_id>"
 SHARE_DIR_NAME: str = ".security/shares"
 WRAP_FILENAME_FORMAT: str = "{key_id}.wrapped"
+KEK_FILENAME_FORMAT: str = "{key_id}.kek"
 HKDF_INFO: bytes = b"axon-share-v1"
 
 
@@ -140,6 +143,87 @@ def share_wrap_path(project_dir: Path, key_id: str) -> Path:
     """Return the on-disk path of the wrapped DEK for *key_id*."""
     _validate_key_id(key_id)
     return Path(project_dir) / SHARE_DIR_NAME / WRAP_FILENAME_FORMAT.format(key_id=key_id)
+
+
+def share_kek_path(project_dir: Path, key_id: str) -> Path:
+    """Return the on-disk path of the master-wrapped KEK for *key_id*.
+    Owner-only: this file holds the per-share KEK encrypted under the
+    OWNER'S MASTER (NOT the share token), so the owner can re-derive
+    the KEK at hard-revoke time without needing the share token (which
+    only the grantee has). Enables selective re-wrap on hard revoke
+    instead of forcing every surviving grantee to re-redeem.
+    """
+    _validate_key_id(key_id)
+    return Path(project_dir) / SHARE_DIR_NAME / KEK_FILENAME_FORMAT.format(key_id=key_id)
+
+
+def _persist_share_kek(project_dir: Path, key_id: str, kek: bytes, master: bytes) -> Path:
+    """Wrap *kek* under *master* (AES-KW) and persist atomically.
+    Mirrors the same envelope pattern used for the project DEK in
+    ``master.py`` (40-byte AES-KW output for a 32-byte plaintext key).
+    Used by :func:`generate_sealed_share` so the owner can re-wrap the
+    DEK for surviving grantees during a hard revoke without ever
+    needing the share token back.
+    """
+    if len(kek) != 32:
+        raise SecurityError(f"share KEK must be 32 bytes, got {len(kek)}")
+    if len(master) != 32:
+        raise SecurityError(f"master key must be 32 bytes, got {len(master)}")
+    path = share_kek_path(project_dir, key_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wrapped = aes_key_wrap(master, kek)
+    tmp = path.with_suffix(path.suffix + ".sealing")
+    try:
+        tmp.write_bytes(wrapped)
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise SecurityError(f"Failed to persist share KEK at {path}: {exc}") from exc
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return path
+
+
+def _load_share_kek(project_dir: Path, key_id: str, master: bytes) -> bytes | None:
+    """Load + unwrap the persisted KEK for *key_id*; None if absent.
+    Returns ``None`` (not raises) when the ``.kek`` file is missing,
+    so callers can fall back to the legacy "all-shares-invalidated"
+    behaviour for projects created before per-share KEK persistence
+    was added. Raises :class:`SecurityError` only when the file exists
+    but is unreadable / malformed / won't unwrap.
+    """
+    if len(master) != 32:
+        raise SecurityError(f"master key must be 32 bytes, got {len(master)}")
+    path = share_kek_path(project_dir, key_id)
+    if not path.is_file():
+        return None
+    try:
+        wrapped = path.read_bytes()
+    except OSError as exc:
+        raise SecurityError(f"Failed to read persisted share KEK at {path}: {exc}") from exc
+    try:
+        kek = aes_key_unwrap(master, wrapped)
+    except InvalidUnwrap as exc:
+        raise SecurityError(
+            f"Persisted share KEK at {path} won't unwrap with the current "
+            "master. Project may have been sealed under a different owner."
+        ) from exc
+    except ValueError as exc:
+        raise SecurityError(
+            f"Persisted share KEK at {path} is malformed ({exc}); "
+            "the file may not have finished syncing."
+        ) from exc
+    if len(kek) != 32:
+        raise SecurityError(
+            f"Persisted share KEK at {path} unwrapped to {len(kek)} bytes "
+            "(expected 32); KEK file may be corrupted."
+        )
+    return kek
 
 
 def _derive_share_kek(token_bytes: bytes, key_id: str) -> bytes:
@@ -230,6 +314,14 @@ def generate_sealed_share(
     token_bytes = secrets.token_bytes(32)
     kek = _derive_share_kek(token_bytes, key_id)
     wrapped_dek = aes_key_wrap(kek, dek)  # 40 bytes for a 32-byte DEK
+    # Persist the KEK encrypted under the OWNER'S MASTER so the owner
+    # can re-wrap the DEK for surviving grantees during a hard revoke
+    # without ever needing the share token back. Done BEFORE writing
+    # the wrap file so a crash here doesn't strand a wrap without its
+    # KEK sidecar (a wrap without a KEK falls back to "all
+    # invalidated" on hard revoke; a KEK without a wrap is harmless).
+    master = get_master_key(owner_user_dir)
+    _persist_share_kek(project_dir, key_id, kek, master)
     # Atomic write of the wrap file.
     wrap_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = wrap_path.with_suffix(wrap_path.suffix + ".sealing")
@@ -561,23 +653,24 @@ def revoke_sealed_share(
       their OS keyring CAN still decrypt files synced before the
       revocation. Cached bytes stay decryptable; this is documented
       and covered by the "soft vs hard" trade-off.
-    **Hard (``rotate=True``)** — slow, breaks all cached DEKs:
+    **Hard (``rotate=True``)** — slow, breaks the revoked grantee's cached DEK:
     - Generate a fresh project DEK + a fresh ``seal_id``.
     - Re-encrypt every content file under the project with the new
       DEK + AAD (``make_aad(new_seal_id, rel)``).
     - Update ``.security/dek.wrapped`` (master-wrapped form).
     - Update the sealed marker with the new ``seal_id``.
-    - **Delete every share wrap** in ``.security/shares/`` (including
-      the one being revoked AND every still-valid share's wrap).
-    - Returns the list of invalidated key_ids in
-      ``invalidated_share_key_ids`` so the caller can re-issue them.
-    Why hard revoke kills ALL share wraps in v1: persisting per-share
-    KEKs encrypted-under-master so the owner can re-wrap surviving
-    shares without the original token is a meaningful design surface
-    (more files, more recovery edge-cases) tracked as a follow-up.
-    The simpler "rotate invalidates all" model matches the same UX as
-    "compromised master" — rare, well-understood, all-affected-grantees
-    re-redeem.
+    - **Selective re-wrap** for surviving shares: for each other
+      active share, load the per-share KEK persisted at
+      ``.security/shares/<key_id>.kek``, re-wrap the new DEK under
+      that KEK, and atomically replace ``.security/shares/<key_id>.wrapped``.
+      Surviving grantees can redeem the new wrap without re-issuing.
+    - Legacy fallback: if a surviving share has no ``.kek`` file
+      (project predates per-share KEK persistence), that share is
+      invalidated and listed in ``invalidated_share_key_ids``.
+    - Returns the list of key_ids in ``invalidated_share_key_ids``
+      so the caller can re-issue them (only the revoked share +
+      any legacy-fallback shares — NOT surviving shares that were
+      re-wrapped successfully).
     Args:
         owner_user_dir: Owner's AxonStore user directory.
         project: Sealed project the share belongs to.
@@ -610,7 +703,11 @@ def revoke_sealed_share(
 
 
 def _soft_revoke(project_dir: Path, key_id: str) -> dict[str, Any]:
-    """Delete the wrap file for *key_id* — fresh redeem will fail."""
+    """Delete the wrap file for *key_id* — fresh redeem will fail.
+    Also deletes the persisted ``.kek`` sidecar (if present) so the
+    revoked share's KEK isn't kept around indefinitely. Best-effort:
+    a missing KEK file is fine.
+    """
     wrap = share_wrap_path(project_dir, key_id)
     if not wrap.is_file():
         raise SecurityError(
@@ -621,6 +718,13 @@ def _soft_revoke(project_dir: Path, key_id: str) -> dict[str, Any]:
         wrap.unlink()
     except OSError as exc:
         raise SecurityError(f"Failed to delete sealed-share wrap at {wrap}: {exc}") from exc
+    # Best-effort: also drop the persisted KEK sidecar.
+    kek_path = share_kek_path(project_dir, key_id)
+    if kek_path.is_file():
+        try:
+            kek_path.unlink()
+        except OSError as exc:
+            logger.debug("Could not delete share KEK sidecar %s: %s", kek_path, exc)
     logger.info("Soft-revoked sealed share key_id=%s under %s", key_id, project_dir)
     return {
         "status": "soft_revoked",
@@ -899,27 +1003,94 @@ def _hard_revoke(
                 pass
             raise SecurityError(f"hard_revoke failed to atomically replace {src}: {exc}") from exc
         files_resealed += 1
-    # Track which specific key_id was wrap-deleted before the bulk-delete.
+    # Track which specific key_id was wrap-deleted before any cleanup.
     wrap_existed = share_wrap_path(project_dir, key_id).is_file() if key_id else False
-    # Nuke every share wrap BEFORE promoting the staged DEK. If we
-    # crashed in the OPPOSITE order (promote-then-delete), surviving
-    # wraps would still encode the OLD DEK while the project files were
-    # already encrypted under the NEW DEK — grantees would silently get
-    # decryption failures. Deleting wraps first means the worst-case
-    # crash window leaves "no shares + project still on the new DEK"
-    # which is recoverable by re-issuing shares; the original ordering
-    # could leave surviving shares irrecoverably broken.
-    invalidated: list[str] = list_sealed_share_key_ids(project_dir)
-    shares_dir = project_dir / SHARE_DIR_NAME
-    if shares_dir.is_dir():
-        for entry in shares_dir.iterdir():
-            if entry.is_file() and entry.name.endswith(".wrapped"):
-                try:
-                    entry.unlink()
-                except OSError as exc:
-                    logger.debug("Could not delete share wrap %s: %s", entry, exc)
-    # Promote staged DEK over the live one. The staged DEK is identical
-    # to what we'd compute now; using it ensures a crash-safe ordering.
+    # Selective re-wrap (audit C1):
+    #   1. Enumerate every existing share key_id (the union of "to be
+    #      revoked" and "to survive").
+    #   2. For each SURVIVING key_id, try to load its persisted KEK.
+    #      - On hit  → AES-KW wrap the new DEK under that KEK and stage
+    #        the new wrap to ``<key_id>.wrapped.new``.
+    #      - On miss → log a one-shot warning and treat the share as
+    #        invalidated (legacy fallback for projects created before
+    #        per-share KEK persistence shipped).
+    #   3. Promote the staged DEK over the live one.
+    #   4. For each surviving key_id with a staged ``.wrapped.new``,
+    #      atomically rename it over ``<key_id>.wrapped``. For the
+    #      revoked key_id (and any survivor without a KEK), delete the
+    #      old ``.wrapped``. Always delete the revoked key_id's ``.kek``.
+    # Crash window analysis: if we crash AFTER promoting the staged DEK
+    # but BEFORE renaming all the ``.wrapped.new`` files, the project's
+    # live state is "new DEK on disk + a mix of old/new wraps". A
+    # subsequent successful revoke (or manual fixup) will detect the
+    # mismatch — the next call's stage_rotation will see no rotation
+    # marker (we cleared it on success), so it would mint a fresh DEK
+    # and re-rotate. The .wrapped.new files would still be cleanable by
+    # ops. We surface the partial state via a clear error path on read.
+    all_key_ids: list[str] = list_sealed_share_key_ids(project_dir)
+    survivor_ids = [kid for kid in all_key_ids if kid != key_id]
+    rewrapped_survivors: list[str] = []
+    invalidated_survivors: list[str] = []
+    legacy_warned = False
+    for survivor_kid in survivor_ids:
+        try:
+            survivor_kek = _load_share_kek(project_dir, survivor_kid, master)
+        except SecurityError as exc:
+            # KEK file present but unwrap/read failed — treat as
+            # invalidated rather than aborting the whole revoke (an
+            # unrelated grantee shouldn't block the revocation).
+            logger.warning(
+                "hard_revoke: failed to load KEK for surviving share %s "
+                "(%s); will invalidate this share. Re-issue required.",
+                survivor_kid,
+                exc,
+            )
+            invalidated_survivors.append(survivor_kid)
+            continue
+        if survivor_kek is None:
+            # Legacy project — per-share KEK was never persisted. Fall
+            # back to "all surviving shares invalidated" with a single
+            # consolidated warning so the log isn't spammed once per
+            # share.
+            if not legacy_warned:
+                logger.warning(
+                    "hard_revoke: surviving share(s) in project at %s are "
+                    "missing per-share KEK files (.security/shares/<key_id>.kek). "
+                    "These shares cannot be selectively re-wrapped and will be "
+                    "invalidated. Grantees for those shares must re-redeem. "
+                    "New shares generated after this revoke will persist KEK files.",
+                    project_dir,
+                )
+                legacy_warned = True
+            invalidated_survivors.append(survivor_kid)
+            continue
+        new_wrapped_dek = aes_key_wrap(survivor_kek, new_dek)
+        # Stage the new wrap to ``.wrapped.new``. Promote AFTER the
+        # staged DEK is promoted so a crash mid-loop never points
+        # surviving grantees at a wrap whose DEK isn't yet live.
+        live_wrap = share_wrap_path(project_dir, survivor_kid)
+        staged_wrap = live_wrap.with_suffix(live_wrap.suffix + ".new")
+        tmp_wrap = live_wrap.with_suffix(live_wrap.suffix + ".tmp")
+        try:
+            # Write to a sibling temp file then rename so a crash mid-write
+            # never leaves a partially-written .wrapped.new on disk.
+            tmp_wrap.write_bytes(new_wrapped_dek)
+            tmp_wrap.replace(staged_wrap)
+        except OSError as exc:
+            tmp_wrap.unlink(missing_ok=True)
+            raise SecurityError(
+                f"hard_revoke failed to stage re-wrap for share {survivor_kid} "
+                f"at {staged_wrap}: {exc}"
+            ) from exc
+        rewrapped_survivors.append(survivor_kid)
+    # Promote staged DEK over the live one BEFORE renaming the staged
+    # share wraps. The staged share wraps already encode the new DEK,
+    # so any ordering where survivors go live before the project DEK is
+    # promoted would be inconsistent — survivors would unwrap to a DEK
+    # that isn't yet the live DEK on the on-disk files. Promote DEK
+    # first, then atomically rename staged wraps. A crash between these
+    # two steps leaves the new DEK live + ``.wrapped.new`` sidecars on
+    # disk; the recovery path below handles them on the next call.
     dek_wrap_path = project_dir / ".security" / "dek.wrapped"
     try:
         os.replace(_rotation_dek_path(project_dir), dek_wrap_path)
@@ -927,6 +1098,61 @@ def _hard_revoke(
         raise SecurityError(
             f"hard_revoke failed to promote staged DEK at {dek_wrap_path}: {exc}"
         ) from exc
+    # Atomically rename each staged ``.wrapped.new`` over the live
+    # ``.wrapped``. Any failure here leaves a recoverable state (the
+    # next call's read of the staged file lets ops complete by hand).
+    shares_dir = project_dir / SHARE_DIR_NAME
+    for survivor_kid in rewrapped_survivors:
+        live_wrap = share_wrap_path(project_dir, survivor_kid)
+        staged_wrap = live_wrap.with_suffix(live_wrap.suffix + ".new")
+        try:
+            os.replace(staged_wrap, live_wrap)
+        except OSError as exc:
+            raise SecurityError(
+                f"hard_revoke: staged DEK promoted but failed to atomically "
+                f"rename re-wrap {staged_wrap} → {live_wrap} ({exc}). "
+                "Manual recovery: rename the .wrapped.new files into place."
+            ) from exc
+    # Delete the wraps + KEKs of the revoked + invalidated key_ids.
+    # The revoked key_id is always cleaned up (wrap + KEK deleted);
+    # surviving shares without a usable KEK fall through to the legacy
+    # "must re-redeem" path and also get their files deleted.
+    # ``delete_keyids`` is used ONLY for on-disk cleanup (best-effort:
+    # the files may not exist). ``invalidated_share_key_ids`` in the
+    # return dict lists only key_ids that were REAL shares and now need
+    # re-issuing — phantom key_ids (trigger key_id that never had a
+    # wrap) are excluded from the audit output.
+    delete_keyids = set(invalidated_survivors)
+    if key_id:
+        delete_keyids.add(key_id)
+    if shares_dir.is_dir():
+        for delete_kid in delete_keyids:
+            for path in (
+                share_wrap_path(project_dir, delete_kid),
+                share_kek_path(project_dir, delete_kid),
+            ):
+                if path.is_file():
+                    try:
+                        path.unlink()
+                    except OSError as exc:
+                        logger.debug("Could not delete %s: %s", path, exc)
+        # Also sweep any orphaned ``.wrapped.new`` left from earlier
+        # crashed runs (not from this run — those have all been
+        # promoted by now).
+        for entry in shares_dir.iterdir():
+            if entry.is_file() and entry.name.endswith(".wrapped.new"):
+                try:
+                    entry.unlink()
+                except OSError as exc:
+                    logger.debug("Could not delete orphan stage %s: %s", entry, exc)
+    # ``invalidated_share_key_ids`` lists only key_ids that were actual
+    # shares and now need re-issuing (the revoked one if it existed +
+    # any survivors that fell back to the legacy/error path). Phantom
+    # key_ids (the trigger key_id was never a real share) are excluded.
+    invalidated_set = set(invalidated_survivors)
+    if key_id and key_id in all_key_ids:
+        invalidated_set.add(key_id)
+    invalidated: list[str] = sorted(invalidated_set)
     # Refresh the sealed marker to carry the new seal_id.
     _write_sealed_marker(
         project_dir,

@@ -41,15 +41,9 @@ def _require_local_turboquantdb(brain, action: str = "This action") -> None:
         )
 
 
-@router.get("/health")
-async def health_check():
-    """Return 200 with status 'ok' when the brain is ready; 503 when not yet available."""
-    from axon import api as _api
-
-    brain = _api.brain
-    if brain is None:
-        return JSONResponse({"status": "initializing"}, status_code=503)
-    return {"status": "ok", "project": getattr(brain, "_active_project", "default")}
+# NOTE: The legacy `/health` route lives in `axon.api_routes.health` as of PR
+# audit-batch-A1; that module preserves it as a backward-compatible alias for
+# the new `/health/ready` probe (audit AUDIT_2026_04_26.md).
 
 
 _SENSITIVE_FIELDS = frozenset(

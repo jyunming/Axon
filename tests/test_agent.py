@@ -456,9 +456,8 @@ class TestToolGraphFinalize:
 
 class TestToolListProjects:
     def test_list_projects_no_projects(self):
-        with patch("axon.agent._tool_list_projects") as mock_fn:
-            mock_fn.return_value = "No projects found."
-            result = mock_fn()
+        with patch("axon.projects.list_projects", return_value=[]):
+            result = _tool_list_projects()
         assert "No projects" in result
 
     def test_list_projects_returns_names(self):
@@ -550,9 +549,9 @@ class TestToolAddText:
         brain = _make_brain()
         mock_loader = MagicMock()
         mock_loader.load_text.return_value = [{"text": "hello", "metadata": {}}]
-        with patch("axon.agent.SmartTextLoader", return_value=mock_loader, create=True):
-            with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
-                dispatch_tool(brain, "add_text", {"text": "hello world"})
+        # agent.py imports SmartTextLoader locally from axon.loaders — patch there.
+        with patch("axon.loaders.SmartTextLoader", return_value=mock_loader):
+            dispatch_tool(brain, "add_text", {"text": "hello world"})
         # brain.ingest should have been called
         brain.ingest.assert_called()
 

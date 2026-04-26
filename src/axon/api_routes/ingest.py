@@ -13,6 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Reque
 
 from axon.api_routes import _enforce_write_access
 from axon.api_routes import enforce_project as _enforce_project
+from axon.api_routes._rate_limit import enforce_rate_limit
 from axon.api_schemas import (
     BatchTextIngestRequest,
     DeleteRequest,
@@ -25,11 +26,18 @@ from axon.api_schemas import (
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
+
 # Module-level fallback caps used before the brain config is available.
 # Real values come from AxonConfig.max_upload_bytes / .max_files_per_request
 # which are proper dataclass fields (not getattr defaults).
 MAX_UPLOAD_BYTES: int = 500 * 1024 * 1024  # 500 MiB per file
 MAX_FILES_PER_REQUEST: int = 1000
+
+
+def _project_label(brain: object, request_project: str | None = None) -> str:
+    """Return a stable project label for Prometheus counters."""
+    return request_project or getattr(brain, "_active_project", None) or "_global"
+
 
 _PATH_ENRICHMENT_EXCLUDED_TYPES = frozenset(
     {
@@ -159,6 +167,7 @@ async def ingest_data(
     req: Request,
 ):
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
@@ -171,6 +180,10 @@ async def ingest_data(
     except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=_project_label(brain),
+        surface=getattr(req.state, "surface", "api"),
+    )
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc)
     _api._evict_old_jobs()
@@ -357,12 +370,17 @@ async def get_stale_docs(days: int = 7):
 @router.post("/add_text")
 async def add_text(request: TextIngestRequest):
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=_project_label(brain, request.project),
+        surface="api",
+    )
     if not request.text or not request.text.strip():
         raise HTTPException(status_code=400, detail="Text must not be empty.")
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
@@ -390,6 +408,7 @@ async def add_text(request: TextIngestRequest):
 async def add_texts(request: BatchTextIngestRequest):
     """Ingest a list of documents in a single embedding batch."""
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
@@ -399,6 +418,10 @@ async def add_texts(request: BatchTextIngestRequest):
 
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=_project_label(brain, request.project),
+        surface="api",
+    )
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
     project_key = request.project or brain._active_project
@@ -435,10 +458,12 @@ async def add_texts(request: BatchTextIngestRequest):
 
 
 @router.post("/ingest_url")
-async def ingest_url(request: URLIngestRequest):
+async def ingest_url(request: URLIngestRequest, req: Request):
     """Fetch an HTTP/HTTPS URL and ingest its text content."""
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
+    enforce_rate_limit(req, bucket="ingest_url", max_hits=20, window_seconds=60.0)
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
@@ -446,6 +471,10 @@ async def ingest_url(request: URLIngestRequest):
 
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=_project_label(brain, request.project),
+        surface="api",
+    )
     loader = URLLoader()
     project_key = request.project or brain._active_project
     try:
@@ -474,17 +503,24 @@ async def ingest_url(request: URLIngestRequest):
 
 @router.post("/ingest/upload")
 async def ingest_upload(
+    req: Request,
     files: list[UploadFile] = File(...),
     project: str | None = Form(None),
 ):
     """Accept multipart file uploads, load them through the normal file loaders, and ingest."""
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
+    enforce_rate_limit(req, bucket="ingest_upload", max_hits=30, window_seconds=60.0)
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=_project_label(brain, project),
+        surface="api",
+    )
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
     # Defence in depth: reject obviously oversized batches before any I/O.

@@ -1958,6 +1958,10 @@ def _interactive_repl(
         init_display: Optional _InitDisplay handler to stop after initialization.
         quiet: Suppress spinners and progress bars (auto-enabled for non-TTY stdin).
     """
+    from axon.logging_setup import configure_logging
+
+    configure_logging()
+
     import warnings
 
     warnings.filterwarnings("ignore", category=FutureWarning, module="google")

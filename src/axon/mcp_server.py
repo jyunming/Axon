@@ -854,6 +854,9 @@ async def mount_refresh(project: str | None = None) -> Any:
 
 def main() -> None:
     """Entry point for the axon-mcp console script."""
+    from axon.logging_setup import configure_logging
+
+    configure_logging()
     mcp.run()
 
 

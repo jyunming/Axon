@@ -29,11 +29,13 @@ from __future__ import annotations
 import os
 import secrets
 import struct
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 try:
     from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
     from cryptography.hazmat.primitives.keywrap import (
@@ -54,6 +56,7 @@ __all__ = [
     "NONCE_LEN",
     "TAG_LEN",
     "DEK_LEN",
+    "STREAMING_CHUNK_SIZE",
     "SealedFormatError",
     "SealedFile",
     "generate_dek",
@@ -74,6 +77,12 @@ HEADER_LEN: int = 16  # 4 magic + 1 version + 1 cipher_id + 10 reserved/zero
 NONCE_LEN: int = 12  # AES-GCM standard nonce length
 TAG_LEN: int = 16  # AES-GCM authentication tag length
 DEK_LEN: int = 32  # 256-bit Data Encryption Key
+
+# Default chunk size for streaming encryption — 1 MiB strikes a practical
+# balance between per-call overhead (smaller chunks = more update() calls)
+# and memory residency (larger chunks = more bytes pinned per worker).
+# Override via the ``chunk_size`` kwarg on :meth:`SealedFile.write_stream`.
+STREAMING_CHUNK_SIZE: int = 1024 * 1024
 
 # 4-byte magic | 1-byte version | 1-byte cipher_id | 10-byte reserved (zero)
 _HEADER_STRUCT = struct.Struct(">4sBB10x")
@@ -131,10 +140,27 @@ def _unpack_header(header: bytes) -> tuple[int, int]:
 
 class SealedFile:
     """Atomic AES-256-GCM file wrapper.
-    Both :meth:`write` and :meth:`read` operate on whole-file
-    plaintext: there is no streaming API in v1 (decrypt-into-memory
-    policy per the plan doc). Adding streaming is straightforward later
-    — the on-disk format already records everything needed.
+
+    Three writers, one reader. All three writers produce byte-for-byte
+    compatible output (``MAGIC + header + nonce + ciphertext + tag``)
+    and any of them can be read back with :meth:`read` regardless of
+    which one wrote the file:
+
+    - :meth:`write` — buffers the whole plaintext in memory; simplest
+      and fastest for small payloads (config, metadata, share wraps).
+    - :meth:`write_stream` — encrypts an iterator of plaintext chunks
+      incrementally via the lower-level ``Cipher`` API, never holding
+      more than ``chunk_size`` bytes of plaintext + ciphertext in RAM
+      at once. Use for large content files (vector segments, BM25
+      indexes, raw documents) that would OOM on a buffered write.
+    - :meth:`write_stream_from_path` — convenience wrapper that opens
+      *src_path* for reading and pipes ``chunk_size``-byte reads into
+      ``write_stream``.
+
+    The reader (:meth:`read`) currently still loads the whole file —
+    streaming reads are tracked separately. The point of the streaming
+    writer is removing the 1 GiB ceiling enforced by the seal/revoke
+    paths because *those* paths buffer the entire plaintext.
     """
 
     @staticmethod
@@ -159,6 +185,10 @@ class SealedFile:
         ``<name>.sealing`` file then renamed via :func:`os.replace` so a
         crash mid-write never leaves a half-sealed file at the live
         path.
+
+        For payloads bigger than a few hundred MB, prefer
+        :meth:`write_stream` to avoid pinning the entire plaintext in
+        memory.
         """
         if len(key) != 32:
             raise ValueError(f"key must be 32 bytes (AES-256), got {len(key)}")
@@ -171,6 +201,127 @@ class SealedFile:
         tmp = path.with_suffix(path.suffix + ".sealing")
         tmp.write_bytes(body)
         os.replace(tmp, path)
+
+    @staticmethod
+    def write_stream(
+        path: Path | str,
+        plaintext_iter: Iterable[bytes],
+        key: bytes,
+        *,
+        aad: bytes = b"",
+        chunk_size: int = STREAMING_CHUNK_SIZE,
+    ) -> None:
+        """Encrypt *plaintext_iter* with *key* and write to *path* atomically.
+
+        Streams the encryption with the lower-level
+        :class:`cryptography.hazmat.primitives.ciphers.Cipher` API so
+        only one caller-supplied chunk of plaintext + ciphertext is resident
+        in memory at a time. Memory use is bounded by the caller's chunk size;
+        :meth:`write_stream_from_path` reads in ``chunk_size``-byte blocks. The on-disk layout is identical to :meth:`write`
+        (``MAGIC + header + nonce + ciphertext + tag``); files written
+        by either method are interchangeable on read.
+
+        AES-GCM produces a single authentication tag covering the entire
+        ciphertext, so the writer must hold the destination tempfile
+        open until the iterator is exhausted and ``finalize()`` returns
+        — only then is the trailing 16-byte tag known. The atomic
+        ``tempfile + os.replace`` discipline still applies: a crash
+        mid-write leaves the original ``path`` intact (or absent) but
+        never partially overwritten.
+
+        Args:
+            path: Destination file path.
+            plaintext_iter: Any iterable of ``bytes`` chunks. Empty
+                chunks are skipped silently. Whole-payload zero-byte
+                files (an empty iterator) ARE valid — they produce a
+                sealed file whose ciphertext section is zero bytes long.
+            key: 32-byte AES-256 key.
+            aad: Additional Authenticated Data — bound into the GCM
+                tag but NOT stored in the file. Same semantics as
+                :meth:`write`.
+            chunk_size: Bytes pulled per ``encryptor.update()`` call.
+                Iterator chunks larger than ``chunk_size`` are passed
+                through whole; smaller iterator chunks are passed
+                through whole. The parameter is mainly a hint to
+                :meth:`write_stream_from_path` controlling its read
+                size — for direct callers who provide their own iterator
+                it has no effect on per-chunk processing because
+                ``encryptor.update`` accepts arbitrarily-sized inputs.
+        """
+        if len(key) != 32:
+            raise ValueError(f"key must be 32 bytes (AES-256), got {len(key)}")
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        path = Path(path)
+        nonce = os.urandom(NONCE_LEN)
+        cipher = Cipher(algorithms.AES(key), modes.GCM(nonce))
+        encryptor = cipher.encryptor()
+        if aad:
+            # Must be supplied BEFORE the first update() call. AESGCM in
+            # the high-level AEAD API does this implicitly; the low-level
+            # Cipher API surfaces the ordering requirement to the caller.
+            encryptor.authenticate_additional_data(aad)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".sealing")
+        # Open BEFORE the loop so we can stream-write ciphertext chunks
+        # as they're produced. Atomic os.replace at the end.
+        try:
+            with tmp.open("wb") as fh:
+                fh.write(_pack_header())
+                fh.write(nonce)
+                for chunk in plaintext_iter:
+                    if not chunk:
+                        continue
+                    ct = encryptor.update(chunk)
+                    if ct:
+                        fh.write(ct)
+                # finalize() returns any remaining ciphertext (typically
+                # empty for GCM) and computes the auth tag. The tag is
+                # then available on encryptor.tag — append it to the
+                # file so the existing read() path can pick it up.
+                tail = encryptor.finalize()
+                if tail:
+                    fh.write(tail)
+                fh.write(encryptor.tag)
+            os.replace(tmp, path)
+        except BaseException:
+            # Best-effort cleanup on any failure — never leave a partial
+            # ``.sealing`` tempfile behind.
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def write_stream_from_path(
+        src_path: Path | str,
+        dst_path: Path | str,
+        key: bytes,
+        *,
+        aad: bytes = b"",
+        chunk_size: int = STREAMING_CHUNK_SIZE,
+    ) -> None:
+        """Convenience wrapper: read *src_path* in chunks, seal to *dst_path*.
+
+        Equivalent to opening *src_path* and feeding fixed-size reads
+        into :meth:`write_stream`. Used by the project-seal and
+        hard-revoke paths so a multi-GB content file can be re-encrypted
+        without ever materialising the whole plaintext.
+        """
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        src_path = Path(src_path)
+
+        def _reader() -> Iterator[bytes]:
+            with src_path.open("rb") as fh:
+                while True:
+                    buf = fh.read(chunk_size)
+                    if not buf:
+                        break
+                    yield buf
+
+        SealedFile.write_stream(dst_path, _reader(), key, aad=aad, chunk_size=chunk_size)
 
     @staticmethod
     def read(
