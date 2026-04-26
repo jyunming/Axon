@@ -817,9 +817,9 @@ class AxonConfig:
     # below control whether — and how often — the grantee re-checks that
     # marker to detect the owner re-ingesting while the grantee was idle.
     # "off"        → never auto-refresh; user must `/project switch` again.
-    # "switch"     → cache the marker on switch; no further auto-refresh
-    #                (default — minimal overhead, manual refresh via
-    #                 explicit re-switch only).
+    # "switch"     → re-reads the marker once per TTL interval during queries
+    #                (default — low overhead; set mount_refresh_ttl_s=0 to
+    #                 disable TTL and require an explicit re-switch).
     # "per_query"  → re-read the marker before every retrieval; on a newer
     #                marker, re-open project handles. Adds ~1ms/query.
     mount_refresh_mode: Literal["off", "switch", "per_query"] = "switch"
@@ -1139,6 +1139,11 @@ class AxonConfig:
                 "allow_origins": flat["api_allow_origins"],
             },
             "projects_root": flat["projects_root"],
+        }
+        # Persist security/mount-refresh settings so `config get/set` round-trips work.
+        data["security"] = {
+            "mount_refresh_mode": flat["mount_refresh_mode"],
+            "mount_refresh_ttl_s": flat["mount_refresh_ttl_s"],
         }
         if flat.get("axon_store_base"):
             data["store"] = {"base": flat["axon_store_base"]}
