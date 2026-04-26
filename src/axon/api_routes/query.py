@@ -22,11 +22,16 @@ router = APIRouter()
 @router.post("/query")
 async def query_brain(request: QueryRequest):
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(request.project, brain)
+    _metrics.record_query(
+        project=request.project or getattr(brain, "_active_project", "_global") or "_global",
+        surface="api",
+    )
     try:
         overrides = {
             "top_k": request.top_k,

@@ -153,6 +153,7 @@ async def ingest_data(
     req: Request,
 ):
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
@@ -165,6 +166,10 @@ async def ingest_data(
     except (ValueError, OSError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=getattr(brain, "_active_project", "_global") or "_global",
+        surface=getattr(req.state, "surface", "api"),
+    )
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc)
     _api._evict_old_jobs()
@@ -351,12 +356,17 @@ async def get_stale_docs(days: int = 7):
 @router.post("/add_text")
 async def add_text(request: TextIngestRequest):
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=request.project or getattr(brain, "_active_project", "_global") or "_global",
+        surface="api",
+    )
     if not request.text or not request.text.strip():
         raise HTTPException(status_code=400, detail="Text must not be empty.")
     doc_id = request.doc_id or f"agent_doc_{uuid.uuid4().hex[:8]}"
@@ -384,6 +394,7 @@ async def add_text(request: TextIngestRequest):
 async def add_texts(request: BatchTextIngestRequest):
     """Ingest a list of documents in a single embedding batch."""
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
@@ -393,6 +404,10 @@ async def add_texts(request: BatchTextIngestRequest):
 
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=request.project or getattr(brain, "_active_project", "_global") or "_global",
+        surface="api",
+    )
     results: list[dict] = []
     docs_to_ingest: list[dict] = []
     project_key = request.project or brain._active_project
@@ -432,6 +447,7 @@ async def add_texts(request: BatchTextIngestRequest):
 async def ingest_url(request: URLIngestRequest):
     """Fetch an HTTP/HTTPS URL and ingest its text content."""
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
@@ -440,6 +456,10 @@ async def ingest_url(request: URLIngestRequest):
 
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=request.project or getattr(brain, "_active_project", "_global") or "_global",
+        surface="api",
+    )
     loader = URLLoader()
     project_key = request.project or brain._active_project
     try:
@@ -473,12 +493,17 @@ async def ingest_upload(
 ):
     """Accept multipart file uploads, load them through the normal file loaders, and ingest."""
     from axon import api as _api
+    from axon.api_routes import metrics as _metrics
 
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(project, brain)
     _enforce_write_access(brain, "ingest")
+    _metrics.record_ingest(
+        project=project or getattr(brain, "_active_project", "_global") or "_global",
+        surface="api",
+    )
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
     from axon.loaders import DirectoryLoader
