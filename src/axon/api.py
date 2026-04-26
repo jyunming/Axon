@@ -292,24 +292,30 @@ async def metrics_middleware(request: Request, call_next):
     from axon.api_routes import metrics as _metrics
 
     started = _time.perf_counter()
-    response = await call_next(request)
-    duration = _time.perf_counter() - started
-    # Use route template when available so high-cardinality dynamic
-    # path segments (e.g. /projects/{name}) collapse into one series.
-    route = request.scope.get("route")
-    path = getattr(route, "path", request.url.path)
-    _metrics.record_request(
-        path=path,
-        method=request.method,
-        status=response.status_code,
-        duration_seconds=duration,
-    )
-    return response
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        duration = _time.perf_counter() - started
+        # Use route template when available so high-cardinality dynamic
+        # path segments (e.g. /projects/{name}) collapse into one series.
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)
+        _metrics.record_request(
+            path=path,
+            method=request.method,
+            status=status,
+            duration_seconds=duration,
+        )
 
 
-# Paths that bypass the X-API-Key check. /metrics is public so Prometheus
-# scrapers do not need to ship the secret; /health{,/live,/ready} keep
-# liveness probes from spuriously failing when the API key rotates.
+# Paths that bypass the X-API-Key check.
+# /health{,/live,/ready}: liveness probes must not fail when the API key rotates.
+# /metrics: standard Prometheus scrapers don't ship secrets; operators who need
+#   metrics auth should use a reverse-proxy (e.g. nginx basic-auth) or a network
+#   firewall — not the application-level X-API-Key.
 _AUTH_BYPASS_EXACT = frozenset({"/health", "/health/live", "/health/ready", "/metrics", "/gui"})
 _AUTH_BYPASS_PREFIX = ("/v1/health", "/v1/metrics", "/gui/")
 

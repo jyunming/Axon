@@ -25,6 +25,12 @@ from axon.api_schemas import (
 logger = logging.getLogger("AxonAPI")
 router = APIRouter()
 
+
+def _project_label(brain: object, request_project: str | None = None) -> str:
+    """Return a stable project label for Prometheus counters."""
+    return request_project or getattr(brain, "_active_project", None) or "_global"
+
+
 _PATH_ENRICHMENT_EXCLUDED_TYPES = frozenset(
     {
         "csv",
@@ -167,7 +173,7 @@ async def ingest_data(
         raise HTTPException(status_code=400, detail=f"Invalid path: {str(e)}")
     _enforce_write_access(brain, "ingest")
     _metrics.record_ingest(
-        project=getattr(brain, "_active_project", "_global") or "_global",
+        project=_project_label(brain),
         surface=getattr(req.state, "surface", "api"),
     )
     job_id = uuid.uuid4().hex[:12]
@@ -364,7 +370,7 @@ async def add_text(request: TextIngestRequest):
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
     _metrics.record_ingest(
-        project=request.project or getattr(brain, "_active_project", "_global") or "_global",
+        project=_project_label(brain, request.project),
         surface="api",
     )
     if not request.text or not request.text.strip():
@@ -405,7 +411,7 @@ async def add_texts(request: BatchTextIngestRequest):
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
     _metrics.record_ingest(
-        project=request.project or getattr(brain, "_active_project", "_global") or "_global",
+        project=_project_label(brain, request.project),
         surface="api",
     )
     results: list[dict] = []
@@ -457,7 +463,7 @@ async def ingest_url(request: URLIngestRequest):
     _enforce_project(request.project, brain)
     _enforce_write_access(brain, "ingest")
     _metrics.record_ingest(
-        project=request.project or getattr(brain, "_active_project", "_global") or "_global",
+        project=_project_label(brain, request.project),
         surface="api",
     )
     loader = URLLoader()
@@ -501,7 +507,7 @@ async def ingest_upload(
     _enforce_project(project, brain)
     _enforce_write_access(brain, "ingest")
     _metrics.record_ingest(
-        project=project or getattr(brain, "_active_project", "_global") or "_global",
+        project=_project_label(brain, project),
         surface="api",
     )
     if not files:
