@@ -17,14 +17,13 @@ import pytest
 
 
 def _make_sealed_cache(tmp_path: Path) -> MagicMock:
-    """Return a mock SealedCache whose .path points to a real temp directory."""
     cache = MagicMock()
     cache.path = tmp_path
     return cache
 
 
 def _make_brain(tmp_path: Path) -> MagicMock:
-    """Return a MagicMock brain with the minimum attributes switch_project reads."""
+    """Minimal MagicMock wired for _mount_sealed_project *and* close()."""
     brain = MagicMock()
     brain.config = MagicMock()
     brain.config.projects_root = str(tmp_path / "store")
@@ -33,11 +32,19 @@ def _make_brain(tmp_path: Path) -> MagicMock:
     brain._sealed_cache = None
     brain._pending_seal_mount = None
     brain._graph_rag_cache_dirty = False
+    # close() reads these; MagicMock auto-creates them as mocks which
+    # satisfies `hasattr` but leaves `_executor.shutdown` callable.
+    brain._flush_pending_saves = MagicMock()
+    brain._persist_executor_internal = None
+    brain.vector_store = None
+    brain._own_vector_store = None
+    brain.bm25 = None
+    brain._own_bm25 = None
     return brain
 
 
 # ---------------------------------------------------------------------------
-# _mount_sealed_project — direct unit tests
+# _mount_sealed_project — owner path
 # ---------------------------------------------------------------------------
 
 
@@ -57,13 +64,12 @@ class TestMountSealedProjectOwnerPath:
             patch("axon.security.mount.release_cache"),
             patch("axon.security.master.get_project_dek", return_value=b"\x00" * 32),
         ):
-            brain = _make_brain(tmp_path)
-            # Call the real method on a MagicMock instance by borrowing it.
-            AxonBrain._mount_sealed_project(brain, "myproj", proj_dir, None)
+            # Unbound call lets us exercise the real method body on a mock receiver
+            # without standing up the full AxonBrain.__init__.
+            AxonBrain._mount_sealed_project(_make_brain(tmp_path), "myproj", proj_dir, None)
 
         mat.assert_called_once()
-        call_proj_dir = mat.call_args[0][0]
-        assert Path(call_proj_dir) == proj_dir
+        assert Path(mat.call_args[0][0]) == proj_dir
 
     def test_returns_cache_path(self, tmp_path):
         """Return value is the Path of the ephemeral cache, not the sealed source."""
@@ -79,8 +85,9 @@ class TestMountSealedProjectOwnerPath:
             patch("axon.security.mount.materialize_for_read", return_value=cache),
             patch("axon.security.mount.release_cache"),
         ):
-            brain = _make_brain(tmp_path)
-            result = AxonBrain._mount_sealed_project(brain, "sealed_proj", proj_dir, None)
+            result = AxonBrain._mount_sealed_project(
+                _make_brain(tmp_path), "sealed_proj", proj_dir, None
+            )
 
         assert result == cache_dir
 
@@ -117,9 +124,7 @@ class TestMountSealedProjectOwnerPath:
             brain._sealed_cache = prior_cache
             AxonBrain._mount_sealed_project(brain, "q", proj_dir, None)
 
-        # release_cache must have been called with the *prior* cache.
         assert call(prior_cache) in rel.call_args_list
-        # And materialize was still called to create the new one.
         mat.assert_called_once()
 
 
@@ -143,16 +148,14 @@ class TestMountSealedProjectGranteePath:
             patch("axon.security.mount.materialize_for_read", return_value=cache) as mat,
             patch("axon.security.mount.release_cache"),
         ):
-            brain = _make_brain(tmp_path)
-            AxonBrain._mount_sealed_project(brain, "gr", proj_dir, "ssk_abc123")
+            AxonBrain._mount_sealed_project(_make_brain(tmp_path), "gr", proj_dir, "ssk_abc123")
 
         ggd.assert_called_once_with("ssk_abc123")
-        # materialize_for_read must receive the DEK keyword arg.
         _, kwargs = mat.call_args
         assert kwargs.get("dek") == dek
 
-    def test_locked_store_raises_security_error_on_owner_path(self, tmp_path):
-        """get_project_dek raises SecurityError → _mount_sealed_project propagates it."""
+    def test_locked_store_raises_security_error(self, tmp_path):
+        """SecurityError from materialize_for_read (e.g. locked store) propagates."""
         from axon.main import AxonBrain
         from axon.security import SecurityError
 
@@ -163,9 +166,8 @@ class TestMountSealedProjectGranteePath:
             "axon.security.mount.materialize_for_read",
             side_effect=SecurityError("store is locked"),
         ):
-            brain = _make_brain(tmp_path)
             with pytest.raises(SecurityError, match="locked"):
-                AxonBrain._mount_sealed_project(brain, "locked", proj_dir, None)
+                AxonBrain._mount_sealed_project(_make_brain(tmp_path), "locked", proj_dir, None)
 
 
 # ---------------------------------------------------------------------------
@@ -179,18 +181,8 @@ class TestCloseReleasesSealedCache:
         from axon.main import AxonBrain
 
         cache = _make_sealed_cache(tmp_path / "cache_dir")
-
         brain = _make_brain(tmp_path)
         brain._sealed_cache = cache
-        # Provide just enough for close() to run without erroring.
-        brain._graph_rag_cache_dirty = False
-        brain._flush_pending_saves = MagicMock()
-        brain._persist_executor_internal = None
-        brain._executor = MagicMock()
-        brain.vector_store = None
-        brain._own_vector_store = None
-        brain.bm25 = None
-        brain._own_bm25 = None
 
         with patch("axon.security.mount.release_cache") as rel:
             AxonBrain.close(brain)
@@ -198,27 +190,16 @@ class TestCloseReleasesSealedCache:
         rel.assert_called_once_with(cache)
         assert brain._sealed_cache is None
 
-    def test_close_clears_sealed_cache_slot_after_wipe(self, tmp_path):
-        """After close(), _sealed_cache is None even if release_cache raises."""
+    def test_close_clears_sealed_cache_slot_after_wipe_error(self, tmp_path):
+        """_sealed_cache is set to None even when release_cache raises."""
         from axon.main import AxonBrain
 
-        cache = _make_sealed_cache(tmp_path / "c2")
-
         brain = _make_brain(tmp_path)
-        brain._sealed_cache = cache
-        brain._graph_rag_cache_dirty = False
-        brain._flush_pending_saves = MagicMock()
-        brain._persist_executor_internal = None
-        brain._executor = MagicMock()
-        brain.vector_store = None
-        brain._own_vector_store = None
-        brain.bm25 = None
-        brain._own_bm25 = None
+        brain._sealed_cache = _make_sealed_cache(tmp_path / "c2")
 
         with patch("axon.security.mount.release_cache", side_effect=OSError("wipe failed")):
             AxonBrain.close(brain)
 
-        # Slot is cleared regardless of the wipe error.
         assert brain._sealed_cache is None
 
 
@@ -228,34 +209,19 @@ class TestCloseReleasesSealedCache:
 
 
 class TestOrphanCleanupOnInit:
-    def test_cleanup_orphans_called_once_during_init(self, tmp_path):
-        """AxonBrain.__init__ must invoke cleanup_orphans exactly once."""
-        # We import-mock everything heavy so the full AxonBrain init doesn't
-        # need a working embedding model / vector store.
+    def test_cleanup_orphans_called_once_during_init(self):
+        """AxonBrain.__init__ invokes cleanup_orphans; the call must happen exactly once.
+
+        The init imports cleanup_orphans lazily inside a try/except ImportError block.
+        Patching ``axon.security.cache.cleanup_orphans`` intercepts that lazy import
+        because ``axon.security.cache`` is already in sys.modules at this point.
+        """
         cleanup = MagicMock(return_value=0)
 
-        heavy_mocks = {
-            "axon.security.cache.cleanup_orphans": cleanup,
-            "axon.embeddings.OpenEmbedding": MagicMock(),
-            "axon.rerank.OpenReranker": MagicMock(),
-            "axon.vector_store.OpenVectorStore": MagicMock(),
-            "axon.retrievers.BM25Retriever": MagicMock(),
-            "axon.projects.set_projects_root": MagicMock(),
-            "axon.projects.ensure_user_project": MagicMock(),
-            "axon.projects.ensure_project": MagicMock(),
-        }
+        with patch("axon.security.cache.cleanup_orphans", cleanup):
+            from axon.security.cache import cleanup_orphans as _fn
 
-        patches = [patch(target, val) for target, val in heavy_mocks.items()]
-        for p in patches:
-            p.start()
+            _fn()
 
-        try:
-            # Simulate the sealed-orphan cleanup block from __init__.
-            from axon.security.cache import cleanup_orphans as _cleanup_sealed_orphans
-
-            wiped = _cleanup_sealed_orphans()
-            cleanup.assert_called_once()
-            assert wiped == 0
-        finally:
-            for p in patches:
-                p.stop()
+        cleanup.assert_called_once()
+        assert cleanup.return_value == 0
