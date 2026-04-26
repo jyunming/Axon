@@ -132,8 +132,11 @@ def main():
     import argparse
 
     from axon.config import AxonConfig
+    from axon.logging_setup import configure_logging
     from axon.main import AxonBrain
     from axon.repl import _infer_provider, _InitDisplay, _interactive_repl
+
+    configure_logging()
 
     # On Windows, switch the console to UTF-8 (codepage 65001) so that
     # box-drawing characters and emoji render correctly.

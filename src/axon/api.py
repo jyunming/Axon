@@ -17,13 +17,8 @@ from fastapi.responses import JSONResponse
 from axon import __version__
 from axon import shares as _shares  # noqa: F401 — tests patch axon.api._shares.*
 from axon.api_schemas import _compute_content_hash  # noqa: F401
+from axon.logging_setup import configure_logging, set_request_id
 from axon.main import AxonBrain, AxonConfig
-
-# Setup logging
-
-
-logging.basicConfig(level=logging.INFO)
-
 
 logger = logging.getLogger("AxonAPI")
 
@@ -161,6 +156,7 @@ def _get_user_dir() -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     global brain
     try:
         config_path = os.getenv("AXON_CONFIG_PATH")
@@ -268,13 +264,23 @@ _RAG_API_KEY: str | None = os.getenv("RAG_API_KEY")
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
-    """Attach X-Request-ID and X-Axon-Surface to every request for audit traceability."""
+    """Attach X-Request-ID and X-Axon-Surface to every request for audit traceability.
+
+    Also propagates the request ID into the logging contextvar so that every
+    log record emitted during this request carries ``rid=<request_id>``.
+    """
     from uuid import uuid4
+
+    from axon.logging_setup import reset_request_id as _reset_rid
 
     rid = request.headers.get("X-Request-ID", str(uuid4()))
     request.state.request_id = rid
     request.state.surface = request.headers.get("X-Axon-Surface", "api")
-    response = await call_next(request)
+    token = set_request_id(rid)
+    try:
+        response = await call_next(request)
+    finally:
+        _reset_rid(token)
     response.headers["X-Request-ID"] = rid
     return response
 
