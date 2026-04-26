@@ -1,14 +1,14 @@
 # SHARE_MOUNT_SEALED — plan for encrypted-at-rest share mounts
 
-> **Status:** Plan + design proposal. **Phase 1 (crypto + keyring
-> primitives) shipped on 2026-04-25** as PR #56 / branch
-> `feat/sealed-mount-phase-1`. The four §5 design decisions were
-> locked the same day — see §5 for the resolved options. Phases 2–7
-> are the next code work; each opens its own GitHub issue.
-> Supersedes the rejected `SHARE_MOUNT_REMOTE.md` (server-mediated
-> mounts) — that approach required the owner to run a long-lived
-> `axon-api` reachable by grantees, which broke the offline-owner
-> workflow.
+> **Status:** Phases 1–6 shipped; Phase 7 (smoke verification) shipped.
+> All cryptographic code, key-management, share lifecycle, ephemeral
+> cache, cross-interface surfaces, and passphrase fallback are
+> production-ready. Phase 7 adds the two-machine OneDrive/GDrive
+> smoke procedure and integration tests for ``switch_project``'s
+> sealed path. Supersedes the rejected ``SHARE_MOUNT_REMOTE.md``
+> (server-mediated mounts) — that approach required the owner to run
+> a long-lived ``axon-api`` reachable by grantees, which broke the
+> offline-owner workflow.
 >
 > Builds on the four shipped fixes from `fix/share-mount-sqlite-wal-safety`
 > (issues #51–#54): cloud-sync path classifier, WAL→DELETE journal
@@ -301,12 +301,12 @@ later phases add reach and polish.
 |---|---|---|
 | **0** | This doc + §5 decisions locked + per-phase GitHub issues opened | ✅ doc landed, decisions locked 2026-04-25 |
 | **1** | Crypto foundations: `axon.security.crypto` module (`SealedFile.{write,read}`, AES-KW wrap/unwrap, KEK derivation, `make_aad`), keyring integration with `KeyringUnavailableError`, tests on synthetic data. **Zero behavior change for existing projects.** | ✅ **SHIPPED** — PR #56 / `feat/sealed-mount-phase-1` (2026-04-25) |
-| **2** | **Ephemeral cache subsystem** + **TQDB sealed read** + **LanceDB sealed read** — owner can `axon project seal <name>` on either backend; mount flow reads from the cache; cache wiped on close; PID-based crash recovery. Both backends in one PR (cache makes them backend-agnostic). | Open |
-| **3** | Sealed-share generation + redemption flow — fill in `generate_sealed_share` / `redeem_sealed_share` stubs; grantee can query a sealed project on a shared filesystem | Open |
-| **4** | Revocation: soft `revoke` (manifest mark) + hard `revoke --rotate` (re-encrypt + per-share KEK regeneration); progress UX for hard; tests covering both flows + cached-bytes-after-rotate negative case | Open |
+| **2** | **Ephemeral cache subsystem** + **TQDB sealed read** + **LanceDB sealed read** — owner can `axon project seal <name>` on either backend; mount flow reads from the cache; cache wiped on close; PID-based crash recovery. Both backends in one PR (cache makes them backend-agnostic). | ✅ **SHIPPED** (`cache.py` + `seal.py` + `mount.py` + `main.py` integration) |
+| **3** | Sealed-share generation + redemption flow — fill in `generate_sealed_share` / `redeem_sealed_share` stubs; grantee can query a sealed project on a shared filesystem | ✅ **SHIPPED** (`share.py` `generate_sealed_share` / `redeem_sealed_share`) |
+| **4** | Revocation: soft `revoke` (manifest mark) + hard `revoke --rotate` (re-encrypt + per-share KEK regeneration); progress UX for hard; tests covering both flows + cached-bytes-after-rotate negative case | ✅ **SHIPPED** (`share.py` `revoke_sealed_share`, PR #75) |
 | **5** | Cross-interface surfaces — REST `/store/seal`, `/share/generate?sealed=true&ttl_days=N`, `/share/revoke?rotate=true`; MCP tools (`seal_project`, `share_project sealed=true`, `revoke_share rotate=true`); REPL `/store seal <name>`, `/share generate --sealed`, `/share revoke --rotate`; CLI flags; docs (`SHARE_MOUNT.md` rewrite + cross-link) | ✅ **SHIPPED** |
 | **6** | Passphrase fallback for headless / no-keyring environments (Phase 1 deferred from §5.3) | ✅ **SHIPPED** |
-| **7** | Verification: extend `SHARE_MOUNT_SMOKE.md` with sealed-store steps; real two-machine OneDrive run before tagging | Open |
+| **7** | Verification: extend `SHARE_MOUNT_SMOKE.md` with sealed-store steps; real two-machine OneDrive run before tagging | ✅ **SHIPPED** (`docs/SHARE_MOUNT_SEALED_SMOKE.md` §"Phase 7" + `tests/test_sealed_switch_project.py`) |
 
 Each phase has its own GitHub issue (templated after #51–#54).
 Total estimated work: ~3–5 weeks of focused effort across the 7
