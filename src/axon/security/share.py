@@ -1054,12 +1054,11 @@ def _hard_revoke(
             # share.
             if not legacy_warned:
                 logger.warning(
-                    "hard_revoke: project at %s has no persisted per-share "
-                    "KEK files (.security/shares/<key_id>.kek). Selective "
-                    "re-wrap is unavailable on this legacy project — every "
-                    "surviving share will be invalidated and grantees must "
-                    "re-redeem. New shares generated after this revoke will "
-                    "have KEK persistence enabled.",
+                    "hard_revoke: surviving share(s) in project at %s are "
+                    "missing per-share KEK files (.security/shares/<key_id>.kek). "
+                    "These shares cannot be selectively re-wrapped and will be "
+                    "invalidated. Grantees for those shares must re-redeem. "
+                    "New shares generated after this revoke will persist KEK files.",
                     project_dir,
                 )
                 legacy_warned = True
@@ -1071,9 +1070,14 @@ def _hard_revoke(
         # surviving grantees at a wrap whose DEK isn't yet live.
         live_wrap = share_wrap_path(project_dir, survivor_kid)
         staged_wrap = live_wrap.with_suffix(live_wrap.suffix + ".new")
+        tmp_wrap = live_wrap.with_suffix(live_wrap.suffix + ".tmp")
         try:
-            staged_wrap.write_bytes(new_wrapped_dek)
+            # Write to a sibling temp file then rename so a crash mid-write
+            # never leaves a partially-written .wrapped.new on disk.
+            tmp_wrap.write_bytes(new_wrapped_dek)
+            tmp_wrap.replace(staged_wrap)
         except OSError as exc:
+            tmp_wrap.unlink(missing_ok=True)
             raise SecurityError(
                 f"hard_revoke failed to stage re-wrap for share {survivor_kid} "
                 f"at {staged_wrap}: {exc}"
