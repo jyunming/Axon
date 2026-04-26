@@ -556,6 +556,45 @@ def main():
         "sealed share (key_id starts with 'ssk_'). Required to locate "
         "the wrap file under .security/shares/. Ignored for legacy shares.",
     )
+    # ── Share extend ────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--share-extend",
+        metavar="KEY_ID",
+        help="Extend or clear a share key's expiry, then exit. "
+        "Pair with --share-ttl-days N to set a new TTL from now, or "
+        "omit it to clear the expiry entirely.",
+    )
+    parser.add_argument(
+        "--share-ttl-days",
+        metavar="DAYS",
+        type=int,
+        default=None,
+        help="New TTL in days for --share-extend (omit to clear expiry).",
+    )
+    # ── Store whoami ─────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--store-whoami",
+        action="store_true",
+        help="Show current user identity and AxonStore path, then exit",
+    )
+    # ── Mount refresh ────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--mount-refresh",
+        metavar="MOUNT",
+        nargs="?",
+        const="",
+        help="Refresh a sealed-mount from the owner's latest version, then exit. "
+        "Optionally supply MOUNT name (e.g. mounts/alice_docs); defaults to active project.",
+    )
+    # ── Governance ───────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--governance",
+        metavar="SUBCOMMAND",
+        nargs="?",
+        const="overview",
+        help="Governance operator commands: overview | audit | sessions | projects | "
+        "graph-rebuild. Defaults to 'overview' when no subcommand is given.",
+    )
     # ── Sessions ────────────────────────────────────────────────────────────
     parser.add_argument(
         "--session-list",
@@ -853,6 +892,10 @@ def main():
         and not getattr(args, "share_generate", None)
         and not getattr(args, "share_redeem", None)
         and not getattr(args, "share_revoke", None)
+        and not getattr(args, "share_extend", None)
+        and not getattr(args, "store_whoami", False)
+        and getattr(args, "mount_refresh", None) is None
+        and not getattr(args, "governance", None)
         and not getattr(args, "session_list", False)
         and not getattr(args, "optimize_index", False)
         and not getattr(args, "migrate_vectors", None)
@@ -1238,6 +1281,88 @@ def main():
                 except Exception as exc:
                     print(f"  Revoke failed: {exc}")
                     sys.exit(1)
+            return
+        if args.share_extend:
+            from axon import shares as _shares_mod
+
+            user_dir = Path(config.projects_root)
+            key_id = args.share_extend.strip()
+            ttl_days = getattr(args, "share_ttl_days", None)
+            try:
+                result = _shares_mod.extend_share_key(
+                    owner_user_dir=user_dir, key_id=key_id, ttl_days=ttl_days
+                )
+                new_exp = result.get("expires_at") or "(no expiry)"
+                print(f"  Share '{result['key_id']}' expiry updated → {new_exp}")
+            except Exception as exc:
+                print(f"  Extend failed: {exc}")
+                sys.exit(1)
+            return
+        if args.store_whoami:
+            import getpass as _gp
+
+            username = _gp.getuser()
+            projects_root = Path(config.projects_root)
+            print(f"\n  User:       {username}")
+            print(f"  User dir:   {projects_root}")
+            print(f"  Store path: {projects_root.parent}")
+            active = _proj_mod.get_active_project()
+            print(f"  Project:    {active}\n")
+            return
+        if getattr(args, "mount_refresh", None) is not None:
+            mount_name = args.mount_refresh or None
+            try:
+                from axon.main import AxonBrain as _AxonBrain
+
+                _brain_tmp = _AxonBrain(config)
+                if mount_name:
+                    _brain_tmp.switch_project(mount_name)
+                refreshed = _brain_tmp.refresh_mount()
+                print(f"  Mount refreshed: {refreshed}")
+            except Exception as exc:
+                print(f"  Mount refresh failed: {exc}")
+                sys.exit(1)
+            return
+        if getattr(args, "governance", None) is not None:
+            import json as _json_gov
+
+            sub = (args.governance or "overview").lower().strip()
+            _gov_api_base = os.environ.get("AXON_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+            try:
+                import urllib.request as _ur
+
+                if sub == "graph-rebuild":
+                    _req = _ur.Request(
+                        f"{_gov_api_base}/governance/graph/rebuild",
+                        data=b"{}",
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with _ur.urlopen(_req, timeout=30) as _resp:
+                        _data = _json_gov.loads(_resp.read())
+                    print(_json_gov.dumps(_data, indent=2))
+                    return
+                _GOV_URLS = {
+                    "overview": f"{_gov_api_base}/governance/overview",
+                    "audit": f"{_gov_api_base}/governance/audit",
+                    "sessions": f"{_gov_api_base}/governance/copilot/sessions",
+                    "projects": f"{_gov_api_base}/governance/projects",
+                }
+                if sub not in _GOV_URLS:
+                    print(
+                        f"  Unknown governance subcommand '{sub}'. "
+                        "Choose: overview | audit | sessions | projects | graph-rebuild"
+                    )
+                    sys.exit(1)
+                with _ur.urlopen(_GOV_URLS[sub], timeout=30) as _resp:
+                    _data = _json_gov.loads(_resp.read())
+                print(_json_gov.dumps(_data, indent=2))
+            except Exception as exc:
+                print(
+                    f"  Governance command failed: {exc}\n"
+                    "  Make sure the Axon API server is running (axon-api)."
+                )
+                sys.exit(1)
             return
         if args.session_list:
             from axon.sessions import _list_sessions, _print_sessions

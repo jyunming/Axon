@@ -46,6 +46,7 @@ import {
 import {
   AxonShareProjectTool, AxonRedeemShareTool, AxonRevokeShareTool,
   AxonListSharesTool, AxonInitStoreTool, AxonGetStoreStatusTool,
+  AxonExtendShareTool, AxonStoreWhoamiTool,
   initStore, shareProject, redeemShare, revokeShare, listShares,
 
 } from './tools/shares';
@@ -61,7 +62,7 @@ import { AxonConfigValidateTool, AxonConfigSetTool, runConfigSetupWizard } from 
 
 import {
   AxonSecurityStatusTool, AxonSecurityBootstrapTool, AxonSecurityUnlockTool,
-  AxonSecurityLockTool, AxonSecurityChangePassphraseTool,
+  AxonSecurityLockTool, AxonSecurityChangePassphraseTool, AxonSealProjectTool,
 } from './tools/security';
 
 import { showGovernancePanel } from './governance/panel';
@@ -173,6 +174,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('security_unlock', new AxonSecurityUnlockTool()),
         (vscode as any).lm.registerTool('security_lock', new AxonSecurityLockTool()),
         (vscode as any).lm.registerTool('security_change_passphrase', new AxonSecurityChangePassphraseTool()),
+        (vscode as any).lm.registerTool('seal_project', new AxonSealProjectTool()),
+        (vscode as any).lm.registerTool('extend_share', new AxonExtendShareTool()),
+        (vscode as any).lm.registerTool('store_whoami', new AxonStoreWhoamiTool()),
       );
       state.outputChannel.appendLine('Successfully registered all Axon tools.');
     } else {

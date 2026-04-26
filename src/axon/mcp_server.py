@@ -770,29 +770,6 @@ async def governance_graph_rebuild() -> Any:
     Equivalent to graph_finalize() but writes an audit-log entry and enforces write-lease
     checks. Prefer this over graph_finalize() in automated operator pipelines.
     Returns job metadata including the number of community summaries produced.
-    """
-    return await _post("/governance/graph/rebuild", {})
-
-
-# ---------------------------------------------------------------------------
-# Streaming query (SP-B1 parity sweep — previously REST/CLI only)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def query_stream(
-    query: str,
-    top_k: int | None = None,
-    filters: dict | None = None,
-    project: str | None = None,
-) -> Any:
-    """Ask a question and receive a full streamed answer accumulated into one response.
-    Internally calls the ``/query/stream`` SSE endpoint and collects all tokens
-    before returning, so MCP clients that do not support incremental delivery still
-    receive the complete answer in a single tool result.
-    Use ``query_knowledge`` for a blocking single-round-trip query; use this tool
-    when the server response is expected to be long (> 1000 tokens) or when the
-    LLM provider has a long first-token latency and you want a progress signal.
     Args:
         query: The question to ask.
         top_k: Number of chunks to retrieve for context (overrides global setting).
@@ -810,32 +787,6 @@ async def query_stream(
     if project:
         body["project"] = project
     # Use a longer timeout for streaming; accumulate SSE chunks.
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        accumulated: list[str] = []
-        async with client.stream(
-            "POST", f"{API_BASE}/query/stream", json=body, headers=_headers()
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data:"):
-                    chunk = line[5:].strip()
-                    if chunk and chunk != "[DONE]":
-                        accumulated.append(chunk)
-    return {"answer": "".join(accumulated), "streamed": True}
-
-
-# ---------------------------------------------------------------------------
-# Mount refresh with project targeting (SP-B1 parity sweep)
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def mount_refresh(project: str | None = None) -> Any:
-    """Re-read the owner's version marker for a mounted share project.
-    If *project* is supplied and the active project differs, switches to *project*
-    first. No-op when the target project is not a mount (``mounts/<name>``).
-    Use after the owner has re-ingested content and synced the share directory,
-    to make queries reflect the latest knowledge without restarting the server.
     Args:
         project: The mount project to refresh, e.g. ``"mounts/alice_research"``.
             Omit to refresh the currently active project (must already be a mount).
