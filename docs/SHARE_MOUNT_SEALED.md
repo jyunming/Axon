@@ -118,7 +118,7 @@ Wrapping = AES-256-KW (RFC 5649) — small (40 bytes per wrap), constant time, w
 
 | Key | Owner storage | Grantee storage |
 |---|---|---|
-| **Master** | OS keyring (DPAPI on Windows, Keychain on macOS, Secret Service on Linux) with passphrase fallback at `~/.axon/.security/master.enc` | (Grantees never see the master key) |
+| **Master** | OS keyring (DPAPI on Windows, Keychain on macOS, Secret Service on Linux) with passphrase fallback at `~/.axon/AxonStore/<username>/.security/master.enc` | (Grantees never see the master key) |
 | **Project DEK (encrypted with master)** | `~/.axon/AxonStore/<owner>/<project>/.security/dek.wrapped` | (Not stored — derived from share material at mount time) |
 | **Project DEK (encrypted with per-share KEK)** | `~/.axon/AxonStore/<owner>/<project>/.security/shares/<key_id>.wrapped` | Bytes synced to grantee via OneDrive; same path on grantee side |
 | **Share token (used to derive KEK)** | (Owner generates, transmits via share_string) | OS keyring at `axon.share.<key_id>` after redemption |
@@ -304,8 +304,8 @@ later phases add reach and polish.
 | **2** | **Ephemeral cache subsystem** + **TQDB sealed read** + **LanceDB sealed read** — owner can `axon project seal <name>` on either backend; mount flow reads from the cache; cache wiped on close; PID-based crash recovery. Both backends in one PR (cache makes them backend-agnostic). | Open |
 | **3** | Sealed-share generation + redemption flow — fill in `generate_sealed_share` / `redeem_sealed_share` stubs; grantee can query a sealed project on a shared filesystem | Open |
 | **4** | Revocation: soft `revoke` (manifest mark) + hard `revoke --rotate` (re-encrypt + per-share KEK regeneration); progress UX for hard; tests covering both flows + cached-bytes-after-rotate negative case | Open |
-| **5** | Cross-interface surfaces — REST `/store/seal`, `/share/generate?sealed=true&ttl_days=N`, `/share/revoke?rotate=true`; MCP tools (`seal_project`, `share_project sealed=true`, `revoke_share rotate=true`); REPL `/store seal <name>`, `/share generate --sealed`, `/share revoke --rotate`; CLI flags; docs (`SHARE_MOUNT.md` rewrite + cross-link) | Open |
-| **6** | Passphrase fallback for headless / no-keyring environments (Phase 1 deferred from §5.3) | Open |
+| **5** | Cross-interface surfaces — REST `/store/seal`, `/share/generate?sealed=true&ttl_days=N`, `/share/revoke?rotate=true`; MCP tools (`seal_project`, `share_project sealed=true`, `revoke_share rotate=true`); REPL `/store seal <name>`, `/share generate --sealed`, `/share revoke --rotate`; CLI flags; docs (`SHARE_MOUNT.md` rewrite + cross-link) | ✅ **SHIPPED** |
+| **6** | Passphrase fallback for headless / no-keyring environments (Phase 1 deferred from §5.3) | ✅ **SHIPPED** |
 | **7** | Verification: extend `SHARE_MOUNT_SMOKE.md` with sealed-store steps; real two-machine OneDrive run before tagging | Open |
 
 Each phase has its own GitHub issue (templated after #51–#54).
@@ -355,9 +355,6 @@ the default; until then both recipes coexist.
   fine for v1.
 - **Post-quantum crypto.** AES-256-GCM is the line; PQC is its own
   decade.
-- **Streaming encryption** (decrypt as bytes are read from disk
-  block-by-block). Decrypt-into-memory is simpler and v1 has the RAM
-  budget.
 - **Multi-owner / write access for grantees.** Mounts stay read-only
   by design.
 - **Key escrow / recovery** (e.g. Shamir-secret-sharing the master

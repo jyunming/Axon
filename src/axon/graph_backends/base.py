@@ -3,7 +3,7 @@
 This module defines the stable interface all graph backends must satisfy.
 Concrete implementations live in sibling modules:
   - graphrag_backend.py  (existing GraphRAG, shipped in v0.1)
-  - dynamic_graph_backend.py  (SQLite-WAL temporal graph, planned for v0.3)
+  - dynamic_graph_backend.py  (SQLite temporal graph, DELETE journal mode, v0.3)
 """
 from __future__ import annotations
 

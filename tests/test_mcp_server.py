@@ -70,6 +70,15 @@ EXPECTED_MCP_TOOL_NAMES = {
     "graph_data",
     "graph_backend_status",
     "get_active_leases",
+    # Governance (added by parity sweep B1)
+    "governance_overview",
+    "governance_audit",
+    "governance_sessions",
+    "governance_projects",
+    "governance_graph_rebuild",
+    # Streaming + mount (added by parity sweep B1)
+    "query_stream",
+    "mount_refresh",
 }
 
 

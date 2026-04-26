@@ -1,4 +1,4 @@
-"""Dynamic graph package — SQLite-WAL temporal knowledge graph (v0.3)."""
+"""Dynamic graph package — SQLite temporal knowledge graph, DELETE journal mode (v0.3)."""
 from axon.dynamic_graph.models import (
     Entity,
     Episode,
