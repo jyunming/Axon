@@ -156,8 +156,8 @@ class OpenVectorStore:
             "  2. Use the default TurboQuantDB backend "
             "(vector_store.provider: turboquantdb in config.yaml) — it does "
             "not use SQLite.\n"
-            "  3. See docs/SHARE_MOUNT.md for the full supported / unsupported"
-            " matrix.\n"
+            "  3. See docs/SHARING.md for the full supported / unsupported"
+            " filesystem matrix and OneDrive/Dropbox/Google Drive setup.\n"
         )
         try:
             from rich.console import Console

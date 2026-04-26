@@ -120,7 +120,7 @@ axon --config "vector_store.provider=chroma"
 > /project new chroma-test
 > /ingest C:\path\to\test\corpus
 # EXPECT: loud RuntimeError BEFORE any files are written. The error
-# message must mention OneDrive, the path, and link to docs/SHARE_MOUNT.md.
+# message must mention OneDrive, the path, and link to docs/SHARING.md.
 # If ingest silently succeeds and a chroma.sqlite3 appears in the
 # OneDrive folder → preflight regressed.
 ```
@@ -354,7 +354,7 @@ After running, paste the result into the release PR (or the next
 > coverage in `tests/test_share_mount_sync_reorder.py` exercises the
 > *mechanism* on synthetic local tmpdirs — useful but not equivalent.
 > The server-mediated remote-mount design was explicitly rejected in
-> favour of the [sealed-mount approach](SHARE_MOUNT_SEALED.md), which
+> favour of the [sealed-mount approach](../../docs/architecture/SEALED_SHARING_DESIGN.md), which
 > keeps the shared-filesystem model and adds encryption-at-rest. Until
 > sealed-mount lands universally, run this smoke before each release
 > that touches share-mount code.

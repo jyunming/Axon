@@ -123,9 +123,14 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/refresh` | Re-ingest all tracked files whose content has changed |
 | `/stale [N]` | List docs not refreshed in N days (default 7) |
 | `/share list` | List outgoing and incoming shares |
-| `/share generate <project> <grantee>` | Generate a read-only share key |
-| `/share redeem <key>` | Mount a shared project (read-only) |
-| `/share revoke <key_id>` | Revoke an outgoing share |
+| `/share generate <project> <grantee>` | Generate a share key (auto-detects sealed projects) |
+| `/share generate <project> <grantee> --ttl-days N` | Generate a share key with an expiry of N days |
+| `/share redeem <key>` | Mount a shared project (auto-detects sealed envelopes) |
+| `/share revoke <key_id>` | Soft-revoke a legacy share |
+| `/share revoke <ssk_id> --project <name>` | Soft-revoke a sealed share |
+| `/share revoke <ssk_id> --project <name> --rotate` | Hard-revoke: re-encrypt project with new DEK (invalidates all cached keys) |
+
+> For cloud drives (OneDrive, Dropbox, GDrive): use sealed mode — see [SHARING.md](SHARING.md#sealed-sharing-onedrive--dropbox--google-drive)
 | `/store whoami` | Show AxonStore identity and status |
 | `/store init <path>` | Change the store base path (e.g. to a shared drive) |
 | `/graph status` | Show GraphRAG community build status |

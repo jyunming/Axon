@@ -9,7 +9,7 @@ behaviour — the sealed-share helpers in this file still raise
 ``SecurityError("not configured")``.
 
 The plan landing this work in phases is in
-``docs/SHARE_MOUNT_SEALED.md``. **Phase 1 (this commit) ships the
+``docs/architecture/SEALED_SHARING_DESIGN.md``. **Phase 1 (this commit) ships the
 crypto + keyring primitives only — no code outside this package uses
 them yet.** Behaviour for existing projects is unchanged.
 """
@@ -45,7 +45,7 @@ class SecurityError(Exception):
 # ---------------------------------------------------------------------------
 # Existing stub interface — preserved verbatim from the previous
 # axon/security.py module so every existing caller continues to work.
-# Real implementations land in later phases per docs/SHARE_MOUNT_SEALED.md.
+# Real implementations land in later phases per docs/architecture/SEALED_SHARING_DESIGN.md.
 # ---------------------------------------------------------------------------
 
 

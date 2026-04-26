@@ -7,7 +7,7 @@ operation is **atomic per file**: each file is written to a sibling
 live name — so a crash mid-seal leaves the original file intact (or
 fully sealed) but never partially overwritten.
 
-What gets sealed (per ``docs/SHARE_MOUNT_SEALED.md`` §4.6):
+What gets sealed (per ``docs/architecture/SEALED_SHARING_DESIGN.md`` §4.6):
   - ``meta.json``
   - everything under ``bm25_index/``
   - everything under ``vector_store_data/``

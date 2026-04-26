@@ -31,7 +31,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 - 🔒 **Private by default** — all inference runs locally via Ollama or vLLM. No API key, no upload, no telemetry.
 - 📄 **Ingest anything** — 54 file formats (PDF, DOCX, Jupyter, code, images, URLs) in one command. SHA-256 dedup skips unchanged files.
 - 🤖 **Works in your tools** — `@axon` in Copilot Chat, MCP for Claude Code / Codex / Gemini CLI / Cursor, Graph panel in VS Code or your browser.
-- 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Per-user permissions, full audit trail, no extra infrastructure.
+- 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Sealed (AES-256-GCM encrypted) sharing works safely through OneDrive, Dropbox, and Google Drive. Per-user permissions, full audit trail, no extra infrastructure.
 - 🕸️ **See your knowledge as a graph** — interactive 3D entity-relationship graph. Embedded webview in VS Code; opens in your browser everywhere else. Click any node to jump to the exact source line.
 - 🔬 **Production-grade retrieval** — hybrid search, reranking, HyDE, multi-query expansion, and automatic web fallback. Zero manual tuning.
 
@@ -191,10 +191,7 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 | 🏝️ | **[Offline / Air-gap Guide](https://github.com/jyunming/Axon/blob/main/docs/OFFLINE_GUIDE.md)** | Full air-gap setup, model pre-download, local-assets-only mode |
 | 💻 | **[Code RAG Guide](https://github.com/jyunming/Axon/blob/main/docs/CODE_RAG_GUIDE.md)** | Code graph retrieval and structural search |
 | 🤝 | **[AxonStore](https://github.com/jyunming/Axon/blob/main/docs/AXON_STORE.md)** | Multi-user sharing, revocation, and the lease lifecycle |
-| 📦 | **[Share Mount Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT.md)** | Which filesystems work for cross-machine sharing (and which corrupt) |
-| 🧪 | **[Share Mount Smoke](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SMOKE.md)** | Manual two-machine OneDrive verification recipe (run before each share-mount release) |
-| 🔐 | **[Share Mount Sealed (plan)](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SEALED.md)** | Encrypted-at-rest share mounts — the next big design change for OneDrive-safe sharing |
-| 🔬 | **[Share Mount Sealed Smoke](https://github.com/jyunming/Axon/blob/main/docs/SHARE_MOUNT_SEALED_SMOKE.md)** | Manual verification recipe for sealed-store two-machine runs |
+| 🔐 | **[Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md)** | Plaintext and sealed sharing — which filesystems are safe, OneDrive/Dropbox/Google Drive setup, revocation |
 | 📊 | **[Governance Console](https://github.com/jyunming/Axon/blob/main/docs/GOVERNANCE_CONSOLE.md)** | Audit trail, maintenance runbook, session management |
 | 📈 | **[Evaluation Guide](https://github.com/jyunming/Axon/blob/main/docs/EVALUATION.md)** | RAGAS metrics, running evals, building testsets |
 | 🛠️ | **[Development Guide](https://github.com/jyunming/Axon/blob/main/docs/DEVELOPMENT.md)** | Tests, contributing, pre-commit hooks, packaging & release |

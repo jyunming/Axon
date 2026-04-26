@@ -17,7 +17,7 @@ Two primitive layers:
 This module **only** provides the primitives — no code outside the
 package consumes them yet. Wiring into project-seal / generate-sealed-
 share / redeem-sealed-share lands in Phases 2–4 per
-``docs/SHARE_MOUNT_SEALED.md``.
+``docs/architecture/SEALED_SHARING_DESIGN.md``.
 
 Dependencies: ``cryptography`` (PyPI) — installed via the ``sealed``
 extra (``pip install axon-rag[sealed]``). Importing this module on a
