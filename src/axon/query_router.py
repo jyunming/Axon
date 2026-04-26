@@ -759,16 +759,39 @@ class QueryRouterMixin:
                 )
 
     def _maybe_refresh_mount(self) -> None:
-        """When ``cfg.mount_refresh_mode == "per_query"``, re-check the
-        owner's version marker before retrieval and reopen handles if the
-        owner has re-ingested.
+        """Re-check the owner's version marker before retrieval and reopen
+        handles if the owner has re-ingested.
+
+        Two modes trigger an actual check:
+
+        * ``"per_query"`` -- always checks on every call.
+        * ``"switch"``    -- checks when ``time.monotonic()`` has advanced
+          past ``_last_mount_check_ts + cfg.mount_refresh_ttl_s``.  This
+          provides a TTL-based background refresh without the overhead of
+          per-query disk I/O when the TTL has not expired yet.
+
         ``MountSyncPendingError`` is allowed to propagate so callers (REST
         API, REPL, MCP) can surface a transient "sync in progress" signal
         instead of returning stale results.
         """
-        mode = getattr(self.config, "mount_refresh_mode", "switch")
-        if mode != "per_query":
+        import time as _time
+
+        mode = self.config.mount_refresh_mode
+        if mode == "off":
             return
+
+        should_check = False
+        if mode == "per_query":
+            should_check = True
+        elif mode == "switch":
+            ttl = self.config.mount_refresh_ttl_s
+            if ttl > 0:
+                last = getattr(self, "_last_mount_check_ts", 0.0)
+                should_check = (_time.monotonic() - last) >= ttl
+
+        if not should_check:
+            return
+
         try:
             self.refresh_mount()
         except Exception:
@@ -786,6 +809,12 @@ class QueryRouterMixin:
             import logging as _logging
 
             _logging.getLogger("Axon").debug("refresh_mount failed (non-fatal): %s", _exc)
+        finally:
+            # Always update the timestamp so the next query starts a fresh
+            # TTL interval, even when refresh_mount returned False (no
+            # change) or raised a non-fatal exception.
+            if mode == "switch":
+                self._last_mount_check_ts = _time.monotonic()
 
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
         """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""

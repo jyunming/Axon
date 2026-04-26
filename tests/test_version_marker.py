@@ -266,12 +266,12 @@ class TestRefreshMount:
 class TestMaybeRefreshMount:
     """QueryRouterMixin._maybe_refresh_mount() per-query hook (#53)."""
 
-    def _stub(self, mode: str, refresh_side_effect=None):
+    def _stub(self, mode: str, refresh_side_effect=None, *, ttl: int = 300):
         from types import MethodType, SimpleNamespace
 
         from axon.query_router import QueryRouterMixin
 
-        cfg = SimpleNamespace(mount_refresh_mode=mode)
+        cfg = SimpleNamespace(mount_refresh_mode=mode, mount_refresh_ttl_s=ttl)
         refresh = MagicMockCallable(side_effect=refresh_side_effect)
         stub = SimpleNamespace(
             config=cfg,
@@ -285,8 +285,20 @@ class TestMaybeRefreshMount:
         stub._maybe_refresh_mount()
         assert refresh.call_count == 0
 
-    def test_switch_mode_does_not_refresh(self):
-        stub, refresh = self._stub("switch")
+    def test_switch_mode_within_ttl_does_not_refresh(self):
+        """When the TTL has not yet elapsed, switch mode should not refresh."""
+        import time
+
+        stub, refresh = self._stub("switch", ttl=300)
+        # Seed _last_mount_check_ts so the TTL has NOT elapsed.
+        stub._last_mount_check_ts = time.monotonic()
+        stub._maybe_refresh_mount()
+        assert refresh.call_count == 0
+
+    def test_switch_mode_ttl_zero_never_auto_refreshes(self):
+        """TTL=0 disables TTL-based auto-refresh entirely in switch mode."""
+        stub, refresh = self._stub("switch", ttl=0)
+        # Even without a _last_mount_check_ts set, TTL=0 means no auto-refresh.
         stub._maybe_refresh_mount()
         assert refresh.call_count == 0
 
@@ -306,7 +318,7 @@ class TestMaybeRefreshMount:
 
     def test_other_exceptions_swallowed(self):
         stub, _refresh = self._stub("per_query", refresh_side_effect=RuntimeError("transient"))
-        # Must NOT raise — refresh-machinery bugs should never break a retrieval.
+        # Must NOT raise -- refresh-machinery bugs should never break a retrieval.
         stub._maybe_refresh_mount()
 
 
