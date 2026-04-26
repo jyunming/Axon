@@ -86,6 +86,14 @@ llmlingua = [
 rebel = [
     "transformers>=4.20.0",
 ]
+sparse = [
+    # Phase 1 SPLADE backend for axon.sparse_retrieval.SpladeSparseRetriever.
+    # Optional — only required when rag.sparse_retrieval is true in config.yaml.
+    # torch is intentionally unpinned so the user's environment (CPU/CUDA/ROCm)
+    # picks the right wheel.
+    "transformers>=4.40",
+    "torch>=2.0",
+]
 loaders = [
     "ebooklib>=0.18",
     "striprtf>=0.0.26",

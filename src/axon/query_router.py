@@ -1084,6 +1084,23 @@ class QueryRouterMixin:
                 results = weighted_score_fusion(vector_results, bm25_results, weight=_fusion_weight)
         else:
             results = vector_results
+        # Optional learned-sparse fusion (Phase 1 — SPLADE).
+        # Gated on cfg.sparse_retrieval AND a successfully-initialised retriever.
+        # Errors are swallowed inside fuse_sparse so the dense / hybrid path is
+        # never destabilised.
+        if getattr(cfg, "sparse_retrieval", False) and getattr(self, "_sparse_retriever", None):
+            from axon.sparse_retrieval import fuse_sparse
+
+            results = fuse_sparse(
+                self._sparse_retriever,
+                query,
+                results,
+                top_k=fetch_k,
+                sparse_weight=getattr(cfg, "sparse_weight", 0.3),
+                filter_dict=filters,
+            )
+            diagnostics.channels_activated.append("sparse")
+            trace.channel_raw_counts["sparse"] = len(results)
         # Web Search Fallback (if enabled and local results are insufficient)
         _threshold_score_field = (
             "score"

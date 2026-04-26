@@ -403,6 +403,35 @@ embeddings = list(model.embed(["test sentence"]))
 print(f"Embedding dimension: {len(embeddings[0])}")  # Should print 384
 ```
 
+### Option D — Learned Sparse Retrieval (SPLADE, Phase 1)
+
+In addition to dense embeddings, Axon can run a **learned sparse retriever**
+(SPLADE) alongside the existing BM25 + dense hybrid pipeline.  SPLADE produces
+a sparse vector per document where weights live in the model's vocabulary
+space, giving keyword-style precision plus semantic expansion (synonyms,
+morphological variants).  Results are merged into the hybrid pipeline via
+weighted score fusion — disabled by default.
+
+Install the optional extra (pulls in `transformers` and `torch`):
+
+```bash
+pip install axon-rag[sparse]
+```
+
+Then enable it in `config.yaml`:
+
+```yaml
+rag:
+  sparse_retrieval: true
+  sparse_model: naver/splade-cocondenser-ensembledistil   # ≈440 MB download on first run
+  sparse_weight: 0.3                                       # 0.0–1.0; weight applied to sparse scores
+```
+
+The first ingest after enabling this re-encodes documents into sparse vectors;
+existing dense / BM25 indexes are preserved.  SPLADE inference is CPU-bound
+unless you have a CUDA build of `torch` installed — it is intentionally
+opt-in for that reason.
+
 ---
 
 ## 6. Optional Features (Code Corpus & Vision)
