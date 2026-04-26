@@ -309,7 +309,7 @@ axon> Compare @report.pdf with @notes.docx
 
 ## 4. REST API Reference
 
-**67 endpoints** across 9 route files. Base URL: `http://localhost:8000` (default).
+**68 endpoints** across 12 route files. Base URL: `http://localhost:8000` (default).
 
 Interactive docs: `/docs` (Swagger UI), `/redoc`.
 
@@ -317,7 +317,11 @@ Interactive docs: `/docs` (Swagger UI), `/redoc`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness probe — returns `{"status": "ok", "project": "<active-project>"}` |
+| `GET` | `/health/live` | Liveness probe — always returns `{"status": "alive"}` with `200` while the process is running; does not check brain state |
+| `GET` | `/health/ready` | Readiness probe — returns `{"status": "ok", "project": "<active-project>"}` with `200` when ready; returns `{"status": "initializing"}` with `503` during cold start |
+| `GET` | `/health` | Backward-compatible alias for `/health/ready` |
+
+> **Kubernetes:** use `livenessProbe → /health/live` and `readinessProbe → /health/ready`.
 
 ### 4.2 Query & Search
 
@@ -463,6 +467,18 @@ Always check `/registry/leases` before transitioning to `readonly`. Wait for `ac
 | `POST` | `/llm/copilot/result/{task_id}` | Report Copilot LLM task result |
 
 These endpoints are used internally by the VS Code extension. External callers should use `/query` instead.
+
+### 4.10 Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/metrics` | Prometheus exposition format metrics (`text/plain; version=0.0.4`); returns `503` if `prometheus-client` is not installed |
+
+Exposed metrics: `axon_requests_total` (Counter, labels: `path/method/status`), `axon_request_duration_seconds` (Histogram, labels: `path/method`), `axon_query_total` (Counter, labels: `project/surface`), `axon_ingest_total` (Counter, labels: `project/surface`), `axon_brain_ready` (Gauge — `1` when brain is initialised).
+
+> **Rate limiting:** `/share`, `/ingest`, and `/security` endpoints enforce per-IP rate limiting (default: 10 requests per 60-second window). Requests exceeding the limit receive HTTP `429 Too Many Requests`.
+
+> **Request ID tracking:** every API response includes an `X-Request-ID` header. Governance write routes also emit this value into the audit trail for end-to-end log correlation.
 
 ---
 
@@ -649,6 +665,9 @@ YAML section: `rag:`
 | `rag.hybrid_search` | bool | `true` | Combine vector + BM25 sparse retrieval |
 | `rag.hybrid_weight` | float | `0.7` | Hybrid fusion weight (`1.0` = pure vector, `0.0` = pure BM25; only used in `weighted` mode) |
 | `rag.hybrid_mode` | str | `rrf` | Hybrid fusion mode: `rrf` (Reciprocal Rank Fusion, default) or `weighted` |
+| `rag.sparse_retrieval` | bool | `false` | Enable SPLADE learned sparse retrieval alongside dense+BM25 (requires `pip install 'axon-rag[sparse]'`) |
+| `rag.sparse_model` | str | `naver/splade-cocondenser-ensembledistil` | HuggingFace model ID for the SPLADE sparse encoder |
+| `rag.sparse_weight` | float | `0.3` | Weight applied to sparse scores during hybrid fusion (`0.0`–`1.0`); values outside this range are rejected at startup |
 | `rag.rerank` | bool | `false` | BGE cross-encoder reranker |
 | `rag.rerank_top_k` | int | `5` | Max results to return after re-ranking |
 | `rag.sentence_window` | bool | `false` | Expand retrieved chunks with surrounding sentences |
@@ -797,6 +816,8 @@ YAML section: `offline:`
 |-------|------|---------|-------------|
 | `api.key` | str | `""` | Bearer token required for write endpoints |
 | `api.allow_origins` | list | `[]` | CORS allowed origins (e.g. `["http://localhost:3000"]`) |
+| `api.max_upload_bytes` | int | `524288000` | Maximum file size per `/ingest/upload` multipart upload in bytes (default 500 MiB); requests exceeding this receive HTTP `413` |
+| `api.max_files_per_request` | int | `1000` | Maximum files per `/ingest/upload` batch request; requests exceeding this receive HTTP `422` |
 
 Environment variables for the API server:
 
