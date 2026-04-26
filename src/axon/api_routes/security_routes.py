@@ -75,7 +75,7 @@ async def security_bootstrap(request: SecurityBootstrapRequest):
     from axon import security as _security
 
     try:
-        return _security.bootstrap_store(_current_user_dir(), request.passphrase)
+        return _security.bootstrap_store(_current_user_dir(), request.passphrase.get_secret_value())
     except _security.SecurityError as exc:
         message = str(exc)
         status = 409 if "already bootstrapped" in message.lower() else 400
@@ -96,7 +96,7 @@ async def security_unlock(request: SecurityUnlockRequest, req: Request):
     if len(failures) >= _UNLOCK_MAX_ATTEMPTS:
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
     try:
-        result = _security.unlock_store(_current_user_dir(), request.passphrase)
+        result = _security.unlock_store(_current_user_dir(), request.passphrase.get_secret_value())
         _unlock_failures.pop(client_ip, None)
         return result
     except _security.SecurityError as exc:
@@ -130,8 +130,8 @@ async def security_change_passphrase(request: SecurityChangePassphraseRequest):
     try:
         return _security.change_passphrase(
             _current_user_dir(),
-            request.old_passphrase,
-            request.new_passphrase,
+            request.old_passphrase.get_secret_value(),
+            request.new_passphrase.get_secret_value(),
         )
     except _security.SecurityError as exc:
         message = str(exc)
