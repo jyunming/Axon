@@ -1091,6 +1091,7 @@ class QueryRouterMixin:
         if getattr(cfg, "sparse_retrieval", False) and getattr(self, "_sparse_retriever", None):
             from axon.sparse_retrieval import fuse_sparse
 
+            _sparse_raw_count: list[int] = []
             results = fuse_sparse(
                 self._sparse_retriever,
                 query,
@@ -1098,9 +1099,11 @@ class QueryRouterMixin:
                 top_k=fetch_k,
                 sparse_weight=getattr(cfg, "sparse_weight", 0.3),
                 filter_dict=filters,
+                _raw_count_out=_sparse_raw_count,
             )
             diagnostics.channels_activated.append("sparse")
-            trace.channel_raw_counts["sparse"] = len(results)
+            # Record pre-fusion raw hit count (not the merged result set size).
+            trace.channel_raw_counts["sparse"] = _sparse_raw_count[0] if _sparse_raw_count else 0
         # Web Search Fallback (if enabled and local results are insufficient)
         _threshold_score_field = (
             "score"

@@ -1620,6 +1620,9 @@ Your primary goal is to help the user by answering questions based on the provid
             if self._own_bm25:
                 self._own_bm25.flush()
                 logger.info("finalize_ingest: BM25 corpus flushed.")
+            if getattr(self, "_sparse_retriever", None) is not None:
+                self._sparse_retriever.save()
+                logger.info("finalize_ingest: sparse index flushed.")
             self._save_entity_graph()
             self._save_relation_graph()
             if getattr(self, "_claims_graph", None):

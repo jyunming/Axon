@@ -358,6 +358,10 @@ class AxonConfig:
 
     def __post_init__(self) -> None:
         """Populate fields from environment variables and resolve storage paths."""
+        # Validate sparse_weight is in [0.0, 1.0] — values outside this range
+        # produce negative or >1 blended scores in fuse_sparse.
+        if not (0.0 <= self.sparse_weight <= 1.0):
+            raise ValueError(f"sparse_weight must be between 0.0 and 1.0, got {self.sparse_weight}")
         # 1. API Keys and URLs
         if not self.api_key:
             self.api_key = os.getenv("API_KEY", os.getenv("OPENAI_API_KEY", ""))

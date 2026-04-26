@@ -147,6 +147,7 @@ def fuse_sparse(
     top_k: int = 10,
     sparse_weight: float = 0.3,
     filter_dict: dict | None = None,
+    _raw_count_out: list[int] | None = None,
 ) -> list[dict]:
     """Fuse dense-retrieval results with a sparse retriever via weighted score fusion.
 
@@ -154,10 +155,16 @@ def fuse_sparse(
     drop-in extension after the existing BM25 fusion step.  Sparse retrieval
     failure must never degrade the main path — exceptions are logged and the
     dense results are returned unchanged.
+
+    *_raw_count_out* is an optional mutable list; if provided, the number of raw
+    sparse hits (before merging with dense results) is appended to it so callers
+    can record accurate per-channel diagnostics.
     """
     try:
         q_vec = retriever.encode_query(query)
         sparse_hits = retriever.search(q_vec, top_k=top_k, filter_dict=filter_dict)
+        if _raw_count_out is not None:
+            _raw_count_out.append(len(sparse_hits))
     except Exception as exc:
         logger.warning("sparse retrieval failed, falling back to dense-only: %s", exc)
         return dense_results
@@ -276,7 +283,8 @@ class SpladeSparseRetriever:
         self._tokenizer = None
         self._model = None
         self._torch = None
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # guards model/tokenizer lazy init
+        self._docs_lock = threading.Lock()  # guards self.docs mutations
         os.makedirs(self.storage_path, exist_ok=True)
         self.load()
         if eager_load_model and self._model is None:
@@ -376,6 +384,7 @@ class SpladeSparseRetriever:
         if not documents:
             return 0
         added = 0
+        encoded: list[tuple[str, str, dict, dict]] = []
         for doc in documents:
             doc_id = doc.get("id")
             text = doc.get("text", "")
@@ -386,12 +395,18 @@ class SpladeSparseRetriever:
             except Exception as exc:
                 logger.warning("SPLADE encode failed for doc %s: %s", doc_id, exc)
                 continue
-            self.docs[str(doc_id)] = {
-                "text": text,
-                "metadata": doc.get("metadata", {}) or {},
-                "vec": {int(i): float(v) for i, v in zip(vec.indices, vec.values)},
-            }
-            added += 1
+            encoded.append(
+                (
+                    str(doc_id),
+                    text,
+                    doc.get("metadata", {}) or {},
+                    {int(i): float(v) for i, v in zip(vec.indices, vec.values)},
+                )
+            )
+        with self._docs_lock:
+            for doc_id, text, metadata, vec_dict in encoded:
+                self.docs[doc_id] = {"text": text, "metadata": metadata, "vec": vec_dict}
+                added += 1
         if save and added:
             self.save()
         return added
@@ -416,11 +431,16 @@ class SpladeSparseRetriever:
         """
         if isinstance(query_vector, str):
             query_vector = self.encode_query(query_vector)
-        if not query_vector.indices or not self.docs:
+        if not query_vector.indices:
             return []
         q_map = {int(i): float(v) for i, v in zip(query_vector.indices, query_vector.values)}
+        with self._docs_lock:
+            if not self.docs:
+                return []
+            # Snapshot docs to avoid mutating-while-iterating races.
+            docs_snapshot = list(self.docs.items())
         scored: list[tuple[float, str]] = []
-        for doc_id, payload in self.docs.items():
+        for doc_id, payload in docs_snapshot:
             if filter_dict and not _matches_filter(payload.get("metadata", {}), filter_dict):
                 continue
             doc_vec = payload["vec"]
@@ -433,16 +453,19 @@ class SpladeSparseRetriever:
                 scored.append((score, doc_id))
         scored.sort(key=lambda x: x[0], reverse=True)
         out: list[dict] = []
-        for score, doc_id in scored[:top_k]:
-            payload = self.docs[doc_id]
-            out.append(
-                {
-                    "id": doc_id,
-                    "text": payload.get("text", ""),
-                    "score": float(score),
-                    "metadata": dict(payload.get("metadata", {}) or {}),
-                }
-            )
+        with self._docs_lock:
+            for score, doc_id in scored[:top_k]:
+                payload = self.docs.get(doc_id)
+                if payload is None:
+                    continue
+                out.append(
+                    {
+                        "id": doc_id,
+                        "text": payload.get("text", ""),
+                        "score": float(score),
+                        "metadata": dict(payload.get("metadata", {}) or {}),
+                    }
+                )
         return out
 
     # ------------------------------------------------------------------
@@ -457,12 +480,14 @@ class SpladeSparseRetriever:
         """Persist the sparse index to disk as JSON."""
         os.makedirs(self.storage_path, exist_ok=True)
         # Stringify token-id keys for JSON compatibility.
-        serial_docs: dict[str, Any] = {}
-        for doc_id, payload in self.docs.items():
-            serial_docs[doc_id] = {
-                "text": payload.get("text", ""),
-                "metadata": payload.get("metadata", {}) or {},
-                "vec": {str(int(t)): float(w) for t, w in payload.get("vec", {}).items()},
+        with self._docs_lock:
+            serial_docs: dict[str, Any] = {
+                doc_id: {
+                    "text": payload.get("text", ""),
+                    "metadata": payload.get("metadata", {}) or {},
+                    "vec": {str(int(t)): float(w) for t, w in payload.get("vec", {}).items()},
+                }
+                for doc_id, payload in self.docs.items()
             }
         blob = {
             "model": self.model_name,
@@ -485,17 +510,27 @@ class SpladeSparseRetriever:
         except Exception as exc:
             logger.warning("Failed to load sparse index at %s: %s", path, exc)
             return
-        self.model_name = blob.get("model", self.model_name)
+        persisted_model = blob.get("model", self.model_name)
+        if persisted_model != self.model_name:
+            logger.warning(
+                "Sparse index was built with model %r but current config uses %r; "
+                "index scores may be incompatible. Keeping configured model.",
+                persisted_model,
+                self.model_name,
+            )
+        # Honour the caller's explicit model choice — do NOT overwrite self.model_name.
         self.dim = int(blob.get("dim", 0) or 0)
         raw_docs = blob.get("docs", {}) or {}
-        self.docs = {}
-        for doc_id, payload in raw_docs.items():
-            vec_raw = payload.get("vec", {}) or {}
-            self.docs[str(doc_id)] = {
+        new_docs: dict[str, Any] = {
+            str(doc_id): {
                 "text": payload.get("text", ""),
                 "metadata": payload.get("metadata", {}) or {},
-                "vec": {int(t): float(w) for t, w in vec_raw.items()},
+                "vec": {int(t): float(w) for t, w in (payload.get("vec", {}) or {}).items()},
             }
+            for doc_id, payload in raw_docs.items()
+        }
+        with self._docs_lock:
+            self.docs = new_docs
 
 
 # ---------------------------------------------------------------------------
