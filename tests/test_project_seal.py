@@ -91,19 +91,19 @@ def _populate_plaintext_project(user_dir: Path, project: str = "research") -> Pa
 
 class TestProjectSealEntryPath:
     def test_missing_project_raises(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         with pytest.raises(_security.SecurityError, match="does not exist"):
             project_seal("does-not-exist", user_dir)
 
     def test_locked_store_raises(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         _populate_plaintext_project(user_dir)
         lock_store(user_dir)
         with pytest.raises(_security.SecurityError, match="locked"):
             project_seal("research", user_dir)
 
     def test_already_sealed_is_no_op(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         first = project_seal("research", user_dir)
         assert first["status"] == "sealed"
@@ -123,19 +123,19 @@ class TestProjectSealEntryPath:
 
 class TestProjectSealCoverage:
     def test_meta_json_is_sealed(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         assert is_sealed_file(proj / "meta.json")
 
     def test_bm25_files_sealed(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         assert is_sealed_file(proj / "bm25_index" / ".bm25_log.jsonl")
 
     def test_vector_store_files_sealed(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         assert is_sealed_file(proj / "vector_store_data" / "manifest.json")
@@ -144,7 +144,7 @@ class TestProjectSealCoverage:
     def test_version_json_stays_plaintext(self, kr_backend, user_dir):
         """Grantees need to detect changes without the DEK — so version.json
         is deliberately NOT sealed (per docs/SHARE_MOUNT_SEALED.md §4.6)."""
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         assert not is_sealed_file(proj / "version.json")
@@ -154,7 +154,7 @@ class TestProjectSealCoverage:
         """The wrap files in .security/ must stay plaintext — they contain
         no plaintext secrets themselves (DEK is wrapped) but sealing them
         would cause a chicken-and-egg unwrap loop."""
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         # The dek.wrapped file is binary AES-KW output (40 bytes), NOT
@@ -170,21 +170,21 @@ class TestProjectSealCoverage:
 
 class TestSealedMarker:
     def test_marker_written_after_seal(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         marker = proj / SEALED_MARKER_PATH
         assert marker.is_file()
 
     def test_is_project_sealed_true_after_seal(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         assert is_project_sealed(proj) is False
         project_seal("research", user_dir)
         assert is_project_sealed(proj) is True
 
     def test_read_sealed_marker_has_required_fields(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         result = project_seal("research", user_dir)
         marker = read_sealed_marker(proj)
@@ -207,7 +207,7 @@ class TestSealedMarker:
             read_sealed_marker(proj)
 
     def test_get_sealed_project_record_returns_marker(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         record = _security.get_sealed_project_record("research", user_dir)
@@ -215,7 +215,7 @@ class TestSealedMarker:
         assert record["cipher_suite"] == "AES-256-GCM-v1"
 
     def test_get_sealed_project_record_returns_none_when_unsealed(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         _populate_plaintext_project(user_dir)
         assert _security.get_sealed_project_record("research", user_dir) is None
 
@@ -227,14 +227,14 @@ class TestSealedMarker:
 
 class TestSealAtomicity:
     def test_no_sealing_tempfiles_left_after_success(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         leftover = list(proj.rglob("*.sealing"))
         assert leftover == []
 
     def test_orphan_sealing_files_removed_on_resume(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         # Simulate a crashed prior attempt: leave a .sealing orphan.
         orphan = proj / "vector_store_data" / "seg-00000001.bin.sealing"
@@ -258,7 +258,7 @@ class TestSealAtomicity:
             _write_inprogress_seal_id,
         )
 
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         dek = get_or_create_project_dek(user_dir, proj)
 
@@ -288,7 +288,7 @@ class TestSealAtomicity:
         """
         from axon.security.seal import SEALING_INPROGRESS_PATH
 
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         # Pre-condition: no resume context.
         assert not (proj / SEALING_INPROGRESS_PATH).is_file()
@@ -305,7 +305,7 @@ class TestSealAtomicity:
 
 class TestSealedContentIsCiphertext:
     def test_meta_json_no_longer_readable_as_plaintext(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         # On-disk bytes of meta.json must NOT contain the original
@@ -316,7 +316,7 @@ class TestSealedContentIsCiphertext:
         assert sealed_bytes[:4] == b"AXSL"
 
     def test_vector_store_segment_no_longer_readable(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         proj = _populate_plaintext_project(user_dir)
         project_seal("research", user_dir)
         sealed_bytes = (proj / "vector_store_data" / "seg-00000001.bin").read_bytes()
@@ -332,7 +332,7 @@ class TestSealedContentIsCiphertext:
 
 class TestNestedProjectSeal:
     def test_seal_nested_project_via_subs_layout(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "test-pass-ok")
         # research/papers → user_dir/research/subs/papers
         nested = user_dir / "research" / "subs" / "papers"
         (nested / "bm25_index").mkdir(parents=True)

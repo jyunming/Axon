@@ -265,7 +265,8 @@ def bootstrap_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
         SecurityError: the store is already bootstrapped (use
             :func:`change_passphrase` to rotate, or wipe the keyring
             entry first if you really mean to start over).
-        BadPassphraseError: the supplied passphrase is empty.
+        BadPassphraseError: the supplied passphrase is empty or shorter
+            than ``_MIN_PASSPHRASE_LEN`` (8) characters.
     Returns a status dict with ``{"initialized": True, "owner": ...}``.
     """
     if not passphrase:

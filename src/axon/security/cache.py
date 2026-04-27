@@ -58,8 +58,10 @@ logger = logging.getLogger("Axon")
 
 # Tracks cache dirs for which the Windows NTFS plaintext-persistence warning
 # has already been logged — so we emit it at most once per cache lifetime
-# rather than once per file deleted.
+# rather than once per file deleted. Protected by a lock to avoid double-emit
+# under concurrent wipe calls.
 _windows_warned_paths: set[str] = set()
+_windows_warned_lock = threading.Lock()
 
 __all__ = [
     "CACHE_PREFIX",
@@ -141,14 +143,16 @@ def _secure_delete_file(path: Path) -> None:
     # Emit a one-time INFO warning on Windows about the NTFS limitation.
     if sys.platform == "win32":
         parent_key = str(path.parent)
-        if parent_key not in _windows_warned_paths:
-            _windows_warned_paths.add(parent_key)
-            logger.info(
-                "SealedCache: Windows NTFS secure-delete is best-effort — "
-                "plaintext may persist in freed sectors on HDDs. "
-                "Enable BitLocker on %s for full protection.",
-                path.parent,
-            )
+        with _windows_warned_lock:
+            if parent_key not in _windows_warned_paths:
+                _windows_warned_paths.add(parent_key)
+                logger.info(
+                    "SealedCache: Windows NTFS secure-delete is best-effort — "
+                    "NTFS copy-on-write and SSD TRIM/wear-leveling may retain "
+                    "plaintext in freed sectors. Enable BitLocker on %s for "
+                    "full protection.",
+                    path.parent,
+                )
 
     try:
         size = path.stat().st_size
@@ -175,12 +179,12 @@ def _secure_delete_file(path: Path) -> None:
                 if sys.platform == "win32":
                     try:
                         import ctypes
+                        import msvcrt
 
-                        ctypes.windll.kernel32.FlushFileBuffers(  # type: ignore[attr-defined]
-                            ctypes.get_osfhandle(fh.fileno())
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass  # best-effort; fsync above is the primary mechanism
+                        handle = msvcrt.get_osfhandle(fh.fileno())
+                        ctypes.windll.kernel32.FlushFileBuffers(handle)  # type: ignore[attr-defined]
+                    except Exception as _flush_exc:  # noqa: BLE001
+                        logger.debug("FlushFileBuffers failed for %s: %s", path, _flush_exc)
         except OSError as exc:
             logger.debug("secure-delete overwrite failed for %s: %s", path, exc)
     try:

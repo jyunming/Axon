@@ -311,7 +311,7 @@ Do not use Chroma on any shared, network, or cloud-sync path. Chroma is also not
 
 ### Windows users with highly sensitive data
 
-The encrypted cache is wiped with random-byte overwrite on close, but NTFS copy-on-write and SSD wear-leveling may retain plaintext in freed sectors even after the overwrite completes. On a spinning HDD, Axon also calls `FlushFileBuffers` (Windows API) after each file wipe for best-effort write-through, but this does not guarantee physical sector erasure on SSDs.
+The encrypted cache is wiped with random-byte overwrite on close, but NTFS copy-on-write and SSD TRIM/wear-leveling may retain plaintext in freed sectors even after the overwrite completes. On Windows, Axon calls `FlushFileBuffers` (Windows API) after each file wipe for best-effort write-through, but this does not guarantee physical sector erasure on SSDs or eliminate NTFS copy-on-write remnants.
 
 For compliance or classified use, take one of the following measures:
 

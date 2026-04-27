@@ -173,7 +173,7 @@ class TestSoftRevoke:
             revoke_sealed_share(owner_user_dir, "research", "ssk_never")
 
     def test_revoke_unsealed_project_raises(self, kr_backend, owner_user_dir):
-        bootstrap_store(owner_user_dir, "pw")
+        bootstrap_store(owner_user_dir, "test-pass-ok")
         (owner_user_dir / "open").mkdir()
         (owner_user_dir / "open" / "meta.json").write_text("{}", encoding="utf-8")
         with pytest.raises(_security.SecurityError, match="not sealed"):
