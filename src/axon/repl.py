@@ -3566,15 +3566,23 @@ def _interactive_repl(
                             )
                         else:
                             try:
-                                from axon.security.seal import is_project_sealed
+                                try:
+                                    from axon.security.seal import is_project_sealed as _is_sf
 
-                                if is_project_sealed(proj_dir):
+                                    _proj_sealed = _is_sf(proj_dir)
+                                except ImportError:
+                                    _proj_sealed = False
+                                if _proj_sealed:
+                                    import secrets as _secrets
+
                                     from axon import security as _security
 
+                                    _key_id = f"ssk_{_secrets.token_hex(8)}"
                                     result = _security.generate_sealed_share(
                                         owner_user_dir=user_dir,
                                         project=proj,
                                         grantee=grantee,
+                                        key_id=_key_id,
                                     )
                                     print(f"\n    Sealed share generated for project '{proj}'")
                                     print(f"    Grantee:      {grantee}")
@@ -3613,7 +3621,8 @@ def _interactive_repl(
                         try:
                             import base64 as _b64
 
-                            _dec = _b64.urlsafe_b64decode(share_str + "==").decode(
+                            _padding = "=" * (-len(share_str) % 4)
+                            _dec = _b64.urlsafe_b64decode(share_str + _padding).decode(
                                 "utf-8", errors="replace"
                             )
                             _is_sealed = _dec.startswith("SEALED1:")
@@ -3623,9 +3632,7 @@ def _interactive_repl(
                             if _is_sealed:
                                 from axon import security as _security
 
-                                result = _security.redeem_sealed_share(
-                                    grantee_user_dir=user_dir, share_string=share_str
-                                )
+                                result = _security.redeem_sealed_share(user_dir, share_str)
                                 print("\n    Sealed share redeemed!")
                                 print(f"    Project '{result['project']}' from {result['owner']}")
                                 print(
