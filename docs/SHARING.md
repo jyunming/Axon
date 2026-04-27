@@ -233,6 +233,51 @@ axon --share-list
 
 ---
 
+## Moving a Sealed Project to a Different OS
+
+Sealed project files are AES-256-GCM ciphertext — the format is identical on every
+platform (big-endian header, standard nonce/tag layout, forward-slash paths in AAD).
+After decrypting into the temp cache, LanceDB (Apache Arrow), BM25 (msgpack/JSON),
+and TurboQuantDB (manifest.json) all open correctly on any OS.
+
+The only thing you need to carry across is the **master key** so Axon can unwrap
+the project DEK on the destination machine.
+
+### Steps
+
+1. **Copy the sealed project directory** to the same relative location on the new machine,
+   or point `store.base` in `config.yaml` to the shared sync folder.
+
+2. **Copy `master.enc`** from the source machine:
+   ```
+   <store_base>/<owner>/.security/master.enc
+   ```
+   Place it at the same relative path on the destination.
+
+   > Axon now always writes this file alongside the OS keyring (DPAPI / Keychain /
+   > Secret Service), so it exists on every platform after the first `--store-bootstrap`.
+
+3. **Unlock on the destination** with the same passphrase:
+   ```
+   axon --store-unlock
+   ```
+   Axon checks the OS keyring first (no entry on a fresh machine), then falls back to
+   `master.enc` automatically. No extra flags are needed.
+
+4. **Switch to the project and query normally:**
+   ```
+   axon --project research
+   axon> What are the key findings?
+   ```
+
+### Security note
+
+`master.enc` is protected by your passphrase via scrypt (N=2¹⁵). Someone who has the
+file but not the passphrase cannot decrypt anything. Treat it with the same care as a
+password manager export — store it only in locations you control.
+
+---
+
 ## Filesystem Compatibility Matrix
 
 This matrix applies to **plaintext sharing** only. Sealed sharing works through any filesystem because the content is encrypted before it reaches the filesystem.

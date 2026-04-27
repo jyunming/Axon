@@ -203,10 +203,11 @@ def _read_keyring_record(user_dir: Path) -> dict[str, Any] | None:
 
 
 def _write_keyring_record(user_dir: Path, *, salt: bytes, wrapped_master: bytes) -> None:
-    """Persist the master record to the keyring or fallback file.
-    Routes to the file fallback when the OS keyring is unavailable.
-    The wrapped master is identical in both stores — only the location
-    differs.
+    """Persist the master record to the OS keyring AND the portable fallback file.
+
+    Both stores receive an identical scrypt-wrapped blob so the project can be
+    copied cross-platform: the owner copies master.enc alongside the sealed
+    project directory and unlocks with the same passphrase on any OS.
     """
     from . import fallback_store as _fb
 
@@ -221,11 +222,20 @@ def _write_keyring_record(user_dir: Path, *, salt: bytes, wrapped_master: bytes)
     try:
         _kr.store_secret(_service(user_dir), MASTER_USERNAME, payload)
     except _kr.KeyringUnavailableError:
-        _fb.write_master_record(user_dir, payload)
         logger.info(
-            "Sealed-store master persisted to file fallback at %s " "(OS keyring unavailable)",
+            "OS keyring unavailable — master will be stored in file only at %s",
             _fb.fallback_master_path(user_dir),
         )
+    # Always write the portable fallback file.  It is scrypt-hardened
+    # (passphrase required to unwrap), so writing it on Windows/macOS
+    # alongside DPAPI/Keychain does not weaken security.
+    try:
+        _fb.write_master_record(user_dir, payload)
+    except OSError as exc:
+        raise SecurityError(
+            f"Failed to write master key fallback file at "
+            f"{_fb.fallback_master_path(user_dir)}: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
