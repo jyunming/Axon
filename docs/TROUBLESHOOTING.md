@@ -288,8 +288,8 @@ send many requests in a short period will trigger this limit.
 
 **Fix:**
 - Wait 60 seconds before retrying.
-- For bulk ingest operations, use the `POST /ingest/batch` endpoint to send multiple files in a
-  single request rather than one request per file.
+- For bulk text ingest, use `POST /add_texts` (batched JSON) to send multiple documents in one
+  request. For file uploads, use `POST /ingest/upload` which accepts multiple files per request.
 - To raise the default limits for trusted environments, increase them in `config.yaml`:
   ```yaml
   api:

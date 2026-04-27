@@ -5,9 +5,9 @@ master key management (Phase 2), sealed share generate/redeem (Phase 3),
 hard/soft revocation (Phase 4), ephemeral plaintext cache (Phase 5),
 headless/file fallback (Phase 6), and smoke tests (Phase 7).
 
-Users on minimal installs (no ``cryptography``/``keyring`` packages) get
-``ImportError`` with a clear install hint — the helpers no longer silently
-raise ``SecurityError("not configured")``.
+On minimal installs (no ``cryptography``/``keyring`` packages), the helpers
+raise ``SecurityError`` with a clear "install with pip install axon-rag[sealed]"
+hint rather than the old silent stub behaviour.
 
 Full design and threat model: ``docs/architecture/SEALED_SHARING_DESIGN.md``.
 """
