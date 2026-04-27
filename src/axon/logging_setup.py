@@ -36,11 +36,15 @@ def configure_logging(level: int = logging.INFO) -> None:
     with _configure_lock:
         for handler in root.handlers:
             if handler.get_name() == _AXON_HANDLER_NAME:
+                handler.setLevel(level)
                 handler.setFormatter(formatter)
+                if not any(isinstance(f, RequestIdFilter) for f in handler.filters):
+                    handler.addFilter(RequestIdFilter())
                 return
 
         handler = logging.StreamHandler()
         handler.set_name(_AXON_HANDLER_NAME)
+        handler.setLevel(level)
         handler.addFilter(RequestIdFilter())
         handler.setFormatter(formatter)
         root.addHandler(handler)

@@ -61,9 +61,9 @@ class TestConfigureLogging:
 
         configure_logging()
         root = logging.getLogger()
-        axon_handler = next(
-            h for h in root.handlers if (h.get_name() or "") == "_axon_request_id_handler"
-        )
+        from axon.logging_setup import _AXON_HANDLER_NAME
+
+        axon_handler = next(h for h in root.handlers if (h.get_name() or "") == _AXON_HANDLER_NAME)
         filter_types = [type(f) for f in axon_handler.filters]
         assert RequestIdFilter in filter_types
 

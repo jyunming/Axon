@@ -251,7 +251,7 @@ try:
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
-            expose_headers=["X-Request-ID", "X-Axon-Mount-Sync-Pending"],
+            expose_headers=["X-Request-ID", "X-Axon-Mount-Sync-Pending", "X-Axon-Surface"],
         )
         logger.info("CORS enabled for origins: %s", _cors_origins)
 except ImportError:  # pragma: no cover — fastapi installed implies starlette
