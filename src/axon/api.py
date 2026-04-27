@@ -282,6 +282,7 @@ async def add_request_id(request: Request, call_next):
     finally:
         _reset_rid(token)
     response.headers["X-Request-ID"] = rid
+    response.headers["X-Axon-Surface"] = request.state.surface
     return response
 
 
@@ -308,7 +309,7 @@ async def metrics_middleware(request: Request, call_next):
         # Use route template when available so high-cardinality dynamic
         # path segments (e.g. /projects/{name}) collapse into one series.
         route = request.scope.get("route")
-        path = getattr(route, "path", request.url.path)
+        path = getattr(route, "path", None) or "__unmatched__"
         _metrics.record_request(
             path=path,
             method=request.method,

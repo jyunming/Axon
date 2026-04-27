@@ -307,13 +307,15 @@ Error: HTTP 413 Request Entity Too Large
 {"detail": "Upload exceeds maximum size of 500 MiB"}
 ```
 
-**Cause:** The uploaded file or batch exceeds `max_upload_bytes` (default 500 MiB) or
-`max_files_per_request` (default 1000 files). Both limits were added to harden the ingest
-API against oversized payloads.
+**Cause:** The uploaded file or batch exceeds `max_upload_bytes` (default 500 MiB). This limit
+was added to harden the ingest API against oversized payloads.
+
+Note: exceeding `max_files_per_request` (default 1000 files) returns HTTP **422**, not 413.
 
 **Fix:**
-- Split large batches into smaller ones below the 500 MiB threshold.
-- To raise the limits for trusted environments, adjust them in `config.yaml`:
+- Split large uploads into batches below the 500 MiB threshold.
+- For the file-count limit (HTTP 422), split the batch into smaller requests.
+- To raise limits for trusted environments, adjust them in `config.yaml`:
   ```yaml
   api:
     max_upload_bytes: 1073741824   # 1 GiB
