@@ -229,7 +229,13 @@ def _write_keyring_record(user_dir: Path, *, salt: bytes, wrapped_master: bytes)
     # Always write the portable fallback file.  It is scrypt-hardened
     # (passphrase required to unwrap), so writing it on Windows/macOS
     # alongside DPAPI/Keychain does not weaken security.
-    _fb.write_master_record(user_dir, payload)
+    try:
+        _fb.write_master_record(user_dir, payload)
+    except OSError as exc:
+        raise SecurityError(
+            f"Failed to write master key fallback file at "
+            f"{_fb.fallback_master_path(user_dir)}: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

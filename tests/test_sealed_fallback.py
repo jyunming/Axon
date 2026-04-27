@@ -214,10 +214,10 @@ class TestFallbackFormatParity:
 
 
 class TestKeyringStillPreferredWhenAvailable:
-    def test_bootstrap_with_keyring_does_not_write_fallback_file(self, kr_available, user_dir):
+    def test_bootstrap_with_keyring_also_writes_fallback_file(self, kr_available, user_dir):
         bootstrap_store(user_dir, "with-keyring-pp")
-        # Master in keyring; file fallback not touched.
-        assert _fb.is_present(user_dir) is False
+        # Master goes to keyring AND the portable fallback file for cross-platform use.
+        assert _fb.is_present(user_dir) is True
 
 
 # ---------------------------------------------------------------------------

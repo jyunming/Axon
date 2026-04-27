@@ -14,8 +14,12 @@ from unittest.mock import patch
 
 import pytest
 
-from axon.security import SecurityError
-from axon.security.master import (
+pytest.importorskip("cryptography")
+pytest.importorskip("keyring")
+
+import axon.security.master as _master_mod  # noqa: E402
+from axon.security import SecurityError  # noqa: E402
+from axon.security.master import (  # noqa: E402
     BadPassphraseError,
     bootstrap_store,
     change_passphrase,
@@ -30,6 +34,14 @@ from axon.security.master import (
 
 _PASSPHRASE = "test-portability-passphrase"
 _NEW_PASSPHRASE = "new-portability-passphrase"
+
+
+@pytest.fixture(autouse=True)
+def _clear_master_cache():
+    """Prevent _unlocked_masters leaking across tests (cache is module-global)."""
+    _master_mod._unlocked_masters.clear()
+    yield
+    _master_mod._unlocked_masters.clear()
 
 
 def _fallback_path(user_dir: Path) -> Path:
