@@ -1326,6 +1326,11 @@ def delete_grantee_dek(key_id: str, user_dir: Path | None = None) -> bool:
     """
     if not key_id:
         return False
+    # Validate key_id without raising — invalid IDs mean nothing was stored.
+    try:
+        _validate_key_id(key_id)
+    except SecurityError:
+        return False
     service = _share_keyring_service(key_id)
     had_secret = False
     try:

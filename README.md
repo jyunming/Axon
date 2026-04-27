@@ -149,7 +149,7 @@ pip install "axon-rag[sealed]"   # install sealed extra on both machines
 
 ```bash
 axon --store-init "/path/to/OneDrive/AxonStore"  # 1. point store at sync folder
-axon --store-bootstrap                            # 2. bootstrap master key (once per machine; prompts for passphrase)
+axon --store-bootstrap "your-passphrase"          # 2. bootstrap master key (once per machine)
 axon --project-new research                       # 3. create project + ingest
 axon --project research --ingest /docs
 axon --project-seal research                      # 4. encrypt in place (≈1 s per 100 MB)

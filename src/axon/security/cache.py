@@ -182,7 +182,7 @@ def _secure_delete_file(path: Path) -> None:
                         import msvcrt
 
                         handle = msvcrt.get_osfhandle(fh.fileno())
-                        ctypes.windll.kernel32.FlushFileBuffers(handle)  # type: ignore[attr-defined]
+                        ctypes.windll.kernel32.FlushFileBuffers(handle)
                     except Exception as _flush_exc:  # noqa: BLE001
                         logger.debug("FlushFileBuffers failed for %s: %s", path, _flush_exc)
         except OSError as exc:
