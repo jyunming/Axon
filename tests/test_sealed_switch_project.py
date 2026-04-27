@@ -224,4 +224,82 @@ class TestOrphanCleanupOnInit:
             _fn()
 
         cleanup.assert_called_once()
-        assert cleanup.return_value == 0
+
+
+# ---------------------------------------------------------------------------
+# switch_project routing — sealed detection via is_project_sealed
+# ---------------------------------------------------------------------------
+
+
+class TestSwitchProjectSealedRouting:
+    """Verify switch_project routes to the sealed path when the project is
+    sealed, and stays on the plaintext path otherwise.
+
+    Uses the same unbound-method pattern as the rest of this file so no
+    full AxonBrain.__init__ is required.
+    """
+
+    def test_switch_to_sealed_local_project_stashes_pending_mount(self, tmp_path):
+        """switch_project('myproj') must stash _pending_seal_mount when sealed."""
+        from axon.main import AxonBrain
+
+        # Create a fake project directory so the existence check passes.
+        proj_dir = tmp_path / "store" / "myproj"
+        proj_dir.mkdir(parents=True)
+
+        brain = _make_brain(tmp_path)
+        brain.config.projects_root = str(tmp_path / "store")
+        brain.config.max_workers = 4  # avoid MagicMock comparison in ThreadPoolExecutor
+        mount_calls: list = []
+
+        def _fake_mount(name, root, key_id):
+            mount_calls.append((name, root, key_id))
+            return tmp_path / "cache"
+
+        brain._mount_sealed_project = _fake_mount
+
+        brain._project_is_sealed = MagicMock(return_value=True)
+
+        with (
+            patch("axon.projects.project_dir", return_value=proj_dir),
+            patch("axon.projects.is_reserved_top_level_name", return_value=False),
+            patch("axon.main.AxonBrain.close"),
+        ):
+            AxonBrain.switch_project(brain, "myproj")
+
+        # After switch_project, _mount_sealed_project must have been called.
+        assert len(mount_calls) == 1
+        assert mount_calls[0][0] == "myproj"
+        assert mount_calls[0][2] is None  # owner path: no share key
+
+    def test_switch_to_plaintext_project_skips_mount(self, tmp_path):
+        """switch_project('myproj') must NOT call _mount_sealed_project when not sealed."""
+        from axon.main import AxonBrain
+
+        proj_dir = tmp_path / "store" / "myproj"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "meta.json").write_text("{}")
+
+        brain = _make_brain(tmp_path)
+        brain.config.projects_root = str(tmp_path / "store")
+        brain.config.max_workers = 4
+        mount_calls: list = []
+
+        def _fake_mount(name, root, key_id):
+            mount_calls.append((name, root, key_id))
+            return tmp_path / "cache"
+
+        brain._mount_sealed_project = _fake_mount
+
+        brain._project_is_sealed = MagicMock(return_value=False)
+
+        with (
+            patch("axon.projects.project_dir", return_value=proj_dir),
+            patch("axon.projects.project_vector_path", return_value=str(tmp_path / "vs")),
+            patch("axon.projects.project_bm25_path", return_value=str(tmp_path / "bm25")),
+            patch("axon.projects.is_reserved_top_level_name", return_value=False),
+            patch("axon.main.AxonBrain.close"),
+        ):
+            AxonBrain.switch_project(brain, "myproj")
+
+        assert mount_calls == [], "_mount_sealed_project must NOT be called for plaintext projects"

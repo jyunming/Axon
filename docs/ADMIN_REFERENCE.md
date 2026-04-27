@@ -474,7 +474,7 @@ These endpoints are used internally by the VS Code extension. External callers s
 |--------|------|-------------|
 | `GET` | `/metrics` | Prometheus exposition format metrics (`text/plain; version=0.0.4`); returns `503` if `prometheus-client` is not installed |
 
-Exposed metrics: `axon_requests_total` (Counter, labels: `path/method/status`), `axon_request_duration_seconds` (Histogram, labels: `path/method`), `axon_query_total` (Counter, labels: `project/surface`), `axon_ingest_total` (Counter, labels: `project/surface`), `axon_brain_ready` (Gauge — `1` when brain is initialised).
+Exposed metrics: `axon_requests_total` (Counter, labels: `path/method/status`), `axon_request_duration_seconds` (Histogram, labels: `path/method`), `axon_query_total` (Counter, labels: `project/surface`), `axon_ingest_total` (Counter, labels: `project/surface`), `axon_brain_ready` (Gauge — `1` when brain is initialized).
 
 > **Rate limiting:** `/share`, `/ingest`, and `/security` endpoints enforce per-IP rate limiting (default: 10 requests per 60-second window). Requests exceeding the limit receive HTTP `429 Too Many Requests`.
 

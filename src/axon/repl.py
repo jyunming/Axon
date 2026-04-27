@@ -3566,21 +3566,41 @@ def _interactive_repl(
                             )
                         else:
                             try:
-                                result = _shares_mod.generate_share_key(
-                                    owner_user_dir=user_dir,
-                                    project=proj,
-                                    grantee=grantee,
-                                    ttl_days=ttl_days,
-                                )
-                                print(f"\n    Share key generated for project '{proj}'")
-                                print(f"    Grantee:      {grantee}")
-                                print("    Access:       read-only")
-                                print(f"    Key ID:       {result['key_id']}")
-                                if result.get("expires_at"):
-                                    print(f"    Expires at:   {result['expires_at']}")
-                                print(f"\n    Share string (send this to {grantee}):")
-                                print(f"\n      {result['share_string']}\n")
-                                print(f"    Revoke with:  /share revoke {result['key_id']}\n")
+                                from axon.security.seal import is_project_sealed
+
+                                if is_project_sealed(proj_dir):
+                                    from axon import security as _security
+
+                                    result = _security.generate_sealed_share(
+                                        owner_user_dir=user_dir,
+                                        project=proj,
+                                        grantee=grantee,
+                                    )
+                                    print(f"\n    Sealed share generated for project '{proj}'")
+                                    print(f"    Grantee:      {grantee}")
+                                    print("    Access:       read-only (encrypted-at-rest)")
+                                    print(f"    Key ID:       {result['key_id']}")
+                                    print(f"\n    Share string (send out-of-band to {grantee}):")
+                                    print(f"\n      {result['share_string']}\n")
+                                    print(
+                                        f"    Revoke with:  /share revoke {result['key_id']} --project {proj}\n"
+                                    )
+                                else:
+                                    result = _shares_mod.generate_share_key(
+                                        owner_user_dir=user_dir,
+                                        project=proj,
+                                        grantee=grantee,
+                                        ttl_days=ttl_days,
+                                    )
+                                    print(f"\n    Share key generated for project '{proj}'")
+                                    print(f"    Grantee:      {grantee}")
+                                    print("    Access:       read-only")
+                                    print(f"    Key ID:       {result['key_id']}")
+                                    if result.get("expires_at"):
+                                        print(f"    Expires at:   {result['expires_at']}")
+                                    print(f"\n    Share string (send this to {grantee}):")
+                                    print(f"\n      {result['share_string']}\n")
+                                    print(f"    Revoke with:  /share revoke {result['key_id']}\n")
                             except Exception as e:
                                 print(f"    Share generation failed: {e}")
                 elif sub == "redeem":
@@ -3589,17 +3609,40 @@ def _interactive_repl(
                         print("    Usage: /share redeem <share_string>")
                     else:
                         user_dir = Path(brain.config.projects_root)
+                        share_str = sub_arg.strip()
                         try:
-                            result = _shares_mod.redeem_share_key(
-                                grantee_user_dir=user_dir,
-                                share_string=sub_arg.strip(),
+                            import base64 as _b64
+
+                            _dec = _b64.urlsafe_b64decode(share_str + "==").decode(
+                                "utf-8", errors="replace"
                             )
-                            print("\n    Share redeemed!")
-                            print(f"    Project '{result['project']}' from {result['owner']}")
-                            print(
-                                f"    Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
-                            )
-                            print("    Access:      read-only\n")
+                            _is_sealed = _dec.startswith("SEALED1:")
+                        except Exception:
+                            _is_sealed = False
+                        try:
+                            if _is_sealed:
+                                from axon import security as _security
+
+                                result = _security.redeem_sealed_share(
+                                    grantee_user_dir=user_dir, share_string=share_str
+                                )
+                                print("\n    Sealed share redeemed!")
+                                print(f"    Project '{result['project']}' from {result['owner']}")
+                                print(
+                                    f"    Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
+                                )
+                                print("    Access:      read-only (encrypted-at-rest)\n")
+                            else:
+                                result = _shares_mod.redeem_share_key(
+                                    grantee_user_dir=user_dir,
+                                    share_string=share_str,
+                                )
+                                print("\n    Share redeemed!")
+                                print(f"    Project '{result['project']}' from {result['owner']}")
+                                print(
+                                    f"    Mounted at:  mounts/{result.get('mount_name', result['owner'] + '_' + result['project'])}"
+                                )
+                                print("    Access:      read-only\n")
                         except (ValueError, NotImplementedError) as e:
                             print(f"    Redeem failed: {e}")
                         except Exception as e:

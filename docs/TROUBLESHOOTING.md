@@ -288,7 +288,7 @@ send many requests in a short period will trigger this limit.
 
 **Fix:**
 - Wait 60 seconds before retrying.
-- For bulk ingest operations, use the batched ingest endpoint to send multiple files in a
+- For bulk ingest operations, use the `POST /ingest/batch` endpoint to send multiple files in a
   single request rather than one request per file.
 - To raise the default limits for trusted environments, increase them in `config.yaml`:
   ```yaml

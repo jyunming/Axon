@@ -120,6 +120,8 @@ Ask a question and receive a full streamed answer accumulated into one response.
 
 **Returns:** `{"answer": "...", "streamed": true}`
 
+> **Note:** `query_stream` returns `answer` (not `response`). Unlike `query_knowledge`, it does not return `provenance` or `settings`.
+
 ---
 
 ## Knowledge Base Management (5)
@@ -209,7 +211,7 @@ Encrypt every content file in a project in place (one-shot migration). Walks the
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `project_name` | string | required | Name of the open project to seal (must exist) |
+| `project_name` | string | required | Name of the open project to seal (must exist). Note: this parameter is named `project_name`, not `project`, unlike most other tools. |
 | `migration_mode` | string | `"in_place"` | Reserved for future variants; only `"in_place"` is implemented |
 
 **Returns:** `{"status": "sealed"|"already_sealed"}`
@@ -289,7 +291,7 @@ Check whether the AxonStore has been initialised on this machine. Returns store 
 
 ### `init_store`
 
-Move the store to a different base path (e.g. a shared network drive). Call only when changing where the store lives. Safe to call repeatedly.
+Initialize the AxonStore on first use, or move it to a different base path (e.g. a shared network drive). On a fresh install where `get_store_status` returns `{"initialized": false}`, call this to create the store layout at `base_path`. Also safe to call when relocating an existing store. Safe to call repeatedly.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -491,7 +493,7 @@ Re-wrap the master key under a new passphrase. Project DEKs are not touched (the
 
 ## Usage Notes
 
-- All tools operate on the **active project**. Most ingest, search, and query tools accept an optional `project` parameter validated against the active project (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `revoke_share`, `graph_backend_status`, `refresh_mount`. Use `switch_project` to change the active project.
+- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `refresh_mount`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`governance_*`, `security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
 
 - `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
 

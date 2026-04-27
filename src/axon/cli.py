@@ -1175,13 +1175,30 @@ def main():
             data = _shares_mod.list_shares(user_dir)
             sharing = data.get("sharing", [])
             shared = data.get("shared", [])
-            print("\n  Shares — issued by me:")
+            print("\n  Shares — issued by me (legacy):")
             if sharing:
                 for s in sharing:
                     tag = " [revoked]" if s.get("revoked") else ""
                     print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
             else:
                 print("    (none)")
+            try:
+                from axon.projects import project_dir as _proj_dir
+                from axon.security.share import list_sealed_share_key_ids
+
+                sealed_ids: list[str] = []
+                for entry in sharing or []:
+                    try:
+                        pd = _proj_dir(entry.get("project", ""))
+                        sealed_ids.extend(list_sealed_share_key_ids(pd))
+                    except Exception:
+                        pass
+                if sealed_ids:
+                    print("\n  Shares — issued by me (sealed):")
+                    for kid in sealed_ids:
+                        print(f"    {kid}  [sealed]")
+            except Exception:
+                pass
             print("\n  Shares — received:")
             if shared:
                 for s in shared:
@@ -1203,31 +1220,69 @@ def main():
                 print(f"  Project '{proj}' not found.")
                 sys.exit(1)
             try:
-                result = _shares_mod.generate_share_key(
-                    owner_user_dir=user_dir, project=proj, grantee=grantee
-                )
-                print(f"\n  Share key generated for project '{proj}'")
-                print(f"  Grantee:  {grantee}")
-                print(f"  Key ID:   {result['key_id']}")
-                print(f"\n  Share string:\n\n    {result['share_string']}\n")
-                print(f"  Revoke:   axon --share-revoke {result['key_id']}\n")
+                from axon.security.seal import is_project_sealed
+
+                if is_project_sealed(proj_dir):
+                    from axon import security as _security
+
+                    result = _security.generate_sealed_share(
+                        owner_user_dir=user_dir, project=proj, grantee=grantee
+                    )
+                    print(f"\n  Sealed share generated for project '{proj}'")
+                    print(f"  Grantee:  {grantee}")
+                    print(f"  Key ID:   {result['key_id']}")
+                    print(f"\n  Share string (send out-of-band):\n\n    {result['share_string']}\n")
+                    print(
+                        f"  Revoke:   axon --share-revoke {result['key_id']} --share-project {proj}\n"
+                    )
+                else:
+                    result = _shares_mod.generate_share_key(
+                        owner_user_dir=user_dir, project=proj, grantee=grantee
+                    )
+                    print(f"\n  Share key generated for project '{proj}'")
+                    print(f"  Grantee:  {grantee}")
+                    print(f"  Key ID:   {result['key_id']}")
+                    print(f"\n  Share string:\n\n    {result['share_string']}\n")
+                    print(f"  Revoke:   axon --share-revoke {result['key_id']}\n")
             except Exception as exc:
                 print(f"  Share generation failed: {exc}")
                 sys.exit(1)
             return
         if args.share_redeem:
-            from axon import shares as _shares_mod
-
             user_dir = Path(config.projects_root)
+            share_str = args.share_redeem.strip()
             try:
-                result = _shares_mod.redeem_share_key(
-                    grantee_user_dir=user_dir, share_string=args.share_redeem.strip()
+                import base64
+
+                _decoded = base64.urlsafe_b64decode(share_str + "==").decode(
+                    "utf-8", errors="replace"
                 )
-                print("\n  Share redeemed!")
-                print(f"  Project '{result['project']}' from {result['owner']}")
-                mount = result.get("mount_name", result["owner"] + "_" + result["project"])
-                print(f"  Mounted at:  mounts/{mount}")
-                print("  Access:      read-only\n")
+                _is_sealed = _decoded.startswith("SEALED1:")
+            except Exception:
+                _is_sealed = False
+            try:
+                if _is_sealed:
+                    from axon import security as _security
+
+                    result = _security.redeem_sealed_share(
+                        grantee_user_dir=user_dir, share_string=share_str
+                    )
+                    print("\n  Sealed share redeemed!")
+                    print(f"  Project '{result['project']}' from {result['owner']}")
+                    mount = result.get("mount_name", result["owner"] + "_" + result["project"])
+                    print(f"  Mounted at:  mounts/{mount}")
+                    print("  Access:      read-only (encrypted-at-rest)\n")
+                else:
+                    from axon import shares as _shares_mod
+
+                    result = _shares_mod.redeem_share_key(
+                        grantee_user_dir=user_dir, share_string=share_str
+                    )
+                    print("\n  Share redeemed!")
+                    print(f"  Project '{result['project']}' from {result['owner']}")
+                    mount = result.get("mount_name", result["owner"] + "_" + result["project"])
+                    print(f"  Mounted at:  mounts/{mount}")
+                    print("  Access:      read-only\n")
             except Exception as exc:
                 print(f"  Redeem failed: {exc}")
                 sys.exit(1)
@@ -1699,13 +1754,30 @@ def main():
         data = _shares_mod.list_shares(user_dir)
         sharing = data.get("sharing", [])
         shared = data.get("shared", [])
-        print("\n  Shares — issued by me:")
+        print("\n  Shares — issued by me (legacy):")
         if sharing:
             for s in sharing:
                 tag = " [revoked]" if s.get("revoked") else ""
                 print(f"    {s['project']} → {s['grantee']}  [ro]{tag}")
         else:
             print("    (none)")
+        try:
+            from axon.projects import project_dir as _proj_dir
+            from axon.security.share import list_sealed_share_key_ids
+
+            sealed_ids: list[str] = []
+            for entry in sharing or []:
+                try:
+                    pd = _proj_dir(entry.get("project", ""))
+                    sealed_ids.extend(list_sealed_share_key_ids(pd))
+                except Exception:
+                    pass
+            if sealed_ids:
+                print("\n  Shares — issued by me (sealed):")
+                for kid in sealed_ids:
+                    print(f"    {kid}  [sealed]")
+        except Exception:
+            pass
         print("\n  Shares — received:")
         if shared:
             for s in shared:
@@ -1727,31 +1799,67 @@ def main():
             print(f"  Project '{proj}' not found.")
             sys.exit(1)
         try:
-            result = _shares_mod.generate_share_key(
-                owner_user_dir=user_dir, project=proj, grantee=grantee
-            )
-            print(f"\n  Share key generated for project '{proj}'")
-            print(f"  Grantee:  {grantee}")
-            print(f"  Key ID:   {result['key_id']}")
-            print(f"\n  Share string:\n\n    {result['share_string']}\n")
-            print(f"  Revoke:   axon --share-revoke {result['key_id']}\n")
+            from axon.security.seal import is_project_sealed
+
+            if is_project_sealed(proj_dir):
+                from axon import security as _security
+
+                result = _security.generate_sealed_share(
+                    owner_user_dir=user_dir, project=proj, grantee=grantee
+                )
+                print(f"\n  Sealed share generated for project '{proj}'")
+                print(f"  Grantee:  {grantee}")
+                print(f"  Key ID:   {result['key_id']}")
+                print(f"\n  Share string (send out-of-band):\n\n    {result['share_string']}\n")
+                print(
+                    f"  Revoke:   axon --share-revoke {result['key_id']} --share-project {proj}\n"
+                )
+            else:
+                result = _shares_mod.generate_share_key(
+                    owner_user_dir=user_dir, project=proj, grantee=grantee
+                )
+                print(f"\n  Share key generated for project '{proj}'")
+                print(f"  Grantee:  {grantee}")
+                print(f"  Key ID:   {result['key_id']}")
+                print(f"\n  Share string:\n\n    {result['share_string']}\n")
+                print(f"  Revoke:   axon --share-revoke {result['key_id']}\n")
         except Exception as exc:
             print(f"  Share generation failed: {exc}")
             sys.exit(1)
         return
     if getattr(args, "share_redeem", None):
-        from axon import shares as _shares_mod
-
         user_dir = Path(brain.config.projects_root)
+        share_str = args.share_redeem.strip()
         try:
-            result = _shares_mod.redeem_share_key(
-                grantee_user_dir=user_dir, share_string=args.share_redeem.strip()
-            )
-            print("\n  Share redeemed!")
-            print(f"  Project '{result['project']}' from {result['owner']}")
-            mount = result.get("mount_name", result["owner"] + "_" + result["project"])
-            print(f"  Mounted at:  mounts/{mount}")
-            print("  Access:      read-only\n")
+            import base64
+
+            _decoded = base64.urlsafe_b64decode(share_str + "==").decode("utf-8", errors="replace")
+            _is_sealed = _decoded.startswith("SEALED1:")
+        except Exception:
+            _is_sealed = False
+        try:
+            if _is_sealed:
+                from axon import security as _security
+
+                result = _security.redeem_sealed_share(
+                    grantee_user_dir=user_dir, share_string=share_str
+                )
+                print("\n  Sealed share redeemed!")
+                print(f"  Project '{result['project']}' from {result['owner']}")
+                mount = result.get("mount_name", result["owner"] + "_" + result["project"])
+                print(f"  Mounted at:  mounts/{mount}")
+                print("  Access:      read-only (encrypted-at-rest)\n")
+            else:
+                from axon import shares as _shares_mod
+
+                result = _shares_mod.redeem_share_key(
+                    grantee_user_dir=user_dir, share_string=share_str
+                )
+                print("\n  Share redeemed!")
+                print(f"  Project '{result['project']}' from {result['owner']}")
+                mount = result.get("mount_name", result["owner"] + "_" + result["project"])
+                print(f"  Mounted at:  mounts/{mount}")
+                print("  Access:      read-only\n")
         except Exception as exc:
             print(f"  Redeem failed: {exc}")
             sys.exit(1)
