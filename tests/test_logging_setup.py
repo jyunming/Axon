@@ -11,11 +11,12 @@ import logging
 # ---------------------------------------------------------------------------
 
 
-def _reset_logging_setup_module() -> None:
-    """Reset the module-level _configured flag so each test gets a clean slate."""
-    import axon.logging_setup as _ls
+def _remove_axon_handler() -> None:
+    """Remove the Axon-installed handler so each test gets a clean slate."""
+    from axon.logging_setup import _AXON_HANDLER_NAME
 
-    _ls._configured = False
+    root = logging.getLogger()
+    root.handlers = [h for h in root.handlers if h.get_name() != _AXON_HANDLER_NAME]
 
 
 # ---------------------------------------------------------------------------
@@ -25,31 +26,28 @@ def _reset_logging_setup_module() -> None:
 
 class TestConfigureLogging:
     def setup_method(self):
-        _reset_logging_setup_module()
-        # Also clear root handlers so we start clean.
-        root = logging.getLogger()
-        root.handlers.clear()
+        _remove_axon_handler()
 
     def teardown_method(self):
-        _reset_logging_setup_module()
-        root = logging.getLogger()
-        root.handlers.clear()
+        _remove_axon_handler()
 
     def test_configure_adds_one_handler(self):
-        from axon.logging_setup import configure_logging
+        from axon.logging_setup import _AXON_HANDLER_NAME, configure_logging
 
         configure_logging()
         root = logging.getLogger()
-        assert len(root.handlers) == 1
+        axon_handlers = [h for h in root.handlers if h.get_name() == _AXON_HANDLER_NAME]
+        assert len(axon_handlers) == 1
 
     def test_configure_is_idempotent(self):
-        """Calling configure_logging() twice must not duplicate handlers."""
-        from axon.logging_setup import configure_logging
+        """Calling configure_logging() twice must not add a second Axon handler."""
+        from axon.logging_setup import _AXON_HANDLER_NAME, configure_logging
 
         configure_logging()
         configure_logging()
         root = logging.getLogger()
-        assert len(root.handlers) == 1
+        axon_handlers = [h for h in root.handlers if h.get_name() == _AXON_HANDLER_NAME]
+        assert len(axon_handlers) == 1
 
     def test_configure_sets_level(self):
         from axon.logging_setup import configure_logging
@@ -63,9 +61,39 @@ class TestConfigureLogging:
 
         configure_logging()
         root = logging.getLogger()
-        handler = root.handlers[0]
-        filter_types = [type(f) for f in handler.filters]
+        from axon.logging_setup import _AXON_HANDLER_NAME
+
+        axon_handler = next(h for h in root.handlers if (h.get_name() or "") == _AXON_HANDLER_NAME)
+        filter_types = [type(f) for f in axon_handler.filters]
         assert RequestIdFilter in filter_types
+
+    def test_does_not_clear_pre_existing_handlers(self):
+        """configure_logging must NOT remove handlers installed by the embedder."""
+        sentinel = logging.StreamHandler()
+        sentinel.set_name("sentinel_handler")
+        root = logging.getLogger()
+        root.addHandler(sentinel)
+        try:
+            from axon.logging_setup import configure_logging
+
+            configure_logging()
+            names = {h.get_name() for h in root.handlers}
+            assert "sentinel_handler" in names, "pre-existing handler must be preserved"
+        finally:
+            root.handlers = [h for h in root.handlers if h.get_name() != "sentinel_handler"]
+
+    def test_thread_safe_concurrent_calls(self):
+        """Concurrent configure_logging() calls must not install duplicate handlers."""
+        from axon.logging_setup import _AXON_HANDLER_NAME, configure_logging
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futs = [pool.submit(configure_logging) for _ in range(8)]
+            for f in concurrent.futures.as_completed(futs):
+                f.result(timeout=5)
+
+        root = logging.getLogger()
+        axon_handlers = [h for h in root.handlers if h.get_name() == _AXON_HANDLER_NAME]
+        assert len(axon_handlers) == 1, f"expected 1 axon handler, got {len(axon_handlers)}"
 
 
 class TestRequestIdFilter:

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import contextvars
 import logging
-from typing import Any
+import threading
 
 _request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+_AXON_HANDLER_NAME = "_axon_request_id_handler"
+_configure_lock = threading.Lock()
 
 
 class RequestIdFilter(logging.Filter):
@@ -17,29 +20,34 @@ class RequestIdFilter(logging.Filter):
         return True
 
 
-_configured = False
-
-
 def configure_logging(level: int = logging.INFO) -> None:
     """Idempotent: safe to call multiple times from different entry points.
 
-    Sets up a single StreamHandler on the root logger that includes a
-    ``rid=<request_id>`` field in every log line.  Subsequent calls are
-    no-ops so entry points (CLI, API lifespan, MCP server) can each call
-    this without duplicating handlers.
+    Adds a single named StreamHandler that includes a ``rid=<request_id>``
+    field in every log line.  If the handler is already present (same name),
+    updates its formatter and level but does not add a second copy.  Does NOT
+    clear handlers installed by the embedding application or other libraries.
     """
-    global _configured
-    if _configured:
-        return
-    _configured = True
     fmt = "%(asctime)s [%(levelname)s] [rid=%(request_id)s] %(name)s: %(message)s"
-    handler = logging.StreamHandler()
-    handler.addFilter(RequestIdFilter())
-    handler.setFormatter(logging.Formatter(fmt))
+    formatter = logging.Formatter(fmt)
     root = logging.getLogger()
     root.setLevel(level)
-    root.handlers.clear()
-    root.addHandler(handler)
+
+    with _configure_lock:
+        for handler in root.handlers:
+            if handler.get_name() == _AXON_HANDLER_NAME:
+                handler.setLevel(level)
+                handler.setFormatter(formatter)
+                if not any(isinstance(f, RequestIdFilter) for f in handler.filters):
+                    handler.addFilter(RequestIdFilter())
+                return
+
+        handler = logging.StreamHandler()
+        handler.set_name(_AXON_HANDLER_NAME)
+        handler.setLevel(level)
+        handler.addFilter(RequestIdFilter())
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
 
 
 def set_request_id(rid: str) -> contextvars.Token[str]:
@@ -57,7 +65,7 @@ def get_request_id() -> str:
     return _request_id_var.get()
 
 
-__all__: list[Any] = [
+__all__: list[str] = [
     "RequestIdFilter",
     "configure_logging",
     "set_request_id",

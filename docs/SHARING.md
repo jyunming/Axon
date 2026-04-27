@@ -185,7 +185,7 @@ Or in the REPL:
 axon> /share revoke ssk_abc123 --project research
 ```
 
-Marks the share as revoked and deletes the `.wrapped` file so the share string cannot be redeemed again. A grantee who has already redeemed still has the DEK in their keyring and can continue querying until they restart Axon. Use when the grantee is cooperative or has simply lost access to the machine.
+Marks the share as revoked and deletes the `.wrapped` file so the share string cannot be redeemed again. A grantee who has already redeemed still has the DEK cached in their OS keyring — soft revoke blocks new redemptions but does not remove the cached key, so a cooperative grantee can continue querying indefinitely. Use when the grantee is cooperative or has simply lost access to the machine; use hard revoke when you need to guarantee termination of access.
 
 **Hard revoke** (slow, re-encrypts everything with a new DEK):
 
@@ -215,7 +215,7 @@ axon --share-list
 |---|---|
 | Cloud provider reads your files (OneDrive, Dropbox, etc.) | Yes — AES-256-GCM ciphertext only |
 | Another OneDrive collaborator reads your project | Yes — they do not have the decryption key |
-| Grantee continues querying after soft revoke | Partial — cached DEK in keyring is still valid until grantee restarts |
+| Grantee continues querying after soft revoke | Partial — cached DEK in OS keyring remains valid indefinitely; soft revoke only blocks new redemptions |
 | Grantee continues querying after hard revoke | Yes — new DEK, old cached key fails with authentication error |
 | Unencrypted temp files on grantee disk during a query | Partial — ephemeral cache lives in OS temp dir during the query session, wiped securely on exit |
 

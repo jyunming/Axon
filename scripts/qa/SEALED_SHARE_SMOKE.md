@@ -400,7 +400,7 @@ To restore access: OWNER generates a new share (`ssk_yyy`), GRANTEE redeems it.
 | **Google Drive Desktop** | Use **Mirror** mode, not **Stream** (Stream uses virtual files similar to OneDrive Files-On-Demand and can cause the same issue). |
 | **Windows DPAPI keyring** | No passphrase needed; the OS keyring is unlocked at login. `axon share redeem` stores the unwrapped DEK silently. |
 | **macOS Keychain** | The first query after `redeem` prompts "axon wants to use the login keychain" — click **Allow**. The second and subsequent queries are silent. |
-| **Linux headless / no-keyring** | Set `AXON_KEYRING_BACKEND=file` before running Axon. The file-backed keyring stores the DEK in `~/.axon-keyring` (mode 0600). |
+| **Linux headless / no-keyring** | Configure a supported keyring backend via the `keyring` library (e.g. `PYTHON_KEYRING_BACKEND=keyring.backends.SecretService.Keyring`). If no OS keyring is available, Axon automatically falls back to `<user_dir>/.security/master.enc` for the master key. For the share DEK, also set `PYTHON_KEYRING_BACKEND` or ensure the store is bootstrapped so the file fallback path is used. |
 | **SMB share** | No special handling needed; Axon sees it as a normal POSIX path. NTFS semantics on SMB can cause rename-over-existing to fail — Axon retries with a delete-then-rename fallback. |
 
 ### 8 — CI equivalent

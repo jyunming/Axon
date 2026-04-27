@@ -182,7 +182,7 @@ response includes a `diagnostics` object containing `confidence`, `fallback_trig
 
 ## 10. Sparse Retrieval (SPLADE)
 
-**Config:** `retrieval.sparse_retrieval: true`
+**Config:** `rag.sparse_retrieval: true`
 
 SPLADE (SParse Lexical AnD Expansion) is a learned sparse neural retrieval method that
 complements the existing dense (embedding) + BM25 hybrid by capturing exact lexical matches
@@ -197,7 +197,7 @@ where exact token overlap is a strong relevance signal.
 
 **How to enable (`config.yaml`):**
 ```yaml
-retrieval:
+rag:
   sparse_retrieval: true
   sparse_model: "naver/splade-cocondenser-ensembledistil"  # default
   sparse_weight: 0.3  # weight in score fusion (0.0–1.0)
