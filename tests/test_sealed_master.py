@@ -90,13 +90,13 @@ class TestBootstrapStore:
         assert is_bootstrapped(user_dir)
 
     def test_bootstrap_caches_master_so_user_is_unlocked_immediately(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         assert is_unlocked(user_dir)
 
     def test_bootstrap_again_raises_security_error(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         with pytest.raises(SecurityError, match="already bootstrapped"):
-            bootstrap_store(user_dir, "pw2")
+            bootstrap_store(user_dir, "passw0rd-2")
 
     def test_empty_passphrase_rejected(self, kr_backend, user_dir):
         with pytest.raises(BadPassphraseError, match="non-empty"):
@@ -105,7 +105,7 @@ class TestBootstrapStore:
     def test_bootstrap_writes_keyring_record_with_schema_version(self, kr_backend, user_dir):
         import json
 
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         record = json.loads(kr_backend.get_password("axon.master.alice", MASTER_USERNAME))
         assert record["v"] == 1
         assert "salt" in record and "wrapped" in record
@@ -118,27 +118,27 @@ class TestBootstrapStore:
 
 class TestUnlockLock:
     def test_unlock_after_bootstrap_with_correct_passphrase(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         lock_store(user_dir)
         assert not is_unlocked(user_dir)
 
-        result = unlock_store(user_dir, "pw")
+        result = unlock_store(user_dir, "passw0rd")
         assert result["unlocked"] is True
         assert is_unlocked(user_dir)
 
     def test_unlock_with_wrong_passphrase_raises(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "right")
+        bootstrap_store(user_dir, "right-pw!")
         lock_store(user_dir)
         with pytest.raises(BadPassphraseError, match="Wrong passphrase"):
-            unlock_store(user_dir, "wrong")
+            unlock_store(user_dir, "wrong-pw!")
         assert not is_unlocked(user_dir)
 
     def test_unlock_before_bootstrap_raises(self, kr_backend, user_dir):
         with pytest.raises(SecurityError, match="not bootstrapped"):
-            unlock_store(user_dir, "pw")
+            unlock_store(user_dir, "passw0rd")
 
     def test_lock_clears_master_cache(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         assert is_unlocked(user_dir)
         result = lock_store(user_dir)
         assert result["locked"] is True
@@ -146,7 +146,7 @@ class TestUnlockLock:
         assert not is_unlocked(user_dir)
 
     def test_lock_idempotent_when_not_unlocked(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         lock_store(user_dir)
         result = lock_store(user_dir)  # again
         assert result["locked"] is True
@@ -160,32 +160,32 @@ class TestUnlockLock:
 
 class TestChangePassphrase:
     def test_rotate_with_correct_old_passphrase(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "old")
+        bootstrap_store(user_dir, "old-passw")
         master_before = get_master_key(user_dir)
-        result = change_passphrase(user_dir, "old", "new")
+        result = change_passphrase(user_dir, "old-passw", "new-passw")
         assert result["rotated"] is True
         # Master is UNCHANGED across passphrase rotation.
         assert get_master_key(user_dir) == master_before
 
     def test_rotate_with_wrong_old_raises(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "old")
+        bootstrap_store(user_dir, "old-passw")
         with pytest.raises(BadPassphraseError, match="Old passphrase"):
-            change_passphrase(user_dir, "wrong-old", "new")
+            change_passphrase(user_dir, "wrong-old", "new-passw")
 
     def test_after_rotate_old_passphrase_no_longer_works(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "old")
-        change_passphrase(user_dir, "old", "new")
+        bootstrap_store(user_dir, "old-passw")
+        change_passphrase(user_dir, "old-passw", "new-passw")
         lock_store(user_dir)
         with pytest.raises(BadPassphraseError):
-            unlock_store(user_dir, "old")
+            unlock_store(user_dir, "old-passw")
         # New one works.
-        unlock_store(user_dir, "new")
+        unlock_store(user_dir, "new-passw")
         assert is_unlocked(user_dir)
 
     def test_empty_new_passphrase_rejected(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "old")
+        bootstrap_store(user_dir, "old-passw")
         with pytest.raises(BadPassphraseError):
-            change_passphrase(user_dir, "old", "")
+            change_passphrase(user_dir, "old-passw", "")
 
 
 # ---------------------------------------------------------------------------
@@ -195,22 +195,22 @@ class TestChangePassphrase:
 
 class TestGetMasterKey:
     def test_returns_32_bytes_when_unlocked(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         master = get_master_key(user_dir)
         assert isinstance(master, bytes)
         assert len(master) == 32
 
     def test_raises_when_locked(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         lock_store(user_dir)
         with pytest.raises(SecurityError, match="locked"):
             get_master_key(user_dir)
 
     def test_master_stable_across_lock_unlock(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         m1 = get_master_key(user_dir)
         lock_store(user_dir)
-        unlock_store(user_dir, "pw")
+        unlock_store(user_dir, "passw0rd")
         m2 = get_master_key(user_dir)
         assert m1 == m2
 
@@ -222,7 +222,7 @@ class TestGetMasterKey:
 
 class TestProjectDek:
     def test_first_call_creates_and_persists_wrapped_dek(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         proj = user_dir / "research"
         proj.mkdir()
         dek = get_or_create_project_dek(user_dir, proj)
@@ -234,7 +234,7 @@ class TestProjectDek:
         assert wrap_path.stat().st_size == 40
 
     def test_idempotent_returns_same_dek(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         proj = user_dir / "research"
         proj.mkdir()
         d1 = get_or_create_project_dek(user_dir, proj)
@@ -242,7 +242,7 @@ class TestProjectDek:
         assert d1 == d2
 
     def test_distinct_projects_get_distinct_deks(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         p1 = user_dir / "p1"
         p2 = user_dir / "p2"
         p1.mkdir()
@@ -252,7 +252,7 @@ class TestProjectDek:
         assert d1 != d2
 
     def test_locked_store_blocks_dek_access(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         lock_store(user_dir)
         proj = user_dir / "research"
         proj.mkdir()
@@ -260,29 +260,29 @@ class TestProjectDek:
             get_or_create_project_dek(user_dir, proj)
 
     def test_dek_survives_passphrase_rotation(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "old")
+        bootstrap_store(user_dir, "old-passw")
         proj = user_dir / "research"
         proj.mkdir()
         dek_before = get_or_create_project_dek(user_dir, proj)
-        change_passphrase(user_dir, "old", "new")
+        change_passphrase(user_dir, "old-passw", "new-passw")
         # DEK should be retrievable AND identical — passphrase rotation
         # doesn't touch project DEKs.
         dek_after = get_or_create_project_dek(user_dir, proj)
         assert dek_before == dek_after
 
     def test_dek_survives_lock_unlock_cycle(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         proj = user_dir / "research"
         proj.mkdir()
         dek1 = get_or_create_project_dek(user_dir, proj)
         lock_store(user_dir)
-        unlock_store(user_dir, "pw")
+        unlock_store(user_dir, "passw0rd")
         dek2 = get_or_create_project_dek(user_dir, proj)
         assert dek1 == dek2
 
     def test_no_partial_wrap_left_after_failed_write(self, kr_backend, user_dir):
         """Atomic per-file write — the .sealing tempfile must not survive."""
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         proj = user_dir / "research"
         proj.mkdir()
         get_or_create_project_dek(user_dir, proj)
@@ -291,7 +291,7 @@ class TestProjectDek:
         assert leftover == []
 
     def test_corrupt_wrapped_dek_raises_security_error(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         proj = user_dir / "research"
         proj.mkdir()
         get_or_create_project_dek(user_dir, proj)
@@ -309,7 +309,7 @@ class TestProjectDek:
 
 class TestGetProjectDekReadOnly:
     def test_raises_when_no_dek_file(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         proj = user_dir / "research"
         proj.mkdir()
         # No DEK created yet.
@@ -317,7 +317,7 @@ class TestGetProjectDekReadOnly:
             get_project_dek(user_dir, proj)
 
     def test_returns_existing_dek_unchanged(self, kr_backend, user_dir):
-        bootstrap_store(user_dir, "pw")
+        bootstrap_store(user_dir, "passw0rd")
         proj = user_dir / "research"
         proj.mkdir()
         original = get_or_create_project_dek(user_dir, proj)
@@ -346,3 +346,51 @@ class TestKeyringRecordValidation:
         )
         with pytest.raises(SecurityError, match="schema_version mismatch"):
             unlock_store(user_dir, "pw")
+
+
+# ---------------------------------------------------------------------------
+# Passphrase minimum-length enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestPassphraseMinimumLength:
+    """bootstrap_store and change_passphrase enforce a minimum passphrase
+    length; unlock_store deliberately does NOT so it returns a clear
+    "wrong passphrase" error rather than a misleading "too short" one.
+    """
+
+    def test_bootstrap_rejects_short_passphrase(self, kr_backend, user_dir):
+        """A passphrase shorter than 8 characters is rejected at bootstrap."""
+        with pytest.raises(BadPassphraseError, match="at least 8"):
+            bootstrap_store(user_dir, "short")
+
+    def test_bootstrap_rejects_exactly_seven_chars(self, kr_backend, user_dir):
+        with pytest.raises(BadPassphraseError, match="at least 8"):
+            bootstrap_store(user_dir, "1234567")
+
+    def test_bootstrap_accepts_exactly_eight_chars(self, kr_backend, user_dir):
+        result = bootstrap_store(user_dir, "12345678")
+        assert result["initialized"] is True
+
+    def test_change_passphrase_rejects_short_new_passphrase(self, kr_backend, user_dir):
+        """change_passphrase rejects a new passphrase that is too short."""
+        bootstrap_store(user_dir, "long-enough-old")
+        with pytest.raises(BadPassphraseError, match="at least 8"):
+            change_passphrase(user_dir, "long-enough-old", "short")
+
+    def test_change_passphrase_accepts_eight_char_new_passphrase(self, kr_backend, user_dir):
+        bootstrap_store(user_dir, "long-enough-old")
+        result = change_passphrase(user_dir, "long-enough-old", "new12345")
+        assert result["rotated"] is True
+
+    def test_unlock_accepts_short_passphrase_and_raises_bad_passphrase(self, kr_backend, user_dir):
+        """unlock_store does NOT enforce minimum length — it lets the
+        wrong-passphrase path fire normally so the error message is clear.
+        Passing a short passphrase should raise BadPassphraseError (wrong
+        passphrase), NOT BadPassphraseError (too short).
+        """
+        bootstrap_store(user_dir, "correct-long-pass")
+        lock_store(user_dir)
+        # A short passphrase is just wrong — no "too short" error raised.
+        with pytest.raises(BadPassphraseError, match="Wrong passphrase"):
+            unlock_store(user_dir, "tiny")

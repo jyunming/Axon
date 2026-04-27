@@ -307,6 +307,31 @@ Do not use Chroma on any shared, network, or cloud-sync path. Chroma is also not
 
 ---
 
+## Security Considerations
+
+### Windows users with highly sensitive data
+
+The encrypted cache is wiped with random-byte overwrite on close, but NTFS copy-on-write and SSD wear-leveling may retain plaintext in freed sectors even after the overwrite completes. On a spinning HDD, Axon also calls `FlushFileBuffers` (Windows API) after each file wipe for best-effort write-through, but this does not guarantee physical sector erasure on SSDs.
+
+For compliance or classified use, take one of the following measures:
+
+- **Enable BitLocker** on the drive containing `%TEMP%` (the default cache location). BitLocker encrypts every sector, so even previously-freed sectors are protected at rest.
+- **Redirect the cache to an encrypted volume** by setting the `AXON_CACHE_DIR` environment variable to a path on a BitLocker drive, a VeraCrypt container, or a RAM disk:
+  ```
+  set AXON_CACHE_DIR=E:\secure-tmp
+  ```
+- **Use a RAM disk** (e.g. ImDisk, RamMap) for `%TEMP%`. A RAM disk never writes to physical storage; cache contents are destroyed when the machine powers off.
+
+Axon logs an INFO-level reminder (`SealedCache: Windows NTFS secure-delete is best-effort`) when it first wipes a cache directory on Windows. This reminder is emitted once per cache directory per process lifetime.
+
+### Passphrase strength
+
+`axon --store-bootstrap` and `axon --store-change-passphrase` require a passphrase of at least 8 characters. This is a minimum floor; a stronger passphrase significantly increases resistance to offline brute-force attacks against the scrypt-wrapped master key (N=2¹⁵, r=8, p=1). A 16+ character random passphrase or a four-word diceware phrase is recommended.
+
+`axon --store-unlock` does not enforce the minimum length so it can distinguish "wrong passphrase" from "too short" without misleading error messages.
+
+---
+
 ## See Also
 
 - [ADMIN_REFERENCE.md](ADMIN_REFERENCE.md) — complete command reference for all share and seal operations

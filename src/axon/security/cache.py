@@ -15,11 +15,14 @@ implemented here:
 - **Cache location**: ``tempfile.mkdtemp(prefix="axon-sealed-")``
   (Linux/macOS uses ``/tmp``; Windows uses ``%LOCALAPPDATA%\\Temp``).
   Per-mount; never shared between projects.
-- **Wipe on close**: every cache file is overwritten with zeros
-  (``O_RDWR`` re-open + ``write(b"\\x00" * size)`` + fsync) before
-  unlink. This won't survive low-level disk forensics on SSDs (TRIM
-  / wear-leveling defeat overwrite), but at the filesystem layer the
-  plaintext is gone.
+- **Wipe on close**: every cache file is overwritten with random bytes
+  (``O_RDWR`` re-open + ``write(os.urandom(...))`` + fsync +
+  ``FlushFileBuffers`` on Windows) before unlink. This won't survive
+  low-level disk forensics on SSDs (TRIM / wear-leveling defeat
+  overwrite) or NTFS copy-on-write sector reuse, but at the filesystem
+  layer the plaintext is gone. On Windows, enable BitLocker on the
+  drive containing ``%TEMP%`` (or redirect via ``AXON_CACHE_DIR``) for
+  full protection of highly sensitive data.
 - **Crash recovery**: every cache dir contains a ``.pid`` sentinel
   with the creating process's PID. :func:`cleanup_orphans` walks the
   temp dir on next AxonBrain boot, finds ``axon-sealed-*`` dirs whose
@@ -37,6 +40,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -51,6 +55,11 @@ except ImportError as exc:  # pragma: no cover — import-time guard
     ) from exc
 
 logger = logging.getLogger("Axon")
+
+# Tracks cache dirs for which the Windows NTFS plaintext-persistence warning
+# has already been logged — so we emit it at most once per cache lifetime
+# rather than once per file deleted.
+_windows_warned_paths: set[str] = set()
 
 __all__ = [
     "CACHE_PREFIX",
@@ -108,13 +117,39 @@ def _project_size_bytes(sealed_dir: Path) -> int:
 
 
 def _secure_delete_file(path: Path) -> None:
-    """Overwrite *path* with zeros, fsync, then unlink.
-    Best-effort at the filesystem layer — won't defeat SSD TRIM /
-    wear-leveling, but ensures no readable plaintext bytes remain at
-    the file's logical address before the inode is freed. Errors are
-    silently swallowed (the unlink is the desired post-condition; if
-    we can't even unlink, there's nothing useful to do here).
+    """Overwrite *path* with random bytes, fsync, then unlink.
+
+    Uses ``os.urandom`` for overwrite content instead of zeros — random
+    bytes prevent zero-pattern detection and make statistical recovery
+    harder. On Windows, calls ``FlushFileBuffers`` via ctypes after the
+    Python-level ``fsync`` to maximise the chance that the random data
+    actually reaches the storage device before the file handle is closed.
+
+    **Windows NTFS limitation**: NTFS copy-on-write and SSD TRIM /
+    wear-leveling may redirect writes to new sectors, leaving the old
+    sector content accessible via low-level disk forensics even after
+    this function completes. This implementation is best-effort at the
+    filesystem layer — it ensures no readable plaintext survives at the
+    file's *logical* address. For compliance or classified use, enable
+    BitLocker on the volume containing the cache (see
+    ``docs/SHARING.md#security-considerations``).
+
+    Errors are silently swallowed (the unlink is the desired
+    post-condition; if we can't even unlink, there's nothing useful to
+    do here).
     """
+    # Emit a one-time INFO warning on Windows about the NTFS limitation.
+    if sys.platform == "win32":
+        parent_key = str(path.parent)
+        if parent_key not in _windows_warned_paths:
+            _windows_warned_paths.add(parent_key)
+            logger.info(
+                "SealedCache: Windows NTFS secure-delete is best-effort — "
+                "plaintext may persist in freed sectors on HDDs. "
+                "Enable BitLocker on %s for full protection.",
+                path.parent,
+            )
+
     try:
         size = path.stat().st_size
     except OSError:
@@ -122,19 +157,30 @@ def _secure_delete_file(path: Path) -> None:
     if size > 0:
         try:
             with path.open("r+b") as fh:
-                # Write zeros in 64 KiB chunks so we don't allocate a
-                # huge buffer for huge files.
-                chunk = b"\x00" * min(size, 64 * 1024)
+                # Overwrite with random bytes in 64 KiB chunks to avoid
+                # allocating a large buffer for large files.
+                chunk_size = min(size, 64 * 1024)
                 remaining = size
                 while remaining > 0:
-                    write_len = min(remaining, len(chunk))
-                    fh.write(chunk[:write_len])
+                    write_len = min(remaining, chunk_size)
+                    fh.write(os.urandom(write_len))
                     remaining -= write_len
                 fh.flush()
                 try:
                     os.fsync(fh.fileno())
                 except OSError:
                     pass
+                # On Windows, call FlushFileBuffers for best-effort
+                # write-through to the storage device.
+                if sys.platform == "win32":
+                    try:
+                        import ctypes
+
+                        ctypes.windll.kernel32.FlushFileBuffers(  # type: ignore[attr-defined]
+                            ctypes.get_osfhandle(fh.fileno())
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass  # best-effort; fsync above is the primary mechanism
         except OSError as exc:
             logger.debug("secure-delete overwrite failed for %s: %s", path, exc)
     try:
