@@ -92,6 +92,12 @@ _SCRYPT_P: int = 1
 _SCRYPT_LEN: int = 32  # 256-bit KEK
 _SALT_LEN: int = 32  # 256 bits of salt entropy
 
+# Minimum passphrase length enforced at bootstrap and rotation time.
+# NOT enforced at unlock — unlocking accepts any passphrase so the
+# caller receives BadPassphraseError (wrong passphrase) rather than a
+# misleading "too short" error when the passphrase is simply wrong.
+_MIN_PASSPHRASE_LEN: int = 8
+
 
 class BadPassphraseError(SecurityError):
     """Raised when ``unlock_store`` or ``change_passphrase`` is given a
@@ -264,6 +270,11 @@ def bootstrap_store(user_dir: Path, passphrase: str) -> dict[str, Any]:
     """
     if not passphrase:
         raise BadPassphraseError("passphrase must be a non-empty string")
+    if len(passphrase) < _MIN_PASSPHRASE_LEN:
+        raise BadPassphraseError(
+            f"passphrase must be at least {_MIN_PASSPHRASE_LEN} characters "
+            f"(got {len(passphrase)})"
+        )
     if is_bootstrapped(user_dir):
         raise SecurityError(
             f"Store at {_service(user_dir)} is already bootstrapped. "
@@ -343,6 +354,11 @@ def change_passphrase(user_dir: Path, old_passphrase: str, new_passphrase: str) 
     """
     if not new_passphrase:
         raise BadPassphraseError("new_passphrase must be a non-empty string")
+    if len(new_passphrase) < _MIN_PASSPHRASE_LEN:
+        raise BadPassphraseError(
+            f"new_passphrase must be at least {_MIN_PASSPHRASE_LEN} characters "
+            f"(got {len(new_passphrase)})"
+        )
     record = _read_keyring_record(user_dir)
     if record is None:
         raise SecurityError(f"Store at {_service(user_dir)} is not bootstrapped.")

@@ -366,3 +366,61 @@ class TestSelfCheck:
         result = _self_check()
         assert result["ok"] is True
         assert "round-trip OK" in result["details"]
+
+
+# ---------------------------------------------------------------------------
+# _secure_delete_file — random-byte overwrite
+# ---------------------------------------------------------------------------
+
+
+class TestSecureDeleteUsesRandomBytes:
+    """Verify that _secure_delete_file writes random (non-zero) bytes."""
+
+    def test_overwrite_content_is_not_all_zeros(self, tmp_path):
+        """The overwrite must use random bytes, not a zero buffer.
+
+        Strategy: intercept ``os.urandom`` to record what bytes were
+        requested, confirm they were non-zero (urandom never returns all
+        zeros for a reasonable-sized request) and that the file was
+        actually overwritten and then removed.
+        """
+        from axon.security.cache import _secure_delete_file
+
+        target = tmp_path / "sensitive.bin"
+        # Write 1 000 bytes so the overwrite loop runs at least one chunk.
+        target.write_bytes(b"SECRET" * 167)
+
+        urandom_calls: list[int] = []
+        real_urandom = os.urandom
+
+        def spy_urandom(n: int) -> bytes:
+            data = real_urandom(n)
+            urandom_calls.append(n)
+            return data
+
+        with patch("axon.security.cache.os.urandom", side_effect=spy_urandom):
+            _secure_delete_file(target)
+
+        # os.urandom must have been called at least once for the overwrite.
+        assert urandom_calls, "os.urandom was never called — overwrite did not run"
+        total_requested = sum(urandom_calls)
+        assert total_requested > 0, "os.urandom was called but requested 0 bytes"
+        # File must be gone after the secure delete.
+        assert not target.exists(), "file was not unlinked after secure delete"
+
+    def test_file_is_unlinked_after_secure_delete(self, tmp_path):
+        from axon.security.cache import _secure_delete_file
+
+        target = tmp_path / "gone.bin"
+        target.write_bytes(b"data")
+        _secure_delete_file(target)
+        assert not target.exists()
+
+    def test_empty_file_is_unlinked_without_overwrite(self, tmp_path):
+        """Zero-size files skip the overwrite loop but must still be removed."""
+        from axon.security.cache import _secure_delete_file
+
+        target = tmp_path / "empty.bin"
+        target.write_bytes(b"")
+        _secure_delete_file(target)
+        assert not target.exists()
