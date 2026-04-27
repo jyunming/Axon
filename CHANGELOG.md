@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.0 — 2026-04-27
+## [0.3.0] - 2026-04-27
 
 ### ✨ New Features
 
@@ -16,8 +16,7 @@
 ### ⬆️ Upgrade from v0.2.1
 
 ```bash
-pip install --upgrade axon-rag          # base upgrade
-pip install "axon-rag[sealed]"          # add cloud-drive sharing support
+pip install --upgrade "axon-rag[sealed]"   # upgrades base + adds cloud-drive sharing support
 ```
 
 - **No action required for existing projects** — all changes are fully additive and backward-compatible.

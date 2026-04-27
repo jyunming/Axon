@@ -261,6 +261,7 @@ def _share_keyring_service(key_id: str) -> str:
 
 def _grantee_dek_fallback_path(user_dir: Path, key_id: str) -> Path:
     """``<user_dir>/.security/shares/<key_id>.dek.wrapped`` — per-share fallback."""
+    _validate_key_id(key_id)
     return Path(user_dir) / ".security" / "shares" / f"{key_id}.dek.wrapped"
 
 
@@ -1325,6 +1326,11 @@ def delete_grantee_dek(key_id: str, user_dir: Path | None = None) -> bool:
     """
     if not key_id:
         return False
+    # Validate key_id without raising — invalid IDs mean nothing was stored.
+    try:
+        _validate_key_id(key_id)
+    except SecurityError:
+        return False
     service = _share_keyring_service(key_id)
     had_secret = False
     try:
@@ -1338,5 +1344,8 @@ def delete_grantee_dek(key_id: str, user_dir: Path | None = None) -> bool:
     if user_dir is not None:
         fb_path = _grantee_dek_fallback_path(Path(user_dir), key_id)
         had_file = fb_path.is_file()
-        fb_path.unlink(missing_ok=True)
+        try:
+            fb_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("delete_grantee_dek(%s) file unlink failed: %s", key_id, exc)
     return had_secret or had_file

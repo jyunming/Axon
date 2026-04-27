@@ -104,7 +104,7 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 - Dropbox
 - Google Drive (Mirror mode)
 
-→ [Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md) | [Quick Setup →](#sealed-sharing-quick-start)
+→ [Sharing Guide](docs/SHARING.md) | [Quick Setup →](#sealed-sharing-quick-start)
 
 </td>
 </tr>
@@ -164,7 +164,7 @@ axon --share-redeem "SEALED1:..."                  # 2. redeem — DEK stored in
 axon --project mounts/owner_research "question"   # 3. query; Axon decrypts to temp, wipes on exit
 ```
 
-**[→ Full Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md)** — OneDrive setup, revocation, headless/Docker grantees, filesystem compatibility matrix.
+**[→ Full Sharing Guide](docs/SHARING.md)** — OneDrive setup, revocation, headless/Docker grantees, filesystem compatibility matrix.
 
 ---
 

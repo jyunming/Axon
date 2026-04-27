@@ -83,7 +83,7 @@ def _populate_and_seal(user_dir: Path, project: str = "research") -> Path:
     (proj / "vector_store_data" / "manifest.json").write_text('{"d":768}', encoding="utf-8")
     (proj / "vector_store_data" / "seg-00000001.bin").write_bytes(b"\xab" * 4096)
 
-    bootstrap_store(user_dir, "pw")
+    bootstrap_store(user_dir, "test-pass-ok")
     project_seal(project, user_dir)
     return proj
 
