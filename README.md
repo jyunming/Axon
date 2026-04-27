@@ -31,7 +31,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 - 🔒 **Private by default** — all inference runs locally via Ollama or vLLM. No API key, no upload, no telemetry.
 - 📄 **Ingest anything** — 54 file formats (PDF, DOCX, Jupyter, code, images, URLs) in one command. SHA-256 dedup skips unchanged files.
 - 🤖 **Works in your tools** — `@axon` in Copilot Chat, MCP for Claude Code / Codex / Gemini CLI / Cursor, Graph panel in VS Code or your browser.
-- 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Sealed (AES-256-GCM encrypted) sharing works safely through OneDrive, Dropbox, and Google Drive. Per-user permissions, full audit trail, no extra infrastructure.
+- 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Sealed (AES-256-GCM encrypted) sharing works safely through OneDrive, Dropbox, and Google Drive. Per-user permissions, full audit trail, no extra infrastructure. [Quick setup →](#sealed-sharing-quick-start)
 - 🕸️ **See your knowledge as a graph** — interactive 3D entity-relationship graph. Embedded webview in VS Code; opens in your browser everywhere else. Click any node to jump to the exact source line.
 - 🔬 **Production-grade retrieval** — hybrid search, reranking, HyDE, multi-query expansion, and automatic web fallback. Zero manual tuning.
 
@@ -96,6 +96,21 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 </td>
 <td width="50%" valign="top">
 
+### ☁️ Cloud-Drive Sharing
+**Sealed (AES-256-GCM encrypted) sharing works through any cloud sync drive.**
+Files are ciphertext on disk — cloud providers see only encrypted bytes.
+
+- OneDrive Personal / Business
+- Dropbox
+- Google Drive (Mirror mode)
+
+→ [Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md) | [Quick Setup →](#sealed-sharing-quick-start)
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
 ### 🛡️ Governance & Agents
 - **Governance Console** — full audit trail of every query
 - Graceful maintenance states: `normal → draining → readonly → offline`
@@ -119,6 +134,37 @@ axon                    # launches the interactive REPL
 Local inference uses [Ollama](https://ollama.com). Cloud providers (OpenAI, Gemini, Grok, vLLM, GitHub Copilot) work via API keys.
 
 **[→ Full installation guide with VS Code, MCP, and cloud provider setup](https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md)**
+
+---
+
+## 🔐 Sealed Sharing Quick Start
+
+Share an encrypted knowledge base through OneDrive, Dropbox, or Google Drive. Cloud providers see only ciphertext.
+
+```bash
+pip install "axon-rag[sealed]"   # install sealed extra on both machines
+```
+
+**Owner (5 steps)**
+
+```bash
+axon --store-init "/path/to/OneDrive/AxonStore"  # 1. point store at sync folder
+axon --store-bootstrap "your-passphrase"          # 2. bootstrap master key (once per machine)
+axon --project-new research                       # 3. create project + ingest
+axon --project research --ingest /docs
+axon --project-seal research                      # 4. encrypt in place (≈1 s per 100 MB)
+axon --share-generate research alice              # 5. print SEALED1:... string — send to grantee
+```
+
+**Grantee (3 steps)**
+
+```bash
+axon --store-init "/path/to/OneDrive/AxonStore"   # 1. same shared folder
+axon --share-redeem "SEALED1:..."                  # 2. redeem — DEK stored in OS keyring
+axon --project mounts/owner_research "question"   # 3. query; Axon decrypts to temp, wipes on exit
+```
+
+**[→ Full Sharing Guide](https://github.com/jyunming/Axon/blob/main/docs/SHARING.md)** — OneDrive setup, revocation, headless/Docker grantees, filesystem compatibility matrix.
 
 ---
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.3.0 — 2026-04-27
+
+### ✨ New Features
+
+- **Sealed sharing (AES-256-GCM encrypted-at-rest)** — all 7 phases shipped; works through OneDrive, Dropbox, and Google Drive. Cloud providers see only ciphertext. See [Sharing Guide](docs/SHARING.md).
+- **Cross-platform key portability** — dual-write `master.enc` so sealed projects move cleanly between Windows, macOS, and Linux without re-sealing.
+- **Grantee headless Linux / Docker support** — share DEK file fallback for environments without a GUI keyring (CI, servers, containers).
+- **SPLADE sparse retrieval (Phase 1)** — hybrid dense + BM25 + sparse pipeline; opt-in via `pip install axon-rag[sparse]` + `sparse_retrieval: true` in config.yaml.
+- **7 new MCP tools** — governance suite, `query_stream`, `mount_refresh`, `seal_project`.
+- **Split health endpoints** — `/health/live` (process up) and `/health/ready` (brain ready) replace the single `/health` route; Prometheus metrics at `/metrics`.
+- **Per-IP rate limiting** — applied to share, ingest, and security endpoints.
+- **Structured logging** — every request logs a `X-Request-ID` header for distributed tracing.
+
+### ⬆️ Upgrade from v0.2.1
+
+```bash
+pip install --upgrade axon-rag          # base upgrade
+pip install "axon-rag[sealed]"          # add cloud-drive sharing support
+```
+
+- **No action required for existing projects** — all changes are fully additive and backward-compatible.
+- **To enable sealed sharing**: run `axon --project-seal <name>` once per project (opt-in, irreversible without re-ingest).
+- **To enable cloud-drive sharing**: set `store.base` to your OneDrive / Dropbox / Google Drive path in `config.yaml`.
+- **To enable sparse retrieval**: `pip install axon-rag[sparse]` then add `sparse_retrieval: true` to `config.yaml`.
+
+---
+
 ## [0.2.1] - 2026-04-25
 
 ### ✨ New Features
