@@ -74,7 +74,7 @@ import re as _re
 
 from . import SecurityError
 from . import keyring as _kr
-from .crypto import DEK_LEN
+from .crypto import DEK_LEN, unwrap_key, wrap_key
 from .master import get_master_key, get_project_dek
 from .seal import is_project_sealed
 
@@ -252,6 +252,64 @@ def _resolve_owned_project_dir(project_name: str, user_dir: Path) -> Path:
 def _share_keyring_service(key_id: str) -> str:
     """Per-share keyring service name for the grantee's unwrapped DEK."""
     return f"{SHARE_KEYRING_PREFIX}.{key_id}"
+
+
+# ---------------------------------------------------------------------------
+# Grantee DEK file fallback helpers (headless Linux / Docker / CI)
+# ---------------------------------------------------------------------------
+
+
+def _grantee_dek_fallback_path(user_dir: Path, key_id: str) -> Path:
+    """``<user_dir>/.security/shares/<key_id>.dek.wrapped`` — per-share fallback."""
+    return Path(user_dir) / ".security" / "shares" / f"{key_id}.dek.wrapped"
+
+
+def _write_grantee_dek_fallback(user_dir: Path, key_id: str, dek: bytes) -> None:
+    """Wrap *dek* under the grantee's master key and persist to file atomically.
+
+    Mirrors the pattern used for project DEKs in ``master.py``:
+    ``<project>/.security/dek.wrapped`` (40-byte AES-KW output).  The
+    grantee must have their store unlocked (``axon --store-unlock``) before
+    this is called, because :func:`get_master_key` will raise
+    ``SecurityError`` otherwise.
+    """
+    master = get_master_key(user_dir)
+    wrapped = wrap_key(dek, master)
+    path = _grantee_dek_fallback_path(user_dir, key_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_bytes(wrapped)
+        tmp.replace(path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        import os as _os
+
+        _os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _read_grantee_dek_fallback(user_dir: Path, key_id: str) -> bytes | None:
+    """Unwrap the DEK from the file fallback using the grantee's master key.
+
+    Returns ``None`` when the fallback file does not exist (analogous to
+    :func:`axon.security.keyring.get_secret` returning None).  Raises
+    :class:`SecurityError` when the file exists but can't be decrypted.
+    """
+    path = _grantee_dek_fallback_path(user_dir, key_id)
+    if not path.is_file():
+        return None
+    master = get_master_key(user_dir)
+    try:
+        return unwrap_key(path.read_bytes(), master)
+    except Exception as exc:
+        raise SecurityError(f"Grantee DEK fallback file is unreadable: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -473,12 +531,35 @@ def redeem_sealed_share(
     service = _share_keyring_service(key_id)
     try:
         _kr.store_secret(service, "dek", base64.b64encode(dek).decode("ascii"))
-    except _kr.KeyringUnavailableError as exc:
-        raise SecurityError(
-            f"Cannot persist sealed-share DEK to OS keyring: {exc}. "
-            "On a headless Linux server, install gnome-keyring or use "
-            "the passphrase fallback (Phase 6)."
-        ) from exc
+    except _kr.KeyringUnavailableError:
+        # Keyring unavailable (headless Linux / Docker / CI) — fall back to
+        # a file wrapped under the grantee's own master key, mirroring the
+        # master.enc dual-write pattern in master.py.
+        try:
+            _write_grantee_dek_fallback(grantee_user_dir, key_id, dek)
+            logger.info(
+                "Grantee DEK for %s persisted to file fallback (keyring unavailable)",
+                key_id,
+            )
+        except SecurityError:
+            raise  # store not bootstrapped or locked — surface as-is
+        except OSError as exc:
+            raise SecurityError(
+                f"Cannot persist grantee DEK for {key_id}: keyring unavailable and "
+                f"file fallback failed: {exc}"
+            ) from exc
+    else:
+        # Keyring is available — also write the file fallback so the DEK
+        # survives a cross-platform copy (mirrors the master.enc dual-write).
+        try:
+            _write_grantee_dek_fallback(grantee_user_dir, key_id, dek)
+        except Exception as _fb_exc:
+            # File fallback is best-effort when keyring is available;
+            # a failure here should not abort a successful keyring write.
+            logger.debug(
+                "Grantee DEK file fallback write failed (keyring write succeeded): %s",
+                _fb_exc,
+            )
     # Build the mount descriptor — same path format as the legacy
     # share path so the rest of the brain doesn't need a special case
     # at list-mounts / list-projects time.
@@ -567,21 +648,50 @@ def _create_sealed_mount_descriptor(
 # ---------------------------------------------------------------------------
 
 
-def get_grantee_dek(key_id: str) -> bytes:
-    """Fetch the grantee's cached DEK for *key_id* from the OS keyring.
+def get_grantee_dek(key_id: str, user_dir: Path | None = None) -> bytes:
+    """Fetch the grantee's cached DEK for *key_id*.
+
+    Resolution order:
+    1. OS keyring (``axon.share.<key_id>`` / ``dek``).
+    2. File fallback at ``<user_dir>/.security/shares/<key_id>.dek.wrapped``
+       (used when keyring is unavailable — headless Linux / Docker / CI).
+
+    Args:
+        key_id: Share key identifier.
+        user_dir: Grantee's AxonStore user directory.  Required when the
+            keyring is unavailable (supplies the master key path for the
+            file fallback).  If ``None`` and the keyring is unavailable,
+            a :class:`SecurityError` is raised with a clear message.
+
     Raises:
-        SecurityError: keyring unavailable, no DEK stored under
-            ``axon.share.<key_id>`` (grantee never redeemed), or the
-            stored value is malformed base64.
+        SecurityError: keyring unavailable and *user_dir* not given (or
+            file fallback also absent), no DEK stored for *key_id*, or
+            the stored value is malformed.
     """
     _validate_key_id(key_id)
     service = _share_keyring_service(key_id)
     try:
         secret = _kr.get_secret(service, "dek")
-    except _kr.KeyringUnavailableError as exc:
-        raise SecurityError(
-            f"OS keyring unavailable; cannot fetch sealed-share DEK for " f"{key_id}: {exc}"
-        ) from exc
+    except _kr.KeyringUnavailableError:
+        # Keyring unavailable — try the file fallback.
+        if user_dir is None:
+            raise SecurityError(
+                f"OS keyring unavailable; cannot fetch sealed-share DEK for "
+                f"{key_id}. Pass user_dir to use the file fallback."
+            )
+        dek = _read_grantee_dek_fallback(Path(user_dir), key_id)
+        if dek is None:
+            raise SecurityError(
+                f"Share DEK for {key_id!r} not found in keyring or file fallback. "
+                "Redeem the share again, or ensure the grantee store is bootstrapped "
+                "and unlocked (axon --store-unlock) before querying."
+            )
+        if len(dek) != DEK_LEN:
+            raise SecurityError(
+                f"Grantee DEK fallback for {key_id} is {len(dek)} bytes "
+                f"(expected {DEK_LEN}); file may be corrupted."
+            )
+        return dek
     if secret is None:
         raise SecurityError(
             f"No sealed-share DEK in keyring for {key_id}. "
@@ -1195,23 +1305,38 @@ def _hard_revoke(
     }
 
 
-def delete_grantee_dek(key_id: str) -> bool:
+def delete_grantee_dek(key_id: str, user_dir: Path | None = None) -> bool:
     """Remove the grantee's cached DEK for *key_id*; True iff one was present.
+
+    Deletes both the OS keyring entry and the file fallback (if present) so
+    cleanup is complete regardless of how the DEK was originally persisted.
+
     Used by Phase 4 revocation cleanup. Best-effort — a missing
     entry returns False without raising, so callers can use this as
     an idempotent cleanup hook. The keyring layer itself silently
     no-ops on missing-key delete, so we have to probe first to
     distinguish "deleted something" from "nothing was there".
+
+    Args:
+        key_id: Share key identifier.
+        user_dir: Grantee's AxonStore user directory.  When provided, the
+            file fallback at ``<user_dir>/.security/shares/<key_id>.dek.wrapped``
+            is also deleted (best-effort).
     """
     if not key_id:
         return False
     service = _share_keyring_service(key_id)
+    had_secret = False
     try:
         had_secret = _kr.get_secret(service, "dek") is not None
-        if not had_secret:
-            return False
-        _kr.delete_secret(service, "dek")
-        return True
+        if had_secret:
+            _kr.delete_secret(service, "dek")
     except Exception as exc:
-        logger.debug("delete_grantee_dek(%s) failed: %s", key_id, exc)
-        return False
+        logger.debug("delete_grantee_dek(%s) keyring op failed: %s", key_id, exc)
+    # Also clean up the file fallback, regardless of keyring availability.
+    had_file = False
+    if user_dir is not None:
+        fb_path = _grantee_dek_fallback_path(Path(user_dir), key_id)
+        had_file = fb_path.is_file()
+        fb_path.unlink(missing_ok=True)
+    return had_secret or had_file
