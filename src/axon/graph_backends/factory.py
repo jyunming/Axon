@@ -29,11 +29,13 @@ def _registry() -> dict[str, type]:
     global _BACKEND_REGISTRY
     if not _BACKEND_REGISTRY:
         from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+        from axon.graph_backends.federated_backend import FederatedGraphBackend
         from axon.graph_backends.graphrag_backend import GraphRagBackend
 
         _BACKEND_REGISTRY = {
             "graphrag": GraphRagBackend,
             "dynamic_graph": DynamicGraphBackend,
+            "federated": FederatedGraphBackend,
         }
     return _BACKEND_REGISTRY
 

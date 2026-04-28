@@ -180,6 +180,8 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "tqdb_search_list_size",
         "tqdb_alpha",
         "tqdb_n_refinements",
+        "tqdb_hybrid",
+        "tqdb_hybrid_weight",
     },
     "rag": {
         "hybrid_search",
@@ -226,6 +228,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "raptor_chunk_group_size",
         "dedup_on_ingest",
         "graph_backend",
+        "graph_federation_weights",
         "ingest_engine",
         "bm25_engine",
         "symbol_index_engine",
@@ -359,6 +362,8 @@ class AxonConfig:
     tqdb_search_list_size: int = 128
     tqdb_alpha: float | None = None  # HNSW pruning aggressiveness (None = TQDB default 1.2)
     tqdb_n_refinements: int | None = None  # HNSW refinement passes (None = TQDB default 5)
+    tqdb_hybrid: bool = False  # v0.7.0: enable TQDB-side BM25+dense RRF hybrid search
+    tqdb_hybrid_weight: float = 0.5  # v0.7.0: dense weight in hybrid fusion (0=sparse, 1=dense)
     # BM25 Settings
     bm25_path: str = ""
 
@@ -523,8 +528,11 @@ class AxonConfig:
     # Saves ~6 MB RAM at 100k docs at the cost of a ~0.1% false-positive rate
     # (a chunk that was never ingested may be silently skipped). Opt-in; disabled by default.
     bloom_filter_hash_store: bool = False
-    # Graph backend selector: "graphrag" (default) or "dynamic" (SQLite temporal graph, DELETE journal mode)
+    # Graph backend selector: "graphrag" (default), "dynamic_graph", or "federated"
     graph_backend: str = "graphrag"
+    # Per-backend RRF weights for the "federated" backend (equal weights by default).
+    # Example: graph_federation_weights: {graphrag: 1.5, dynamic_graph: 1.0}
+    graph_federation_weights: dict = field(default_factory=dict)
     # Rust engine selectors (per pipeline stage)
     ingest_engine: str = "python"
     bm25_engine: str = "python"
@@ -929,6 +937,10 @@ class AxonConfig:
             if "tqdb_n_refinements" in vs:
                 raw = vs["tqdb_n_refinements"]
                 config_dict["tqdb_n_refinements"] = int(raw) if raw is not None else None
+            if "tqdb_hybrid" in vs:
+                config_dict["tqdb_hybrid"] = bool(vs["tqdb_hybrid"])
+            if "tqdb_hybrid_weight" in vs:
+                config_dict["tqdb_hybrid_weight"] = float(vs["tqdb_hybrid_weight"])
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
         if "bm25" in data:
@@ -1102,6 +1114,8 @@ class AxonConfig:
                 "tqdb_search_list_size": flat["tqdb_search_list_size"],
                 "tqdb_alpha": flat["tqdb_alpha"],
                 "tqdb_n_refinements": flat["tqdb_n_refinements"],
+                "tqdb_hybrid": flat["tqdb_hybrid"],
+                "tqdb_hybrid_weight": flat["tqdb_hybrid_weight"],
             },
             "bm25": {
                 "path": flat["bm25_path"],
@@ -1121,6 +1135,7 @@ class AxonConfig:
                 "graph_rag_community": flat["graph_rag_community"],
                 "dedup_on_ingest": flat["dedup_on_ingest"],
                 "graph_backend": flat["graph_backend"],
+                "graph_federation_weights": flat["graph_federation_weights"],
                 "ingest_engine": flat["ingest_engine"],
                 "bm25_engine": flat["bm25_engine"],
                 "symbol_index_engine": flat["symbol_index_engine"],

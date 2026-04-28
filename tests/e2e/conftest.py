@@ -136,7 +136,7 @@ class FakeVectorStore:
                 "metadata": metadata or {},
             }
 
-    def search(self, query_embedding, top_k=10, filter_dict=None):
+    def search(self, query_embedding, top_k=10, filter_dict=None, query_text=None):
         matches = []
         for doc in self._storage.values():
             if not self._matches_filters(doc.get("metadata", {}), filter_dict):

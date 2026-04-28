@@ -74,6 +74,7 @@ class RetrievalConfig:
     """Retrieval parameters passed to GraphBackend.retrieve()."""
 
     top_k: int = 10
+    point_in_time: datetime | None = None
 
 
 @dataclass

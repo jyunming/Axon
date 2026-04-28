@@ -20,6 +20,7 @@ from axon.config import AxonConfig
 from axon.graph_backends.base import GraphBackend
 from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
 from axon.graph_backends.factory import get_graph_backend
+from axon.graph_backends.federated_backend import FederatedGraphBackend
 from axon.graph_backends.graphrag_backend import GraphRagBackend
 
 # ---------------------------------------------------------------------------
@@ -74,6 +75,20 @@ class TestGetGraphBackend:
         brain.config.bm25_path = str(tmp_path)
         backend = get_graph_backend(brain)
         assert isinstance(backend, DynamicGraphBackend)
+
+    def test_federated_config_returns_federated_backend(self, tmp_path):
+        brain = _fake_brain("federated")
+        brain.config.bm25_path = str(tmp_path)
+        brain.config.graph_federation_weights = {}
+        backend = get_graph_backend(brain)
+        assert isinstance(backend, FederatedGraphBackend)
+
+    def test_federated_backend_satisfies_protocol(self, tmp_path):
+        brain = _fake_brain("federated")
+        brain.config.bm25_path = str(tmp_path)
+        brain.config.graph_federation_weights = {}
+        backend = get_graph_backend(brain)
+        assert isinstance(backend, GraphBackend)
 
     def test_result_satisfies_protocol(self):
         brain = _fake_brain("graphrag")

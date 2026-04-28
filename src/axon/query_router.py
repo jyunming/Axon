@@ -956,12 +956,13 @@ class QueryRouterMixin:
                         self.embedding.embed_query(search_queries[0]),
                         top_k=fetch_k,
                         filter_dict=filters,
+                        query_text=search_queries[0],
                     )
                 )
             else:
                 embeddings = self.embedding.embed(search_queries)
                 for res_list in self.vector_store.batch_search(
-                    embeddings, top_k=fetch_k, filter_dict=filters
+                    embeddings, top_k=fetch_k, filter_dict=filters, query_texts=search_queries
                 ):
                     all_vector_results.extend(res_list)
         # Dedupe vector store results based on ID
