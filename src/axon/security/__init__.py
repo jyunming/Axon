@@ -1,17 +1,15 @@
-"""Security primitives for Axon — sealed shares + (Phase 1) crypto foundations.
+"""Security primitives for Axon — sealed sharing (all 7 phases shipped).
 
-Top-level package keeps the **existing public stub interface** intact so
-every caller that imports from ``axon.security`` continues to work
-exactly as before. New cryptographic primitives live in
-:mod:`axon.security.crypto` and are imported lazily so users on minimal
-installs (no ``cryptography``/``keyring`` packages) keep the existing
-behaviour — the sealed-share helpers in this file still raise
-``SecurityError("not configured")``.
+All seven phases are implemented: crypto + keyring primitives (Phase 1),
+master key management (Phase 2), sealed share generate/redeem (Phase 3),
+hard/soft revocation (Phase 4), ephemeral plaintext cache (Phase 5),
+headless/file fallback (Phase 6), and smoke tests (Phase 7).
 
-The plan landing this work in phases is in
-``docs/architecture/SEALED_SHARING_DESIGN.md``. **Phase 1 (this commit) ships the
-crypto + keyring primitives only — no code outside this package uses
-them yet.** Behaviour for existing projects is unchanged.
+On minimal installs (no ``cryptography``/``keyring`` packages), the helpers
+raise ``SecurityError`` with a clear "install with pip install axon-rag[sealed]"
+hint rather than the old silent stub behaviour.
+
+Full design and threat model: ``docs/architecture/SEALED_SHARING_DESIGN.md``.
 """
 from __future__ import annotations
 
