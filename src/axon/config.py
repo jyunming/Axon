@@ -180,6 +180,8 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "tqdb_search_list_size",
         "tqdb_alpha",
         "tqdb_n_refinements",
+        "tqdb_hybrid",
+        "tqdb_hybrid_weight",
     },
     "rag": {
         "hybrid_search",
@@ -226,6 +228,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "raptor_chunk_group_size",
         "dedup_on_ingest",
         "graph_backend",
+        "graph_federation_weights",
         "ingest_engine",
         "bm25_engine",
         "symbol_index_engine",
@@ -934,6 +937,10 @@ class AxonConfig:
             if "tqdb_n_refinements" in vs:
                 raw = vs["tqdb_n_refinements"]
                 config_dict["tqdb_n_refinements"] = int(raw) if raw is not None else None
+            if "tqdb_hybrid" in vs:
+                config_dict["tqdb_hybrid"] = bool(vs["tqdb_hybrid"])
+            if "tqdb_hybrid_weight" in vs:
+                config_dict["tqdb_hybrid_weight"] = float(vs["tqdb_hybrid_weight"])
             # vector_store_path is always derived from AxonStore in __post_init__
             # — ignore any path value in config.yaml.
         if "bm25" in data:
@@ -1107,6 +1114,8 @@ class AxonConfig:
                 "tqdb_search_list_size": flat["tqdb_search_list_size"],
                 "tqdb_alpha": flat["tqdb_alpha"],
                 "tqdb_n_refinements": flat["tqdb_n_refinements"],
+                "tqdb_hybrid": flat["tqdb_hybrid"],
+                "tqdb_hybrid_weight": flat["tqdb_hybrid_weight"],
             },
             "bm25": {
                 "path": flat["bm25_path"],
@@ -1126,6 +1135,7 @@ class AxonConfig:
                 "graph_rag_community": flat["graph_rag_community"],
                 "dedup_on_ingest": flat["dedup_on_ingest"],
                 "graph_backend": flat["graph_backend"],
+                "graph_federation_weights": flat["graph_federation_weights"],
                 "ingest_engine": flat["ingest_engine"],
                 "bm25_engine": flat["bm25_engine"],
                 "symbol_index_engine": flat["symbol_index_engine"],

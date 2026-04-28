@@ -28,6 +28,7 @@ prompt outputs are interchangeable.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
 import os
@@ -683,8 +684,10 @@ class DynamicGraphBackend:
             # If the existing active fact has the same timestamp (±1 s), both are
             # conflicted (same-time contradictory assertions); otherwise supersede.
             if scope_key is not None:
+                # Include both 'active' and prior 'conflicted' facts for the same scope —
+                # a new assertion always supersedes or re-conflicts existing ones.
                 existing_rows = self._conn.execute(
-                    "SELECT fact_id, valid_at FROM facts WHERE scope_key = ? AND status = 'active'",
+                    "SELECT fact_id, valid_at FROM facts WHERE scope_key = ? AND status IN ('active', 'conflicted')",
                     (scope_key,),
                 ).fetchall()
                 for erow in existing_rows:
@@ -716,14 +719,18 @@ class DynamicGraphBackend:
                     else "active"
                 )
             _insert_status = new_fact_status if scope_key is not None else "active"
+            # Conflicted facts get invalid_at=now so temporal queries exclude them
+            # (invalid_at IS NULL means "still valid"; conflicted is logically invalid).
+            _invalid_at = now if _insert_status == "conflicted" else None
             self._conn.execute(
-                "INSERT OR IGNORE INTO facts (fact_id, subject, relation, object, valid_at, status, scope_key, confidence, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO facts (fact_id, subject, relation, object, valid_at, invalid_at, status, scope_key, confidence, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     fact_id,
                     subj_norm,
                     rel_upper,
                     obj_norm,
                     now,
+                    _invalid_at,
                     _insert_status,
                     scope_key,
                     confidence,
@@ -1096,7 +1103,7 @@ class DynamicGraphBackend:
                         "type": etype,
                         "color": _colors.get(etype, "#94a3b8"),
                         "val": 4,
-                        "tooltip": f"<b>{name}</b><br/>{desc[:220]}",
+                        "tooltip": f"<b>{html.escape(name)}</b><br/>{html.escape(desc[:220])}",
                     }
             relation = row["relation"]
             label = relation.replace("_", " ").lower()

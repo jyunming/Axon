@@ -138,7 +138,12 @@ class FederatedGraphBackend:
                 bid = future_to_id[future]
                 try:
                     per_backend[bid] = future.result()
-                except Exception:
+                except Exception as exc:
+                    import logging as _logging
+
+                    _logging.getLogger("Axon").warning(
+                        "FederatedGraphBackend: %s retrieve() failed — %s", bid, exc
+                    )
                     per_backend[bid] = []
         return _weighted_rrf(per_backend, self._weights)
 

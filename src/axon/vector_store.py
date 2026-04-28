@@ -864,13 +864,14 @@ class MultiVectorStore:
         query_embedding: list[float],
         top_k: int = 10,
         filter_dict: dict | None = None,
+        query_text: str | None = None,
     ) -> list[dict]:
         from concurrent.futures import ThreadPoolExecutor
 
         seen: dict[str, dict] = {}
         with ThreadPoolExecutor(max_workers=max(1, min(4, len(self._stores)))) as ex:
             futures = [
-                ex.submit(store.search, query_embedding, top_k, filter_dict)
+                ex.submit(store.search, query_embedding, top_k, filter_dict, query_text)
                 for store in self._stores
             ]
             for fut in futures:
@@ -888,6 +889,7 @@ class MultiVectorStore:
         query_embeddings: list[list[float]],
         top_k: int = 10,
         filter_dict: dict | None = None,
+        query_texts: list[str] | None = None,
     ) -> list[list[dict]]:
         """Batch search across all child stores, merging results per query index."""
         if not query_embeddings:
@@ -896,7 +898,7 @@ class MultiVectorStore:
 
         with ThreadPoolExecutor(max_workers=max(1, min(4, len(self._stores)))) as ex:
             store_futures = [
-                ex.submit(store.batch_search, query_embeddings, top_k, filter_dict)
+                ex.submit(store.batch_search, query_embeddings, top_k, filter_dict, query_texts)
                 for store in self._stores
             ]
             per_store: list[list[list[dict]]] = []
