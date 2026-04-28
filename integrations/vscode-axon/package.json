@@ -2,7 +2,7 @@
   "name": "axon-copilot",
   "displayName": "Axon Copilot",
   "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "axon",
   "engines": {
     "vscode": "^1.93.0"
@@ -758,7 +758,7 @@
       {
         "name": "seal_project",
         "displayName": "Axon: Seal Project",
-        "modelDescription": "Encrypt every content file in a project at rest (one-shot). Idempotent — re-sealing an already-sealed project is a no-op. Requires the sealed-store to be unlocked first (security_unlock).",
+        "modelDescription": "Encrypt every content file in a project at rest (one-shot). Idempotent \u2014 re-sealing an already-sealed project is a no-op. Requires the sealed-store to be unlocked first (security_unlock).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -772,7 +772,9 @@
               "default": "in_place"
             }
           },
-          "required": ["project_name"]
+          "required": [
+            "project_name"
+          ]
         }
       },
       {
@@ -787,11 +789,16 @@
               "description": "The key ID of the share to extend (from list_shares)."
             },
             "ttl_days": {
-              "type": ["integer", "null"],
+              "type": [
+                "integer",
+                "null"
+              ],
               "description": "New time-to-live in days from now. null clears the expiry entirely."
             }
           },
-          "required": ["key_id"]
+          "required": [
+            "key_id"
+          ]
         }
       },
       {
