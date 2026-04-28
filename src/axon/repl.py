@@ -2593,6 +2593,7 @@ def _interactive_repl(
                         "    /project switch mounts/<name>          switch to a mounted share\n"
                         "    /project delete <name>                 delete a leaf project and its data\n"
                         "    /project folder                        open the active project folder\n"
+                        "    /project rotate-keys [<name>]          rotate sealed project DEK; invalidates all shares\n"
                         "\n"
                         "    Projects are stored in ~/.axon/projects/<name>/\n"
                         "    Sub-projects use nested subs/ directories (max depth: 5).\n"
@@ -3258,6 +3259,9 @@ def _interactive_repl(
                     )
                     print("    /project folder                          open active project folder")
                     print(
+                        "    /project rotate-keys [<name>]           rotate sealed DEK + invalidate shares\n"
+                    )
+                    print(
                         "    /project seal <name>                     encrypt at rest "
                         "(requires /store unlock)\n"
                     )
@@ -3411,10 +3415,34 @@ def _interactive_repl(
                         finally:
                             if needs_switch_back:
                                 brain.switch_project(previously_active)
+                elif sub == "rotate-keys":
+                    proj = sub_arg.strip().lower() if sub_arg else brain._active_project
+                    if not proj or proj == "default":
+                        print("    Usage: /project rotate-keys <name>")
+                        print(
+                            "    Rotates the sealed project DEK and invalidates all existing shares."
+                        )
+                    else:
+                        try:
+                            from axon import security as _security
+
+                            proj_root = _security.resolve_owned_sealed_project_path(
+                                proj, Path(brain.config.projects_root)
+                            )
+                            result = _security.project_rotate_keys(proj_root)
+                            resealed = result.get("files_resealed", 0)
+                            revoked = result.get("invalidated_share_key_ids", [])
+                            print(
+                                f"    [rotate-keys] '{proj}': {resealed} file(s) re-encrypted, "
+                                f"{len(revoked)} share(s) invalidated."
+                            )
+                            print("    Grantees must re-redeem a new share to regain access.")
+                        except Exception as exc:
+                            print(f"    rotate-keys failed: {exc}")
                 else:
                     print(
                         f"    Unknown sub-command '{sub}'. "
-                        "Try: list, new, switch, delete, folder, seal"
+                        "Try: list, new, switch, delete, folder, seal, rotate-keys"
                     )
             elif cmd == "/retry":
                 if not _last_query:

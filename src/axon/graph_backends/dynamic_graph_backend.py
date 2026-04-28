@@ -102,6 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_entities_name   ON entities(canonical_name);
 CREATE INDEX IF NOT EXISTS idx_facts_subject   ON facts(subject, status);
 CREATE INDEX IF NOT EXISTS idx_facts_object    ON facts(object, status);
 CREATE INDEX IF NOT EXISTS idx_facts_scope     ON facts(scope_key) WHERE scope_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_facts_temporal  ON facts(valid_at, invalid_at);
 CREATE INDEX IF NOT EXISTS idx_evidence_fact   ON fact_evidence(fact_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_chunk  ON fact_evidence(chunk_id);
 """
@@ -161,6 +162,121 @@ def _now_iso() -> str:
 def _norm(name: str) -> str:
     """Normalize entity name: strip and lowercase."""
     return name.strip().lower()
+
+
+_CODE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".r",
+        ".sh",
+        ".bash",
+        ".ps1",
+        ".lua",
+        ".m",
+        ".ml",
+        ".ex",
+        ".exs",
+    }
+)
+
+
+def _is_code_chunk(chunk: dict) -> bool:
+    """Return True when the chunk originates from a source-code file."""
+    meta = chunk.get("metadata") or {}
+    if meta.get("language"):
+        return True
+    if meta.get("source_type") == "code":
+        return True
+    src = str(meta.get("source", "") or meta.get("file_path", ""))
+    if src:
+        suffix = Path(src).suffix.lower()
+        if suffix in _CODE_EXTENSIONS:
+            return True
+    return False
+
+
+def _extract_python_entities_and_facts(text: str) -> tuple[list[dict], list[dict]]:
+    """Parse Python source with ast and return (entities, facts) dicts."""
+    import ast as _ast
+
+    entities: list[dict] = []
+    facts: list[dict] = []
+    try:
+        tree = _ast.parse(text)
+    except SyntaxError:
+        return [], []
+    module_name = ""
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.ClassDef):
+            entities.append(
+                {"name": node.name, "type": "CONCEPT", "description": f"class {node.name}"}
+            )
+            for base in node.bases:
+                base_name = getattr(base, "id", None) or getattr(base, "attr", None)
+                if base_name:
+                    entities.append({"name": base_name, "type": "CONCEPT", "description": ""})
+                    facts.append(
+                        {
+                            "subject": node.name,
+                            "relation": "INHERITS",
+                            "object": base_name,
+                            "description": "",
+                            "confidence": 1.0,
+                        }
+                    )
+        elif isinstance(node, _ast.FunctionDef | _ast.AsyncFunctionDef):
+            if node.col_offset == 0:
+                entities.append(
+                    {"name": node.name, "type": "CONCEPT", "description": f"function {node.name}"}
+                )
+        elif isinstance(node, _ast.Import | _ast.ImportFrom):
+            if isinstance(node, _ast.ImportFrom) and node.module:
+                top = node.module.split(".")[0]
+                if top and not module_name:
+                    module_name = top
+                entities.append({"name": top, "type": "PRODUCT", "description": f"module {top}"})
+                facts.append(
+                    {
+                        "subject": "__module__",
+                        "relation": "IMPORTS",
+                        "object": top,
+                        "description": "",
+                        "confidence": 0.9,
+                    }
+                )
+            elif isinstance(node, _ast.Import):
+                for alias in node.names:
+                    top = alias.name.split(".")[0]
+                    entities.append(
+                        {"name": top, "type": "PRODUCT", "description": f"module {top}"}
+                    )
+                    facts.append(
+                        {
+                            "subject": "__module__",
+                            "relation": "IMPORTS",
+                            "object": top,
+                            "description": "",
+                            "confidence": 0.9,
+                        }
+                    )
+    return entities[:20], facts[:20]
 
 
 # ---------------------------------------------------------------------------
@@ -563,20 +679,52 @@ class DynamicGraphBackend:
             scope_key = f"{subj_norm}:{rel_upper}"
         fact_id = _sha8(f"{subj_norm}|{rel_upper}|{obj_norm}|{now}")
         with self._write_lock:
-            # Supersede existing active facts with the same scope_key (exclusive families)
+            # Supersede or conflict existing active facts with the same scope_key.
+            # If the existing active fact has the same timestamp (±1 s), both are
+            # conflicted (same-time contradictory assertions); otherwise supersede.
             if scope_key is not None:
-                self._conn.execute(
-                    "UPDATE facts SET status = 'superseded', invalid_at = ? WHERE scope_key = ? AND status = 'active'",
-                    (now, scope_key),
+                existing_rows = self._conn.execute(
+                    "SELECT fact_id, valid_at FROM facts WHERE scope_key = ? AND status = 'active'",
+                    (scope_key,),
+                ).fetchall()
+                for erow in existing_rows:
+                    try:
+                        existing_dt = datetime.fromisoformat(erow["valid_at"])
+                        new_dt = datetime.fromisoformat(now)
+                        delta = abs((new_dt - existing_dt).total_seconds())
+                    except Exception:
+                        delta = 999.0
+                    new_status = "conflicted" if delta <= 1.0 else "superseded"
+                    self._conn.execute(
+                        "UPDATE facts SET status = ?, invalid_at = ? WHERE fact_id = ?",
+                        (new_status, now, erow["fact_id"]),
+                    )
+                # If any existing facts were conflicted, mark the new one conflicted too.
+                new_fact_status = (
+                    "conflicted"
+                    if any(
+                        abs(
+                            (
+                                datetime.fromisoformat(now)
+                                - datetime.fromisoformat(erow["valid_at"])
+                            ).total_seconds()
+                        )
+                        <= 1.0
+                        for erow in existing_rows
+                        if erow["valid_at"]
+                    )
+                    else "active"
                 )
+            _insert_status = new_fact_status if scope_key is not None else "active"
             self._conn.execute(
-                "INSERT OR IGNORE INTO facts (fact_id, subject, relation, object, valid_at, status, scope_key, confidence, metadata) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+                "INSERT OR IGNORE INTO facts (fact_id, subject, relation, object, valid_at, status, scope_key, confidence, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     fact_id,
                     subj_norm,
                     rel_upper,
                     obj_norm,
                     now,
+                    _insert_status,
                     scope_key,
                     confidence,
                     json.dumps({"description": description}),
@@ -621,13 +769,20 @@ class DynamicGraphBackend:
                     ),
                 )
                 self._conn.commit()
-            # Entity extraction
-            entities = self._extract_entities(text)
+            # Entity extraction — AST path for code, LLM path for prose
+            if _is_code_chunk(chunk):
+                entities, facts_raw = _extract_python_entities_and_facts(text)
+                if not entities:
+                    entities = self._extract_entities(text)
+                    facts_raw = self._extract_facts(text)
+            else:
+                entities = self._extract_entities(text)
+                facts_raw = self._extract_facts(text)
             for ent in entities:
                 self._upsert_entity(ent["name"], ent["type"], ent["description"], now)
                 entities_added += 1
             # Fact extraction
-            facts = self._extract_facts(text)
+            facts = facts_raw
             for fact in facts:
                 self._upsert_fact(
                     subject=fact["subject"],
@@ -669,15 +824,33 @@ class DynamicGraphBackend:
         query_terms = [_norm(w) for w in query.split() if len(w) >= 3]
         if not query_terms:
             return []
-        # Step 2: find active facts matching query terms (direct hits)
+        # Step 2: find facts matching query terms.
+        # When point_in_time is set, return facts valid at that instant
+        # (valid_at <= pit AND (invalid_at IS NULL OR invalid_at > pit));
+        # otherwise return currently active facts only.
         placeholders = ",".join("?" for _ in query_terms)
-        rows = self._execute(
-            f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
-            f"FROM facts "
-            f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders})) "
-            f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
-            (*query_terms, *query_terms, top_k),
-        )
+        pit = getattr(cfg, "point_in_time", None) if cfg else None
+        if not isinstance(pit, datetime):
+            pit = None
+        if pit is not None:
+            pit_str = pit.isoformat() if hasattr(pit, "isoformat") else str(pit)
+            rows = self._execute(
+                f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
+                f"FROM facts "
+                f"WHERE valid_at <= ? AND (invalid_at IS NULL OR invalid_at > ?) "
+                f"  AND status != 'superseded' "
+                f"  AND (subject IN ({placeholders}) OR object IN ({placeholders})) "
+                f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
+                (pit_str, pit_str, *query_terms, *query_terms, top_k),
+            )
+        else:
+            rows = self._execute(
+                f"SELECT fact_id, subject, relation, object, valid_at, confidence, metadata "
+                f"FROM facts "
+                f"WHERE status = 'active' AND (subject IN ({placeholders}) OR object IN ({placeholders})) "
+                f"ORDER BY confidence DESC, valid_at DESC LIMIT ?",
+                (*query_terms, *query_terms, top_k),
+            )
         # Step 3: Perform multi-hop BFS if requested (Epic 1/4)
         max_hops = 1
         if cfg and hasattr(cfg, "graph_rag_max_hops"):
@@ -864,7 +1037,8 @@ class DynamicGraphBackend:
             "(SELECT COUNT(*) FROM episodes) AS episodes, "
             "(SELECT COUNT(*) FROM entities) AS entities, "
             "(SELECT COUNT(*) FROM facts WHERE status = 'active') AS active_facts, "
-            "(SELECT COUNT(*) FROM facts WHERE status = 'superseded') AS superseded_facts"
+            "(SELECT COUNT(*) FROM facts WHERE status = 'superseded') AS superseded_facts, "
+            "(SELECT COUNT(*) FROM facts WHERE status = 'conflicted') AS conflicted_facts"
         )
         if not rows:
             return {
@@ -873,6 +1047,7 @@ class DynamicGraphBackend:
                 "entities": 0,
                 "active_facts": 0,
                 "superseded_facts": 0,
+                "conflicted_facts": 0,
             }
         row = rows[0]
         return {
@@ -881,41 +1056,72 @@ class DynamicGraphBackend:
             "entities": row["entities"],
             "active_facts": row["active_facts"],
             "superseded_facts": row["superseded_facts"],
+            "conflicted_facts": row["conflicted_facts"],
         }
 
     def graph_data(self, filters: GraphDataFilters | None = None) -> GraphPayload:
-        """Return current active facts as a nodes + links payload."""
+        """Return current active facts as a renderer-enriched nodes + links payload."""
         limit = (filters.limit if filters else None) or 500
         rows = self._execute(
-            "SELECT fact_id, subject, relation, object, confidence "
+            "SELECT fact_id, subject, relation, object, confidence, valid_at, invalid_at "
             "FROM facts WHERE status = 'active' ORDER BY confidence DESC LIMIT ?",
             (limit,),
         )
-        # Collect unique node names
+        # One query to build entity type + description lookup (O(n_entities), not O(n_facts))
+        entity_rows = self._execute("SELECT canonical_name, entity_type, description FROM entities")
+        entity_meta: dict[str, tuple[str, str]] = {
+            r["canonical_name"]: (r["entity_type"], r["description"]) for r in entity_rows
+        }
+        # Lazy import of color map from graph_render (avoids hard dependency)
+        try:
+            from axon.graph_render import _VIZ_TYPE_COLORS as _colors
+        except Exception:
+            _colors: dict[str, str] = {}  # type: ignore[assignment]
+        # Collect unique node names with visualization metadata
         node_names: dict[str, dict] = {}
         links: list[dict] = []
         for row in rows:
             subj = row["subject"]
             obj = row["object"]
+            conf = float(row["confidence"])
+            valid_at = row["valid_at"]
+            invalid_at = row["invalid_at"]
             for name in (subj, obj):
                 if name not in node_names:
-                    node_names[name] = {"id": name, "name": name, "label": name, "type": "entity"}
+                    etype, desc = entity_meta.get(name, ("UNKNOWN", ""))
+                    node_names[name] = {
+                        "id": name,
+                        "name": name,
+                        "label": name[:24],
+                        "type": etype,
+                        "color": _colors.get(etype, "#94a3b8"),
+                        "val": 4,
+                        "tooltip": f"<b>{name}</b><br/>{desc[:220]}",
+                    }
+            relation = row["relation"]
+            label = relation.replace("_", " ").lower()
+            if valid_at:
+                label = f"{label} ({valid_at[:10]})"
             links.append(
                 {
                     "source": subj,
                     "target": obj,
-                    "label": row["relation"].replace("_", " ").lower(),
-                    "relation": row["relation"],
-                    "weight": float(row["confidence"]),
+                    "label": label,
+                    "relation": relation,
+                    "value": conf,
+                    "width": 1.0 + conf,
+                    "weight": conf,
+                    "valid_at": valid_at,
+                    "invalid_at": invalid_at,
                 }
             )
         # Apply entity_type filter if requested
         if filters and filters.entity_types:
             allowed = set(filters.entity_types)
-            entity_rows = self._execute("SELECT canonical_name, entity_type FROM entities")
-            type_map = {r["canonical_name"]: r["entity_type"] for r in entity_rows}
             for name, node in node_names.items():
-                node["type"] = type_map.get(name, "entity")
+                if node["type"] == "entity":
+                    etype, _ = entity_meta.get(name, ("UNKNOWN", ""))
+                    node["type"] = etype
             node_names = {n: d for n, d in node_names.items() if d["type"] in allowed}
         return GraphPayload(nodes=list(node_names.values()), links=links)
 
