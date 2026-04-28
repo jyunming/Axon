@@ -53,14 +53,65 @@ def _write_python_discovery() -> None:
         pass
 
 
-def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
-    """Migrate documents from a ChromaDB directory into the current LanceDB store."""
+def _cli_migrate_vectors_to_tqdb(brain, source_path_arg: str) -> None:
+    """Migrate a ChromaDB or LanceDB store into TurboQuantDB using tqdb.migrate (v0.8.0+)."""
     from pathlib import Path
 
-    if brain.config.vector_store != "lancedb":
+    dst = brain.config.vector_store_path
+    src = Path(source_path_arg).expanduser().resolve() if source_path_arg != "auto" else None
+    try:
+        from tqdb import migrate as _tqdb_migrate
+    except ImportError:
+        print("  tqdb.migrate requires tqdb>=0.8.0. Run: pip install --upgrade tqdb")
+        return
+    # Auto-detect source backend from directory contents
+    if src is None:
+        # Default: look for chroma_data or lancedb_data sibling to vector_store_path
+        vs_path = Path(dst)
+        for candidate in (vs_path.parent / "chroma_data", vs_path.parent / "lancedb_data"):
+            if candidate.exists():
+                src = candidate
+                break
+    if src is None or not src.exists():
+        print("  Source path not found. Specify explicitly: axon --migrate-vectors <path>")
+        return
+    # Detect format: ChromaDB has chroma.sqlite3; LanceDB has *.lance dirs
+    is_chroma = (src / "chroma.sqlite3").exists() or any(src.glob("*.sqlite3"))
+    is_lancedb = any(src.glob("*.lance"))
+    print(f"  Source: {src}")
+    print(f"  Target: {dst}  (TurboQuantDB)")
+    try:
+        if is_chroma:
+            print("  Format: ChromaDB → TurboQuantDB")
+            result = _tqdb_migrate.migrate_chroma(str(src), dst)
+        elif is_lancedb:
+            print("  Format: LanceDB → TurboQuantDB")
+            result = _tqdb_migrate.migrate_lancedb(str(src), dst)
+        else:
+            print("  Could not detect source format (expected ChromaDB or LanceDB).")
+            return
+        migrated = result.get("migrated", "?") if isinstance(result, dict) else "?"
+        print(f"\n  Migration complete: {migrated} vectors written to TurboQuantDB.")
+        print("  Tip: run  axon --optimize-index  after migrating large collections.")
+    except Exception as exc:
+        print(f"  Migration failed: {exc}")
+
+
+def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
+    """Migrate documents from a ChromaDB or LanceDB directory into the current vector store.
+    For turboquantdb targets, uses the tqdb.migrate toolkit (v0.8.0+) for a fast bulk import.
+    For lancedb targets, uses the existing streaming path.
+    """
+    from pathlib import Path
+
+    target = brain.config.vector_store
+    if target == "turboquantdb":
+        _cli_migrate_vectors_to_tqdb(brain, chroma_path_arg)
+        return
+    if target != "lancedb":
         print(
-            f"  Migration requires vector_store=lancedb in config "
-            f"(current: {brain.config.vector_store}). Update your config and retry."
+            f"  Migration supports vector_store=lancedb or vector_store=turboquantdb "
+            f"(current: {target}). Update your config and retry."
         )
         return
     # Resolve the source chroma path

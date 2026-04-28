@@ -56,7 +56,7 @@ dependencies = [
     "rich>=13.0.0",
     "tiktoken>=0.7.0",
     "lancedb>=0.8.0",
-    "tqdb>=0.2.1",
+    "tqdb>=0.7.0",
     "prometheus-client>=0.20",
 ]
 

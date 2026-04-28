@@ -359,6 +359,8 @@ class AxonConfig:
     tqdb_search_list_size: int = 128
     tqdb_alpha: float | None = None  # HNSW pruning aggressiveness (None = TQDB default 1.2)
     tqdb_n_refinements: int | None = None  # HNSW refinement passes (None = TQDB default 5)
+    tqdb_hybrid: bool = False  # v0.7.0: enable TQDB-side BM25+dense RRF hybrid search
+    tqdb_hybrid_weight: float = 0.5  # v0.7.0: dense weight in hybrid fusion (0=sparse, 1=dense)
     # BM25 Settings
     bm25_path: str = ""
 

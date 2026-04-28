@@ -55,6 +55,7 @@ class OpenVectorStore:
         self.provider = config.vector_store
         self.client: Any = None
         self.collection: Any = None
+        self._async_client: Any = None  # tqdb.aio.AsyncDatabase — lazy, tqdb-only
         self._init_store()
 
     def _init_store(self):
@@ -192,6 +193,80 @@ class OpenVectorStore:
             except Exception:
                 pass
             self.client = None
+            if self._async_client is not None:
+                try:
+                    if hasattr(self._async_client, "close"):
+                        self._async_client.close()
+                except Exception:
+                    pass
+                self._async_client = None
+
+    def _open_async_client(self) -> Any:
+        """Return a lazy-initialised ``tqdb.aio.AsyncDatabase`` for this store.
+        Reuses the same on-disk path as the sync client; TQDB supports concurrent
+        readers so opening a second handle is safe.  Falls back to ``None`` when
+        the tqdb.aio module is not yet available (pre-v0.8.0 installs).
+        """
+        if self._async_client is not None:
+            return self._async_client
+        if self.client is None:
+            return None
+        try:
+            from tqdb.aio import AsyncDatabase as _ADB
+
+            self._async_client = _ADB(self.client)
+        except Exception:
+            self._async_client = None
+        return self._async_client
+
+    async def search_async(
+        self,
+        query_embedding: list[float],
+        top_k: int = 10,
+        filter_dict: dict | None = None,
+        query_text: str | None = None,
+    ) -> list[dict]:
+        """Async variant of :meth:`search`.
+        For turboquantdb: uses ``tqdb.aio.AsyncDatabase`` (v0.8.0+) so searches
+        run in a thread-pool worker without blocking the FastAPI event loop.
+        Falls back to ``run_in_executor`` for other backends or pre-v0.8.0 tqdb.
+        """
+        import asyncio
+
+        if self.provider == "turboquantdb":
+            async_client = self._open_async_client()
+            if async_client is not None:
+                import numpy as np
+
+                q = np.array(query_embedding, dtype=np.float32)
+                tqdb_filter = filter_dict if filter_dict else None
+                search_kwargs: dict = {
+                    "top_k": top_k,
+                    "filter": tqdb_filter,
+                    "_use_ann": None,
+                    "ann_search_list_size": getattr(self.config, "tqdb_search_list_size", None),
+                }
+                if query_text and getattr(self.config, "tqdb_hybrid", False):
+                    search_kwargs["hybrid"] = {
+                        "text": query_text,
+                        "weight": float(getattr(self.config, "tqdb_hybrid_weight", 0.5)),
+                        "rrf_k": 60,
+                        "oversample": 2,
+                    }
+                results = await async_client.search(q, **search_kwargs)
+                return [
+                    {
+                        "id": r["id"],
+                        "text": r.get("document", ""),
+                        "score": max(0.0, r["score"]),
+                        "metadata": r.get("metadata", {}),
+                    }
+                    for r in results
+                ]
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, self.search, query_embedding, top_k, filter_dict, query_text
+        )
 
     # Chroma hard limit per collection.add() call.
     _CHROMA_MAX_BATCH = 5000
@@ -379,7 +454,9 @@ class OpenVectorStore:
                 # tqdb writes manifest.json on open — no sidecar needed.
             import numpy as np
 
-            metas = metadatas if metadatas is not None else [{}] * len(ids)
+            # v0.8.0 fix: insert_batch now accepts None per-row entries, but
+            # normalise them here anyway so downstream code always gets dicts.
+            metas = [m if m is not None else {} for m in (metadatas or [{}] * len(ids))]
             # TQDB requires a numpy float32 array; convert from list/ndarray uniformly.
             vecs = np.array(embeddings, dtype=np.float32)
             self.client.insert_batch(ids=ids, vectors=vecs, metadatas=metas, documents=texts)
@@ -465,6 +542,7 @@ class OpenVectorStore:
         query_embedding: list[float],
         top_k: int = 10,
         filter_dict: dict | None = None,
+        query_text: str | None = None,
     ) -> list[dict]:
         if self.provider == "chroma":
             results = self.collection.query(
@@ -513,15 +591,23 @@ class OpenVectorStore:
             import numpy as np
 
             q = np.array(query_embedding, dtype=np.float32)
-            # normalize=True on the engine handles query normalisation internally.
             tqdb_filter = filter_dict if filter_dict else None
-            results = self.client.search(
-                q,
-                top_k=top_k,
-                filter=tqdb_filter,
-                _use_ann=True,
-                ann_search_list_size=getattr(self.config, "tqdb_search_list_size", None),
-            )
+            # v0.7.0: _use_ann=None lets TQDB auto-select HNSW vs brute-force by collection size.
+            search_kwargs: dict = {
+                "top_k": top_k,
+                "filter": tqdb_filter,
+                "_use_ann": None,
+                "ann_search_list_size": getattr(self.config, "tqdb_search_list_size", None),
+            }
+            # v0.7.0: opt-in TQDB-side hybrid (BM25 + dense RRF) when query text is available.
+            if query_text and getattr(self.config, "tqdb_hybrid", False):
+                search_kwargs["hybrid"] = {
+                    "text": query_text,
+                    "weight": float(getattr(self.config, "tqdb_hybrid_weight", 0.5)),
+                    "rrf_k": 60,
+                    "oversample": 2,
+                }
+            results = self.client.search(q, **search_kwargs)
             return [
                 {
                     "id": r["id"],
@@ -537,11 +623,14 @@ class OpenVectorStore:
         query_embeddings: list[list[float]],
         top_k: int = 10,
         filter_dict: dict | None = None,
+        query_texts: list[str] | None = None,
     ) -> list[list[dict]]:
         """Search with multiple query embeddings in a single call where possible.
         Returns one result list per input embedding.  ChromaDB supports a true
         batch query in a single round-trip; all other backends run searches in
         parallel via a thread pool.
+        ``query_texts`` is forwarded to each per-embedding search call for
+        v0.7.0+ hybrid search support (ignored by non-turboquantdb backends).
         """
         if not query_embeddings:
             return []
@@ -571,7 +660,16 @@ class OpenVectorStore:
         # list. The early-return above already covers the empty case but
         # we belt+brace the math (audit P1).
         with ThreadPoolExecutor(max_workers=max(1, min(8, len(query_embeddings)))) as ex:
-            futures = [ex.submit(self.search, emb, top_k, filter_dict) for emb in query_embeddings]
+            futures = [
+                ex.submit(
+                    self.search,
+                    emb,
+                    top_k,
+                    filter_dict,
+                    query_texts[i] if query_texts and i < len(query_texts) else None,
+                )
+                for i, emb in enumerate(query_embeddings)
+            ]
             return [fut.result() for fut in futures]
 
     def get_by_ids(self, ids: list[str]) -> list[dict]:
@@ -736,11 +834,15 @@ class OpenVectorStore:
         elif self.provider == "turboquantdb":
             if self.client is None:
                 return
-            for chunk_id in ids:
-                try:
-                    self.client.delete(chunk_id)
-                except Exception as e:
-                    logger.debug(f"TurboQuantDB delete {chunk_id} failed: {e}")
+            try:
+                # v0.7.0+: batch deletion is O(n) in one call instead of n round-trips.
+                self.client.delete_batch(ids)
+            except AttributeError:
+                for chunk_id in ids:
+                    try:
+                        self.client.delete(chunk_id)
+                    except Exception as e:
+                        logger.debug(f"TurboQuantDB delete {chunk_id} failed: {e}")
 
 
 class MultiVectorStore:
