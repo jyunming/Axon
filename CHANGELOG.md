@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.1] - 2026-04-29
+
+### ✨ New Features
+
+- **Dynamic Graph temporal queries** — `RetrievalConfig.point_in_time` filters facts valid at any past timestamp; backed by `idx_facts_temporal` index for fast O(log n) lookups at 100k facts.
+- **Dynamic Graph conflict detection** — exclusive-relation facts with the same scope_key and reference_time (±1 s) are marked `conflicted` rather than silently superseded; surfaced in `status()` as `conflicted_facts`.
+- **Federated graph backend** — `graph_backend: "federated"` runs `graphrag` + `dynamic_graph` concurrently via `ThreadPoolExecutor` and fuses results with per-backend weighted Reciprocal Rank Fusion. Wall-clock latency ≈ max(t_graphrag, t_dynamic). Weights tunable via `graph_federation_weights` in `config.yaml`.
+- **Code AST extraction** — Python code chunks are parsed with `ast` (stdlib) instead of an LLM call; extracts `CLASS`, `FUNCTION`, `MODULE` entities and `DEFINES`/`IMPORTS`/`INHERITS` facts. Faster and deterministic.
+- **Dynamic Graph visualization enrichment** — `graph_data()` now attaches node colors, tooltips, and `valid_at`/`invalid_at` temporal labels to links for the 3D renderer.
+- **REPL `/project rotate-keys`** — rotates the sealed project DEK and invalidates all outstanding shares from the REPL (previously REST-only).
+- **TurboQuantDB v0.7.0/v0.8.0** — hybrid BM25+dense search (`tqdb_hybrid: true`, `tqdb_hybrid_weight` in config), `tqdb.aio.AsyncDatabase` for non-blocking FastAPI query paths, `delete_batch` support, and `tqdb.migrate` toolkit for importing existing ChromaDB/LanceDB collections.
+
+### 🐛 Bug Fixes
+
+- Fixed `None` metadata entries crashing `tqdb` inserts by normalising to `{}` before write.
+- Fixed `FakeVectorStore.search()` signature in e2e conftest missing `query_text` parameter.
+- Fixed `MultiVectorStore.search/batch_search` not forwarding `query_text`/`query_texts` to sub-stores.
+
+### ⬆️ Upgrade from v0.3.0
+
+```bash
+pip install --upgrade axon-rag
+```
+
+- **No breaking changes** — all additions are fully backward-compatible.
+- **To enable federated backend**: set `graph_backend: "federated"` in `config.yaml` (requires the `[sealed]` extra for Dynamic Graph).
+- **To enable hybrid search**: set `tqdb_hybrid: true` in `config.yaml` (TurboQuantDB only).
+- **Minimum tqdb version**: `0.7.0` (updated from `0.1.0`).
+
+---
+
 ## [0.3.0] - 2026-04-27
 
 ### ✨ New Features
