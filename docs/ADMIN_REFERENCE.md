@@ -151,6 +151,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--config-validate` | Validate `config.yaml` and print issues; exits with code `1` if any errors found |
 | `--config-reset` | Reset `config.yaml` to built-in defaults and exit |
 | `--setup` | Run the interactive config setup wizard and exit |
+| `--doctor` | Run health checks (Python ≥ 3.10, Ollama daemon, model pulled, store writable, recommended extras) and print a colored checklist; exits non-zero on any required-check failure |
 
 ### 2.11 AxonStore (Sealed Store)
 

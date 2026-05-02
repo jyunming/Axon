@@ -179,6 +179,43 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
         )
 
 
+def _is_first_run(args) -> bool:
+    """Detect a fresh checkout that should trigger the setup wizard.
+
+    Returns True when no config file is present at the default location
+    (``--config`` overrides this check — the user is being explicit) and
+    the AxonStore directory has no projects yet. We deliberately avoid
+    treating the absence of a homedir-config as "first run" when the
+    user has stored projects already; that would loop them through the
+    wizard every time they run ``axon`` from a different working dir.
+    """
+    # When the user passed --config explicitly, they know what they're
+    # doing — skip the auto-wizard.
+    if getattr(args, "config", None):
+        return False
+    home = Path.home()
+    default_config = home / ".config" / "axon" / "config.yaml"
+    if default_config.exists():
+        return False
+    store_base = os.environ.get("AXON_STORE_BASE")
+    if store_base:
+        base = Path(os.path.expanduser(store_base))
+    else:
+        base = home / ".axon" / "AxonStore"
+    if not base.exists():
+        return True
+    try:
+        # Empty user dir == no projects yet.
+        for entry in base.iterdir():
+            if entry.is_dir():
+                inner = list(entry.iterdir())
+                if inner:
+                    return False
+    except OSError:
+        return False
+    return True
+
+
 def main():
     import argparse
 
@@ -583,6 +620,15 @@ def main():
         action="store_true",
         help="Run the interactive config setup wizard and exit",
     )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help=(
+            "Run health checks (Python version, Ollama daemon, default model, "
+            "store path writable, recommended extras) and print a colored "
+            "checklist; exits non-zero on any required-check failure"
+        ),
+    )
     # ── Share lifecycle ──────────────────────────────────────────────────────
     parser.add_argument(
         "--share-list",
@@ -717,6 +763,17 @@ def main():
             _cfg.save(args.config or None)
             print(f"Saved {len(_changes)} change(s).")
         sys.exit(0)
+    if getattr(args, "doctor", False):
+        from axon.config import AxonConfig as _AxonConfig
+        from axon.doctor import render_report, run_doctor
+
+        try:
+            _cfg = _AxonConfig.load(args.config or None)
+        except Exception:
+            _cfg = None  # doctor falls back to env vars when no config
+        report = run_doctor(_cfg)
+        print(render_report(report))
+        sys.exit(0 if report.overall != "error" else 1)
     # Suppress httpx INFO noise before _InitDisplay is active (ollama.list fires early)
     if sys.stdin.isatty():
         logging.getLogger("httpx").propagate = False
@@ -970,6 +1027,27 @@ def main():
         and not getattr(args, "non_interactive", False)
         and sys.stdin.isatty()
     )
+    # First-run auto-trigger: when entering an interactive REPL on a fresh
+    # checkout with no config file present yet, send the user through the
+    # setup wizard before dropping them into an empty REPL. Mirrors what
+    # `axon --setup` would do, but without forcing them to know the flag.
+    if _entering_repl and _is_first_run(args):
+        from axon.config_wizard import run_wizard as _run_wizard
+
+        print("\n  Welcome to Axon — running first-run setup. Press Ctrl+C to skip.")
+        try:
+            _changes = _run_wizard(config_path=args.config or "")
+        except KeyboardInterrupt:
+            print("\n  First-run setup skipped. Run `axon --setup` later to configure.\n")
+            _changes = None
+        if _changes:
+            for _k, _v in _changes.items():
+                setattr(config, _k, _v)
+            try:
+                config.save(args.config or None)
+                print(f"  Saved {len(_changes)} change(s). Continuing into REPL.\n")
+            except Exception as _exc:
+                print(f"  Could not save config: {_exc}. Continuing with in-memory values.\n")
     # Auto-pull only for CLI paths that will actually hit the chat model.
     _should_auto_pull_ollama_model = bool(
         config.llm_provider == "ollama"

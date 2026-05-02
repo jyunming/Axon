@@ -123,6 +123,19 @@ langchain = [
     # local retrieval backend without REST round-trips.
     "langchain-core>=0.1.0",
 ]
+starter = [
+    # v0.3.2 onboarding (item 23): the recommended bundle for first-time users.
+    # Pulls in the Streamlit UI, sealed-mount sharing (cloud-drive-safe), and the
+    # extra document-loader formats (EPUB, RTF, .msg) so a fresh `pip install
+    # axon-rag[starter]` covers >90% of beginner workflows. Power users can
+    # still pick the granular extras (chroma, qdrant, graphrag, gliner, …).
+    "streamlit>=1.30.0",
+    "cryptography>=42.0.0",
+    "keyring>=24.0.0",
+    "ebooklib>=0.18",
+    "striprtf>=0.0.26",
+    "extract-msg>=0.28.0",
+]
 llama-index = [
     # v0.3.2 third-party agent integration (item 16).
     # Provides axon.integrations.llama_index.AxonLlamaRetriever, a BaseRetriever

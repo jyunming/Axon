@@ -13,29 +13,27 @@ Axon has five different ways to use it — terminal chat, VS Code extension, RES
 > **Before you start:** Make sure you have [Python 3.10 or later](https://www.python.org/downloads/) installed. Run `python --version` to check.
 
 ```bash
-# 1. Download the code
-git clone https://github.com/jyunming/Axon.git
-cd Axon
-# 2. Install Axon  (-e means "editable" — you can update the code without reinstalling)
-pip install -e .
+pip install "axon-rag[starter]"
 ```
 
-> You should see `Successfully installed axon-...` at the end. If you see errors, check that your Python version is 3.10+ with `python --version`.
-> **Tip:** It is good practice to use a virtual environment so Axon's packages don't conflict with other Python projects. See [SETUP.md § 2](SETUP.md#2-install-the-package) for step-by-step instructions.
+That installs Axon plus the recommended bundle (Streamlit UI, sealed-mount sharing, extra document loaders for EPUB/RTF/.msg). Power users who want only the bare retrieval engine can `pip install axon-rag` without the extra and add specific extras (`[chroma]`, `[qdrant]`, `[graphrag]`, `[gliner]`, `[langchain]`, `[llama-index]`) à la carte.
+
+> **Tip:** Use a virtual environment so Axon's deps don't collide with other projects. See [SETUP.md § 2](SETUP.md#2-install-the-package) for step-by-step instructions.
+
+> **Working from a checkout?** `pip install -e .` from the cloned repo root gives you an editable install. Most users should use the PyPI command above.
 
 ```bash
-# 3. Install Ollama — the free app that runs LLMs on your computer
-#    Download from: https://ollama.com  (install it, then come back here)
-#    Then pull a model (pick one):
+# Install Ollama — the free app that runs LLMs on your computer.
+# Download from https://ollama.com, install, then:
 ollama pull llama3.1:8b   # recommended — good quality, needs ~8 GB RAM
 ollama pull phi3:mini     # lighter option — needs ~4 GB RAM
 ```
 
-> **Verify Ollama is running** before continuing. Open a new terminal and run:
+> **Verify everything's wired up** in one command:
 > ```bash
-> curl http://localhost:11434
+> axon --doctor
 > ```
-> You should see `Ollama is running`. If you get "connection refused", Ollama hasn't started yet — open the Ollama app from your Applications/Start menu, or run `ollama serve` in a terminal and leave it running.
+> Prints a colored checklist (Python version, Ollama daemon, model pulled, store writable, recommended extras) so you don't discover a missing piece on your first query. Each warning carries a one-line "do this next" hint.
 
 ---
 

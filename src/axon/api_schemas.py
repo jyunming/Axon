@@ -141,6 +141,18 @@ class QueryRequest(BaseModel):
         False,
         description="When True, include retrieval diagnostics in response",
     )
+    include_citations: bool = Field(
+        True,
+        description=(
+            "When True (default), include ``sources`` and ``citations`` arrays "
+            "in the response — sources lists every retrieved chunk made "
+            "available to the LLM (slim form, text truncated to 500 chars); "
+            "citations is a list of structured spans extracted from the "
+            "response, one per ``[N]`` / ``[Document N]`` marker. Set to "
+            "False to skip the extra payload (e.g. high-throughput agents "
+            "that only need the answer string)."
+        ),
+    )
     dry_run: bool = Field(
         False,
         description="Skip LLM; return ranked chunks + diagnostics without calling generation model",

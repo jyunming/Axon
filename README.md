@@ -127,13 +127,21 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 ## ⚡ Quick Start
 
 ```bash
-pip install axon-rag    # requires Python 3.10+
-axon                    # launches the interactive REPL
+pip install "axon-rag[starter]"   # Python 3.10+. Includes UI, sealed sharing, extra loaders.
+axon                              # First run auto-launches the setup wizard, then drops into the REPL.
+```
+
+That's it. The wizard configures your LLM provider, embedding model, and retrieval defaults; subsequent runs go straight to the REPL.
+
+If something doesn't look right:
+
+```bash
+axon --doctor                     # Health checks: Python, Ollama, model pulled, store writable.
 ```
 
 Local inference uses [Ollama](https://ollama.com). Cloud providers (OpenAI, Gemini, Grok, vLLM, GitHub Copilot) work via API keys.
 
-**[→ Full installation guide with VS Code, MCP, and cloud provider setup](https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md)**
+**[→ Setup guide for VS Code, MCP, and cloud providers →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 
 ---
 
