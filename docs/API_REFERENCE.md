@@ -287,8 +287,16 @@ Changes are scoped to the current server session by default (`persist: false`). 
 | `GET` | `/graph/visualize` | Render the knowledge graph as a self-contained HTML page |
 | `GET` | `/code-graph/data` | Code structure graph payload for the VS Code code-graph panel |
 | `GET` | `/graph/backend/status` | Active graph backend type and health (distinguishes graphrag vs dynamic backend) |
+| `GET` | `/graph/conflicts` | List facts with `status='conflicted'` (incompatible exclusive-relation facts) |
+| `POST` | `/graph/retrieve` | Run the active graph backend's `retrieve()` directly — point-in-time + per-query federation weights |
 
 `/graph/status` response: `{"community_build_in_progress": false, "community_summary_count": 12, "entity_count": 340, "code_node_count": 0, "graph_ready": true}`. `graph_ready` is `true` once the entity graph or code graph has nodes — use this to know whether graph queries will return data before the full ingest job completes.
+
+`/graph/finalize` response includes `status` (`"ok"` | `"not_applicable"` | `"error"`) and `detail` so callers can tell "ran and built nothing" apart from "this backend has no finalize step". The `dynamic_graph` backend always returns `not_applicable`; `federated` aggregates from sub-backends.
+
+`/graph/conflicts` query params: `project` (optional, must match active project), `limit` (1-1000, default 100). Response: `{"backend": "...", "supported": bool, "conflicts": [{"fact_id", "subject", "relation", "object", "valid_at", "invalid_at", "scope_key", ...}, ...]}`. Backends without conflict tracking return `supported: false`.
+
+`/graph/retrieve` request body: `{"query": "...", "top_k"?: int, "point_in_time"?: ISO-8601, "federation_weights"?: {"graphrag": 0.5, "dynamic_graph": 1.5}, "project"?: "..."}`. Returns graph contexts only (no LLM call). Use this to surface historical queries on bi-temporal backends (`dynamic_graph`) and per-question federation weight overrides; the main `/query` endpoint still routes through the legacy GraphRAG mixin and does not yet expose `point_in_time`.
 
 `/graph/visualize` returns `text/html` — open in a browser or embed in an iframe.
 `/graph/data` and `/code-graph/data` return `{"nodes": [...], "links": [...]}` JSON payloads

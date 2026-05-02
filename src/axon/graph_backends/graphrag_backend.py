@@ -31,6 +31,8 @@ BACKEND_ID = "graphrag"
 class GraphRagBackend:
     """Adapts ``AxonBrain``'s GraphRAG graph state to the ``GraphBackend`` Protocol."""
 
+    BACKEND_ID = BACKEND_ID
+
     def __init__(self, brain: Any) -> None:
         self._brain = brain
 

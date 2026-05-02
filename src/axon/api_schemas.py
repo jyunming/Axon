@@ -183,6 +183,37 @@ class SearchVisualizeRequest(BaseModel):
     project: str | None = Field(None, description="Target project (must match active project)")
 
 
+class GraphRetrieveRequest(BaseModel):
+    """Body for ``POST /graph/retrieve``.
+
+    ``point_in_time`` enables historical queries against backends that store
+    bi-temporal facts (currently only ``dynamic_graph``). On other backends
+    it is ignored. ``federation_weights`` overrides the project-level RRF
+    weights for a single retrieve and is consumed only by the federated
+    backend.
+    """
+
+    query: str = Field(..., description="The query string to retrieve graph contexts for")
+    project: str | None = Field(None, description="Target project (must match active project)")
+    top_k: int | None = Field(
+        None, ge=1, le=200, description="Maximum graph contexts to return (default 10)"
+    )
+    point_in_time: str | None = Field(
+        None,
+        description=(
+            "ISO-8601 timestamp; return facts valid at that instant. "
+            "Only honoured by backends with bi-temporal storage."
+        ),
+    )
+    federation_weights: dict[str, float] | None = Field(
+        None,
+        description=(
+            "Per-query RRF weights for the federated backend. "
+            "Keys: ``graphrag``, ``dynamic_graph``. Ignored by other backends."
+        ),
+    )
+
+
 class IngestRequest(BaseModel):
     path: str = Field(
         ...,

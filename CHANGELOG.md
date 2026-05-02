@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### ✨ New Features
+
+- **Graph backend capability flags** — `FinalizationResult.status` is now `"ok"`, `"not_applicable"`, or `"error"` so callers can tell "ran and built nothing" apart from "this backend has no finalize step". `dynamic_graph` returns `not_applicable`; the federated backend aggregates statuses from sub-backends. Surfaced via `POST /graph/finalize` and the `graph_finalize` MCP tool.
+- **Point-in-time graph retrieval surface** — new `POST /graph/retrieve` REST route, `graph_retrieve` MCP tool, and `/graph retrieve <q> [--at TS]` REPL command run the active backend's `retrieve()` directly with a `RetrievalConfig`, surfacing `point_in_time` historical queries that were already implemented internally.
+- **Conflict inspection** — new `GET /graph/conflicts` REST route, `graph_conflicts` MCP tool, and `/graph conflicts` REPL command return facts with `status='conflicted'` (incompatible exclusive-relation facts in the same scope). Backends without conflict tracking return `supported: false` instead of an empty list.
+- **Per-query federation weight override** — `RetrievalConfig.federation_weights` and the `federation_weights` field on `POST /graph/retrieve` / `graph_retrieve` MCP tool override the project-level `graph_federation_weights` for a single retrieve. Lets agents shift weight toward `graphrag` or `dynamic_graph` per-question without changing config.
+
+### 🐛 Bug Fixes
+
+- `BACKEND_ID` is now a class attribute on `DynamicGraphBackend` and `GraphRagBackend` (was only a module-level constant). The federated backend's `b.BACKEND_ID` lookup in `retrieve()` now works as documented.
+
+---
+
 ## [0.3.1] - 2026-04-29
 
 ### ✨ New Features

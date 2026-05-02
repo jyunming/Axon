@@ -128,6 +128,16 @@ class FederatedGraphBackend:
     ) -> list[GraphContext]:
         if not self._backends:
             return []
+        # Per-query weight override: cfg.federation_weights wins over project default.
+        weights = self._weights
+        per_query = getattr(cfg, "federation_weights", None) if cfg else None
+        if isinstance(per_query, dict) and per_query:
+            weights = {
+                "graphrag": float(per_query.get("graphrag", self._weights["graphrag"])),
+                "dynamic_graph": float(
+                    per_query.get("dynamic_graph", self._weights["dynamic_graph"])
+                ),
+            }
         per_backend: dict[str, list[GraphContext]] = {}
         with ThreadPoolExecutor(max_workers=len(self._backends)) as pool:
             future_to_id = {
@@ -145,7 +155,7 @@ class FederatedGraphBackend:
                         "FederatedGraphBackend: %s retrieve() failed — %s", bid, exc
                     )
                     per_backend[bid] = []
-        return _weighted_rrf(per_backend, self._weights)
+        return _weighted_rrf(per_backend, weights)
 
     # ------------------------------------------------------------------
     # Ingest / finalize / clear / delete_documents (sequential delegation)
@@ -163,15 +173,47 @@ class FederatedGraphBackend:
         return total
 
     def finalize(self, force: bool = False) -> FinalizationResult:
-        total = FinalizationResult(backend_id=BACKEND_ID)
+        # Aggregate sub-backend statuses: if any sub-backend ran successfully
+        # ("ok"), the federation is "ok"; if all returned "not_applicable",
+        # the federation is "not_applicable" too.
+        total = FinalizationResult(backend_id=BACKEND_ID, status="not_applicable")
+        any_ok = False
+        details: list[str] = []
         for b in self._backends:
             try:
                 r = b.finalize(force=force)
                 total.communities_built += r.communities_built
                 total.time_elapsed += r.time_elapsed
-            except Exception:
-                pass
+                if getattr(r, "status", "ok") == "ok":
+                    any_ok = True
+                if getattr(r, "detail", ""):
+                    details.append(f"{b.BACKEND_ID}: {r.detail}")
+            except Exception as exc:
+                details.append(f"{b.BACKEND_ID}: error — {exc}")
+        if any_ok:
+            total.status = "ok"
+        total.detail = "; ".join(details)
         return total
+
+    def list_conflicts(self, limit: int = 100) -> list[dict]:
+        """Aggregate conflicts from any sub-backend that exposes ``list_conflicts``."""
+        out: list[dict] = []
+        remaining = int(limit)
+        for b in self._backends:
+            if remaining <= 0:
+                break
+            fn = getattr(b, "list_conflicts", None)
+            if not callable(fn):
+                continue
+            try:
+                rows = fn(limit=remaining)
+            except Exception:
+                continue
+            for row in rows:
+                row.setdefault("backend", b.BACKEND_ID)
+            out.extend(rows)
+            remaining -= len(rows)
+        return out
 
     def clear(self) -> None:
         for b in self._backends:

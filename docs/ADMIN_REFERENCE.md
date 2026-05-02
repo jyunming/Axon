@@ -289,7 +289,9 @@ All RAG flags can be toggled at runtime without restarting.
 |---------|-------------|---------|
 | `/graph status` | Show GraphRAG entity/community build status | `/graph status` |
 | `/graph build` | Trigger entity extraction and community detection | `/graph build` |
-| `/graph finalize` | Trigger explicit community rebuild | `/graph finalize` |
+| `/graph finalize` | Trigger explicit community rebuild; reports `not_applicable` on backends without a community step (e.g. `dynamic_graph`) | `/graph finalize` |
+| `/graph conflicts` | List facts with `status='conflicted'` (dynamic_graph or federated backend); `graphrag` reports unsupported | `/graph conflicts` |
+| `/graph retrieve <q>` | Run the active backend's `retrieve()` directly. Flags: `--at ISO-TIMESTAMP` (point-in-time), `--top-k N` | `/graph retrieve who leads acme --at 2025-06-01` |
 | `/graph viz` | Open the interactive 3D graph in VS Code webview (or default browser outside VS Code) | `/graph viz` |
 | `/graph-viz [PATH]` | Export entity–relation graph as standalone HTML file; omit path to open in browser immediately | `/graph-viz /tmp/graph.html` |
 
