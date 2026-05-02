@@ -23,6 +23,10 @@
 
 The dataclass default for the vector store has been `turboquantdb` since v0.2.1, but several user-facing docs and the (unreferenced) `config.yaml.template` still showed `provider: lancedb` as the default in their example configs. Fixed in `docs/OFFLINE_GUIDE.md`, `docs/MODEL_GUIDE.md`, `docs/SETUP.md`, and `config.yaml.template` so every example aligns with the actual code default. LanceDB remains a fully-supported alternative (covered in the same examples) — only the labelling changes.
 
+### 🛠️ Developer Experience
+
+- **Pre-commit pytest now uses pytest-testmon** — selective test runs based on per-file coverage tracking. Typical local commit drops from ~45 min to ~30 s for doc-only changes; source edits to widely-imported modules still take a few minutes. CI is unaffected (full suite still runs on every push). Cache file `.testmondata` is gitignored. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#pre-commit-pytest-testmon-accelerated) for cache-recovery commands when the selection is wrong.
+
 ---
 
 ## [0.3.1] - 2026-04-29

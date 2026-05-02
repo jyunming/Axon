@@ -182,13 +182,24 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
 def _is_first_run(args) -> bool:
     """Detect a fresh checkout that should trigger the setup wizard.
 
-    Returns True when no config file is present at the default location
-    (``--config`` overrides this check — the user is being explicit) and
-    the AxonStore directory has no projects yet. We deliberately avoid
-    treating the absence of a homedir-config as "first run" when the
-    user has stored projects already; that would loop them through the
+    Returns True when no config file existed at the default location *before*
+    the brain init path ran (``AxonConfig.load`` auto-creates one), and the
+    AxonStore directory has no projects yet. ``main()`` snapshots the result
+    onto ``args._first_run_snapshot`` early — before ``AxonConfig.load`` —
+    because by the time the REPL-entry branch checks, the config file has
+    already been created and a naive existence check would always return
+    False on a fresh install.
+
+    ``--config`` overrides the check (the user is being explicit). We also
+    avoid treating the absence of the homedir-config as "first run" when
+    the user has stored projects already; that would loop them through the
     wizard every time they run ``axon`` from a different working dir.
     """
+    # main() pre-computes this once before AxonConfig.load auto-creates the
+    # config file; honour the snapshot if it's there.
+    snap = getattr(args, "_first_run_snapshot", None)
+    if isinstance(snap, bool):
+        return snap
     # When the user passed --config explicitly, they know what they're
     # doing — skip the auto-wizard.
     if getattr(args, "config", None):
@@ -197,9 +208,13 @@ def _is_first_run(args) -> bool:
     default_config = home / ".config" / "axon" / "config.yaml"
     if default_config.exists():
         return False
-    store_base = os.environ.get("AXON_STORE_BASE")
-    if store_base:
-        base = Path(os.path.expanduser(store_base))
+    # AXON_STORE_BASE is the *base directory* that contains AxonStore/<user>/...
+    # (see AxonConfig.__post_init__). Scan {base}/AxonStore/, not {base}/
+    # itself, so a non-empty AXON_STORE_BASE pointing at an unrelated parent
+    # directory doesn't suppress the first-run wizard.
+    env_base = os.environ.get("AXON_STORE_BASE")
+    if env_base:
+        base = Path(os.path.expanduser(env_base)) / "AxonStore"
     else:
         base = home / ".axon" / "AxonStore"
     if not base.exists():
@@ -214,6 +229,14 @@ def _is_first_run(args) -> bool:
     except OSError:
         return False
     return True
+
+
+def _snapshot_first_run_state(args) -> None:
+    """Compute ``_is_first_run(args)`` BEFORE ``AxonConfig.load`` auto-creates
+    the default config file, and stash the result on ``args`` so the later
+    check at the REPL-entry branch sees the original filesystem state.
+    """
+    args._first_run_snapshot = _is_first_run(args)
 
 
 def main():
@@ -727,6 +750,11 @@ def main():
         help="Migrate vectors from ChromaDB at CHROMA_PATH (or auto-detect) to LanceDB, then exit",
     )
     args = parser.parse_args()
+    # Snapshot first-run filesystem state BEFORE any AxonConfig.load() call —
+    # AxonConfig.load auto-creates the default config file, so a naive check
+    # later in main() would always see the config present. _is_first_run
+    # honours this snapshot if present.
+    _snapshot_first_run_state(args)
     # ── Early exits: config validator / wizard (no brain required) ──────────
     if args.config_validate:
         from axon.config import AxonConfig as _AxonConfig

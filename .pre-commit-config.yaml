@@ -44,7 +44,13 @@ repos:
         pass_filenames: true
       - id: pytest-check
         name: pytest
-        entry: python -m pytest tests/ -v --tb=short --no-cov -m "not extension" --ignore=tests/e2e --ignore=tests/e2e_sync
+        # --testmon: skip tests whose dependent code hasn't changed since
+        # the last green run (cache stored in .testmondata, gitignored).
+        # First run rebuilds the cache (~45 min); subsequent commits drop
+        # to ~30 s for doc-only changes. CI does NOT use --testmon — it
+        # always runs the full suite. See docs/DEVELOPMENT.md for cache
+        # recovery commands when testmon's selection is wrong.
+        entry: python -m pytest tests/ --testmon --tb=short --no-cov -m "not extension" --ignore=tests/e2e --ignore=tests/e2e_sync
         language: system
         pass_filenames: false
         always_run: true

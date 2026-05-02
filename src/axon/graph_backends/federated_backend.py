@@ -173,25 +173,34 @@ class FederatedGraphBackend:
         return total
 
     def finalize(self, force: bool = False) -> FinalizationResult:
-        # Aggregate sub-backend statuses: if any sub-backend ran successfully
-        # ("ok"), the federation is "ok"; if all returned "not_applicable",
-        # the federation is "not_applicable" too.
+        # Aggregate sub-backend statuses with the priority error > ok > not_applicable.
+        # An exception or a sub-backend reporting status='error' must propagate as
+        # the federation's status — silently masking it as 'not_applicable' or
+        # 'ok' would misrepresent a real failure to the caller.
         total = FinalizationResult(backend_id=BACKEND_ID, status="not_applicable")
         any_ok = False
+        any_error = False
         details: list[str] = []
         for b in self._backends:
             try:
                 r = b.finalize(force=force)
                 total.communities_built += r.communities_built
                 total.time_elapsed += r.time_elapsed
-                if getattr(r, "status", "ok") == "ok":
+                sub_status = getattr(r, "status", "ok")
+                if sub_status == "ok":
                     any_ok = True
+                elif sub_status == "error":
+                    any_error = True
                 if getattr(r, "detail", ""):
                     details.append(f"{b.BACKEND_ID}: {r.detail}")
             except Exception as exc:
+                any_error = True
                 details.append(f"{b.BACKEND_ID}: error — {exc}")
-        if any_ok:
+        if any_error:
+            total.status = "error"
+        elif any_ok:
             total.status = "ok"
+        # else: leave as 'not_applicable' (no sub-backend ran a real finalize)
         total.detail = "; ".join(details)
         return total
 

@@ -146,6 +146,10 @@ dev = [
     "pytest>=7.4.0,<8.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",
     "pytest-cov>=4.1.0,<5.0.0",
+    # v0.3.2 developer-experience: pre-commit pytest hook uses --testmon to
+    # skip tests whose dependencies haven't changed since the last green run.
+    # Local-only — CI keeps running the full suite. See DEVELOPMENT.md.
+    "pytest-testmon>=2.1.0,<3.0.0",
     "black==23.12.1",
     "ruff>=0.1.0,<1.0.0",
     "mypy>=1.5.0,<2.0.0",

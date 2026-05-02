@@ -40,6 +40,8 @@ python -m pytest -k test_basic_split --no-cov
 
 > **Note:** VS Code extension e2e tests (`tests/e2e/test_vscode_extension_*.py`) require a live VS Code instance and are excluded from the standard run via `-m "not extension"`. The pre-commit hook runs the full non-extension suite automatically on every commit (black + ruff + pytest).
 
+> **Pre-commit pytest is testmon-accelerated.** The hook uses `pytest-testmon` to skip tests whose dependent code hasn't changed since the last green run. First commit on a fresh clone runs the full suite (~45 min) to populate `.testmondata` (gitignored); subsequent commits typically take ~30 s for doc-only changes and a few minutes for source edits. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#pre-commit-pytest-testmon-accelerated) for cache-recovery commands.
+
 ### Code Quality
 
 We use several tools to maintain code quality:

@@ -48,6 +48,12 @@ coverage.xml
 .pytest_cache/
 .hypothesis/
 
+# pytest-testmon cache (per-developer; pre-commit hook uses --testmon to skip
+# unaffected tests — see docs/DEVELOPMENT.md). Never commit this; it's local
+# state derived from your working tree.
+.testmondata
+.testmondata-journal
+
 # Data stores
 chroma_data/
 bm25_index/

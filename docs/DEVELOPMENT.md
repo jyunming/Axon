@@ -28,6 +28,39 @@ python -m pytest -k test_name --no-cov                # match by name
 
 > VS Code extension e2e tests (`tests/e2e/test_vscode_extension_*.py`) require a live VS Code instance. Exclude them with `-m "not extension"` if running headlessly. The pre-commit hook does this automatically.
 
+#### Pre-commit pytest (testmon-accelerated)
+
+The pre-commit pytest hook uses [pytest-testmon](https://testmon.org/) to run only tests whose dependent code changed since the last green run. Cache lives in `.testmondata` (gitignored) and is per-developer.
+
+| Commit shape | Approx. local hook time |
+|---|---|
+| First commit on a fresh clone (cache empty) | ~45 min — populates the cache |
+| Doc-only commit | ~30 s |
+| Single-source-file edit | ~1–3 min |
+| Edit to a widely-imported module (e.g. `cli.py`, `config.py`) | ~5–10 min |
+| Branch hop / cross-cutting refactor | testmon may rebuild → ~45 min once, then back to fast |
+
+**Forcing a full run** (when testmon's selection feels wrong):
+
+```bash
+rm .testmondata .testmondata-journal      # nuke the cache
+# next commit's hook does a full rebuild
+```
+
+Or run pytest manually without `--testmon`:
+
+```bash
+python -m pytest tests/ --no-cov
+```
+
+**CI is unaffected** — `.github/workflows/ci.yml` runs the full suite on every push. testmon is purely a local-dev accelerator (fresh runners have no cache).
+
+**Editable install required.** Pre-commit invokes the host Python's pytest, so `pytest-testmon` must be installed in the same env:
+
+```bash
+pip install -e ".[dev]"
+```
+
 **Code Quality:**
 ```bash
 make format        # Auto-format code

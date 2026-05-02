@@ -236,15 +236,22 @@ def run_doctor(config: Any | None = None) -> DoctorReport:
     model_name: str | None = None
     store_base: str | None = None
     if config is not None:
-        # Tolerate either a real AxonConfig or a SimpleNamespace fixture.
-        base_url = getattr(getattr(config, "llm", None), "base_url", None) or getattr(
-            config, "ollama_base_url", None
+        # AxonConfig is a flat dataclass: llm_provider / llm_model / ollama_base_url
+        # / axon_store_base. We also tolerate nested-attribute fixtures (e.g.
+        # SimpleNamespace(llm=..., store=...) in tests) and an older-style
+        # default_model / store_base fallback for back-compat.
+        base_url = getattr(config, "ollama_base_url", None) or getattr(
+            getattr(config, "llm", None), "base_url", None
         )
-        model_name = getattr(getattr(config, "llm", None), "model", None) or getattr(
-            config, "default_model", None
+        model_name = (
+            getattr(config, "llm_model", None)
+            or getattr(getattr(config, "llm", None), "model", None)
+            or getattr(config, "default_model", None)
         )
-        store_base = getattr(getattr(config, "store", None), "base", None) or getattr(
-            config, "store_base", None
+        store_base = (
+            getattr(config, "axon_store_base", None)
+            or getattr(getattr(config, "store", None), "base", None)
+            or getattr(config, "store_base", None)
         )
 
     checks: list[Check] = []
