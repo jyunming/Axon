@@ -116,6 +116,19 @@ sealed-test = [
     # Pure dev/test deps — not needed at runtime.
     "requests>=2.31.0",
 ]
+langchain = [
+    # v0.3.2 third-party agent integration (item 16).
+    # Provides axon.integrations.langchain.AxonRetriever, a BaseRetriever subclass
+    # that wraps brain.search_raw(), so any LangChain agent can use Axon as its
+    # local retrieval backend without REST round-trips.
+    "langchain-core>=0.1.0",
+]
+llama-index = [
+    # v0.3.2 third-party agent integration (item 16).
+    # Provides axon.integrations.llama_index.AxonLlamaRetriever, a BaseRetriever
+    # subclass that wraps brain.search_raw() and yields llama_index NodeWithScore.
+    "llama-index-core>=0.10.0",
+]
 dev = [
     "pytest>=7.4.0,<8.0.0",
     "pytest-asyncio>=0.21.0,<1.0.0",

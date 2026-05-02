@@ -208,6 +208,33 @@ Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-
 
 ---
 
+## 🐍 Use Axon from Your Python Agent
+
+Drop-in retrievers for LangChain and LlamaIndex agents — no REST round-trips, no extra process. Both wrap the same `AxonBrain.search_raw()` codepath the REST and REPL surfaces use, so hybrid search, reranking, HyDE, multi-query, and the GraphRAG budget apply automatically.
+
+```python
+# pip install "axon-rag[langchain]"
+from axon import AxonBrain, AxonConfig
+from axon.integrations.langchain import AxonRetriever
+
+brain = AxonBrain(AxonConfig.from_yaml("config.yaml"))
+retriever = AxonRetriever(brain=brain, top_k=5)
+
+docs = retriever.invoke("what does the project do?")  # list[Document]
+```
+
+```python
+# pip install "axon-rag[llama-index]"
+from axon.integrations.llama_index import AxonLlamaRetriever
+
+retriever = AxonLlamaRetriever(brain=brain, top_k=5)
+nodes = retriever.retrieve("what does the project do?")  # list[NodeWithScore]
+```
+
+Per-call overrides (e.g. force HyDE for one question): `retriever.with_overrides({"hyde": True}).invoke(query)`.
+
+---
+
 ## 📚 Documentation
 
 **Getting started**
