@@ -105,7 +105,9 @@ Full RAG query — retrieval + generation in one call. Use `search_knowledge` if
 | `filters` | dict | `null` | Optional metadata filters for retrieval |
 | `project` | string | `null` | Expected active project — returns 409 on mismatch; use `switch_project` to change |
 
-**Returns:** `{"response": "...", "provenance": {"answer_source": "...", "retrieved_count": N}, "settings": {...}}`
+**Returns:** `{"response": "...", "provenance": {"answer_source": "...", "retrieved_count": N}, "settings": {...}, "sources": [...], "citations": [...]}`
+
+The `sources` array (slim view of every retrieved chunk made available to the LLM, indexed 0..N-1) and `citations` array (structured spans parsed from the response, one per `[N]` / `[Document N]` marker, with character offsets) are returned by default. Set `include_citations: false` on the underlying REST request to skip both arrays.
 
 ### `query_stream`
 

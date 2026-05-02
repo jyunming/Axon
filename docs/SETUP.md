@@ -66,7 +66,9 @@ venv\Scripts\activate
 Install the package. Choose the option that matches your needs:
 
 ```bash
-# Minimal install (sentence-transformers + LanceDB + Ollama LLM)
+# Recommended for first-time users — Streamlit UI + sealed sharing + extra loaders
+pip install "axon-rag[starter]"
+# Minimal install (sentence-transformers + TurboQuantDB + Ollama LLM)
 pip install -e .
 # With development tools (tests, linting, type checking)
 pip install -e ".[dev]"
@@ -82,10 +84,13 @@ pip install -e ".[all]"
 
 | Extra | What it enables | Install |
 |---|---|---|
+| `starter` | Recommended for first-time users — bundles `streamlit` (UI), `cryptography` + `keyring` (sealed sharing), and `loaders` (EPUB/RTF/.msg). Covers >90% of beginner workflows. | `pip install "axon-rag[starter]"` |
 | `graphrag` | GraphRAG community detection using the Leiden algorithm (better than the default networkx Louvain fallback) | `pip install -e ".[graphrag]"` |
 | `gliner` | GLiNER fast NER backend for entity extraction — skips the LLM call during ingest (`graph_rag_ner_backend: gliner` in config) | `pip install -e ".[gliner]"` |
 | `llmlingua` | LLMLingua-2 token compression for GraphRAG community reports before map-reduce (`graph_rag_report_compress: true` in config) | `pip install -e ".[llmlingua]"` |
 | `loaders` | EPUB, RTF, and `.msg` (Outlook) file loaders | `pip install -e ".[loaders]"` |
+| `langchain` | `axon.integrations.langchain.AxonRetriever` — drop-in `BaseRetriever` for any LangChain agent. Wraps `AxonBrain.search_raw()` so hybrid/rerank/HyDE all apply. | `pip install -e ".[langchain]"` |
+| `llama-index` | `axon.integrations.llama_index.AxonLlamaRetriever` — drop-in `BaseRetriever` returning native `NodeWithScore` for any LlamaIndex query engine. | `pip install -e ".[llama-index]"` |
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
 > The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x — do not install it on Python 3.13.
@@ -103,6 +108,16 @@ axon --help
 ```
 
 You should see the CLI help output. If you get a `command not found` error, ensure your virtual environment is activated.
+
+**One-shot health check** — run this after installing Ollama (next section) to confirm every required piece is in place:
+
+```bash
+axon --doctor
+```
+
+Prints a colored ✓/!/✗ checklist for: Python version, Ollama daemon reachable, default LLM model pulled, AxonStore base writable, recommended extras present. Each warning carries a one-line "do this next" hint. Exits non-zero on any required-check failure so CI / shell scripts can use it as a precondition.
+
+> **First-run wizard auto-trigger:** running plain `axon` with no config file at the default path AND no projects in the AxonStore base will automatically launch `--setup`. New users don't need to know the flag — just run `axon` after install.
 
 ---
 
