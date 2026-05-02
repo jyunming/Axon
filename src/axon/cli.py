@@ -470,6 +470,21 @@ def main():
         help="Export the entity graph as an HTML file to PATH (default: active project dir/graph.html) and print its path, then exit",
     )
     parser.add_argument(
+        "--graph-conflicts",
+        action="store_true",
+        help="List facts with status='conflicted' from the active graph backend (dynamic_graph or federated), then exit",
+    )
+    parser.add_argument(
+        "--graph-retrieve",
+        metavar="QUERY",
+        help="Run the active graph backend's retrieve() directly and print the graph contexts (point-in-time supported via --graph-at), then exit",
+    )
+    parser.add_argument(
+        "--graph-at",
+        metavar="ISO_TIMESTAMP",
+        help="ISO-8601 timestamp passed as point_in_time to --graph-retrieve (only honoured by bi-temporal backends)",
+    )
+    parser.add_argument(
         "--no-dedup",
         action="store_true",
         help="Disable ingest deduplication (allow re-ingesting identical content)",
@@ -930,6 +945,8 @@ def main():
         and not getattr(args, "graph_status", False)
         and not getattr(args, "graph_finalize", False)
         and not getattr(args, "graph_export", False)
+        and not getattr(args, "graph_conflicts", False)
+        and not getattr(args, "graph_retrieve", None)
         and not getattr(args, "delete_doc", None)
         and not getattr(args, "delete_doc_id", None)
         and not getattr(args, "store_init", None)
@@ -1684,6 +1701,58 @@ def main():
         except Exception as exc:
             print(f"  Error: {exc}")
             sys.exit(1)
+        return
+    if getattr(args, "graph_conflicts", False):
+        backend = getattr(brain, "_graph_backend", None)
+        fn = getattr(backend, "list_conflicts", None) if backend else None
+        if not callable(fn):
+            bid = getattr(backend, "BACKEND_ID", "none") if backend else "none"
+            print(f"  Backend '{bid}' does not track conflicted facts.")
+            return
+        try:
+            rows = fn(limit=100)
+        except Exception as exc:
+            print(f"  Error listing conflicts: {exc}")
+            sys.exit(1)
+        if not rows:
+            print("  No conflicted facts.")
+            return
+        print(f"\n  {len(rows)} conflicted fact(s):")
+        for row in rows[:50]:
+            va = row.get("valid_at", "")
+            print(
+                f"    [{va[:10] if va else '?'}] {row.get('subject','?')} "
+                f"{row.get('relation','?')} {row.get('object','?')}"
+            )
+        return
+    if getattr(args, "graph_retrieve", None):
+        from datetime import datetime as _dt
+
+        from axon.graph_backends.base import RetrievalConfig as _RCfg
+
+        backend = getattr(brain, "_graph_backend", None)
+        if backend is None or not callable(getattr(backend, "retrieve", None)):
+            print("  No graph backend is active.")
+            sys.exit(1)
+        pit = None
+        if getattr(args, "graph_at", None):
+            try:
+                pit = _dt.fromisoformat(args.graph_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                print(f"  Bad --graph-at value: {exc}")
+                sys.exit(1)
+        try:
+            ctxs = backend.retrieve(args.graph_retrieve, _RCfg(top_k=10, point_in_time=pit), None)
+        except Exception as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
+        if not ctxs:
+            print("  No graph contexts matched.")
+            return
+        print(f"\n  {len(ctxs)} context(s)" + (f" at {pit.isoformat()}" if pit else "") + ":")
+        for ctx in ctxs:
+            text = (ctx.text or "")[:120].replace("\n", " ")
+            print(f"    [{ctx.score:.3f} {ctx.context_type}] {text}")
         return
     if getattr(args, "graph_export", None) is not None:
         import tempfile

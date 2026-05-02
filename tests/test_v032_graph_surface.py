@@ -211,6 +211,36 @@ class TestFederationWeightOverride:
             FederatedGraphBackend.__init__ = original_init  # type: ignore[assignment]
             fed_mod._weighted_rrf = original_rrf  # type: ignore[assignment]
 
+    def test_request_schema_rejects_unknown_keys(self):
+        """GraphRetrieveRequest rejects federation_weights with non-canonical keys."""
+        from axon.api_schemas import GraphRetrieveRequest
+
+        with pytest.raises(Exception, match="unknown key"):
+            GraphRetrieveRequest(
+                query="hello",
+                federation_weights={"graphrag": 1.0, "made_up_backend": 0.5},
+            )
+
+    def test_request_schema_rejects_negative_weights(self):
+        """GraphRetrieveRequest rejects negative federation_weights values."""
+        from axon.api_schemas import GraphRetrieveRequest
+
+        with pytest.raises(Exception, match=">= 0"):
+            GraphRetrieveRequest(
+                query="hello",
+                federation_weights={"graphrag": -1.0, "dynamic_graph": 1.0},
+            )
+
+    def test_request_schema_accepts_valid_weights(self):
+        """Valid federation_weights pass through unchanged."""
+        from axon.api_schemas import GraphRetrieveRequest
+
+        req = GraphRetrieveRequest(
+            query="hello",
+            federation_weights={"graphrag": 0.3, "dynamic_graph": 1.7},
+        )
+        assert req.federation_weights == {"graphrag": 0.3, "dynamic_graph": 1.7}
+
     def test_no_override_uses_project_default(self, tmp_path):
         brain = _make_brain(tmp_path, federation_weights={"graphrag": 2.0, "dynamic_graph": 0.5})
 

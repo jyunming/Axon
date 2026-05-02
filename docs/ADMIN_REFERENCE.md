@@ -134,6 +134,8 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--graph-status` | Print knowledge graph status (entity count, code nodes, community state), then exit |
 | `--graph-finalize` | Rebuild community summaries and finalize the knowledge graph, then exit |
 | `--graph-export [PATH]` | Export the entity graph as an HTML file to PATH (default: active project dir/graph.html), then exit |
+| `--graph-conflicts` | List facts with `status='conflicted'` from the active graph backend (dynamic_graph or federated), then exit |
+| `--graph-retrieve QUERY [--graph-at TS]` | Run the active graph backend's `retrieve()` directly. `--graph-at` passes an ISO-8601 `point_in_time` (only honoured by bi-temporal backends). Then exit |
 
 ### 2.9 Vector Index Management
 

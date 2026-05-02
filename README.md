@@ -202,7 +202,7 @@ Extensions panel  →  "..."  →  Install from VSIX...
 
 Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 48 tools appear in the agent hammer menu automatically.
 
-> The VS Code extension surfaces **35 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
+> The VS Code extension surfaces **39 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
 
 **[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 

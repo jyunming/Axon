@@ -67,8 +67,74 @@ export class AxonGraphFinalizeTool implements vscode.LanguageModelTool<any> {
       if (result.status !== 200) {
         return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph finalize error: ${formatDetail(data, result.body)}`)]);
       }
-      const summaries = data.community_summary_count ?? data.summaries ?? '?';
-      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph finalized. Community summaries: ${summaries}`)]);
+      const status = data.status ?? 'ok';
+      const summaries = data.community_summary_count ?? data.summaries ?? 0;
+      const detail = data.detail ?? '';
+      const backendId = data.backend_id ?? '';
+      let msg: string;
+      if (status === 'not_applicable') {
+        msg = `Graph finalize not applicable on backend '${backendId || 'unknown'}'${detail ? ` — ${detail}` : ''}.`;
+      } else {
+        msg = `Graph finalized. Community summaries: ${summaries}.`;
+      }
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(msg)]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
+
+}
+
+export class AxonGraphConflictsTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    return { invocationMessage: 'Listing conflicted graph facts…' };
+  }
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const limit = (options.input && typeof options.input.limit === 'number') ? options.input.limit : 100;
+    try {
+      const result = await httpGet(`${apiBase}/graph/conflicts?limit=${encodeURIComponent(String(limit))}`, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph conflicts error: ${formatDetail(data, result.body)}`)]);
+      }
+      if (data.supported === false) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Backend '${data.backend ?? 'unknown'}' does not track conflicted facts.`)]);
+      }
+      const conflicts = Array.isArray(data.conflicts) ? data.conflicts : [];
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Backend '${data.backend ?? 'unknown'}' — ${conflicts.length} conflict(s):\n${JSON.stringify(conflicts, null, 2)}`)]);
+    } catch (err) {
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
+    }
+  }
+
+}
+
+export class AxonGraphRetrieveTool implements vscode.LanguageModelTool<any> {
+  async prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<any>, _token: vscode.CancellationToken) {
+    const q = options.input && options.input.query ? String(options.input.query) : '';
+    return { invocationMessage: `Running graph backend retrieve for: "${q}"…` };
+  }
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
+    const config = vscode.workspace.getConfiguration('axon');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiKey = config.get<string>('apiKey', '');
+    const body: any = { query: options.input?.query ?? '' };
+    if (typeof options.input?.top_k === 'number') body.top_k = options.input.top_k;
+    if (typeof options.input?.point_in_time === 'string') body.point_in_time = options.input.point_in_time;
+    if (options.input?.federation_weights && typeof options.input.federation_weights === 'object') {
+      body.federation_weights = options.input.federation_weights;
+    }
+    try {
+      const result = await httpPost(`${apiBase}/graph/retrieve`, body, apiKey);
+      const data = JSON.parse(result.body);
+      if (result.status !== 200) {
+        return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Graph retrieve error: ${formatDetail(data, result.body)}`)]);
+      }
+      const ctxs = Array.isArray(data.contexts) ? data.contexts : [];
+      return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(`Backend '${data.backend ?? 'unknown'}' returned ${ctxs.length} context(s).\n${JSON.stringify(data, null, 2)}`)]);
     } catch (err) {
       return new (vscode as any).LanguageModelToolResult([new (vscode as any).LanguageModelTextPart(apiConnectionError(err))]);
     }

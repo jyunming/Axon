@@ -183,6 +183,9 @@ class SearchVisualizeRequest(BaseModel):
     project: str | None = Field(None, description="Target project (must match active project)")
 
 
+_VALID_FEDERATION_KEYS = frozenset({"graphrag", "dynamic_graph"})
+
+
 class GraphRetrieveRequest(BaseModel):
     """Body for ``POST /graph/retrieve``.
 
@@ -193,7 +196,11 @@ class GraphRetrieveRequest(BaseModel):
     backend.
     """
 
-    query: str = Field(..., description="The query string to retrieve graph contexts for")
+    query: str = Field(
+        ...,
+        max_length=MAX_QUERY_FIELD_CHARS,
+        description="The query string to retrieve graph contexts for",
+    )
     project: str | None = Field(None, description="Target project (must match active project)")
     top_k: int | None = Field(
         None, ge=1, le=200, description="Maximum graph contexts to return (default 10)"
@@ -209,9 +216,24 @@ class GraphRetrieveRequest(BaseModel):
         None,
         description=(
             "Per-query RRF weights for the federated backend. "
-            "Keys: ``graphrag``, ``dynamic_graph``. Ignored by other backends."
+            "Keys: ``graphrag``, ``dynamic_graph``. Values must be >= 0. "
+            "Ignored by other backends."
         ),
     )
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        fw = self.federation_weights
+        if fw is not None:
+            unknown = set(fw.keys()) - _VALID_FEDERATION_KEYS
+            if unknown:
+                raise ValueError(
+                    f"federation_weights contains unknown key(s): {sorted(unknown)}. "
+                    f"Allowed keys: {sorted(_VALID_FEDERATION_KEYS)}"
+                )
+            for k, v in fw.items():
+                if v < 0:
+                    raise ValueError(f"federation_weights['{k}'] must be >= 0 (got {v})")
 
 
 class IngestRequest(BaseModel):
