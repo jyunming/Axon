@@ -15,11 +15,14 @@
     <meta name="theme-color" content="#050a14">
     <meta property="og:title" content="Axon — Private RAG. Local first. Graph native.">
     <meta property="og:description" content="Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. 48 MCP tools, sealed cloud-drive sharing, GraphRAG. MIT licensed.">
-    <meta property="og:image" content="docs/assets/axon-mark.png">
+    <!-- Social preview parsers (Slack, Discord, Twitter, etc.) require absolute
+         HTTPS URLs for og:image / twitter:image. Relative paths silently fail. -->
+    <meta property="og:image" content="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/axon-mark.png">
     <meta property="og:image:type" content="image/png">
+    <meta property="og:url" content="https://jyunming.github.io/Axon/">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary">
-    <meta name="twitter:image" content="docs/assets/axon-mark.png">
+    <meta name="twitter:image" content="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/axon-mark.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Syne+Mono&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Sans:ital,wght@0,300;0,400;0,500;1,300&family=Instrument+Serif:ital@0;1&family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..900,0..100;1,9..144,400..900,0..100&display=swap" rel="stylesheet">
@@ -811,10 +814,13 @@
             50%      { transform: scale(0.85); opacity: 0.8; }
         }
         @media (prefers-reduced-motion: reduce) {
+            .hero-mark { transition: none; filter: none; }
             .hero-mark .hm-branch { stroke-dashoffset: 0; animation: none; }
             .hero-mark .hm-terminals circle { opacity: 1; animation: none; }
             .hero-mark .hm-core { animation: none; }
-            .hero-mark:hover { transform: none; }
+            /* Disable BOTH transform AND the filter-glow change on hover —
+               a transitioning glow on hover is still motion. */
+            .hero-mark:hover { transform: none; filter: none; }
         }
         @media (max-width: 640px) {
             .hero-mark svg { width: 56px; height: 56px; }
@@ -1970,8 +1976,12 @@
 <header class="container">
     <!-- Axon brand mark — large, animated. Sits above the version tag and
          the H1 title so the icon has a primary visual presence on the page,
-         not just in the nav corner. Stroke pulses on first paint. -->
-    <a href="#" class="hero-mark reveal active" aria-label="Axon home">
+         not just in the nav corner.
+         Geometry inlined intentionally (NOT <img src=axon-icon.svg>) so the
+         entrance animation can target the individual <line>/<circle>/<g>
+         children with CSS classes. Keep this geometry in sync with the
+         shared docs/assets/brand/axon-icon.svg if either changes. -->
+    <a href="#" class="hero-mark reveal active" aria-label="Axon — scroll to top">
         <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" aria-hidden="true">
             <polygon points="50,7 87,28 87,72 50,93 13,72 13,28" stroke-width="5" stroke-linejoin="round"/>
             <g stroke-width="5" stroke-linecap="round">

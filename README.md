@@ -1,5 +1,6 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-icon.svg" alt="Axon" width="96" height="96" />
+  <!-- Decorative — the wordmark below carries the brand name for screen readers -->
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-icon.svg" alt="" width="96" height="96" />
 </div>
 
 <div align="center">
@@ -7,7 +8,7 @@
 </div>
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-animation.gif" alt="Axon REPL" width="400" />
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-animation.gif" alt="Axon REPL — first-run wizard, ingest, and a cited query in action" width="400" />
 
   <h3>Your documents, answerable. On your hardware.</h3>
 
