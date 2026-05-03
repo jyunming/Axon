@@ -355,9 +355,11 @@ Interactive docs: `/docs` (Swagger UI), `/redoc`.
 | `step_back` | bool | `false` | Step-back query abstraction |
 | `decompose` | bool | `false` | Decompose compound query into sub-questions |
 | `compress` | bool | `false` | LLM context compression post-retrieval |
-| `cite` | bool | `true` | Inline citations |
+| `cite` | bool | `true` | Inline citations (legacy alias) |
+| `include_citations` | bool | `true` | **v0.3.2** — when true, response carries `sources` + `citations` arrays with character offsets (Claude `cite_sources` / OpenAI `file_citation` shape). Set `false` for high-throughput callers that only need the answer string |
 | `discuss` | bool | `true` | Allow general-knowledge fallback |
 | `graph_rag` | bool | `false` | GraphRAG entity-graph retrieval |
+| `federation_weights` | dict[str, float] | `null` | **v0.3.2** — per-call RRF override for `graph_backend: federated`. Keys: `graphrag`, `dynamic_graph` |
 | `raptor` | bool | `false` | RAPTOR hierarchical summary retrieval |
 | `crag_lite` | bool | `false` | CRAG-Lite corrective retrieval |
 | `temperature` | float | `0.7` | LLM temperature |
@@ -429,7 +431,9 @@ Interactive docs: `/docs` (Swagger UI), `/redoc`.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/graph/status` | Entity count, edge count, community count, rebuild status |
-| `POST` | `/graph/finalize` | Trigger explicit community detection rebuild |
+| `POST` | `/graph/finalize` | Trigger community detection rebuild. v0.3.2: returns capability-flagged status (`ok` \| `not_applicable` \| `error`) + `community_summary_count` + `backend_id` |
+| `POST` | `/graph/retrieve` | **v0.3.2** — run active backend's `retrieve()` directly. Body: `query` (req), `top_k`, `point_in_time` (ISO 8601), `federation_weights` (`{graphrag, dynamic_graph}`). Bi-temporal-only fields silently ignored on non-bi-temporal backends |
+| `GET`  | `/graph/conflicts` | **v0.3.2** — list `status='conflicted'` facts. Query: `?limit=N` (default 100). Returns `{supported: bool, conflicts: [...]}` |
 | `GET` | `/graph/data` | Full entity/relation graph as JSON (`nodes` + `links`) |
 | `GET` | `/code-graph/data` | Structural code graph as JSON (file/class/function nodes) |
 | `GET` | `/graph/visualize` | Interactive 3D graph as self-contained HTML |
@@ -754,9 +758,10 @@ YAML section: `rag:` (graph_rag_* keys)
 | `rag.graph_rag_ner_backend` | str | `llm` | NER backend: `llm` (default) or `gliner` (no LLM for entity extraction) |
 | `rag.graph_rag_relation_backend` | str | `llm` | Relation extraction backend: `llm` or `rebel` |
 | `rag.graph_rag_entity_resolve` | bool | `false` | Merge near-duplicate entity names via cosine similarity |
-| `rag.graph_backend` | str | `graphrag` | Graph backend: `graphrag` (default) or `dynamic` (SQLite with DELETE journal mode temporal graph) |
-| `rag.code_graph` | bool | `false` | Build File/Symbol nodes with CONTAINS/IMPORTS edges from code chunk metadata |
-| `rag.code_graph_bridge` | bool | `false` | Add MENTIONED_IN edges linking prose chunks to code symbols |
+| `graph_backend` | str | `graphrag` | Top-level (NOT under `rag:`). Graph backend: `graphrag`, `dynamic_graph` (bi-temporal SQLite), or `federated` (RRF over both). Note: value is `dynamic_graph`, NOT `dynamic` — the latter fails validation. |
+| `graph_federation_weights` | dict[str, float] | `null` | Top-level. Per-backend RRF weights when `graph_backend: federated`. Keys: `graphrag`, `dynamic_graph`. Override per-call via `federation_weights` on `POST /graph/retrieve`. |
+| `code_graph` | bool | `false` | Top-level. Build File/Symbol nodes with CONTAINS/IMPORTS edges from code chunk metadata |
+| `code_graph_bridge` | bool | `false` | Top-level. Add MENTIONED_IN edges linking prose chunks to code symbols |
 
 ### 6.9 RAPTOR Settings
 
