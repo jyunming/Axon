@@ -50,9 +50,10 @@ coverage.xml
 
 # pytest-testmon cache (per-developer; pre-commit hook uses --testmon to skip
 # unaffected tests — see docs/DEVELOPMENT.md). Never commit this; it's local
-# state derived from your working tree.
+# state derived from your working tree. SQLite WAL/SHM siblings appear when
+# the cache is mid-update.
 .testmondata
-.testmondata-journal
+.testmondata-*
 
 # Data stores
 chroma_data/

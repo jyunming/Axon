@@ -2,7 +2,7 @@
   "name": "axon-copilot",
   "displayName": "Axon Copilot",
   "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "axon",
   "engines": {
     "vscode": "^1.93.0"
@@ -746,12 +746,20 @@
               "type": "object",
               "description": "Per-query RRF weights for the federated backend. Keys: 'graphrag', 'dynamic_graph'. Values must be >= 0.",
               "properties": {
-                "graphrag": { "type": "number", "minimum": 0 },
-                "dynamic_graph": { "type": "number", "minimum": 0 }
+                "graphrag": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "dynamic_graph": {
+                  "type": "number",
+                  "minimum": 0
+                }
               }
             }
           },
-          "required": ["query"]
+          "required": [
+            "query"
+          ]
         }
       },
       {
