@@ -3575,6 +3575,8 @@ def _interactive_repl(
                         try:
                             _idx = parts.index("--ttl-days")
                             ttl_days = int(parts[_idx + 1])
+                            if ttl_days <= 0:
+                                raise ValueError("ttl_days must be positive")
                             del parts[_idx : _idx + 2]
                         except (ValueError, IndexError):
                             print("    Invalid --ttl-days value (must be a positive integer).")
