@@ -89,6 +89,7 @@ __all__ = [
     "SHARE_DIR_NAME",
     "WRAP_FILENAME_FORMAT",
     "KEK_FILENAME_FORMAT",
+    "EXPIRY_FILENAME_FORMAT",
     "generate_sealed_share",
     "redeem_sealed_share",
     "is_sealed_share_envelope",
@@ -96,6 +97,7 @@ __all__ = [
     "delete_grantee_dek",
     "share_wrap_path",
     "share_kek_path",
+    "share_expiry_path",
     "list_sealed_share_key_ids",
     "revoke_sealed_share",
 ]
@@ -133,6 +135,13 @@ SHARE_KEYRING_PREFIX: str = "axon.share"  # service = "axon.share.<key_id>"
 SHARE_DIR_NAME: str = ".security/shares"
 WRAP_FILENAME_FORMAT: str = "{key_id}.wrapped"
 KEK_FILENAME_FORMAT: str = "{key_id}.kek"
+# v0.4.0+: signed expiry sidecar — JSON document at
+# ``<project>/.security/shares/<key_id>.expiry`` carrying
+# ``{key_id, expires_at (ISO 8601 UTC), sig (Ed25519 over
+# "<key_id>:<expires_at_iso>")}``. Generators set this when
+# expires_at is supplied; redeem path verifies it on every mount
+# and raises ShareExpiredError if elapsed (or sig mismatches).
+EXPIRY_FILENAME_FORMAT: str = "{key_id}.expiry"
 HKDF_INFO: bytes = b"axon-share-v1"
 
 
@@ -169,6 +178,194 @@ def share_wrap_path(project_dir: Path, key_id: str) -> Path:
     """Return the on-disk path of the wrapped DEK for *key_id*."""
     _validate_key_id(key_id)
     return Path(project_dir) / SHARE_DIR_NAME / WRAP_FILENAME_FORMAT.format(key_id=key_id)
+
+
+def share_expiry_path(project_dir: Path, key_id: str) -> Path:
+    """Return the on-disk path of the signed expiry sidecar for *key_id*.
+
+    Layout: ``<project>/.security/shares/<key_id>.expiry`` — a JSON
+    file with three fields:
+
+    - ``key_id`` (str)            — same as the filename stem; defends
+                                    against rename-attack (an attacker
+                                    moving Alice's longer-lived sidecar
+                                    onto Bob's key_id would change
+                                    neither key_id nor signature, and
+                                    the verify step would fail).
+    - ``expires_at`` (ISO 8601)   — UTC timestamp, ``Z`` suffix.
+    - ``sig`` (base64url)         — Ed25519 signature over the bytes
+                                    ``f"{key_id}:{expires_at}".encode()``
+                                    using the owner's signing key
+                                    (derived from master via HKDF —
+                                    see ``axon.security.signing``).
+
+    No sidecar at this path = the share has no TTL; redeem proceeds
+    without an expiry check. Once a sidecar exists, the share is
+    irrevocably TTL-gated for the rest of its life.
+    """
+    _validate_key_id(key_id)
+    return Path(project_dir) / SHARE_DIR_NAME / EXPIRY_FILENAME_FORMAT.format(key_id=key_id)
+
+
+def _expiry_signing_message(key_id: str, expires_at_iso: str) -> bytes:
+    """Canonical signed payload — must match owner-side write and
+    grantee-side verify exactly. Don't include any other fields here
+    or older clients will reject newer sidecars."""
+    return f"{key_id}:{expires_at_iso}".encode()
+
+
+def _write_expiry_sidecar(
+    project_dir: Path,
+    key_id: str,
+    expires_at: Any,
+    privkey: Any,
+) -> Path:
+    """Sign + persist an expiry sidecar atomically.
+
+    Args:
+        project_dir: Owner's project root (NOT user_dir).
+        key_id: Share key identifier.
+        expires_at: A timezone-aware ``datetime`` in UTC (or
+            convertible). Naive datetimes are rejected.
+        privkey: Ed25519PrivateKey from
+            :func:`axon.security.signing.derive_signing_keypair`.
+
+    Returns:
+        The path the sidecar was written to.
+
+    Raises:
+        SecurityError: ``expires_at`` is naive / not a datetime, or
+            an I/O error occurred during atomic write.
+    """
+    from datetime import datetime, timezone
+
+    if not isinstance(expires_at, datetime):
+        raise SecurityError(f"expires_at must be a datetime, got {type(expires_at).__name__}")
+    if expires_at.tzinfo is None:
+        raise SecurityError(
+            "expires_at must be timezone-aware (UTC). Naive datetimes "
+            "lead to silent off-by-N-hour bugs in cross-timezone shares."
+        )
+    expires_at_utc = expires_at.astimezone(timezone.utc)
+    # Format with explicit ``Z`` suffix so it survives a round-trip
+    # through any JSON parser that doesn't preserve ``+00:00``.
+    iso = expires_at_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    sig = privkey.sign(_expiry_signing_message(key_id, iso))
+    sidecar = {
+        "key_id": key_id,
+        "expires_at": iso,
+        "sig": base64.urlsafe_b64encode(sig).decode("ascii").rstrip("="),
+    }
+    target = share_expiry_path(project_dir, key_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".sealing")
+    try:
+        tmp.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise SecurityError(
+            f"Failed to write expiry sidecar for {key_id} at {target}: {exc}"
+        ) from exc
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+    return target
+
+
+def _check_expiry_or_raise(
+    project_dir: Path,
+    key_id: str,
+    pubkey_hex: str,
+) -> None:
+    """Verify + check the expiry sidecar for *key_id*. No sidecar = no-op.
+
+    Raises:
+        ShareExpiredError: signature failed verification, sidecar is
+            malformed, key_id mismatch, or ``now > expires_at``.
+            All three failure modes mean the same thing to the caller:
+            this share is no longer valid; auto-destroy.
+    """
+    from datetime import datetime, timezone
+
+    from . import ShareExpiredError as _Expired
+    from .signing import pubkey_from_hex
+
+    expiry_path = share_expiry_path(project_dir, key_id)
+    if not expiry_path.is_file():
+        return  # no TTL on this share
+    try:
+        sidecar = json.loads(expiry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise _Expired(f"Expiry sidecar for {key_id} at {expiry_path} is malformed: {exc}") from exc
+    sidecar_key_id = sidecar.get("key_id", "")
+    expires_at_iso = sidecar.get("expires_at", "")
+    sig_b64url = sidecar.get("sig", "")
+    if not (sidecar_key_id and expires_at_iso and sig_b64url):
+        raise _Expired(
+            f"Expiry sidecar for {key_id} is missing required fields " "(key_id, expires_at, sig)."
+        )
+    # Defend against rename attack: refuse if the embedded key_id
+    # doesn't match the filename. An attacker who copied alice's
+    # longer-lived sidecar onto bob's key_id would still trip this.
+    if sidecar_key_id != key_id:
+        raise _Expired(
+            f"Expiry sidecar key_id mismatch (file={key_id!r}, "
+            f"contents={sidecar_key_id!r}). Possible tamper attempt."
+        )
+    if not pubkey_hex:
+        # SEALED1 mount (no pubkey recorded) — TTL is unenforceable.
+        # Treat as expired since we can't verify the sidecar.
+        raise _Expired(
+            f"Cannot verify expiry sidecar for {key_id}: no signing "
+            "pubkey recorded for this mount. Re-redeem the share with a "
+            "v0.4.0+ generator (SEALED2 envelope) to enable TTL gating."
+        )
+    try:
+        pubkey = pubkey_from_hex(pubkey_hex)
+    except SecurityError as exc:
+        raise _Expired(
+            f"Mount descriptor for {key_id} carries an invalid signing " f"pubkey: {exc}"
+        ) from exc
+    # Pad b64url back to a multiple of 4 (we strip ``=`` on write).
+    pad = "=" * (-len(sig_b64url) % 4)
+    try:
+        sig = base64.urlsafe_b64decode(sig_b64url.encode("ascii") + pad.encode())
+    except Exception as exc:
+        raise _Expired(f"Expiry sidecar for {key_id} has malformed signature: {exc}") from exc
+    msg = _expiry_signing_message(key_id, expires_at_iso)
+    try:
+        pubkey.verify(sig, msg)
+    except Exception as exc:
+        # cryptography raises InvalidSignature; we treat any verify
+        # failure as expired so a tampered sidecar can't extend access.
+        raise _Expired(
+            f"Expiry sidecar signature for {key_id} failed verification: "
+            "the file may have been tampered with, or the share was "
+            "minted by a different owner key. Treating as expired."
+        ) from exc
+    # Parse the timestamp — accept both ``Z`` and ``+00:00`` forms.
+    try:
+        expires_at = datetime.fromisoformat(expires_at_iso.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise _Expired(
+            f"Expiry sidecar expires_at {expires_at_iso!r} is not valid " f"ISO 8601: {exc}"
+        ) from exc
+    if expires_at.tzinfo is None:
+        # Defend against a sidecar that somehow shed its timezone.
+        raise _Expired(
+            f"Expiry sidecar expires_at {expires_at_iso!r} is naive (no "
+            "timezone). Treating as expired to avoid silent off-by-hour bugs."
+        )
+    if datetime.now(timezone.utc) > expires_at:
+        raise _Expired(
+            f"Sealed share {key_id} expired at {expires_at_iso}. "
+            "Request a fresh share from the owner."
+        )
 
 
 def share_kek_path(project_dir: Path, key_id: str) -> Path:
@@ -349,6 +546,8 @@ def generate_sealed_share(
     project: str,
     grantee: str,
     key_id: str,
+    *,
+    expires_at: Any = None,
 ) -> dict[str, Any]:
     """Mint a per-share KEK, wrap the DEK under it, return a share envelope.
     Args:
@@ -359,6 +558,13 @@ def generate_sealed_share(
         key_id: Caller-supplied key identifier (e.g. ``ssk_a1b2c3d4``).
             Used as the HKDF salt + filename of the wrap file. Must be
             unique per share — re-using a key_id collides on disk.
+        expires_at: Optional timezone-aware UTC datetime. When set,
+            writes a signed expiry sidecar at
+            ``<project>/.security/shares/<key_id>.expiry``. Grantees
+            running v0.4.0+ verify the signature on every mount and
+            auto-destroy the share once the timestamp elapses. Naive
+            datetimes are rejected to prevent silent off-by-N-hour
+            bugs across timezones.
     Returns:
         ``{"key_id": ..., "share_string": ..., "wrapped_path": ...,
         "owner": ..., "project": ..., "grantee": ...}``
@@ -433,21 +639,36 @@ def generate_sealed_share(
     # wrap the KEK above), so deriving the keypair adds no I/O.
     from .signing import derive_signing_keypair, pubkey_to_hex
 
-    _privkey, pubkey = derive_signing_keypair(master)
+    privkey, pubkey = derive_signing_keypair(master)
     pubkey_hex = pubkey_to_hex(pubkey)
     raw = (
         f"{SEALED_SHARE_PREFIX_V2}:{key_id}:{token_hex}:"
         f"{owner_name}:{project}:{owner_store_path}:{pubkey_hex}"
     )
     share_string = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+    # Write the signed expiry sidecar AFTER the wrap file is in place
+    # but BEFORE we return the share_string. If sidecar write fails, the
+    # whole generate_sealed_share call fails — better to surface the
+    # error than to mint a TTL-less share when one was requested.
+    expiry_path: Path | None = None
+    expires_at_iso: str | None = None
+    if expires_at is not None:
+        expiry_path = _write_expiry_sidecar(project_dir, key_id, expires_at, privkey)
+        # Re-serialize the same way as the sidecar so the audit log
+        # uses the canonical form (ISO 8601 UTC with ``Z``).
+        from datetime import datetime, timezone
+
+        if isinstance(expires_at, datetime):
+            expires_at_iso = expires_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     logger.info(
-        "Generated sealed share key_id=%s project=%s grantee=%s wrapped_path=%s envelope=SEALED2",
+        "Generated sealed share key_id=%s project=%s grantee=%s wrapped_path=%s envelope=SEALED2 expires_at=%s",
         key_id,
         project,
         grantee,
         wrap_path,
+        expires_at_iso or "never",
     )
-    return {
+    result: dict[str, Any] = {
         "key_id": key_id,
         "share_string": share_string,
         "wrapped_path": str(wrap_path),
@@ -456,6 +677,10 @@ def generate_sealed_share(
         "grantee": grantee,
         "sealed": True,
     }
+    if expires_at_iso is not None:
+        result["expires_at"] = expires_at_iso
+        result["expiry_sidecar_path"] = str(expiry_path)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -735,10 +960,32 @@ def _create_sealed_mount_descriptor(
 # ---------------------------------------------------------------------------
 
 
-def get_grantee_dek(key_id: str, user_dir: Path | None = None) -> bytes:
-    """Fetch the grantee's cached DEK for *key_id*.
+def _find_sealed_mount(user_dir: Path, key_id: str) -> dict[str, Any] | None:
+    """Return the sealed-mount descriptor matching *key_id*, or ``None``."""
+    try:
+        from axon.mounts import list_mount_descriptors
+    except ImportError:
+        return None
+    for desc in list_mount_descriptors(user_dir):
+        if desc.get("mount_type") == "sealed" and desc.get("share_key_id") == key_id:
+            return desc
+    return None
 
-    Resolution order:
+
+def get_grantee_dek(key_id: str, user_dir: Path | None = None) -> bytes:
+    """Fetch the grantee's cached DEK for *key_id*, after TTL check.
+
+    v0.4.0+: when *user_dir* is provided AND a sealed-mount descriptor
+    exists for *key_id* AND that descriptor records the owner's signing
+    pubkey (i.e. the share was redeemed from a SEALED2 envelope), this
+    function consults the signed expiry sidecar at
+    ``<owner-project>/.security/shares/<key_id>.expiry`` BEFORE returning
+    the DEK. Tampered sidecars, malformed signatures, key_id mismatch,
+    or ``now > expires_at`` all raise :class:`ShareExpiredError`. Callers
+    (notably :meth:`AxonBrain._mount_sealed_project`) catch the exception
+    and trigger the auto-destroy flow.
+
+    Resolution order (after expiry check):
     1. OS keyring (``axon.share.<key_id>`` / ``dek``).
     2. File fallback at ``<user_dir>/.security/shares/<key_id>.dek.wrapped``
        (used when keyring is unavailable — headless Linux / Docker / CI).
@@ -747,15 +994,37 @@ def get_grantee_dek(key_id: str, user_dir: Path | None = None) -> bytes:
         key_id: Share key identifier.
         user_dir: Grantee's AxonStore user directory.  Required when the
             keyring is unavailable (supplies the master key path for the
-            file fallback).  If ``None`` and the keyring is unavailable,
-            a :class:`SecurityError` is raised with a clear message.
+            file fallback). Also required for TTL enforcement — without
+            it we can't locate the mount descriptor or the synced
+            expiry sidecar. When ``None`` and the keyring is available,
+            the DEK is returned without an expiry check (callers that
+            care about TTL must pass *user_dir*).
 
     Raises:
+        ShareExpiredError: signed expiry sidecar shows the share is
+            elapsed, the signature failed verification, the embedded
+            key_id doesn't match the filename, or the mount records no
+            signing pubkey (TTL unenforceable). Subclass of SecurityError.
         SecurityError: keyring unavailable and *user_dir* not given (or
             file fallback also absent), no DEK stored for *key_id*, or
             the stored value is malformed.
     """
     _validate_key_id(key_id)
+    # TTL gate. The check is best-effort — if user_dir is None, no
+    # mount exists for this key_id, or the mount predates SEALED2,
+    # the gate falls open (and we surface a SecurityError later if
+    # the sidecar exists but pubkey is missing — see
+    # ``_check_expiry_or_raise``). All actual decisions live there.
+    if user_dir is not None:
+        mount = _find_sealed_mount(Path(user_dir), key_id)
+        if mount is not None:
+            target = mount.get("target_project_dir", "")
+            pubkey_hex = mount.get("owner_pubkey_hex", "")
+            if target:
+                # Note: ``_check_expiry_or_raise`` is a no-op when the
+                # expiry sidecar doesn't exist — most shares (TTL-less)
+                # pay zero cost on this path.
+                _check_expiry_or_raise(Path(target), key_id, pubkey_hex)
     service = _share_keyring_service(key_id)
     try:
         secret = _kr.get_secret(service, "dek")
