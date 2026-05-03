@@ -61,6 +61,8 @@ Each project gets its own subfolder under your user directory (e.g. `~/.axon/Axo
 
 ## First-time Configuration
 
+> **New in v0.3.2:** running plain `axon` on a fresh checkout (no config file at the default path, no projects under the AxonStore base) now auto-launches this wizard before dropping into the REPL. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to skip and configure later.
+
 Run the interactive wizard to set your LLM provider, model, embedding settings, and retrieval flags — no manual YAML editing needed:
 
 ```bash
@@ -334,7 +336,7 @@ Open `http://localhost:8501` in your browser if it doesn't open automatically.
 
 ## Entry Point 5 — MCP Server (for AI coding agents)
 
-> **What is MCP?** Model Context Protocol is an open standard that lets AI coding agents call external tools programmatically. This is different from the VS Code extension (Entry Point 2): the extension gives you an `@axon` chat participant inside Copilot Chat; the MCP server gives any MCP-compatible agent direct access to all 30 Axon tools without a chat interface.
+> **What is MCP?** Model Context Protocol is an open standard that lets AI coding agents call external tools programmatically. This is different from the VS Code extension (Entry Point 2): the extension gives you an `@axon` chat participant inside Copilot Chat; the MCP server gives any MCP-compatible agent direct access to all 48 Axon tools without a chat interface.
 
 `axon-mcp` is a standard stdio server built on the open MCP protocol. It works with **Claude Code, Claude Desktop, OpenAI Codex CLI, OpenAI Codex Desktop, Google Gemini CLI, Cursor, VS Code Copilot agent mode**, and any other MCP-compatible tool.
 
@@ -441,9 +443,9 @@ Both features are **off by default** to keep your first ingest fast. Enable them
 
 > **Prerequisite:** Graph features require extra libraries. Install them once:
 > ```bash
-> pip install "axon[graphrag]"
+> pip install "axon-rag[graphrag]"
 > ```
-> The quotes are required on most terminals.
+> The quotes are required on most terminals. (Package is `axon-rag` on PyPI; `axon` is the CLI.)
 
 Edit `~/.config/axon/config.yaml` (Linux/macOS) or `C:\Users\<you>\.config\axon\config.yaml` (Windows):
 

@@ -86,7 +86,7 @@ When a grantee queries a sealed project, Axon decrypts the files into an ephemer
 
 ### Prerequisites
 
-- Both machines need the `[sealed]` extra: `pip install "axon-rag[sealed]"` (installs `cryptography` and `keyring`)
+- Both machines need sealed-share libraries (`cryptography` + `keyring`). These are bundled in the recommended `[starter]` install — `pip install "axon-rag[starter]"`. If you skipped the bundle, install just the sealed extra: `pip install "axon-rag[sealed]"`.
 - A shared sync folder accessible to both owner and grantee (OneDrive, Dropbox, Google Drive Mirror mode)
 - The folder must be set to sync fully to disk on both machines:
   - **OneDrive**: right-click the folder in Explorer → "Always keep on this device" (disables Files On-Demand for that folder)
@@ -119,6 +119,7 @@ axon --project research --ingest /path/to/documents
 Step 4: Seal the project
 
 ```bash
+axon --store-unlock          # required after every process restart before --project-seal works
 axon --project-seal research
 ```
 
@@ -185,7 +186,7 @@ Or in the REPL:
 axon> /share revoke ssk_abc123 --project research
 ```
 
-Marks the share as revoked and deletes the `.wrapped` file so the share string cannot be redeemed again. A grantee who has already redeemed still has the DEK cached in their OS keyring — soft revoke blocks new redemptions but does not remove the cached key, so a cooperative grantee can continue querying indefinitely. Use when the grantee is cooperative or has simply lost access to the machine; use hard revoke when you need to guarantee termination of access.
+Marks the share as revoked and deletes both the `.wrapped` file and its `.kek` sidecar so the share string cannot be redeemed again. A grantee who has already redeemed still has the DEK cached in their OS keyring — soft revoke blocks new redemptions but does not remove the cached key, so a cooperative grantee can continue querying indefinitely. Use when the grantee is cooperative or has simply lost access to the machine; use hard revoke when you need to guarantee termination of access.
 
 **Hard revoke** (slow, re-encrypts everything with a new DEK):
 
@@ -199,7 +200,7 @@ Or in the REPL:
 axon> /share revoke ssk_abc123 --project research --rotate
 ```
 
-Generates a new DEK, re-encrypts every content file in the project, and deletes all existing share wraps (including wraps for other active grantees — they must redeem new shares). The grantee's cached DEK no longer matches the ciphertext; their next query fails with an authentication error. Use when the grantee machine is compromised or you suspect unauthorized access.
+Generates a new DEK, re-encrypts every content file in the project, and selectively re-wraps the new DEK for surviving grantees that have a per-share KEK sidecar (`.security/shares/<key_id>.kek`). The revoked grantee's cached DEK no longer matches the ciphertext; their next query fails with an authentication error. Surviving grantees on legacy projects (predating per-share KEK persistence) are also invalidated and must redeem fresh shares — both the CLI flag (`axon --share-revoke ... --share-rotate`) and the REPL command (`/share revoke ... --rotate`) return an `invalidated_share_key_ids` list so you know who to re-issue. Use when the grantee machine is compromised or you suspect unauthorized access.
 
 Note: hard revoke re-encrypts all N files, so it takes roughly as long as the original seal. Wait for the sync folder to upload all re-encrypted files before the revoke takes effect on the grantee side.
 
