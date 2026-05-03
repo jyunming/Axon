@@ -129,8 +129,9 @@ def pubkey_from_hex(hex_str: str) -> Ed25519PublicKey:
 
     Raises:
         SecurityError: *hex_str* is not exactly
-            :data:`SIGNING_PUBKEY_HEX_LEN` lowercase hex characters,
-            or the bytes don't form a valid Ed25519 public key.
+            :data:`SIGNING_PUBKEY_HEX_LEN` hex characters (case
+            insensitive), or the bytes don't form a valid Ed25519
+            public key.
     """
     if not isinstance(hex_str, str):
         raise SecurityError(f"pubkey_hex must be str, got {type(hex_str).__name__}")

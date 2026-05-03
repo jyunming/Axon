@@ -1433,7 +1433,9 @@ def main():
                 _decoded = base64.urlsafe_b64decode(share_str + _padding).decode(
                     "utf-8", errors="replace"
                 )
-                _is_sealed = _decoded.startswith("SEALED1:")
+                from axon.security.share import is_sealed_share_envelope as _is_se
+
+                _is_sealed = _is_se(_decoded)
             except Exception:
                 _is_sealed = False
             try:

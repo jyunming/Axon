@@ -3655,7 +3655,9 @@ def _interactive_repl(
                             _dec = _b64.urlsafe_b64decode(share_str + _padding).decode(
                                 "utf-8", errors="replace"
                             )
-                            _is_sealed = _dec.startswith("SEALED1:")
+                            from axon.security.share import is_sealed_share_envelope as _is_se
+
+                            _is_sealed = _is_se(_dec)
                         except Exception:
                             _is_sealed = False
                         try:

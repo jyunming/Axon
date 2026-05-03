@@ -110,14 +110,18 @@ class TestPubkeyFromHex:
         with pytest.raises(SecurityError, match="must be str"):
             pubkey_from_hex(b"a" * 64)  # type: ignore[arg-type]
 
-    def test_rejects_invalid_curve_point(self):
-        # 32 zero bytes is technically valid hex but we still want the
-        # cryptography library's downstream validation to surface as a
-        # clean SecurityError rather than an opaque crash.
-        # Note: Ed25519 actually accepts the all-zero key as a valid
-        # public key (it's just the identity point); the assertion is
-        # that pubkey_from_hex doesn't *crash*, returning either a
-        # valid key object or a SecurityError.
+    def test_does_not_crash_on_edge_case_curve_point(self):
+        """All-zero bytes is technically valid hex; ensure pubkey_from_hex
+        returns either a valid key object or raises SecurityError, but
+        never crashes with an opaque cryptography-internal error.
+
+        Note: Ed25519 accepts the all-zero key as a valid public key
+        (it's the curve's identity point), so this test is documenting
+        the contract — the pubkey_from_hex wrapper is a defensive
+        validator, NOT a curve-point validator. Curve-point semantics
+        are downstream of this function (verify() will reject signatures
+        from the identity key as part of normal verification flow).
+        """
         try:
             result = pubkey_from_hex("00" * 32)
             # cryptography accepted it; our wrapper passes through.
