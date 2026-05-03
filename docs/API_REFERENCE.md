@@ -77,7 +77,6 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
   "timeout": null,           // request timeout in seconds — null inherits global config
   "include_diagnostics": false,  // include confidence scores in response
   "include_citations": true, // v0.3.2 — when true, response carries sources + citations arrays (Claude / OpenAI compatible). Set false for high-throughput agents
-  "federation_weights": null, // v0.3.2 — per-call dict[str, float] override for graph_backend: federated. Keys: graphrag, dynamic_graph
   "dry_run": false,          // skip LLM synthesis; return retrieved chunks only
   "chat_history": []         // prior turns for multi-turn conversation context
 }
@@ -159,7 +158,7 @@ retrieval `trace` object (pipeline step timings and intermediate results).
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/ingest` | Async file/directory ingest — returns `job_id` immediately |
-| `POST` | `/ingest/upload` | Multipart file upload — used by VS Code extension and webapp drag-drop. Stores file in a temp dir then triggers `/ingest` |
+| `POST` | `/ingest/upload` | **Synchronous** multipart file upload — used by VS Code extension and webapp drag-drop. Ingests inline and returns `{status, files, ingested_files, ingested_chunks}`; no `job_id` polling required (unlike `/ingest`) |
 | `GET` | `/ingest/status/{job_id}` | Poll async ingest job status |
 | `POST` | `/ingest/refresh` | Re-ingest files whose content has changed |
 | `POST` | `/ingest_url` | Fetch and ingest content from a remote URL |
@@ -434,12 +433,8 @@ Requires the `[sealed]` extra (already bundled in `[starter]`).
 | `POST` | `/share/generate` | Generate a read-only share key. Auto-detects sealed vs plaintext based on whether the project is sealed |
 | `POST` | `/share/redeem` | Mount a shared project using a share string |
 | `POST` | `/share/revoke` | Revoke a share by `key_id`. Pass `rotate: true` for hard revoke (rotates DEK) |
-| `POST` | `/share/extend` | **v0.3.x** — push out the `expires_at` of an already-issued share. Body: `{key_id, ttl_days}` |
+| `POST` | `/share/extend` | Push out the expiry of an issued share. **Plaintext shares only** — sealed `ssk_` shares don't currently honour `ttl_days` (silently ignored at generate; v0.4.0 candidate). Body: `{key_id, ttl_days}` |
 | `GET`  | `/share/list` | List outgoing shares (sharing) and incoming mounts (shared) |
-| `POST` | `/store/init` | Initialise / move the AxonStore base path (e.g. point at a OneDrive sync folder) |
-| `GET`  | `/store/status` | Store path, identity, version, sealed-store status |
-| `GET`  | `/store/whoami` | Current OS user + active store path |
-| `GET` | `/share/list` | List outgoing and incoming shares |
 
 **`POST /store/init` body:**
 ```json
@@ -454,9 +449,11 @@ Requires the `[sealed]` extra (already bundled in `[starter]`).
 {
   "project": "my-project",             // required — project to share
   "grantee": "alice",                  // required — identifier of the recipient
-  "expires_at": null                   // optional ISO 8601 expiry timestamp (default: null — no expiry)
+  "ttl_days": null                     // optional integer days until expiry (default: null = no expiry).
+                                       // Honoured for plaintext shares (sk_); silently ignored for sealed (ssk_).
 }
 ```
+Response carries `key_id` (`sk_` for plaintext, `ssk_` for sealed), `share_string` (base64 envelope; sealed ones decode to `SEALED1:...`), and `expires_at` (ISO 8601 if `ttl_days` was set on a plaintext share, else `null`).
 
 **`POST /share/redeem` body:**
 ```json
@@ -468,7 +465,9 @@ Requires the `[sealed]` extra (already bundled in `[starter]`).
 **`POST /share/revoke` body:**
 ```json
 {
-  "key_id": "abc123"  // required — key_id from /share/list
+  "key_id": "ssk_a4f9c1d2",   // required — key_id from /share/list (sk_ plaintext, ssk_ sealed)
+  "project": "research",      // required for sealed shares (ssk_); optional for plaintext
+  "rotate": false             // hard revoke — rotate project DEK + re-encrypt + selective re-wrap
 }
 ```
 

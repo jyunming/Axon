@@ -118,7 +118,7 @@ Two share modes ship in v0.3.x:
 |-----------|------|---------|-------------|
 | `project` | string | required | Name of the project to share |
 | `grantee` | string | required | OS username of the recipient |
-| `ttl_days` | int \| null | `null` | Days from creation until the share expires. `null` = no expiry |
+| `ttl_days` | int \| null | `null` | Days from creation until the share expires. `null` = no expiry. **Currently honoured only for plaintext (`sk_`) shares** — the sealed (`ssk_`) branch silently ignores `ttl_days` at generate time (wiring it through is a v0.4.0 candidate; track via the planned TTL-gated sealed-share design). |
 
 > See [SHARING.md](SHARING.md) for the full sealed-share threat model, sync-folder prerequisites, and the `pip install "axon-rag[sealed]"` (or `[starter]`) extras.
 
@@ -131,11 +131,12 @@ curl -X POST http://localhost:8000/share/generate \
   -d '{"project": "my-project", "grantee": "bob"}'
 # Response: {"share_string": "eyJ...", "key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "owner": "<your-username>", "expires_at": null}
 
-# Sealed share (project sealed) — same call, sealed envelope returned
+# Sealed share (project sealed) — same call, sealed envelope returned.
+# Note: ttl_days is currently silently ignored on the sealed branch.
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
-  -d '{"project": "research", "grantee": "alice", "ttl_days": 30}'
-# Response: {"share_string": "U0VBTEVE...", "key_id": "ssk_a4f9c1d2", "project": "research", "grantee": "alice", "owner": "<your-username>", "expires_at": "2026-06-02T15:00:00Z"}
+  -d '{"project": "research", "grantee": "alice"}'
+# Response: {"share_string": "U0VBTEVE...", "key_id": "ssk_a4f9c1d2", "project": "research", "grantee": "alice", "owner": "<your-username>", "security_mode": "sealed_v1"}
 ```
 
 **REPL:**
@@ -153,7 +154,7 @@ Send it out-of-band (Signal, encrypted email — never the same channel as the d
 
 ### Extending an existing share
 
-Call `POST /share/extend` (or REPL `/share extend <key_id> --ttl-days N`) to push out the expiry of a share that's already issued — useful when a contractor's engagement is renewed without re-issuing keys.
+Call `POST /share/extend` (or REPL `/share extend <key_id> --ttl-days N`) to push out the expiry of a share that's already issued — useful when a contractor's engagement is renewed without re-issuing keys. **Plaintext shares (`sk_`) only** — the sealed branch tracks expiry through a separate sidecar mechanism (v0.4.0 candidate); calling extend on an `ssk_` key currently no-ops or returns a 422 depending on whether the legacy manifest contains the key.
 
 ---
 
