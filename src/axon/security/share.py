@@ -302,12 +302,31 @@ def _check_expiry_or_raise(
         sidecar = json.loads(expiry_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise _Expired(f"Expiry sidecar for {key_id} at {expiry_path} is malformed: {exc}") from exc
+    # JSON ``[]``, ``null``, ``42``, etc. all parse as valid JSON but
+    # would crash ``.get()`` / ``.replace()`` later. Reject anything
+    # that isn't a JSON object up front so the contract "all failures
+    # → ShareExpiredError" holds.
+    if not isinstance(sidecar, dict):
+        raise _Expired(
+            f"Expiry sidecar for {key_id} is not a JSON object " f"(got {type(sidecar).__name__})."
+        )
     sidecar_key_id = sidecar.get("key_id", "")
     expires_at_iso = sidecar.get("expires_at", "")
     sig_b64url = sidecar.get("sig", "")
-    if not (sidecar_key_id and expires_at_iso and sig_b64url):
+    # Each field must be a non-empty string. Non-string types (e.g.
+    # ``"expires_at": 42``) would crash later .replace()/.encode()
+    # calls; treat as malformed.
+    if not (
+        isinstance(sidecar_key_id, str)
+        and isinstance(expires_at_iso, str)
+        and isinstance(sig_b64url, str)
+        and sidecar_key_id
+        and expires_at_iso
+        and sig_b64url
+    ):
         raise _Expired(
-            f"Expiry sidecar for {key_id} is missing required fields " "(key_id, expires_at, sig)."
+            f"Expiry sidecar for {key_id} is missing required fields "
+            "(key_id, expires_at, sig must all be non-empty strings)."
         )
     # Defend against rename attack: refuse if the embedded key_id
     # doesn't match the filename. An attacker who copied alice's

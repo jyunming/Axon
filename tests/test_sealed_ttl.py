@@ -198,6 +198,41 @@ class TestCheckExpiryOrRaise:
         with pytest.raises(ShareExpiredError, match="missing required"):
             _check_expiry_or_raise(proj, "ssk_partial", pubkey_hex)
 
+    @pytest.mark.parametrize(
+        "non_dict_payload",
+        [
+            "[]",  # array
+            "null",
+            "42",
+            '"a string"',
+            "true",
+        ],
+    )
+    def test_non_dict_json_treated_as_malformed(self, tmp_path, non_dict_payload):
+        """JSON ``[]``, ``null``, etc. parse cleanly but aren't dicts.
+        Without an isinstance() check, ``.get()`` / ``.replace()`` would
+        raise AttributeError and bypass the ShareExpiredError contract.
+        """
+        _, _pub, pubkey_hex = _make_keypair()
+        proj = _make_project_dir(tmp_path)
+        path = share_expiry_path(proj, "ssk_nondict")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(non_dict_payload)
+        with pytest.raises(ShareExpiredError, match="not a JSON object"):
+            _check_expiry_or_raise(proj, "ssk_nondict", pubkey_hex)
+
+    def test_non_string_field_values_treated_as_malformed(self, tmp_path):
+        """Sidecar with valid object shape but a non-string field
+        (e.g. ``"expires_at": 42``) must fail with the missing-fields
+        error rather than crash on ``.replace()`` later."""
+        _, _pub, pubkey_hex = _make_keypair()
+        proj = _make_project_dir(tmp_path)
+        path = share_expiry_path(proj, "ssk_typebad")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"key_id": "ssk_typebad", "expires_at": 42, "sig": "abc"}))
+        with pytest.raises(ShareExpiredError, match="non-empty strings"):
+            _check_expiry_or_raise(proj, "ssk_typebad", pubkey_hex)
+
 
 # ---------------------------------------------------------------------------
 # Wire-format invariants
@@ -211,6 +246,38 @@ class TestSigningMessageFormat:
     def test_signing_message_is_concatenation(self):
         msg = _expiry_signing_message("ssk_format", "2099-12-31T23:59:59Z")
         assert msg == b"ssk_format:2099-12-31T23:59:59Z"
+
+    def test_auto_destroy_strips_mounts_prefix(self, tmp_path, monkeypatch):
+        """Regression: ``_mount_sealed_project`` calls auto_destroy with the
+        full project identifier (e.g. ``"mounts/alice_research"``), but
+        ``remove_mount_descriptor`` expects the bare mount name. The
+        helper must strip the prefix or the descriptor stays orphaned.
+        """
+        from unittest.mock import MagicMock
+
+        from axon.main import AxonBrain
+
+        captured: dict[str, str] = {}
+
+        def fake_remove_mount_descriptor(user_dir, name):
+            captured["name"] = name
+            return True
+
+        # Patch where remove_mount_descriptor is imported (lazy in the helper)
+        import axon.mounts as _mounts
+
+        monkeypatch.setattr(_mounts, "remove_mount_descriptor", fake_remove_mount_descriptor)
+        monkeypatch.setattr("axon.security.share.delete_grantee_dek", lambda *a, **k: True)
+
+        brain = MagicMock()
+        brain.config = MagicMock()
+        brain.config.projects_root = str(tmp_path)
+        brain._sealed_cache = None
+        AxonBrain._auto_destroy_expired_share(
+            brain, "mounts/alice_research", "ssk_test", Exception("expired")
+        )
+        # Must have stripped the ``mounts/`` prefix
+        assert captured["name"] == "alice_research"
 
     def test_iso_form_uses_z_suffix(self, tmp_path):
         """The sidecar must always emit the ``Z`` form, never

@@ -1022,6 +1022,13 @@ Your primary goal is to help the user by answering questions based on the provid
         from axon.security.share import delete_grantee_dek
 
         user_dir = Path(self.config.projects_root)
+        # Mount names are stored without the ``mounts/`` prefix on disk
+        # (the prefix is only how callers refer to mounted projects in
+        # APIs like switch_project). Strip it here so
+        # remove_mount_descriptor can find the canonical descriptor file.
+        bare_mount_name = mount_name
+        if bare_mount_name.startswith("mounts/"):
+            bare_mount_name = bare_mount_name[len("mounts/") :]
         logger.warning(
             "Sealed share '%s' (key_id=%s) expired or failed verification: %s. "
             "Auto-destroying local DEK + cache + mount descriptor.",
@@ -1048,15 +1055,15 @@ Your primary goal is to help the user by answering questions based on the provid
             except Exception as exc:
                 logger.debug("Auto-destroy: cache release raised: %s", exc)
             self._sealed_cache = None
-        # 3. Mount descriptor
+        # 3. Mount descriptor — pass the bare name (no ``mounts/`` prefix)
         try:
             from axon.mounts import remove_mount_descriptor
 
-            remove_mount_descriptor(user_dir, mount_name)
+            remove_mount_descriptor(user_dir, bare_mount_name)
         except Exception as exc:
             logger.warning(
                 "Auto-destroy: remove_mount_descriptor for %s failed: %s",
-                mount_name,
+                bare_mount_name,
                 exc,
             )
 
