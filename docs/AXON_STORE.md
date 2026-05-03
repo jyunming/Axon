@@ -105,7 +105,12 @@ The `username` is your OS username. `store_path` is the `AxonStore/` directory i
 
 ## 4. Sharing a Project
 
-The sharer generates a signed share key that encodes: sharer identity, project name, grantee username, and a timestamp. The key is HMAC-signed with a secret derived from the store path.
+Two share modes ship in v0.3.x:
+
+- **Plaintext shares** (`sk_xxxxxxxx` key IDs) — HMAC-signed, used for unsealed projects on a shared filesystem
+- **Sealed shares** (`ssk_xxxxxxxx` key IDs, `SEALED1:`-prefixed envelope) — AES-256-GCM at rest with a per-grantee AES-KW wrap; safe through OneDrive / Dropbox / Google Drive (cloud sees ciphertext only)
+
+`/share/generate` automatically picks the right mode based on whether the project is sealed (`axon --project-seal <project>`).
 
 **Parameters:**
 
@@ -113,24 +118,42 @@ The sharer generates a signed share key that encodes: sharer identity, project n
 |-----------|------|---------|-------------|
 | `project` | string | required | Name of the project to share |
 | `grantee` | string | required | OS username of the recipient |
-| `expires_at` | string | `null` | ISO 8601 expiry timestamp — `null` means no expiry |
+| `ttl_days` | int \| null | `null` | Days from creation until the share expires. `null` = no expiry |
+
+> See [SHARING.md](SHARING.md) for the full sealed-share threat model, sync-folder prerequisites, and the `pip install "axon-rag[sealed]"` (or `[starter]`) extras.
 
 **REST API:**
 
 ```bash
+# Plaintext share (project not sealed)
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "grantee": "bob"}'
-# Response: {"share_string": "<base64-encoded-payload>", "key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "owner": "<your-username>"}
+# Response: {"share_string": "eyJ...", "key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "owner": "<your-username>", "expires_at": null}
+
+# Sealed share (project sealed) — same call, sealed envelope returned
+curl -X POST http://localhost:8000/share/generate \
+  -H "Content-Type: application/json" \
+  -d '{"project": "research", "grantee": "alice", "ttl_days": 30}'
+# Response: {"share_string": "U0VBTEVE...", "key_id": "ssk_a4f9c1d2", "project": "research", "grantee": "alice", "owner": "<your-username>", "expires_at": "2026-06-02T15:00:00Z"}
 ```
 
 **REPL:**
 
 ```
 /share generate my-project bob
+/share generate research alice --ttl-days 30   # with expiry
 ```
 
-The `share_string` (a raw base64 string) must be sent to the grantee out-of-band. Share strings do not expire by default. All shares are **read-only** — there is no `write_access` capability.
+The `share_string` is a base64 envelope:
+- Plaintext: base64 of an HMAC-signed payload
+- Sealed: base64 of `SEALED1:<key_id>:<token_hex>:<owner>:<project>:<store_path>`
+
+Send it out-of-band (Signal, encrypted email — never the same channel as the data). All shares are **read-only** — there is no `write_access` capability.
+
+### Extending an existing share
+
+Call `POST /share/extend` (or REPL `/share extend <key_id> --ttl-days N`) to push out the expiry of a share that's already issued — useful when a contractor's engagement is renewed without re-issuing keys.
 
 ---
 
@@ -172,29 +195,44 @@ What are the key findings?
 
 ## 6. Revoking Access
 
-The sharer can revoke a share at any time using its `key_id`.
+Two revoke flavors:
+
+- **Soft revoke** (default) — deletes the share's wrap files. Fresh redeems fail; cached DEKs on the grantee side keep working until rotate.
+- **Hard revoke** (`--rotate` / `rotate=true`) — rotates the project DEK, re-encrypts every content file, selectively re-wraps the new DEK for surviving grantees with a `.kek` sidecar. The revoked grantee's cached DEK no longer matches the ciphertext; their next query fails.
 
 **Parameters:**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `key_id` | string | required | Key ID from `/share/list` (format: `sk_xxxxxxxx`) |
+| `key_id` | string | required | Key ID from `/share/list`. Format: `sk_xxxxxxxx` (plaintext) or `ssk_xxxxxxxx` (sealed) |
+| `project` | string | required for sealed | Project name. **Required** for sealed shares (`ssk_` prefix); optional for plaintext |
+| `rotate` | bool | `false` | Hard revoke — rotate DEK + re-encrypt + selective re-wrap |
 
 **REST API:**
 
 ```bash
+# Soft revoke a plaintext share
 curl -X POST http://localhost:8000/share/revoke \
   -H "Content-Type: application/json" \
   -d '{"key_id": "sk_a1b2c3d4"}'
+
+# Hard revoke a sealed share — rotate DEK + invalidate cache
+curl -X POST http://localhost:8000/share/revoke \
+  -H "Content-Type: application/json" \
+  -d '{"key_id": "ssk_a4f9c1d2", "project": "research", "rotate": true}'
 ```
 
 **REPL:**
 
 ```
 /share revoke sk_a1b2c3d4
+/share revoke ssk_a4f9c1d2 --project research --rotate
 ```
 
-Revocation marks the key as revoked in the owner's manifest (`.share_manifest.json`). The effect on the grantee side is **active at switch time and lazy otherwise**: when the grantee calls `POST /project/switch` targeting a mounted project, Axon validates the share against the owner's manifest first and returns `404` immediately if the share has been revoked. Revocation is also checked lazily on project-list and share-list operations for any mounts that were not explicitly switched to. There is no real-time HTTP 403 on every mounted read path.
+Revocation effects:
+- **Plaintext share**: marks the key as revoked in the owner's manifest (`.share_manifest.json`). Validated lazily — at `POST /project/switch` and on `/project list` / `/share list` operations. There is no per-read HTTP 403.
+- **Sealed share, soft**: deletes `.security/shares/<key_id>.wrapped` AND `<key_id>.kek` so fresh redeems fail. Cached DEKs in grantees' OS keyrings keep working.
+- **Sealed share, hard (`rotate=true`)**: re-encrypts the full project, returns an `invalidated_share_key_ids` list so the owner knows which surviving grantees need fresh shares (legacy projects without `.kek` sidecars).
 
 ---
 
@@ -225,12 +263,14 @@ Revoked entries in `sharing` are shown with `"revoked": true`. Entries in `share
 
 ## 8. Operational Notes
 
-- **All shares are read-only.** Any attempt to ingest into a mounted project returns HTTP 403. There is no `write_access` parameter — it was removed in v0.9.0.
+- **All shares are read-only.** Any attempt to ingest into a mounted project returns HTTP 403. There is no `write_access` parameter.
 
-- **Shared filesystem required.** Both users must have filesystem access to the `base_path` set during `store init`. Network latency affects ingest performance but not query performance (mounted read scopes point at the mounted project's own vector and BM25 paths via the descriptor).
+- **Shared filesystem required for plaintext.** Sealed shares can ride OneDrive / Dropbox / Google Drive (cloud sees ciphertext only). Plaintext shares require both users to have filesystem access to the same `base_path` set during `store init`.
 
-- **Key security.** Share strings contain a base64-encoded payload and HMAC signature. Do not share them over untrusted channels. Revocation is recorded in the owner's `.share_manifest.json`. Revocation is checked at switch time and on every retrieval; it is descriptor/manifest-based, not HMAC-on-access. HMAC is only used during the initial redeem step.
+- **Key security.** Sealed share strings begin (after base64-decode) with `SEALED1:<key_id>:<token_hex>:<owner>:<project>:<store_path>`; plaintext share strings are HMAC-signed payloads. Do not share them over untrusted channels (Signal / encrypted email recommended). Revocation is recorded in the owner's `.share_manifest.json` and validated lazily — at switch time, project-list, and share-list operations.
 
-- **Project isolation.** Each user's projects are stored under `{base_path}/AxonStore/{username}/`. Users cannot read each other's data without an explicit share key.
+- **Project isolation and hierarchy.** Each user's projects live under `{base_path}/AxonStore/{username}/`. Users cannot read each other's data without an explicit share key. Project names are slash-separated and **nest up to 5 levels deep** (`research/papers/2024/q3/draft`); deeper paths are rejected at validation time (`_MAX_DEPTH` in `projects.py`).
 
-- **No expiry by default.** Share keys do not expire. Revoke explicitly when access should end.
+- **Mount layout.** When grantee bob redeems a share for `alice/research/papers`, it appears as `mounts/alice_research_papers` in bob's namespace (the `/` is replaced with `_` in the mount name).
+
+- **Expiry.** Share keys do not expire by default. Pass `ttl_days` at generate time (or extend later via `POST /share/extend`) to set a finite TTL, or revoke explicitly when access should end.
