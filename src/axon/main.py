@@ -992,6 +992,81 @@ Your primary goal is to help the user by answering questions based on the provid
             logger.debug("is_project_sealed raised on %s: %s", project_root, exc)
             return False
 
+    def _auto_destroy_expired_share(
+        self,
+        mount_name: str,
+        share_key_id: str,
+        cause: Exception,
+    ) -> None:
+        """Wipe local state for an expired sealed share.
+
+        Called from :meth:`_mount_sealed_project` when
+        :func:`axon.security.share.get_grantee_dek` raises
+        :class:`ShareExpiredError`. Performs three local cleanups:
+
+        1. Delete the cached DEK from the OS keyring AND the file
+           fallback at ``<user_dir>/.security/shares/<key_id>.dek.wrapped``.
+        2. Wipe the active plaintext cache for this project, if any
+           (covers the case where a previous mount staged files
+           before the most recent expiry sidecar landed).
+        3. Remove the mount descriptor at
+           ``<user_dir>/mounts/<mount_name>/mount.json``. The project
+           disappears from ``list_projects`` immediately.
+
+        Encrypted source files on the synced filesystem (OneDrive,
+        Dropbox, Drive) are deliberately NOT touched. Deleting them
+        would propagate the deletion back to the OWNER's source
+        folder via sync — a catastrophically destructive failure
+        mode. The owner manages their own files.
+        """
+        from axon.security.share import delete_grantee_dek
+
+        user_dir = Path(self.config.projects_root)
+        # Mount names are stored without the ``mounts/`` prefix on disk
+        # (the prefix is only how callers refer to mounted projects in
+        # APIs like switch_project). Strip it here so
+        # remove_mount_descriptor can find the canonical descriptor file.
+        bare_mount_name = mount_name
+        if bare_mount_name.startswith("mounts/"):
+            bare_mount_name = bare_mount_name[len("mounts/") :]
+        logger.warning(
+            "Sealed share '%s' (key_id=%s) expired or failed verification: %s. "
+            "Auto-destroying local DEK + cache + mount descriptor.",
+            mount_name,
+            share_key_id,
+            cause,
+        )
+        # 1. DEK
+        try:
+            delete_grantee_dek(share_key_id, user_dir=user_dir)
+        except Exception as exc:
+            logger.warning(
+                "Auto-destroy: delete_grantee_dek for %s failed: %s",
+                share_key_id,
+                exc,
+            )
+        # 2. Cache
+        prior = getattr(self, "_sealed_cache", None)
+        if prior is not None:
+            try:
+                from axon.security.mount import release_cache
+
+                release_cache(prior)
+            except Exception as exc:
+                logger.debug("Auto-destroy: cache release raised: %s", exc)
+            self._sealed_cache = None
+        # 3. Mount descriptor — pass the bare name (no ``mounts/`` prefix)
+        try:
+            from axon.mounts import remove_mount_descriptor
+
+            remove_mount_descriptor(user_dir, bare_mount_name)
+        except Exception as exc:
+            logger.warning(
+                "Auto-destroy: remove_mount_descriptor for %s failed: %s",
+                bare_mount_name,
+                exc,
+            )
+
     def _mount_sealed_project(
         self,
         name: str,
@@ -1029,10 +1104,37 @@ Your primary goal is to help the user by answering questions based on the provid
         user_dir = Path(self.config.projects_root)
         if share_key_id is not None:
             # Grantee path — DEK from keyring, not from disk.
-            from axon.security.share import get_grantee_dek
+            #
+            # v0.4.0: get_grantee_dek now consults the signed expiry
+            # sidecar on the synced filesystem before returning the DEK.
+            # If the share is expired (or the sidecar fails signature
+            # verification), it raises ShareExpiredError — which we
+            # catch here and AUTO-DESTROY the local share state:
+            #   - DEK from OS keyring + file fallback
+            #   - active plaintext cache
+            #   - mount descriptor (project disappears from list_projects)
+            # Encrypted source files on the synced filesystem are NOT
+            # touched; they belong to the owner.
+            from axon.security import ShareExpiredError
+            from axon.security.share import delete_grantee_dek, get_grantee_dek
 
-            grantee_dek = get_grantee_dek(share_key_id)
-            cache = materialize_for_read(project_root, user_dir, dek=grantee_dek)
+            try:
+                grantee_dek = get_grantee_dek(share_key_id, user_dir=user_dir)
+            except ShareExpiredError as exc:
+                self._auto_destroy_expired_share(name, share_key_id, exc)
+                raise
+            try:
+                cache = materialize_for_read(project_root, user_dir, dek=grantee_dek)
+            except Exception:
+                # If materialisation fails for any other reason, do not
+                # auto-destroy — the share itself is still valid.
+                raise
+            # Defensive belt-and-suspenders: scrub the DEK from local
+            # variable scope as soon as it's been handed to the cache
+            # materialiser. The keyring still has it; this is just a
+            # process-memory hygiene gesture.
+            del grantee_dek
+            _ = delete_grantee_dek  # noqa: F841 — silence unused-import on warm paths
         else:
             cache = materialize_for_read(project_root, user_dir)
         self._sealed_cache = cache

@@ -18,6 +18,7 @@ from typing import Any
 
 __all__ = [
     "SecurityError",
+    "ShareExpiredError",
     "store_status",
     "bootstrap_store",
     "unlock_store",
@@ -38,6 +39,21 @@ __all__ = [
 
 class SecurityError(Exception):
     """Raised for security operation failures."""
+
+
+class ShareExpiredError(SecurityError):
+    """Raised when a sealed-share's signed expiry sidecar shows the
+    share has elapsed (``now > expires_at``) OR the sidecar's
+    signature fails verification (treated as expired since we cannot
+    trust an unsigned/forged expiry value).
+
+    Caught in :meth:`AxonBrain._mount_sealed_project` to trigger the
+    v0.4.0 auto-destroy flow: the grantee's cached DEK is wiped from
+    the keyring + file fallback, the active plaintext cache is
+    released, and the mount descriptor is removed. The encrypted
+    files on the synced filesystem are NOT touched — they belong to
+    the owner.
+    """
 
 
 # ---------------------------------------------------------------------------

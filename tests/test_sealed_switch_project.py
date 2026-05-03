@@ -150,9 +150,19 @@ class TestMountSealedProjectGranteePath:
         ):
             AxonBrain._mount_sealed_project(_make_brain(tmp_path), "gr", proj_dir, "ssk_abc123")
 
-        ggd.assert_called_once_with("ssk_abc123")
-        _, kwargs = mat.call_args
-        assert kwargs.get("dek") == dek
+        # v0.4.0: get_grantee_dek now accepts user_dir for the TTL
+        # check (consults the signed expiry sidecar via the mount
+        # descriptor). user_dir = brain.config.projects_root.
+        ggd.assert_called_once()
+        args, kwargs = ggd.call_args
+        assert args[0] == "ssk_abc123"
+        # user_dir may be passed positionally or as kw — accept both shapes.
+        passed_user_dir = (
+            kwargs.get("user_dir") if "user_dir" in kwargs else (args[1] if len(args) > 1 else None)
+        )
+        assert passed_user_dir is not None
+        _, mat_kwargs = mat.call_args
+        assert mat_kwargs.get("dek") == dek
 
     def test_locked_store_raises_security_error(self, tmp_path):
         """SecurityError from materialize_for_read (e.g. locked store) propagates."""
