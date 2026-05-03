@@ -69,7 +69,9 @@
             scroll-snap-type: y mandatory;
             scrollbar-width: thin;
         }
-        body { scroll-behavior: smooth; }
+        @media (prefers-reduced-motion: no-preference) {
+            body { scroll-behavior: smooth; }
+        }
 
         section, header, footer {
             scroll-snap-align: start;
@@ -882,36 +884,6 @@
         }
         .hero-note a { color: var(--teal-dim); text-decoration: none; transition: color 0.2s; }
         .hero-note a:hover { color: var(--teal); }
-
-        /* ─── Marquee strip ─── */
-        .marquee {
-            position: relative; z-index: 10;
-            border-top: 1px solid var(--border-subtle);
-            border-bottom: 1px solid var(--border-subtle);
-            background: rgba(0,0,0,0.25);
-            overflow: hidden; padding: 16px 0;
-            mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
-            -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
-        }
-        .marquee-track {
-            display: flex; gap: 60px; width: max-content;
-            animation: marquee 38s linear infinite;
-        }
-        .marquee-item {
-            font-family: var(--label); font-size: 0.74rem;
-            letter-spacing: 0.16em; text-transform: uppercase;
-            color: var(--text-tertiary);
-            display: inline-flex; align-items: center; gap: 14px;
-            white-space: nowrap;
-        }
-        .marquee-item::before {
-            content: '◇'; color: var(--teal-dim); font-size: 0.7rem;
-        }
-        .marquee-item .accent { color: var(--teal); }
-        @keyframes marquee {
-            from { transform: translateX(0); }
-            to   { transform: translateX(-50%); }
-        }
 
         /* ─── How It Works ─── */
         .how-strip {
@@ -1842,8 +1814,6 @@
             .terminal-body { padding: 16px 18px; }
             .tl, .to { font-size: 0.7rem; }
             .hero-bullets { gap: 14px; font-size: 0.62rem; }
-            .marquee { padding: 12px 0; }
-            .marquee-item { font-size: 0.66rem; }
             .nav-inner { padding: 12px 0; }
             .nav-logo { font-size: 0.92rem; }
             .nav-logo .nav-mark { width: 18px; height: 18px; }
@@ -2086,7 +2056,7 @@
                 <div class="stat-lbl">Graph Backends</div>
             </div>
             <div class="stat-item reveal" style="transition-delay:0.15s">
-                <div class="stat-val">7</div>
+                <div class="stat-val">8</div>
                 <div class="stat-lbl">LLM Providers</div>
             </div>
             <div class="stat-item reveal" style="transition-delay:0.2s">
@@ -2331,7 +2301,7 @@
             <div class="sc-tile-meta">
                 <span class="sc-tile-num">02</span>
                 <span class="sc-tile-name">VS Code · @axon</span>
-                <span class="sc-tile-tag">39 LM tools · 3D graph webview</span>
+                <span class="sc-tile-tag">44 LM tools · 3D graph webview</span>
             </div>
         </div>
         <div class="sc-tile reveal" style="transition-delay:0.1s">
@@ -2532,7 +2502,8 @@ $ axon
             </div>
 
             <div class="codes-panel" id="tab-rest">
-<span class="co"># Start the API server</span>
+<span class="co"># Start the API server (set RAG_API_KEY first when binding to 0.0.0.0)</span>
+$ export RAG_API_KEY="$(openssl rand -hex 32)"
 $ axon-api --host 0.0.0.0 --port 8000
 
 <span class="co"># Query with structured citations enabled (default)</span>
@@ -2752,6 +2723,11 @@ results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
        should read as ambient texture, not compete with foreground content. */
     const N = 50, MAX_DIST = 140;
     let mouse = { x: null, y: null, r: 220 };
+    /* Honor prefers-reduced-motion — track at runtime so we can pause the
+       animation loop entirely (CSS already hides the canvas, but the JS
+       loop keeps spinning otherwise). */
+    const reducedMotionMQ = window.matchMedia('(prefers-reduced-motion: reduce)');
+    function smoothBehavior() { return reducedMotionMQ.matches ? 'auto' : 'smooth'; }
 
     function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; }
 
@@ -2796,6 +2772,9 @@ results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
     }
 
     function animate() {
+        /* Bail out cleanly if the user prefers reduced motion. CSS already
+           hides the canvas, but stopping the rAF loop saves CPU/battery. */
+        if (reducedMotionMQ.matches) return;
         ctx.clearRect(0, 0, width, height);
         particles.forEach(p => { p.update(); p.draw(); });
         for (let i = 0; i < particles.length; i++) {
@@ -2821,7 +2800,12 @@ results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
     window.addEventListener('resize', init);
     window.addEventListener('mousemove', e => { mouse.x = e.x; mouse.y = e.y; });
     window.addEventListener('mouseout', () => { mouse.x = null; mouse.y = null; });
-    init(); animate();
+    init();
+    if (!reducedMotionMQ.matches) animate();
+    /* Resume animation if the user toggles their OS preference at runtime */
+    reducedMotionMQ.addEventListener('change', e => {
+        if (!e.matches) animate();
+    });
 
     /* ─────────────────────────────────────────────
      *  Reveal-on-scroll
@@ -2870,7 +2854,7 @@ results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
 
         function goTo(i) {
             idx = Math.max(0, Math.min(slides.length - 1, i));
-            slides[idx].scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
+            slides[idx].scrollIntoView({ behavior: smoothBehavior(), inline: 'start', block: 'nearest' });
             update();
         }
         function update() {
@@ -2926,7 +2910,7 @@ results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
             dot.setAttribute('data-label', d.label);
             dot.setAttribute('aria-label', d.label);
             dot.addEventListener('click', () => {
-                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                el.scrollIntoView({ behavior: smoothBehavior(), block: 'start' });
             });
             nav.appendChild(dot);
             found.push({ el, dot });
