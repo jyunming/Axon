@@ -54,15 +54,18 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 - BGE reranker for second-pass precision
 - Web fallback via Brave Search (CRAG-Lite)
 - Smart per-question query routing
+- **Structured citations** — `sources` + `citations` arrays with character offsets (Claude / OpenAI compatible)
 
 </td>
 <td width="50%" valign="top">
 
 ### 🧠 Graph Intelligence
-- **RAPTOR** — hierarchical corpus summaries
 - **GraphRAG** — entity/relation/community graph (local / global / hybrid)
-- **Code Graph** — file/class/function graph with import edges
-- Interactive 3D graph — embedded webview in VS Code, browser elsewhere
+- **Dynamic Graph** — bi-temporal SQLite facts with `valid_at` + `invalid_at`
+- **Federated** — weighted RRF over multiple backends, tunable per query
+- **Point-in-time queries** (v0.3.2) — `--graph-retrieve "..." --graph-at TS`
+- **Conflict inspection** (v0.3.2) — `--graph-conflicts` surfaces `status='conflicted'` facts
+- **RAPTOR** — hierarchical corpus summaries · **Code Graph** via AST · 3D webview
 
 </td>
 </tr>
@@ -81,7 +84,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 
 ### 🔧 LLMs & Embeddings
 - **Local:** Ollama, vLLM
-- **Cloud:** OpenAI, Gemini, xAI Grok, GitHub Copilot (API)
+- **Cloud:** OpenAI, Gemini, xAI Grok, GitHub Copilot, Ollama Cloud (API)
 - Hot-swap provider and model — no restart needed
 - Streaming on all providers
 - 4 embedding providers; BGE-M3 for multilingual
@@ -143,7 +146,7 @@ If something doesn't look right:
 axon --doctor                     # Health checks: Python, Ollama, model pulled, store writable.
 ```
 
-Local inference uses [Ollama](https://ollama.com). Cloud providers (OpenAI, Gemini, Grok, vLLM, GitHub Copilot) work via API keys.
+Local inference uses [Ollama](https://ollama.com) or vLLM (self-hosted). Cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) work via API keys.
 
 **[→ Setup guide for VS Code, MCP, and cloud providers →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 
@@ -214,7 +217,7 @@ Extensions panel  →  "..."  →  Install from VSIX...
 
 Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 48 tools appear in the agent hammer menu automatically.
 
-> The VS Code extension surfaces **39 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
+> The VS Code extension surfaces **44 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
 
 **[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 
