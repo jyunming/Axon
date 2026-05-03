@@ -3604,20 +3604,33 @@ def _interactive_repl(
                                     _proj_sealed = False
                                 if _proj_sealed:
                                     import secrets as _secrets
+                                    from datetime import datetime as _dt
+                                    from datetime import timedelta as _td
+                                    from datetime import timezone as _tz
 
                                     from axon import security as _security
 
                                     _key_id = f"ssk_{_secrets.token_hex(8)}"
+                                    # v0.4.0: ttl_days is parsed earlier
+                                    # in this block (search for "--ttl-days").
+                                    # Convert to UTC datetime for the sealed
+                                    # path's signed expiry sidecar.
+                                    _expires_at = (
+                                        _dt.now(_tz.utc) + _td(days=ttl_days) if ttl_days else None
+                                    )
                                     result = _security.generate_sealed_share(
                                         owner_user_dir=user_dir,
                                         project=proj,
                                         grantee=grantee,
                                         key_id=_key_id,
+                                        expires_at=_expires_at,
                                     )
                                     print(f"\n    Sealed share generated for project '{proj}'")
                                     print(f"    Grantee:      {grantee}")
                                     print("    Access:       read-only (encrypted-at-rest)")
                                     print(f"    Key ID:       {result['key_id']}")
+                                    if result.get("expires_at"):
+                                        print(f"    Expires at:   {result['expires_at']}")
                                     print(f"\n    Share string (send out-of-band to {grantee}):")
                                     print(f"\n      {result['share_string']}\n")
                                     print(

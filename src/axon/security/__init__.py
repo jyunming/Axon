@@ -179,13 +179,20 @@ def generate_sealed_share(
     project: str,
     grantee: str,
     key_id: str,
+    *,
+    expires_at: Any = None,
 ) -> dict[str, Any]:
     """Generate a sealed share envelope.
     Phase 3 — wired to :mod:`axon.security.share`. Wraps the project
     DEK under a per-share KEK derived from a fresh random token, writes
     ``<project>/.security/shares/<key_id>.wrapped``, and returns a
-    base64 ``share_string`` with the ``SEALED1:`` prefix the redeem
-    path uses to tell sealed shares apart from legacy shares.
+    base64 ``share_string`` with the ``SEALED2:`` prefix (v0.4.0+; older
+    callers may also receive ``SEALED1:`` if they predate the upgrade).
+
+    v0.4.0: ``expires_at`` (timezone-aware UTC datetime) writes a signed
+    expiry sidecar at ``<project>/.security/shares/<key_id>.expiry``.
+    Grantees verify the signature on every mount and auto-destroy local
+    DEK + cache + descriptor once the timestamp elapses.
     """
     try:
         from .share import generate_sealed_share as _impl
@@ -193,7 +200,7 @@ def generate_sealed_share(
         raise SecurityError(
             "Sealed-store support is not installed. " "Install with: pip install axon-rag[sealed]"
         ) from exc
-    return _impl(owner_user_dir, project, grantee, key_id)
+    return _impl(owner_user_dir, project, grantee, key_id, expires_at=expires_at)
 
 
 def redeem_sealed_share(user_dir: Path, share_string: str) -> dict[str, Any]:

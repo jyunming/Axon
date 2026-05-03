@@ -185,12 +185,27 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
                 detail="Sealed-store security must be unlocked before generating sealed shares.",
             )
         key_id = f"ssk_{secrets.token_hex(4)}"
+        # v0.4.0: convert ttl_days to a UTC datetime that
+        # generate_sealed_share will sign + persist as the expiry sidecar.
+        # Reject zero/negative values explicitly — silently passing them
+        # would mint a share that's already expired.
+        sealed_expires_at = None
+        if request.ttl_days is not None:
+            if request.ttl_days <= 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"ttl_days must be positive (got {request.ttl_days}).",
+                )
+            from datetime import datetime, timedelta, timezone
+
+            sealed_expires_at = datetime.now(timezone.utc) + timedelta(days=request.ttl_days)
         try:
             result = _security.generate_sealed_share(
                 owner_user_dir=user_dir,
                 project=request.project,
                 grantee=request.grantee,
                 key_id=key_id,
+                expires_at=sealed_expires_at,
             )
         except _security.SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -206,7 +221,11 @@ async def share_generate(request: ShareGenerateRequest, req: Request):
             "share",
             key_id,
             project=request.project,
-            details={"grantee": request.grantee, "security_mode": "sealed_v1"},
+            details={
+                "grantee": request.grantee,
+                "security_mode": "sealed_v1",
+                "expires_at": result.get("expires_at"),
+            },
             surface=surface,
             request_id=rid,
         )
