@@ -3,7 +3,20 @@ name: CI
 on:
   push:
     branches: [main, master, develop]
+    # Skip CI for pure Markdown/docs-only pushes — they can't break tests.
+    # NOTE: index.html is NOT ignored — scripts/audit_packaging.py inspects
+    # the landing page version strings, so a website-only version bump
+    # must still trip CI to catch Cargo/extension/landing-page version drift.
+    # Markdown files (including README.md) are ignored. Per-readme deletion/
+    # rename is caught at release time via the package build (uses
+    # project.readme = "README.md" in pyproject.toml).
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:  # all PRs, regardless of target branch
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
 
 jobs:
   test:
