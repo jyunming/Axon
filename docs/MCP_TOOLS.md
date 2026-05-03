@@ -383,7 +383,9 @@ Return entity count, edge count, community summary count, rebuild status, and re
 
 Trigger an explicit community detection rebuild. Call after a large ingest batch to ensure graph-augmented answers reflect the latest knowledge. No parameters.
 
-**Returns:** `{"communities_built": N}`
+**Returns:** `{"status": "ok" | "not_applicable" | "error", "community_summary_count": N, "backend_id": "graphrag" | "dynamic_graph" | "federated", "detail": "..."}`
+
+> v0.3.2: status is capability-flagged. Backends without a finalize step (e.g. `dynamic_graph`) return `"not_applicable"`; the federated backend aggregates statuses from sub-backends.
 
 ### `graph_data`
 
@@ -414,9 +416,9 @@ Run the active graph backend's `retrieve()` directly with a `RetrievalConfig` an
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `query` | string | required | The query string |
-| `top_k` | int | `10` | Maximum graph contexts to return (1-200) |
+| `top_k` | int \| null | `null` | Maximum graph contexts to return (server resolves to 10 when null; range 1-200) |
 | `point_in_time` | string | `null` | ISO-8601 timestamp; return facts valid at that instant. Honoured only by bi-temporal backends (`dynamic_graph`); ignored elsewhere |
-| `federation_weights` | object | `null` | Per-query RRF weights for the federated backend. Keys: `graphrag`, `dynamic_graph`. Ignored by other backends |
+| `federation_weights` | dict[str, float] | `null` | Per-query RRF weights for the federated backend. Keys: `graphrag`, `dynamic_graph`. Ignored by other backends |
 
 **Returns:** `{"backend": "...", "contexts": [{"context_id", "context_type", "text", "score", "rank", "valid_at", "invalid_at", "matched_entity_names", "hop_count", ...}, ...]}`
 
@@ -518,7 +520,7 @@ Re-wrap the master key under a new passphrase. Project DEKs are not touched (the
 
 ## Usage Notes
 
-- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `refresh_mount`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`governance_*`, `security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
+- Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `refresh_mount`, `graph_status`, `graph_finalize`, `graph_data`, `graph_conflicts`, `graph_retrieve`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`governance_*`, `security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
 
 - `ingest_path` is async — it returns a `job_id`. Poll `get_job_status` until `status == "completed"` or `"failed"`. `ingest_url` is synchronous and returns `{"status": "ingested"|"skipped", "doc_id": "..."}` immediately — no polling required.
 
@@ -528,7 +530,7 @@ Re-wrap the master key under a new passphrase. Project DEKs are not touched (the
 
 - `update_settings` changes are scoped to the current session by default. Pass `persist=True` to write to `config.yaml`.
 
-- AxonStore tools (`init_store`, `share_project`, `redeem_share`, `list_shares`) are always available. Call `init_store` only if you want to move the store to a shared drive.
+- AxonStore tools: `init_store` and `get_store_status` are always available pre-init. `share_project`, `redeem_share`, `list_shares`, and `revoke_share` require an initialised store (`init_store` first if the store hasn't been bootstrapped).
 
 - Sealed-store tools (`security_*`, `seal_project`) require Phase 1 bootstrap (`security_bootstrap`) before use. The store must be unlocked (`security_unlock`) after every process restart before sealed projects can be accessed.
 

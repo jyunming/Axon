@@ -174,6 +174,7 @@ The system supports cloud providers in addition to local Ollama models. Set `llm
 | **Ollama Cloud** | `ollama_cloud` | Any Ollama-hosted model | Requires `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` |
 | **vLLM** | `vllm` | Any vLLM-served model | Self-hosted OpenAI-compatible endpoint; set `vllm_base_url` in `config.yaml` |
 | **GitHub Copilot** | `copilot` | Any active Copilot model | VS Code only — routes LLM calls through the Copilot extension bridge; no Ollama required. Enable via `axon.useCopilotLlm: true` in VS Code settings or `provider: copilot` in `config.yaml`. |
+| **GitHub Copilot (PAT)** | `github_copilot` | `gpt-4o`, `gpt-4.1`, `claude-3.5-sonnet` | Headless server use — talks to the Copilot API directly with a PAT. Requires `GITHUB_COPILOT_PAT` (or fallback `GITHUB_TOKEN`). Use `copilot` for VS Code integration; `github_copilot` for non-VS-Code workflows (CI, scripts, REST). |
 
 ### Per-provider config.yaml examples
 
