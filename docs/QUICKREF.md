@@ -4,13 +4,18 @@
 
 ### Installation
 ```bash
-# Basic installation
-pip install -e .
+# Recommended for first-time users — UI + sealed sharing + extra loaders
+pip install "axon-rag[starter]"
+# Bare retrieval engine
+pip install axon-rag
 # With development tools
 pip install -e ".[dev]"
-# With optional features
-pip install -e ".[qdrant,fastembed]"
-pip install -e ".[all]"
+# Granular extras (combine as needed)
+pip install -e ".[qdrant,fastembed]"          # alternative vector stores
+pip install -e ".[graphrag]"                   # community detection
+pip install -e ".[langchain]"                  # LangChain BaseRetriever adapter
+pip install -e ".[llama-index]"                # LlamaIndex BaseRetriever adapter
+pip install -e ".[all]"                        # everything except dev
 ```
 
 ### Development
@@ -72,8 +77,10 @@ axon --provider openai --model gpt-4o "Your question"
 axon --pull llama3.1:8b
 # CLI — see all providers and locally available models
 axon --list-models
-# CLI — run the interactive setup wizard
+# CLI — run the interactive setup wizard (auto-runs on first run with no config)
 axon --setup
+# CLI — health checks (Python, Ollama, model, store, recommended extras)
+axon --doctor
 # CLI — advanced RAG flags (can be combined)
 axon --cite "Summarise my documents"        # inline [Document N] citations
 axon --no-cite "Your question"              # suppress citations for cleaner output
@@ -134,7 +141,9 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/store whoami` | Show AxonStore identity and status |
 | `/store init <path>` | Change the store base path (e.g. to a shared drive) |
 | `/graph status` | Show GraphRAG community build status |
-| `/graph finalize` | Trigger explicit community rebuild |
+| `/graph finalize` | Trigger explicit community rebuild (reports `not_applicable` on backends without a community step, e.g. `dynamic_graph`) |
+| `/graph conflicts` | List facts with `status='conflicted'` (dynamic_graph or federated backend); `graphrag` reports unsupported |
+| `/graph retrieve <q> [--at TS] [--top-k N]` | Run the active backend's `retrieve()` directly. `--at` passes an ISO-8601 `point_in_time` (only honoured by bi-temporal backends) |
 | `/graph viz` | Open the interactive 3D graph — embedded webview in VS Code, default browser elsewhere |
 | `/graph-viz [path]` | Export entity–relation graph as HTML; omit path to open in browser immediately (requires `pip install axon[graphrag]`) |
 | `/retry` | Re-send the last query (useful after switching model or RAG settings) |

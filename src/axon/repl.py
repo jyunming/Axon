@@ -2625,6 +2625,8 @@ def _interactive_repl(
                         "    Sealed-store sub-commands require the [sealed] extra installed.",
                         "graph": "    /graph status                  show entity count, edges, community summaries\n"
                         "    /graph finalize                trigger community detection rebuild\n"
+                        "    /graph conflicts               list conflicted facts (dynamic_graph backend)\n"
+                        "    /graph retrieve <q> [--at TS]  run backend.retrieve directly (point-in-time)\n"
                         "    /graph viz [path]              export graph as HTML (opens in browser)\n"
                         "\n"
                         "    GraphRAG must be enabled: /rag graph-rag\n"
@@ -4047,11 +4049,115 @@ def _interactive_repl(
                     else:
                         print("    Finalizing graph communities… (this may take a moment)")
                         try:
-                            brain.finalize_graph()
-                            summaries = getattr(brain, "_community_summaries", {}) or {}
-                            print(f"    Done. {len(summaries)} community summaries generated.\n")
+                            backend = getattr(brain, "_graph_backend", None)
+                            if backend is not None and callable(getattr(backend, "finalize", None)):
+                                _r = backend.finalize(force=True)
+                                _stat = getattr(_r, "status", "ok")
+                                _det = getattr(_r, "detail", "")
+                                if _stat == "not_applicable":
+                                    print(
+                                        f"    Backend has no finalize step — {_det or 'no community detection on this backend'}."
+                                    )
+                                else:
+                                    summaries = getattr(brain, "_community_summaries", {}) or {}
+                                    print(
+                                        f"    Done. {len(summaries)} community summaries generated.\n"
+                                    )
+                            else:
+                                brain.finalize_graph()
+                                summaries = getattr(brain, "_community_summaries", {}) or {}
+                                print(
+                                    f"    Done. {len(summaries)} community summaries generated.\n"
+                                )
                         except Exception as e:
                             print(f"    Finalize failed: {e}")
+                elif sub == "conflicts":
+                    backend = getattr(brain, "_graph_backend", None)
+                    fn = getattr(backend, "list_conflicts", None) if backend else None
+                    if not callable(fn):
+                        _bid = getattr(backend, "BACKEND_ID", "none") if backend else "none"
+                        print(f"    Backend '{_bid}' does not track conflicted facts.")
+                    else:
+                        try:
+                            _rows = fn(limit=100)
+                        except Exception as e:
+                            print(f"    Listing conflicts failed: {e}")
+                            _rows = []
+                        if not _rows:
+                            print("    No conflicted facts.")
+                        else:
+                            print(f"\n    {len(_rows)} conflicted fact(s):")
+                            for _row in _rows[:50]:
+                                _va = _row.get("valid_at", "")
+                                print(
+                                    f"      [{_va[:10] if _va else '?'}] "
+                                    f"{_row.get('subject','?')} "
+                                    f"{_row.get('relation','?')} "
+                                    f"{_row.get('object','?')}"
+                                )
+                            print()
+                elif sub == "retrieve":
+                    sub_parts2 = arg.split(maxsplit=1)
+                    if len(sub_parts2) < 2 or not sub_parts2[1].strip():
+                        print("    Usage: /graph retrieve <query> [--at ISO-TIMESTAMP] [--top-k N]")
+                    else:
+                        from datetime import datetime as _dt
+
+                        from axon.graph_backends.base import RetrievalConfig as _RCfg
+
+                        _raw = sub_parts2[1]
+                        # Parse trailing flags off the end.
+                        _at: _dt | None = None
+                        _topk = 10
+                        _tokens = _raw.split()
+                        _qry_tokens: list[str] = []
+                        i = 0
+                        while i < len(_tokens):
+                            t = _tokens[i]
+                            if t == "--at" and i + 1 < len(_tokens):
+                                try:
+                                    _at = _dt.fromisoformat(_tokens[i + 1].replace("Z", "+00:00"))
+                                except ValueError:
+                                    print(f"    Bad --at value: {_tokens[i + 1]}")
+                                    _at = None
+                                i += 2
+                            elif t == "--top-k" and i + 1 < len(_tokens):
+                                try:
+                                    _topk = int(_tokens[i + 1])
+                                except ValueError:
+                                    print(f"    Bad --top-k value: {_tokens[i + 1]}")
+                                i += 2
+                            else:
+                                _qry_tokens.append(t)
+                                i += 1
+                        _q = " ".join(_qry_tokens).strip()
+                        backend = getattr(brain, "_graph_backend", None)
+                        if backend is None or not callable(getattr(backend, "retrieve", None)):
+                            print("    No graph backend is active.")
+                        elif not _q:
+                            print("    Query string is empty after stripping flags.")
+                        else:
+                            try:
+                                _ctxs = backend.retrieve(
+                                    _q,
+                                    _RCfg(top_k=_topk, point_in_time=_at),
+                                    None,
+                                )
+                            except Exception as e:
+                                print(f"    Retrieve failed: {e}")
+                                _ctxs = []
+                            if not _ctxs:
+                                print("    No graph contexts matched.")
+                            else:
+                                print(
+                                    f"\n    {len(_ctxs)} context(s)"
+                                    + (f" at {_at.isoformat()}" if _at else "")
+                                    + ":"
+                                )
+                                for _c in _ctxs[:20]:
+                                    _txt = (_c.text or "")[:120].replace("\n", " ")
+                                    print(f"      [{_c.score:.3f} {_c.context_type}] {_txt}")
+                                print()
                 elif sub == "viz":
                     import hashlib as _hashlib_g
                     import time as _time_g
@@ -4098,7 +4204,10 @@ def _interactive_repl(
                         print(f"    Graph visualisation failed: {e}")
                 else:
                     print(f"    Unknown sub-command '{sub}'.")
-                    print("    Usage: /graph status | /graph finalize | /graph viz [path]")
+                    print(
+                        "    Usage: /graph status | /graph finalize | /graph conflicts | "
+                        "/graph retrieve <query> [--at TS] [--top-k N] | /graph viz [path]"
+                    )
             elif cmd == "/theme":
                 global _MD_CODE_THEME
                 _theme_arg = arg.strip()

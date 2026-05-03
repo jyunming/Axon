@@ -129,8 +129,8 @@ class TestVsCodeManifestContract:
         manifest = _extension_manifest()
         tools = manifest["contributes"]["languageModelTools"]
         assert (
-            len(tools) == 37
-        ), f"Expected 37 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+            len(tools) == 39
+        ), f"Expected 39 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
     def test_tier1_vscode_capabilities_in_manifest(self):
         """Every Tier 1 capability with VS Code support has a corresponding manifest tool."""

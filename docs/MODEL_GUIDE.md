@@ -560,7 +560,7 @@ llm:
 
 vector_store:
 
-  provider: lancedb
+  provider: turboquantdb
 
 ```
 
@@ -586,7 +586,7 @@ llm:
 
 vector_store:
 
-  provider: lancedb
+  provider: turboquantdb
 
 ```
 

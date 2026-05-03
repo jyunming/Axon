@@ -141,6 +141,18 @@ class QueryRequest(BaseModel):
         False,
         description="When True, include retrieval diagnostics in response",
     )
+    include_citations: bool = Field(
+        True,
+        description=(
+            "When True (default), include ``sources`` and ``citations`` arrays "
+            "in the response — sources lists every retrieved chunk made "
+            "available to the LLM (slim form, text truncated to 500 chars); "
+            "citations is a list of structured spans extracted from the "
+            "response, one per ``[N]`` / ``[Document N]`` marker. Set to "
+            "False to skip the extra payload (e.g. high-throughput agents "
+            "that only need the answer string)."
+        ),
+    )
     dry_run: bool = Field(
         False,
         description="Skip LLM; return ranked chunks + diagnostics without calling generation model",
@@ -181,6 +193,59 @@ class SearchVisualizeRequest(BaseModel):
     )
     filters: dict[str, Any] | None = Field(None, description="Metadata filters")
     project: str | None = Field(None, description="Target project (must match active project)")
+
+
+_VALID_FEDERATION_KEYS = frozenset({"graphrag", "dynamic_graph"})
+
+
+class GraphRetrieveRequest(BaseModel):
+    """Body for ``POST /graph/retrieve``.
+
+    ``point_in_time`` enables historical queries against backends that store
+    bi-temporal facts (currently only ``dynamic_graph``). On other backends
+    it is ignored. ``federation_weights`` overrides the project-level RRF
+    weights for a single retrieve and is consumed only by the federated
+    backend.
+    """
+
+    query: str = Field(
+        ...,
+        max_length=MAX_QUERY_FIELD_CHARS,
+        description="The query string to retrieve graph contexts for",
+    )
+    project: str | None = Field(None, description="Target project (must match active project)")
+    top_k: int | None = Field(
+        None, ge=1, le=200, description="Maximum graph contexts to return (default 10)"
+    )
+    point_in_time: str | None = Field(
+        None,
+        description=(
+            "ISO-8601 timestamp; return facts valid at that instant. "
+            "Only honoured by backends with bi-temporal storage."
+        ),
+    )
+    federation_weights: dict[str, float] | None = Field(
+        None,
+        description=(
+            "Per-query RRF weights for the federated backend. "
+            "Keys: ``graphrag``, ``dynamic_graph``. Values must be >= 0. "
+            "Ignored by other backends."
+        ),
+    )
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        fw = self.federation_weights
+        if fw is not None:
+            unknown = set(fw.keys()) - _VALID_FEDERATION_KEYS
+            if unknown:
+                raise ValueError(
+                    f"federation_weights contains unknown key(s): {sorted(unknown)}. "
+                    f"Allowed keys: {sorted(_VALID_FEDERATION_KEYS)}"
+                )
+            for k, v in fw.items():
+                if v < 0:
+                    raise ValueError(f"federation_weights['{k}'] must be >= 0 (got {v})")
 
 
 class IngestRequest(BaseModel):

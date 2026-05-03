@@ -134,6 +134,8 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--graph-status` | Print knowledge graph status (entity count, code nodes, community state), then exit |
 | `--graph-finalize` | Rebuild community summaries and finalize the knowledge graph, then exit |
 | `--graph-export [PATH]` | Export the entity graph as an HTML file to PATH (default: active project dir/graph.html), then exit |
+| `--graph-conflicts` | List facts with `status='conflicted'` from the active graph backend (dynamic_graph or federated), then exit |
+| `--graph-retrieve QUERY [--graph-at TS]` | Run the active graph backend's `retrieve()` directly. `--graph-at` passes an ISO-8601 `point_in_time` (only honoured by bi-temporal backends). Then exit |
 
 ### 2.9 Vector Index Management
 
@@ -149,6 +151,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--config-validate` | Validate `config.yaml` and print issues; exits with code `1` if any errors found |
 | `--config-reset` | Reset `config.yaml` to built-in defaults and exit |
 | `--setup` | Run the interactive config setup wizard and exit |
+| `--doctor` | Run health checks (Python ≥ 3.10, Ollama daemon, model pulled, store writable, recommended extras) and print a colored checklist; exits non-zero on any required-check failure |
 
 ### 2.11 AxonStore (Sealed Store)
 
@@ -289,7 +292,9 @@ All RAG flags can be toggled at runtime without restarting.
 |---------|-------------|---------|
 | `/graph status` | Show GraphRAG entity/community build status | `/graph status` |
 | `/graph build` | Trigger entity extraction and community detection | `/graph build` |
-| `/graph finalize` | Trigger explicit community rebuild | `/graph finalize` |
+| `/graph finalize` | Trigger explicit community rebuild; reports `not_applicable` on backends without a community step (e.g. `dynamic_graph`) | `/graph finalize` |
+| `/graph conflicts` | List facts with `status='conflicted'` (dynamic_graph or federated backend); `graphrag` reports unsupported | `/graph conflicts` |
+| `/graph retrieve <q>` | Run the active backend's `retrieve()` directly. Flags: `--at ISO-TIMESTAMP` (point-in-time), `--top-k N` | `/graph retrieve who leads acme --at 2025-06-01` |
 | `/graph viz` | Open the interactive 3D graph in VS Code webview (or default browser outside VS Code) | `/graph viz` |
 | `/graph-viz [PATH]` | Export entity–relation graph as standalone HTML file; omit path to open in browser immediately | `/graph-viz /tmp/graph.html` |
 

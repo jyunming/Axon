@@ -41,7 +41,7 @@ offline:
   enabled: true
   local_models_dir: /mnt/aimodels          # root for HF model directories
 vector_store:
-  provider: lancedb                         # lancedb or chroma (both fully local)
+  provider: turboquantdb                    # turboquantdb (default), lancedb, or chroma — all fully local
 ```
 
 ### Compatible providers
@@ -50,7 +50,7 @@ vector_store:
 |-------|-----------|-------------|
 | **LLM** | `ollama`, `vllm` | `openai`, `gemini`, `grok`, `github_copilot`, `ollama_cloud` |
 | **Embedding** | `sentence_transformers`, `fastembed`, `ollama` | `openai` |
-| **Vector store** | `chroma`, `lancedb` | `qdrant` (remote) |
+| **Vector store** | `turboquantdb` (default), `lancedb`, `chroma` | `qdrant` (remote) |
 | **Web search** | — | Brave (disabled automatically) |
 
 ---
@@ -247,7 +247,7 @@ rag:
   raptor: false                         # disable in offline_mode (needs LLM calls during ingest)
   graph_rag: false                      # same
 vector_store:
-  provider: lancedb                     # fully local; chroma also works
+  provider: turboquantdb                # default; lancedb or chroma also fully local
 offline:
   enabled: true
   local_models_dir: /mnt/aimodels      # fallback root if per-type dirs below are not set
@@ -277,7 +277,7 @@ rag:
   raptor: false
   graph_rag: false
 vector_store:
-  provider: lancedb
+  provider: turboquantdb
 offline:
   enabled: true
   local_models_dir: C:/aimodels

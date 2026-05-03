@@ -2,6 +2,8 @@
 
 Common issues and fixes for Axon.
 
+> **First thing to try:** run `axon --doctor`. It checks Python version, Ollama daemon, default model pulled, AxonStore base writable, and recommended extras — each failure carries a one-line "do this next" hint. Most of the issues listed below are caught (and explained) by the doctor before they surface as a cryptic error on your first query.
+
 ---
 
 ## Ollama: Not Running When You Query

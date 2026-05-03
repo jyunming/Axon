@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+### ✨ New Features
+
+- **Graph backend capability flags** — `FinalizationResult.status` is now `"ok"`, `"not_applicable"`, or `"error"` so callers can tell "ran and built nothing" apart from "this backend has no finalize step". `dynamic_graph` returns `not_applicable`; the federated backend aggregates statuses from sub-backends. Surfaced via `POST /graph/finalize` and the `graph_finalize` MCP tool.
+- **Point-in-time graph retrieval surface** — new `POST /graph/retrieve` REST route, `graph_retrieve` MCP tool, `/graph retrieve <q> [--at TS]` REPL command, and `--graph-retrieve QUERY [--graph-at TS]` CLI flag run the active backend's `retrieve()` directly with a `RetrievalConfig`, surfacing `point_in_time` historical queries that were already implemented internally. Also exposed as a VS Code LM tool (`graph_retrieve`).
+- **Conflict inspection** — new `GET /graph/conflicts` REST route, `graph_conflicts` MCP tool, `/graph conflicts` REPL command, `--graph-conflicts` CLI flag, and VS Code LM tool return facts with `status='conflicted'` (incompatible exclusive-relation facts in the same scope). Backends without conflict tracking return `supported: false` instead of an empty list.
+- **Per-query federation weight override** — `RetrievalConfig.federation_weights` and the `federation_weights` field on `POST /graph/retrieve` / `graph_retrieve` MCP tool override the project-level `graph_federation_weights` for a single retrieve. Lets agents shift weight toward `graphrag` or `dynamic_graph` per-question without changing config. Validated to reject unknown keys and negative values.
+- **LangChain `BaseRetriever` adapter** — new `axon-rag[langchain]` extra ships `axon.integrations.langchain.AxonRetriever`, a drop-in `BaseRetriever` subclass that wraps `AxonBrain.search_raw()`. Any LangChain agent can now use Axon as its local retrieval backend without REST round-trips. Per-call overrides via `with_overrides({...})`.
+- **LlamaIndex `BaseRetriever` adapter** — new `axon-rag[llama-index]` extra ships `axon.integrations.llama_index.AxonLlamaRetriever`, returning native `NodeWithScore` for use in any LlamaIndex query engine.
+- **Structured citation metadata** — `POST /query` now returns `sources` (slim view of every retrieved chunk made available to the LLM) and `citations` (structured spans parsed from the response, one per `[N]` / `[Document N]` marker, with character offsets). Lets agents render clickable citations without re-running retrieval. Disable with `include_citations: false` for high-throughput callers that only need the answer string.
+- **`axon-rag[starter]` install bundle** — recommended one-line install for first-time users. Pulls Streamlit UI, sealed-mount sharing (cryptography + keyring), and the optional document loaders (EPUB, RTF, .msg) so a fresh `pip install "axon-rag[starter]"` covers >90% of beginner workflows. Power users keep the granular extras.
+- **First-run setup auto-trigger** — running plain `axon` on a fresh checkout (no config file at the default path, no projects under the AxonStore base) now sends the user through the setup wizard before dropping into the REPL. Existing installs are unaffected. Press Ctrl+C to skip and configure later via `axon --setup`.
+- **`axon --doctor` health-check command** — non-destructive sanity check that prints a colored checklist for: Python version (≥ 3.10), Ollama daemon reachable, default LLM model pulled, AxonStore base directory writable, recommended extras present. Each warning carries a one-line "do this next" hint. Exits non-zero on any required-check failure so CI and shell scripts can use it as a precondition.
+
+### 🐛 Bug Fixes
+
+- `BACKEND_ID` is now a class attribute on `DynamicGraphBackend` and `GraphRagBackend` (was only a module-level constant). The federated backend's `b.BACKEND_ID` lookup in `retrieve()` now works as documented.
+
+### 📚 Doc cleanup (vector-store default consistency)
+
+The dataclass default for the vector store has been `turboquantdb` since v0.2.1, but several user-facing docs and the (unreferenced) `config.yaml.template` still showed `provider: lancedb` as the default in their example configs. Fixed in `docs/OFFLINE_GUIDE.md`, `docs/MODEL_GUIDE.md`, `docs/SETUP.md`, and `config.yaml.template` so every example aligns with the actual code default. LanceDB remains a fully-supported alternative (covered in the same examples) — only the labelling changes.
+
+### 🛠️ Developer Experience
+
+- **Pre-commit pytest now uses pytest-testmon** — selective test runs based on per-file coverage tracking. Typical local commit drops from ~45 min to ~30 s for doc-only changes; source edits to widely-imported modules still take a few minutes. CI is unaffected (full suite still runs on every push). Cache file `.testmondata` is gitignored. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#pre-commit-pytest-testmon-accelerated) for cache-recovery commands when the selection is wrong.
+
+---
+
 ## [0.3.1] - 2026-04-29
 
 ### ✨ New Features

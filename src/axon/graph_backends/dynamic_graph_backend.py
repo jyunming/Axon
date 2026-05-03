@@ -303,6 +303,8 @@ class DynamicGraphBackend:
                and ``brain.config`` for retrieval configuration.
     """
 
+    BACKEND_ID = BACKEND_ID
+
     def __init__(self, brain: Any) -> None:
         self._brain = brain
         _base = Path(getattr(brain.config, "bm25_path", "."))
@@ -1004,7 +1006,47 @@ class DynamicGraphBackend:
 
     def finalize(self, force: bool = False) -> FinalizationResult:
         """No-op — dynamic graph is episodic; no community detection step."""
-        return FinalizationResult(backend_id=BACKEND_ID)
+        return FinalizationResult(
+            backend_id=BACKEND_ID,
+            status="not_applicable",
+            detail="dynamic_graph has no community-detection step",
+        )
+
+    def list_conflicts(self, limit: int = 100) -> list[dict]:
+        """Return facts whose ``status='conflicted'`` was set by ``_upsert_fact``.
+
+        Conflicts arise when two exclusive-relation facts with the same
+        ``scope_key`` and overlapping ``valid_at`` (±1 s) are ingested. Both
+        are kept and surfaced here so the UI / agent can prompt the user to
+        resolve the contradiction.
+        """
+        rows = self._execute(
+            "SELECT fact_id, subject, relation, object, valid_at, invalid_at, "
+            "       scope_key, confidence, metadata "
+            "FROM facts WHERE status = 'conflicted' "
+            "ORDER BY valid_at DESC LIMIT ?",
+            (int(limit),),
+        )
+        out: list[dict] = []
+        for r in rows:
+            try:
+                meta = json.loads(r["metadata"]) if r["metadata"] else {}
+            except Exception:
+                meta = {}
+            out.append(
+                {
+                    "fact_id": r["fact_id"],
+                    "subject": r["subject"],
+                    "relation": r["relation"],
+                    "object": r["object"],
+                    "valid_at": r["valid_at"],
+                    "invalid_at": r["invalid_at"],
+                    "scope_key": r["scope_key"],
+                    "confidence": float(r["confidence"]),
+                    "metadata": meta,
+                }
+            )
+        return out
 
     def clear(self) -> None:
         """Delete all rows from all tables."""

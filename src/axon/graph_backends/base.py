@@ -53,11 +53,20 @@ class IngestResult:
 
 @dataclass
 class FinalizationResult:
-    """Summary returned by GraphBackend.finalize()."""
+    """Summary returned by GraphBackend.finalize().
+
+    ``status`` distinguishes a no-op finalize ("not_applicable", e.g. dynamic
+    graph backends with no community step) from a successful run ("ok") and a
+    runtime failure ("error"). Surface this verbatim through REST/MCP so
+    callers can tell "ran and built nothing" apart from "this backend has no
+    finalize step".
+    """
 
     communities_built: int = 0
     time_elapsed: float = 0.0
     backend_id: str = ""
+    status: str = "ok"
+    detail: str = ""
 
 
 @dataclass
@@ -71,10 +80,15 @@ class GraphDataFilters:
 
 @dataclass
 class RetrievalConfig:
-    """Retrieval parameters passed to GraphBackend.retrieve()."""
+    """Retrieval parameters passed to GraphBackend.retrieve().
+
+    ``federation_weights`` is consumed only by FederatedGraphBackend; setting
+    it on a single-backend retrieve() is harmless (ignored).
+    """
 
     top_k: int = 10
     point_in_time: datetime | None = None
+    federation_weights: dict[str, float] | None = None
 
 
 @dataclass
@@ -102,6 +116,11 @@ class GraphPayload:
 _REQUIRED_METHODS = frozenset(
     {"ingest", "retrieve", "finalize", "clear", "delete_documents", "status", "graph_data"}
 )
+
+# Optional capabilities — backends MAY implement these. Callers must check
+# with hasattr() before invoking. Keeping them off the Protocol avoids
+# forcing every backend to implement features that don't apply.
+_OPTIONAL_CAPABILITIES = frozenset({"list_conflicts"})
 
 
 @runtime_checkable

@@ -119,6 +119,10 @@ async def query_brain(request: QueryRequest):
         }
         if request.include_diagnostics:
             out["diagnostics"] = brain._last_diagnostics.to_dict()
+        if request.include_citations:
+            cit = getattr(brain, "_last_citations", None) or {}
+            out["sources"] = cit.get("sources", [])
+            out["citations"] = cit.get("citations", [])
         return out
     except HTTPException:
         raise

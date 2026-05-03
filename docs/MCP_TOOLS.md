@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **46 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **48 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -105,7 +105,9 @@ Full RAG query — retrieval + generation in one call. Use `search_knowledge` if
 | `filters` | dict | `null` | Optional metadata filters for retrieval |
 | `project` | string | `null` | Expected active project — returns 409 on mismatch; use `switch_project` to change |
 
-**Returns:** `{"response": "...", "provenance": {"answer_source": "...", "retrieved_count": N}, "settings": {...}}`
+**Returns:** `{"response": "...", "provenance": {"answer_source": "...", "retrieved_count": N}, "settings": {...}, "sources": [...], "citations": [...]}`
+
+The `sources` array (slim view of every retrieved chunk made available to the LLM, indexed 0..N-1) and `citations` array (structured spans parsed from the response, one per `[N]` / `[Document N]` marker, with character offsets) are returned by default. Set `include_citations: false` on the underlying REST request to skip both arrays.
 
 ### `query_stream`
 
@@ -369,7 +371,7 @@ Re-read the owner's version marker for a mounted share project, optionally switc
 
 ---
 
-## Graph (4)
+## Graph (6)
 
 ### `graph_status`
 
@@ -394,6 +396,29 @@ Return the full entity/relation graph as JSON for inspection, export, or custom 
 Return the active graph backend's type and health metrics. Distinguishes between the GraphRAG community-graph backend, the dynamic SQLite-WAL graph backend, and no backend. No parameters.
 
 **Returns:** `{"backend": "graphrag"|"dynamic"|"none", "ready": true|false, ...}`
+
+### `graph_conflicts`
+
+List facts whose status is `conflicted` (incompatible exclusive-relation facts in the same scope). Backends that don't track conflicts (e.g. `graphrag`) return `supported: false`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | `100` | Maximum conflicts to return (1-1000) |
+
+**Returns:** `{"backend": "...", "supported": bool, "conflicts": [{"fact_id", "subject", "relation", "object", "valid_at", "scope_key", ...}, ...]}`
+
+### `graph_retrieve`
+
+Run the active graph backend's `retrieve()` directly with a `RetrievalConfig` and return graph contexts only — no LLM call. Surfaces point-in-time historical queries (`point_in_time`) and per-query federation weight overrides (`federation_weights`) that the legacy `/query` pipeline does not yet expose.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | required | The query string |
+| `top_k` | int | `10` | Maximum graph contexts to return (1-200) |
+| `point_in_time` | string | `null` | ISO-8601 timestamp; return facts valid at that instant. Honoured only by bi-temporal backends (`dynamic_graph`); ignored elsewhere |
+| `federation_weights` | object | `null` | Per-query RRF weights for the federated backend. Keys: `graphrag`, `dynamic_graph`. Ignored by other backends |
+
+**Returns:** `{"backend": "...", "contexts": [{"context_id", "context_type", "text", "score", "rank", "valid_at", "invalid_at", "matched_entity_names", "hop_count", ...}, ...]}`
 
 ---
 

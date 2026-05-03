@@ -1931,6 +1931,11 @@ def test_refresh_write_guard_returns_403_before_scanning_docs():
 def test_finalize_mounted_share_returns_403():
     """POST /graph/finalize returns 403 when active project is a mounted share."""
     api_module.brain = _make_brain()
+    # The route now prefers the backend protocol path; fall back trigger via
+    # backend.finalize raising PermissionError.
+    api_module.brain._graph_backend.finalize.side_effect = PermissionError(
+        "Cannot finalize_graph on mounted share 'mounts/alice_proj'."
+    )
     api_module.brain.finalize_graph.side_effect = PermissionError(
         "Cannot finalize_graph on mounted share 'mounts/alice_proj'."
     )
@@ -3036,8 +3041,9 @@ class TestGraphFinalize:
         assert resp.status_code == 503
 
     def test_success(self):
-        """graph.py lines 40-41 — finalize runs ok."""
+        """graph.py — finalize runs ok via legacy brain.finalize_graph fallback."""
         brain = _make_brain()
+        brain._graph_backend = None  # exercise legacy fallback
         brain._community_summaries = {"c1": "summary"}
         brain.finalize_graph.return_value = None
         api_module.brain = brain
@@ -3048,20 +3054,42 @@ class TestGraphFinalize:
         assert data["community_summary_count"] == 1
 
     def test_permission_error_returns_403(self):
-        """graph.py lines 44-46 — PermissionError → 403."""
+        """graph.py — PermissionError → 403 (via legacy fallback)."""
         brain = _make_brain()
+        brain._graph_backend = None
         brain.finalize_graph.side_effect = PermissionError("read-only mode")
         api_module.brain = brain
         resp = client.post("/graph/finalize")
         assert resp.status_code == 403
 
     def test_generic_exception_returns_500(self):
-        """graph.py lines 44-46 — generic Exception → 500."""
+        """graph.py — generic Exception → 500 (via legacy fallback)."""
         brain = _make_brain()
+        brain._graph_backend = None
         brain.finalize_graph.side_effect = RuntimeError("graph build failed")
         api_module.brain = brain
         resp = client.post("/graph/finalize")
         assert resp.status_code == 500
+
+    def test_backend_protocol_path_surfaces_status(self):
+        """When backend.finalize() returns status='not_applicable' the route
+        forwards that verbatim instead of silently reporting ok."""
+        from axon.graph_backends.base import FinalizationResult
+
+        brain = _make_brain()
+        brain._community_summaries = {}
+        brain._graph_backend.finalize.return_value = FinalizationResult(
+            backend_id="dynamic_graph",
+            status="not_applicable",
+            detail="dynamic_graph has no community-detection step",
+        )
+        api_module.brain = brain
+        resp = client.post("/graph/finalize")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "not_applicable"
+        assert data["backend_id"] == "dynamic_graph"
+        assert "community" in data["detail"].lower()
 
 
 class TestGraphVisualize:

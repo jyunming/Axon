@@ -687,6 +687,52 @@ async def graph_backend_status() -> Any:
 
 
 @mcp.tool()
+async def graph_conflicts(limit: int = 100) -> Any:
+    """List facts whose status is ``conflicted`` (incompatible exclusive relations).
+    Conflicts arise when two exclusive-relation facts (e.g. ``MARRIED_TO``,
+    ``IS_CEO_OF``) for the same subject overlap in time. Both are kept and
+    surfaced here so a human or agent can prompt the user to resolve.
+    Returns ``{"backend", "supported", "conflicts": [...]}``. Backends that
+    don't track conflicts (e.g. ``graphrag``) return ``supported: false``.
+    Args:
+        limit: Maximum conflicts to return (1-1000, default 100).
+    """
+    from urllib.parse import urlencode
+
+    qs = urlencode({"limit": int(limit)})
+    return await _get(f"/graph/conflicts?{qs}")
+
+
+@mcp.tool()
+async def graph_retrieve(
+    query: str,
+    top_k: int | None = None,
+    point_in_time: str | None = None,
+    federation_weights: dict[str, float] | None = None,
+) -> Any:
+    """Run the active graph backend's retrieve() and return graph contexts only.
+    Surfaces point-in-time historical queries and per-query federation weight
+    overrides without going through the full /query LLM pipeline.
+    Args:
+        query: The query string.
+        top_k: Maximum graph contexts to return (default 10, max 200).
+        point_in_time: ISO-8601 timestamp; return facts valid at that instant.
+            Honoured only by bi-temporal backends (``dynamic_graph``); ignored
+            elsewhere.
+        federation_weights: Per-query RRF weights for the federated backend.
+            Keys: ``graphrag``, ``dynamic_graph``. Ignored by other backends.
+    """
+    body: dict[str, Any] = {"query": query}
+    if top_k is not None:
+        body["top_k"] = int(top_k)
+    if point_in_time is not None:
+        body["point_in_time"] = point_in_time
+    if federation_weights is not None:
+        body["federation_weights"] = federation_weights
+    return await _post("/graph/retrieve", body)
+
+
+@mcp.tool()
 async def get_active_leases() -> Any:
     """Return active write-lease counts for all projects currently tracked by the server.
     Operator tool — shows which projects have in-flight write operations,

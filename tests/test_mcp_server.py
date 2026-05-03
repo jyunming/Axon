@@ -69,6 +69,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "graph_finalize",
     "graph_data",
     "graph_backend_status",
+    "graph_conflicts",
+    "graph_retrieve",
     "get_active_leases",
     # Governance (added by parity sweep B1)
     "governance_overview",

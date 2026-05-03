@@ -2,7 +2,7 @@
   "name": "axon-copilot",
   "displayName": "Axon Copilot",
   "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "axon",
   "engines": {
     "vscode": "^1.93.0"
@@ -703,6 +703,63 @@
         "inputSchema": {
           "type": "object",
           "properties": {}
+        }
+      },
+      {
+        "name": "graph_conflicts",
+        "displayName": "Axon: Graph Conflicts",
+        "modelDescription": "List facts whose status is 'conflicted' (incompatible exclusive-relation facts in the same scope). Backends without conflict tracking (e.g. graphrag) return supported=false.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonGraphConflicts",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number",
+              "description": "Maximum conflicts to return (1-1000, default 100)."
+            }
+          }
+        }
+      },
+      {
+        "name": "graph_retrieve",
+        "displayName": "Axon: Graph Retrieve",
+        "modelDescription": "Run the active graph backend's retrieve() directly with a RetrievalConfig. Surfaces point-in-time historical queries (point_in_time, ISO-8601) and per-query federation_weights overrides without an LLM call. Returns graph contexts only.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "axonGraphRetrieve",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The query string to retrieve graph contexts for."
+            },
+            "top_k": {
+              "type": "number",
+              "description": "Maximum graph contexts to return (default 10, max 200)."
+            },
+            "point_in_time": {
+              "type": "string",
+              "description": "ISO-8601 timestamp; return facts valid at that instant. Honoured only by bi-temporal backends (dynamic_graph)."
+            },
+            "federation_weights": {
+              "type": "object",
+              "description": "Per-query RRF weights for the federated backend. Keys: 'graphrag', 'dynamic_graph'. Values must be >= 0.",
+              "properties": {
+                "graphrag": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "dynamic_graph": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": [
+            "query"
+          ]
         }
       },
       {

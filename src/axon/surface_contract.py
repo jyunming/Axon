@@ -401,6 +401,38 @@ REGISTRY: list[Capability] = [
         },
         api_route="/graph/visualize",
     ),
+    Capability(
+        id="graph_conflicts",
+        name="Graph conflict inspection",
+        category="graph",
+        tier=Tier.TWO,
+        description=(
+            "List facts whose status='conflicted' (incompatible exclusive-relation "
+            "facts in the same scope). Returns supported=false on backends that do "
+            "not track conflicts (e.g. graphrag)."
+        ),
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Conflict-resolution UI is operator-tier; not exposed in Streamlit",
+        },
+        api_route="/graph/conflicts",
+    ),
+    Capability(
+        id="graph_retrieve",
+        name="Graph backend retrieve (point-in-time)",
+        category="graph",
+        tier=Tier.TWO,
+        description=(
+            "Run the active graph backend's retrieve() directly with a "
+            "RetrievalConfig — surfaces point_in_time historical queries and "
+            "per-query federation_weights overrides without an LLM call."
+        ),
+        supported_surfaces=PRIMARY_SURFACES,
+        intentional_exceptions={
+            Surface.WEBAPP: "Bypasses the standard query pipeline; not exposed in Streamlit",
+        },
+        api_route="/graph/retrieve",
+    ),
     # ── Session ──────────────────────────────────────────────────────────────
     Capability(
         id="session_list",

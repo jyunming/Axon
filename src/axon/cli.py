@@ -179,6 +179,66 @@ def _cli_migrate_vectors(brain, chroma_path_arg: str) -> None:
         )
 
 
+def _is_first_run(args) -> bool:
+    """Detect a fresh checkout that should trigger the setup wizard.
+
+    Returns True when no config file existed at the default location *before*
+    the brain init path ran (``AxonConfig.load`` auto-creates one), and the
+    AxonStore directory has no projects yet. ``main()`` snapshots the result
+    onto ``args._first_run_snapshot`` early — before ``AxonConfig.load`` —
+    because by the time the REPL-entry branch checks, the config file has
+    already been created and a naive existence check would always return
+    False on a fresh install.
+
+    ``--config`` overrides the check (the user is being explicit). We also
+    avoid treating the absence of the homedir-config as "first run" when
+    the user has stored projects already; that would loop them through the
+    wizard every time they run ``axon`` from a different working dir.
+    """
+    # main() pre-computes this once before AxonConfig.load auto-creates the
+    # config file; honour the snapshot if it's there.
+    snap = getattr(args, "_first_run_snapshot", None)
+    if isinstance(snap, bool):
+        return snap
+    # When the user passed --config explicitly, they know what they're
+    # doing — skip the auto-wizard.
+    if getattr(args, "config", None):
+        return False
+    home = Path.home()
+    default_config = home / ".config" / "axon" / "config.yaml"
+    if default_config.exists():
+        return False
+    # AXON_STORE_BASE is the *base directory* that contains AxonStore/<user>/...
+    # (see AxonConfig.__post_init__). Scan {base}/AxonStore/, not {base}/
+    # itself, so a non-empty AXON_STORE_BASE pointing at an unrelated parent
+    # directory doesn't suppress the first-run wizard.
+    env_base = os.environ.get("AXON_STORE_BASE")
+    if env_base:
+        base = Path(os.path.expanduser(env_base)) / "AxonStore"
+    else:
+        base = home / ".axon" / "AxonStore"
+    if not base.exists():
+        return True
+    try:
+        # Empty user dir == no projects yet.
+        for entry in base.iterdir():
+            if entry.is_dir():
+                inner = list(entry.iterdir())
+                if inner:
+                    return False
+    except OSError:
+        return False
+    return True
+
+
+def _snapshot_first_run_state(args) -> None:
+    """Compute ``_is_first_run(args)`` BEFORE ``AxonConfig.load`` auto-creates
+    the default config file, and stash the result on ``args`` so the later
+    check at the REPL-entry branch sees the original filesystem state.
+    """
+    args._first_run_snapshot = _is_first_run(args)
+
+
 def main():
     import argparse
 
@@ -470,6 +530,21 @@ def main():
         help="Export the entity graph as an HTML file to PATH (default: active project dir/graph.html) and print its path, then exit",
     )
     parser.add_argument(
+        "--graph-conflicts",
+        action="store_true",
+        help="List facts with status='conflicted' from the active graph backend (dynamic_graph or federated), then exit",
+    )
+    parser.add_argument(
+        "--graph-retrieve",
+        metavar="QUERY",
+        help="Run the active graph backend's retrieve() directly and print the graph contexts (point-in-time supported via --graph-at), then exit",
+    )
+    parser.add_argument(
+        "--graph-at",
+        metavar="ISO_TIMESTAMP",
+        help="ISO-8601 timestamp passed as point_in_time to --graph-retrieve (only honoured by bi-temporal backends)",
+    )
+    parser.add_argument(
         "--no-dedup",
         action="store_true",
         help="Disable ingest deduplication (allow re-ingesting identical content)",
@@ -567,6 +642,15 @@ def main():
         "--setup",
         action="store_true",
         help="Run the interactive config setup wizard and exit",
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help=(
+            "Run health checks (Python version, Ollama daemon, default model, "
+            "store path writable, recommended extras) and print a colored "
+            "checklist; exits non-zero on any required-check failure"
+        ),
     )
     # ── Share lifecycle ──────────────────────────────────────────────────────
     parser.add_argument(
@@ -666,6 +750,11 @@ def main():
         help="Migrate vectors from ChromaDB at CHROMA_PATH (or auto-detect) to LanceDB, then exit",
     )
     args = parser.parse_args()
+    # Snapshot first-run filesystem state BEFORE any AxonConfig.load() call —
+    # AxonConfig.load auto-creates the default config file, so a naive check
+    # later in main() would always see the config present. _is_first_run
+    # honours this snapshot if present.
+    _snapshot_first_run_state(args)
     # ── Early exits: config validator / wizard (no brain required) ──────────
     if args.config_validate:
         from axon.config import AxonConfig as _AxonConfig
@@ -702,6 +791,17 @@ def main():
             _cfg.save(args.config or None)
             print(f"Saved {len(_changes)} change(s).")
         sys.exit(0)
+    if getattr(args, "doctor", False):
+        from axon.config import AxonConfig as _AxonConfig
+        from axon.doctor import render_report, run_doctor
+
+        try:
+            _cfg = _AxonConfig.load(args.config or None)
+        except Exception:
+            _cfg = None  # doctor falls back to env vars when no config
+        report = run_doctor(_cfg)
+        print(render_report(report))
+        sys.exit(0 if report.overall != "error" else 1)
     # Suppress httpx INFO noise before _InitDisplay is active (ollama.list fires early)
     if sys.stdin.isatty():
         logging.getLogger("httpx").propagate = False
@@ -930,6 +1030,8 @@ def main():
         and not getattr(args, "graph_status", False)
         and not getattr(args, "graph_finalize", False)
         and not getattr(args, "graph_export", False)
+        and not getattr(args, "graph_conflicts", False)
+        and not getattr(args, "graph_retrieve", None)
         and not getattr(args, "delete_doc", None)
         and not getattr(args, "delete_doc_id", None)
         and not getattr(args, "store_init", None)
@@ -953,6 +1055,27 @@ def main():
         and not getattr(args, "non_interactive", False)
         and sys.stdin.isatty()
     )
+    # First-run auto-trigger: when entering an interactive REPL on a fresh
+    # checkout with no config file present yet, send the user through the
+    # setup wizard before dropping them into an empty REPL. Mirrors what
+    # `axon --setup` would do, but without forcing them to know the flag.
+    if _entering_repl and _is_first_run(args):
+        from axon.config_wizard import run_wizard as _run_wizard
+
+        print("\n  Welcome to Axon — running first-run setup. Press Ctrl+C to skip.")
+        try:
+            _changes = _run_wizard(config_path=args.config or "")
+        except KeyboardInterrupt:
+            print("\n  First-run setup skipped. Run `axon --setup` later to configure.\n")
+            _changes = None
+        if _changes:
+            for _k, _v in _changes.items():
+                setattr(config, _k, _v)
+            try:
+                config.save(args.config or None)
+                print(f"  Saved {len(_changes)} change(s). Continuing into REPL.\n")
+            except Exception as _exc:
+                print(f"  Could not save config: {_exc}. Continuing with in-memory values.\n")
     # Auto-pull only for CLI paths that will actually hit the chat model.
     _should_auto_pull_ollama_model = bool(
         config.llm_provider == "ollama"
@@ -1684,6 +1807,58 @@ def main():
         except Exception as exc:
             print(f"  Error: {exc}")
             sys.exit(1)
+        return
+    if getattr(args, "graph_conflicts", False):
+        backend = getattr(brain, "_graph_backend", None)
+        fn = getattr(backend, "list_conflicts", None) if backend else None
+        if not callable(fn):
+            bid = getattr(backend, "BACKEND_ID", "none") if backend else "none"
+            print(f"  Backend '{bid}' does not track conflicted facts.")
+            return
+        try:
+            rows = fn(limit=100)
+        except Exception as exc:
+            print(f"  Error listing conflicts: {exc}")
+            sys.exit(1)
+        if not rows:
+            print("  No conflicted facts.")
+            return
+        print(f"\n  {len(rows)} conflicted fact(s):")
+        for row in rows[:50]:
+            va = row.get("valid_at", "")
+            print(
+                f"    [{va[:10] if va else '?'}] {row.get('subject','?')} "
+                f"{row.get('relation','?')} {row.get('object','?')}"
+            )
+        return
+    if getattr(args, "graph_retrieve", None):
+        from datetime import datetime as _dt
+
+        from axon.graph_backends.base import RetrievalConfig as _RCfg
+
+        backend = getattr(brain, "_graph_backend", None)
+        if backend is None or not callable(getattr(backend, "retrieve", None)):
+            print("  No graph backend is active.")
+            sys.exit(1)
+        pit = None
+        if getattr(args, "graph_at", None):
+            try:
+                pit = _dt.fromisoformat(args.graph_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                print(f"  Bad --graph-at value: {exc}")
+                sys.exit(1)
+        try:
+            ctxs = backend.retrieve(args.graph_retrieve, _RCfg(top_k=10, point_in_time=pit), None)
+        except Exception as exc:
+            print(f"  Error: {exc}")
+            sys.exit(1)
+        if not ctxs:
+            print("  No graph contexts matched.")
+            return
+        print(f"\n  {len(ctxs)} context(s)" + (f" at {pit.isoformat()}" if pit else "") + ":")
+        for ctx in ctxs:
+            text = (ctx.text or "")[:120].replace("\n", " ")
+            print(f"    [{ctx.score:.3f} {ctx.context_type}] {text}")
         return
     if getattr(args, "graph_export", None) is not None:
         import tempfile

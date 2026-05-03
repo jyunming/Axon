@@ -59,6 +59,93 @@ _ROUTE_PROFILES: dict = {
 
 
 # ---------------------------------------------------------------------------
+# Citation metadata helpers
+# ---------------------------------------------------------------------------
+
+# ``[Document N]`` is what _build_context emits and what we tell the LLM to
+# cite with. Some models drop the word "Document" and just write ``[N]``;
+# accept either form. We capture only 1- and 2-digit indices to avoid
+# matching arbitrary bracketed numbers in source-quoted code.
+_CITATION_MARKER_RE = re.compile(r"\[(?:Document\s+)?(\d{1,2})\]")
+_CITATION_TEXT_TRUNCATE = 500  # chars per source.text in the response payload
+
+
+def _slim_source(idx: int, row: dict) -> dict:
+    """Build a JSON-friendly source entry for one retrieved chunk.
+
+    The returned dict carries enough context for an agent to render a
+    clickable citation (id, source, score, truncated text) without
+    bloating the response payload with full document bodies.
+    """
+    meta = row.get("metadata", {}) or {}
+    src = meta.get("source") or row.get("source") or ""
+    title = meta.get("title") or src or row.get("id", "")
+    raw_text = row.get("text", "") or meta.get("parent_text", "") or ""
+    truncated = (
+        raw_text[:_CITATION_TEXT_TRUNCATE] + "…"
+        if len(raw_text) > _CITATION_TEXT_TRUNCATE
+        else raw_text
+    )
+    score = row.get("rerank_score") if "rerank_score" in row else row.get("score")
+    return {
+        "index": int(idx),
+        "id": row.get("id", ""),
+        "source": src,
+        "title": title,
+        "score": float(score) if isinstance(score, int | float) else None,
+        "is_web": bool(row.get("is_web", False)),
+        "url": meta.get("url") or meta.get("source_url") or None,
+        "text": truncated,
+        "metadata": {
+            k: v
+            for k, v in meta.items()
+            if k in {"file_path", "page", "symbol_name", "symbol_type", "source_class"}
+            and v is not None
+        },
+    }
+
+
+def _build_citation_metadata(response: str, citation_results: list[dict]) -> dict:
+    """Return ``{"sources": [...], "citations": [...]}`` for a response.
+
+    ``sources`` is the slim view of every chunk that was made available to
+    the LLM, indexed 0..N-1 so a marker ``[1]`` maps to ``sources[0]``.
+    ``citations`` is the list of structured spans extracted from the LLM
+    response — one entry per ``[N]`` / ``[Document N]`` marker, with
+    character offsets so frontends can render inline citations without
+    re-parsing the response themselves.
+
+    Both fields are always present; if the LLM emits no markers, the
+    ``citations`` list is empty (the agent can still inspect ``sources``
+    to see what context was available).
+    """
+    sources = [_slim_source(i, row) for i, row in enumerate(citation_results)]
+    citations: list[dict] = []
+    # Tolerate non-string responses (test fixtures occasionally return a
+    # MagicMock from mocked llm.complete()); we only parse real strings.
+    if not isinstance(response, str) or not response or not sources:
+        return {"sources": sources, "citations": citations}
+    for match in _CITATION_MARKER_RE.finditer(response):
+        marker_idx_one_based = int(match.group(1))
+        # Reject out-of-range markers (LLM hallucinated a citation).
+        # Index in the response is 1-based; sources is 0-based.
+        if marker_idx_one_based < 1 or marker_idx_one_based > len(sources):
+            continue
+        doc_idx = marker_idx_one_based - 1
+        citations.append(
+            {
+                "marker": match.group(0),
+                "document_index": doc_idx,
+                "document_title": sources[doc_idx]["title"],
+                "document_id": sources[doc_idx]["id"],
+                "start_in_response": match.start(),
+                "end_in_response": match.end(),
+            }
+        )
+    return {"sources": sources, "citations": citations}
+
+
+# ---------------------------------------------------------------------------
 
 
 class QueryRouterMixin:
@@ -1422,6 +1509,9 @@ class QueryRouterMixin:
         # Warn (don't block) if the embedding model has changed — retrieval
         # results will be degraded but the user can still access existing data.
         self._validate_embedding_meta(on_mismatch="warn")
+        # Clear citation metadata so a no-context fallback or cached hit
+        # doesn't leak the previous question's citations into this turn.
+        self._last_citations = {"sources": [], "citations": []}
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
         # --- System-level query router ---
@@ -1584,6 +1674,11 @@ class QueryRouterMixin:
             "web_count": _web_count,
         }
         response = self.llm.complete(query, system_prompt, chat_history=chat_history)
+        # Build structured citation metadata so REST/MCP callers can render
+        # clickable citations without re-running retrieval. Stored on the
+        # brain so /query and query_knowledge MCP tool can surface it
+        # without changing the brain.query() return signature.
+        self._last_citations = _build_citation_metadata(response, citation_results)
         self._log_query_metrics(
             query,
             retrieval["vector_count"],

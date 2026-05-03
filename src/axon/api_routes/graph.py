@@ -42,7 +42,12 @@ async def get_graph_status():
 
 @router.post("/graph/finalize")
 async def finalize_graph(request: Request):
-    """Trigger an explicit community rebuild."""
+    """Trigger an explicit community rebuild.
+
+    When the active backend has no community step (e.g. ``dynamic_graph``),
+    the response carries ``status: "not_applicable"`` and an explanatory
+    ``detail`` string instead of silently doing nothing.
+    """
     import asyncio
 
     from axon import api as _api
@@ -56,23 +61,154 @@ async def finalize_graph(request: Request):
     surface = getattr(request.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
     try:
-        await asyncio.to_thread(brain.finalize_graph, True)
-        summary_count = len(brain._community_summaries)
+        backend = getattr(brain, "_graph_backend", None)
+        finalize_status = "ok"
+        finalize_detail = ""
+        backend_id = ""
+        if backend is not None and callable(getattr(backend, "finalize", None)):
+            result = await asyncio.to_thread(backend.finalize, True)
+            finalize_status = getattr(result, "status", "ok")
+            finalize_detail = getattr(result, "detail", "")
+            backend_id = getattr(result, "backend_id", "")
+        else:
+            await asyncio.to_thread(brain.finalize_graph, True)
+        summary_count = len(getattr(brain, "_community_summaries", {}) or {})
         gov.emit(
             "graph_finalize",
             "graph",
             project,
             project=project,
-            details={"community_summary_count": summary_count},
+            details={
+                "community_summary_count": summary_count,
+                "backend_status": finalize_status,
+            },
             surface=surface,
             request_id=rid,
         )
-        return {"status": "ok", "community_summary_count": summary_count}
+        return {
+            "status": finalize_status,
+            "community_summary_count": summary_count,
+            "backend_id": backend_id,
+            "detail": finalize_detail,
+        }
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.error(f"finalize_graph failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/graph/conflicts", tags=["graph"])
+async def graph_conflicts(
+    project: str | None = Query(None, description="Expected active project"),
+    limit: int = Query(100, ge=1, le=1000, description="Max conflicts to return"),
+):
+    """Return facts whose status is ``conflicted``.
+
+    Conflicts arise when two exclusive-relation facts (``MARRIED_TO``,
+    ``IS_CEO_OF``, …) with the same ``scope_key`` and overlapping ``valid_at``
+    are ingested. Backends that don't track conflicts return an empty list
+    with ``supported: false``.
+    """
+    from axon import api as _api
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    _enforce_project(project, brain)
+    backend = getattr(brain, "_graph_backend", None)
+    if backend is None:
+        return {"backend": "none", "supported": False, "conflicts": []}
+    fn = getattr(backend, "list_conflicts", None)
+    if not callable(fn):
+        return {
+            "backend": getattr(backend, "BACKEND_ID", "unknown"),
+            "supported": False,
+            "conflicts": [],
+        }
+    try:
+        rows = fn(limit=int(limit))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "backend": getattr(backend, "BACKEND_ID", "unknown"),
+        "supported": True,
+        "conflicts": rows,
+    }
+
+
+@router.post("/graph/retrieve", tags=["graph"])
+async def graph_retrieve(request: Request):
+    """Run the active graph backend's ``retrieve`` directly with a
+    :class:`RetrievalConfig`. Returns graph contexts only — no LLM call.
+
+    Surfaces ``point_in_time`` historical queries and per-query
+    ``federation_weights`` overrides without going through the full
+    ``/query`` pipeline. The main ``/query`` endpoint still routes through
+    the legacy GraphRAG mixin for backward compatibility.
+    """
+    import asyncio
+    from datetime import datetime as _dt
+
+    from axon import api as _api
+    from axon.api_schemas import GraphRetrieveRequest
+    from axon.graph_backends.base import RetrievalConfig
+
+    brain = _api.brain
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    body = await request.json()
+    try:
+        payload = GraphRetrieveRequest(**body)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _enforce_project(payload.project, brain)
+    backend = getattr(brain, "_graph_backend", None)
+    if backend is None or not callable(getattr(backend, "retrieve", None)):
+        return {"backend": "none", "contexts": []}
+    pit_dt: _dt | None = None
+    if payload.point_in_time:
+        try:
+            pit_dt = _dt.fromisoformat(payload.point_in_time.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"point_in_time must be ISO-8601: {exc}",
+            ) from exc
+    cfg = RetrievalConfig(
+        top_k=payload.top_k or 10,
+        point_in_time=pit_dt,
+        federation_weights=payload.federation_weights,
+    )
+    try:
+        contexts = await asyncio.to_thread(backend.retrieve, payload.query, cfg, None)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "backend": getattr(backend, "BACKEND_ID", "unknown"),
+        "contexts": [_serialise_context(c) for c in contexts],
+    }
+
+
+def _serialise_context(ctx) -> dict:
+    """Convert a GraphContext dataclass to a JSON-friendly dict."""
+    return {
+        "context_id": ctx.context_id,
+        "context_type": ctx.context_type,
+        "text": ctx.text,
+        "score": float(ctx.score),
+        "rank": int(ctx.rank),
+        "backend_id": ctx.backend_id,
+        "source_id": ctx.source_id,
+        "source_doc_id": ctx.source_doc_id,
+        "source_chunk_id": ctx.source_chunk_id,
+        "metadata": ctx.metadata or {},
+        "valid_at": ctx.valid_at.isoformat() if ctx.valid_at else None,
+        "invalid_at": ctx.invalid_at.isoformat() if ctx.invalid_at else None,
+        "evidence_ids": list(ctx.evidence_ids or []),
+        "matched_entity_names": list(ctx.matched_entity_names or []),
+        "hop_count": int(ctx.hop_count),
+    }
 
 
 @router.post("/query/visualize", response_class=HTMLResponse, tags=["graph"])

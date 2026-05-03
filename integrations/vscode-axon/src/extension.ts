@@ -54,6 +54,7 @@ import {
 import {
   AxonGraphStatusTool, AxonShowGraphTool, AxonGraphFinalizeTool,
   AxonGraphDataTool, AxonGetActiveLeasesTool,
+  AxonGraphConflictsTool, AxonGraphRetrieveTool,
   showGraphStatus,
 
 } from './tools/graph';
@@ -164,6 +165,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         (vscode as any).lm.registerTool('show_graph', new AxonShowGraphTool(context)),
         (vscode as any).lm.registerTool('graph_finalize', new AxonGraphFinalizeTool()),
         (vscode as any).lm.registerTool('graph_data', new AxonGraphDataTool()),
+        (vscode as any).lm.registerTool('graph_conflicts', new AxonGraphConflictsTool()),
+        (vscode as any).lm.registerTool('graph_retrieve', new AxonGraphRetrieveTool()),
         (vscode as any).lm.registerTool('get_active_leases', new AxonGetActiveLeasesTool()),
         (vscode as any).lm.registerTool('axon_config_validate', new AxonConfigValidateTool()),
         (vscode as any).lm.registerTool('axonConfigValidate', new AxonConfigValidateTool()),

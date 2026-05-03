@@ -299,6 +299,17 @@ test-verified. Package version bumped to `0.3.0`.
 
 > "Dynamic Graph projects answer current-state and historical questions; mixed-backend projects federate at retrieval level."
 
+> **v0.3.2 partial delivery (2026-05):** the milestone's user-facing surfaces
+> are now exposed via `POST /graph/retrieve` REST + `graph_retrieve` MCP +
+> `/graph retrieve` REPL + `--graph-retrieve` CLI:
+>
+> - Point-in-time query (`RetrievalConfig.point_in_time`) — surfaced.
+> - `/graph/finalize` returns `status: "not_applicable"` for Dynamic Graph — surfaced (capability flag).
+> - Conflict inspection (`/graph/conflicts` + `graph_conflicts` MCP) — surfaced.
+> - Per-query federated weight override (`RetrievalConfig.federation_weights`) — surfaced.
+>
+> The internal storage and retrieval primitives were already shipped in v0.3.0/v0.3.1 — v0.3.2 is the surface layer. The full v0.4.0 deliverable still requires plumbing `_graph_backend.retrieve()` into the main `/query` pipeline (today only `status()` and `graph_data()` are wired); the dedicated `POST /graph/retrieve` route exposes the backend protocol directly without touching `query_router.py`.
+
 - `src/axon/dynamic_graph/ingest.py` — episode creation, entity extraction (AST
   path for code, LLM path for prose), fact extraction, duplicate merge
 - `src/axon/dynamic_graph/retrieval.py` — current-state facts, point-in-time facts,

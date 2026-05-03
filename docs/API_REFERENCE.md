@@ -85,20 +85,45 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 > differs, the server returns `409 Conflict`. Use `POST /project/switch` first to change
 > the active project. Omit `project` to query whichever project is currently active.
 
-**`POST /query` response** includes a `provenance` object on every non-dry-run response:
+**`POST /query` response** includes a `provenance` object on every non-dry-run response, and (when `include_citations: true` — the default) a `sources` array plus a `citations` array:
 ```json
 {
   "query": "...",
-  "response": "...",
+  "response": "First fact [1]. Second fact [Document 2].",
   "settings": {...},
   "provenance": {
     "answer_source": "local_kb",
     "retrieved_count": 5,
     "web_count": 0
-  }
+  },
+  "sources": [
+    {
+      "index": 0,
+      "id": "chunk-abc",
+      "source": "README.md",
+      "title": "README.md",
+      "score": 0.91,
+      "is_web": false,
+      "url": null,
+      "text": "Truncated chunk text… (max 500 chars + ellipsis)",
+      "metadata": {"file_path": "...", "page": 0, "symbol_name": "..."}
+    }
+  ],
+  "citations": [
+    {
+      "marker": "[1]",
+      "document_index": 0,
+      "document_title": "README.md",
+      "document_id": "chunk-abc",
+      "start_in_response": 11,
+      "end_in_response": 14
+    }
+  ]
 }
 ```
 `answer_source` values: `"local_kb"` (retrieved from knowledge base), `"web_snippet_fallback"` (Brave web results used), `"no_context_fallback"` (no retrieval; LLM answered from general knowledge because `discussion_fallback=true`), `"no_results"` (no retrieval and strict mode returned a refusal).
+
+`sources` is the slim view of every chunk made available to the LLM (indexed 0..N-1; markers `[N]` map to `sources[N-1]`). `citations` is parsed from the response — one entry per `[N]` or `[Document N]` marker — with character offsets so frontends can render inline citations without re-scanning the response. Out-of-range markers are silently dropped. Set `include_citations: false` on the request body to skip both arrays (e.g. high-throughput agents that only need the answer string).
 
 **`POST /query/stream` body:** same as `/query`.
 Response: Server-Sent Events stream. Each event is `data: <json>\n\n` where `<json>` is a
@@ -287,8 +312,16 @@ Changes are scoped to the current server session by default (`persist: false`). 
 | `GET` | `/graph/visualize` | Render the knowledge graph as a self-contained HTML page |
 | `GET` | `/code-graph/data` | Code structure graph payload for the VS Code code-graph panel |
 | `GET` | `/graph/backend/status` | Active graph backend type and health (distinguishes graphrag vs dynamic backend) |
+| `GET` | `/graph/conflicts` | List facts with `status='conflicted'` (incompatible exclusive-relation facts) |
+| `POST` | `/graph/retrieve` | Run the active graph backend's `retrieve()` directly — point-in-time + per-query federation weights |
 
 `/graph/status` response: `{"community_build_in_progress": false, "community_summary_count": 12, "entity_count": 340, "code_node_count": 0, "graph_ready": true}`. `graph_ready` is `true` once the entity graph or code graph has nodes — use this to know whether graph queries will return data before the full ingest job completes.
+
+`/graph/finalize` response includes `status` (`"ok"` | `"not_applicable"` | `"error"`) and `detail` so callers can tell "ran and built nothing" apart from "this backend has no finalize step". The `dynamic_graph` backend always returns `not_applicable`; `federated` aggregates from sub-backends.
+
+`/graph/conflicts` query params: `project` (optional, must match active project), `limit` (1-1000, default 100). Response: `{"backend": "...", "supported": bool, "conflicts": [{"fact_id", "subject", "relation", "object", "valid_at", "invalid_at", "scope_key", ...}, ...]}`. Backends without conflict tracking return `supported: false`.
+
+`/graph/retrieve` request body: `{"query": "...", "top_k"?: int, "point_in_time"?: ISO-8601, "federation_weights"?: {"graphrag": 0.5, "dynamic_graph": 1.5}, "project"?: "..."}`. Returns graph contexts only (no LLM call). Use this to surface historical queries on bi-temporal backends (`dynamic_graph`) and per-question federation weight overrides; the main `/query` endpoint still routes through the legacy GraphRAG mixin and does not yet expose `point_in_time`.
 
 `/graph/visualize` returns `text/html` — open in a browser or embed in an iframe.
 `/graph/data` and `/code-graph/data` return `{"nodes": [...], "links": [...]}` JSON payloads
