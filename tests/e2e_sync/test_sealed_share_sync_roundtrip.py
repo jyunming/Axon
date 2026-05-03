@@ -303,9 +303,23 @@ class TestSealedShareEndToEndViaNextcloud:
         import base64
 
         decoded = base64.urlsafe_b64decode(share["share_string"]).decode("utf-8")
-        parts = decoded.split(":")
-        parts[-1] = str(grantee_mirror_root / "AxonStore")
-        rebuilt_share_string = base64.urlsafe_b64encode(":".join(parts).encode()).decode("ascii")
+        # SEALED2 envelope shape: SEALED2:key_id:token:owner:project:store_path:pubkey
+        # SEALED1 envelope shape: SEALED1:key_id:token:owner:project:store_path
+        # On Windows store_path contains ':' (drive letter), so use rpartition
+        # to peel off the trailing field on SEALED2, then reassemble.
+        from axon.security.share import SEALED_SHARE_PREFIX_V2
+
+        new_path = str(grantee_mirror_root / "AxonStore")
+        if decoded.startswith(f"{SEALED_SHARE_PREFIX_V2}:"):
+            before_pubkey, sep, pubkey = decoded.rpartition(":")
+            head_parts = before_pubkey.split(":", 5)
+            head_parts[5] = new_path  # owner_store_path
+            rebuilt_decoded = ":".join(head_parts) + sep + pubkey
+        else:
+            head_parts = decoded.split(":", 5)
+            head_parts[5] = new_path
+            rebuilt_decoded = ":".join(head_parts)
+        rebuilt_share_string = base64.urlsafe_b64encode(rebuilt_decoded.encode()).decode("ascii")
 
         # 5. Grantee redeems using the rebuilt share_string.
         result = redeem_sealed_share(grantee_user_dir, rebuilt_share_string)

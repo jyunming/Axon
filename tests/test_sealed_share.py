@@ -113,9 +113,16 @@ class TestGenerateSealedShareHappyPath:
         assert result["owner"] == "alice"
         assert result["project"] == "research"
         assert result["grantee"] == "bob"
-        # Decoded share_string starts with the prefix.
+        # Decoded share_string starts with a sealed prefix. v0.4.0+ emits
+        # SEALED2 by default (carrying the signing pubkey for expiry-sidecar
+        # verification), but SEALED1 is still a valid envelope that older
+        # generators may produce.
         decoded = base64.urlsafe_b64decode(result["share_string"]).decode("utf-8")
-        assert decoded.startswith(f"{SEALED_SHARE_PREFIX}:")
+        from axon.security.share import SEALED_SHARE_PREFIX_V2
+
+        assert decoded.startswith(f"{SEALED_SHARE_PREFIX}:") or decoded.startswith(
+            f"{SEALED_SHARE_PREFIX_V2}:"
+        )
         assert "ssk_test01" in decoded
         assert "alice" in decoded
         assert "research" in decoded
@@ -348,10 +355,27 @@ class TestRedeemSealedShareErrors:
         share = generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_unsync")
         # Simulate "owner not synced" by editing the share_string to
         # point at a non-existent owner_store_path.
+        # SEALED2 envelope shape: SEALED2:key_id:token:owner:project:store_path:pubkey
+        # SEALED1 envelope shape: SEALED1:key_id:token:owner:project:store_path
+        # On Windows store_path contains ':' (drive letter), so we must
+        # use rpartition to peel off the trailing field on SEALED2,
+        # then reassemble.
+        from axon.security.share import SEALED_SHARE_PREFIX_V2
+
         decoded = base64.urlsafe_b64decode(share["share_string"]).decode("utf-8")
-        parts = decoded.split(":")
-        parts[-1] = str(tmp_path / "no_such_store")  # owner_store_path
-        broken = base64.urlsafe_b64encode(":".join(parts).encode()).decode("ascii")
+        bogus_path = str(tmp_path / "no_such_store")
+        if decoded.startswith(f"{SEALED_SHARE_PREFIX_V2}:"):
+            # Pubkey is the trailing colon-segment.
+            before_pubkey, sep, pubkey = decoded.rpartition(":")
+            head_parts = before_pubkey.split(":", 5)
+            head_parts[5] = bogus_path  # owner_store_path
+            broken_decoded = ":".join(head_parts) + sep + pubkey
+        else:
+            # Legacy SEALED1: store_path is the last colon-segment.
+            head_parts = decoded.split(":", 5)
+            head_parts[5] = bogus_path
+            broken_decoded = ":".join(head_parts)
+        broken = base64.urlsafe_b64encode(broken_decoded.encode()).decode("ascii")
         with pytest.raises(_security.SecurityError, match="not yet synced|does not exist"):
             redeem_sealed_share(grantee_user_dir, broken)
 

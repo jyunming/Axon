@@ -253,16 +253,19 @@ async def share_redeem(request: ShareRedeemRequest, req: Request):
     user_dir = _api._get_user_dir()
     rid = getattr(req.state, "request_id", "")
     surface = getattr(req.state, "surface", "api")
-    # Detect sealed share by the ``SEALED1:`` prefix in the decoded
-    # envelope (Phase 3 wire format). The legacy JSON-with-security_mode
-    # detection is kept as a fallback in case any older share_strings
-    # using that earlier shape are still in flight.
+    # Detect sealed share by the ``SEALED1:`` or ``SEALED2:`` prefix in
+    # the decoded envelope (v0.4.0 added SEALED2 with embedded signing
+    # pubkey; SEALED1 is still accepted for backward compat). The legacy
+    # JSON-with-security_mode detection is kept as a fallback in case
+    # any older share_strings using that earlier shape are still in flight.
     is_sealed_share = False
     try:
+        from axon.security.share import is_sealed_share_envelope
+
         decoded = base64.urlsafe_b64decode(request.share_string.encode("ascii")).decode(
             "utf-8", errors="replace"
         )
-        if decoded.startswith("SEALED1:"):
+        if is_sealed_share_envelope(decoded):
             is_sealed_share = True
         else:
             # Fallback: try the legacy JSON-envelope shape.

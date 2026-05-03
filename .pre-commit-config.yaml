@@ -48,24 +48,26 @@ repos:
         language: system
         files: ^src/axon/.*\.py$
         pass_filenames: true
-      - id: pytest-check
-        name: pytest
-        # Trigger ONLY on files that could actually affect test outcomes:
-        #   - src/axon/**/*.py     — package source (imported by tests)
-        #   - tests/**/*.py        — the tests themselves
-        #   - pyproject.toml       — dependencies, build config
-        #   - src/axon/Cargo.toml  — Rust extension version + deps
-        #   - requirements*.txt    — pinned deps
-        #   - config.yaml          — runtime defaults the tests load
-        # NOT triggered: scripts/*.py (standalone CLI tools never imported
-        # by tests), docs/*, integrations/vscode-axon/* (its own test suite),
-        # *.html/*.md/*.svg/*.json. Pure doc/script commits run pre-commit
-        # in <2 sec total. --testmon then selects only tests whose deps
-        # changed since the last green run (.testmondata, gitignored).
-        # CI does NOT use --testmon and runs the full suite as the safety net.
-        entry: python -m pytest tests/ --testmon --tb=short --no-cov -m "not extension" --ignore=tests/e2e --ignore=tests/e2e_sync
+      - id: pytest-scoped
+        name: pytest (scope-aware)
+        # SCOPE-AWARE selector. Maps each staged file to a small,
+        # predictable set of test files via path-prefix rules in
+        # ``scripts/precommit_pytest_scoped.py``.
+        #
+        # Replaced the previous testmon-based hook because testmon's
+        # transitive-coverage analysis pulled in essentially the whole
+        # 4500-test suite when foundational modules (e.g.
+        # axon/security/share.py) changed — a 30+ minute commit on
+        # every v0.4.0 source edit. Path-prefix mapping is heuristic
+        # but predictable: ``axon/security/*`` → sealed-share tests,
+        # ``axon/api_routes/*`` → API tests, etc. CI runs the full
+        # suite as the safety net.
+        #
+        # Doc/HTML/SVG/MD/scripts commits skip this hook entirely via
+        # the ``files:`` regex.
+        entry: python scripts/precommit_pytest_scoped.py
         language: system
-        pass_filenames: false
+        pass_filenames: true
         files: *test-trigger-files
         stages: [pre-commit]
       - id: eval-smoke

@@ -230,7 +230,7 @@ try:
         if not os.path.isfile(cfg_path):
             return []
         try:
-            import yaml as _yaml  # type: ignore[import-untyped]
+            import yaml as _yaml  # type: ignore[import-untyped, unused-ignore]
 
             with open(cfg_path, encoding="utf-8") as fh:
                 raw = _yaml.safe_load(fh) or {}
