@@ -5,6 +5,8 @@ Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 80
 For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
 `http://localhost:8000/redoc` after starting the server.
 
+> Every endpoint below is also reachable under `/v1/...` (every router is dual-mounted at the root and the `/v1` prefix). The `/v1` mount is the recommended path for clients that pin to a major API version.
+
 > **Operators:** for governance runbooks, maintenance state workflows, and the complete CLI/REPL/MCP reference, see [ADMIN_REFERENCE.md](ADMIN_REFERENCE.md).
 
 ---
@@ -74,6 +76,7 @@ For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
   "temperature": null,       // LLM temperature override — null inherits global config
   "timeout": null,           // request timeout in seconds — null inherits global config
   "include_diagnostics": false,  // include confidence scores in response
+  "include_citations": true, // v0.3.2 — when true, response carries sources + citations arrays (Claude / OpenAI compatible). Set false for high-throughput agents
   "dry_run": false,          // skip LLM synthesis; return retrieved chunks only
   "chat_history": []         // prior turns for multi-turn conversation context
 }
@@ -155,11 +158,13 @@ retrieval `trace` object (pipeline step timings and intermediate results).
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/ingest` | Async file/directory ingest — returns `job_id` immediately |
+| `POST` | `/ingest/upload` | **Synchronous** multipart file upload — used by VS Code extension and webapp drag-drop. Ingests inline and returns `{status, files, ingested_files, ingested_chunks}`; no `job_id` polling required (unlike `/ingest`) |
 | `GET` | `/ingest/status/{job_id}` | Poll async ingest job status |
 | `POST` | `/ingest/refresh` | Re-ingest files whose content has changed |
 | `POST` | `/ingest_url` | Fetch and ingest content from a remote URL |
 | `POST` | `/add_text` | Ingest a single text string |
 | `POST` | `/add_texts` | Batch ingest a list of text strings |
+| `POST` | `/delete` | Delete documents matching a metadata filter or doc_id list |
 
 **`POST /ingest` body:**
 ```json
@@ -256,6 +261,9 @@ inspect ingested sources and chunk counts.
 | `POST` | `/project/new` | Create a new named project |
 | `POST` | `/project/switch` | Switch the active project |
 | `POST` | `/project/delete/{name}` | Delete a project and all its data |
+| `POST` | `/project/seal` | Seal an unsealed project — encrypt every content file in place with AES-256-GCM. Idempotent on already-sealed projects. Requires `[sealed]`/`[starter]` extra |
+| `POST` | `/project/rotate-keys` | Rotate the project DEK; re-encrypt every sealed content file; selectively re-wrap surviving share KEKs. Equivalent to a hard-revoke without a specific key_id |
+| `POST` | `/mount/refresh` | Refresh shared-store mount descriptors — call after the owner has issued/revoked a share so the grantee's `mounts/` reflects the current set |
 
 Use `POST /project/switch` to change the active project before querying, searching, or ingesting.
 All routes that accept a `"project"` field validate it against the active project and return
@@ -398,6 +406,23 @@ each poll. VS Code calls this to receive tasks queued while the user was offline
 
 ---
 
+## Security (sealed-mount lifecycle)
+
+Master-key + passphrase lifecycle for sealed projects. All routes under `/security/*`.
+Requires the `[sealed]` extra (already bundled in `[starter]`).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/security/status` | Sealed store status — `{initialized, unlocked, sealed_hidden_count, public_key_fingerprint, cipher_suite}` |
+| `POST` | `/security/bootstrap` | One-time setup — generate the master key under a passphrase. Body: `{passphrase}` |
+| `POST` | `/security/unlock` | Unlock the sealed store with the bootstrap passphrase. Body: `{passphrase}` |
+| `POST` | `/security/lock` | Lock the sealed store — drops the master from process memory. No body |
+| `POST` | `/security/change-passphrase` | Re-wrap the master under a new passphrase. Body: `{old_passphrase, new_passphrase}` |
+
+> Sealed-mount admin routes (`/project/seal`, `/project/rotate-keys`) live in the **Projects** section but require an unlocked store — call `/security/unlock` first if your shell or process restarted. See [SHARING.md](SHARING.md) for the full owner/grantee flow.
+
+---
+
 ## AxonStore & Sharing
 
 | Method | Path | Description |
@@ -405,10 +430,11 @@ each poll. VS Code calls this to receive tasks queued while the user was offline
 | `GET` | `/store/status` | AxonStore initialisation status and metadata — safe to call before the brain is ready; polls `store_meta.json` directly |
 | `GET` | `/store/whoami` | AxonStore identity — returns `username` and `store_path` |
 | `POST` | `/store/init` | Change the store base path (e.g. to a shared drive) |
-| `POST` | `/share/generate` | Generate a read-only share key for a project and grantee |
+| `POST` | `/share/generate` | Generate a read-only share key. Auto-detects sealed vs plaintext based on whether the project is sealed |
 | `POST` | `/share/redeem` | Mount a shared project using a share string |
-| `POST` | `/share/revoke` | Revoke a share by `key_id` |
-| `GET` | `/share/list` | List outgoing and incoming shares |
+| `POST` | `/share/revoke` | Revoke a share by `key_id`. Pass `rotate: true` for hard revoke (rotates DEK) |
+| `POST` | `/share/extend` | Push out the expiry of an issued share. **Plaintext shares only** — sealed `ssk_` shares don't currently honour `ttl_days` (silently ignored at generate; v0.4.0 candidate). Body: `{key_id, ttl_days}` |
+| `GET`  | `/share/list` | List outgoing shares (sharing) and incoming mounts (shared) |
 
 **`POST /store/init` body:**
 ```json
@@ -423,9 +449,11 @@ each poll. VS Code calls this to receive tasks queued while the user was offline
 {
   "project": "my-project",             // required — project to share
   "grantee": "alice",                  // required — identifier of the recipient
-  "expires_at": null                   // optional ISO 8601 expiry timestamp (default: null — no expiry)
+  "ttl_days": null                     // optional integer days until expiry (default: null = no expiry).
+                                       // Honoured for plaintext shares (sk_); silently ignored for sealed (ssk_).
 }
 ```
+Response carries `key_id` (`sk_` for plaintext, `ssk_` for sealed), `share_string` (base64 envelope; sealed ones decode to `SEALED1:...`), and `expires_at` (ISO 8601 if `ttl_days` was set on a plaintext share, else `null`).
 
 **`POST /share/redeem` body:**
 ```json
@@ -437,7 +465,9 @@ each poll. VS Code calls this to receive tasks queued while the user was offline
 **`POST /share/revoke` body:**
 ```json
 {
-  "key_id": "abc123"  // required — key_id from /share/list
+  "key_id": "ssk_a4f9c1d2",   // required — key_id from /share/list (sk_ plaintext, ssk_ sealed)
+  "project": "research",      // required for sealed shares (ssk_); optional for plaintext
+  "rotate": false             // hard revoke — rotate project DEK + re-encrypt + selective re-wrap
 }
 ```
 
