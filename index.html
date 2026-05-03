@@ -3,29 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Axon — Private AI Knowledge Engine</title>
+    <title>Axon — Private RAG. Local first. Graph native. Agent ready.</title>
+    <meta name="description" content="Axon is a private, local-first RAG engine with GraphRAG, sealed sharing, and 48 MCP tools. Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. Nothing leaves your machine.">
+    <link rel="icon" type="image/svg+xml" href="docs/assets/brand/axon-favicon.svg">
+    <link rel="alternate icon" href="docs/assets/brand/axon-favicon.svg">
+    <link rel="apple-touch-icon" href="docs/assets/brand/axon-icon.svg">
+    <meta name="theme-color" content="#050a14">
+    <meta property="og:title" content="Axon — Private RAG. Local first. Graph native.">
+    <meta property="og:description" content="Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. 48 MCP tools, sealed cloud-drive sharing, GraphRAG. MIT licensed.">
+    <meta property="og:image" content="docs/assets/brand/axon-icon.svg">
+    <meta property="og:type" content="website">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Syne+Mono&family=JetBrains+Mono:wght@400;500&family=Instrument+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Syne+Mono&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Sans:ital,wght@0,300;0,400;0,500;1,300&family=Instrument+Serif:ital@0;1&family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..900,0..100;1,9..144,400..900,0..100&display=swap" rel="stylesheet">
 
     <style>
         :root {
             --bg:            #050a14;
+            --bg-soft:       #060c18;
             --surface-1:     #091220;
             --surface-2:     #0d1a2e;
+            --surface-3:     #112237;
             --border:        rgba(0, 212, 180, 0.14);
             --border-subtle: rgba(255, 255, 255, 0.05);
+            --border-soft:   rgba(255, 255, 255, 0.08);
             --border-strong: rgba(0, 212, 180, 0.4);
             --teal:          #00d4b4;
+            --teal-bright:   #00f0cc;
             --teal-dim:      rgba(0, 212, 180, 0.55);
+            --teal-deep:     rgba(0, 212, 180, 0.04);
             --amber:         #f59e0b;
             --amber-dim:     rgba(245, 158, 11, 0.55);
-            --text-primary:  #e2eaf5;
-            --text-secondary:#7a9ab8;
-            --text-dim:      #3d5a73;
+            --violet:        #a78bfa;
+            --violet-dim:    rgba(167, 139, 250, 0.5);
+            --rose:          #f472b6;
+            --rose-dim:      rgba(244, 114, 182, 0.5);
+            --text-primary:  #e6edf7;     /* +tiny lift, body emphasis */
+            --text-secondary:#a8bfd1;     /* was 7a9ab8 — too dim against the bg */
+            --text-tertiary: #8aa3b8;     /* was 5a7891 */
+            --text-dim:      #6b8aa3;     /* was 3d5a73 — failed AA contrast */
             --mono:          'JetBrains Mono', 'Courier New', monospace;
             --sans:          'Instrument Sans', 'Helvetica Neue', sans-serif;
+            --serif:         'Instrument Serif', Georgia, serif;
             --display:       'Syne', sans-serif;
+            --hero:          'Fraunces', 'Times New Roman', serif;
             --label:         'Syne Mono', monospace;
         }
 
@@ -37,25 +58,628 @@
             font-family: var(--sans);
             overflow-x: hidden;
             line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
+        /* ─── Deck-style snap framework ───
+           Every section is exactly one viewport tall. Hard snap.
+           All content of each section must fit; multi-card sections
+           paginate horizontally inside the viewport. */
+        html {
+            scroll-snap-type: y mandatory;
+            scrollbar-width: thin;
+        }
+        body { scroll-behavior: smooth; }
+
+        section, header, footer {
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+            min-height: 100vh;
+            min-height: 100dvh;   /* iOS Safari accurate viewport */
+            max-height: 100vh;
+            max-height: 100dvh;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            /* TOP-aligned (not center) — content under heading is more
+               important than visual balance; centering caused the title
+               to clip at top when content overflowed slightly. */
+            justify-content: flex-start;
+            padding: 72px 0 18px;  /* clear the fixed nav at top */
+            overflow: hidden;
+            z-index: 10;
+            /* Sections are now full-bleed; an inner .container gets the
+               max-width clamp instead. Without this, sections that already
+               had .container shrank to 90% with side gutters that revealed
+               the body grid pattern as visible "blocking" bands. */
+            width: 100%;
+            max-width: none;
+            margin: 0;
+        }
+        /* If a section also had .container / .container-wide on it, neutralise
+           those classes' width clamp at the section level — let them apply on
+           the inner content via padding instead. */
+        section.container, section.container-wide,
+        header.container { width: 100%; max-width: none; padding-left: 0; padding-right: 0; }
+
+        /* Hero stays vertically centered — its content is sized for it. */
+        header { justify-content: center !important; }
+
+        /* ─── Compact section heads + H2s for deck mode ───
+           Originally these heads carried 56–64px margin-bottom and H2s
+           used clamp(2.2rem, 4.5vw, 3.5rem) which is 86px at 1920px wide.
+           In a 100vh deck that ate ~20% of the viewport before content
+           even started. Cap aggressively. */
+        .axes-head, .rare-head, .matrix-head, .arch-head,
+        .compare-head, .codes-head, .install-head, .wn-head,
+        .vig-head, .feat-head, .codes-head { margin-bottom: 22px !important; }
+
+        .axes-head h2, .rare-head h2, .matrix-head h2, .arch-head h2,
+        .compare-head h2, .codes-head h2, .install-head h2, .wn-head h2,
+        .vig-head h2, .feat-head h2, .section-title {
+            font-size: clamp(1.4rem, 2.2vw, 2rem) !important;
+            line-height: 1.1 !important;
+            margin-top: 6px !important;
+            margin-bottom: 10px !important;
+        }
+        .axes-head p, .rare-head p, .matrix-head p, .arch-head p,
+        .compare-head p, .codes-head p, .install-head p, .wn-head p,
+        .vig-head p {
+            font-size: 0.82rem !important;
+            line-height: 1.55 !important;
+            max-width: 640px; margin: 0 auto;
+        }
+        /* eyebrow line above H2 */
+        .axes-head .eyebrow, .rare-head .eyebrow, .matrix-head .eyebrow,
+        .arch-head .eyebrow, .compare-head .eyebrow, .codes-head .eyebrow,
+        .install-head .eyebrow, .wn-head .eyebrow, .vig-head .eyebrow {
+            font-size: 0.62rem !important; margin-bottom: 8px;
+        }
+        /* Section <h2> outside named heads (used by Showcase, Pullquote etc.) */
+        section h2 {
+            font-size: clamp(1.4rem, 2.2vw, 2rem);
+            line-height: 1.1;
+        }
+
+        /* ─────────────────────────────────────────────
+         *  Mobile (≤900px): relax the deck constraints.
+         *  Forcing 100vh max-height + overflow:hidden on a
+         *  375×812 viewport clips real content; switch to
+         *  proximity snap with a min-height floor and let
+         *  sections grow naturally.
+         * ───────────────────────────────────────────── */
+        @media (max-width: 900px) {
+            html { scroll-snap-type: y proximity; }
+            section, header, footer {
+                max-height: none !important;
+                min-height: auto !important;
+                scroll-snap-stop: normal;
+                overflow: visible;
+                padding: 64px 0 36px !important;
+                justify-content: flex-start !important;
+            }
+            header { min-height: 100vh !important; }   /* keep hero full-bleed */
+            section h2,
+            .axes-head h2, .arch-head h2, .compare-head h2,
+            .codes-head h2, .install-head h2, .section-title {
+                font-size: clamp(1.5rem, 6vw, 2rem) !important;
+            }
+            .axes-head p, .arch-head p, .compare-head p,
+            .codes-head p, .install-head p {
+                font-size: 0.88rem !important;
+            }
+            /* Inner containers should breathe a bit */
+            section > .container,
+            section > .container-wide,
+            header > .container { width: 92%; padding: 0; }
+            /* Hide the deck-nav on every mobile size */
+            .deck-nav { display: none !important; }
+            /* Hide the hero terminal — too tall + too wide for mobile */
+            header .terminal-window { display: none !important; }
+            /* Hero typography compaction */
+            header h1 { font-size: clamp(2rem, 9vw, 3rem) !important; }
+            .hero-bullets { font-size: 0.7rem !important; gap: 10px !important; }
+
+            /* Compare table → restack as cards (table is too wide for mobile) */
+            .ctable thead { display: none; }
+            .ctable, .ctable tbody, .ctable tr, .ctable td { display: block; width: 100%; }
+            .ctable tr {
+                margin-bottom: 12px;
+                border: 1px solid var(--border-subtle);
+                padding: 10px 12px;
+                background: rgba(255,255,255,0.015);
+            }
+            .ctable td { padding: 4px 0 !important; font-size: 0.8rem !important; border: none; }
+            .ctable .row-h {
+                font-size: 0.74rem !important;
+                color: var(--text-secondary);
+                letter-spacing: 0.08em; text-transform: uppercase;
+                margin-bottom: 4px;
+            }
+            .ctable td:not(.row-h)::before {
+                content: attr(data-col) ': ';
+                font-size: 0.62rem; color: var(--text-dim);
+                letter-spacing: 0.12em; text-transform: uppercase;
+                margin-right: 6px;
+            }
+            .ctable .cell-axon { color: var(--teal); }
+
+            /* Showcase 2×2 → 1 column, smaller tile heights */
+            .sc-gallery {
+                grid-template-columns: 1fr !important;
+                grid-template-rows: auto !important;
+                gap: 14px !important;
+            }
+            .sc-tile { min-height: 180px; }
+            .sc-tile-img { max-height: 180px; }
+
+            /* Code panel — tabs scroll horizontally; pre wraps */
+            .codes-tabs {
+                overflow-x: auto;
+                scrollbar-width: none;
+                flex-wrap: nowrap !important;
+                white-space: nowrap;
+            }
+            .codes-tabs::-webkit-scrollbar { display: none; }
+            .codes-panel {
+                font-size: 0.66rem !important;
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+
+            /* Architecture chip rows wrap, but tighten layer name column */
+            .arch-layer { flex-direction: column !important; align-items: flex-start !important; }
+            .arch-layer-name { min-width: 0 !important; padding-bottom: 6px; }
+            .arch-nodes { flex-wrap: wrap; gap: 6px; }
+
+            /* Intro deck stack — 5 how-steps as horizontal scroller, stats as horizontal scroller */
+            .how-inner { overflow-x: auto; flex-wrap: nowrap; gap: 14px; padding-bottom: 8px; }
+            .how-inner::-webkit-scrollbar { display: none; }
+            .how-step { flex: 0 0 86%; }
+            .stats-inner { flex-wrap: wrap !important; justify-content: center; gap: 12px 18px !important; }
+            .stat-item { padding: 4px 8px !important; }
+
+            /* Pullquote — smaller text */
+            .pullquote-text { font-size: 1.1rem !important; line-height: 1.5 !important; }
+
+            /* Footer */
+            .footer-title { font-size: clamp(1.8rem, 8vw, 2.6rem) !important; }
+            .footer-install { font-size: 0.8rem !important; padding: 12px 14px !important; }
+        }
+
+        /* Very small phones */
+        @media (max-width: 480px) {
+            nav { padding: 0; }
+            .nav-inner { padding: 10px 0 !important; flex-wrap: wrap; gap: 10px; }
+            .nav-links { gap: 12px; font-size: 0.7rem; }
+            .nav-install { padding: 5px 10px !important; font-size: 0.68rem !important; }
+        }
+
+        /* ─── Density passes per dense section ─── */
+        /* Matrix — chip cloud (replaces old 4-col grid) */
+        .chipcloud {
+            display: flex; flex-direction: column; gap: 18px;
+            margin-top: 12px;
+        }
+        .chipgroup {
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 18px; align-items: start;
+            padding: 12px 0;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .chipgroup:first-child { border-top: none; }
+        .chipgroup-label {
+            font-family: var(--label); font-size: 0.66rem;
+            letter-spacing: 0.18em; text-transform: uppercase;
+            color: var(--text-secondary);
+            padding-top: 4px;
+        }
+        .chipgroup-label .cg-count {
+            display: inline-block; margin-left: 6px;
+            font-size: 0.58rem; color: var(--text-dim);
+            border: 1px solid var(--border-subtle);
+            padding: 1px 6px; border-radius: 8px;
+        }
+        .chipgroup-chips {
+            display: flex; flex-wrap: wrap; gap: 6px;
+        }
+        .chip {
+            font-family: var(--mono); font-size: 0.72rem;
+            padding: 4px 10px;
+            border: 1px solid var(--border-subtle);
+            background: rgba(255,255,255,0.015);
+            color: var(--text-primary);
+            transition: border-color 0.2s, background 0.2s, transform 0.15s;
+            cursor: default;
+            white-space: nowrap;
+        }
+        .chip:hover { transform: translateY(-1px); border-color: currentColor; }
+        .chipgroup-teal   { color: var(--teal); }
+        .chipgroup-violet { color: var(--violet); }
+        .chipgroup-amber  { color: var(--amber); }
+        .chipgroup-rose   { color: var(--rose); }
+        .chipgroup-teal   .chip:hover { background: rgba(0,212,180,0.08); }
+        .chipgroup-violet .chip:hover { background: rgba(167,139,250,0.08); }
+        .chipgroup-amber  .chip:hover { background: rgba(245,158,11,0.08); }
+        .chipgroup-rose   .chip:hover { background: rgba(244,114,182,0.08); }
+        .chip-new { border-color: var(--teal); color: var(--teal); }
+        .chip-new::before { content: 'NEW '; font-size: 0.55rem; opacity: 0.6; letter-spacing: 0.1em; }
+        .chip-soon { opacity: 0.55; font-style: italic; }
+        @media (max-width: 800px) {
+            .chipgroup { grid-template-columns: 1fr; gap: 8px; }
+            .chip { font-size: 0.68rem; padding: 3px 8px; }
+        }
+
+        /* Showcase v2 — 2×2 visual tile gallery */
+        .sc-gallery {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 18px;
+            flex: 1; min-height: 0;
+            margin-top: 8px;
+        }
+        .sc-tile {
+            display: flex; flex-direction: column;
+            border: 1px solid var(--border-subtle);
+            background: rgba(255,255,255,0.015);
+            overflow: hidden;
+            transition: border-color 0.25s, transform 0.25s;
+            min-height: 0;
+        }
+        .sc-tile:hover {
+            border-color: var(--teal);
+            transform: translateY(-2px);
+        }
+        .sc-tile-img {
+            flex: 1; min-height: 0;
+            background: #020812;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .sc-tile-img img {
+            width: 100%; height: 100%;
+            object-fit: cover;
+            opacity: 0.92;
+            transition: opacity 0.2s;
+        }
+        .sc-tile:hover .sc-tile-img img { opacity: 1; }
+        .sc-tile-img-svg svg { width: 100%; height: 100%; max-height: 320px; padding: 8px; }
+        .sc-tile-meta {
+            display: flex; align-items: center; gap: 14px;
+            padding: 10px 14px;
+            font-family: var(--mono);
+            background: rgba(0,0,0,0.3);
+            flex-shrink: 0;
+        }
+        .sc-tile-num {
+            font-size: 0.66rem;
+            color: var(--teal);
+            letter-spacing: 0.12em;
+            font-weight: 700;
+            border: 1px solid var(--teal);
+            padding: 2px 6px;
+        }
+        .sc-tile-name {
+            font-size: 0.86rem;
+            color: var(--text-primary);
+            font-weight: 600;
+            flex: 1;
+        }
+        .sc-tile-tag {
+            font-size: 0.62rem;
+            color: var(--text-dim);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+        @media (max-width: 800px) {
+            .sc-gallery { grid-template-columns: 1fr; grid-template-rows: repeat(4, 1fr); gap: 10px; }
+            .sc-tile-tag { display: none; }
+        }
+
+        /* Architecture — 5 layer chip rows */
+        .arch-layer { padding: 8px 14px !important; gap: 14px !important; }
+        .arch-layer-name { font-size: 0.68rem !important; min-width: 100px !important; }
+        .arch-layer-name .lnum { font-size: 0.6rem !important; }
+        .arch-node { padding: 5px 10px !important; font-size: 0.7rem !important; }
+        .arch-foot { padding: 10px 14px !important; font-size: 0.62rem !important; gap: 14px !important; }
+
+        /* Features — 6 cards */
+        .features-grid { gap: 1px !important; }
+        .feat-card { padding: 18px 20px !important; }
+        .feat-card .feat-icon { width: 28px; height: 28px; margin-bottom: 8px !important; }
+        .feat-card h3 { font-size: 0.95rem !important; margin: 0 0 8px !important; }
+        .feat-card p { font-size: 0.74rem !important; line-height: 1.5 !important; margin: 0 0 10px !important; }
+        .feat-card .feat-meta { font-size: 0.6rem !important; padding-top: 10px !important; }
+
+        /* Compare — table */
+        .ctable th, .ctable td { padding: 8px 14px !important; font-size: 0.78rem !important; }
+        .ctable .row-h { font-size: 0.78rem !important; }
+
+        /* Rare — 3 cards */
+        .rare-card { padding: 22px 24px !important; }
+        .rare-headline { font-size: 1.05rem !important; line-height: 1.25 !important; margin-bottom: 10px !important; }
+        .rare-body { font-size: 0.78rem !important; line-height: 1.55 !important; margin-bottom: 12px !important; }
+        .rare-detail { font-size: 0.66rem !important; padding: 10px 12px !important; line-height: 1.5 !important; }
+        .rare-foot { font-size: 0.6rem !important; padding-top: 10px !important; margin-top: 12px !important; }
+
+        /* Axes — 5 cards */
+        .axes-grid > div { padding: 18px 20px !important; }
+        .axes-grid h3 { font-size: 0.95rem !important; margin: 8px 0 8px !important; }
+        .axes-grid p, .axes-grid .axis-body { font-size: 0.74rem !important; line-height: 1.5 !important; }
+        .axes-grid .axis-num { font-size: 0.55rem !important; }
+
+        /* Install — 6 cards */
+        .install-grid { gap: 1px !important; }
+        .ipath { padding: 16px 18px !important; }
+        .ipath-tag { font-size: 0.55rem !important; margin-bottom: 6px !important; }
+        .ipath-name { font-size: 0.92rem !important; margin-bottom: 6px !important; }
+        .ipath-desc { font-size: 0.74rem !important; line-height: 1.5 !important; }
+        .ipath-deps { font-size: 0.6rem !important; }
+        /* Inner container fills available section height and centers content */
+        section > .container,
+        section > .container-wide,
+        header > .container {
+            display: flex; flex-direction: column;
+            justify-content: center;
+            flex: 1; width: 90%; max-width: 1320px;
+            margin: 0 auto; min-height: 0;
+        }
+
+        /* ─── Horizontal pagination pattern (slides inside a section) ───
+           Used by Showcase + Workflow Vignettes + How-It-Works on mobile.
+           One slide visible at a time; arrows + dots navigate. */
+        .pager {
+            position: relative; flex: 1; min-height: 0;
+            display: flex; flex-direction: column; justify-content: center;
+        }
+        .pager-track {
+            display: flex;
+            scroll-snap-type: x mandatory;
+            overflow-x: auto;
+            scroll-behavior: smooth;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            flex: 1; min-height: 0;
+        }
+        .pager-track::-webkit-scrollbar { display: none; }
+        .pager-slide {
+            flex: 0 0 100%;
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+            display: flex; flex-direction: column; justify-content: center;
+            padding: 0 4px;
+        }
+        .pager-controls {
+            display: flex; align-items: center; justify-content: center; gap: 16px;
+            margin-top: 18px; flex-shrink: 0;
+        }
+        .pager-btn {
+            width: 36px; height: 36px;
+            background: transparent; border: 1px solid var(--border-subtle);
+            color: var(--text-secondary); cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-family: var(--mono); font-size: 1rem;
+            transition: background 0.2s, border-color 0.2s, color 0.2s;
+        }
+        .pager-btn:hover {
+            background: rgba(0,212,180,0.05); border-color: var(--border-strong);
+            color: var(--teal);
+        }
+        .pager-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .pager-dots { display: flex; gap: 8px; align-items: center; }
+        .pager-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: rgba(255,255,255,0.18); border: none; cursor: pointer;
+            transition: background 0.2s, transform 0.2s, width 0.2s;
+            padding: 0;
+        }
+        .pager-dot.active { background: var(--teal); width: 22px; border-radius: 4px; }
+        .pager-dot:hover:not(.active) { background: rgba(255,255,255,0.4); transform: scale(1.4); }
+        .pager-counter {
+            font-family: var(--label); font-size: 0.66rem;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--text-dim);
+        }
+        .pager-counter .pc-cur { color: var(--teal); }
+
+        /* Pager-aware overrides for sections that previously stacked */
+        .pager-slide.showcase-row {
+            margin-bottom: 0 !important;
+            display: grid !important;
+            grid-template-columns: 1fr 1fr;
+            gap: 56px; align-items: center;
+        }
+        .pager-slide.vig {
+            margin-bottom: 0 !important;
+            display: grid !important;
+            grid-template-columns: 200px 1fr 280px;
+            gap: 36px; align-items: center;
+            background: var(--bg-soft);
+            padding: 36px 40px;
+            border: 1px solid var(--border-subtle);
+        }
+        @media (max-width: 1024px) {
+            .pager-slide.showcase-row { grid-template-columns: 1fr; gap: 24px; }
+            .pager-slide.vig { grid-template-columns: 1fr; gap: 18px; padding: 24px 20px; }
+        }
+        /* The .vig-list wrapper was a grid; collapse so the pager flex governs */
+        .vig-list.pager { display: flex; flex-direction: column; background: transparent; border: none; }
+
+        /* ─── Per-section compaction so content fits 100vh ───
+           Rather than allow any section to internally scroll (which would
+           defeat the "all info visible per snap" promise), aggressively
+           shrink type and spacing in the densest sections. */
+        section.intro-deck, section.matrix, section.compare,
+        section.whatsnew, section.install, section.axes,
+        section.rare, section.features, section.arch {
+            padding-top: 64px; padding-bottom: 18px;
+        }
+        section.intro-deck .how-num,
+        section.intro-deck .how-title { font-size: 0.95rem; }
+        section.intro-deck .how-desc { font-size: 0.78rem; line-height: 1.45; }
+        section.intro-deck .stat-val { font-size: 1.6rem; }
+        section.intro-deck .marquee-track { font-size: 0.78rem; }
+        section.matrix h2, section.compare h2, section.install h2,
+        section.whatsnew h2, section.features h2, section.axes h2,
+        section.rare h2, section.arch h2 { margin-bottom: 18px; }
+        section.matrix .matrix-grid { font-size: 0.78rem; }
+        section.whatsnew .wn-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; }
+        @media (max-width: 1024px) {
+            section.whatsnew .wn-list { grid-template-columns: 1fr; gap: 10px; }
+        }
+        section.whatsnew .wn-item { padding: 12px 16px; }
+        section.whatsnew .wn-title { font-size: 0.92rem; margin-bottom: 4px; }
+        section.whatsnew .wn-desc { font-size: 0.74rem; line-height: 1.45; }
+
+        /* Last-resort safety net for very short viewports (< 720px tall):
+           rather than clipping content, allow the inner container to scroll
+           with a thin scrollbar — the section itself still snaps. */
+        @media (max-height: 720px) {
+            section > .container,
+            section > .container-wide,
+            header > .container { overflow-y: auto; scrollbar-width: thin; }
+        }
+
+        /* ─── Reusable swipe-snap mobile carousel pattern ───
+           For grids of small cards (Five Axes, Rare Ideas, Features, Install).
+           On desktop the original grid; on mobile a horizontal scroller. */
+        @media (max-width: 1024px) {
+            .swipe-snap-mobile {
+                display: flex !important;
+                grid-template-columns: none !important;
+                overflow-x: auto;
+                scroll-snap-type: x mandatory;
+                scrollbar-width: none;
+                -ms-overflow-style: none;
+                padding: 0;
+                gap: 1px;
+                flex: 1; min-height: 0;
+            }
+            .swipe-snap-mobile::-webkit-scrollbar { display: none; }
+            .swipe-snap-mobile > * {
+                flex: 0 0 92%;
+                scroll-snap-align: start;
+                scroll-snap-stop: always;
+            }
+        }
+        .swipe-hint {
+            display: none;
+            font-family: var(--label); font-size: 0.6rem;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--text-dim); text-align: center;
+            margin-top: 12px; flex-shrink: 0;
+        }
+        .swipe-hint .arr { color: var(--teal); margin-left: 6px; animation: arr-nudge 1.6s ease-in-out infinite; display: inline-block; }
+        @keyframes arr-nudge {
+            0%, 100% { transform: translateX(0); opacity: 0.6; }
+            50%      { transform: translateX(4px); opacity: 1; }
+        }
+        @media (max-width: 1024px) { .swipe-hint { display: block; } }
+
+        /* ─── Right-edge section navigator (desktop only) ─── */
+        .deck-nav {
+            position: fixed; right: 22px; left: auto; top: 50%; bottom: auto;
+            transform: translateY(-50%); z-index: 95;
+            display: flex; flex-direction: column; gap: 10px;
+            /* override the bare `nav { ... }` rule which would otherwise
+               give this element a full-width frosted-blur background */
+            background: transparent !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            border: none !important;
+            width: auto;
+        }
+        .deck-nav-dot {
+            width: 9px; height: 9px; border-radius: 50%;
+            background: rgba(255,255,255,0.18);
+            border: 1px solid transparent;
+            cursor: pointer; padding: 0;
+            transition: all 0.25s;
+            position: relative;
+        }
+        .deck-nav-dot::after {
+            content: attr(data-label);
+            position: absolute; right: 22px; top: 50%;
+            transform: translateY(-50%);
+            font-family: var(--label); font-size: 0.6rem;
+            letter-spacing: 0.14em; text-transform: uppercase;
+            color: var(--text-secondary); white-space: nowrap;
+            background: rgba(5,10,20,0.92);
+            border: 1px solid var(--border-subtle);
+            padding: 4px 10px; opacity: 0;
+            pointer-events: none; transition: opacity 0.2s;
+        }
+        .deck-nav-dot:hover { background: var(--teal-dim); transform: scale(1.3); }
+        .deck-nav-dot:hover::after { opacity: 1; }
+        .deck-nav-dot.active {
+            background: var(--teal);
+            box-shadow: 0 0 12px rgba(0,212,180,0.6);
+        }
+        @media (max-width: 1024px) { .deck-nav { display: none; } }
 
         h1, h2, h3, h4 { font-family: var(--display); letter-spacing: -0.02em; }
         code { font-family: var(--mono); font-size: 0.82em; }
+        a { color: inherit; }
 
+        /* ─── Background scaffolding ─── */
+        /* Atmospheric layer order (back → front):
+             body bg → ::before glow pools → ::after grid → #network-canvas → content (z 10+)
+           Canvas sits at z-index 3 above the static decoration so it reads
+           clearly, but stays below all interactive content. */
+        body::before {
+            content: '';
+            position: fixed; inset: 0;
+            /* Softer glow pools — was 0.08/0.05, now half-strength so foreground content doesn't compete */
+            background: radial-gradient(ellipse 70vw 55vh at 50% 0%, rgba(0,212,180,0.04), transparent 70%),
+                        radial-gradient(ellipse 60vw 40vh at 90% 80%, rgba(167,139,250,0.025), transparent 70%);
+            z-index: 1; pointer-events: none;
+        }
+        body::after {
+            content: '';
+            position: fixed; inset: 0;
+            /* Grid pattern even fainter — barely-there texture */
+            background-image:
+                linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+            background-size: 80px 80px;
+            z-index: 2; pointer-events: none;
+        }
         #network-canvas {
             position: fixed; top: 0; left: 0;
             width: 100%; height: 100%;
-            z-index: 1; opacity: 0.45; pointer-events: none;
+            z-index: 3; opacity: 0.42;  /* calmer — was 0.78 */
+            pointer-events: none;
         }
 
         .container { width: 90%; max-width: 1200px; margin: 0 auto; }
+        .container-wide { width: 92%; max-width: 1320px; margin: 0 auto; }
 
         .reveal {
-            opacity: 0; transform: translateY(20px);
-            transition: opacity 0.55s cubic-bezier(0.16, 1, 0.3, 1),
-                        transform 0.55s cubic-bezier(0.16, 1, 0.3, 1);
+            opacity: 0; transform: translateY(8px);  /* gentler than 20px */
+            transition: opacity 0.4s ease-out,
+                        transform 0.4s ease-out;
         }
         .reveal.active { opacity: 1; transform: translateY(0); }
+        /* Respect prefers-reduced-motion — no reveal animation, no marquee, no particles */
+        @media (prefers-reduced-motion: reduce) {
+            .reveal { opacity: 1; transform: none; transition: none; }
+            #network-canvas { display: none; }
+        }
+
+        /* Decorative scoring numerals (editorial pacing) */
+        .scorelin {
+            display: flex; align-items: center; gap: 18px;
+            font-family: var(--label); font-size: 0.62rem;
+            letter-spacing: 0.2em; text-transform: uppercase;
+            color: var(--text-dim); margin-bottom: 28px;
+        }
+        .scorelin::before, .scorelin::after {
+            content: ''; flex: 1; height: 1px;
+            background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
+        }
 
         /* ─── Navbar ─── */
         nav {
@@ -76,12 +700,31 @@
         .nav-logo {
             font-family: var(--label); font-size: 1.05rem;
             color: var(--teal); text-decoration: none; letter-spacing: 0.12em;
+            display: flex; align-items: center; gap: 8px;
         }
         .nav-logo em { color: var(--text-dim); font-style: normal; }
-        .nav-links { display: flex; align-items: center; gap: 28px; }
+        .nav-logo .nav-mark {
+            width: 22px; height: 22px;
+            color: var(--teal);
+            transition: transform 0.4s ease, filter 0.3s;
+            filter: drop-shadow(0 0 6px rgba(0,212,180,0.35));
+        }
+        .nav-logo:hover .nav-mark {
+            transform: rotate(60deg);
+            filter: drop-shadow(0 0 10px rgba(0,212,180,0.55));
+        }
+        .nav-mark .nm-pulse {
+            animation: nm-pulse 2.6s ease-in-out infinite;
+            transform-origin: 50% 50%;
+        }
+        @keyframes nm-pulse {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.45; }
+        }
+        .nav-links { display: flex; align-items: center; gap: 26px; }
         .nav-links a {
             color: var(--text-secondary); text-decoration: none;
-            font-size: 0.75rem; font-weight: 500;
+            font-size: 0.74rem; font-weight: 500;
             font-family: var(--label); letter-spacing: 0.1em; text-transform: uppercase;
             transition: color 0.2s;
         }
@@ -90,14 +733,14 @@
             border: 1px solid var(--border-strong) !important;
             color: var(--teal) !important;
             padding: 6px 14px; font-family: var(--mono) !important;
-            font-size: 0.75rem !important; letter-spacing: 0 !important;
+            font-size: 0.74rem !important; letter-spacing: 0 !important;
             text-transform: none !important; transition: background 0.2s, box-shadow 0.2s !important;
         }
         .nav-install:hover {
             background: rgba(0,212,180,0.07) !important;
             box-shadow: 0 0 18px rgba(0,212,180,0.18) !important;
         }
-        @media (max-width: 640px) {
+        @media (max-width: 720px) {
             .nav-links { gap: 14px; }
             .nav-links a:not(.nav-install) { display: none; }
         }
@@ -108,37 +751,68 @@
             display: flex; flex-direction: column;
             justify-content: center; align-items: center; text-align: center;
             position: relative; z-index: 10;
-            padding-top: 90px; padding-bottom: 60px;
+            padding-top: 110px; padding-bottom: 70px;
         }
         .version-tag {
             display: inline-flex; align-items: center; gap: 9px;
             border: 1px solid var(--border);
             background: rgba(0,212,180,0.04);
-            color: var(--teal); padding: 5px 14px;
-            font-family: var(--label); font-size: 0.68rem;
-            letter-spacing: 0.14em; text-transform: uppercase;
-            margin-bottom: 36px;
+            color: var(--teal); padding: 6px 16px;
+            font-family: var(--label); font-size: 0.66rem;
+            letter-spacing: 0.15em; text-transform: uppercase;
+            margin-bottom: 38px;
         }
         .version-dot {
             width: 5px; height: 5px; background: var(--teal);
             animation: blink-dot 2s step-end infinite;
         }
         @keyframes blink-dot { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        .version-tag .vt-sep { color: var(--text-dim); margin: 0 4px; }
+        .version-tag .vt-meta { color: var(--text-secondary); }
 
         h1 {
-            font-family: var(--display); font-weight: 800;
-            font-size: clamp(3.5rem, 7.5vw, 7rem);
-            line-height: 1.0; margin-bottom: 28px;
+            font-family: var(--hero);
+            /* Fraunces variable axes — opsz pushes to display optical size, SOFT
+               warms the letter shapes so the headline feels editorial rather than
+               textbook-serif. Bold weight holds at hero scale. */
+            font-variation-settings: "opsz" 144, "SOFT" 80, "wght" 700;
+            font-weight: 700;
+            font-size: clamp(3rem, 7.8vw, 7.4rem);
+            line-height: 0.96; margin-bottom: 32px;
             color: var(--text-primary); letter-spacing: -0.035em;
-            max-width: 920px;
+            max-width: 940px;
         }
-        h1 .accent { color: var(--teal); }
+        h1 .accent {
+            color: var(--teal);
+            font-variation-settings: "opsz" 144, "SOFT" 100, "wght" 800;
+        }
         h1 .muted  { color: var(--text-secondary); }
+        h1 .serif-it {
+            font-family: var(--hero); font-style: italic; font-weight: 400;
+            font-variation-settings: "opsz" 144, "SOFT" 100, "wght" 400;
+            letter-spacing: -0.015em;
+            color: var(--text-primary);
+        }
 
         .hero-sub {
-            font-size: clamp(1rem, 1.8vw, 1.2rem);
-            color: var(--text-secondary); max-width: 600px;
-            margin-bottom: 42px; line-height: 1.75; font-weight: 300;
+            font-size: clamp(1.05rem, 1.7vw, 1.25rem);
+            color: var(--text-secondary); max-width: 660px;
+            margin-bottom: 18px; line-height: 1.7; font-weight: 300;
+        }
+        .hero-sub strong { color: var(--text-primary); font-weight: 500; }
+        .hero-sub .h-em { font-family: var(--serif); font-style: italic; color: var(--text-primary); }
+
+        .hero-bullets {
+            display: flex; gap: 28px; flex-wrap: wrap; justify-content: center;
+            margin-bottom: 40px;
+            font-family: var(--label); font-size: 0.7rem;
+            color: var(--text-tertiary); letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .hero-bullets span { display: inline-flex; align-items: center; gap: 8px; }
+        .hero-bullets .hb-dot {
+            width: 4px; height: 4px; background: var(--teal);
+            border-radius: 50%; opacity: 0.7;
         }
 
         /* CTA */
@@ -146,19 +820,20 @@
         .btn-primary {
             display: inline-flex; align-items: center; gap: 10px;
             background: var(--teal); color: #050a14; text-decoration: none;
-            padding: 12px 28px; font-family: var(--label); font-size: 0.78rem;
+            padding: 13px 30px; font-family: var(--label); font-size: 0.78rem;
             letter-spacing: 0.1em; text-transform: uppercase; font-weight: 400;
             transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
+            border: none; cursor: pointer;
         }
         .btn-primary:hover {
-            background: #00f0cc;
+            background: var(--teal-bright);
             box-shadow: 0 0 32px rgba(0,212,180,0.4); transform: translateY(-1px);
         }
         .btn-secondary {
             display: inline-flex; align-items: center; gap: 10px;
             background: transparent; border: 1px solid var(--border-subtle);
             color: var(--text-secondary); text-decoration: none;
-            padding: 12px 28px; font-family: var(--label); font-size: 0.78rem;
+            padding: 13px 30px; font-family: var(--label); font-size: 0.78rem;
             letter-spacing: 0.1em; text-transform: uppercase; font-weight: 400;
             transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.15s;
         }
@@ -171,7 +846,7 @@
         .terminal-window {
             background: #020812; border: 1px solid var(--border-subtle);
             border-top: 1px solid var(--border);
-            width: 100%; max-width: 640px; text-align: left; overflow: hidden;
+            width: 100%; max-width: 720px; text-align: left; overflow: hidden;
             box-shadow: 0 40px 80px -20px rgba(0,0,0,0.8), 0 0 50px rgba(0,212,180,0.04);
         }
         .terminal-header {
@@ -184,75 +859,112 @@
             font-family: var(--label); font-size: 0.66rem; color: var(--text-dim);
             margin-left: 10px; letter-spacing: 0.1em; text-transform: uppercase;
         }
+        .term-meta { margin-left: auto; font-family: var(--mono); font-size: 0.66rem; color: var(--text-dim); }
         .terminal-body { padding: 22px 26px; }
-        .tl { display: flex; gap: 10px; margin-bottom: 4px; font-family: var(--mono); font-size: 0.8rem; line-height: 1.5; }
+        .tl { display: flex; gap: 10px; margin-bottom: 4px; font-family: var(--mono); font-size: 0.8rem; line-height: 1.55; }
         .tv { color: var(--teal); user-select: none; }
         .t$ { color: var(--text-dim); user-select: none; }
         .tc { color: var(--text-primary); }
         .tp { color: var(--amber); }
-        .to { padding-left: 20px; margin-bottom: 3px; font-family: var(--mono); font-size: 0.73rem; color: var(--text-dim); }
+        .tk { color: var(--violet); }
+        .to { padding-left: 20px; margin-bottom: 3px; font-family: var(--mono); font-size: 0.74rem; color: var(--text-dim); }
         .tok { color: #10b981; } .tinfo { color: var(--teal-dim); } .tans { color: var(--text-primary); }
+        .tcite { color: var(--amber); }
         .cursor {
             border-right: 1.5px solid var(--teal);
             animation: blink-cursor 0.75s step-end infinite; padding-right: 2px;
         }
         @keyframes blink-cursor { from,to{border-color:transparent} 50%{border-color:var(--teal)} }
         .hero-note {
-            margin-top: 18px; font-size: 0.73rem; color: var(--text-dim);
-            max-width: 520px; text-align: center; line-height: 1.7;
-            font-family: var(--label); letter-spacing: 0.02em;
+            margin-top: 22px; font-size: 0.72rem; color: var(--text-dim);
+            max-width: 580px; text-align: center; line-height: 1.7;
+            font-family: var(--label); letter-spacing: 0.04em;
         }
-        .hero-note a { color: var(--teal-dim); text-decoration: none; }
+        .hero-note a { color: var(--teal-dim); text-decoration: none; transition: color 0.2s; }
         .hero-note a:hover { color: var(--teal); }
+
+        /* ─── Marquee strip ─── */
+        .marquee {
+            position: relative; z-index: 10;
+            border-top: 1px solid var(--border-subtle);
+            border-bottom: 1px solid var(--border-subtle);
+            background: rgba(0,0,0,0.25);
+            overflow: hidden; padding: 16px 0;
+            mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+            -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+        }
+        .marquee-track {
+            display: flex; gap: 60px; width: max-content;
+            animation: marquee 38s linear infinite;
+        }
+        .marquee-item {
+            font-family: var(--label); font-size: 0.74rem;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--text-tertiary);
+            display: inline-flex; align-items: center; gap: 14px;
+            white-space: nowrap;
+        }
+        .marquee-item::before {
+            content: '◇'; color: var(--teal-dim); font-size: 0.7rem;
+        }
+        .marquee-item .accent { color: var(--teal); }
+        @keyframes marquee {
+            from { transform: translateX(0); }
+            to   { transform: translateX(-50%); }
+        }
 
         /* ─── How It Works ─── */
         .how-strip {
             padding: 0; position: relative; z-index: 10;
-            border-top: 1px solid var(--border-subtle);
             border-bottom: 1px solid var(--border-subtle);
         }
-        .how-inner { display: flex; align-items: stretch; }
+        .how-inner { display: grid; grid-template-columns: repeat(5, 1fr); }
         .how-step {
-            flex: 1; padding: 36px 40px; position: relative;
+            padding: 36px 28px; position: relative;
             border-right: 1px solid var(--border-subtle);
             transition: background 0.3s;
         }
         .how-step:last-child { border-right: none; }
-        .how-step:hover { background: rgba(0,212,180,0.02); }
+        .how-step:hover { background: rgba(0,212,180,0.025); }
         .how-step::after {
-            content: '→'; position: absolute; right: -14px; top: 50%;
+            content: '→'; position: absolute; right: -10px; top: 50%;
             transform: translateY(-50%); color: var(--border-strong);
-            font-family: var(--mono); font-size: 1.1rem; z-index: 2;
+            font-family: var(--mono); font-size: 1rem; z-index: 2;
             pointer-events: none;
         }
         .how-step:last-child::after { display: none; }
         .how-num {
-            font-family: var(--label); font-size: 0.62rem; letter-spacing: 0.18em;
-            text-transform: uppercase; color: var(--text-dim); margin-bottom: 12px;
+            font-family: var(--label); font-size: 0.6rem; letter-spacing: 0.18em;
+            text-transform: uppercase; color: var(--text-dim); margin-bottom: 10px;
         }
         .how-title {
-            font-family: var(--display); font-size: 1.3rem; font-weight: 700;
-            color: var(--text-primary); margin-bottom: 10px;
+            font-family: var(--display); font-size: 1.1rem; font-weight: 700;
+            color: var(--text-primary); margin-bottom: 9px;
         }
         .how-title span { color: var(--teal); }
-        .how-desc { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.65; font-weight: 300; }
-        @media (max-width: 768px) {
-            .how-inner { flex-direction: column; }
-            .how-step { border-right: none; border-bottom: 1px solid var(--border-subtle); }
-            .how-step:last-child { border-bottom: none; }
-            .how-step::after { content: '↓'; right: auto; left: 40px; top: auto; bottom: -14px; transform: none; }
+        .how-desc { font-size: 0.78rem; color: var(--text-secondary); line-height: 1.6; font-weight: 300; }
+        .how-icon { width: 24px; height: 24px; color: var(--teal-dim); margin-bottom: 14px; opacity: 0.85; }
+        @media (max-width: 1080px) {
+            .how-inner { grid-template-columns: repeat(2, 1fr); }
+            .how-step:nth-child(2n) { border-right: none; }
+            .how-step { border-bottom: 1px solid var(--border-subtle); }
+            .how-step::after { display: none; }
+        }
+        @media (max-width: 560px) {
+            .how-inner { grid-template-columns: 1fr; }
+            .how-step { border-right: none; }
         }
 
         /* ─── Stats Strip ─── */
         .stats-strip {
-            padding: 24px 0; z-index: 10; position: relative;
+            padding: 28px 0; z-index: 10; position: relative;
             border-bottom: 1px solid var(--border-subtle);
         }
         .stats-inner {
             display: flex; align-items: center; justify-content: center;
             flex-wrap: wrap;
         }
-        .stat-item { padding: 8px 36px; text-align: center; position: relative; }
+        .stat-item { padding: 8px 30px; text-align: center; position: relative; }
         .stat-item:not(:last-child)::after {
             content: ''; position: absolute; right: 0; top: 25%; bottom: 25%;
             width: 1px; background: var(--border-subtle);
@@ -261,9 +973,345 @@
             font-family: var(--display); font-size: 1.7rem; font-weight: 700;
             color: var(--teal); line-height: 1; margin-bottom: 4px;
         }
+        .stat-val.dim { color: var(--text-secondary); }
+        .stat-val.amber { color: var(--amber); }
+        .stat-val.violet { color: var(--violet); }
         .stat-lbl {
-            font-family: var(--label); font-size: 0.62rem; color: var(--text-dim);
+            font-family: var(--label); font-size: 0.6rem; color: var(--text-dim);
             letter-spacing: 0.14em; text-transform: uppercase;
+        }
+
+        /* ─── Five Axes ─── */
+        .axes { padding: 110px 0 90px; position: relative; z-index: 10; }
+        .axes-head { text-align: center; margin-bottom: 64px; }
+        .axes-head .eyebrow { display: inline-block; }
+        .axes-head h2 {
+            font-family: var(--display); font-size: clamp(2.2rem, 4.5vw, 3.5rem);
+            font-weight: 700; line-height: 1.05; letter-spacing: -0.025em;
+            margin: 14px 0 18px; max-width: 800px; margin-left: auto; margin-right: auto;
+        }
+        .axes-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .axes-head p {
+            color: var(--text-secondary); max-width: 600px; margin: 0 auto;
+            font-size: 0.95rem; line-height: 1.75; font-weight: 300;
+        }
+
+        .axes-grid {
+            display: grid; grid-template-columns: repeat(5, 1fr);
+            gap: 1px; background: var(--border-subtle);
+            border: 1px solid var(--border-subtle);
+        }
+        .axis {
+            background: var(--bg-soft); padding: 36px 28px; position: relative;
+            display: flex; flex-direction: column;
+            transition: background 0.3s;
+        }
+        .axis:hover { background: var(--surface-1); }
+        .axis-num {
+            font-family: var(--label); font-size: 0.62rem; letter-spacing: 0.16em;
+            text-transform: uppercase; color: var(--text-dim); margin-bottom: 16px;
+            display: flex; justify-content: space-between;
+        }
+        .axis-num span { color: var(--teal); }
+        .axis-icon {
+            width: 32px; height: 32px; margin-bottom: 18px;
+            color: var(--teal);
+        }
+        .axis-title {
+            font-family: var(--display); font-size: 1.05rem; font-weight: 700;
+            color: var(--text-primary); margin-bottom: 10px;
+            letter-spacing: -0.01em;
+        }
+        .axis-desc {
+            font-size: 0.82rem; color: var(--text-secondary);
+            line-height: 1.7; font-weight: 300; flex: 1;
+        }
+        .axis-tag {
+            margin-top: 18px; font-family: var(--mono); font-size: 0.7rem;
+            color: var(--teal-dim);
+            border-top: 1px dashed var(--border-subtle); padding-top: 12px;
+        }
+        .axis:nth-child(2) .axis-icon { color: var(--amber); }
+        .axis:nth-child(2) .axis-num span { color: var(--amber); }
+        .axis:nth-child(2) .axis-tag { color: var(--amber-dim); }
+        .axis:nth-child(3) .axis-icon { color: var(--rose); }
+        .axis:nth-child(3) .axis-num span { color: var(--rose); }
+        .axis:nth-child(3) .axis-tag { color: var(--rose-dim); }
+        .axis:nth-child(4) .axis-icon { color: var(--violet); }
+        .axis:nth-child(4) .axis-num span { color: var(--violet); }
+        .axis:nth-child(4) .axis-tag { color: var(--violet-dim); }
+        @media (max-width: 1080px) { .axes-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 560px)  { .axes-grid { grid-template-columns: 1fr; } }
+
+        /* ─── Rare ideas (the "only Axon does this" section) ─── */
+        .rare {
+            padding: 110px 0 90px; position: relative; z-index: 10;
+            border-top: 1px solid var(--border-subtle);
+            background: linear-gradient(180deg, transparent, rgba(0,212,180,0.012), transparent);
+        }
+        .rare-head { text-align: center; margin-bottom: 64px; }
+        .rare-head h2 {
+            font-family: var(--display); font-size: clamp(2.2rem, 4.5vw, 3.5rem);
+            font-weight: 700; letter-spacing: -0.025em; line-height: 1.05;
+            margin: 14px auto 18px; max-width: 880px;
+        }
+        .rare-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .rare-head p {
+            color: var(--text-secondary); max-width: 620px; margin: 0 auto;
+            font-size: 0.95rem; line-height: 1.75; font-weight: 300;
+        }
+        .rare-head p em { color: var(--text-tertiary); font-style: normal; font-family: var(--serif); }
+
+        .rare-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 1px; background: var(--border-subtle);
+            border: 1px solid var(--border-subtle);
+        }
+        .rare-card {
+            background: var(--bg-soft); padding: 40px 32px 32px;
+            display: flex; flex-direction: column;
+            position: relative; transition: background 0.3s;
+        }
+        .rare-card:hover { background: var(--surface-1); }
+        .rare-numslot {
+            font-family: var(--label); font-size: 0.62rem;
+            letter-spacing: 0.18em; text-transform: uppercase;
+            color: var(--text-dim); margin-bottom: 22px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .rare-numslot .rn-num {
+            font-family: var(--hero); font-variation-settings: "opsz" 144, "SOFT" 100, "wght" 600;
+            font-style: italic; font-size: 2.4rem; color: var(--teal); line-height: 0.9;
+            letter-spacing: -0.03em;
+        }
+        .rare-numslot .rn-tag { color: var(--teal); }
+        .rare-headline {
+            font-family: var(--hero);
+            font-variation-settings: "opsz" 144, "SOFT" 80, "wght" 600;
+            font-size: 1.6rem; line-height: 1.2;
+            color: var(--text-primary); margin-bottom: 18px;
+            letter-spacing: -0.015em;
+        }
+        .rare-headline .rh-em { font-style: italic; color: var(--teal); font-weight: 400; }
+        .rare-body {
+            color: var(--text-secondary); font-size: 0.9rem;
+            line-height: 1.75; font-weight: 300; margin-bottom: 22px;
+        }
+        .rare-body strong { color: var(--text-primary); font-weight: 500; }
+        .rare-detail {
+            font-family: var(--mono); font-size: 0.74rem;
+            background: rgba(0,0,0,0.35); border-left: 2px solid var(--teal);
+            padding: 12px 14px; color: var(--text-secondary); line-height: 1.7;
+            margin-bottom: 18px;
+        }
+        .rare-detail .rd-k { color: var(--violet); }
+        .rare-detail .rd-s { color: var(--amber); }
+        .rare-detail .rd-c { color: var(--text-dim); font-style: italic; }
+        .rare-foot {
+            margin-top: auto; padding-top: 18px;
+            border-top: 1px dashed var(--border-subtle);
+            font-family: var(--label); font-size: 0.62rem;
+            letter-spacing: 0.14em; text-transform: uppercase;
+            color: var(--text-tertiary); display: flex; justify-content: space-between;
+        }
+        .rare-foot .rf-mark { color: var(--teal); }
+        .rare-card:nth-child(2) .rare-numslot .rn-num,
+        .rare-card:nth-child(2) .rare-numslot .rn-tag,
+        .rare-card:nth-child(2) .rare-headline .rh-em,
+        .rare-card:nth-child(2) .rare-detail { border-color: var(--violet); }
+        .rare-card:nth-child(2) .rare-numslot .rn-num,
+        .rare-card:nth-child(2) .rare-numslot .rn-tag,
+        .rare-card:nth-child(2) .rare-headline .rh-em,
+        .rare-card:nth-child(2) .rare-foot .rf-mark { color: var(--violet); }
+        .rare-card:nth-child(3) .rare-numslot .rn-num,
+        .rare-card:nth-child(3) .rare-numslot .rn-tag,
+        .rare-card:nth-child(3) .rare-headline .rh-em,
+        .rare-card:nth-child(3) .rare-foot .rf-mark { color: var(--amber); }
+        .rare-card:nth-child(3) .rare-detail { border-color: var(--amber); }
+        @media (max-width: 980px) { .rare-grid { grid-template-columns: 1fr; } }
+
+        /* ─── Workflow vignettes ─── */
+        .vignettes {
+            padding: 100px 0; position: relative; z-index: 10;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .vig-head { text-align: center; margin-bottom: 64px; }
+        .vig-head h2 {
+            font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 700; letter-spacing: -0.025em; margin: 14px 0 16px;
+        }
+        .vig-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .vig-head p {
+            color: var(--text-secondary); max-width: 600px; margin: 0 auto;
+            font-size: 0.92rem; line-height: 1.75; font-weight: 300;
+        }
+
+        .vig-list {
+            display: grid; grid-template-columns: 1fr;
+            gap: 1px; background: var(--border-subtle);
+            border: 1px solid var(--border-subtle);
+        }
+        .vig {
+            background: var(--bg-soft); padding: 36px 40px;
+            display: grid; grid-template-columns: 200px 1fr 280px;
+            gap: 36px; align-items: center;
+            transition: background 0.3s;
+        }
+        .vig:hover { background: var(--surface-1); }
+        .vig-persona {
+            font-family: var(--label); font-size: 0.62rem;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--teal);
+        }
+        .vig-persona .vp-name {
+            display: block; margin-top: 8px;
+            font-family: var(--hero);
+            font-variation-settings: "opsz" 144, "SOFT" 100, "wght" 500;
+            font-style: italic; font-size: 1.5rem; color: var(--text-primary);
+            text-transform: none; letter-spacing: -0.01em; line-height: 1.1;
+        }
+        .vig-persona .vp-loc {
+            display: block; margin-top: 6px; color: var(--text-dim);
+            font-family: var(--label);
+        }
+        .vig-narr {
+            color: var(--text-secondary); font-size: 0.95rem;
+            line-height: 1.75; font-weight: 300;
+        }
+        .vig-narr strong { color: var(--text-primary); font-weight: 500; }
+        .vig-narr em { color: var(--teal); font-style: normal; font-family: var(--serif); }
+        .vig-narr code {
+            background: rgba(0,212,180,0.06); border: 1px solid rgba(0,212,180,0.14);
+            color: var(--teal-dim); padding: 1px 5px;
+        }
+        .vig-evidence {
+            display: flex; flex-direction: column; gap: 10px;
+        }
+        .vig-tag {
+            font-family: var(--mono); font-size: 0.7rem;
+            color: var(--text-secondary);
+            padding: 5px 9px; border: 1px solid var(--border-subtle);
+            background: rgba(0,0,0,0.25);
+            display: flex; align-items: center; gap: 8px;
+        }
+        .vig-tag::before { content: '◇'; color: var(--teal); font-size: 0.7rem; }
+        .vig-tag.violet::before { color: var(--violet); }
+        .vig-tag.amber::before { color: var(--amber); }
+        .vig-evidence-img {
+            display: block; width: 100%; height: auto;
+            border: 1px solid var(--border-subtle);
+            box-shadow: 0 12px 24px -8px rgba(0,0,0,0.6);
+        }
+        .vig:nth-child(2) .vig-persona { color: var(--violet); }
+        .vig:nth-child(3) .vig-persona { color: var(--amber); }
+        @media (max-width: 1024px) {
+            .vig { grid-template-columns: 1fr; gap: 18px; padding: 28px 24px; }
+            .vig-evidence { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+            .vig-evidence-img { display: none; }
+        }
+
+        /* ─── Capabilities Matrix ─── */
+        .matrix { padding: 90px 0; position: relative; z-index: 10;
+                  border-top: 1px solid var(--border-subtle);
+                  background: linear-gradient(180deg, transparent, rgba(0,0,0,0.25)); }
+        .matrix-head { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: end; margin-bottom: 56px; }
+        .matrix-head h2 {
+            font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 700; letter-spacing: -0.025em; line-height: 1.05;
+        }
+        .matrix-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .matrix-head p {
+            color: var(--text-secondary); font-size: 0.92rem;
+            line-height: 1.75; font-weight: 300;
+        }
+        @media (max-width: 800px) { .matrix-head { grid-template-columns: 1fr; gap: 24px; } }
+        .matrix-grid {
+            display: grid; grid-template-columns: repeat(4, 1fr);
+            gap: 1px; background: var(--border-subtle); border: 1px solid var(--border-subtle);
+        }
+        .mcol { background: var(--bg-soft); padding: 28px 26px; }
+        .mcol-h {
+            font-family: var(--label); font-size: 0.65rem;
+            letter-spacing: 0.18em; text-transform: uppercase;
+            color: var(--teal); margin-bottom: 22px;
+            padding-bottom: 12px; border-bottom: 1px solid var(--border-subtle);
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .mcol-h span { color: var(--text-dim); font-family: var(--mono); }
+        .mlist { list-style: none; padding: 0; }
+        .mlist li {
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 10px; padding: 7px 0;
+            border-bottom: 1px dashed rgba(255,255,255,0.04);
+            font-size: 0.82rem; color: var(--text-secondary); font-weight: 400;
+        }
+        .mlist li:last-child { border-bottom: none; }
+        .mlist li .mtag {
+            font-family: var(--mono); font-size: 0.66rem; color: var(--text-dim);
+            white-space: nowrap;
+        }
+        .mlist li.shipped::before { content: '●'; color: var(--teal); margin-right: 8px; font-size: 0.6rem; }
+        .mlist li.partial::before { content: '○'; color: var(--amber); margin-right: 8px; font-size: 0.6rem; }
+        .mlist li.optional::before { content: '◇'; color: var(--text-dim); margin-right: 8px; font-size: 0.6rem; }
+        @media (max-width: 980px) { .matrix-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 560px) { .matrix-grid { grid-template-columns: 1fr; } }
+
+        /* ─── Architecture diagram ─── */
+        .arch { padding: 100px 0; position: relative; z-index: 10; }
+        .arch-head { text-align: center; margin-bottom: 56px; }
+        .arch-head .eyebrow { display: inline-block; }
+        .arch-head h2 {
+            font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 700; letter-spacing: -0.025em;
+            margin: 14px 0 16px;
+        }
+        .arch-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .arch-head p {
+            color: var(--text-secondary); max-width: 600px; margin: 0 auto;
+            font-size: 0.92rem; line-height: 1.75; font-weight: 300;
+        }
+        .arch-diagram {
+            border: 1px solid var(--border-subtle);
+            background: linear-gradient(180deg, var(--bg-soft) 0%, var(--surface-1) 100%);
+            padding: 36px;
+            box-shadow: 0 30px 60px -15px rgba(0,0,0,0.6);
+        }
+        .arch-layer {
+            display: grid; grid-template-columns: 140px 1fr;
+            align-items: center; gap: 24px;
+            padding: 18px 0;
+            border-bottom: 1px dashed var(--border-subtle);
+        }
+        .arch-layer:last-child { border-bottom: none; }
+        .arch-layer-name {
+            font-family: var(--label); font-size: 0.66rem;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--teal-dim);
+        }
+        .arch-layer-name .lnum { color: var(--text-dim); font-family: var(--mono); display: block; margin-bottom: 4px; }
+        .arch-nodes { display: flex; flex-wrap: wrap; gap: 8px; }
+        .arch-node {
+            font-family: var(--mono); font-size: 0.74rem;
+            padding: 7px 13px;
+            border: 1px solid var(--border-subtle);
+            background: rgba(0,0,0,0.25);
+            color: var(--text-primary);
+            transition: border-color 0.25s, background 0.25s;
+        }
+        .arch-node:hover { border-color: var(--teal); background: rgba(0,212,180,0.06); }
+        .arch-node.brain { border-color: var(--border-strong); background: rgba(0,212,180,0.08); color: var(--teal); }
+        .arch-node.gov { border-color: rgba(245,158,11,0.3); background: rgba(245,158,11,0.04); color: var(--amber); }
+        .arch-node.crypto { border-color: rgba(167,139,250,0.3); background: rgba(167,139,250,0.04); color: var(--violet); }
+        .arch-foot {
+            font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim);
+            margin-top: 18px; padding-top: 18px;
+            border-top: 1px solid var(--border-subtle);
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+        }
+        .arch-foot span::before { content: '— '; color: var(--text-dim); }
+        @media (max-width: 720px) {
+            .arch-layer { grid-template-columns: 1fr; gap: 12px; }
+            .arch-diagram { padding: 22px 16px; }
         }
 
         /* ─── Features ─── */
@@ -276,11 +1324,12 @@
         .section-title {
             font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
             font-weight: 700; color: var(--text-primary);
-            margin-bottom: 14px; letter-spacing: -0.02em;
+            margin-bottom: 14px; letter-spacing: -0.025em;
         }
+        .section-title .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
         .section-sub {
             color: var(--text-secondary); font-size: 0.95rem;
-            max-width: 520px; margin-bottom: 60px; line-height: 1.75; font-weight: 300;
+            max-width: 560px; margin-bottom: 60px; line-height: 1.75; font-weight: 300;
         }
         .features-grid {
             display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -303,84 +1352,419 @@
             color: var(--text-primary); margin-bottom: 10px;
         }
         .feat-card p { color: var(--text-secondary); font-size: 0.85rem; line-height: 1.7; }
+        .feat-meta {
+            margin-top: 16px; padding-top: 12px;
+            border-top: 1px dashed var(--border-subtle);
+            font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim);
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+        }
+        .feat-meta .accent { color: var(--teal-dim); }
         .ftag {
             display: inline; font-family: var(--mono); font-size: 0.72em;
             background: rgba(0,212,180,0.06); border: 1px solid rgba(0,212,180,0.14);
             color: var(--teal-dim); padding: 1px 5px; margin: 0 1px;
         }
 
+        /* ─── Compare table ─── */
+        .compare {
+            padding: 100px 0; position: relative; z-index: 10;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .compare-head { text-align: center; margin-bottom: 56px; }
+        .compare-head h2 {
+            font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 700; letter-spacing: -0.025em; margin: 14px 0 16px;
+        }
+        .compare-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .compare-head p {
+            color: var(--text-secondary); max-width: 600px; margin: 0 auto;
+            font-size: 0.92rem; line-height: 1.75; font-weight: 300;
+        }
+        .ctable {
+            width: 100%; border-collapse: collapse;
+            font-family: var(--sans); font-size: 0.86rem;
+            border: 1px solid var(--border-subtle);
+            background: var(--bg-soft);
+        }
+        .ctable th, .ctable td {
+            padding: 16px 18px; text-align: left;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .ctable th {
+            font-family: var(--label); font-size: 0.66rem;
+            letter-spacing: 0.14em; text-transform: uppercase;
+            color: var(--text-tertiary); font-weight: 500;
+            background: rgba(0,0,0,0.3);
+        }
+        .ctable th.axon-col {
+            color: var(--teal);
+            background: rgba(0,212,180,0.05);
+            border-bottom: 1px solid var(--border-strong);
+        }
+        .ctable tr:last-child td { border-bottom: none; }
+        .ctable td.row-h {
+            font-family: var(--label); font-size: 0.7rem;
+            letter-spacing: 0.1em; text-transform: uppercase;
+            color: var(--text-secondary);
+            border-right: 1px solid var(--border-subtle);
+            background: rgba(0,0,0,0.15);
+        }
+        .ctable td { color: var(--text-secondary); font-size: 0.84rem; }
+        .ctable td.cell-axon { background: rgba(0,212,180,0.025); border-left: 1px solid rgba(0,212,180,0.1); border-right: 1px solid rgba(0,212,180,0.1); }
+        .ck-yes { color: var(--teal); font-family: var(--mono); }
+        .ck-no  { color: rgba(239,68,68,0.7); font-family: var(--mono); }
+        .ck-mid { color: var(--amber); font-family: var(--mono); }
+        @media (max-width: 720px) {
+            .ctable { font-size: 0.74rem; }
+            .ctable th, .ctable td { padding: 10px 8px; }
+        }
+
         /* ─── Showcases ─── */
-        .showcase { padding: 60px 0 120px; z-index: 10; position: relative; }
+        .showcase { padding: 100px 0 120px; z-index: 10; position: relative; }
         .showcase-row {
             display: grid; grid-template-columns: 1fr 1fr;
-            gap: 72px; margin-bottom: 100px; align-items: center;
+            gap: 72px; margin-bottom: 110px; align-items: center;
         }
+        .showcase-row:last-child { margin-bottom: 0; }
         .showcase-row:nth-child(even) .sc-content { order: 2; }
         .showcase-row:nth-child(even) .sc-visual  { order: 1; }
         .sc-num {
             font-family: var(--label); font-size: 0.62rem; letter-spacing: 0.18em;
             text-transform: uppercase; color: var(--text-dim); margin-bottom: 16px;
+            display: flex; align-items: center; gap: 14px;
         }
         .sc-num span { color: var(--teal); }
+        .sc-num::after {
+            content: ''; flex: 1; max-width: 80px; height: 1px;
+            background: linear-gradient(90deg, var(--border-subtle), transparent);
+        }
         .sc-title {
             font-family: var(--display); font-size: clamp(1.5rem, 2.5vw, 2.2rem);
-            font-weight: 700; color: var(--text-primary); margin-bottom: 16px; line-height: 1.15;
+            font-weight: 700; color: var(--text-primary); margin-bottom: 16px; line-height: 1.1; letter-spacing: -0.02em;
         }
+        .sc-title .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
         .sc-desc {
-            color: var(--text-secondary); font-size: 0.9rem;
+            color: var(--text-secondary); font-size: 0.92rem;
             margin-bottom: 24px; line-height: 1.8; font-weight: 300;
         }
+        .sc-desc strong { color: var(--text-primary); font-weight: 500; }
         .check-list { list-style: none; padding: 0; }
         .check-list li {
-            margin-bottom: 9px; display: flex; align-items: flex-start;
-            gap: 11px; font-size: 0.85rem; color: var(--text-secondary);
+            margin-bottom: 11px; display: flex; align-items: flex-start;
+            gap: 11px; font-size: 0.86rem; color: var(--text-secondary);
         }
         .ck { color: var(--teal); font-family: var(--label); font-size: 0.7rem; margin-top: 2px; flex-shrink: 0; }
         .cka { color: var(--amber) !important; }
+        .ckv { color: var(--violet) !important; }
         .sc-visual img {
             width: 100%; height: auto; border: 1px solid var(--border-subtle); display: block;
             box-shadow: 0 30px 60px -15px rgba(0,0,0,0.7);
             transition: border-color 0.3s;
         }
         .sc-visual img:hover { border-color: var(--border); }
+        .sc-snippet {
+            font-family: var(--mono); font-size: 0.78rem;
+            background: #020812; border: 1px solid var(--border-subtle);
+            border-left: 2px solid var(--teal); padding: 14px 18px;
+            margin-top: 18px; color: var(--text-secondary); line-height: 1.7;
+            overflow-x: auto;
+        }
+        .sc-snippet .sk { color: var(--violet); }
+        .sc-snippet .sn { color: var(--amber); }
+        .sc-snippet .ss { color: var(--teal); }
+        .sc-snippet .scm { color: var(--text-dim); font-style: italic; }
         @media (max-width: 1024px) {
-            .showcase-row { grid-template-columns: 1fr; gap: 32px; }
+            .showcase-row { grid-template-columns: 1fr; gap: 32px; margin-bottom: 70px; }
             .showcase-row:nth-child(even) .sc-content { order: 0; }
             .showcase-row:nth-child(even) .sc-visual  { order: 0; }
         }
 
-        /* ─── Isolation Diagram ─── */
+        /* ─── Share-schema Diagram (SVG-based, animated) ─── */
         .iso-wrap {
-            border: 1px solid var(--border-subtle); background: var(--surface-1);
-            padding: 28px 20px;
+            border: 1px solid var(--border-subtle);
+            background:
+                radial-gradient(ellipse 60% 50% at 50% 35%, rgba(0,212,180,0.06), transparent 70%),
+                linear-gradient(180deg, var(--surface-1), #060e1c);
+            padding: 28px 24px 22px;
+            box-shadow: 0 30px 60px -15px rgba(0,0,0,0.6);
+            position: relative; overflow: hidden;
+        }
+        .iso-wrap::before {
+            /* Subtle grid behind the diagram so the nodes float on something. */
+            content: ''; position: absolute; inset: 0;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+            background-size: 32px 32px;
+            mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, #000 30%, transparent 95%);
+            -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, #000 30%, transparent 95%);
+            opacity: 0.5; pointer-events: none;
+        }
+        .iso-svg {
+            display: block; width: 100%; height: auto;
+            position: relative; z-index: 1;
+        }
+        /* Hex-node colour families (match the brand mark vocabulary) */
+        .iso-svg .hex-root   { fill: rgba(0,212,180,0.08);   stroke: var(--teal); }
+        .iso-svg .hex-priv   { fill: rgba(245,158,11,0.07);  stroke: var(--amber); }
+        .iso-svg .hex-team   { fill: rgba(0,212,180,0.07);   stroke: var(--teal-bright); }
+        .iso-svg .hex-pub    { fill: rgba(255,255,255,0.04); stroke: rgba(255,255,255,0.35); }
+        .iso-svg .hex-share  { fill: rgba(167,139,250,0.06); stroke: var(--violet); }
+        .iso-svg .hex-share-h{ fill: rgba(244,114,182,0.06); stroke: var(--rose); }
+        .iso-svg .hex {
+            stroke-width: 1.6; stroke-linejoin: round;
+            transition: filter 0.3s, stroke-width 0.3s;
+        }
+        .iso-svg .hex-root  { filter: drop-shadow(0 0 14px rgba(0,212,180,0.55)); }
+        .iso-svg .node-group:hover .hex { stroke-width: 2.4; filter: drop-shadow(0 0 8px currentColor); }
+        .iso-svg .node-label-eyebrow {
+            font-family: 'Syne Mono', monospace; font-size: 8px;
+            letter-spacing: 1.2px; text-transform: uppercase;
+            fill: var(--text-tertiary);
+        }
+        .iso-svg .node-label-name {
+            font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500;
+            fill: var(--text-primary);
+        }
+        /* Center pulse */
+        .iso-svg .root-halo {
+            transform-origin: center;
+            animation: root-pulse 3.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes root-pulse {
+            0%   { r: 30; opacity: 0.5; }
+            70%  { r: 56; opacity: 0; }
+            100% { r: 56; opacity: 0; }
+        }
+        /* Connection lines + animated data flow */
+        .iso-svg .conn {
+            stroke: var(--text-dim); stroke-width: 1.2; fill: none;
+            stroke-dasharray: 4 4;
+            animation: conn-flow 2.2s linear infinite;
+        }
+        .iso-svg .conn-sealed { stroke: var(--violet); animation-duration: 3s; }
+        .iso-svg .conn-hmac   { stroke: var(--rose);   animation-duration: 2.6s; }
+        @keyframes conn-flow {
+            from { stroke-dashoffset: 16; }
+            to   { stroke-dashoffset: 0; }
+        }
+        /* Lock badges on sealed terminals */
+        .iso-svg .badge {
+            font-family: 'JetBrains Mono', monospace; font-size: 8px; font-weight: 600;
+            letter-spacing: 0.5px; fill: var(--text-primary);
+        }
+        .iso-svg .badge-bg-sealed { fill: rgba(167,139,250,0.18); stroke: var(--violet); }
+        .iso-svg .badge-bg-hmac   { fill: rgba(244,114,182,0.18); stroke: var(--rose); }
+        .iso-svg .badge-bg { stroke-width: 1; rx: 2; }
+        /* Annotation labels along the side */
+        .iso-svg .annot {
+            font-family: 'Syne Mono', monospace; font-size: 9px;
+            letter-spacing: 1.2px; text-transform: uppercase;
+            fill: var(--text-tertiary);
+        }
+        .iso-svg .annot-line {
+            stroke: var(--text-dim); stroke-width: 0.8; stroke-dasharray: 2 3;
+        }
+        /* Bottom KPI strip */
+        .iso-kpis {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 1px; background: var(--border-subtle);
+            margin-top: 18px; border: 1px solid var(--border-subtle);
+        }
+        .iso-kpi {
+            background: rgba(0,0,0,0.35); padding: 12px 14px;
+            transition: background 0.3s;
+        }
+        .iso-kpi:hover { background: rgba(0,212,180,0.05); }
+        .iso-kpi-val {
+            font-family: var(--display); font-size: 1.3rem; font-weight: 700;
+            color: var(--teal); line-height: 1; margin-bottom: 4px;
+        }
+        .iso-kpi-val.amber { color: var(--amber); }
+        .iso-kpi-val.violet { color: var(--violet); }
+        .iso-kpi-lbl {
+            font-family: var(--label); font-size: 0.58rem;
+            letter-spacing: 0.14em; text-transform: uppercase;
+            color: var(--text-dim);
+        }
+
+        /* ─── Code Examples ─── */
+        .codes {
+            padding: 100px 0; position: relative; z-index: 10;
+            border-top: 1px solid var(--border-subtle);
+            background: linear-gradient(180deg, transparent, rgba(0,0,0,0.2));
+        }
+        .codes-head { text-align: center; margin-bottom: 48px; }
+        .codes-head h2 {
+            font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 700; letter-spacing: -0.025em; margin: 14px 0 16px;
+        }
+        .codes-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .codes-head p {
+            color: var(--text-secondary); max-width: 600px; margin: 0 auto;
+            font-size: 0.92rem; line-height: 1.75; font-weight: 300;
+        }
+        .codes-tabs {
+            display: flex; gap: 0; flex-wrap: wrap;
+            border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 0;
+        }
+        .codes-tab {
+            padding: 12px 22px; font-family: var(--label); font-size: 0.7rem;
+            letter-spacing: 0.12em; text-transform: uppercase;
+            color: var(--text-tertiary); cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: color 0.2s, border-color 0.2s, background 0.2s;
+            background: transparent; border-top: none; border-left: none; border-right: none;
+        }
+        .codes-tab:hover { color: var(--text-primary); background: rgba(0,212,180,0.03); }
+        .codes-tab.active { color: var(--teal); border-bottom-color: var(--teal); }
+        .codes-panel {
+            display: none;
+            background: #020812; border: 1px solid var(--border-subtle);
+            border-top: none;
+            padding: 28px 32px; font-family: var(--mono); font-size: 0.84rem;
+            line-height: 1.7; color: var(--text-secondary);
+            overflow-x: auto;
             box-shadow: 0 30px 60px -15px rgba(0,0,0,0.6);
         }
-        .iso-diagram { display: flex; flex-direction: column; align-items: center; gap: 0; }
-        .iso-tier { display: flex; justify-content: center; gap: 10px; width: 100%; padding: 10px 0; }
-        .iso-node {
-            border: 1px solid; padding: 10px 14px; font-family: var(--mono);
-            text-align: center; min-width: 100px; transition: border-color 0.25s, background 0.25s;
+        .codes-panel.active { display: block; }
+        .codes-panel .ck { color: var(--violet); }
+        .codes-panel .cs { color: var(--amber); }
+        .codes-panel .cn { color: var(--teal); }
+        .codes-panel .co { color: var(--text-dim); font-style: italic; }
+        .codes-panel .cf { color: var(--text-primary); font-weight: 500; }
+
+        /* ─── Install paths ─── */
+        .install { padding: 100px 0; position: relative; z-index: 10; }
+        .install-head { text-align: center; margin-bottom: 56px; }
+        .install-head h2 {
+            font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 700; letter-spacing: -0.025em; margin: 14px 0 16px;
         }
-        .iso-nlbl { font-family: var(--label); font-size: 0.56rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.55; margin-bottom: 3px; }
-        .iso-nname { font-size: 0.78rem; color: var(--text-primary); }
-        .iso-root   { border-color: var(--border-strong); background: rgba(0,212,180,0.05); }
-        .iso-root:hover { border-color: var(--teal); background: rgba(0,212,180,0.1); }
-        .iso-priv   { border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.04); }
-        .iso-priv:hover { border-color: var(--amber); }
-        .iso-team   { border-color: rgba(139,92,246,0.35); background: rgba(139,92,246,0.04); }
-        .iso-team:hover { border-color: rgba(139,92,246,0.7); }
-        .iso-pub    { border-color: rgba(255,255,255,0.12); background: rgba(255,255,255,0.02); }
-        .iso-pub:hover { border-color: rgba(255,255,255,0.3); }
-        .iso-share  { border-color: rgba(236,72,153,0.3); background: rgba(236,72,153,0.03); }
-        .iso-share:hover { border-color: rgba(236,72,153,0.65); }
-        .iso-spine { display: flex; justify-content: center; gap: 70px; padding: 3px 0; }
-        .iso-line { width: 1px; height: 22px; background: var(--border-subtle); }
-        .iso-spine2 { display: flex; justify-content: center; gap: 40px; padding: 3px 0; }
-        .iso-footer-strip {
-            display: flex; justify-content: space-around; margin-top: 14px;
-            padding-top: 10px; border-top: 1px solid var(--border-subtle); width: 100%;
+        .install-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .install-head p {
+            color: var(--text-secondary); max-width: 600px; margin: 0 auto;
+            font-size: 0.92rem; line-height: 1.75; font-weight: 300;
         }
-        .iso-fl { font-family: var(--label); font-size: 0.57rem; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; }
+        .install-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1px; background: var(--border-subtle); border: 1px solid var(--border-subtle);
+        }
+        .ipath {
+            background: var(--bg-soft); padding: 28px;
+            display: flex; flex-direction: column;
+            transition: background 0.3s;
+        }
+        .ipath:hover { background: var(--surface-1); }
+        .ipath.featured { background: rgba(0,212,180,0.04); border-left: 2px solid var(--teal); }
+        .ipath-tag {
+            font-family: var(--label); font-size: 0.6rem;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--text-dim); margin-bottom: 8px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .ipath-tag .ip-rec { color: var(--teal); }
+        .ipath-name {
+            font-family: var(--mono); font-size: 1.1rem; color: var(--teal);
+            margin-bottom: 14px; font-weight: 500;
+        }
+        .ipath-name .ip-pkg { color: var(--text-primary); }
+        .ipath-desc {
+            font-size: 0.84rem; color: var(--text-secondary);
+            line-height: 1.7; flex: 1;
+        }
+        .ipath-deps {
+            margin-top: 16px; padding-top: 12px;
+            border-top: 1px dashed var(--border-subtle);
+            font-family: var(--mono); font-size: 0.68rem; color: var(--text-dim);
+        }
+
+        /* ─── What's New (timeline) ─── */
+        .whatsnew {
+            padding: 100px 0; position: relative; z-index: 10;
+            border-top: 1px solid var(--border-subtle);
+            background: linear-gradient(180deg, rgba(0,0,0,0.2), transparent);
+        }
+        .wn-head { text-align: center; margin-bottom: 48px; }
+        .wn-head .vbadge {
+            display: inline-block; font-family: var(--label); font-size: 0.7rem;
+            color: var(--teal); border: 1px solid var(--border-strong);
+            padding: 6px 14px; letter-spacing: 0.16em; text-transform: uppercase;
+            margin-bottom: 14px; background: rgba(0,212,180,0.05);
+        }
+        .wn-head h2 {
+            font-family: var(--display); font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 700; letter-spacing: -0.025em; margin-bottom: 16px;
+        }
+        .wn-head h2 .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .wn-head p {
+            color: var(--text-secondary); max-width: 580px; margin: 0 auto;
+            font-size: 0.92rem; line-height: 1.75; font-weight: 300;
+        }
+        .wn-list {
+            max-width: 880px; margin: 0 auto;
+            border-left: 1px dashed var(--border-subtle);
+            padding-left: 36px;
+        }
+        .wn-item {
+            position: relative; padding: 22px 0;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .wn-item:last-child { border-bottom: none; }
+        .wn-item::before {
+            content: ''; position: absolute; left: -42px; top: 30px;
+            width: 8px; height: 8px; background: var(--teal);
+            border: 2px solid var(--bg);
+            box-shadow: 0 0 0 1px var(--teal);
+        }
+        .wn-tag {
+            font-family: var(--label); font-size: 0.62rem;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--teal); margin-bottom: 6px;
+        }
+        .wn-tag.amber { color: var(--amber); }
+        .wn-tag.amber + .wn-title + .wn-desc { /* nothing — just for variety */ }
+        .wn-title {
+            font-family: var(--display); font-size: 1.1rem; font-weight: 600;
+            color: var(--text-primary); margin-bottom: 6px;
+        }
+        .wn-desc {
+            font-size: 0.85rem; color: var(--text-secondary);
+            line-height: 1.7; font-weight: 300;
+        }
+        .wn-desc code {
+            background: rgba(0,212,180,0.06); padding: 1px 5px;
+            border: 1px solid rgba(0,212,180,0.14); color: var(--teal-dim);
+            font-size: 0.78em;
+        }
+
+        /* ─── Pull quote ─── */
+        .pullquote {
+            padding: 80px 0; position: relative; z-index: 10;
+            text-align: center;
+        }
+        .pullquote-inner {
+            max-width: 880px; margin: 0 auto; padding: 0 20px;
+        }
+        .pullquote-mark {
+            font-family: var(--serif); font-size: 5rem;
+            color: var(--teal); line-height: 1; opacity: 0.4;
+            margin-bottom: -20px; font-style: italic;
+        }
+        .pullquote-text {
+            font-family: var(--serif); font-style: italic;
+            font-size: clamp(1.4rem, 3vw, 2.2rem);
+            line-height: 1.4; color: var(--text-primary);
+            font-weight: 400; letter-spacing: -0.01em;
+            margin-bottom: 26px;
+        }
+        .pullquote-text .pq-em { color: var(--teal); }
+        .pullquote-attr {
+            font-family: var(--label); font-size: 0.7rem;
+            letter-spacing: 0.18em; text-transform: uppercase;
+            color: var(--text-dim);
+        }
 
         /* ─── Footer ─── */
         footer {
@@ -392,11 +1776,22 @@
             background: linear-gradient(90deg, transparent, var(--teal) 40%, transparent);
             opacity: 0.35;
         }
+        .footer-eyebrow {
+            font-family: var(--label); font-size: 0.62rem;
+            letter-spacing: 0.2em; text-transform: uppercase;
+            color: var(--teal); margin-bottom: 14px;
+        }
         .footer-title {
             font-family: var(--display); font-size: clamp(2rem, 4.5vw, 3.8rem);
-            font-weight: 700; color: var(--text-primary); margin-bottom: 12px; letter-spacing: -0.03em;
+            font-weight: 700; color: var(--text-primary); margin-bottom: 18px;
+            letter-spacing: -0.03em; line-height: 1.05;
         }
-        .footer-sub { color: var(--text-secondary); font-size: 0.88rem; margin-bottom: 48px; font-weight: 300; }
+        .footer-title .ax-em { font-family: var(--serif); font-style: italic; color: var(--teal); font-weight: 400; }
+        .footer-sub {
+            color: var(--text-secondary); font-size: 0.92rem;
+            margin-bottom: 48px; font-weight: 300; max-width: 520px;
+            margin-left: auto; margin-right: auto; line-height: 1.7;
+        }
         .footer-install {
             display: inline-block; font-family: var(--mono);
             background: var(--surface-1); border: 1px solid var(--border);
@@ -411,13 +1806,93 @@
         .footer-meta a { color: var(--text-dim); text-decoration: none; transition: color 0.2s; }
         .footer-meta a:hover { color: var(--teal); }
         .footer-meta .sep { margin: 0 10px; opacity: 0.35; }
+        .footer-sig {
+            margin-top: 36px; padding-top: 28px;
+            border-top: 1px solid var(--border-subtle);
+            display: flex; justify-content: space-between; align-items: center;
+            font-family: var(--label); font-size: 0.62rem;
+            letter-spacing: 0.12em; text-transform: uppercase;
+            color: var(--text-dim);
+            flex-wrap: wrap; gap: 14px;
+        }
+        .footer-sig .sig-mark { color: var(--teal-dim); }
 
+        /* ─── Tighter mobile rhythm ─── */
+        @media (max-width: 1024px) {
+            .axes, .matrix, .arch, .features, .compare, .showcase,
+            .codes, .install, .whatsnew, .rare, .vignettes { padding: 64px 0; }
+            .pullquote { padding: 50px 0; }
+            footer { padding: 56px 0 40px; }
+            header { padding-top: 92px; padding-bottom: 48px; min-height: auto; }
+            .axes-head, .rare-head, .matrix-head, .arch-head,
+            .compare-head, .codes-head, .install-head, .wn-head, .vig-head { margin-bottom: 38px; }
+            .showcase-row { margin-bottom: 56px; }
+        }
         @media (max-width: 640px) {
             .hero-cta { flex-direction: column; align-items: center; }
             .btn-primary, .btn-secondary { width: 100%; max-width: 300px; justify-content: center; }
-            .stat-item { padding: 8px 18px; }
-            .footer-install { padding: 16px 24px; font-size: 0.9rem; }
+            .stat-item { padding: 6px 14px; }
+            .stat-val { font-size: 1.3rem; }
+            .stat-lbl { font-size: 0.55rem; }
+            .footer-install { padding: 14px 18px; font-size: 0.78rem; word-break: break-word; }
+            .footer-sig { flex-direction: column; }
+            .axes, .matrix, .arch, .features, .compare, .showcase,
+            .codes, .install, .whatsnew, .rare, .vignettes { padding: 48px 0; }
+            .terminal-window { box-shadow: 0 20px 40px -10px rgba(0,0,0,0.7); }
+            .terminal-body { padding: 16px 18px; }
+            .tl, .to { font-size: 0.7rem; }
+            .hero-bullets { gap: 14px; font-size: 0.62rem; }
+            .marquee { padding: 12px 0; }
+            .marquee-item { font-size: 0.66rem; }
+            .nav-inner { padding: 12px 0; }
+            .nav-logo { font-size: 0.92rem; }
+            .nav-logo .nav-mark { width: 18px; height: 18px; }
+            h1 { font-size: clamp(2.4rem, 11vw, 4rem); }
+            .section-title, .axes-head h2, .rare-head h2, .matrix-head h2,
+            .arch-head h2, .compare-head h2, .codes-head h2,
+            .install-head h2, .wn-head h2, .vig-head h2,
+            .footer-title { font-size: clamp(1.8rem, 7vw, 2.4rem); }
         }
+
+        /* ─── Evidence frames for the rare-ideas + workflow sections ───
+           Realistic terminal-styled proof blocks; replace the .term-evidence
+           IMG tag with an actual GIF/screenshot when one is recorded. */
+        .term-evidence {
+            background: #020812; border: 1px solid var(--border-subtle);
+            border-top: 1px solid var(--border);
+            overflow: hidden; margin-top: 18px;
+            box-shadow: 0 20px 40px -12px rgba(0,0,0,0.7);
+        }
+        .term-evidence-head {
+            display: flex; align-items: center; gap: 6px;
+            padding: 7px 12px; background: rgba(255,255,255,0.02);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .term-evidence-head .dot { width: 7px; height: 7px; }
+        .term-evidence-head .ev-tab {
+            margin-left: auto; font-family: var(--label);
+            font-size: 0.58rem; color: var(--text-dim);
+            letter-spacing: 0.1em; text-transform: uppercase;
+        }
+        .term-evidence-body {
+            padding: 14px 16px; font-family: var(--mono);
+            font-size: 0.74rem; line-height: 1.7; color: var(--text-secondary);
+        }
+        .term-evidence-body .te-prompt { color: var(--teal); }
+        .term-evidence-body .te-flag   { color: var(--violet); }
+        .term-evidence-body .te-str    { color: var(--amber); }
+        .term-evidence-body .te-comment{ color: var(--text-dim); font-style: italic; }
+        .term-evidence-body .te-ok     { color: #10b981; }
+        .term-evidence-body .te-warn   { color: var(--amber); }
+        .term-evidence-body .te-arrow  { color: var(--teal-dim); }
+        .term-evidence-body .te-hl     { color: var(--text-primary); }
+        .term-evidence-img {
+            display: block; width: 100%; height: auto;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        /* Print/no-script grace */
+        .no-anim .reveal { opacity: 1; transform: translateY(0); }
     </style>
 </head>
 <body>
@@ -427,8 +1902,27 @@
 <!-- Navbar -->
 <nav>
     <div class="container nav-inner">
-        <a class="nav-logo" href="#">AX<em>ON</em></a>
+        <a class="nav-logo" href="#" aria-label="Axon home">
+            <svg class="nav-mark" viewBox="0 0 100 100" fill="none" stroke="currentColor" aria-hidden="true">
+                <polygon points="50,7 87,28 87,72 50,93 13,72 13,28" stroke-width="6" stroke-linejoin="round"/>
+                <g stroke-width="6" stroke-linecap="round">
+                    <line x1="50" y1="50" x2="50" y2="22"/>
+                    <line x1="50" y1="50" x2="74" y2="64"/>
+                    <line x1="50" y1="50" x2="26" y2="64"/>
+                </g>
+                <g class="nm-pulse" fill="currentColor">
+                    <circle cx="50" cy="22" r="6"/>
+                    <circle cx="74" cy="64" r="6"/>
+                    <circle cx="26" cy="64" r="6"/>
+                </g>
+                <circle cx="50" cy="50" r="9" fill="currentColor"/>
+            </svg>
+            AX<em>ON</em>
+        </a>
         <div class="nav-links">
+            <a href="#capabilities">Capabilities</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#code">Code</a>
             <a href="https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md" target="_blank" rel="noopener noreferrer">Docs</a>
             <a href="https://github.com/jyunming/Axon" target="_blank" rel="noopener noreferrer">GitHub</a>
             <a href="https://pypi.org/project/axon-rag/" target="_blank" rel="noopener noreferrer" class="nav-install">pip install axon-rag</a>
@@ -440,20 +1934,26 @@
 <header class="container">
     <div class="version-tag reveal active">
         <div class="version-dot"></div>
-        v0.3.2 — now on PyPI
+        v0.3.2 <span class="vt-sep">/</span> <span class="vt-meta">now on PyPI</span>
     </div>
 
     <h1 class="reveal active">
         Your documents,<br>
         <span class="accent">answerable.</span><br>
-        <span class="muted">On your hardware.</span>
+        <span class="serif-it muted">On your hardware.</span>
     </h1>
 
     <p class="hero-sub reveal active">
-        Drop in PDFs, code, spreadsheets, or URLs.
-        Ask anything, get cited answers from a local LLM.
+        Drop in <strong>PDFs, code, spreadsheets, or URLs</strong>.
+        Ask anything, get <span class="h-em">cited answers</span> from a local LLM.
         Nothing leaves your machine.
     </p>
+
+    <div class="hero-bullets reveal active" style="transition-delay:0.05s">
+        <span><span class="hb-dot"></span> Hybrid + GraphRAG retrieval</span>
+        <span><span class="hb-dot"></span> Sealed cloud-drive sharing</span>
+        <span><span class="hb-dot"></span> Zero telemetry</span>
+    </div>
 
     <div class="hero-cta reveal active" style="transition-delay:0.1s">
         <a href="https://pypi.org/project/axon-rag/" target="_blank" rel="noopener noreferrer" class="btn-primary">
@@ -463,295 +1963,734 @@
             <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
             View on GitHub
         </a>
-        <a href="https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md" target="_blank" rel="noopener noreferrer" class="btn-secondary">
-            Documentation
-        </a>
     </div>
 
     <div class="terminal-window reveal active" style="transition-delay:0.2s">
         <div class="terminal-header">
             <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
-            <span class="term-tab">Terminal — bash</span>
+            <span class="term-tab">~/research — bash</span>
+            <span class="term-meta">axon · 0.3.2 · python 3.11</span>
         </div>
         <div class="terminal-body">
             <div class="tl">
-                <span class="tv">(axon-rag)</span>
+                <span class="tv">(axon)</span>
                 <span class="t$">$</span>
-                <span class="tc">pip install <span class="tp">axon-rag</span></span>
+                <span class="tc">pip install <span class="tp">"axon-rag[starter]"</span></span>
             </div>
             <div class="to tok">✓ Successfully installed axon-rag-0.3.2</div>
             <div class="tl" style="margin-top:12px">
-                <span class="tv">(axon-rag)</span>
+                <span class="tv">(axon)</span>
                 <span class="t$">$</span>
-                <span class="tc">axon ingest ~/research/papers/</span>
+                <span class="tc">axon --doctor</span>
             </div>
-            <div class="to tinfo">→ Scanning 42 files [PDF, MD, DOCX, ipynb]</div>
-            <div class="to tok">✓ Indexed 42 files · 0 duplicates · 1,847 chunks</div>
+            <div class="to tok">✓ Python 3.11 · Ollama reachable · llama3.1:8b cached · store writable</div>
             <div class="tl" style="margin-top:12px">
-                <span class="tv">(axon-rag)</span>
+                <span class="tv">(axon)</span>
                 <span class="t$">$</span>
-                <span class="tc">axon query "What are the key findings in section 4?"</span>
+                <span class="tc">axon ingest <span class="tk">~/research/papers/</span></span>
             </div>
-            <div class="to tinfo">↳ hybrid search · BGE rerank · cite</div>
-            <div class="to tans"><span class="cursor">Based on section 4.2 [1] and the methodology [2]...</span></div>
+            <div class="to tinfo">→ Scanning 42 files [PDF, MD, DOCX, ipynb] · SHA-256 dedup</div>
+            <div class="to tok">✓ Indexed 42 files · 0 duplicates · 1,847 chunks · 312 entities · 89 relations</div>
+            <div class="tl" style="margin-top:12px">
+                <span class="tv">(axon)</span>
+                <span class="t$">$</span>
+                <span class="tc">axon query <span class="tp">"What were the v0.3.2 graph backend changes?"</span></span>
+            </div>
+            <div class="to tinfo">↳ hybrid search · BGE rerank · GraphRAG local · cite</div>
+            <div class="to tans">v0.3.2 added four user-visible graph capabilities <span class="tcite">[Doc 1]</span> <span class="tcite">[Doc 2]</span>:</div>
+            <div class="to tans" style="padding-left:34px">  • <span class="tans">Capability flags on </span><span class="tp">FinalizationResult</span><span class="tans"> — <span class="tcite">[3]</span></span></div>
+            <div class="to tans" style="padding-left:34px">  • <span class="tans">Point-in-time </span><span class="tp">/graph/retrieve</span><span class="tans"> route — <span class="tcite">[4]</span></span></div>
+            <div class="to tans" style="padding-left:34px">  • <span class="tans">Conflict inspection via </span><span class="tp">graph_conflicts</span><span class="tans"> — <span class="tcite">[5]</span></span></div>
+            <div class="to tans" style="padding-left:34px">  • <span class="tans">Per-query federation weights<span class="cursor"> </span></span></div>
         </div>
     </div>
 
     <p class="hero-note reveal active" style="transition-delay:0.3s">
-        * Inference runs locally via <a href="https://ollama.com" target="_blank" rel="noopener noreferrer">Ollama</a> — no API key needed.
-        OpenAI, Gemini, Grok, vLLM, and GitHub Copilot are supported via API keys.
+        ✶ Runs on <a href="https://ollama.com" target="_blank" rel="noopener noreferrer">Ollama</a> / vLLM locally · OpenAI · Gemini · Grok · Copilot · MIT licensed
     </p>
 </header>
 
-<!-- How It Works -->
-<section class="how-strip">
-    <div class="container">
+<!-- Marquee -->
+<!-- Combined intro deck: marquee + how-it-works + stats (one viewport) -->
+<section class="intro-deck" id="overview">
+
+    <!-- How It Works (5 steps) -->
+    <div class="how-strip" style="border: none; padding: 0;">
+    <div class="container-wide">
         <div class="how-inner">
             <div class="how-step reveal">
+                <svg class="how-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
                 <div class="how-num">01 / Ingest</div>
                 <div class="how-title"><span>Drop</span> your files</div>
-                <div class="how-desc">54 formats — PDF, code, notebooks, spreadsheets, emails, URLs. SHA-256 deduplication skips already-indexed content automatically.</div>
+                <div class="how-desc">54 formats. SHA-256 dedup, content-aware chunking.</div>
             </div>
-            <div class="how-step reveal" style="transition-delay:0.1s">
+            <div class="how-step reveal" style="transition-delay:0.05s">
+                <svg class="how-icon" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M12 3v3M12 18v3M3 12h3M18 12h3" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
                 <div class="how-num">02 / Index</div>
                 <div class="how-title"><span>Build</span> the graph</div>
-                <div class="how-desc">Hybrid BM25 + dense vectors, RAPTOR hierarchies, GraphRAG community detection — all run locally on your CPU or GPU.</div>
+                <div class="how-desc">Hybrid BM25 + dense. GraphRAG, RAPTOR, code-graph. All on CPU.</div>
+            </div>
+            <div class="how-step reveal" style="transition-delay:0.1s">
+                <svg class="how-icon" viewBox="0 0 24 24" fill="none">
+                    <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M16 16l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <div class="how-num">03 / Retrieve</div>
+                <div class="how-title"><span>Route</span> the query</div>
+                <div class="how-desc">Auto-router picks HyDE, multi-query, step-back, or graph. BGE rerank.</div>
+            </div>
+            <div class="how-step reveal" style="transition-delay:0.15s">
+                <svg class="how-icon" viewBox="0 0 24 24" fill="none">
+                    <path d="M5 4h12l3 3v13H5V4z" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M9 10h7M9 14h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <div class="how-num">04 / Cite</div>
+                <div class="how-title"><span>Answer</span> with proof</div>
+                <div class="how-desc">Structured <code>citations</code> array — Claude / OpenAI compatible shapes.</div>
             </div>
             <div class="how-step reveal" style="transition-delay:0.2s">
-                <div class="how-num">03 / Query</div>
-                <div class="how-title"><span>Ask</span> anything</div>
-                <div class="how-desc">REPL, REST API, 31 MCP tools, 36 VS Code LM tools — cited answers from your private knowledge base in milliseconds.</div>
+                <svg class="how-icon" viewBox="0 0 24 24" fill="none">
+                    <circle cx="6" cy="12" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="18" cy="6" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="18" cy="18" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M8.2 11l7.6-4M8.2 13l7.6 4" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+                <div class="how-num">05 / Share</div>
+                <div class="how-title"><span>Seal</span> &amp; distribute</div>
+                <div class="how-desc">AES-256-GCM at rest. Cloud sees ciphertext. Rotate to revoke.</div>
             </div>
         </div>
     </div>
-</section>
+    </div>
 
-<!-- Stats Strip -->
-<section class="stats-strip">
+    <!-- Stats Strip -->
+    <div class="stats-strip" style="border: none; padding: 0; margin-top: 24px;">
     <div class="container">
         <div class="stats-inner">
             <div class="stat-item reveal">
-                <div class="stat-val">31</div>
+                <div class="stat-val">48</div>
                 <div class="stat-lbl">MCP Tools</div>
             </div>
             <div class="stat-item reveal" style="transition-delay:0.05s">
-                <div class="stat-val">39</div>
-                <div class="stat-lbl">VS Code Tools</div>
-            </div>
-            <div class="stat-item reveal" style="transition-delay:0.1s">
                 <div class="stat-val">54</div>
                 <div class="stat-lbl">File Formats</div>
             </div>
+            <div class="stat-item reveal" style="transition-delay:0.1s">
+                <div class="stat-val violet">3</div>
+                <div class="stat-lbl">Graph Backends</div>
+            </div>
             <div class="stat-item reveal" style="transition-delay:0.15s">
-                <div class="stat-val">5</div>
+                <div class="stat-val">7</div>
                 <div class="stat-lbl">LLM Providers</div>
             </div>
             <div class="stat-item reveal" style="transition-delay:0.2s">
-                <div class="stat-val">0</div>
+                <div class="stat-val amber">0</div>
                 <div class="stat-lbl">Telemetry</div>
             </div>
         </div>
     </div>
+    </div>
 </section>
 
-<!-- Features -->
-<section class="features container">
-    <div class="eyebrow reveal">Capabilities</div>
-    <h2 class="section-title reveal">Unrivaled Capability</h2>
-    <p class="section-sub reveal">Every advanced RAG technique embedded directly into a local-first architecture.</p>
+<!-- Five Axes -->
+<section class="axes container">
+    <div class="axes-head">
+        <div class="eyebrow reveal">— Why Axon —</div>
+        <h2 class="reveal">Five axes <span class="ax-em">we refuse to compromise on.</span></h2>
+        <p class="reveal">Most RAG tools force a trade between cloud power and data privacy. Axon delivers full capability with zero egress — and stacks four more constraints on top.</p>
+    </div>
 
-    <div class="features-grid">
-        <div class="feat-card reveal">
-            <svg class="feat-icon" viewBox="0 0 40 40" fill="none">
-                <circle cx="20" cy="7"  r="3"   stroke="currentColor" stroke-width="1.5"/>
-                <circle cx="8"  cy="29" r="3"   stroke="currentColor" stroke-width="1.5"/>
-                <circle cx="32" cy="29" r="3"   stroke="currentColor" stroke-width="1.5"/>
-                <circle cx="20" cy="22" r="3"   stroke="currentColor" stroke-width="1.5"/>
-                <line x1="20" y1="10" x2="20" y2="19" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="17.5" y1="23.5" x2="10.5" y2="26.5" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="22.5" y1="23.5" x2="29.5" y2="26.5" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="17.5" y1="9"   x2="10"   y2="26.5" stroke="currentColor" stroke-width="0.6" stroke-dasharray="2 2"/>
-                <line x1="22.5" y1="9"   x2="30"   y2="26.5" stroke="currentColor" stroke-width="0.6" stroke-dasharray="2 2"/>
+    <div class="swipe-hint" aria-hidden="true">swipe<span class="arr">→</span>to explore the five axes</div>
+    <div class="axes-grid swipe-snap-mobile">
+        <div class="axis reveal">
+            <div class="axis-num"><span>01</span> Axis</div>
+            <svg class="axis-icon" viewBox="0 0 32 32" fill="none">
+                <path d="M16 4l11 5v8c0 7-4.5 13-11 16-6.5-3-11-9-11-16V9l11-5z" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M11 16l4 4 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            <h3>Graph Intelligence</h3>
-            <p>RAPTOR hierarchies, GraphRAG (local / global / hybrid) with community detection, and Code Graph with file→symbol→caller link traversal via <span class="ftag">code_graph_bridge</span>.</p>
+            <div class="axis-title">Private by default</div>
+            <div class="axis-desc">All inference local. No API key, no upload, no telemetry. <code>local_assets_only</code> preflights at startup.</div>
+            <div class="axis-tag">// air_gapped: true</div>
         </div>
-        <div class="feat-card reveal" style="transition-delay:0.05s">
-            <svg class="feat-icon" viewBox="0 0 40 40" fill="none">
-                <rect x="6" y="4" width="20" height="26" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M26 4l8 8v20H14" stroke="currentColor" stroke-width="1.5"/>
-                <path d="M26 4v8h8"       stroke="currentColor" stroke-width="1.5"/>
-                <line x1="11" y1="14" x2="21" y2="14" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="11" y1="18" x2="21" y2="18" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="11" y1="22" x2="16" y2="22" stroke="currentColor" stroke-width="1.5"/>
-                <circle cx="31" cy="32" r="5" fill="rgba(0,212,180,0.1)" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="31" y1="29" x2="31" y2="35" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="28" y1="32" x2="34" y2="32" stroke="currentColor" stroke-width="1.5"/>
+        <div class="axis reveal" style="transition-delay:0.05s">
+            <div class="axis-num"><span>02</span> Axis</div>
+            <svg class="axis-icon" viewBox="0 0 32 32" fill="none">
+                <rect x="6" y="14" width="20" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M10 14V9a6 6 0 0112 0v5" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="16" cy="20" r="2" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M16 22v3" stroke="currentColor" stroke-width="1.5"/>
             </svg>
-            <h3>Ingest Everything</h3>
-            <p>54 file formats — PDFs, Notebooks, DOCX, PPTX, code — with SHA-256 deduplication. Smart chunking adapts to content type automatically.</p>
+            <div class="axis-title">Sealed by design</div>
+            <div class="axis-desc">AES-256-GCM at rest, per-grantee AES-KW. Master key in OS keyring. Cloud sees ciphertext.</div>
+            <div class="axis-tag">// AES-256-GCM + AES-KW</div>
         </div>
-        <div class="feat-card reveal" style="transition-delay:0.1s">
-            <svg class="feat-icon" viewBox="0 0 40 40" fill="none">
-                <path d="M20 4L6 10v10c0 8.8 6 17 14 20 8-3 14-11.2 14-20V10L20 4z" stroke="currentColor" stroke-width="1.5"/>
-                <polyline points="14,20 18,24 26,16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <div class="axis reveal" style="transition-delay:0.1s">
+            <div class="axis-num"><span>03</span> Axis</div>
+            <svg class="axis-icon" viewBox="0 0 32 32" fill="none">
+                <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="24" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="16" cy="24" r="3" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M11 8h10M9 11l5.5 11M23 11l-5.5 11" stroke="currentColor" stroke-width="1.5"/>
             </svg>
-            <h3>Air-Gapped Privacy</h3>
-            <p>Zero telemetry, zero egress. <span class="ftag">local_assets_only</span> mode runs a model preflight audit at startup — aborts if any active model would reach the network.</p>
+            <div class="axis-title">Shareable without infra</div>
+            <div class="axis-desc">No server. Shares ride any cloud drive. 5-level hierarchy, instant rotate-to-revoke.</div>
+            <div class="axis-tag">// no infra required</div>
         </div>
-        <div class="feat-card reveal" style="transition-delay:0.15s">
-            <svg class="feat-icon" viewBox="0 0 40 40" fill="none">
-                <circle cx="17" cy="17" r="10" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="24.1" y1="24.1" x2="34" y2="34" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                <line x1="11" y1="17" x2="23" y2="17" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="17" y1="11" x2="17" y2="23" stroke="currentColor" stroke-width="1.5"/>
+        <div class="axis reveal" style="transition-delay:0.15s">
+            <div class="axis-num"><span>04</span> Axis</div>
+            <svg class="axis-icon" viewBox="0 0 32 32" fill="none">
+                <circle cx="16" cy="6" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="6" cy="22" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="26" cy="22" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="16" cy="16" r="2.5" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M16 8.5v5M14 17.5l-6 3M18 17.5l6 3M14 7.5L8 21M18 7.5l6 13.5" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2"/>
             </svg>
-            <h3>Advanced Retrieval</h3>
-            <p>Hybrid BM25 + dense search, BGE reranker, HyDE, and sentence-window context. Auto query router (<span class="ftag">heuristic</span> / <span class="ftag">llm</span>) picks the right strategy — zero tuning.</p>
+            <div class="axis-title">Graph native</div>
+            <div class="axis-desc">Three backends: <em>graphrag</em>, bi-temporal <em>dynamic_graph</em>, <em>federated</em> RRF. Plus orthogonal code-graph.</div>
+            <div class="axis-tag">// 3 backends, 1 protocol</div>
         </div>
-        <div class="feat-card reveal" style="transition-delay:0.2s">
-            <svg class="feat-icon" viewBox="0 0 40 40" fill="none">
-                <rect x="5"  y="10" width="30" height="20" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="5"  y1="17" x2="35" y2="17" stroke="currentColor" stroke-width="1.5"/>
-                <rect x="9"  y="21" width="8" height="5"  stroke="currentColor" stroke-width="1"/>
-                <rect x="23" y="21" width="8" height="5"  stroke="currentColor" stroke-width="1"/>
-                <path d="M15 5h10M20 5v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                <path d="M10 30v5M30 30v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <div class="axis reveal" style="transition-delay:0.2s">
+            <div class="axis-num"><span>05</span> Axis</div>
+            <svg class="axis-icon" viewBox="0 0 32 32" fill="none">
+                <rect x="4" y="10" width="24" height="14" rx="1" stroke="currentColor" stroke-width="1.5"/>
+                <circle cx="11" cy="17" r="1.5" fill="currentColor"/>
+                <circle cx="21" cy="17" r="1.5" fill="currentColor"/>
+                <path d="M9 6l3-2M23 6l-3-2M16 24v4M14 28h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
             </svg>
-            <h3>AxonStore &amp; Gov</h3>
-            <p>HMAC-signed, instantly revocable read-only share keys. Federated queries via <span class="ftag">@store</span>. Governance audit trail with graceful <span class="ftag">normal→draining→offline</span> state machine.</p>
-        </div>
-        <div class="feat-card reveal" style="transition-delay:0.25s">
-            <svg class="feat-icon" viewBox="0 0 40 40" fill="none">
-                <rect x="4"  y="8"  width="14" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                <rect x="22" y="8"  width="14" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                <rect x="13" y="26" width="14" height="10" rx="1" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="11" y1="18" x2="20" y2="26" stroke="currentColor" stroke-width="1.5"/>
-                <line x1="29" y1="18" x2="20" y2="26" stroke="currentColor" stroke-width="1.5"/>
-            </svg>
-            <h3>MCP &amp; VS Code</h3>
-            <p>31 MCP tools for Claude Code, Codex, Gemini, Cursor &amp; Copilot. 36 LM tools in the VS Code extension. Interactive 3D graph panel with source-line deep-links.</p>
+            <div class="axis-title">Agent ready</div>
+            <div class="axis-desc">Designed for autonomous agents from day one — MCP tools, in-process retrievers, and citation shapes all speak the protocols agents already expect.</div>
+            <div class="axis-tag">// agent_native: true</div>
         </div>
     </div>
 </section>
 
-<!-- Showcases -->
-<section class="showcase container">
-    <div class="eyebrow reveal" style="text-align:center;margin-bottom:12px">Showcase</div>
-    <h2 class="section-title reveal" style="text-align:center;margin-bottom:80px">See it in Action</h2>
-
-    <!-- 01 REPL -->
-    <div class="showcase-row reveal">
-        <div class="sc-content">
-            <div class="sc-num"><span>01</span> / 04 — Interactive REPL</div>
-            <h3 class="sc-title">Interactive REPL Workflow</h3>
-            <p class="sc-desc">Interact directly with your knowledge base via a robust terminal REPL. Effortlessly swap models, trace sources, and query your GraphRAG database dynamically using natural language.</p>
-            <ul class="check-list">
-                <li><span class="ck">→</span> Zero setup — just <code>pip install axon-rag &amp;&amp; axon</code></li>
-                <li><span class="ck">→</span> Interactive document citations</li>
-                <li><span class="ck">→</span> Fast hybrid semantic search</li>
-            </ul>
-        </div>
-        <div class="sc-visual">
-            <img src="assets/repl-animation.gif" alt="Axon REPL in action">
-        </div>
+<!-- Architecture -->
+<section class="arch container" id="architecture">
+    <div class="arch-head">
+        <div class="eyebrow reveal">— Architecture —</div>
+        <h2 class="reveal">Five layers, <span class="ax-em">one mental model.</span></h2>
+        <p class="reveal">Surfaces → a single <code>AxonBrain</code> via composable mixins. Layers don't leak.</p>
     </div>
 
-    <!-- 02 VS Code Graph -->
-    <div class="showcase-row reveal">
-        <div class="sc-content">
-            <div class="sc-num"><span>02</span> / 04 — VS Code Extension</div>
-            <h3 class="sc-title">Knowledge Graph Integration</h3>
-            <p class="sc-desc">The native VS Code extension opens an interactive 3D webview of your code relationships. <strong style="color:var(--text-primary);font-weight:500">36 LM tools</strong> expose every Axon capability directly in Copilot Chat — search, ingest, share, govern, visualise.</p>
-            <ul class="check-list">
-                <li><span class="ck">→</span> Install with <code>axon-ext</code> — no Marketplace needed</li>
-                <li><span class="ck">→</span> <code>@axon</code> in Copilot Chat — 36 LM tools in the agent hammer menu</li>
-            </ul>
-        </div>
-        <div class="sc-visual">
-            <img src="assets/vscode-graph-panel.png" alt="Axon VS Code Knowledge Graph">
-        </div>
-    </div>
-
-    <!-- 03 Copilot -->
-    <div class="showcase-row reveal">
-        <div class="sc-content">
-            <div class="sc-num"><span>03</span> / 04 — Copilot Chat</div>
-            <h3 class="sc-title">@axon in Copilot</h3>
-            <p class="sc-desc">Bring Axon's deep context straight to GitHub Copilot Chat. By invoking <code>@axon</code>, Copilot can search your local indexed RAG database, summarising complex project logic instantly without leaving the editor.</p>
-        </div>
-        <div class="sc-visual">
-            <img src="assets/AxonCopilot.gif" alt="Axon VSCode Copilot Integration">
-        </div>
-    </div>
-
-    <!-- 04 Isolation -->
-    <div class="showcase-row reveal">
-        <div class="sc-content">
-            <div class="sc-num"><span>04</span> / 04 — Project Architecture</div>
-            <h3 class="sc-title">Project Isolation &amp; AxonStore</h3>
-            <p class="sc-desc">Maintain strict boundaries between knowledge bases. Axon supports <strong style="color:var(--text-primary);font-weight:500">up to 5 levels of nested projects</strong> — searching a parent fans out to all descendants. Share read-only access via cryptographically signed, instantly revocable HMAC keys, or federate queries across all mounted projects via <code>@store</code>.</p>
-            <ul class="check-list">
-                <li><span class="ck cka">→</span> Hierarchical projects — parent search fans out to all children</li>
-                <li><span class="ck cka">→</span> HMAC-signed read-only shares with instant revocation</li>
-                <li><span class="ck cka">→</span> Graceful: <code>normal → draining → readonly → offline</code></li>
-                <li><span class="ck cka">→</span> Full governance audit trail</li>
-            </ul>
-        </div>
-        <div class="sc-visual">
-            <div class="iso-wrap">
-                <div class="iso-diagram">
-                    <!-- Root -->
-                    <div class="iso-tier">
-                        <div class="iso-node iso-root" style="min-width:180px">
-                            <div class="iso-nlbl">AxonStore Root</div>
-                            <div class="iso-nname">@store</div>
-                        </div>
-                    </div>
-                    <!-- Spine 1: 3 branches -->
-                    <div class="iso-spine">
-                        <div class="iso-line" style="position:relative;left:-20px"></div>
-                        <div class="iso-line"></div>
-                        <div class="iso-line" style="position:relative;left:20px"></div>
-                    </div>
-                    <!-- Projects -->
-                    <div class="iso-tier" style="gap:8px">
-                        <div class="iso-node iso-priv" style="min-width:104px">
-                            <div class="iso-nlbl">Private</div>
-                            <div class="iso-nname">my-docs</div>
-                        </div>
-                        <div class="iso-node iso-team" style="min-width:104px">
-                            <div class="iso-nlbl">Team</div>
-                            <div class="iso-nname">eng-wiki</div>
-                        </div>
-                        <div class="iso-node iso-pub" style="min-width:104px">
-                            <div class="iso-nlbl">Mounted</div>
-                            <div class="iso-nname">public-src</div>
-                        </div>
-                    </div>
-                    <!-- Spine 2: 2 shares off priv + team -->
-                    <div class="iso-spine2">
-                        <div class="iso-line"></div>
-                        <div class="iso-line"></div>
-                    </div>
-                    <!-- Shares -->
-                    <div class="iso-tier" style="gap:8px">
-                        <div class="iso-node iso-share" style="min-width:130px">
-                            <div class="iso-nlbl">Read-Only Share</div>
-                            <div class="iso-nname">HMAC key</div>
-                        </div>
-                        <div class="iso-node iso-share" style="min-width:130px">
-                            <div class="iso-nlbl">Read-Only Share</div>
-                            <div class="iso-nname">HMAC key</div>
-                        </div>
-                    </div>
-                    <div class="iso-footer-strip">
-                        <span class="iso-fl">Fan-out queries</span>
-                        <span class="iso-fl">Instant revocation</span>
-                        <span class="iso-fl">Zero-egress</span>
-                    </div>
-                </div>
+    <div class="arch-diagram reveal">
+        <div class="arch-layer">
+            <div class="arch-layer-name"><span class="lnum">L05</span>Surfaces</div>
+            <div class="arch-nodes">
+                <div class="arch-node">REPL</div>
+                <div class="arch-node">REST · /query · /graph/*</div>
+                <div class="arch-node">MCP · 48 tools</div>
+                <div class="arch-node">VS Code · @axon</div>
+                <div class="arch-node">Streamlit</div>
+                <div class="arch-node">LangChain</div>
+                <div class="arch-node">LlamaIndex</div>
             </div>
+        </div>
+        <div class="arch-layer">
+            <div class="arch-layer-name"><span class="lnum">L04</span>Brain</div>
+            <div class="arch-nodes">
+                <div class="arch-node brain">AxonBrain</div>
+                <div class="arch-node">QueryRouterMixin</div>
+                <div class="arch-node">GraphRagMixin</div>
+                <div class="arch-node">CodeGraphMixin</div>
+                <div class="arch-node gov">Governance</div>
+                <div class="arch-node">RateLimit</div>
+            </div>
+        </div>
+        <div class="arch-layer">
+            <div class="arch-layer-name"><span class="lnum">L03</span>Pipeline</div>
+            <div class="arch-nodes">
+                <div class="arch-node">HyDE</div>
+                <div class="arch-node">multi-query</div>
+                <div class="arch-node">step-back</div>
+                <div class="arch-node">hybrid retrieve</div>
+                <div class="arch-node">BGE rerank</div>
+                <div class="arch-node">graph expand</div>
+                <div class="arch-node">cite</div>
+                <div class="arch-node">compress</div>
+            </div>
+        </div>
+        <div class="arch-layer">
+            <div class="arch-layer-name"><span class="lnum">L02</span>Storage</div>
+            <div class="arch-nodes">
+                <div class="arch-node">TurboQuantDB</div>
+                <div class="arch-node">BM25 (Rust)</div>
+                <div class="arch-node">graphrag.json</div>
+                <div class="arch-node">dynamic.sqlite</div>
+                <div class="arch-node">code_graph.json</div>
+                <div class="arch-node">.entity_graph</div>
+            </div>
+        </div>
+        <div class="arch-layer">
+            <div class="arch-layer-name"><span class="lnum">L01</span>Sealing</div>
+            <div class="arch-nodes">
+                <div class="arch-node crypto">AES-256-GCM</div>
+                <div class="arch-node crypto">AES-KW wrap</div>
+                <div class="arch-node crypto">HKDF-SHA256</div>
+                <div class="arch-node">OS keyring</div>
+                <div class="arch-node">version.json</div>
+                <div class="arch-node">audit log</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Pull quote — contrarian positioning -->
+<section class="pullquote">
+    <div class="pullquote-inner reveal">
+        <div class="pullquote-mark">"</div>
+        <p class="pullquote-text">
+            Cloud RAG sells <em>convenience</em>. Vanilla local RAG sells <em>control</em>. We refuse to choose — and we add <span class="pq-em">three constraints nobody else takes on</span>: the graph remembers when, the share survives without infrastructure, and the conflicts get surfaced instead of swept aside.
+        </p>
+        <div class="pullquote-attr">— Axon design constraint · since v0.1</div>
+    </div>
+</section>
+
+<!-- Compare table -->
+<section class="compare container">
+    <div class="compare-head">
+        <div class="eyebrow reveal">— Versus —</div>
+        <h2 class="reveal">How it stacks up <span class="ax-em">against the alternatives.</span></h2>
+        <p class="reveal">Cloud sells convenience, local sells control. Axon refuses to choose.</p>
+    </div>
+
+    <div class="reveal" style="overflow-x:auto">
+        <table class="ctable">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th class="axon-col">Axon</th>
+                    <th>Cloud RAG (e.g. SaaS)</th>
+                    <th>Vanilla local stack</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="row-h">Privacy / egress</td>
+                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> Zero — air-gap mode optional</td>
+                    <td data-col="Cloud RAG"><span class="ck-no">✕</span> All queries to provider</td>
+                    <td data-col="Vanilla local"><span class="ck-yes">●</span> Local</td>
+                </tr>
+                <tr>
+                    <td class="row-h">Cited answers</td>
+                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> Structured <code>citations</code> array</td>
+                    <td data-col="Cloud RAG"><span class="ck-mid">◐</span> Provider-specific shape</td>
+                    <td data-col="Vanilla local"><span class="ck-no">✕</span> Roll your own</td>
+                </tr>
+                <tr>
+                    <td class="row-h">GraphRAG (community + temporal)</td>
+                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> 3 backends + federation</td>
+                    <td data-col="Cloud RAG"><span class="ck-mid">◐</span> Limited / paid tier</td>
+                    <td data-col="Vanilla local"><span class="ck-no">✕</span> Build it yourself</td>
+                </tr>
+                <tr>
+                    <td class="row-h">Sealed cloud sharing</td>
+                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> AES-256-GCM, no server</td>
+                    <td data-col="Cloud RAG"><span class="ck-mid">◐</span> Per-org account</td>
+                    <td data-col="Vanilla local"><span class="ck-no">✕</span> Not a thing</td>
+                </tr>
+                <tr>
+                    <td class="row-h">MCP / agent surface</td>
+                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> 48 tools drop-in</td>
+                    <td data-col="Cloud RAG"><span class="ck-no">✕</span> None</td>
+                    <td data-col="Vanilla local"><span class="ck-no">✕</span> None</td>
+                </tr>
+                <tr>
+                    <td class="row-h">Recurring cost</td>
+                    <td class="cell-axon" data-col="Axon"><span class="ck-yes">●</span> $0 · MIT</td>
+                    <td data-col="Cloud RAG"><span class="ck-no">✕</span> Per-token / seat</td>
+                    <td data-col="Vanilla local"><span class="ck-yes">●</span> $0</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+
+<!-- Showcase — 2×2 visual tile gallery, all 4 surfaces at a glance -->
+<section class="showcase-v2 container" id="showcase">
+    <div class="scorelin reveal">— Showcase / 4 surfaces —</div>
+    <h2 class="section-title reveal" style="text-align:center;margin-bottom:18px">See it in <span class="ax-em">action.</span></h2>
+
+    <div class="sc-gallery">
+        <div class="sc-tile reveal">
+            <div class="sc-tile-img"><img src="docs/assets/repl-animation.gif" alt="Axon REPL in action"></div>
+            <div class="sc-tile-meta">
+                <span class="sc-tile-num">01</span>
+                <span class="sc-tile-name">Interactive REPL</span>
+                <span class="sc-tile-tag">terminal · slash commands · streaming</span>
+            </div>
+        </div>
+        <div class="sc-tile reveal" style="transition-delay:0.05s">
+            <div class="sc-tile-img"><img src="docs/assets/vscode-graph-panel.png" alt="Axon VS Code Knowledge Graph"></div>
+            <div class="sc-tile-meta">
+                <span class="sc-tile-num">02</span>
+                <span class="sc-tile-name">VS Code · @axon</span>
+                <span class="sc-tile-tag">39 LM tools · 3D graph webview</span>
+            </div>
+        </div>
+        <div class="sc-tile reveal" style="transition-delay:0.1s">
+            <div class="sc-tile-img"><img src="docs/assets/AxonCopilot.gif" alt="Axon Copilot integration"></div>
+            <div class="sc-tile-meta">
+                <span class="sc-tile-num">03</span>
+                <span class="sc-tile-name">MCP for any agent</span>
+                <span class="sc-tile-tag">48 tools · stdio · Claude · Cursor · Codex</span>
+            </div>
+        </div>
+        <div class="sc-tile reveal" style="transition-delay:0.15s">
+            <div class="sc-tile-img sc-tile-img-svg">
+                <!--
+                  TRUE share architecture:
+                    Each user gets their own AxonStore namespace
+                    (AxonStore/<user>/) on a shared filesystem.
+                    Owner seals a project → encrypted bytes go to the
+                    shared cloud drive → grantee mounts it under
+                    mounts/<owner>_<project> as read-only.
+                    The cloud only ever sees ciphertext.
+                    Each project supports nested sub-projects (subs/)
+                    up to 5 levels deep — searches at the parent fan
+                    out to all descendants.
+                -->
+                <svg viewBox="0 0 540 380" xmlns="http://www.w3.org/2000/svg" aria-label="Sealed share architecture: owner → cloud → grantee mount" preserveAspectRatio="xMidYMid meet">
+                    <defs>
+                        <linearGradient id="cloudGrad" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="rgba(167,139,250,0.18)"/>
+                            <stop offset="100%" stop-color="rgba(0,212,180,0.10)"/>
+                        </linearGradient>
+                        <marker id="arrow-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#00d4b4"/>
+                        </marker>
+                    </defs>
+
+                    <!-- Namespace headers -->
+                    <text x="20" y="22" font-family="Syne, sans-serif" font-weight="700" font-size="11" fill="#00d4b4" letter-spacing="2">ALICE</text>
+                    <text x="20" y="36" font-family="JetBrains Mono, monospace" font-size="8" fill="rgba(255,255,255,0.4)">AxonStore/alice/</text>
+
+                    <text x="430" y="22" font-family="Syne, sans-serif" font-weight="700" font-size="11" fill="#a78bfa" letter-spacing="2">BOB</text>
+                    <text x="430" y="36" font-family="JetBrains Mono, monospace" font-size="8" fill="rgba(255,255,255,0.4)">AxonStore/bob/</text>
+
+                    <!-- ALICE column container -->
+                    <rect x="14" y="48" width="160" height="320" rx="3" fill="rgba(0,212,180,0.03)" stroke="rgba(0,212,180,0.18)" stroke-width="1"/>
+
+                    <!-- Alice: parent project "research" -->
+                    <g transform="translate(28 60)">
+                        <rect x="0" y="0" width="132" height="40" rx="2" fill="rgba(0,212,180,0.08)" stroke="#00d4b4" stroke-width="1.2"/>
+                        <text x="8" y="14" font-family="JetBrains Mono, monospace" font-size="9" fill="#00d4b4">research/</text>
+                        <text x="8" y="28" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">3,210 chunks · 412 ent</text>
+                    </g>
+
+                    <!-- Alice: nested subs (5-level hierarchy proof) -->
+                    <g transform="translate(40 110)" font-family="JetBrains Mono, monospace" font-size="8" fill="rgba(255,255,255,0.55)">
+                        <text x="0" y="0">└─ subs/papers/</text>
+                        <text x="14" y="13">└─ subs/2024/</text>
+                        <text x="28" y="26" fill="rgba(255,255,255,0.35)">└─ subs/q3-trial/</text>
+                    </g>
+                    <text x="40" y="158" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(0,212,180,0.6)" letter-spacing="0.5">↑ search fans out, parent → descendants</text>
+
+                    <!-- Alice: .shares/ entry (the seal originates here) -->
+                    <g transform="translate(28 200)">
+                        <rect x="0" y="0" width="132" height="44" rx="2" fill="rgba(167,139,250,0.10)" stroke="#a78bfa" stroke-width="1.2"/>
+                        <text x="8" y="14" font-family="JetBrains Mono, monospace" font-size="9" fill="#a78bfa">.shares/</text>
+                        <text x="8" y="27" font-family="JetBrains Mono, monospace" font-size="8" fill="#e2eaf5">ssk_a4f9.wrapped</text>
+                        <text x="8" y="38" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.5)">grantee=bob · DEK</text>
+                    </g>
+
+                    <!-- Alice: command -->
+                    <text x="28" y="280" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">$ axon --project-seal research</text>
+                    <text x="28" y="293" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">$ axon --share-generate \</text>
+                    <text x="28" y="305" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">    research bob</text>
+                    <text x="28" y="320" font-family="JetBrains Mono, monospace" font-size="7" fill="#00d4b4">→ SEALED1:eyJrIjo•••</text>
+                    <text x="28" y="332" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.4)">  send out-of-band</text>
+
+                    <!-- MIDDLE: shared filesystem cloud + encryption gate -->
+                    <g transform="translate(190 80)">
+                        <!-- Cloud-style container -->
+                        <rect x="0" y="0" width="160" height="220" rx="14" fill="url(#cloudGrad)" stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="3 3"/>
+                        <text x="80" y="22" text-anchor="middle" font-family="Syne, sans-serif" font-weight="700" font-size="9" fill="rgba(255,255,255,0.7)" letter-spacing="2">SHARED FILESYSTEM</text>
+                        <text x="80" y="36" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="8" fill="rgba(255,255,255,0.45)">OneDrive · Dropbox · Drive</text>
+
+                        <!-- Encryption gate -->
+                        <g transform="translate(28 60)">
+                            <rect x="0" y="0" width="104" height="48" rx="2" fill="rgba(167,139,250,0.18)" stroke="#a78bfa" stroke-width="1.4"/>
+                            <!-- lock icon -->
+                            <g transform="translate(10 10)" stroke="#a78bfa" stroke-width="1.4" fill="none" stroke-linecap="round">
+                                <rect x="0" y="10" width="18" height="14" rx="1.5"/>
+                                <path d="M3 10 v -4 a 6 6 0 0 1 12 0 v 4"/>
+                            </g>
+                            <text x="40" y="20" font-family="JetBrains Mono, monospace" font-size="9" fill="#a78bfa" font-weight="600">AES-256-GCM</text>
+                            <text x="40" y="32" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.55)">per-project DEK</text>
+                            <text x="40" y="42" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.55)">AES-KW per grantee</text>
+                        </g>
+
+                        <!-- Ciphertext glyph -->
+                        <text x="80" y="138" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="rgba(255,255,255,0.32)">▓▒░ ciphertext ░▒▓</text>
+                        <text x="80" y="156" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.35)">cloud sees bytes only</text>
+
+                        <!-- Revoke note -->
+                        <g transform="translate(20 178)">
+                            <text x="0" y="0" font-family="JetBrains Mono, monospace" font-size="7" fill="#f472b6">⟲ rotate → hard-revoke</text>
+                            <text x="0" y="13" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.45)">old SEALED1 token dies</text>
+                        </g>
+                    </g>
+
+                    <!-- BOB column container -->
+                    <rect x="366" y="48" width="160" height="320" rx="3" fill="rgba(167,139,250,0.03)" stroke="rgba(167,139,250,0.18)" stroke-width="1"/>
+
+                    <!-- Bob: own project -->
+                    <g transform="translate(380 60)">
+                        <rect x="0" y="0" width="132" height="32" rx="2" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+                        <text x="8" y="14" font-family="JetBrains Mono, monospace" font-size="9" fill="rgba(255,255,255,0.7)">project-x/</text>
+                        <text x="8" y="25" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.4)">bob's own work</text>
+                    </g>
+
+                    <!-- Bob: mounts/ — what arrives from Alice -->
+                    <g transform="translate(380 110)">
+                        <rect x="0" y="0" width="132" height="56" rx="2" fill="rgba(0,212,180,0.06)" stroke="#00d4b4" stroke-width="1.4" stroke-dasharray="4 2"/>
+                        <text x="8" y="14" font-family="JetBrains Mono, monospace" font-size="9" fill="#00d4b4">mounts/</text>
+                        <text x="8" y="28" font-family="JetBrains Mono, monospace" font-size="8.5" fill="#e2eaf5">alice_research</text>
+                        <g transform="translate(8 36)">
+                            <rect x="0" y="0" width="36" height="11" rx="1" fill="rgba(244,114,182,0.18)" stroke="#f472b6" stroke-width="0.8"/>
+                            <text x="18" y="8" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="7" fill="#f472b6" font-weight="600">R/O</text>
+                            <text x="42" y="8" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.45)">decrypt-on-query</text>
+                        </g>
+                    </g>
+
+                    <!-- Bob: command -->
+                    <text x="380" y="190" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">$ axon --share-redeem \</text>
+                    <text x="380" y="202" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">    "SEALED1:eyJrIjo•••"</text>
+                    <text x="380" y="218" font-family="JetBrains Mono, monospace" font-size="7" fill="#00d4b4">✓ mounted</text>
+
+                    <!-- Bob: query -->
+                    <text x="380" y="248" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">$ axon --project \</text>
+                    <text x="380" y="260" font-family="JetBrains Mono, monospace" font-size="7.5" fill="rgba(255,255,255,0.55)">  mounts/alice_research</text>
+
+                    <!-- Bob: ephemeral cache note -->
+                    <g transform="translate(380 285)">
+                        <rect x="0" y="0" width="132" height="42" rx="2" fill="rgba(245,158,11,0.06)" stroke="#f59e0b" stroke-width="0.8"/>
+                        <text x="8" y="14" font-family="JetBrains Mono, monospace" font-size="8" fill="#f59e0b">ephemeral cache</text>
+                        <text x="8" y="26" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.45)">decrypt → temp dir</text>
+                        <text x="8" y="36" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(255,255,255,0.45)">wiped on exit</text>
+                    </g>
+
+                    <!-- Connection arrows: Alice .shares → cloud → Bob mounts -->
+                    <path d="M 162 222 Q 184 222 192 138" stroke="#a78bfa" stroke-width="1.6" fill="none" marker-end="url(#arrow-r)" stroke-dasharray="0"/>
+                    <path d="M 350 138 Q 366 138 380 138" stroke="#00d4b4" stroke-width="1.6" fill="none" marker-end="url(#arrow-r)"/>
+
+                    <!-- Side label: 5-level hierarchy callout -->
+                    <text x="170" y="365" font-family="JetBrains Mono, monospace" font-size="7" fill="rgba(0,212,180,0.7)" letter-spacing="0.5">subs/ nests up to 5 levels deep</text>
+                </svg>
+            </div>
+            <div class="sc-tile-meta">
+                <span class="sc-tile-num">04</span>
+                <span class="sc-tile-name">Sealed share — Alice → cloud → Bob</span>
+                <span class="sc-tile-tag">AES-256-GCM · per-grantee · R/O mount</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+
+<!-- Code Examples -->
+<section class="codes" id="code">
+    <div class="container">
+        <div class="codes-head">
+            <div class="eyebrow reveal">— Use it from anywhere —</div>
+            <h2 class="reveal">Six surfaces. <span class="ax-em">One brain.</span></h2>
+            <p class="reveal">Same brain, every surface.</p>
+        </div>
+
+        <div class="codes-tabs reveal" role="tablist">
+            <button class="codes-tab active" data-target="tab-repl">REPL</button>
+            <button class="codes-tab" data-target="tab-rest">REST</button>
+            <button class="codes-tab" data-target="tab-mcp">MCP</button>
+            <button class="codes-tab" data-target="tab-langchain">LangChain</button>
+            <button class="codes-tab" data-target="tab-llama">LlamaIndex</button>
+            <button class="codes-tab" data-target="tab-python">Python SDK</button>
+        </div>
+
+        <div class="reveal">
+            <div class="codes-panel active" id="tab-repl">
+<span class="co"># Install the recommended bundle (UI + sealed sharing + extra loaders)</span>
+$ pip install "<span class="cn">axon-rag[starter]</span>"
+
+<span class="co"># Run health check before your first query</span>
+$ axon --doctor
+<span class="co">✓ Python 3.11 · Ollama reachable · llama3.1:8b cached · store writable</span>
+
+<span class="co"># First run auto-launches the setup wizard, then drops into the REPL</span>
+$ axon
+<span class="cf">axon&gt;</span> <span class="ck">/ingest</span> ~/research/papers/
+<span class="cf">axon&gt;</span> <span class="ck">/graph status</span>
+<span class="cf">axon&gt;</span> What were the v0.3.2 graph backend changes?
+<span class="cf">axon&gt;</span> <span class="ck">/graph retrieve</span> "alice" <span class="ck">--at</span> <span class="cs">2025-06-01</span>
+<span class="cf">axon&gt;</span> <span class="ck">/share generate</span> research alice <span class="ck">--ttl-days</span> <span class="cs">30</span>
+            </div>
+
+            <div class="codes-panel" id="tab-rest">
+<span class="co"># Start the API server</span>
+$ axon-api --host 0.0.0.0 --port 8000
+
+<span class="co"># Query with structured citations enabled (default)</span>
+$ curl -X POST localhost:8000/query \
+    -H "<span class="ck">Content-Type</span>: application/json" \
+    -d '{
+      "<span class="ck">query</span>": <span class="cs">"What were the v0.3.2 graph changes?"</span>,
+      "<span class="ck">top_k</span>": 8,
+      "<span class="ck">include_citations</span>": true
+    }'
+
+<span class="co"># Response: { "response", "sources", "citations", "provenance", "settings" }</span>
+<span class="co"># Each citation: { marker, document_index, document_title, start_in_response, end_in_response }</span>
+
+<span class="co"># Point-in-time graph query — new in v0.3.2</span>
+$ curl -X POST localhost:8000/graph/retrieve \
+    -d '{
+      "<span class="ck">query</span>": <span class="cs">"who led acme?"</span>,
+      "<span class="ck">point_in_time</span>": <span class="cs">"2025-06-01T00:00:00Z"</span>,
+      "<span class="ck">federation_weights</span>": { "<span class="ck">graphrag</span>": 0.3, "<span class="ck">dynamic_graph</span>": 0.7 }
+    }'
+            </div>
+
+            <div class="codes-panel" id="tab-mcp">
+<span class="co"># ~/.config/claude/mcp_servers.json — Claude Code, Codex CLI, Cursor, etc.</span>
+{
+  "<span class="ck">mcpServers</span>": {
+    "<span class="ck">axon</span>": {
+      "<span class="ck">command</span>": <span class="cs">"axon-mcp"</span>,
+      "<span class="ck">env</span>": { "<span class="ck">RAG_API_KEY</span>": <span class="cs">"$AXON_KEY"</span> }
+    }
+  }
+}
+
+<span class="co"># 48 tools become available to your agent. A few highlights:</span>
+<span class="co">#   query_knowledge      — RAG query with citations</span>
+<span class="co">#   search_knowledge     — raw chunk search</span>
+<span class="co">#   ingest_path          — async ingest job</span>
+<span class="co">#   graph_retrieve       — point-in-time graph query (v0.3.2)</span>
+<span class="co">#   graph_conflicts      — list conflicted facts (v0.3.2)</span>
+<span class="co">#   graph_finalize       — community rebuild</span>
+<span class="co">#   share_project        — generate read-only share</span>
+<span class="co">#   seal_project         — encrypt at rest with AES-256-GCM</span>
+<span class="co">#   governance_audit     — query the audit log</span>
+            </div>
+
+            <div class="codes-panel" id="tab-langchain">
+<span class="co"># pip install "axon-rag[langchain]"</span>
+<span class="ck">from</span> axon <span class="ck">import</span> AxonBrain, AxonConfig
+<span class="ck">from</span> axon.integrations.langchain <span class="ck">import</span> AxonRetriever
+
+brain = <span class="cf">AxonBrain</span>(AxonConfig.from_yaml(<span class="cs">"config.yaml"</span>))
+retriever = <span class="cf">AxonRetriever</span>(brain=brain, top_k=<span class="cs">5</span>)
+
+<span class="co"># Drop into any LangChain chain that takes a Retriever:</span>
+docs = retriever.<span class="cf">invoke</span>(<span class="cs">"What does the project do?"</span>)
+<span class="co"># → list[langchain_core.documents.Document]</span>
+
+<span class="co"># Per-call override (one-off, doesn't mutate base)</span>
+docs = retriever.<span class="cf">with_overrides</span>({"<span class="ck">hyde</span>": <span class="cs">True</span>, "<span class="ck">rerank</span>": <span class="cs">True</span>}).<span class="cf">invoke</span>(query)
+
+<span class="co"># All RAG features (hybrid, rerank, HyDE, multi-query, GraphRAG budget)</span>
+<span class="co"># apply automatically — same codepath as REST and REPL.</span>
+            </div>
+
+            <div class="codes-panel" id="tab-llama">
+<span class="co"># pip install "axon-rag[llama-index]"</span>
+<span class="ck">from</span> axon <span class="ck">import</span> AxonBrain, AxonConfig
+<span class="ck">from</span> axon.integrations.llama_index <span class="ck">import</span> AxonLlamaRetriever
+<span class="ck">from</span> llama_index.core <span class="ck">import</span> VectorStoreIndex
+<span class="ck">from</span> llama_index.core.query_engine <span class="ck">import</span> RetrieverQueryEngine
+
+brain = <span class="cf">AxonBrain</span>(AxonConfig.from_yaml(<span class="cs">"config.yaml"</span>))
+retriever = <span class="cf">AxonLlamaRetriever</span>(brain=brain, top_k=<span class="cs">5</span>)
+
+<span class="co"># Drop into any LlamaIndex query engine:</span>
+engine = <span class="cf">RetrieverQueryEngine</span>.from_args(retriever)
+nodes  = retriever.<span class="cf">retrieve</span>(<span class="cs">"What does the project do?"</span>)
+<span class="co"># → list[NodeWithScore]</span>
+
+<span class="co"># Each NodeWithScore preserves Axon's hybrid + rerank scoring,</span>
+<span class="co"># plus is_web tagging for CRAG-Lite web fallback rows.</span>
+            </div>
+
+            <div class="codes-panel" id="tab-python">
+<span class="co"># pip install axon-rag</span>
+<span class="ck">from</span> axon <span class="ck">import</span> AxonBrain, AxonConfig
+
+<span class="co"># Bring your own config or load from YAML</span>
+cfg = <span class="cf">AxonConfig</span>.from_yaml(<span class="cs">"config.yaml"</span>)
+brain = <span class="cf">AxonBrain</span>(cfg)
+
+<span class="co"># Ingest a directory (sync) or kick off an async job</span>
+brain.<span class="cf">ingest_path</span>(<span class="cs">"~/research/papers"</span>)
+
+<span class="co"># Full RAG query — returns the LLM-synthesised answer string</span>
+answer = brain.<span class="cf">query</span>(
+    <span class="cs">"What's new in v0.3.2?"</span>,
+    overrides={"<span class="ck">hyde</span>": <span class="cs">True</span>, "<span class="ck">graph_rag</span>": <span class="cs">True</span>}
+)
+
+<span class="co"># Need raw chunks instead? Skip the LLM:</span>
+results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
+    <span class="cs">"alice"</span>, overrides={"<span class="ck">top_k</span>": <span class="cs">10</span>, "<span class="ck">rerank</span>": <span class="cs">True</span>}
+)
+
+<span class="co"># Citations + sources are stashed for the API to surface</span>
+<span class="cf">print</span>(brain._last_citations)  <span class="co"># {"sources": [...], "citations": [...]}</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Install paths -->
+<section class="install container">
+    <div class="install-head">
+        <div class="eyebrow reveal">— Install paths —</div>
+        <h2 class="reveal">Pick your <span class="ax-em">flavor.</span></h2>
+        <p class="reveal"><code>[starter]</code> ships sealed sharing on by default — recommended for everyone. Power users add granular extras.</p>
+    </div>
+
+    <div class="swipe-hint" aria-hidden="true">swipe<span class="arr">→</span>install paths</div>
+    <div class="install-grid swipe-snap-mobile">
+        <div class="ipath featured reveal">
+            <div class="ipath-tag">Bundle <span class="ip-rec">★ Recommended · sealed-ready</span></div>
+            <div class="ipath-name">axon-rag<span class="ip-pkg">[starter]</span></div>
+            <div class="ipath-desc"><strong>Sealed sharing on by default</strong> — AES-256-GCM + OS-keyring ready out of the box. Plus Streamlit UI and extra loaders (EPUB / RTF / .msg).</div>
+            <div class="ipath-deps">cryptography · keyring · streamlit</div>
+        </div>
+        <div class="ipath reveal" style="transition-delay:0.05s">
+            <div class="ipath-tag">Minimal</div>
+            <div class="ipath-name">axon-rag</div>
+            <div class="ipath-desc">Bare engine only — TurboQuantDB + BM25 + Ollama. <em>No sealed sharing, no UI.</em> Add <code>[sealed]</code> separately if you skip the bundle.</div>
+            <div class="ipath-deps">turboquantdb · ollama-py</div>
+        </div>
+        <div class="ipath reveal" style="transition-delay:0.1s">
+            <div class="ipath-tag">Agent</div>
+            <div class="ipath-name">axon-rag<span class="ip-pkg">[langchain]</span></div>
+            <div class="ipath-desc">Drop-in <code>AxonRetriever</code>. Hybrid + rerank + HyDE flow through.</div>
+            <div class="ipath-deps">langchain-core ≥ 0.1</div>
+        </div>
+        <div class="ipath reveal" style="transition-delay:0.15s">
+            <div class="ipath-tag">Agent</div>
+            <div class="ipath-name">axon-rag<span class="ip-pkg">[llama-index]</span></div>
+            <div class="ipath-desc">Drop-in <code>AxonLlamaRetriever</code> returning native <code>NodeWithScore</code>.</div>
+            <div class="ipath-deps">llama-index-core ≥ 0.10</div>
+        </div>
+        <div class="ipath reveal" style="transition-delay:0.2s">
+            <div class="ipath-tag">Graph</div>
+            <div class="ipath-name">axon-rag<span class="ip-pkg">[graphrag]</span></div>
+            <div class="ipath-desc">Leiden community detection. Use when GraphRAG is primary.</div>
+            <div class="ipath-deps">leidenalg · igraph</div>
+        </div>
+        <div class="ipath reveal" style="transition-delay:0.25s">
+            <div class="ipath-tag">Stores</div>
+            <div class="ipath-name">axon-rag<span class="ip-pkg">[qdrant,chroma]</span></div>
+            <div class="ipath-desc">Alternative vector stores. Default <code>turboquantdb</code> works for most. Pick remote Qdrant or familiar Chroma here.</div>
+            <div class="ipath-deps">qdrant-client · chromadb</div>
         </div>
     </div>
 </section>
@@ -759,12 +2698,13 @@
 <!-- Footer -->
 <footer>
     <div class="container">
-        <h2 class="footer-title reveal">Ready to index<br>your world?</h2>
-        <p class="footer-sub reveal">No cloud APIs. No telemetry. No subscription. Open source, MIT licensed.</p>
+        <div class="footer-eyebrow reveal">— pip install axon-rag —</div>
+        <h2 class="footer-title reveal">Ready to index<br><span class="ax-em">your world?</span></h2>
+        <p class="footer-sub reveal">No cloud APIs. No telemetry. No subscription. Open source, MIT licensed. Runs on your laptop today.</p>
 
         <div class="reveal" style="margin-bottom:48px">
             <div class="footer-install">
-                <span class="fi-pr">$ </span><span class="fi-cmd">pip install </span><span class="fi-pkg">axon-rag</span><span class="fi-sep"> &amp;&amp; </span><span class="fi-cmd">axon</span>
+                <span class="fi-pr">$ </span><span class="fi-cmd">pip install </span><span class="fi-pkg">"axon-rag[starter]"</span><span class="fi-sep"> &amp;&amp; </span><span class="fi-cmd">axon</span>
             </div>
         </div>
 
@@ -786,16 +2726,31 @@
             <span class="sep">·</span>
             <a href="https://github.com/jyunming/Axon/blob/main/docs/GETTING_STARTED.md" target="_blank" rel="noopener noreferrer">Docs</a>
             <span class="sep">·</span>
+            <a href="https://github.com/jyunming/Axon/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Changelog</a>
+            <span class="sep">·</span>
             <a href="https://github.com/jyunming/Axon/issues" target="_blank" rel="noopener noreferrer">Issues</a>
+        </div>
+
+        <div class="footer-sig reveal">
+            <span><span class="sig-mark">◆</span> Axon · v0.3.2 · Built local-first</span>
+            <span>Crafted with intent · No tracking</span>
         </div>
     </div>
 </footer>
 
+<!-- Deck navigator (right edge, desktop only) — populated by JS at init -->
+<nav class="deck-nav" aria-label="Section navigator"></nav>
+
 <script>
+    /* ─────────────────────────────────────────────
+     *  Network particle background
+     * ─────────────────────────────────────────────*/
     const canvas = document.getElementById('network-canvas');
     const ctx = canvas.getContext('2d');
     let width, height, particles = [];
-    const N = 70, MAX_DIST = 140;
+    /* Calmer density — fewer nodes, shorter reach. The atmospheric layer
+       should read as ambient texture, not compete with foreground content. */
+    const N = 50, MAX_DIST = 140;
     let mouse = { x: null, y: null, r: 220 };
 
     function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; }
@@ -804,7 +2759,12 @@
         constructor() {
             this.x = Math.random() * width; this.y = Math.random() * height;
             this.vx = (Math.random() - 0.5) * 0.7; this.vy = (Math.random() - 0.5) * 0.7;
-            this.radius = Math.random() * 1.4 + 0.4;
+            /* Particles are now larger (0.9 - 2.6 px) so the dots are visible
+               without cranking line strokes too high. */
+            this.radius = Math.random() * 1.7 + 0.9;
+            /* Mild brightness variance — some dots glow a little more than
+               others, gives the network organic depth. */
+            this.brightness = 0.55 + Math.random() * 0.25;
         }
         update() {
             this.x += this.vx; this.y += this.vy;
@@ -825,7 +2785,7 @@
         draw() {
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(0, 212, 180, 0.32)';
+            ctx.fillStyle = `rgba(0, 212, 180, ${this.brightness})`;
             ctx.fill();
         }
     }
@@ -844,9 +2804,11 @@
                 const dy = particles[i].y - particles[j].y;
                 const d = Math.sqrt(dx*dx + dy*dy);
                 if (d < MAX_DIST) {
+                    /* Brighter line stroke + slight thickness — the connection
+                       graph is what makes the network read as a network. */
                     ctx.beginPath();
-                    ctx.strokeStyle = `rgba(0, 212, 180, ${(1 - d/MAX_DIST) * 0.28})`;
-                    ctx.lineWidth = 0.5;
+                    ctx.strokeStyle = `rgba(0, 212, 180, ${(1 - d/MAX_DIST) * 0.5})`;
+                    ctx.lineWidth = 0.7;
                     ctx.moveTo(particles[i].x, particles[i].y);
                     ctx.lineTo(particles[j].x, particles[j].y);
                     ctx.stroke();
@@ -861,10 +2823,127 @@
     window.addEventListener('mouseout', () => { mouse.x = null; mouse.y = null; });
     init(); animate();
 
+    /* ─────────────────────────────────────────────
+     *  Reveal-on-scroll
+     * ─────────────────────────────────────────────*/
     const obs = new IntersectionObserver(entries => {
         entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('active'); });
     }, { threshold: 0.08 });
     document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+
+    /* ─────────────────────────────────────────────
+     *  Code-tabs
+     * ─────────────────────────────────────────────*/
+    const tabs = document.querySelectorAll('.codes-tab');
+    const panels = document.querySelectorAll('.codes-panel');
+    tabs.forEach(t => {
+        t.addEventListener('click', () => {
+            const target = t.dataset.target;
+            tabs.forEach(x => x.classList.toggle('active', x === t));
+            panels.forEach(p => p.classList.toggle('active', p.id === target));
+        });
+    });
+
+    /* ─────────────────────────────────────────────
+     *  Horizontal pagers (Showcase + Vignettes)
+     * ─────────────────────────────────────────────*/
+    document.querySelectorAll('.pager').forEach(pager => {
+        const track = pager.querySelector('.pager-track');
+        const slides = Array.from(track.querySelectorAll('.pager-slide'));
+        const prev = pager.querySelector('[data-pager-prev]');
+        const next = pager.querySelector('[data-pager-next]');
+        const dotsEl = pager.querySelector('[data-pager-dots]');
+        const curEl = pager.querySelector('.pc-cur');
+        const totalEl = pager.querySelector('.pc-total');
+        if (!slides.length) return;
+
+        let idx = 0;
+        const dots = slides.map((_, i) => {
+            const d = document.createElement('button');
+            d.className = 'pager-dot' + (i === 0 ? ' active' : '');
+            d.setAttribute('aria-label', `Go to slide ${i + 1}`);
+            d.addEventListener('click', () => goTo(i));
+            dotsEl && dotsEl.appendChild(d);
+            return d;
+        });
+        if (totalEl) totalEl.textContent = String(slides.length).padStart(2, '0');
+
+        function goTo(i) {
+            idx = Math.max(0, Math.min(slides.length - 1, i));
+            slides[idx].scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
+            update();
+        }
+        function update() {
+            dots.forEach((d, i) => d.classList.toggle('active', i === idx));
+            if (curEl) curEl.textContent = String(idx + 1).padStart(2, '0');
+            if (prev) prev.disabled = idx === 0;
+            if (next) next.disabled = idx === slides.length - 1;
+        }
+        prev && prev.addEventListener('click', () => goTo(idx - 1));
+        next && next.addEventListener('click', () => goTo(idx + 1));
+
+        /* Keep state synced if user swipes the track directly */
+        let scrollT;
+        track.addEventListener('scroll', () => {
+            clearTimeout(scrollT);
+            scrollT = setTimeout(() => {
+                const w = track.clientWidth || 1;
+                const newIdx = Math.round(track.scrollLeft / w);
+                if (newIdx !== idx) { idx = newIdx; update(); }
+            }, 80);
+        });
+        update();
+    });
+
+    /* ─────────────────────────────────────────────
+     *  Deck navigator — right-edge dots, click-to-jump,
+     *  active state via IntersectionObserver
+     * ─────────────────────────────────────────────*/
+    (function initDeckNav() {
+        const nav = document.querySelector('.deck-nav');
+        if (!nav) return;
+
+        /* Only top-level, named viewport sections — short labels */
+        const decks = [
+            { sel: 'header.container',     label: 'Top' },
+            { sel: 'section.intro-deck',   label: 'Overview' },
+            { sel: 'section.axes',         label: 'Axes' },
+            { sel: 'section.arch',         label: 'Architecture' },
+            { sel: 'section.pullquote',    label: 'Manifesto' },
+            { sel: 'section.compare',      label: 'Compare' },
+            { sel: 'section.showcase-v2',  label: 'Showcase' },
+            { sel: 'section.codes',        label: 'Code' },
+            { sel: 'section.install',      label: 'Install' },
+            { sel: 'footer',               label: 'Get it' },
+        ];
+
+        const found = [];
+        decks.forEach(d => {
+            const el = document.querySelector(d.sel);
+            if (!el) return;
+            const dot = document.createElement('button');
+            dot.className = 'deck-nav-dot';
+            dot.setAttribute('data-label', d.label);
+            dot.setAttribute('aria-label', d.label);
+            dot.addEventListener('click', () => {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+            nav.appendChild(dot);
+            found.push({ el, dot });
+        });
+
+        const sectionToDot = new Map(found.map(({ el, dot }) => [el, dot]));
+        const dnObs = new IntersectionObserver(entries => {
+            entries.forEach(e => {
+                if (e.isIntersecting && e.intersectionRatio > 0.5) {
+                    sectionToDot.forEach(d => d.classList.remove('active'));
+                    const dot = sectionToDot.get(e.target);
+                    if (dot) dot.classList.add('active');
+                }
+            });
+        }, { threshold: [0.5, 0.75] });
+        found.forEach(({ el }) => dnObs.observe(el));
+    })();
 </script>
 </body>
 </html>
