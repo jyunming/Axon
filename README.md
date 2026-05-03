@@ -84,7 +84,7 @@ Most RAG tools make you choose between **cloud power** and **data privacy**. Axo
 
 ### 🔧 LLMs & Embeddings
 - **Local:** Ollama, vLLM
-- **Cloud:** OpenAI, Gemini, xAI Grok, GitHub Copilot, Ollama Cloud (API)
+- **Cloud (API key):** OpenAI, Gemini, xAI Grok, GitHub Copilot, Ollama Cloud
 - Hot-swap provider and model — no restart needed
 - Streaming on all providers
 - 4 embedding providers; BGE-M3 for multilingual

@@ -200,7 +200,7 @@ Or in the REPL:
 axon> /share revoke ssk_abc123 --project research --rotate
 ```
 
-Generates a new DEK, re-encrypts every content file in the project, and selectively re-wraps the new DEK for surviving grantees that have a per-share KEK sidecar (`.security/shares/<key_id>.kek`). The revoked grantee's cached DEK no longer matches the ciphertext; their next query fails with an authentication error. Surviving grantees on legacy projects (predating per-share KEK persistence) are also invalidated and must redeem fresh shares — `--share-revoke` returns an `invalidated_share_key_ids` list so you know who to re-issue. Use when the grantee machine is compromised or you suspect unauthorized access.
+Generates a new DEK, re-encrypts every content file in the project, and selectively re-wraps the new DEK for surviving grantees that have a per-share KEK sidecar (`.security/shares/<key_id>.kek`). The revoked grantee's cached DEK no longer matches the ciphertext; their next query fails with an authentication error. Surviving grantees on legacy projects (predating per-share KEK persistence) are also invalidated and must redeem fresh shares — both the CLI flag (`axon --share-revoke ... --share-rotate`) and the REPL command (`/share revoke ... --rotate`) return an `invalidated_share_key_ids` list so you know who to re-issue. Use when the grantee machine is compromised or you suspect unauthorized access.
 
 Note: hard revoke re-encrypts all N files, so it takes roughly as long as the original seal. Wait for the sync folder to upload all re-encrypted files before the revoke takes effect on the grantee side.
 

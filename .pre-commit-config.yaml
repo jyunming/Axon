@@ -1,3 +1,9 @@
+# YAML anchor for the test-trigger regex shared by pytest-check + eval-smoke.
+# Both hooks must trigger on the SAME set of files (real source/dep edits) —
+# defining once here prevents the two regexes from drifting over time.
+x-test-trigger-files: &test-trigger-files
+  '^(src/axon/.*\.py|tests/.*\.py|pyproject\.toml|src/axon/Cargo\.toml|requirements.*\.txt|config\.yaml)$'
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
@@ -60,7 +66,7 @@ repos:
         entry: python -m pytest tests/ --testmon --tb=short --no-cov -m "not extension" --ignore=tests/e2e --ignore=tests/e2e_sync
         language: system
         pass_filenames: false
-        files: '^(src/axon/.*\.py|tests/.*\.py|pyproject\.toml|src/axon/Cargo\.toml|requirements.*\.txt|config\.yaml)$'
+        files: *test-trigger-files
         stages: [pre-commit]
       - id: eval-smoke
         name: evaluation-smoke
@@ -68,5 +74,5 @@ repos:
         entry: python -m pytest tests/test_eval_smoke.py -m eval -v --tb=short --no-header
         language: system
         pass_filenames: false
-        files: '^(src/axon/.*\.py|tests/.*\.py|pyproject\.toml|src/axon/Cargo\.toml|requirements.*\.txt|config\.yaml)$'
+        files: *test-trigger-files
         stages: [pre-commit]
