@@ -3,7 +3,25 @@ name: CI
 on:
   push:
     branches: [main, master, develop]
+    # Skip CI for pure doc / web-only pushes — they can't break tests.
+    # If a doc PR also touches code, the code path overrides this filter.
+    paths-ignore:
+      - '**.md'
+      - 'index.html'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
   pull_request:  # all PRs, regardless of target branch
+    paths-ignore:
+      - '**.md'
+      - 'index.html'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
 
 jobs:
   test:
