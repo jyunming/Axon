@@ -91,6 +91,11 @@ pip install -e ".[all]"
 | `loaders` | EPUB, RTF, and `.msg` (Outlook) file loaders | `pip install -e ".[loaders]"` |
 | `langchain` | `axon.integrations.langchain.AxonRetriever` — drop-in `BaseRetriever` for any LangChain agent. Wraps `AxonBrain.search_raw()` so hybrid/rerank/HyDE all apply. | `pip install -e ".[langchain]"` |
 | `llama-index` | `axon.integrations.llama_index.AxonLlamaRetriever` — drop-in `BaseRetriever` returning native `NodeWithScore` for any LlamaIndex query engine. | `pip install -e ".[llama-index]"` |
+| `sealed` | AES-256-GCM encrypted-at-rest projects for cloud-drive sharing (already bundled in `[starter]`; install standalone if you skip the bundle). | `pip install -e ".[sealed]"` |
+| `qdrant` | Qdrant vector store backend (remote or local server). Default vector store is TurboQuantDB. | `pip install -e ".[qdrant]"` |
+| `chroma` | ChromaDB vector store backend. Useful if you have an existing Chroma collection to migrate. | `pip install -e ".[chroma]"` |
+| `fastembed` | FastEmbed local embedding provider — alternative to Sentence-Transformers. | `pip install -e ".[fastembed]"` |
+| `all` | Everything above plus development tools — for contributors. | `pip install -e ".[all]"` |
 
 > **`graphrag` extra and Python 3.13+:** The `[graphrag]` extra uses `leidenalg` + `igraph`, which ship pre-built wheels for Python 3.13 on all platforms.
 > The older `graspologic` package (v0.3.x) is **not compatible** with Python 3.13 or NumPy 2.x — do not install it on Python 3.13.
@@ -644,7 +649,7 @@ OLLAMA_EMBED_MODEL=nomic-embed-text
 # Bind to localhost by default for local setups. For Docker/Compose deployments, set AXON_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
 AXON_HOST=127.0.0.1
 AXON_PORT=8000
-# Vector store storage (Chroma-only — ignored for LanceDB and other providers)
+# Vector store storage (Chroma-only — ignored for the default TurboQuantDB and other providers)
 # Where ChromaDB stores its data when `vector_store.provider: chroma`
 CHROMA_DATA_PATH=./chroma_data
 # Where BM25 index is stored
@@ -950,7 +955,7 @@ Expected: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}
 
 ### Available MCP tools
 
-For the full list of all 31 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md).
+For the full list of all 48 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md). v0.3.2 adds `graph_retrieve` (point-in-time), `graph_conflicts`, and capability-flagged `graph_finalize`.
 
 > **Tip:** use `search_knowledge` (not `query_knowledge`) in agent mode — the agent's own LLM synthesises the answer from raw chunks, so no Ollama is required.
 
@@ -1068,7 +1073,9 @@ Copilot will call `list_knowledge` or `list_projects` automatically. You can als
 @axon search for information about neural networks
 ```
 
-### Available tools (32 total)
+### Available tools (44 total)
+
+> v0.3.2 added `graph_retrieve` (point-in-time, with `--at TS`), `graph_conflicts`, and capability-flagged `graph_finalize` to this list. Run `axon-ext` (or open the Axon: Show Tools command in VS Code) to list everything live.
 
 | Tool | What it does |
 |---|---|
