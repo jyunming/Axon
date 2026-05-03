@@ -704,7 +704,11 @@ def main():
         metavar="DAYS",
         type=int,
         default=None,
-        help="New TTL in days for --share-extend (omit to clear expiry).",
+        help=(
+            "TTL in days. Used by both --share-generate (mints a share with "
+            "auto-destroy on expiry; works for plaintext + sealed) and "
+            "--share-extend (renews expiry; omit to clear)."
+        ),
     )
     # ── Store whoami ─────────────────────────────────────────────────────────
     parser.add_argument(
@@ -1394,25 +1398,43 @@ def main():
                     _proj_sealed = _is_sealed_fn(proj_dir)
                 except ImportError:
                     _proj_sealed = False
+                # v0.4.0: --share-ttl-days applies to BOTH sealed and
+                # plaintext shares now. Convert to a UTC datetime for
+                # the sealed path; the plaintext path takes ttl_days int
+                # directly. Reject non-positive values up front.
+                _ttl = getattr(args, "share_ttl_days", None)
+                if _ttl is not None and _ttl <= 0:
+                    print(f"  --share-ttl-days must be positive (got {_ttl}).")
+                    sys.exit(2)
                 if _proj_sealed:
                     import secrets as _secrets
+                    from datetime import datetime as _dt
+                    from datetime import timedelta as _td
+                    from datetime import timezone as _tz
 
                     from axon import security as _security
 
                     _key_id = f"ssk_{_secrets.token_hex(8)}"
+                    _expires_at = (_dt.now(_tz.utc) + _td(days=_ttl)) if _ttl else None
                     result = _security.generate_sealed_share(
-                        owner_user_dir=user_dir, project=proj, grantee=grantee, key_id=_key_id
+                        owner_user_dir=user_dir,
+                        project=proj,
+                        grantee=grantee,
+                        key_id=_key_id,
+                        expires_at=_expires_at,
                     )
                     print(f"\n  Sealed share generated for project '{proj}'")
                     print(f"  Grantee:  {grantee}")
                     print(f"  Key ID:   {result['key_id']}")
+                    if result.get("expires_at"):
+                        print(f"  Expires:  {result['expires_at']}")
                     print(f"\n  Share string (send out-of-band):\n\n    {result['share_string']}\n")
                     print(
                         f"  Revoke:   axon --share-revoke {result['key_id']} --share-project {proj}\n"
                     )
                 else:
                     result = _shares_mod.generate_share_key(
-                        owner_user_dir=user_dir, project=proj, grantee=grantee
+                        owner_user_dir=user_dir, project=proj, grantee=grantee, ttl_days=_ttl
                     )
                     print(f"\n  Share key generated for project '{proj}'")
                     print(f"  Grantee:  {grantee}")
@@ -2027,25 +2049,40 @@ def main():
                 _proj_sealed = _is_sealed_fn(proj_dir)
             except ImportError:
                 _proj_sealed = False
+            # v0.4.0: ttl_days now applies to sealed shares too.
+            _ttl2 = getattr(args, "share_ttl_days", None)
+            if _ttl2 is not None and _ttl2 <= 0:
+                print(f"  --share-ttl-days must be positive (got {_ttl2}).")
+                sys.exit(2)
             if _proj_sealed:
                 import secrets as _secrets
+                from datetime import datetime as _dt
+                from datetime import timedelta as _td
+                from datetime import timezone as _tz
 
                 from axon import security as _security
 
                 _key_id = f"ssk_{_secrets.token_hex(8)}"
+                _expires_at2 = (_dt.now(_tz.utc) + _td(days=_ttl2)) if _ttl2 else None
                 result = _security.generate_sealed_share(
-                    owner_user_dir=user_dir, project=proj, grantee=grantee, key_id=_key_id
+                    owner_user_dir=user_dir,
+                    project=proj,
+                    grantee=grantee,
+                    key_id=_key_id,
+                    expires_at=_expires_at2,
                 )
                 print(f"\n  Sealed share generated for project '{proj}'")
                 print(f"  Grantee:  {grantee}")
                 print(f"  Key ID:   {result['key_id']}")
+                if result.get("expires_at"):
+                    print(f"  Expires:  {result['expires_at']}")
                 print(f"\n  Share string (send out-of-band):\n\n    {result['share_string']}\n")
                 print(
                     f"  Revoke:   axon --share-revoke {result['key_id']} --share-project {proj}\n"
                 )
             else:
                 result = _shares_mod.generate_share_key(
-                    owner_user_dir=user_dir, project=proj, grantee=grantee
+                    owner_user_dir=user_dir, project=proj, grantee=grantee, ttl_days=_ttl2
                 )
                 print(f"\n  Share key generated for project '{proj}'")
                 print(f"  Grantee:  {grantee}")

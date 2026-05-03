@@ -6,6 +6,69 @@ _No changes yet._
 
 ---
 
+## [0.4.0] - 2026-05-04
+
+### 🔒 Security — TTL-gated sealed shares with auto-destruction
+
+Closes the v0.3.x security gap where a redeemed sealed-share DEK lived in the grantee's OS keyring **indefinitely**. v0.4.0 adds:
+
+- **Ed25519 signing keypair** — derived deterministically from the owner's master via HKDF-SHA256. Domain-separated from the per-share KEK derivation. No new files on disk.
+- **`SEALED2:` share-string envelope** — extends `SEALED1:` with a 7th field carrying the owner's signing pubkey hex (64 chars). Backward-compatible — older `SEALED1:` strings sent before v0.4.0 keep redeeming.
+- **Signed expiry sidecar** at `<project>/.security/shares/<key_id>.expiry` — JSON `{key_id, expires_at, sig}`. Owner signs `b"key_id:expires_at"` with the Ed25519 privkey; grantee verifies on every mount using the pubkey from the SEALED2 envelope.
+- **Mount-time TTL check** in `get_grantee_dek()` — seven failure modes (expired, tampered date, rename attack, missing pubkey, malformed JSON, non-dict JSON, bad signature) all raise `ShareExpiredError`.
+- **Auto-destroy on expiry** in `_mount_sealed_project()` — wipes DEK from keyring + file fallback, releases active plaintext cache, removes mount descriptor. Encrypted source files on the synced filesystem are **deliberately not touched** (would propagate destruction back to the owner via OneDrive sync).
+
+### 🛠️ Surfaces
+
+`ttl_days` now flows through every share-generation surface:
+- **REST** — `POST /share/generate` accepts `ttl_days: N` for sealed projects too (was plaintext-only). Response carries `expires_at` (canonical ISO 8601 UTC, `Z` suffix).
+- **CLI** — `axon --share-generate research alice --share-ttl-days 30` (works for both modes; help text updated).
+- **REPL** — `/share generate research alice --ttl-days 30` (works for both modes).
+- **MCP** — `share_project(..., ttl_days=N)` already wired in v0.3.2; now also propagates through the sealed branch on the server side.
+
+`POST /share/generate` rejects `ttl_days <= 0` with HTTP 422.
+
+### 🛡️ Wire-format invariants
+
+- `SEALED1:` envelope (6 fields) — unchanged. Continues to be accepted on redeem.
+- `SEALED2:` envelope adds field 7: lowercase hex Ed25519 pubkey (exactly 64 chars).
+- Signed message format: `f"{key_id}:{expires_at_iso}".encode()` — bumping requires a new envelope version.
+- `expires_at` is always written as ISO 8601 UTC with `Z` suffix (never `+00:00`).
+- Sidecar atomic write with `.sealing` tmp + `os.replace` + `0o600` perms (matches the wrap-file convention).
+
+### 🐛 Bug fixes
+
+- `_check_expiry_or_raise` now defends against non-dict JSON (`[]`, `null`, `42`) and non-string field values — all funneled through `ShareExpiredError` per the contract.
+- `_auto_destroy_expired_share` strips the `mounts/` prefix before calling `remove_mount_descriptor` (the helper expects the bare mount name; descriptor would otherwise stay orphaned).
+
+### ⚙️ Developer experience
+
+- `scripts/precommit_pytest_scoped.py` replaces the testmon-based pre-commit hook. Path-prefix mapping picks a tight subset of test files per change area: `axon/security/*` → `tests/test_sealed*`, `axon/api_routes/*` → `tests/test_api*`, etc. Predictable runtime — sub-minute for any change area, vs the 30+ min testmon worst case on foundational-module edits. CI still runs the full suite as the safety net.
+
+### 📦 Packaging
+
+- `axon-rag` 0.4.0 on PyPI.
+- VS Code extension `axon-copilot-0.4.0.vsix` rebuilt + bundled under `src/axon/extensions/`.
+- `scripts/audit_packaging.py --expected-version 0.4.0` passes — Cargo, package.json, index.html (hero + terminal), bundled VSIX all in sync.
+
+### ⚠️ Known limitations
+
+- **Clock skew**: TTL relies on the grantee's local clock. Ed25519 prevents tampering with the date but not clock manipulation. NTP oracle out of scope.
+- **Encrypted sync files NOT deleted**: deleting them would propagate destruction back to the owner via OneDrive — destructive failure mode.
+- **Pre-v0.4.0 grantees**: client-side enforcement model. Older grantees won't perform the TTL check; they pre-date the security gap closure.
+
+### ⬆️ Upgrade from v0.3.2
+
+```bash
+pip install --upgrade axon-rag
+```
+
+- **No breaking changes** for existing share strings — `SEALED1:` envelopes keep working forever.
+- **Owner side**: pass `--share-ttl-days N` (or `ttl_days=N` via API/MCP) to mint a TTL-gated share.
+- **Grantee side**: TTL is enforced automatically — no config or migration needed. Once you upgrade, expired shares auto-destroy on next mount.
+
+---
+
 ## [0.3.2] - 2026-05-03
 
 ### ✨ New Features

@@ -47,7 +47,10 @@ def _rebuild_and_bundle_vsix(root: Path, version: str) -> None:
 
 def _refresh_cargo_lock(root: Path) -> None:
     try:
-        _run(["cargo", "update", "-p", "axon", "--precise", _cargo_version(root)], cwd=root / "src" / "axon")
+        _run(
+            ["cargo", "update", "-p", "axon", "--precise", _cargo_version(root)],
+            cwd=root / "src" / "axon",
+        )
     except (subprocess.CalledProcessError, FileNotFoundError):
         # cargo may be absent in bump-only workflows; acceptable
         print("  note: cargo not available; Cargo.lock not refreshed (CI will update it).")
@@ -65,7 +68,9 @@ def _cargo_version(root: Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Bump single-source package version in Cargo.toml")
     ap.add_argument("version", help="New version (e.g. 0.2.0)")
-    ap.add_argument("--skip-vsix", action="store_true", help="Skip VSIX rebuild (default: rebuild and bundle)")
+    ap.add_argument(
+        "--skip-vsix", action="store_true", help="Skip VSIX rebuild (default: rebuild and bundle)"
+    )
     ap.add_argument("--skip-cargo-lock", action="store_true", help="Skip Cargo.lock refresh")
     args = ap.parse_args()
 
@@ -77,7 +82,9 @@ def main() -> int:
     cargo = root / "src" / "axon" / "Cargo.toml"
     text = cargo.read_text(encoding="utf-8")
 
-    new_text, n = re.subn(r'^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"', text, count=1, flags=re.M)
+    new_text, n = re.subn(
+        r'^version\s*=\s*"[^"]+"\s*$', f'version = "{version}"', text, count=1, flags=re.M
+    )
     if n != 1:
         raise SystemExit("Failed to update version in src/axon/Cargo.toml")
 
