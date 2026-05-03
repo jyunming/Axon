@@ -26,19 +26,15 @@ from typing import TYPE_CHECKING, Any
 
 try:
     from llama_index.core.retrievers import BaseRetriever
-    from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
+    from llama_index.core.schema import NodeWithScore, TextNode
 
     _LLAMA_INDEX_AVAILABLE = True
 except ImportError:  # pragma: no cover — exercised by extra-not-installed path
     _LLAMA_INDEX_AVAILABLE = False
-
-    class _Missing:
-        pass
-
-    BaseRetriever = _Missing  # type: ignore[assignment,misc]
-    NodeWithScore = _Missing  # type: ignore[assignment,misc]
-    QueryBundle = _Missing  # type: ignore[assignment,misc]
-    TextNode = _Missing  # type: ignore[assignment,misc]
+    # Names imported above are NOT reassigned here — when the extra is
+    # missing we never enter the `if _LLAMA_INDEX_AVAILABLE:` branch that
+    # references them. Reassigning to a sentinel triggered "Unused type:
+    # ignore" warnings under mypy when the extra IS installed.
 
 if TYPE_CHECKING:
     from axon.main import AxonBrain
@@ -71,7 +67,7 @@ def _result_to_node_with_score(result: dict[str, Any]) -> Any:
 
 if _LLAMA_INDEX_AVAILABLE:
 
-    class AxonLlamaRetriever(BaseRetriever):  # type: ignore[misc,valid-type]
+    class AxonLlamaRetriever(BaseRetriever):
         """LlamaIndex :class:`BaseRetriever` backed by :meth:`AxonBrain.search_raw`.
 
         Args:
@@ -107,8 +103,8 @@ if _LLAMA_INDEX_AVAILABLE:
             )
             results, _diag, _trace = self._brain.search_raw(
                 query,
-                filters=self._filters,
-                overrides=self._build_overrides(),
+                filters=self._filters,  # type: ignore[arg-type]
+                overrides=self._build_overrides(),  # type: ignore[arg-type]
             )
             return [_result_to_node_with_score(r) for r in results]
 

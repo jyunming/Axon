@@ -27,7 +27,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 try:
-    from langchain_core.callbacks import CallbackManagerForRetrieverRun
+    from langchain_core.callbacks import (
+        AsyncCallbackManagerForRetrieverRun,
+        CallbackManagerForRetrieverRun,
+    )
     from langchain_core.documents import Document
     from langchain_core.retrievers import BaseRetriever
     from pydantic import ConfigDict
@@ -35,14 +38,11 @@ try:
     _LANGCHAIN_AVAILABLE = True
 except ImportError:  # pragma: no cover — exercised by extra-not-installed path
     _LANGCHAIN_AVAILABLE = False
-
-    class _Missing:
-        pass
-
-    BaseRetriever = _Missing  # type: ignore[assignment,misc]
-    Document = _Missing  # type: ignore[assignment,misc]
-    CallbackManagerForRetrieverRun = _Missing  # type: ignore[assignment,misc]
-    ConfigDict = dict  # type: ignore[assignment,misc]
+    # Names imported above are NOT reassigned here — when the extra is
+    # missing we never enter the `if _LANGCHAIN_AVAILABLE:` branch that
+    # references them, so leaving them unbound is correct. Reassigning
+    # to a sentinel triggered "Unused type: ignore" warnings under mypy
+    # in environments that DO have the extra installed.
 
 if TYPE_CHECKING:
     pass
@@ -82,7 +82,7 @@ def _result_to_document(result: dict[str, Any]) -> Any:
 
 if _LANGCHAIN_AVAILABLE:
 
-    class AxonRetriever(BaseRetriever):  # type: ignore[misc,valid-type]
+    class AxonRetriever(BaseRetriever):
         """LangChain :class:`BaseRetriever` backed by :meth:`AxonBrain.search_raw`.
 
         Args:
@@ -124,7 +124,7 @@ if _LANGCHAIN_AVAILABLE:
                 ov.setdefault("top_k", self.top_k)
             return ov or None
 
-        def _get_relevant_documents(  # type: ignore[override]
+        def _get_relevant_documents(
             self,
             query: str,
             *,
@@ -137,19 +137,27 @@ if _LANGCHAIN_AVAILABLE:
             )
             return [_result_to_document(r) for r in results]
 
-        async def _aget_relevant_documents(  # type: ignore[override]
+        async def _aget_relevant_documents(
             self,
             query: str,
             *,
-            run_manager: CallbackManagerForRetrieverRun,
+            run_manager: AsyncCallbackManagerForRetrieverRun,
         ) -> list[Any]:
             # AxonBrain.search_raw is synchronous; defer to a thread to keep
-            # the event loop free.
+            # the event loop free. We don't pass run_manager into the sync
+            # path because its callback shape is async; the sync method
+            # only needs the brain reference and config from `self`.
             import asyncio
 
-            return await asyncio.to_thread(
-                lambda: self._get_relevant_documents(query, run_manager=run_manager)
-            )
+            def _run() -> list[Any]:
+                results, _diag, _trace = self.brain.search_raw(
+                    query,
+                    filters=self.filters,
+                    overrides=self._build_overrides(),
+                )
+                return [_result_to_document(r) for r in results]
+
+            return await asyncio.to_thread(_run)
 
 else:
 
