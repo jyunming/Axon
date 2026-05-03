@@ -60,7 +60,13 @@ def main() -> int:
         )
 
     website_text = website.read_text(encoding="utf-8")
-    hero_match = re.search(r"v(\d+\.\d+\.\d+)\s+—\s+now on PyPI", website_text)
+    # Hero pill format: "v0.3.2 / now on PyPI" (slash) — earlier designs
+    # used em-dash (—). Regex accepts either separator + the version-tag
+    # markup that wraps the separator in <span class="vt-sep">.
+    hero_match = re.search(
+        r"v(\d+\.\d+\.\d+)\s*(?:<[^>]+>)?\s*[—/]\s*(?:</[^>]+>)?\s*(?:<[^>]+>)?\s*now on PyPI",
+        website_text,
+    )
     install_match = re.search(r"Successfully installed axon-rag-(\d+\.\d+\.\d+)", website_text)
     hero_version = hero_match.group(1) if hero_match else None
     install_version = install_match.group(1) if install_match else None

@@ -1,5 +1,9 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-animation.gif" alt="Axon" width="400" />
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-wordmark.svg" alt="Axon" width="320" />
+</div>
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-animation.gif" alt="Axon REPL" width="400" />
 
   <h3>Your documents, answerable. On your hardware.</h3>
 

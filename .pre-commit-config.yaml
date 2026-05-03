@@ -44,21 +44,29 @@ repos:
         pass_filenames: true
       - id: pytest-check
         name: pytest
-        # --testmon: skip tests whose dependent code hasn't changed since
-        # the last green run (cache stored in .testmondata, gitignored).
-        # First run rebuilds the cache (~45 min); subsequent commits drop
-        # to ~30 s for doc-only changes. CI does NOT use --testmon — it
-        # always runs the full suite. See docs/DEVELOPMENT.md for cache
-        # recovery commands when testmon's selection is wrong.
+        # Trigger ONLY on files that could actually affect test outcomes:
+        #   - src/axon/**/*.py     — package source (imported by tests)
+        #   - tests/**/*.py        — the tests themselves
+        #   - pyproject.toml       — dependencies, build config
+        #   - src/axon/Cargo.toml  — Rust extension version + deps
+        #   - requirements*.txt    — pinned deps
+        #   - config.yaml          — runtime defaults the tests load
+        # NOT triggered: scripts/*.py (standalone CLI tools never imported
+        # by tests), docs/*, integrations/vscode-axon/* (its own test suite),
+        # *.html/*.md/*.svg/*.json. Pure doc/script commits run pre-commit
+        # in <2 sec total. --testmon then selects only tests whose deps
+        # changed since the last green run (.testmondata, gitignored).
+        # CI does NOT use --testmon and runs the full suite as the safety net.
         entry: python -m pytest tests/ --testmon --tb=short --no-cov -m "not extension" --ignore=tests/e2e --ignore=tests/e2e_sync
         language: system
         pass_filenames: false
-        always_run: true
+        files: '^(src/axon/.*\.py|tests/.*\.py|pyproject\.toml|src/axon/Cargo\.toml|requirements.*\.txt|config\.yaml)$'
         stages: [pre-commit]
       - id: eval-smoke
         name: evaluation-smoke
+        # Same gating as pytest — only real source/dep edits trigger eval.
         entry: python -m pytest tests/test_eval_smoke.py -m eval -v --tb=short --no-header
         language: system
         pass_filenames: false
-        always_run: true
+        files: '^(src/axon/.*\.py|tests/.*\.py|pyproject\.toml|src/axon/Cargo\.toml|requirements.*\.txt|config\.yaml)$'
         stages: [pre-commit]

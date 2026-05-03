@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+_No changes yet._
+
+---
+
+## [0.3.2] - 2026-05-03
+
 ### ✨ New Features
 
 - **Graph backend capability flags** — `FinalizationResult.status` is now `"ok"`, `"not_applicable"`, or `"error"` so callers can tell "ran and built nothing" apart from "this backend has no finalize step". `dynamic_graph` returns `not_applicable`; the federated backend aggregates statuses from sub-backends. Surfaced via `POST /graph/finalize` and the `graph_finalize` MCP tool.
