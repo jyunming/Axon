@@ -1,4 +1,8 @@
 <div align="center">
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-icon.svg" alt="Axon" width="96" height="96" />
+</div>
+
+<div align="center">
   <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-wordmark.svg" alt="Axon" width="320" />
 </div>
 

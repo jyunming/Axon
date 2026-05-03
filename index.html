@@ -5,14 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Axon — Private RAG. Local first. Graph native. Agent ready.</title>
     <meta name="description" content="Axon is a private, local-first RAG engine with GraphRAG, sealed sharing, and 48 MCP tools. Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. Nothing leaves your machine.">
+    <!-- Favicon: SVG primary (modern browsers) + PNG fallback (older clients,
+         crawlers, social previews that don't render SVG). -->
     <link rel="icon" type="image/svg+xml" href="docs/assets/brand/axon-favicon.svg">
-    <link rel="alternate icon" href="docs/assets/brand/axon-favicon.svg">
-    <link rel="apple-touch-icon" href="docs/assets/brand/axon-icon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="docs/assets/axon-mark.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="docs/assets/axon-mark.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="docs/assets/axon-mark.png">
+    <link rel="mask-icon" href="docs/assets/brand/axon-favicon.svg" color="#00d4b4">
     <meta name="theme-color" content="#050a14">
     <meta property="og:title" content="Axon — Private RAG. Local first. Graph native.">
     <meta property="og:description" content="Drop in PDFs, code, and notebooks; ask anything; get cited answers from a local LLM. 48 MCP tools, sealed cloud-drive sharing, GraphRAG. MIT licensed.">
-    <meta property="og:image" content="docs/assets/brand/axon-icon.svg">
+    <meta property="og:image" content="docs/assets/axon-mark.png">
+    <meta property="og:image:type" content="image/png">
     <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:image" content="docs/assets/axon-mark.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Syne+Mono&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Sans:ital,wght@0,300;0,400;0,500;1,300&family=Instrument+Serif:ital@0;1&family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..900,0..100;1,9..144,400..900,0..100&display=swap" rel="stylesheet">
@@ -755,6 +762,65 @@
             position: relative; z-index: 10;
             padding-top: 110px; padding-bottom: 70px;
         }
+        /* Hero brand mark — primary icon presence on the page */
+        .hero-mark {
+            display: inline-block;
+            color: var(--teal);
+            margin-bottom: 24px;
+            text-decoration: none;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                        filter 0.4s ease;
+            filter: drop-shadow(0 0 18px rgba(0,212,180,0.35));
+        }
+        .hero-mark:hover {
+            transform: rotate(60deg) scale(1.06);
+            filter: drop-shadow(0 0 32px rgba(0,212,180,0.65));
+        }
+        .hero-mark svg {
+            width: 76px; height: 76px;
+            display: block;
+        }
+        .hero-mark .hm-branch {
+            stroke-dasharray: 32;
+            stroke-dashoffset: 32;
+            animation: hm-draw 1.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        .hero-mark .hm-b1 { animation-delay: 0.2s; }
+        .hero-mark .hm-b2 { animation-delay: 0.4s; }
+        .hero-mark .hm-b3 { animation-delay: 0.6s; }
+        .hero-mark .hm-terminals circle {
+            opacity: 0;
+            animation: hm-fade-in 0.4s ease-out forwards;
+        }
+        .hero-mark .hm-terminals circle:nth-child(1) { animation-delay: 0.6s; }
+        .hero-mark .hm-terminals circle:nth-child(2) { animation-delay: 0.8s; }
+        .hero-mark .hm-terminals circle:nth-child(3) { animation-delay: 1.0s; }
+        .hero-mark .hm-core {
+            transform-origin: 50px 50px;
+            animation: hm-pulse 3s ease-in-out infinite;
+            animation-delay: 1.2s;
+        }
+        @keyframes hm-draw {
+            to { stroke-dashoffset: 0; }
+        }
+        @keyframes hm-fade-in {
+            to { opacity: 1; }
+        }
+        @keyframes hm-pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50%      { transform: scale(0.85); opacity: 0.8; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .hero-mark .hm-branch { stroke-dashoffset: 0; animation: none; }
+            .hero-mark .hm-terminals circle { opacity: 1; animation: none; }
+            .hero-mark .hm-core { animation: none; }
+            .hero-mark:hover { transform: none; }
+        }
+        @media (max-width: 640px) {
+            .hero-mark svg { width: 56px; height: 56px; }
+            .hero-mark { margin-bottom: 18px; }
+        }
+
         .version-tag {
             display: inline-flex; align-items: center; gap: 9px;
             border: 1px solid var(--border);
@@ -1902,6 +1968,26 @@
 
 <!-- Hero -->
 <header class="container">
+    <!-- Axon brand mark — large, animated. Sits above the version tag and
+         the H1 title so the icon has a primary visual presence on the page,
+         not just in the nav corner. Stroke pulses on first paint. -->
+    <a href="#" class="hero-mark reveal active" aria-label="Axon home">
+        <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" aria-hidden="true">
+            <polygon points="50,7 87,28 87,72 50,93 13,72 13,28" stroke-width="5" stroke-linejoin="round"/>
+            <g stroke-width="5" stroke-linecap="round">
+                <line x1="50" y1="50" x2="50" y2="22" class="hm-branch hm-b1"/>
+                <line x1="50" y1="50" x2="74" y2="64" class="hm-branch hm-b2"/>
+                <line x1="50" y1="50" x2="26" y2="64" class="hm-branch hm-b3"/>
+            </g>
+            <g fill="currentColor" class="hm-terminals">
+                <circle cx="50" cy="22" r="6"/>
+                <circle cx="74" cy="64" r="6"/>
+                <circle cx="26" cy="64" r="6"/>
+            </g>
+            <circle cx="50" cy="50" r="9" fill="currentColor" class="hm-core"/>
+        </svg>
+    </a>
+
     <div class="version-tag reveal active">
         <div class="version-dot"></div>
         v0.3.2 <span class="vt-sep">/</span> <span class="vt-meta">now on PyPI</span>
