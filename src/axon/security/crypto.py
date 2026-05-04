@@ -85,7 +85,16 @@ DEK_LEN: int = 32  # 256-bit Data Encryption Key
 STREAMING_CHUNK_SIZE: int = 1024 * 1024
 
 # 4-byte magic | 1-byte version | 1-byte cipher_id | 10-byte reserved (zero)
-_HEADER_STRUCT = struct.Struct(">4sBB10x")
+# Header layout (16 bytes, big-endian):
+#   4s  — MAGIC ("AXSL")
+#   B   — schema_version (currently 1)
+#   B   — cipher_id (0 = AES-256-GCM)
+#   I   — padding_length (v0.4.0 Item 4c — uint32 trailing random bytes
+#         appended AFTER the GCM tag; readers slice these off before
+#         calling AESGCM.decrypt). v0.3.x writers leave this 4-byte
+#         region zero — backward-compatible.
+#   6x  — reserved (must be zero)
+_HEADER_STRUCT = struct.Struct(">4sBBI6x")
 
 
 class SealedFormatError(Exception):
@@ -104,16 +113,27 @@ class SealedFormatError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _pack_header(*, version: int = SCHEMA_VERSION, cipher_id: int = CIPHER_AES_256_GCM) -> bytes:
-    return _HEADER_STRUCT.pack(MAGIC, version, cipher_id)
+def _pack_header(
+    *,
+    version: int = SCHEMA_VERSION,
+    cipher_id: int = CIPHER_AES_256_GCM,
+    padding_length: int = 0,
+) -> bytes:
+    return _HEADER_STRUCT.pack(MAGIC, version, cipher_id, padding_length)
 
 
-def _unpack_header(header: bytes) -> tuple[int, int]:
-    """Return ``(version, cipher_id)``; raise SealedFormatError on mismatch."""
+def _unpack_header(header: bytes) -> tuple[int, int, int]:
+    """Return ``(version, cipher_id, padding_length)``.
+
+    v0.4.0 Item 4c: ``padding_length`` is the count of random bytes
+    appended after the GCM tag. v0.3.x writers leave the 4-byte region
+    zero — old files therefore unpack with ``padding_length=0`` and
+    decrypt unchanged.
+    """
     if len(header) != HEADER_LEN:
         raise SealedFormatError(f"Header must be {HEADER_LEN} bytes, got {len(header)}")
     try:
-        magic, version, cipher_id = _HEADER_STRUCT.unpack(header)
+        magic, version, cipher_id, padding_length = _HEADER_STRUCT.unpack(header)
     except struct.error as exc:
         raise SealedFormatError(f"Could not unpack header: {exc}") from exc
     if magic != MAGIC:
@@ -130,7 +150,12 @@ def _unpack_header(header: bytes) -> tuple[int, int]:
         raise SealedFormatError(
             f"Unsupported cipher_id {cipher_id} (only AES-256-GCM = {CIPHER_AES_256_GCM})"
         )
-    return version, cipher_id
+    if padding_length < 0 or padding_length > 1024 * 1024:
+        # Sanity bound: 1 MiB cap on padding length keeps a corrupt
+        # header from making us slice past the file's end with nothing
+        # actionable to do.
+        raise SealedFormatError(f"Implausible padding_length in header: {padding_length}")
+    return version, cipher_id, padding_length
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +195,7 @@ class SealedFile:
         key: bytes,
         *,
         aad: bytes = b"",
+        padding_bytes: int = 0,
     ) -> None:
         """Encrypt *plaintext* with *key* and write to *path* atomically.
         Args:
@@ -181,6 +207,15 @@ class SealedFile:
                 same AAD on read or :class:`InvalidTag` will be raised.
                 Recommended: ``key_id || file_relpath`` to prevent files
                 from being swapped between projects.
+            padding_bytes: v0.4.0 Item 4c — when ``> 0``, append a random
+                number of random bytes between ``0`` and ``padding_bytes``
+                (inclusive) AFTER the GCM tag. The exact length is
+                recorded in the file header so :meth:`read` can slice it
+                off before calling AESGCM.decrypt. Defeats the trivial
+                file-size leak (an observer otherwise infers plaintext
+                length within ±28 bytes from the on-disk size). Cost:
+                up to ``padding_bytes`` extra storage per file.
+
         The write is atomic — encrypted bytes are written to a sibling
         ``<name>.sealing`` file then renamed via :func:`os.replace` so a
         crash mid-write never leaves a half-sealed file at the live
@@ -192,11 +227,18 @@ class SealedFile:
         """
         if len(key) != 32:
             raise ValueError(f"key must be 32 bytes (AES-256), got {len(key)}")
+        if padding_bytes < 0:
+            raise ValueError("padding_bytes must be >= 0")
         path = Path(path)
         nonce = os.urandom(NONCE_LEN)
         # AESGCM.encrypt returns ciphertext || tag concatenated.
         ct_and_tag = AESGCM(key).encrypt(nonce, plaintext, aad if aad else None)
-        body = _pack_header() + nonce + ct_and_tag
+        # v0.4.0 Item 4c: random-length padding (0..padding_bytes inclusive).
+        # Length is the value that goes into the header; ``read`` uses it to
+        # know how many trailing bytes to discard.
+        pad_len = secrets.randbelow(padding_bytes + 1) if padding_bytes > 0 else 0
+        padding = secrets.token_bytes(pad_len) if pad_len else b""
+        body = _pack_header(padding_length=pad_len) + nonce + ct_and_tag + padding
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".sealing")
         tmp.write_bytes(body)
@@ -210,6 +252,7 @@ class SealedFile:
         *,
         aad: bytes = b"",
         chunk_size: int = STREAMING_CHUNK_SIZE,
+        padding_bytes: int = 0,
     ) -> None:
         """Encrypt *plaintext_iter* with *key* and write to *path* atomically.
 
@@ -252,6 +295,8 @@ class SealedFile:
             raise ValueError(f"key must be 32 bytes (AES-256), got {len(key)}")
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        if padding_bytes < 0:
+            raise ValueError("padding_bytes must be >= 0")
         path = Path(path)
         nonce = os.urandom(NONCE_LEN)
         cipher = Cipher(algorithms.AES(key), modes.GCM(nonce))
@@ -261,13 +306,17 @@ class SealedFile:
             # the high-level AEAD API does this implicitly; the low-level
             # Cipher API surfaces the ordering requirement to the caller.
             encryptor.authenticate_additional_data(aad)
+        # v0.4.0 Item 4c: pre-roll the padding length so it can go into
+        # the header BEFORE we start streaming ciphertext. The header is
+        # written first because the file is built linearly.
+        pad_len = secrets.randbelow(padding_bytes + 1) if padding_bytes > 0 else 0
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".sealing")
         # Open BEFORE the loop so we can stream-write ciphertext chunks
         # as they're produced. Atomic os.replace at the end.
         try:
             with tmp.open("wb") as fh:
-                fh.write(_pack_header())
+                fh.write(_pack_header(padding_length=pad_len))
                 fh.write(nonce)
                 for chunk in plaintext_iter:
                     if not chunk:
@@ -283,6 +332,8 @@ class SealedFile:
                 if tail:
                     fh.write(tail)
                 fh.write(encryptor.tag)
+                if pad_len:
+                    fh.write(secrets.token_bytes(pad_len))
             os.replace(tmp, path)
         except BaseException:
             # Best-effort cleanup on any failure — never leave a partial
@@ -301,6 +352,7 @@ class SealedFile:
         *,
         aad: bytes = b"",
         chunk_size: int = STREAMING_CHUNK_SIZE,
+        padding_bytes: int = 0,
     ) -> None:
         """Convenience wrapper: read *src_path* in chunks, seal to *dst_path*.
 
@@ -308,6 +360,9 @@ class SealedFile:
         into :meth:`write_stream`. Used by the project-seal and
         hard-revoke paths so a multi-GB content file can be re-encrypted
         without ever materialising the whole plaintext.
+
+        ``padding_bytes`` is forwarded to :meth:`write_stream` — see
+        Item 4c semantics there.
         """
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
@@ -321,7 +376,14 @@ class SealedFile:
                         break
                     yield buf
 
-        SealedFile.write_stream(dst_path, _reader(), key, aad=aad, chunk_size=chunk_size)
+        SealedFile.write_stream(
+            dst_path,
+            _reader(),
+            key,
+            aad=aad,
+            chunk_size=chunk_size,
+            padding_bytes=padding_bytes,
+        )
 
     @staticmethod
     def read(
@@ -345,7 +407,17 @@ class SealedFile:
         body = path.read_bytes()
         if len(body) < HEADER_LEN + NONCE_LEN + TAG_LEN:
             raise SealedFormatError(f"File too short to be a sealed AXSL file ({len(body)} bytes)")
-        _unpack_header(body[:HEADER_LEN])
+        _, _, padding_length = _unpack_header(body[:HEADER_LEN])
+        if padding_length:
+            # v0.4.0 Item 4c — slice off trailing random padding before
+            # AESGCM.decrypt. Without this, the GCM tag bytes are in the
+            # wrong place and decrypt raises InvalidTag.
+            if len(body) < HEADER_LEN + NONCE_LEN + TAG_LEN + padding_length:
+                raise SealedFormatError(
+                    f"Truncated sealed file: header claims {padding_length} bytes "
+                    f"of padding but body is only {len(body)} bytes"
+                )
+            body = body[: len(body) - padding_length]
         nonce = body[HEADER_LEN : HEADER_LEN + NONCE_LEN]
         ct_and_tag = body[HEADER_LEN + NONCE_LEN :]
         return AESGCM(key).decrypt(nonce, ct_and_tag, aad if aad else None)

@@ -11,7 +11,7 @@ Marker schema (v1)::
         "schema_version": 1,
         "seq": 42,                     # monotonic per-ingest counter
         "generated_at": "...ISO...",
-        "owner_host": "alice-laptop",  # informational
+        "owner_node_id": "8a3c…",      # store-scoped UUID4 (v0.4.0+)
         "hash_algo": "sha256",
         "artifacts": {
             "meta.json":                                "<hex digest>",
@@ -20,6 +20,16 @@ Marker schema (v1)::
             "bm25_index/.dynamic_graph.snapshot.json":  "<hex digest>",
         }
     }
+
+v0.4.0 Item 4a — privacy: the marker no longer carries the OS hostname
+(``socket.gethostname()``). Hostnames leak the owner's machine identity
+into a file that travels through cloud-sync. We replace it with a
+random UUID4 minted once per store at ``init_store`` time and cached
+in ``store_meta.json::node_id``. The UUID serves the same staleness-
+detection role (distinguishing markers written by different machines
+without doxxing the user) and is opaque to anyone watching the sync
+volume. Existing ``owner_host`` field is retained as ``""`` for
+schema compatibility; new ``owner_node_id`` field carries the UUID.
 
 We hash *manifest-level* files only — the small JSON / log files that
 each backend updates atomically when its data changes.  This stays
@@ -40,7 +50,6 @@ import hashlib
 import json
 import logging
 import os
-import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -92,13 +101,6 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-def _safe_hostname() -> str:
-    try:
-        return socket.gethostname() or ""
-    except Exception:
-        return ""
-
-
 def rollup_hashes(
     project_dir: Path | str,
     *,
@@ -133,8 +135,10 @@ def bump(
     *,
     seq: int | None = None,
     hash_algo: str = "sha256",
+    node_id: str | None = None,
 ) -> dict[str, Any]:
     """Compute and persist a fresh version marker.
+
     Args:
         project_dir: The project root (one level above ``bm25_index``
             and ``vector_store_data``).
@@ -142,8 +146,17 @@ def bump(
             tests.  Production callers should leave this ``None``.
         hash_algo: ``hashlib`` algorithm name.  Defaults to SHA-256;
             BLAKE3 (faster) is a future option once we add the dep.
+        node_id: v0.4.0 Item 4a — store-scoped UUID identifying which
+            machine wrote this marker. When ``None`` (test default or
+            legacy callers), the marker carries an empty
+            ``owner_node_id``. Production callers pass the cached
+            ``store_meta.json::node_id``. The legacy ``owner_host``
+            field is retained but always empty — no more hostname
+            leak through the cloud sync volume.
+
     Returns:
         The marker dict that was written to disk.
+
     The write is atomic: we serialise to ``version.json.tmp`` first
     and then ``os.replace`` over the live name, so concurrent readers
     never observe a half-written file.
@@ -157,7 +170,11 @@ def bump(
         "schema_version": SCHEMA_VERSION,
         "seq": int(seq),
         "generated_at": _now_iso(),
-        "owner_host": _safe_hostname(),
+        # ``owner_host`` retained as empty string for schema continuity
+        # with v0.3.x readers; v0.4.0+ writers no longer leak the OS
+        # hostname through cloud sync. Use ``owner_node_id`` instead.
+        "owner_host": "",
+        "owner_node_id": (node_id or ""),
         "hash_algo": hash_algo,
         "artifacts": rollup_hashes(project_dir, hash_algo=hash_algo),
     }
