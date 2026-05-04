@@ -1,14 +1,5 @@
 <div align="center">
-  <!-- Decorative — the wordmark below carries the brand name for screen readers -->
-  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-icon.svg" alt="" width="96" height="96" />
-</div>
-
-<div align="center">
-  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-wordmark.svg" alt="Axon" width="320" />
-</div>
-
-<div align="center">
-  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-animation.gif" alt="Axon REPL — first-run wizard, ingest, and a cited query in action" width="400" />
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/brand/axon-wordmark.svg" alt="Axon" width="400" />
 
   <h3>Your documents, answerable. On your hardware.</h3>
 
@@ -23,25 +14,22 @@
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/jyunming/Axon/blob/main/LICENSE)
   [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-</div>
+  <br/>
 
----
-
-<div align="center">
-  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-demo.png" alt="Axon REPL startup" width="820" />
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-demo.png" alt="Axon REPL — startup banner, ingest, and a cited query" width="820" />
 </div>
 
 ---
 
 ## 🤔 Why Axon?
 
-Most RAG tools make you choose between **cloud power** and **data privacy**. Axon runs entirely on your hardware — full capability, zero egress.
+Most RAG tools make you choose between **cloud power** and **data privacy**. Axon is local-first — full capability with zero egress when you run on Ollama or vLLM; cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) stay optional.
 
 - 🔒 **Private by default** — all inference runs locally via Ollama or vLLM. No API key, no upload, no telemetry.
 - 📄 **Ingest anything** — 54 file formats (PDF, DOCX, Jupyter, code, images, URLs) in one command. SHA-256 dedup skips unchanged files.
 - 🤖 **Works in your tools** — `@axon` in Copilot Chat, MCP for Claude Code / Codex / Gemini CLI / Cursor, Graph panel in VS Code or your browser.
 - 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Sealed (AES-256-GCM encrypted) sharing works safely through OneDrive, Dropbox, and Google Drive. Per-user permissions, full audit trail, no extra infrastructure. [Quick setup →](#sealed-sharing-quick-start)
-- 🕸️ **See your knowledge as a graph** — interactive 3D entity-relationship graph. Embedded webview in VS Code; opens in your browser everywhere else. Click any node to jump to the exact source line.
+- 🕸️ **See your knowledge as a graph** — interactive 3D entity-relationship graph. Embedded webview in VS Code; opens in your browser everywhere else. Click any node to inspect its supporting chunks and source excerpt.
 - 🔬 **Production-grade retrieval** — hybrid search, reranking, HyDE, multi-query expansion, and automatic web fallback. Zero manual tuning.
 
 ---
@@ -126,8 +114,8 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 ### 🛡️ Governance & Agents
 - **Governance Console** — full audit trail of every query
 - Graceful maintenance states: `normal → draining → readonly → offline`
-- **REST API** — 70 endpoints with Swagger docs at `/docs`
-- **MCP server** — 48 tools for Claude Code, Codex, Gemini, Cursor, Copilot
+- **REST API** — 73 endpoints with Swagger docs at `/docs`
+- **MCP server** — 51 tools for Claude Code, Codex, Gemini, Cursor, Copilot
 - **`@axon`** VS Code chat participant with Graph and Governance panels
 
 </td>
@@ -144,6 +132,15 @@ axon                              # First run auto-launches the setup wizard, th
 ```
 
 That's it. The wizard configures your LLM provider, embedding model, and retrieval defaults; subsequent runs go straight to the REPL.
+
+<details>
+<summary><b>See it run — first-run wizard, ingest, and a cited query</b></summary>
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/jyunming/Axon/main/docs/assets/repl-animation.gif" alt="Axon REPL — first-run wizard, ingest, and a cited query in action" width="640" />
+</div>
+
+</details>
 
 If something doesn't look right:
 
@@ -220,9 +217,9 @@ Extensions panel  →  "..."  →  Install from VSIX...
 →  run `axon-ext`  (or install from VSIX manually)
 ```
 
-Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 48 tools appear in the agent hammer menu automatically.
+Or connect via MCP for Copilot agent mode — point `.vscode/mcp.json` at `axon-mcp` and all 51 tools appear in the agent hammer menu automatically.
 
-> The VS Code extension surfaces **44 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
+> The VS Code extension surfaces **39 LM tools** to Copilot Chat, covering core RAG operations, sealed-store security, sharing, and governance.
 
 **[Full setup guide →](https://github.com/jyunming/Axon/blob/main/docs/SETUP.md)**
 
@@ -272,7 +269,7 @@ Per-call overrides (e.g. force HyDE for one question): `retriever.with_overrides
 | 🔑 | **[Admin Reference](https://github.com/jyunming/Axon/blob/main/docs/ADMIN_REFERENCE.md)** | Every endpoint, REPL command, CLI flag, and config option |
 | ⚡ | **[Quick Reference](https://github.com/jyunming/Axon/blob/main/docs/QUICKREF.md)** | Commands and flags at a glance |
 | 📡 | **[API Reference](https://github.com/jyunming/Axon/blob/main/docs/API_REFERENCE.md)** | Full REST endpoint reference with request/response schemas |
-| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 48 MCP tool signatures with parameter defaults |
+| 🔌 | **[MCP Tools](https://github.com/jyunming/Axon/blob/main/docs/MCP_TOOLS.md)** | All 51 MCP tool signatures with parameter defaults |
 
 **Deep dives**
 
