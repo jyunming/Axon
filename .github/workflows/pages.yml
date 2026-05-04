@@ -32,9 +32,13 @@ jobs:
 
       - name: Prepare publish directory
         run: |
-          mkdir -p public
+          # index.html references images via "docs/assets/..." paths
+          # (relative to the repo root). Pages serves from this publish
+          # dir, so we must mirror the source layout — otherwise every
+          # `<img src="docs/assets/...">` 404s on the live site.
+          mkdir -p public/docs
           [ -f index.html ] && cp index.html public/ || true
-          cp -r docs/assets public/ 2>/dev/null || true
+          cp -r docs/assets public/docs/ 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
