@@ -336,7 +336,7 @@ Open `http://localhost:8501` in your browser if it doesn't open automatically.
 
 ## Entry Point 5 — MCP Server (for AI coding agents)
 
-> **What is MCP?** Model Context Protocol is an open standard that lets AI coding agents call external tools programmatically. This is different from the VS Code extension (Entry Point 2): the extension gives you an `@axon` chat participant inside Copilot Chat; the MCP server gives any MCP-compatible agent direct access to all 48 Axon tools without a chat interface.
+> **What is MCP?** Model Context Protocol is an open standard that lets AI coding agents call external tools programmatically. This is different from the VS Code extension (Entry Point 2): the extension gives you an `@axon` chat participant inside Copilot Chat; the MCP server gives any MCP-compatible agent direct access to all 51 Axon tools without a chat interface.
 
 `axon-mcp` is a standard stdio server built on the open MCP protocol. It works with **Claude Code, Claude Desktop, OpenAI Codex CLI, OpenAI Codex Desktop, Google Gemini CLI, Cursor, VS Code Copilot agent mode**, and any other MCP-compatible tool.
 
