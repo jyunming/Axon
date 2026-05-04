@@ -86,13 +86,28 @@ def main() -> int:
     # If someone hand-edits index.html without updating index.template.html,
     # the next render will silently revert their change. Catching it here
     # forces the user to either update the template or regenerate.
+    #
+    # The template + renderer are NOT optional any more: dropping either
+    # one breaks the release workflow's ability to regenerate the
+    # landing page, so we fail the audit when they're missing rather
+    # than skipping silently (Copilot finding on PR #110).
     import subprocess
     import sys
 
     render_script = root / "scripts" / "render_index.py"
     template = root / "index.template.html"
     rendered_in_sync: bool | None = None
-    if render_script.exists() and template.exists():
+    if not render_script.exists():
+        errors.append(
+            f"missing required script: {render_script.relative_to(root)} "
+            "(needed to render index.html from the template)"
+        )
+    elif not template.exists():
+        errors.append(
+            f"missing required file: {template.relative_to(root)} "
+            "(source-of-truth for index.html — see PR I)"
+        )
+    else:
         result = subprocess.run(
             [sys.executable, str(render_script), "--check"],
             cwd=root,
@@ -101,9 +116,14 @@ def main() -> int:
         )
         rendered_in_sync = result.returncode == 0
         if not rendered_in_sync:
+            # Surface the renderer's actual output: a malformed template
+            # (lost placeholders, etc.) needs a different fix than a
+            # plain drift, and the user shouldn't have to re-run the
+            # script to see why it failed (Copilot finding on PR #110).
+            detail = (result.stderr or result.stdout or "").strip()
             errors.append(
-                "index.html is out of sync with index.template.html — run "
-                "`python scripts/render_index.py` and commit the result"
+                "index.html is out of sync with index.template.html.\n"
+                f"   render_index.py --check output:\n   {detail}"
             )
 
     duplicate_manifest = root / "src" / "axon" / "axon_rust_Cargo.toml"
