@@ -318,7 +318,7 @@ axon> Compare @report.pdf with @notes.docx
 
 ## 4. REST API Reference
 
-**68 endpoints** across 12 route files. Base URL: `http://localhost:8000` (default).
+**73 endpoints** across 12 route files. Base URL: `http://localhost:8000` (default).
 
 Interactive docs: `/docs` (Swagger UI), `/redoc`.
 
@@ -495,7 +495,7 @@ Exposed metrics: `axon_requests_total` (Counter, labels: `path/method/status`), 
 
 ## 5. MCP Tools Reference
 
-44 tools are registered when running `axon-mcp`.
+51 tools are registered when running `axon-mcp`.
 
 ### 5.1 Ingestion (6)
 
@@ -563,7 +563,7 @@ Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` 
 | `list_shares` | — | List outgoing and incoming shares |
 | `refresh_mount` | — | Force-refresh a mounted shared project's handles |
 
-### 5.8 Security (Sealed Store) (6)
+### 5.8 Security (Sealed Store) (9)
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
@@ -573,6 +573,9 @@ Returns: `ingest_path` / `ingest_url` → `{"job_id": "..."}`. `get_job_status` 
 | `security_lock` | — | Lock the sealed-store (clear in-process key cache) |
 | `security_change_passphrase` | `old_passphrase` (str), `new_passphrase` (str) | Rotate the sealed-store passphrase |
 | `seal_project` | `project_name` (str), `migration_mode` (str, default `"in_place"`) | Encrypt all content files in a project at rest |
+| `suggest_passphrase` | `words` (int, optional, 4-12, default 6), `separator` (str, optional, default "-") | Diceware passphrase from EFF wordlist. v0.4.0 Item 1 |
+| `set_keyring_mode` | `mode` (str, required, "persistent"\|"session"\|"never") | Change DEK storage mode at runtime. v0.4.0 Item 2 |
+| `wipe_sealed_cache` | (no params) | Wipe the active sealed-project plaintext cache. Returns `{wiped: bool}`. v0.4.0 Item 3 |
 
 ### 5.9 Graph (4)
 
