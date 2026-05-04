@@ -898,7 +898,29 @@ class QueryRouterMixin:
             self._last_mount_check_ts = time.monotonic()
 
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
-        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
+        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized).
+
+        v0.4.0 Item 3: when ``security.seal_cache_ephemeral`` is on
+        AND the active project is sealed, the entire retrieval body
+        runs inside a per-query mount/unmount cycle (see
+        ``AxonBrain._ephemeral_query_window``). The plaintext on-disk
+        window collapses from "entire session" to "one query
+        execution time" (~1s). LLM synthesis happens AFTER this
+        method returns — it works off in-memory chunks and does not
+        need the cache, so the wipe is safe to fire on retrieval exit.
+
+        ``_ephemeral_query_window`` is optional — minimal mock-based
+        tests construct stub query routers without the AxonBrain mixin
+        installed. Fall back to a no-op pass-through when the helper
+        isn't present.
+        """
+        ctx = getattr(self, "_ephemeral_query_window", None)
+        if ctx is None:
+            return self._execute_retrieval_inner(query, filters=filters, cfg=cfg)
+        with ctx():
+            return self._execute_retrieval_inner(query, filters=filters, cfg=cfg)
+
+    def _execute_retrieval_inner(self, query: str, filters: dict = None, cfg=None) -> dict:
         self._check_mount_revocation()
         self._maybe_refresh_mount()
         from axon.rust_bridge import get_rust_bridge
@@ -1388,6 +1410,12 @@ class QueryRouterMixin:
         Returns ``(results, diagnostics, trace)`` — useful for benchmark harnesses,
         the ``/search/raw`` API endpoint, and the ``--dry-run`` CLI flag.
         The result list is already sliced to the effective top-k.
+
+        v0.4.0 Item 3: ``_execute_retrieval`` itself wraps the body in
+        the ephemeral mount/unmount window when
+        ``security.seal_cache_ephemeral`` is on, so all three call
+        sites (``search_raw``, ``query``, ``query_stream``) share the
+        same per-query cache lifetime.
         """
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters=filters, cfg=cfg)

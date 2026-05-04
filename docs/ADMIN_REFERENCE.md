@@ -166,6 +166,8 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--project-seal NAME` | Encrypt every content file in project NAME at rest, then exit. Requires store to be unlocked first |
 | `--passphrase-generate [--passphrase-words N]` | **v0.4.0 Item 1** — print a Diceware passphrase from the bundled EFF wordlist (CC BY 3.0 US, 7,776 words) and exit. `N` is 4-12 (default 6 ≈ 77 bits of entropy). Use the printed phrase as input to `--store-bootstrap` or `--store-unlock` |
 | `--keyring-mode {persistent\|session\|never}` | **v0.4.0 Item 2** — override `security.keyring_mode` for this invocation. `persistent` (default) = OS keyring; `session` = in-memory only, wiped at exit; `never` = no DEK caching, re-redeem every mount |
+| `--seal-cache-ephemeral` | **v0.4.0 Item 3** — force `security.seal_cache_ephemeral=true` for this process. Sealed plaintext cache lives only for the duration of one query (re-decrypted per call) |
+| `--wipe-sealed-cache` | **v0.4.0 Item 3** — wipe the active sealed plaintext cache and exit. No-op when no sealed project mounted. Returns 0 in both cases |
 
 ### 2.12 Share Lifecycle
 

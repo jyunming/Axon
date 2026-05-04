@@ -646,6 +646,22 @@ def main():
         "config.yaml but takes precedence for this invocation.",
     )
     parser.add_argument(
+        "--seal-cache-ephemeral",
+        action="store_true",
+        help="Force security.seal_cache_ephemeral=true for this process: "
+        "the sealed-project plaintext cache exists only during the body "
+        "of one query/search and is wiped on exit. Adds ~1s/query latency "
+        "(re-decrypt per query) but shrinks the plaintext window from "
+        "session-long to per-query.",
+    )
+    parser.add_argument(
+        "--wipe-sealed-cache",
+        action="store_true",
+        help="Wipe the active sealed-project plaintext cache and exit. "
+        "No-op when no sealed project is mounted. Returns exit 0 in both "
+        "cases. Useful for forcing the next query to re-materialise.",
+    )
+    parser.add_argument(
         "--project-seal",
         metavar="NAME",
         help="Encrypt every content file in project NAME at rest, then exit. "
@@ -830,6 +846,32 @@ def main():
         report = run_doctor(_cfg)
         print(render_report(report))
         sys.exit(0 if report.overall != "error" else 1)
+    if getattr(args, "wipe_sealed_cache", False):
+        # v0.4.0 Item 3 — best-effort wipe via a transient brain. We
+        # spin up an AxonBrain so that any orphaned sealed caches from a
+        # prior session also get scrubbed via the existing
+        # ``cleanup_orphans`` boot path.
+        from axon.config import AxonConfig as _AxonConfig
+        from axon.main import AxonBrain as _AxonBrain
+
+        try:
+            _cfg = _AxonConfig.load(args.config or None)
+        except Exception:
+            _cfg = _AxonConfig()
+        try:
+            _brain = _AxonBrain(_cfg)
+        except Exception as exc:
+            print(f"  Could not start brain to wipe sealed cache: {exc}")
+            sys.exit(1)
+        try:
+            wiped = _brain.wipe_sealed_cache()
+            print("  Sealed-cache wiped." if wiped else "  No active sealed cache to wipe.")
+        finally:
+            try:
+                _brain.close()
+            except Exception:
+                pass
+        sys.exit(0)
     if getattr(args, "passphrase_generate", False):
         # Pure function — no config, no store. Lets users mint a strong
         # passphrase on a fresh box before --store-bootstrap.
@@ -855,6 +897,10 @@ def main():
     # security layer.
     if getattr(args, "keyring_mode", None):
         config.keyring_mode = args.keyring_mode
+    # v0.4.0 Item 3: --seal-cache-ephemeral CLI flag forces ephemeral
+    # mode for this invocation regardless of config.yaml.
+    if getattr(args, "seal_cache_ephemeral", False):
+        config.seal_cache_ephemeral = True
     # Configure logging: always write detailed logs to a rotating file under the Axon store base.
     try:
         from datetime import datetime as _dt

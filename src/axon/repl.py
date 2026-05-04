@@ -2621,6 +2621,7 @@ def _interactive_repl(
                         "    /store change-passphrase <old> <new>     rotate the sealed-store passphrase\n"
                         "    /store keyring-mode [MODE]               show or set DEK storage mode\n"
                         "                                              (persistent|session|never)\n"
+                        "    /store wipe-cache                        wipe the sealed plaintext cache now\n"
                         "\n"
                         "    Example: /store init ~/axon_data\n"
                         "    Moves data to: <base_path>/AxonStore/<username>/\n"
@@ -3978,13 +3979,28 @@ def _interactive_repl(
                                     "migrated; the new mode applies to subsequent "
                                     "store_secret/get_secret calls only."
                                 )
+                elif sub == "wipe-cache":
+                    # v0.4.0 Item 3: scrub the active sealed-project
+                    # plaintext cache; complements seal_cache_ephemeral.
+                    # Cache re-materialises on the next query.
+                    try:
+                        wiped = brain.wipe_sealed_cache()
+                    except Exception as exc:
+                        print(f"    Wipe failed: {exc}")
+                    else:
+                        print(
+                            "    Sealed-cache wiped."
+                            if wiped
+                            else "    No active sealed cache to wipe."
+                        )
                 else:
                     print(f"    Unknown sub-command '{sub}'.")
                     print(
                         "    Usage: /store whoami | /store init <base_path> | "
                         "/store status | /store bootstrap <pp> | /store unlock <pp> | "
                         "/store lock | /store change-passphrase <old> <new> | "
-                        "/store keyring-mode [persistent|session|never]"
+                        "/store keyring-mode [persistent|session|never] | "
+                        "/store wipe-cache"
                     )
             elif cmd == "/passphrase":
                 # ── /passphrase generate [N] — Diceware passphrase ───────

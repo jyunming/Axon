@@ -143,6 +143,30 @@ async def security_set_keyring_mode(request: Request):
     return {"status": "ok", "keyring_mode": mode}
 
 
+@router.post("/security/wipe-sealed-cache")
+async def security_wipe_sealed_cache():
+    """Wipe the active sealed-project plaintext cache.
+
+    v0.4.0 Item 3 manual companion to ``security.seal_cache_ephemeral``.
+    No-op when no sealed cache is mounted. Always returns 200; the
+    response carries ``wiped: bool`` so callers can branch without
+    parsing a status string.
+
+    Subject to the global ``X-API-Key`` middleware. Idempotent — safe
+    to call defensively (e.g. before logging out a session).
+    """
+    from axon import api as _api
+
+    if _api.brain is None:
+        return {"wiped": False, "reason": "no active brain"}
+    try:
+        wiped = bool(_api.brain.wipe_sealed_cache())
+    except Exception as exc:
+        logger.error("wipe_sealed_cache failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"wiped": wiped}
+
+
 @router.get("/suggestions/passphrase")
 async def suggest_passphrase(words: int = 6, separator: str = "-"):
     """Generate a Diceware passphrase from the bundled EFF wordlist.
