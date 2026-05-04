@@ -59,7 +59,7 @@ To set a time limit on the share:
 axon> /share generate research alice --ttl-days 30
 ```
 
-`--ttl-days` is honoured for both plaintext and sealed shares as of v0.4.0 (plaintext-only in v0.3.x). For plaintext shares, the expiry is recorded in the share manifest and enforced by the grantee's client on the next switch or query. To renew or clear a plaintext expiry without re-issuing the share, use `axon --share-extend <key_id> --ttl-days N` (or `--ttl-days 0` to clear). Sealed shares cannot be extended in place — see [Renewing a sealed share](#renewing-a-sealed-share) below.
+`--ttl-days` is honoured for both plaintext and sealed shares as of v0.4.0 (plaintext-only in v0.3.x). For plaintext shares, the expiry is recorded in the share manifest and enforced by the grantee's client on the next switch or query. To renew or clear a plaintext expiry without re-issuing the share, use `axon --share-extend <key_id> --share-ttl-days N` (renew) or `axon --share-extend <key_id>` (omit `--share-ttl-days` to clear); the REPL equivalent is `/share extend <key_id> --ttl-days N` or `/share extend <key_id> --clear`. `ttl_days <= 0` is rejected — there's no `--ttl-days 0` shortcut for clearing. Sealed shares cannot be extended in place — see [Renewing a sealed share](#renewing-a-sealed-share) below.
 
 Step 4 (grantee): Redeem the share
 
@@ -162,7 +162,7 @@ The end-to-end lifecycle:
        "sig": "<base64url-encoded Ed25519 signature over b'<key_id>:<expires_at>'>"
      }
      ```
-     The signature covers the bytes `b"{key_id}:{expires_at}"` exactly. The signing key is derived deterministically from the owner's master via `HKDF-SHA256(master, salt=b"", info=b"axon-share-signing-v1", length=32)`. Wait for **both** files to finish uploading before telling the grantee to redeem.
+     The signature covers the bytes `b"{key_id}:{expires_at}"` exactly. The signing key is derived deterministically from the owner's master via HKDF-SHA256 with `info=b"axon-share-signing-v1"` and a fixed non-empty salt — see `axon.security.signing._SIGNING_SALT` and `SIGNING_HKDF_INFO` for the canonical constants. Wait for **both** files to finish uploading before telling the grantee to redeem.
 2. **Redeem (grantee).** The SEALED2 envelope's 7th field carries the owner's signing pubkey. Axon stores the pubkey in the mount descriptor (`<user_dir>/mounts/<mount_name>/mount.json`) under `owner_pubkey_hex` so it survives across process restarts.
 3. **Mount (grantee).** On every `switch_project` to a sealed mount, Axon reads the mount descriptor's pubkey, fetches the latest `<key_id>.expiry` from the synced FS, verifies the Ed25519 signature against the recorded pubkey, parses `expires_at`, and compares against `datetime.now(timezone.utc)`. Any of these conditions raises `ShareExpiredError`:
    - sidecar JSON is malformed or missing required fields,

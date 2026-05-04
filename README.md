@@ -25,7 +25,7 @@
 
 Most RAG tools make you choose between **cloud power** and **data privacy**. Axon is local-first — full capability with zero egress when you run on Ollama or vLLM; cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) stay optional.
 
-- 🔒 **Private by default** — all inference runs locally via Ollama or vLLM. No API key, no upload, no telemetry.
+- 🔒 **Private by default** — local inference via Ollama or vLLM is the recommended path; cloud providers (OpenAI, Gemini, Grok, GitHub Copilot, Ollama Cloud) remain opt-in. No telemetry. Strict offline / air-gap mode shuts every outbound call off entirely.
 - 📄 **Ingest anything** — 54 file formats (PDF, DOCX, Jupyter, code, images, URLs) in one command. SHA-256 dedup skips unchanged files.
 - 🤖 **Works in your tools** — `@axon` in Copilot Chat, MCP for Claude Code / Codex / Gemini CLI / Cursor, Graph panel in VS Code or your browser.
 - 🤝 **Built for teams** — share your knowledge base with signed, revocable read-only keys. Sealed (AES-256-GCM encrypted) sharing works safely through OneDrive, Dropbox, and Google Drive. Per-user permissions, full audit trail, no extra infrastructure. [Quick setup →](#sealed-sharing-quick-start)
