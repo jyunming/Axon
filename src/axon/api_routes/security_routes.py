@@ -71,6 +71,35 @@ async def security_status():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/suggestions/passphrase")
+async def suggest_passphrase(words: int = 6, separator: str = "-"):
+    """Generate a Diceware passphrase from the bundled EFF wordlist.
+
+    Pure helper — no auth, no store, no rate limit beyond the global
+    middleware. Useful for setup wizards / onboarding UIs that want to
+    suggest a strong default passphrase before the user runs
+    ``/security/bootstrap``.
+
+    Returns ``{passphrase, n_words, entropy_bits, separator, source}``.
+    """
+    from axon.security.wordlist import (
+        estimate_entropy_bits,
+        generate_passphrase,
+    )
+
+    try:
+        phrase = generate_passphrase(n_words=words, separator=separator)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "passphrase": phrase,
+        "n_words": words,
+        "entropy_bits": estimate_entropy_bits(words),
+        "separator": separator,
+        "source": "eff_large_wordlist",
+    }
+
+
 @router.post("/security/bootstrap")
 async def security_bootstrap(request: SecurityBootstrapRequest, req: Request):
     from axon import security as _security

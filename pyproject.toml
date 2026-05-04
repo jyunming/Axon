@@ -211,6 +211,8 @@ python-source = "src"
 include = [
     { path = "src/axon/extensions/*.vsix", format = "wheel" },
     { path = "src/axon/extensions/*.vsix", format = "sdist" },
+    { path = "src/axon/security/data/*.txt", format = "wheel" },
+    { path = "src/axon/security/data/*.txt", format = "sdist" },
     { path = "LICENSE", format = "sdist" },
 ]
 exclude = [

@@ -2600,6 +2600,7 @@ def _interactive_repl(
                         "    Switching to a parent project shows merged data across all sub-projects.\n"
                         "    Use /ingest after switching to add documents to the current project.",
                         "share": "    /share list                              list all issued and received shares\n"
+                        "    /passphrase generate [N]                        Diceware passphrase (default 6 words)\n"
                         "    /share generate <project> <grantee>             generate a read-only share key\n"
                         "                                                    (auto-detects sealed projects)\n"
                         "    /share redeem <share_string>                    mount a shared project\n"
@@ -2623,6 +2624,11 @@ def _interactive_repl(
                         "    Moves data to: <base_path>/AxonStore/<username>/\n"
                         "    Config is updated and persisted to ~/.config/axon/config.yaml.\n"
                         "    Sealed-store sub-commands require the [sealed] extra installed.",
+                        "passphrase": "    /passphrase generate [N]   Diceware passphrase from EFF wordlist\n"
+                        "                               (N words, 4-12, default 6 ≈ 77 bits)\n"
+                        "\n"
+                        "    Use the printed phrase as input to /store bootstrap or /store unlock.\n"
+                        "    77+ bits of entropy makes scrypt brute-force infeasible.",
                         "graph": "    /graph status                  show entity count, edges, community summaries\n"
                         "    /graph finalize                trigger community detection rebuild\n"
                         "    /graph conflicts               list conflicted facts (dynamic_graph backend)\n"
@@ -3937,6 +3943,35 @@ def _interactive_repl(
                         "/store status | /store bootstrap <pp> | /store unlock <pp> | "
                         "/store lock | /store change-passphrase <old> <new>"
                     )
+            elif cmd == "/passphrase":
+                # ── /passphrase generate [N] — Diceware passphrase ───────
+                from axon.security.wordlist import (
+                    estimate_entropy_bits as _eeb,
+                )
+                from axon.security.wordlist import (
+                    generate_passphrase as _gp,
+                )
+
+                _parts = arg.split()
+                if not _parts or _parts[0] != "generate":
+                    print("    Usage: /passphrase generate [N]   (N words, 4-12, default 6)")
+                else:
+                    try:
+                        _n = int(_parts[1]) if len(_parts) > 1 else 6
+                    except ValueError:
+                        print("    Word count must be an integer (4-12).")
+                        _n = None
+                    if _n is not None:
+                        try:
+                            _phrase = _gp(n_words=_n)
+                        except ValueError as exc:
+                            print(f"    {exc}")
+                        else:
+                            print(f"\n    {_phrase}\n")
+                            print(
+                                f"    ({_n} words, ~{_eeb(_n)} bits of entropy "
+                                "from EFF wordlist)\n"
+                            )
             elif cmd == "/refresh":
                 # ── /refresh — re-ingest changed documents ───────────────────────
                 import hashlib as _hl_r

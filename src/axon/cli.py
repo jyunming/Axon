@@ -622,6 +622,20 @@ def main():
         "Project DEKs are not touched (O(1) regardless of project count).",
     )
     parser.add_argument(
+        "--passphrase-generate",
+        action="store_true",
+        help="Generate a Diceware passphrase from the bundled EFF wordlist "
+        "and print it, then exit. Use --passphrase-words N to control word "
+        "count (default 6 ≈ 77 bits of entropy).",
+    )
+    parser.add_argument(
+        "--passphrase-words",
+        type=int,
+        default=6,
+        metavar="N",
+        help="Number of Diceware words for --passphrase-generate (4–12, default 6).",
+    )
+    parser.add_argument(
         "--project-seal",
         metavar="NAME",
         help="Encrypt every content file in project NAME at rest, then exit. "
@@ -806,6 +820,21 @@ def main():
         report = run_doctor(_cfg)
         print(render_report(report))
         sys.exit(0 if report.overall != "error" else 1)
+    if getattr(args, "passphrase_generate", False):
+        # Pure function — no config, no store. Lets users mint a strong
+        # passphrase on a fresh box before --store-bootstrap.
+        from axon.security.wordlist import estimate_entropy_bits, generate_passphrase
+
+        n = getattr(args, "passphrase_words", 6)
+        try:
+            phrase = generate_passphrase(n_words=n)
+        except ValueError as exc:
+            print(f"  {exc}")
+            sys.exit(2)
+        bits = estimate_entropy_bits(n)
+        print(phrase)
+        print(f"  ({n} words, ~{bits} bits of entropy from EFF wordlist)")
+        sys.exit(0)
     # Suppress httpx INFO noise before _InitDisplay is active (ollama.list fires early)
     if sys.stdin.isatty():
         logging.getLogger("httpx").propagate = False

@@ -1,0 +1,15 @@
+EFF Large Diceware Wordlist
+Source: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+License: CC BY 3.0 US (https://creativecommons.org/licenses/by/3.0/us/)
+Author: Electronic Frontier Foundation (EFF)
+
+The wordlist file `eff_large_wordlist.txt` is bundled here verbatim from
+the EFF's published Diceware wordlist (7,776 words, ~12.9 bits of
+entropy per word). Each line has the format `<5-digit-dice-roll>\t<word>`.
+
+We use this list to generate human-memorable passphrases for sealed-store
+unlock. With 6 words, ≥77 bits of entropy — enough to make scrypt brute
+force infeasible.
+
+This redistribution complies with CC BY 3.0 US: the original work is
+attributed to the EFF and the license URL is preserved here.
