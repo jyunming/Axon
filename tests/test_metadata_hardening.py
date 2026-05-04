@@ -206,25 +206,32 @@ class TestSealPadding:
 
     def test_truncated_padding_raises_format_error(self, tmp_path):
         """If a header claims more padding than the file contains, read
-        must raise SealedFormatError — not silently misalign and produce
-        InvalidTag."""
-        from axon.security.crypto import SealedFile, SealedFormatError, generate_dek
+        must raise ``SealedFormatError`` (not silently misalign into
+        ``InvalidTag``). Build the scenario explicitly: write with
+        padding_bytes=0 (file has just header+nonce+ct+tag), then
+        re-stamp the header to claim padding_length=64. There are no
+        trailing pad bytes in the file, so read() will fail the
+        length-check before AESGCM and raise SealedFormatError."""
+        from axon.security.crypto import (
+            _HEADER_STRUCT,
+            HEADER_LEN,
+            SealedFile,
+            SealedFormatError,
+            generate_dek,
+        )
 
         path = tmp_path / "truncated.bin"
         key = generate_dek()
-        SealedFile.write(path, b"hello", key, padding_bytes=64)
-        # Lop off some of the trailing padding bytes
+        SealedFile.write(path, b"hello", key, padding_bytes=0)
+
         body = path.read_bytes()
-        path.write_bytes(body[: len(body) - 10])
-        # The body claimed full padding length; now there isn't enough
-        # left to slice, so the format error fires before AESGCM.
-        # (If the original write picked padding_length=0 the test is
-        # vacuous — assert at least that we don't return wrong plaintext.)
-        try:
-            decrypted = SealedFile.read(path, key)
-        except (SealedFormatError, Exception):
-            return
-        assert decrypted != b"hello"
+        magic, version, cipher_id, _ = _HEADER_STRUCT.unpack(body[:HEADER_LEN])
+        # Lie: claim padding_length=64 even though no pad bytes follow.
+        new_header = _HEADER_STRUCT.pack(magic, version, cipher_id, 64)
+        path.write_bytes(new_header + body[HEADER_LEN:])
+
+        with pytest.raises(SealedFormatError, match="padding"):
+            SealedFile.read(path, key)
 
 
 # ---------------------------------------------------------------------------
@@ -257,4 +264,16 @@ class TestPaddingConfig:
         path = tmp_path / "config.yaml"
         path.write_text("security:\n  seal_padding_bytes: -5\n", encoding="utf-8")
         with pytest.raises(ValueError, match="seal_padding_bytes"):
+            AxonConfig.load(str(path))
+
+    def test_yaml_above_reader_cap_rejected(self, tmp_path):
+        """Copilot finding on PR #109: a budget above the reader's
+        1 MiB sanity bound would emit files this build can't decrypt.
+        Reject at config-load instead of letting it become silent
+        data loss."""
+        from axon.config import AxonConfig
+
+        path = tmp_path / "config.yaml"
+        path.write_text(f"security:\n  seal_padding_bytes: {2 * 1024 * 1024}\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="1 MiB"):
             AxonConfig.load(str(path))

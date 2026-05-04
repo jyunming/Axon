@@ -11,6 +11,8 @@ Marker schema (v1)::
         "schema_version": 1,
         "seq": 42,                     # monotonic per-ingest counter
         "generated_at": "...ISO...",
+        "owner_host": "",              # always empty in v0.4.0+ writers;
+                                       # retained for v0.3.x reader compat
         "owner_node_id": "8a3c…",      # store-scoped UUID4 (v0.4.0+)
         "hash_algo": "sha256",
         "artifacts": {

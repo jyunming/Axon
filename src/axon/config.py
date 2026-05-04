@@ -1121,6 +1121,18 @@ class AxonConfig:
                 _spb = int(sec["seal_padding_bytes"])
                 if _spb < 0:
                     raise ValueError(f"security.seal_padding_bytes must be >= 0, got {_spb}")
+                # Cap matches axon.security.crypto._unpack_header's 1 MiB
+                # sanity bound on padding_length. A larger budget would let
+                # writers emit files this build's reader rejects with
+                # SealedFormatError — silent data loss until the next
+                # release bumps the reader's bound.
+                _SEAL_PADDING_HARD_CAP = 1024 * 1024
+                if _spb > _SEAL_PADDING_HARD_CAP:
+                    raise ValueError(
+                        f"security.seal_padding_bytes must be <= "
+                        f"{_SEAL_PADDING_HARD_CAP} (1 MiB), got {_spb}. "
+                        "Larger values would emit files the reader rejects."
+                    )
                 config_dict["seal_padding_bytes"] = _spb
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
