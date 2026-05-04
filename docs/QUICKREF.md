@@ -140,6 +140,9 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 > For cloud drives (OneDrive, Dropbox, GDrive): use sealed mode — see [SHARING.md](SHARING.md#sealed-sharing-onedrive--dropbox--google-drive)
 | `/store whoami` | Show AxonStore identity and status |
 | `/store init <path>` | Change the store base path (e.g. to a shared drive) |
+| `/store keyring-mode [persistent\|session\|never]` | Show or set DEK storage mode for sealed projects (persistent = OS keyring; session = in-memory only; never = prompt every time) |
+| `/store wipe-cache` | Wipe the active sealed-project plaintext cache (forces re-decryption on next access) |
+| `/passphrase generate [N]` | Generate a Diceware passphrase from the bundled EFF wordlist (4–12 words; default 6 ≈ 77 bits of entropy) |
 | `/graph status` | Show GraphRAG community build status |
 | `/graph finalize` | Trigger explicit community rebuild (reports `not_applicable` on backends without a community step, e.g. `dynamic_graph`) |
 | `/graph conflicts` | List facts with `status='conflicted'` (dynamic_graph or federated backend); `graphrag` reports unsupported |
@@ -656,5 +659,5 @@ MIT License - See [LICENSE](../LICENSE) file.
 
 ---
 
-**Last Updated:** 2026-03-17
+**Last Updated:** 2026-05-04
 **Version:** see `axon --version`
