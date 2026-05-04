@@ -3944,34 +3944,40 @@ def _interactive_repl(
                     # this REPL session. Does NOT migrate already-stored
                     # secrets — see the docstring on
                     # ``set_keyring_mode``.
-                    from axon.security.keyring import (
-                        get_keyring_mode as _gkm,
-                    )
-                    from axon.security.keyring import (
-                        session_cache as _sc,
-                    )
-                    from axon.security.keyring import (
-                        set_keyring_mode as _skm,
-                    )
-
-                    _arg = sub_arg.strip() if sub_arg else ""
-                    if not _arg:
-                        print(f"    Active keyring mode: {_gkm()}")
-                        print(f"    Session cache size:  {len(_sc())}")
-                        print("    Usage: /store keyring-mode " "[persistent|session|never]")
+                    try:
+                        from axon.security.keyring import (
+                            get_keyring_mode as _gkm,
+                        )
+                        from axon.security.keyring import (
+                            session_cache as _sc,
+                        )
+                        from axon.security.keyring import (
+                            set_keyring_mode as _skm,
+                        )
+                    except ImportError:
+                        print(
+                            "    /store keyring-mode requires the sealed extra.\n"
+                            "    Install with: pip install axon-rag[sealed]"
+                        )
                     else:
-                        try:
-                            _skm(_arg)
-                        except ValueError as exc:
-                            print(f"    {exc}")
+                        _arg = sub_arg.strip() if sub_arg else ""
+                        if not _arg:
+                            print(f"    Active keyring mode: {_gkm()}")
+                            print(f"    Session cache size:  {len(_sc())}")
+                            print("    Usage: /store keyring-mode " "[persistent|session|never]")
                         else:
-                            brain.config.keyring_mode = _arg
-                            print(f"    Keyring mode set to {_arg}.")
-                            print(
-                                "    Note: previously stored secrets are NOT "
-                                "migrated; the new mode applies to subsequent "
-                                "store_secret/get_secret calls only."
-                            )
+                            try:
+                                _skm(_arg)
+                            except ValueError as exc:
+                                print(f"    {exc}")
+                            else:
+                                brain.config.keyring_mode = _arg
+                                print(f"    Keyring mode set to {_arg}.")
+                                print(
+                                    "    Note: previously stored secrets are NOT "
+                                    "migrated; the new mode applies to subsequent "
+                                    "store_secret/get_secret calls only."
+                                )
                 else:
                     print(f"    Unknown sub-command '{sub}'.")
                     print(

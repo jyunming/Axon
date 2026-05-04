@@ -296,14 +296,27 @@ def set_keyring_mode(mode: str) -> None:
     ``persistent`` to ``session`` will leave OS keyring entries untouched
     and start writing to the in-process cache instead.
 
+    Side effect on transition AWAY from ``session`` (or INTO ``never``):
+    the in-memory :class:`SessionDEKCache` is wiped. This avoids the
+    awkward state where ``session_cache_size`` is still positive even
+    though the active mode no longer uses the cache, and ensures
+    ``never`` mode actually means "no DEK material in process memory"
+    after the transition completes.
+
     :raises ValueError: If *mode* is not one of ``persistent | session | never``.
     """
     if mode not in _VALID_MODES:
         raise ValueError(f"keyring_mode must be one of {_VALID_MODES}, got {mode!r}")
     global _current_mode
     with _mode_lock:
+        previous = _current_mode
         _current_mode = mode
-    logger.debug("keyring_mode set to %s", mode)
+    # Drop the session cache when the new mode no longer reads from it.
+    # This is intentional: leaving stale DEKs in memory after the user
+    # switched to "never" would silently violate the documented contract.
+    if mode != "session":
+        _SESSION_CACHE.clear()
+    logger.debug("keyring_mode set to %s (was %s)", mode, previous)
 
 
 def get_keyring_mode() -> str:

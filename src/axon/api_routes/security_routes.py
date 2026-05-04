@@ -63,7 +63,6 @@ def _current_user_dir() -> Path:
 @router.get("/security/status")
 async def security_status():
     from axon import security as _security
-    from axon.security.keyring import get_keyring_mode, session_cache
 
     try:
         result = dict(_security.store_status(_current_user_dir()))
@@ -72,9 +71,16 @@ async def security_status():
         raise HTTPException(status_code=500, detail=str(exc))
     # v0.4.0 Item 2: surface the active keyring mode + session cache size
     # so operators can verify config.yaml took effect without poking REPL.
+    # The keyring submodule is part of the optional [sealed] extra — on a
+    # minimal install we silently omit these fields so the endpoint still
+    # works for non-sealed users.
     try:
+        from axon.security.keyring import get_keyring_mode, session_cache
+
         result["keyring_mode"] = get_keyring_mode()
         result["session_cache_size"] = len(session_cache())
+    except ImportError:
+        pass
     except Exception as exc:
         logger.debug("keyring mode lookup failed: %s", exc)
     return result
@@ -92,13 +98,31 @@ async def security_set_keyring_mode(request: Request):
     rotation during a planned maintenance window — for permanent change,
     update ``security.keyring_mode`` in ``config.yaml`` and restart.
     """
-    from axon.security.keyring import set_keyring_mode
+    # The keyring helper lives in the optional [sealed] extra. On a
+    # minimal install, return a controlled 400 with an install hint
+    # instead of letting ImportError become a 500 — matches the pattern
+    # used by other sealed-store endpoints.
+    try:
+        from axon.security.keyring import set_keyring_mode
+    except ImportError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "security.keyring is unavailable. Install the sealed extra: "
+                "pip install axon-rag[sealed]"
+            ),
+        )
 
     try:
         body = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {exc}")
-    mode = (body or {}).get("mode")
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="Body must be a JSON object with a 'mode' field.",
+        )
+    mode = body.get("mode")
     if not isinstance(mode, str):
         raise HTTPException(status_code=422, detail="Body must contain 'mode' as a string.")
     try:

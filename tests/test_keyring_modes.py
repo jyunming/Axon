@@ -292,3 +292,64 @@ class TestRestSurface:
             headers={"Content-Type": "application/json"},
         )
         assert resp.status_code == 400
+
+    def test_post_keyring_mode_rejects_non_object_body(self, api_client):
+        """JSON arrays/strings/null must return 422 (Copilot finding on
+        PR #107) — previously crashed with AttributeError → 500."""
+        for bad_body in ([], "x", None, 42):
+            resp = api_client.post(
+                "/security/keyring-mode",
+                content=__import__("json").dumps(bad_body).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 422, f"non-object body {bad_body!r} should be 422"
+
+
+# ---------------------------------------------------------------------------
+# Side-effects of mode transitions (Copilot finding PR #107)
+# ---------------------------------------------------------------------------
+
+
+class TestModeTransitionSideEffects:
+    def test_switching_out_of_session_clears_cache(self):
+        """If we leave 'session' mode, the in-memory cache must be wiped
+        — otherwise ``never`` mode silently retains DEK material."""
+        from axon.security.keyring import (
+            session_cache,
+            set_keyring_mode,
+            store_secret,
+        )
+
+        set_keyring_mode("session")
+        store_secret("svc", "user", "secret")
+        assert len(session_cache()) == 1
+
+        set_keyring_mode("never")
+        assert len(session_cache()) == 0
+
+    def test_switching_session_to_persistent_clears_cache(self):
+        from axon.security.keyring import (
+            session_cache,
+            set_keyring_mode,
+            store_secret,
+        )
+
+        set_keyring_mode("session")
+        store_secret("svc", "user", "secret")
+        assert len(session_cache()) == 1
+
+        set_keyring_mode("persistent")
+        assert len(session_cache()) == 0
+
+    def test_re_entering_session_mode_starts_empty(self):
+        from axon.security.keyring import (
+            session_cache,
+            set_keyring_mode,
+            store_secret,
+        )
+
+        set_keyring_mode("session")
+        store_secret("a", "u", "s")
+        set_keyring_mode("persistent")  # clears
+        set_keyring_mode("session")
+        assert len(session_cache()) == 0

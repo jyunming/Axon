@@ -842,12 +842,21 @@ def redeem_sealed_share(
     # grantee machine, but on this machine we cache the plaintext DEK
     # so query latency isn't gated on a keyring round-trip per file.
     service = _share_keyring_service(key_id)
+    # v0.4.0 Item 2: respect security.keyring_mode. In session/never
+    # modes the user has explicitly opted out of persistent DEK storage,
+    # so the file fallback (which IS persistent on disk) must NOT fire.
+    # ``store_secret`` already routes session→memory and never→drop;
+    # the only mode where a real OS keyring write happens — and where
+    # KeyringUnavailableError is the legitimate signal to engage the
+    # encrypted-on-disk fallback — is "persistent".
+    _km = _kr.get_keyring_mode()
     try:
         _kr.store_secret(service, "dek", base64.b64encode(dek).decode("ascii"))
     except _kr.KeyringUnavailableError:
         # Keyring unavailable (headless Linux / Docker / CI) — fall back to
         # a file wrapped under the grantee's own master key, mirroring the
-        # master.enc dual-write pattern in master.py.
+        # master.enc dual-write pattern in master.py. Only triggered in
+        # persistent mode (session/never don't raise this).
         try:
             _write_grantee_dek_fallback(grantee_user_dir, key_id, dek)
             logger.info(
@@ -862,17 +871,29 @@ def redeem_sealed_share(
                 f"file fallback failed: {exc}"
             ) from exc
     else:
-        # Keyring is available — also write the file fallback so the DEK
-        # survives a cross-platform copy (mirrors the master.enc dual-write).
-        try:
-            _write_grantee_dek_fallback(grantee_user_dir, key_id, dek)
-        except Exception as _fb_exc:
-            # File fallback is best-effort when keyring is available;
-            # a failure here should not abort a successful keyring write.
+        if _km != "persistent":
+            # session / never: store_secret succeeded by routing to the
+            # in-memory cache or by silently dropping the secret. Writing
+            # the disk fallback here would defeat the point of the mode.
+            # Skip the fallback but still build the mount descriptor below.
             logger.debug(
-                "Grantee DEK file fallback write failed (keyring write succeeded): %s",
-                _fb_exc,
+                "keyring_mode=%s: skipping grantee DEK file fallback for %s",
+                _km,
+                key_id,
             )
+        else:
+            # Persistent + keyring available — write the file fallback so
+            # the DEK survives a cross-platform copy (mirrors the
+            # master.enc dual-write).
+            try:
+                _write_grantee_dek_fallback(grantee_user_dir, key_id, dek)
+            except Exception as _fb_exc:
+                # File fallback is best-effort when keyring is available;
+                # a failure here should not abort a successful keyring write.
+                logger.debug(
+                    "Grantee DEK file fallback write failed (keyring write succeeded): %s",
+                    _fb_exc,
+                )
     # Build the mount descriptor — same path format as the legacy
     # share path so the rest of the brain doesn't need a special case
     # at list-mounts / list-projects time.
