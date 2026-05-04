@@ -59,6 +59,8 @@ To set a time limit on the share:
 axon> /share generate research alice --ttl-days 30
 ```
 
+`--ttl-days` is honoured for both plaintext and sealed shares as of v0.4.0 (plaintext-only in v0.3.x). For plaintext shares, the expiry is recorded in the share manifest and enforced by the grantee's client on the next switch or query. To renew or clear a plaintext expiry without re-issuing the share, use `axon --share-extend <key_id> --ttl-days N` (or `--ttl-days 0` to clear). Sealed shares cannot be extended in place — see [Renewing a sealed share](#renewing-a-sealed-share) below.
+
 Step 4 (grantee): Redeem the share
 
 ```bash
@@ -131,15 +133,60 @@ Step 5: Generate a sealed share for the grantee
 axon --share-generate research alice
 ```
 
-Axon detects that the project is sealed and automatically generates a sealed share (key ID starts with `ssk_`). v0.4.0+ always emits a `SEALED2:` envelope carrying the owner's Ed25519 signing pubkey (used to verify the optional expiry sidecar). The legacy `SEALED1:` 6-field format is still accepted on redeem for backward compatibility with pre-v0.4.0 strings, but is no longer minted. Send the share string to the grantee out-of-band.
+Axon detects that the project is sealed and automatically generates a sealed share (key ID starts with `ssk_`). Send the share string to the grantee out-of-band.
 
-To add an expiry (v0.4.0):
+#### SEALED1 vs SEALED2 envelopes
+
+| Envelope | Decoded payload shape | Role in v0.4.0+ |
+|---|---|---|
+| `SEALED1:` | `SEALED1:<key_id>:<token_hex>:<owner>:<project>:<store_path>` (6 colon-separated fields including the prefix) | Legacy redeem-only — accepted for pre-v0.4.0 share strings, never minted by current generators. Mounts succeed but TTL cannot be enforced (no signing key bound to the envelope). |
+| `SEALED2:` | `SEALED2:<key_id>:<token_hex>:<owner>:<project>:<store_path>:<pubkey_hex_64>` (7 fields; the trailing pubkey is split first via `rpartition(":")` so a Windows `store_path` containing `C:\...` parses correctly) | Default in v0.4.0+. The 7th field carries the owner's Ed25519 signing pubkey, derived deterministically from the master via `HKDF-SHA256(master, info=b"axon-share-signing-v1")`. The grantee uses this pubkey to verify the expiry sidecar on every mount. |
+
+#### Sealed-share TTL flow (v0.4.0)
+
+To add an expiry, pass `--ttl-days` at generation time:
 
 ```
 axon> /share generate research alice --ttl-days 30
 ```
 
-This writes two files to the sync folder: the wrapped DEK (`.security/shares/<key_id>.wrapped`, ~40 bytes) and an Ed25519-signed expiry sidecar (`.security/shares/<key_id>.expiry`, ~250 bytes). Wait for both to upload before telling the grantee to redeem. Once the sidecar's `expires_at` passes, the grantee's next mount fails with `ShareExpiredError` and Axon auto-destroys the local DEK + cache + mount descriptor (encrypted source files on the synced FS are never touched).
+The end-to-end lifecycle:
+
+1. **Generate (owner).** Axon mints a SEALED2 envelope and writes two files to `<project>/.security/shares/`:
+   - `<key_id>.wrapped` — the wrapped DEK (~40 bytes).
+   - `<key_id>.expiry` — an Ed25519-signed JSON sidecar (~250 bytes) with the shape:
+     ```json
+     {
+       "key_id": "ssk_a1b2c3d4",
+       "expires_at": "2026-06-01T17:30:00Z",
+       "sig": "<base64url-encoded Ed25519 signature over b'<key_id>:<expires_at>'>"
+     }
+     ```
+     The signature covers the bytes `b"{key_id}:{expires_at}"` exactly. The signing key is derived deterministically from the owner's master via `HKDF-SHA256(master, salt=b"", info=b"axon-share-signing-v1", length=32)`. Wait for **both** files to finish uploading before telling the grantee to redeem.
+2. **Redeem (grantee).** The SEALED2 envelope's 7th field carries the owner's signing pubkey. Axon stores the pubkey in the mount descriptor (`<user_dir>/mounts/<mount_name>/mount.json`) under `owner_pubkey_hex` so it survives across process restarts.
+3. **Mount (grantee).** On every `switch_project` to a sealed mount, Axon reads the mount descriptor's pubkey, fetches the latest `<key_id>.expiry` from the synced FS, verifies the Ed25519 signature against the recorded pubkey, parses `expires_at`, and compares against `datetime.now(timezone.utc)`. Any of these conditions raises `ShareExpiredError`:
+   - sidecar JSON is malformed or missing required fields,
+   - signature verification fails (tampered or wrong key),
+   - `key_id` inside the sidecar doesn't match the share,
+   - `expires_at` is naive / not valid ISO 8601,
+   - `now > expires_at`,
+   - mount descriptor has no `owner_pubkey_hex` (legacy SEALED1 mount — TTL is unenforceable; the sidecar is treated as untrusted and the mount fails closed).
+4. **Auto-destroy (grantee).** When `ShareExpiredError` fires, Axon performs three local cleanups:
+   - **DEK** — deletes from the OS keyring (`axon.share.<key_id>`) and the file fallback at `<user_dir>/.security/shares/<key_id>.dek.wrapped`.
+   - **Plaintext cache** — wipes the active ephemeral cache directory (the temp dir staged for an earlier mount).
+   - **Mount descriptor** — removes `<user_dir>/mounts/<mount_name>/mount.json`, so the project disappears from `list_projects` immediately.
+
+   **Encrypted source files on the synced filesystem are NEVER touched.** Deleting them would propagate the deletion back to the owner via OneDrive/Dropbox/Drive sync — a destructive failure mode. The owner manages their own files; the grantee only manages local state.
+
+If the grantee's clock is behind the owner's by more than the TTL, expiry won't fire on the grantee yet — accept that the comparison is grantee-local. If the grantee's clock is ahead, expiry fires early; the grantee can re-redeem a fresh share to recover.
+
+#### Renewing a sealed share
+
+`POST /share/extend` (and the equivalent `axon --share-extend` / `/share extend` REPL command) only operates on the **plaintext** share manifest. Sealed shares (`ssk_*` key IDs) are not present in that manifest, so calling `/share/extend ssk_...` returns **404 Not Found** by design. To renew a sealed share:
+
+1. Generate a fresh sealed share with the new expiry: `/share generate <project> <grantee> --ttl-days N`.
+2. Send the new SEALED2 string to the grantee.
+3. After the grantee has redeemed and mounted successfully, revoke the old share: `/share revoke <old_key_id> --project <project>`. Use `--rotate` if the old grantee machine is compromised; soft revoke is sufficient if you simply want to retire the old key ID.
 
 ### Grantee setup (3 steps)
 
@@ -152,10 +199,10 @@ axon --store-init "/path/to/OneDrive/AxonStore"
 Step 2: Redeem the sealed share
 
 ```bash
-axon --share-redeem "SEALED1:..."
+axon --share-redeem "SEALED2:..."
 ```
 
-Axon reads the wrapped DEK from the shared folder, derives the decryption key from the share token, and stores the unwrapped DEK in the OS keyring. The share token is discarded from process memory immediately.
+Axon reads the wrapped DEK from the shared folder, derives the decryption key from the share token, and stores the unwrapped DEK in the OS keyring. The share token is discarded from process memory immediately. The redeem path also extracts the owner's Ed25519 signing pubkey from the SEALED2 envelope (7th field) and persists it in the mount descriptor so subsequent mounts can verify the expiry sidecar (see [TTL flow](#sealed-share-ttl-flow-v040) above). Pre-v0.4.0 `SEALED1:` strings still redeem successfully but mount without TTL enforcement — TTL gating requires a SEALED2 envelope to bind the signing key cryptographically to the share.
 
 Step 3: Query the sealed project
 
@@ -229,6 +276,9 @@ axon --share-list
 | `CacheCapacityError: Not enough disk space` | Temp dir needs at least 1.1× the project size free | Free space in OS temp dir or set `TMPDIR` to a larger volume |
 | `SecurityError: Wrapped DEK won't unwrap` / `InvalidTag` | Hard revoke was performed — grantee's cached DEK is stale | Owner must generate a new share; grantee redeems it |
 | `Sealed-share wrap file missing` | Owner revoked or the sync has not delivered the wrap file yet | Wait for sync to complete, then retry |
+| `ShareExpiredError: Sealed share <id> expired at <ts>` | The expiry sidecar's `expires_at` has passed | Owner generates a fresh share with a new `--ttl-days`; grantee redeems. Sealed shares cannot be extended in place — see [Renewing a sealed share](#renewing-a-sealed-share). |
+| `ShareExpiredError: ... signature verification failed` | Sidecar tampered, owner pubkey rotated, or wrong sidecar synced | Owner regenerates the share; grantee redeems. Local DEK + cache + mount descriptor are auto-destroyed; encrypted source files on the synced FS are untouched. |
+| `404 Not Found` from `POST /share/extend` on a sealed key | Sealed shares (`ssk_*`) are not in the plaintext manifest | Mint a fresh sealed share with `--ttl-days` and revoke the old one |
 | OneDrive shows "Files On-Demand" cloud icons on project files | Files are placeholders and will fail mid-query | Right-click the project folder → "Always keep on this device" |
 | Google Drive Stream mode evicts files | Stream mode removes cached files to free disk space | Switch to Mirror mode in Google Drive preferences |
 
