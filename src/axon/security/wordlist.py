@@ -22,6 +22,10 @@ _MAX_WORDS: Final = 12
 # ambiguous. The passphrase is treated as opaque by Axon's scrypt KDF —
 # the separator only affects how the user reads / types it.
 _DEFAULT_SEPARATOR: Final = " "
+# Cap separator length so a malicious caller (especially via REST query
+# string) cannot force ``separator * (n_words - 1)`` to balloon the
+# response. 8 chars is more than enough for any sensible delimiter.
+_MAX_SEPARATOR_LEN: Final = 8
 
 
 @lru_cache(maxsize=1)
@@ -60,15 +64,24 @@ def generate_passphrase(n_words: int = 6, separator: str = _DEFAULT_SEPARATOR) -
 
     :param n_words: Number of words to draw. Must satisfy
         ``_MIN_WORDS <= n_words <= _MAX_WORDS`` (4–12 inclusive).
-    :param separator: String joined between words. Default ``"-"``.
-    :raises ValueError: If ``n_words`` is outside the allowed range or
-        ``separator`` contains characters that would obscure word
-        boundaries (newline, NUL).
+    :param separator: String joined between words. Default is a single
+        space — 4 EFF entries are themselves hyphenated so ``-`` would
+        make word boundaries visually ambiguous. The REST surface
+        defaults to ``-`` for URL-friendliness; the library default is
+        ``" "``. Length is capped at ``_MAX_SEPARATOR_LEN`` so a
+        malicious caller cannot balloon the response.
+    :raises ValueError: If ``n_words`` is outside the allowed range,
+        ``separator`` contains newline / NUL, or ``separator`` exceeds
+        ``_MAX_SEPARATOR_LEN`` characters.
     """
     if not _MIN_WORDS <= n_words <= _MAX_WORDS:
         raise ValueError(f"n_words must be between {_MIN_WORDS} and {_MAX_WORDS}, got {n_words}")
     if any(c in separator for c in ("\n", "\r", "\0")):
         raise ValueError("separator must not contain newline or NUL bytes")
+    if len(separator) > _MAX_SEPARATOR_LEN:
+        raise ValueError(
+            f"separator must be at most {_MAX_SEPARATOR_LEN} characters, " f"got {len(separator)}"
+        )
     words = _load_wordlist()
     chosen = [secrets.choice(words) for _ in range(n_words)]
     return separator.join(chosen)

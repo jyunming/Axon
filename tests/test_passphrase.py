@@ -93,6 +93,21 @@ def test_generate_passphrase_rejects_bad_separator(bad_sep):
         generate_passphrase(separator=bad_sep)
 
 
+def test_generate_passphrase_rejects_oversize_separator():
+    """Separator length is capped to prevent REST callers from ballooning
+    the response by passing e.g. ``separator='x' * 10000``."""
+    from axon.security.wordlist import _MAX_SEPARATOR_LEN, generate_passphrase
+
+    with pytest.raises(ValueError, match="at most"):
+        generate_passphrase(separator="x" * (_MAX_SEPARATOR_LEN + 1))
+
+
+def test_rest_suggest_passphrase_rejects_oversize_separator(api_client):
+    """REST surface bubbles the separator-length cap as 422."""
+    resp = api_client.get("/suggestions/passphrase?separator=" + ("x" * 100))
+    assert resp.status_code == 422
+
+
 def test_entropy_estimate_matches_formula():
     from axon.security.wordlist import estimate_entropy_bits
 
@@ -161,8 +176,8 @@ def test_rest_suggest_passphrase_default(api_client):
     assert "passphrase" in body
     assert body["n_words"] == 6
     assert body["entropy_bits"] >= 77.0
-    # API default mirrors the library default (space)
-    assert body["separator"] == "-"  # endpoint kept "-" for URL-friendliness
+    # REST default is "-" (URL-friendlier); library default is " ".
+    assert body["separator"] == "-"
     assert body["source"] == "eff_large_wordlist"
 
 

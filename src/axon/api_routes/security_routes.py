@@ -75,10 +75,11 @@ async def security_status():
 async def suggest_passphrase(words: int = 6, separator: str = "-"):
     """Generate a Diceware passphrase from the bundled EFF wordlist.
 
-    Pure helper — no auth, no store, no rate limit beyond the global
-    middleware. Useful for setup wizards / onboarding UIs that want to
-    suggest a strong default passphrase before the user runs
-    ``/security/bootstrap``.
+    Pure helper — does not touch the sealed store. Subject to the global
+    ``X-API-Key`` middleware when ``RAG_API_KEY`` is configured (no
+    endpoint-specific bypass). Useful for setup wizards / onboarding UIs
+    that want to suggest a strong default passphrase before the user
+    runs ``/security/bootstrap``.
 
     Returns ``{passphrase, n_words, entropy_bits, separator, source}``.
     """
