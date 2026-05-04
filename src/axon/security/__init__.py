@@ -34,7 +34,27 @@ __all__ = [
     "resolve_owned_sealed_project_path",
     "project_rotate_keys",
     "project_seal",
+    "generate_passphrase",
+    "estimate_entropy_bits",
 ]
+
+
+def generate_passphrase(n_words: int = 6, separator: str = " ") -> str:
+    """Re-export of :func:`axon.security.wordlist.generate_passphrase`.
+
+    Lazy import keeps the wordlist file off the import path of every
+    minimal install — only loaded when a caller actually requests one.
+    """
+    from .wordlist import generate_passphrase as _impl
+
+    return _impl(n_words=n_words, separator=separator)
+
+
+def estimate_entropy_bits(n_words: int) -> float:
+    """Re-export of :func:`axon.security.wordlist.estimate_entropy_bits`."""
+    from .wordlist import estimate_entropy_bits as _impl
+
+    return _impl(n_words)
 
 
 class SecurityError(Exception):

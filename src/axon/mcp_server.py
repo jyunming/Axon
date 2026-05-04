@@ -75,9 +75,9 @@ def _headers() -> dict[str, str]:
     return h
 
 
-async def _get(path: str) -> Any:
+async def _get(path: str, params: dict | None = None) -> Any:
     async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.get(f"{API_BASE}{path}", headers=_headers())
+        resp = await client.get(f"{API_BASE}{path}", headers=_headers(), params=params)
         resp.raise_for_status()
         return resp.json()
 
@@ -559,6 +559,26 @@ async def security_status() -> Any:
     unlocked: false`` after bootstrap until the next unlock.
     """
     return await _get("/security/status")
+
+
+@mcp.tool()
+async def suggest_passphrase(words: int = 6, separator: str = "-") -> Any:
+    """Suggest a strong Diceware passphrase from the bundled EFF wordlist.
+
+    Pure helper — does not touch the store. Useful before
+    ``security_bootstrap`` (first-time setup) or as a UX hint when
+    rotating via ``security_change_passphrase``.
+
+    Args:
+        words: Number of words to draw (4-12, default 6 ≈ 77 bits).
+        separator: String joined between words (default "-").
+
+    Returns ``{passphrase, n_words, entropy_bits, separator, source}``.
+    """
+    return await _get(
+        "/suggestions/passphrase",
+        params={"words": words, "separator": separator},
+    )
 
 
 @mcp.tool()

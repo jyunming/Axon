@@ -479,9 +479,20 @@ Return current sealed-store status (initialized and unlocked flags). Use on star
 
 **Returns:** `{"initialized": false}` or `{"initialized": true, "unlocked": false}` or `{"initialized": true, "unlocked": true}`
 
+### `suggest_passphrase`
+
+**v0.4.0 Item 1.** Suggest a strong Diceware passphrase from the bundled EFF large wordlist (CC BY 3.0 US, 7,776 words). Pure helper — no auth, no store. Useful before `security_bootstrap` (first-time setup) or as a UX hint when rotating via `security_change_passphrase`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `words` | int | `6` | Word count (4-12). 6 ≈ 77 bits of entropy — enough to make scrypt brute force infeasible |
+| `separator` | string | `"-"` | String joined between words |
+
+**Returns:** `{"passphrase": "...", "n_words": 6, "entropy_bits": 77.5, "separator": "-", "source": "eff_large_wordlist"}`
+
 ### `security_bootstrap`
 
-Initialise the sealed-store with a passphrase (one-time setup). Generates a fresh master key, wraps it under a passphrase-derived KEK, and stores it in the OS keyring. **There is NO recovery** — losing the passphrase means losing access to every project sealed under this master.
+Initialise the sealed-store with a passphrase (one-time setup). Generates a fresh master key, wraps it under a passphrase-derived KEK, and stores it in the OS keyring. **There is NO recovery** — losing the passphrase means losing access to every project sealed under this master. Pair with `suggest_passphrase` for a strong default.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

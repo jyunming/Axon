@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
-_No changes yet._
+### 🔒 Security — Item 1: Diceware passphrase generation
+
+- **EFF large wordlist** (CC BY 3.0 US, 7,776 words) bundled under `src/axon/security/data/`. License preserved as `LICENSE-EFF-WORDLIST.txt`.
+- **`axon.security.generate_passphrase(n_words=6)`** — uses `secrets.choice` for cryptographic randomness. 6 words ≈ 77.5 bits of entropy (`log2(7776**6)`), enough to make scrypt brute force infeasible.
+- **Cross-interface parity** — exposed on every surface:
+  - **CLI** — `axon --passphrase-generate [--passphrase-words N]`
+  - **REPL** — `/passphrase generate [N]`
+  - **REST** — `GET /suggestions/passphrase?words=N&separator=S`
+  - **MCP** — `suggest_passphrase(words=6, separator="-")` (49th tool)
+- 32 tests in `tests/test_passphrase.py` covering wordlist parse, entropy, format, edge cases, no-duplicate-in-1000-runs, and REST contract.
+- Default separator is space (4 EFF entries are themselves hyphenated, so `-` would be visually ambiguous as a word delimiter). REST endpoint defaults to `-` for URL-friendliness.
 
 ---
 
