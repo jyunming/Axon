@@ -636,6 +636,16 @@ def main():
         help="Number of Diceware words for --passphrase-generate (4–12, default 6).",
     )
     parser.add_argument(
+        "--keyring-mode",
+        choices=["persistent", "session", "never"],
+        metavar="MODE",
+        help="Override security.keyring_mode for this process: "
+        "persistent (default — OS keyring), session (in-memory only, "
+        "wiped at exit), never (no DEK caching anywhere — re-redeem "
+        "every mount). Equivalent to setting security.keyring_mode in "
+        "config.yaml but takes precedence for this invocation.",
+    )
+    parser.add_argument(
         "--project-seal",
         metavar="NAME",
         help="Encrypt every content file in project NAME at rest, then exit. "
@@ -840,6 +850,11 @@ def main():
         logging.getLogger("httpx").propagate = False
         logging.getLogger("httpx").setLevel(logging.WARNING)
     config = AxonConfig.load(args.config)
+    # v0.4.0 Item 2: --keyring-mode CLI flag overrides config.yaml for
+    # this invocation. AxonBrain.__init__ will apply this to the
+    # security layer.
+    if getattr(args, "keyring_mode", None):
+        config.keyring_mode = args.keyring_mode
     # Configure logging: always write detailed logs to a rotating file under the Axon store base.
     try:
         from datetime import datetime as _dt

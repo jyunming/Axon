@@ -418,7 +418,8 @@ Requires the `[sealed]` extra (already bundled in `[starter]`).
 | `POST` | `/security/unlock` | Unlock the sealed store with the bootstrap passphrase. Body: `{passphrase}` |
 | `POST` | `/security/lock` | Lock the sealed store — drops the master from process memory. No body |
 | `POST` | `/security/change-passphrase` | Re-wrap the master under a new passphrase. Body: `{old_passphrase, new_passphrase}` |
-| `GET`  | `/suggestions/passphrase` | **v0.4.0 Item 1** — generate a Diceware passphrase from the bundled EFF wordlist (CC BY 3.0 US, 7,776 words). Query: `?words=N&separator=S` (default `words=6` ≈ 77 bits, `separator=-`). Returns `{passphrase, n_words, entropy_bits, separator, source}`. No auth — pure helper. |
+| `GET`  | `/suggestions/passphrase` | **v0.4.0 Item 1** — generate a Diceware passphrase from the bundled EFF wordlist (CC BY 3.0 US, 7,776 words). Query: `?words=N&separator=S` (default `words=6` ≈ 77 bits, `separator=-`). Returns `{passphrase, n_words, entropy_bits, separator, source}`. Subject to global X-API-Key middleware. |
+| `POST` | `/security/keyring-mode` | **v0.4.0 Item 2** — change DEK storage mode at runtime. Body `{"mode": "persistent"\|"session"\|"never"}`. 422 on invalid mode. Caveat: previously stored secrets are NOT migrated. For permanent change, set `security.keyring_mode` in config.yaml and restart. `GET /security/status` now also returns `keyring_mode` + `session_cache_size`. |
 
 > Sealed-mount admin routes (`/project/seal`, `/project/rotate-keys`) live in the **Projects** section but require an unlocked store — call `/security/unlock` first if your shell or process restarted. See [SHARING.md](SHARING.md) for the full owner/grantee flow.
 

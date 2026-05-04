@@ -2619,6 +2619,8 @@ def _interactive_repl(
                         "    /store unlock <passphrase>               unlock for sealed-project queries\n"
                         "    /store lock                              clear in-process master cache\n"
                         "    /store change-passphrase <old> <new>     rotate the sealed-store passphrase\n"
+                        "    /store keyring-mode [MODE]               show or set DEK storage mode\n"
+                        "                                              (persistent|session|never)\n"
                         "\n"
                         "    Example: /store init ~/axon_data\n"
                         "    Moves data to: <base_path>/AxonStore/<username>/\n"
@@ -3936,12 +3938,53 @@ def _interactive_repl(
                             print("    Sealed-store passphrase rotated.")
                         except _security.SecurityError as exc:
                             print(f"    Passphrase rotation failed: {exc}")
+                elif sub == "keyring-mode":
+                    # ── /store keyring-mode [persistent|session|never] ──
+                    # Inspect or change the in-process keyring mode for
+                    # this REPL session. Does NOT migrate already-stored
+                    # secrets — see the docstring on
+                    # ``set_keyring_mode``.
+                    try:
+                        from axon.security.keyring import (
+                            get_keyring_mode as _gkm,
+                        )
+                        from axon.security.keyring import (
+                            session_cache as _sc,
+                        )
+                        from axon.security.keyring import (
+                            set_keyring_mode as _skm,
+                        )
+                    except ImportError:
+                        print(
+                            "    /store keyring-mode requires the sealed extra.\n"
+                            "    Install with: pip install axon-rag[sealed]"
+                        )
+                    else:
+                        _arg = sub_arg.strip() if sub_arg else ""
+                        if not _arg:
+                            print(f"    Active keyring mode: {_gkm()}")
+                            print(f"    Session cache size:  {len(_sc())}")
+                            print("    Usage: /store keyring-mode " "[persistent|session|never]")
+                        else:
+                            try:
+                                _skm(_arg)
+                            except ValueError as exc:
+                                print(f"    {exc}")
+                            else:
+                                brain.config.keyring_mode = _arg
+                                print(f"    Keyring mode set to {_arg}.")
+                                print(
+                                    "    Note: previously stored secrets are NOT "
+                                    "migrated; the new mode applies to subsequent "
+                                    "store_secret/get_secret calls only."
+                                )
                 else:
                     print(f"    Unknown sub-command '{sub}'.")
                     print(
                         "    Usage: /store whoami | /store init <base_path> | "
                         "/store status | /store bootstrap <pp> | /store unlock <pp> | "
-                        "/store lock | /store change-passphrase <old> <new>"
+                        "/store lock | /store change-passphrase <old> <new> | "
+                        "/store keyring-mode [persistent|session|never]"
                     )
             elif cmd == "/passphrase":
                 # ── /passphrase generate [N] — Diceware passphrase ───────

@@ -341,6 +341,18 @@ Your primary goal is to help the user by answering questions based on the provid
 
     def __init__(self, config: AxonConfig | None = None):
         self.config = config or AxonConfig.load()
+        # v0.4.0 Item 2: propagate keyring_mode to the security layer
+        # before anything touches the keyring (e.g. master key unlock or
+        # grantee DEK store/get during sealed-share redeem on startup).
+        try:
+            from axon.security.keyring import set_keyring_mode
+
+            set_keyring_mode(getattr(self.config, "keyring_mode", "persistent"))
+        except ImportError:
+            # Minimal install (no [sealed] extra) — keyring module not
+            # importable. Skip silently; sealed paths will raise their
+            # own clear error if exercised.
+            pass
         # ── Local-assets-only: enforce local model files without disabling RAPTOR/GraphRAG ──
         if self.config.local_assets_only:
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
