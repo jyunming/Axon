@@ -131,15 +131,15 @@ Step 5: Generate a sealed share for the grantee
 axon --share-generate research alice
 ```
 
-Axon detects that the project is sealed and automatically generates a sealed share (key ID starts with `ssk_`). The printed share string begins with `SEALED1:`. Send it to the grantee out-of-band.
+Axon detects that the project is sealed and automatically generates a sealed share (key ID starts with `ssk_`). v0.4.0+ always emits a `SEALED2:` envelope carrying the owner's Ed25519 signing pubkey (used to verify the optional expiry sidecar). The legacy `SEALED1:` 6-field format is still accepted on redeem for backward compatibility with pre-v0.4.0 strings, but is no longer minted. Send the share string to the grantee out-of-band.
 
-To add an expiry:
+To add an expiry (v0.4.0):
 
 ```
 axon> /share generate research alice --ttl-days 30
 ```
 
-Wait for the sync folder to upload the new `.security/shares/<key_id>.wrapped` file (about 40 bytes) to the cloud before telling the grantee to redeem.
+This writes two files to the sync folder: the wrapped DEK (`.security/shares/<key_id>.wrapped`, ~40 bytes) and an Ed25519-signed expiry sidecar (`.security/shares/<key_id>.expiry`, ~250 bytes). Wait for both to upload before telling the grantee to redeem. Once the sidecar's `expires_at` passes, the grantee's next mount fails with `ShareExpiredError` and Axon auto-destroys the local DEK + cache + mount descriptor (encrypted source files on the synced FS are never touched).
 
 ### Grantee setup (3 steps)
 

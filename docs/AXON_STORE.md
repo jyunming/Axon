@@ -118,7 +118,7 @@ Two share modes ship in v0.3.x:
 |-----------|------|---------|-------------|
 | `project` | string | required | Name of the project to share |
 | `grantee` | string | required | OS username of the recipient |
-| `ttl_days` | int \| null | `null` | Days from creation until the share expires. `null` = no expiry. **Currently honoured only for plaintext (`sk_`) shares** — the sealed (`ssk_`) branch silently ignores `ttl_days` at generate time (wiring it through is a v0.4.0 candidate; track via the planned TTL-gated sealed-share design). |
+| `ttl_days` | int \| null | `null` | Positive integer days from creation until the share expires. `null` = no expiry. **v0.4.0:** honoured by both sealed (`ssk_`) and plaintext (`sk_`) shares. For sealed shares this writes an Ed25519-signed expiry sidecar next to the wrap; the grantee's mount fails with `ShareExpiredError` after expiry and auto-destroys the local DEK + cache + mount descriptor. `ttl_days <= 0` returns 422. |
 
 > See [SHARING.md](SHARING.md) for the full sealed-share threat model, sync-folder prerequisites, and the `pip install "axon-rag[sealed]"` (or `[starter]`) extras.
 
@@ -132,11 +132,11 @@ curl -X POST http://localhost:8000/share/generate \
 # Response: {"share_string": "eyJ...", "key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "owner": "<your-username>", "expires_at": null}
 
 # Sealed share (project sealed) — same call, sealed envelope returned.
-# Note: ttl_days is currently silently ignored on the sealed branch.
+# v0.4.0: ttl_days is honoured for sealed shares via signed expiry sidecar.
 curl -X POST http://localhost:8000/share/generate \
   -H "Content-Type: application/json" \
-  -d '{"project": "research", "grantee": "alice"}'
-# Response: {"share_string": "U0VBTEVE...", "key_id": "ssk_a4f9c1d2", "project": "research", "grantee": "alice", "owner": "<your-username>", "security_mode": "sealed_v1"}
+  -d '{"project": "research", "grantee": "alice", "ttl_days": 30}'
+# Response: {"share_string": "U0VBTEVE...", "key_id": "ssk_a4f9c1d2", "project": "research", "grantee": "alice", "owner": "<your-username>", "security_mode": "sealed_v1", "expires_at": "2026-06-03T01:00:00Z"}
 ```
 
 **REPL:**
@@ -148,13 +148,14 @@ curl -X POST http://localhost:8000/share/generate \
 
 The `share_string` is a base64 envelope:
 - Plaintext: base64 of an HMAC-signed payload
-- Sealed: base64 of `SEALED1:<key_id>:<token_hex>:<owner>:<project>:<store_path>`
+- Sealed (v0.4.0+, default for all newly minted sealed shares): base64 of `SEALED2:<key_id>:<token_hex>:<owner>:<project>:<store_path>:<owner_pubkey_hex>` — the trailing field is the owner's Ed25519 signing pubkey so the grantee can verify the expiry sidecar (when present) without an owner round-trip
+- Sealed legacy (`SEALED1:` — 6 fields, no embedded pubkey): only emitted by pre-v0.4.0 builds. Still accepted on redeem for backward compatibility. Will not carry an expiry sidecar.
 
 Send it out-of-band (Signal, encrypted email — never the same channel as the data). All shares are **read-only** — there is no `write_access` capability.
 
 ### Extending an existing share
 
-Call `POST /share/extend` (or REPL `/share extend <key_id> --ttl-days N`) to push out the expiry of a share that's already issued — useful when a contractor's engagement is renewed without re-issuing keys. **Plaintext shares (`sk_`) only** — the sealed branch tracks expiry through a separate sidecar mechanism (v0.4.0 candidate); calling extend on an `ssk_` key currently no-ops or returns a 422 depending on whether the legacy manifest contains the key.
+Call `POST /share/extend` (or REPL `/share extend <key_id> --ttl-days N`) to push out the expiry of a share that's already issued — useful when a contractor's engagement is renewed without re-issuing keys. **Plaintext shares (`sk_`) only.** Sealed (`ssk_`) `key_id`s are not in the plaintext share manifest, so the route returns `404 Key not found`. To renew a sealed share, mint a fresh one with the desired `ttl_days` and revoke the old `key_id` once the grantee has switched over — sealed expiry lives in an Ed25519-signed sidecar that cannot be re-signed in place.
 
 ---
 

@@ -304,15 +304,15 @@ Initialize the AxonStore on first use, or move it to a different base path (e.g.
 
 ### `share_project`
 
-Generate a share key allowing another user to access one of your projects. The returned `share_string` should be sent to the recipient out-of-band. All shares are read-only. Sealed-share auto-detection: if the project was encrypted via `seal_project`, returns a `SEALED1:` envelope.
+Generate a share key allowing another user to access one of your projects. The returned `share_string` should be sent to the recipient out-of-band. All shares are read-only. Sealed-share auto-detection: if the project was encrypted via `seal_project`, v0.4.0+ always returns a `SEALED2:` envelope (carries the owner's Ed25519 signing pubkey for sidecar verification). The legacy `SEALED1:` 6-field format is still accepted by `redeem_share` for backward compatibility but is no longer emitted.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `project` | string | required | Project to share (must exist) |
 | `grantee` | string | required | OS username of the recipient |
-| `ttl_days` | int | `null` | Optional time-to-live in days; `null` means no expiry |
+| `ttl_days` | int | `null` | Optional positive integer days until expiry; `null` means no expiry. **v0.4.0:** honoured for both plaintext (`sk_`) and sealed (`ssk_`) shares. For sealed shares, writes an Ed25519-signed expiry sidecar; the grantee's mount fails with `ShareExpiredError` after expiry and auto-destroys the local DEK + cache + mount descriptor on the next mount attempt. `ttl_days <= 0` is rejected. |
 
-**Returns:** `{"share_string": "axon-share:v1:...", "key_id": "..."}`
+**Returns:** `{"share_string": "axon-share:v1:...", "key_id": "...", "expires_at": "..."}` (`expires_at` is Z-suffixed UTC ISO 8601 when `ttl_days` was set; absent or null otherwise).
 
 ### `redeem_share`
 
@@ -344,7 +344,7 @@ Revoke a previously generated share key. For legacy plaintext shares (`sk_` pref
 
 ### `extend_share`
 
-Renew a share key's expiry, or clear it (`ttl_days=null`). Pairs with `share_project(ttl_days=...)` to give owners a hard cutoff for forgotten shares.
+Renew a share key's expiry, or clear it (`ttl_days=null`). Pairs with `share_project(ttl_days=...)` to give owners a hard cutoff for forgotten shares. **Plaintext shares (`sk_`) only.** Sealed (`ssk_`) `key_id`s are not in the plaintext share manifest and currently return `404 Key not found`. To renew a sealed share, mint a fresh one with the desired `ttl_days` and revoke the old `key_id` — sealed expiry lives in an Ed25519-signed sidecar that cannot be re-signed in place.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
