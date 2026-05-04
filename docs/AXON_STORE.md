@@ -105,10 +105,10 @@ The `username` is your OS username. `store_path` is the `AxonStore/` directory i
 
 ## 4. Sharing a Project
 
-Two share modes ship in v0.3.x:
+Two share modes ship in v0.4.0:
 
 - **Plaintext shares** (`sk_xxxxxxxx` key IDs) — HMAC-signed, used for unsealed projects on a shared filesystem
-- **Sealed shares** (`ssk_xxxxxxxx` key IDs, `SEALED1:`-prefixed envelope) — AES-256-GCM at rest with a per-grantee AES-KW wrap; safe through OneDrive / Dropbox / Google Drive (cloud sees ciphertext only)
+- **Sealed shares** (`ssk_xxxxxxxx` key IDs, `SEALED2:`-prefixed envelope) — AES-256-GCM at rest with a per-grantee AES-KW wrap, plus an embedded owner Ed25519 pubkey so the grantee can verify signed metadata sidecars (e.g. expiry) without an owner round-trip. Safe through OneDrive / Dropbox / Google Drive (cloud sees ciphertext only). The legacy `SEALED1:` envelope (v0.3.x; 6 fields, no embedded pubkey) is **never minted** by v0.4.0+ generators but is still accepted on redeem so old share strings keep working.
 
 `/share/generate` automatically picks the right mode based on whether the project is sealed (`axon --project-seal <project>`).
 
@@ -118,7 +118,7 @@ Two share modes ship in v0.3.x:
 |-----------|------|---------|-------------|
 | `project` | string | required | Name of the project to share |
 | `grantee` | string | required | OS username of the recipient |
-| `ttl_days` | int \| null | `null` | Positive integer days from creation until the share expires. `null` = no expiry. **v0.4.0:** honoured by both sealed (`ssk_`) and plaintext (`sk_`) shares. For sealed shares this writes an Ed25519-signed expiry sidecar next to the wrap; the grantee's mount fails with `ShareExpiredError` after expiry and auto-destroys the local DEK + cache + mount descriptor. `ttl_days <= 0` returns 422. |
+| `ttl_days` | int \| null | `null` | Positive integer days from creation until the share expires. `null` = no expiry. **v0.4.0:** honoured by **both** plaintext (`sk_`) and sealed (`ssk_`) shares — the v0.3.x plaintext-only restriction is gone. For sealed shares this writes an Ed25519-signed expiry sidecar next to the wrap (see [§4.1](#41-expiry-sidecar-shape)); the grantee's mount fails with `ShareExpiredError` after expiry and auto-destroys the local DEK + cache + mount descriptor (see [§4.2](#42-auto-destroy-lifecycle)). `ttl_days <= 0` returns 422. |
 
 > See [SHARING.md](SHARING.md) for the full sealed-share threat model, sync-folder prerequisites, and the `pip install "axon-rag[sealed]"` (or `[starter]`) extras.
 
@@ -148,10 +148,54 @@ curl -X POST http://localhost:8000/share/generate \
 
 The `share_string` is a base64 envelope:
 - Plaintext: base64 of an HMAC-signed payload
-- Sealed (v0.4.0+, default for all newly minted sealed shares): base64 of `SEALED2:<key_id>:<token_hex>:<owner>:<project>:<store_path>:<owner_pubkey_hex>` — the trailing field is the owner's Ed25519 signing pubkey so the grantee can verify the expiry sidecar (when present) without an owner round-trip
-- Sealed legacy (`SEALED1:` — 6 fields, no embedded pubkey): only emitted by pre-v0.4.0 builds. Still accepted on redeem for backward compatibility. Will not carry an expiry sidecar.
+- Sealed (v0.4.0+, default for every newly minted sealed share): base64 of 7 colon-separated fields — `SEALED2:<key_id>:<token_hex>:<owner>:<project>:<store_path>:<owner_pubkey_hex>`. The trailing field is the owner's Ed25519 signing pubkey (64 hex chars) so the grantee can verify the expiry sidecar (when present) without an owner round-trip.
+- Sealed legacy (`SEALED1:` — 6 fields, no embedded pubkey): never minted by v0.4.0+. Still accepted on redeem for backward compatibility, but mounts created from a `SEALED1:` string cannot enforce TTL (no recorded pubkey to verify the sidecar against). To get TTL gating on a legacy share, re-mint as `SEALED2:` and revoke the old key_id.
 
 Send it out-of-band (Signal, encrypted email — never the same channel as the data). All shares are **read-only** — there is no `write_access` capability.
+
+### 4.1 Expiry sidecar shape
+
+When `ttl_days` is set on a sealed share, the owner writes a signed sidecar to:
+
+```
+<owner-store>/<project>/.security/shares/<key_id>.expiry
+```
+
+The file is JSON with three fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key_id` | string | Echoes the share `key_id` (e.g. `ssk_a4f9c1d2`) — must match the filename |
+| `expires_at` | string | ISO 8601 UTC timestamp with trailing `Z` (e.g. `2026-06-03T01:00:00Z`); naive datetimes are rejected |
+| `sig` | string | base64url-encoded Ed25519 signature over `b"<key_id>:<expires_at>"` (the literal byte string formed by joining the two fields with a colon), signed with the owner's master-derived signing key. Verified by the grantee using the pubkey embedded in the `SEALED2:` envelope (recorded in the mount descriptor at redeem time). |
+
+Example sidecar:
+
+```json
+{
+  "key_id": "ssk_a4f9c1d2",
+  "expires_at": "2026-06-03T01:00:00Z",
+  "sig": "k4Pq...base64url..."
+}
+```
+
+The sidecar lives next to the wrap file (`<key_id>.wrapped`) and rides the same sync channel; OneDrive / Dropbox / Drive see opaque JSON bytes. It cannot be re-signed in place (the signing key never leaves the owner) — to extend a sealed share, mint a fresh one and revoke the old `key_id`.
+
+### 4.2 Auto-destroy lifecycle
+
+On every grantee mount of a sealed project, `get_grantee_dek` reads the expiry sidecar and:
+
+1. Verifies the Ed25519 signature with the owner pubkey recorded in the mount descriptor.
+2. Compares `expires_at` against `datetime.now(UTC)`.
+
+If the sidecar is missing the mount proceeds normally (TTL-less share). If the signature fails to verify, or `expires_at` has elapsed, `get_grantee_dek` raises `ShareExpiredError` and `_auto_destroy_expired_share` immediately wipes four pieces of local state:
+
+1. **DEK from the OS keyring** at `axon.share.<key_id>`.
+2. **DEK from the file fallback** at `<grantee-user-dir>/.security/shares/<key_id>.dek.wrapped` (used when the keyring is unavailable or in `keyring_mode=never`).
+3. **Active plaintext cache** for this project (`axon-sealed-*` temp dir) — covers the case where a previous mount staged files before the most recent expiry sidecar landed.
+4. **Mount descriptor** at `<grantee-user-dir>/mounts/<mount_name>/mount.json`, so the project disappears from `list_projects` immediately.
+
+**Encrypted source files on the synced filesystem are deliberately NOT touched.** Deleting them would propagate the deletion back to the owner's source folder via OneDrive / Dropbox / Drive sync — a catastrophically destructive failure mode. The owner manages their own bytes; auto-destroy only cleans up the grantee's local cached state.
 
 ### Extending an existing share
 
@@ -269,10 +313,10 @@ Revoked entries in `sharing` are shown with `"revoked": true`. Entries in `share
 
 - **Shared filesystem required for plaintext.** Sealed shares can ride OneDrive / Dropbox / Google Drive (cloud sees ciphertext only). Plaintext shares require both users to have filesystem access to the same `base_path` set during `store init`.
 
-- **Key security.** Sealed share strings begin (after base64-decode) with `SEALED1:<key_id>:<token_hex>:<owner>:<project>:<store_path>`; plaintext share strings are HMAC-signed payloads. Do not share them over untrusted channels (Signal / encrypted email recommended). Revocation is recorded in the owner's `.share_manifest.json` and validated lazily — at switch time, project-list, and share-list operations.
+- **Key security.** Sealed share strings begin (after base64-decode) with `SEALED2:<key_id>:<token_hex>:<owner>:<project>:<store_path>:<owner_pubkey_hex>` — 7 colon-separated fields. The legacy 6-field `SEALED1:` envelope is still accepted on redeem but is no longer minted. Plaintext share strings are HMAC-signed payloads. Do not share them over untrusted channels (Signal / encrypted email recommended). Revocation is recorded in the owner's `.share_manifest.json` and validated lazily — at switch time, project-list, and share-list operations.
 
 - **Project isolation and hierarchy.** Each user's projects live under `{base_path}/AxonStore/{username}/`. Users cannot read each other's data without an explicit share key. Project names are slash-separated and **nest up to 5 levels deep** (`research/papers/2024/q3/draft`); deeper paths are rejected at validation time (`_MAX_DEPTH` in `projects.py`).
 
 - **Mount layout.** When grantee bob redeems a share for `alice/research/papers`, it appears as `mounts/alice_research_papers` in bob's namespace (the `/` is replaced with `_` in the mount name).
 
-- **Expiry.** Share keys do not expire by default. Pass `ttl_days` at generate time (or extend later via `POST /share/extend`) to set a finite TTL, or revoke explicitly when access should end.
+- **Expiry.** Share keys do not expire by default. Pass `ttl_days` at generate time to set a finite TTL on either share mode (v0.4.0 covers both `sk_` and `ssk_`), or revoke explicitly when access should end. `POST /share/extend` works on plaintext shares only; renew a sealed share by minting a fresh key and revoking the old one. Sealed-share expiry is enforced lazily on the grantee — every mount verifies the signed sidecar and auto-destroys local state on expiry (see [§4.2](#42-auto-destroy-lifecycle)).
