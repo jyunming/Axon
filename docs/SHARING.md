@@ -131,7 +131,7 @@ Step 5: Generate a sealed share for the grantee
 axon --share-generate research alice
 ```
 
-Axon detects that the project is sealed and automatically generates a sealed share (key ID starts with `ssk_`). The printed share string begins with `SEALED1:` (no TTL) or `SEALED2:` (v0.4.0 — TTL set on an unlocked store, envelope carries the owner's signing pubkey). Send it to the grantee out-of-band.
+Axon detects that the project is sealed and automatically generates a sealed share (key ID starts with `ssk_`). v0.4.0+ always emits a `SEALED2:` envelope carrying the owner's Ed25519 signing pubkey (used to verify the optional expiry sidecar). The legacy `SEALED1:` 6-field format is still accepted on redeem for backward compatibility with pre-v0.4.0 strings, but is no longer minted. Send the share string to the grantee out-of-band.
 
 To add an expiry (v0.4.0):
 

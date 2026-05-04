@@ -148,14 +148,14 @@ curl -X POST http://localhost:8000/share/generate \
 
 The `share_string` is a base64 envelope:
 - Plaintext: base64 of an HMAC-signed payload
-- Sealed (no TTL, store locked at mint, or any pre-v0.4.0 share): base64 of `SEALED1:<key_id>:<token_hex>:<owner>:<project>:<store_path>`
-- Sealed (v0.4.0, store unlocked at mint with `ttl_days`): base64 of `SEALED2:<key_id>:<token_hex>:<owner>:<project>:<store_path>:<owner_pubkey_hex>` — carries the Ed25519 verifier so the grantee can validate the expiry sidecar without owner round-trip
+- Sealed (v0.4.0+, default for all newly minted sealed shares): base64 of `SEALED2:<key_id>:<token_hex>:<owner>:<project>:<store_path>:<owner_pubkey_hex>` — the trailing field is the owner's Ed25519 signing pubkey so the grantee can verify the expiry sidecar (when present) without an owner round-trip
+- Sealed legacy (`SEALED1:` — 6 fields, no embedded pubkey): only emitted by pre-v0.4.0 builds. Still accepted on redeem for backward compatibility. Will not carry an expiry sidecar.
 
 Send it out-of-band (Signal, encrypted email — never the same channel as the data). All shares are **read-only** — there is no `write_access` capability.
 
 ### Extending an existing share
 
-Call `POST /share/extend` (or REPL `/share extend <key_id> --ttl-days N`) to push out the expiry of a share that's already issued — useful when a contractor's engagement is renewed without re-issuing keys. **Plaintext shares (`sk_`) only.** For sealed (`ssk_`) shares, the expiry lives in an Ed25519-signed sidecar; extending it would require re-signing under the owner's signing key and re-uploading. The supported flow for renewing a sealed share is to mint a fresh one with a longer `ttl_days` and revoke the old `key_id` once the grantee has switched over. Calling `/share/extend` on an `ssk_` key is a no-op or 422 (depending on whether the legacy manifest contains the key) — the call never modifies the signed sidecar.
+Call `POST /share/extend` (or REPL `/share extend <key_id> --ttl-days N`) to push out the expiry of a share that's already issued — useful when a contractor's engagement is renewed without re-issuing keys. **Plaintext shares (`sk_`) only.** Sealed (`ssk_`) `key_id`s are not in the plaintext share manifest, so the route returns `404 Key not found`. To renew a sealed share, mint a fresh one with the desired `ttl_days` and revoke the old `key_id` once the grantee has switched over — sealed expiry lives in an Ed25519-signed sidecar that cannot be re-signed in place.
 
 ---
 

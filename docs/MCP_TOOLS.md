@@ -304,7 +304,7 @@ Initialize the AxonStore on first use, or move it to a different base path (e.g.
 
 ### `share_project`
 
-Generate a share key allowing another user to access one of your projects. The returned `share_string` should be sent to the recipient out-of-band. All shares are read-only. Sealed-share auto-detection: if the project was encrypted via `seal_project`, returns a `SEALED1:` envelope (or `SEALED2:` when the store is unlocked at mint time and `ttl_days` is set, so the envelope can carry the owner's signing pubkey).
+Generate a share key allowing another user to access one of your projects. The returned `share_string` should be sent to the recipient out-of-band. All shares are read-only. Sealed-share auto-detection: if the project was encrypted via `seal_project`, v0.4.0+ always returns a `SEALED2:` envelope (carries the owner's Ed25519 signing pubkey for sidecar verification). The legacy `SEALED1:` 6-field format is still accepted by `redeem_share` for backward compatibility but is no longer emitted.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -344,7 +344,7 @@ Revoke a previously generated share key. For legacy plaintext shares (`sk_` pref
 
 ### `extend_share`
 
-Renew a share key's expiry, or clear it (`ttl_days=null`). Pairs with `share_project(ttl_days=...)` to give owners a hard cutoff for forgotten shares. **Plaintext shares (`sk_`) only.** For sealed shares (`ssk_`), the expiry lives in an Ed25519-signed sidecar and cannot be extended in place — mint a fresh sealed share with the desired `ttl_days` and revoke the old one.
+Renew a share key's expiry, or clear it (`ttl_days=null`). Pairs with `share_project(ttl_days=...)` to give owners a hard cutoff for forgotten shares. **Plaintext shares (`sk_`) only.** Sealed (`ssk_`) `key_id`s are not in the plaintext share manifest and currently return `404 Key not found`. To renew a sealed share, mint a fresh one with the desired `ttl_days` and revoke the old `key_id` — sealed expiry lives in an Ed25519-signed sidecar that cannot be re-signed in place.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

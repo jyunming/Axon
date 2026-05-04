@@ -433,7 +433,7 @@ Requires the `[sealed]` extra (already bundled in `[starter]`).
 | `POST` | `/share/generate` | Generate a read-only share key. Auto-detects sealed vs plaintext based on whether the project is sealed |
 | `POST` | `/share/redeem` | Mount a shared project using a share string |
 | `POST` | `/share/revoke` | Revoke a share by `key_id`. Pass `rotate: true` for hard revoke (rotates DEK) |
-| `POST` | `/share/extend` | Push out the expiry of an issued share. **Plaintext shares only.** For sealed (`ssk_`) shares, mint a fresh share with the desired `ttl_days` and revoke the old one — sealed expiry lives in a signed sidecar that the owner cannot extend without rotating the share. Body: `{key_id, ttl_days}` |
+| `POST` | `/share/extend` | Push out the expiry of an issued share. **Plaintext shares only.** Sealed (`ssk_`) `key_id`s are not in the plaintext share manifest and currently return `404 Key not found`. To extend a sealed share, mint a fresh sealed share with the desired `ttl_days` and revoke the old one — sealed expiry lives in an Ed25519-signed sidecar that cannot be re-signed in place. Body: `{key_id, ttl_days}` |
 | `GET`  | `/share/list` | List outgoing shares (sharing) and incoming mounts (shared) |
 
 **`POST /store/init` body:**
@@ -454,7 +454,7 @@ Requires the `[sealed]` extra (already bundled in `[starter]`).
                                        // ttl_days <= 0 returns 422.
 }
 ```
-Response carries `key_id` (`sk_` for plaintext, `ssk_` for sealed), `share_string` (base64 envelope; sealed ones decode to `SEALED1:...` for unsigned shares or `SEALED2:...` when minted on an unlocked store with `ttl_days`), and `expires_at` (ISO 8601 Z-suffixed UTC when `ttl_days` was set, else `null`). For sealed shares, an Ed25519-signed expiry sidecar is written next to the wrap and a TTL check fires on every grantee mount; an expired share auto-destroys the local DEK + cache + mount descriptor on next mount attempt.
+Response carries `key_id` (`sk_` for plaintext, `ssk_` for sealed), `share_string` (base64 envelope; v0.4.0+ sealed shares always decode to `SEALED2:...` — the legacy 6-field `SEALED1:...` format is accepted on redeem but no longer emitted), and `expires_at` (ISO 8601 Z-suffixed UTC when `ttl_days` was set, else `null`). When `ttl_days` is set on a sealed share, an Ed25519-signed expiry sidecar is written next to the wrap and a TTL check fires on every grantee mount; an expired share auto-destroys the local DEK + cache + mount descriptor on next mount attempt.
 
 **`POST /share/redeem` body:**
 ```json
