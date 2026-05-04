@@ -1176,10 +1176,16 @@ Your primary goal is to help the user by answering questions based on the provid
     def wipe_sealed_cache(self) -> bool:
         """Wipe the active sealed-project plaintext cache.
 
-        No-op when no sealed cache is mounted. Returns ``True`` when a
-        wipe actually happened. The remount parameters are preserved so
-        the next query / search can re-materialise without going through
-        ``switch_project`` again.
+        Returns ``True`` only when the underlying ``release_cache`` call
+        completed without exception — that is, plaintext is actually
+        gone from disk. ``False`` covers two distinct failure modes:
+
+        - No cache was mounted (nothing to wipe).
+        - ``release_cache`` raised (e.g. a backend still has files open
+          on Windows). The slot is still cleared so callers don't hold
+          a stale handle, but the return signals to REST/REPL that the
+          on-disk plaintext may not have been fully scrubbed and a
+          retry / process restart is warranted.
 
         Public API — surfaced via CLI ``--wipe-sealed-cache``, REPL
         ``/store wipe-cache``, REST ``POST /security/wipe-sealed-cache``,
@@ -1188,14 +1194,20 @@ Your primary goal is to help the user by answering questions based on the provid
         prior = getattr(self, "_sealed_cache", None)
         if prior is None:
             return False
+        wipe_ok = True
         try:
             from axon.security.mount import release_cache
 
             release_cache(prior)
         except Exception as exc:
-            logger.debug("wipe_sealed_cache raised during release: %s", exc)
+            logger.warning(
+                "wipe_sealed_cache: release_cache raised — plaintext may "
+                "still exist on disk: %s",
+                exc,
+            )
+            wipe_ok = False
         self._sealed_cache = None
-        return True
+        return wipe_ok
 
     def _ensure_sealed_cache_mounted(self) -> None:
         """Re-materialise the sealed cache if it was wiped.
@@ -1270,6 +1282,12 @@ Your primary goal is to help the user by answering questions based on the provid
         # Clear any stale sealed-mount intent from a previous switch
         # that didn't reach the post-close materialisation block.
         self._pending_seal_mount = None
+        # v0.4.0 Item 3: also drop ephemeral remount args here. The
+        # post-close materialisation block below sets fresh values for
+        # sealed targets via ``_mount_sealed_project``; for plaintext
+        # targets we must clear the slot so a stale sealed remount
+        # doesn't get triggered by the ephemeral query window.
+        self._sealed_remount_args = None
         if getattr(self, "_graph_rag_cache_dirty", False):
             self._save_graph_rag_extraction_cache()
         from axon.projects import (

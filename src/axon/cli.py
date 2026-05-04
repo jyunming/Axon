@@ -847,30 +847,33 @@ def main():
         print(render_report(report))
         sys.exit(0 if report.overall != "error" else 1)
     if getattr(args, "wipe_sealed_cache", False):
-        # v0.4.0 Item 3 — best-effort wipe via a transient brain. We
-        # spin up an AxonBrain so that any orphaned sealed caches from a
-        # prior session also get scrubbed via the existing
-        # ``cleanup_orphans`` boot path.
-        from axon.config import AxonConfig as _AxonConfig
-        from axon.main import AxonBrain as _AxonBrain
-
+        # v0.4.0 Item 3 — orphan sweep. Note: this is a fresh process,
+        # so there's no live ``_sealed_cache`` slot to wipe — that path
+        # only matters inside a long-running session (REPL, API server)
+        # via ``/store wipe-cache``, ``POST /security/wipe-sealed-cache``,
+        # or MCP ``wipe_sealed_cache``. What we CAN do here is sweep
+        # any ``axon-sealed-*`` directories left behind by a prior
+        # crashed session (the same boot-time cleanup path AxonBrain
+        # runs, but driven explicitly so the user can force it).
         try:
-            _cfg = _AxonConfig.load(args.config or None)
-        except Exception:
-            _cfg = _AxonConfig()
+            from axon.security.cache import cleanup_orphans
+        except ImportError:
+            print("  --wipe-sealed-cache requires the [sealed] extra.")
+            print("  Install: pip install axon-rag[sealed]")
+            sys.exit(2)
         try:
-            _brain = _AxonBrain(_cfg)
+            wiped = cleanup_orphans()
         except Exception as exc:
-            print(f"  Could not start brain to wipe sealed cache: {exc}")
+            print(f"  Orphan-cache cleanup failed: {exc}")
             sys.exit(1)
-        try:
-            wiped = _brain.wipe_sealed_cache()
-            print("  Sealed-cache wiped." if wiped else "  No active sealed cache to wipe.")
-        finally:
-            try:
-                _brain.close()
-            except Exception:
-                pass
+        if wiped:
+            print(f"  Wiped {wiped} orphaned sealed-cache directory(ies).")
+        else:
+            print("  No orphaned sealed-cache directories found.")
+        print(
+            "  Note: an active in-process sealed cache (REPL / API) is "
+            "wiped via /store wipe-cache or POST /security/wipe-sealed-cache."
+        )
         sys.exit(0)
     if getattr(args, "passphrase_generate", False):
         # Pure function — no config, no store. Lets users mint a strong

@@ -83,9 +83,12 @@ class TestWipeSealedCache:
         assert brain._sealed_cache is None
         assert called["n"] == 1
 
-    def test_swallows_release_exception(self, monkeypatch):
-        """Best-effort wipe — a release_cache exception must not
-        propagate; the cache slot still ends up cleared."""
+    def test_swallows_release_exception_returns_false(self, monkeypatch):
+        """A release_cache exception must NOT propagate (caller side
+        is best-effort), but the return value MUST be ``False`` so
+        REST/REPL surfaces can flag that plaintext may still exist on
+        disk. Slot is still cleared so callers don't hold a stale
+        handle."""
         from axon.main import AxonBrain
 
         cache = MagicMock()
@@ -99,9 +102,29 @@ class TestWipeSealedCache:
 
         monkeypatch.setattr(_mnt, "release_cache", _bad)
         result = AxonBrain.wipe_sealed_cache(brain)
-        # Wipe still considered successful at the brain level — slot cleared.
-        assert result is True
+        # Copilot finding on PR #108: report False so callers know the
+        # on-disk plaintext may not be fully scrubbed.
+        assert result is False
         assert brain._sealed_cache is None
+
+
+class TestSwitchProjectClearsRemountArgs:
+    """Copilot finding on PR #108: switching from a sealed project to a
+    plaintext one must clear ``_sealed_remount_args``, otherwise the
+    next query in ephemeral mode would re-materialise the OLD sealed
+    project under the plaintext project's name."""
+
+    def test_switch_project_clears_remount_args(self):
+        """Inspect the source: ``switch_project`` must reset
+        ``_sealed_remount_args`` to ``None``."""
+        import inspect
+
+        from axon.main import AxonBrain
+
+        src = inspect.getsource(AxonBrain.switch_project)
+        assert (
+            "_sealed_remount_args = None" in src
+        ), "switch_project must clear _sealed_remount_args before the new mount"
 
 
 class TestEphemeralQueryWindow:
