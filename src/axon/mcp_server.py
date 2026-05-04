@@ -562,6 +562,24 @@ async def security_status() -> Any:
 
 
 @mcp.tool()
+async def set_keyring_mode(mode: str) -> Any:
+    """Change the keyring DEK storage mode for the running API server.
+
+    v0.4.0 Item 2. Modes:
+      persistent  - DEK in OS keyring (default; survives restart)
+      session     - DEK in process memory only; wiped at exit
+      never       - DEK not cached anywhere; re-redeem every mount
+
+    Caveat: previously stored secrets are NOT migrated. For permanent
+    change, set ``security.keyring_mode`` in config.yaml and restart.
+
+    Args:
+        mode: One of ``persistent``, ``session``, ``never``.
+    """
+    return await _post("/security/keyring-mode", {"mode": mode})
+
+
+@mcp.tool()
 async def suggest_passphrase(words: int = 6, separator: str = "-") -> Any:
     """Suggest a strong Diceware passphrase from the bundled EFF wordlist.
 

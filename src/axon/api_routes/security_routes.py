@@ -63,12 +63,60 @@ def _current_user_dir() -> Path:
 @router.get("/security/status")
 async def security_status():
     from axon import security as _security
+    from axon.security.keyring import get_keyring_mode, session_cache
 
     try:
-        return _security.store_status(_current_user_dir())
+        result = dict(_security.store_status(_current_user_dir()))
     except Exception as exc:
         logger.error("Security status failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+    # v0.4.0 Item 2: surface the active keyring mode + session cache size
+    # so operators can verify config.yaml took effect without poking REPL.
+    try:
+        result["keyring_mode"] = get_keyring_mode()
+        result["session_cache_size"] = len(session_cache())
+    except Exception as exc:
+        logger.debug("keyring mode lookup failed: %s", exc)
+    return result
+
+
+@router.post("/security/keyring-mode")
+async def security_set_keyring_mode(request: Request):
+    """Change the in-process keyring mode for the running API server.
+
+    Body: ``{"mode": "persistent"|"session"|"never"}``. Same caveat as
+    REPL: previously stored secrets are NOT migrated; the new mode
+    applies only to subsequent ``store_secret`` / ``get_secret`` calls.
+
+    Subject to the global ``X-API-Key`` middleware. Suitable for one-off
+    rotation during a planned maintenance window — for permanent change,
+    update ``security.keyring_mode`` in ``config.yaml`` and restart.
+    """
+    from axon.security.keyring import set_keyring_mode
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {exc}")
+    mode = (body or {}).get("mode")
+    if not isinstance(mode, str):
+        raise HTTPException(status_code=422, detail="Body must contain 'mode' as a string.")
+    try:
+        set_keyring_mode(mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    # Best-effort: also poke the running brain config so a subsequent
+    # status read mirrors the change. ``set_keyring_mode`` already
+    # validated ``mode`` against the same literal set; mypy can't see
+    # that at the assignment site, hence the targeted ignore.
+    try:
+        from axon import api as _api
+
+        if _api.brain is not None:
+            _api.brain.config.keyring_mode = mode  # type: ignore[assignment]
+    except Exception as exc:
+        logger.debug("brain config keyring_mode mirror failed: %s", exc)
+    return {"status": "ok", "keyring_mode": mode}
 
 
 @router.get("/suggestions/passphrase")

@@ -25,6 +25,7 @@ Dependency: ``keyring`` (PyPI) — installed via the ``sealed`` extra
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 try:
@@ -48,6 +49,10 @@ __all__ = [
     "store_secret",
     "get_secret",
     "delete_secret",
+    "SessionDEKCache",
+    "set_keyring_mode",
+    "get_keyring_mode",
+    "session_cache",
 ]
 
 
@@ -136,11 +141,29 @@ def is_available() -> bool:
 
 def store_secret(service: str, username: str, secret: str) -> None:
     """Store *secret* under (*service*, *username*).
+
+    Routes through the active keyring mode:
+
+    - ``persistent`` (default): writes to the OS keyring as before.
+    - ``session``: writes to a process-local in-memory dict; OS keyring
+      is never touched. Lost when the process exits.
+    - ``never``: silently no-ops. Callers must re-derive the secret on
+      every read; ``get_secret`` will return ``None``.
+
     Raises:
-        KeyringUnavailableError: backend unavailable.
-        RuntimeError: backend present but operation failed (rare —
-            usually permissions or quota).
+        KeyringUnavailableError: backend unavailable in ``persistent`` mode.
+        RuntimeError: backend present but operation failed (rare).
     """
+    mode = get_keyring_mode()
+    if mode == "session":
+        _SESSION_CACHE.set(service, username, secret)
+        return
+    if mode == "never":
+        # Intentionally drop on the floor. Callers receive None on get.
+        logger.debug(
+            "keyring_mode=never: store_secret no-op for service=%s user=%s", service, username
+        )
+        return
     backend = _active_backend()
     try:
         backend.set_password(service, username, secret)
@@ -150,9 +173,21 @@ def store_secret(service: str, username: str, secret: str) -> None:
 
 def get_secret(service: str, username: str) -> str | None:
     """Return the secret stored at (*service*, *username*) or ``None``.
+
+    Mode dispatch matches :func:`store_secret`:
+
+    - ``persistent``: read from OS keyring.
+    - ``session``: read from in-memory dict only.
+    - ``never``: always returns ``None`` — the secret was never stored.
+
     Returns ``None`` for "not found"; raises only on backend
-    unavailability or unexpected backend errors.
+    unavailability or unexpected backend errors (``persistent`` only).
     """
+    mode = get_keyring_mode()
+    if mode == "session":
+        return _SESSION_CACHE.get(service, username)
+    if mode == "never":
+        return None
     backend = _active_backend()
     try:
         secret = backend.get_password(service, username)
@@ -166,9 +201,20 @@ def get_secret(service: str, username: str) -> str | None:
 
 def delete_secret(service: str, username: str) -> None:
     """Delete the secret at (*service*, *username*).
-    Silently no-ops on "not found" (the desired user-facing behaviour
-    for a delete) so callers can call ``delete_secret`` defensively.
+
+    Silently no-ops on "not found" — the desired post-condition (secret
+    absent) is satisfied. Mode dispatch:
+
+    - ``persistent``: delete from OS keyring.
+    - ``session``: drop from in-memory dict.
+    - ``never``: nothing to delete; pure no-op.
     """
+    mode = get_keyring_mode()
+    if mode == "session":
+        _SESSION_CACHE.delete(service, username)
+        return
+    if mode == "never":
+        return
     from keyring.errors import PasswordDeleteError
 
     backend = _active_backend()
@@ -180,6 +226,99 @@ def delete_secret(service: str, username: str) -> None:
         pass
     except _BackendKeyringError as exc:
         raise RuntimeError(f"keyring delete_password failed: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Mode dispatch (v0.4.0 Item 2)
+# ---------------------------------------------------------------------------
+
+_KeyringMode = str  # Literal["persistent", "session", "never"] — kept loose for runtime
+_VALID_MODES = ("persistent", "session", "never")
+
+
+class SessionDEKCache:
+    """Thread-safe in-process keyring substitute for ``keyring_mode='session'``.
+
+    Stores ``(service, username) -> secret`` in a plain dict guarded by an
+    :class:`threading.Lock`. No persistence, no encryption — the lifetime
+    is bounded by the Python process. Death of the process wipes every
+    DEK.
+
+    Trade-offs vs the OS keyring:
+
+    - **Pro**: zero filesystem footprint, no OS API surface; useful in
+      Docker / CI / headless servers where ``persistent`` would fail
+      with ``KeyringUnavailableError``.
+    - **Con**: process restart loses every DEK — grantees must
+      re-redeem after Axon restart. Memory dumps could expose the DEK
+      while running. Acceptable for short-lived server processes.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[str, str], str] = {}
+        self._lock: threading.Lock = threading.Lock()
+
+    def set(self, service: str, username: str, secret: str) -> None:
+        with self._lock:
+            self._store[(service, username)] = secret
+
+    def get(self, service: str, username: str) -> str | None:
+        with self._lock:
+            return self._store.get((service, username))
+
+    def delete(self, service: str, username: str) -> None:
+        with self._lock:
+            self._store.pop((service, username), None)
+
+    def clear(self) -> None:
+        """Wipe the entire cache — call on shutdown / process exit if
+        defence-in-depth wiping is needed (``del`` already drops the
+        bytes when the dict goes out of scope)."""
+        with self._lock:
+            self._store.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._store)
+
+
+_SESSION_CACHE = SessionDEKCache()
+_current_mode: _KeyringMode = "persistent"
+_mode_lock = threading.Lock()
+
+
+def set_keyring_mode(mode: str) -> None:
+    """Set the active keyring mode for this process.
+
+    Called by ``AxonBrain`` at startup with the value from
+    ``AxonConfig.keyring_mode``. Switching modes mid-flight is allowed
+    but does NOT migrate already-stored secrets — a switch from
+    ``persistent`` to ``session`` will leave OS keyring entries untouched
+    and start writing to the in-process cache instead.
+
+    :raises ValueError: If *mode* is not one of ``persistent | session | never``.
+    """
+    if mode not in _VALID_MODES:
+        raise ValueError(f"keyring_mode must be one of {_VALID_MODES}, got {mode!r}")
+    global _current_mode
+    with _mode_lock:
+        _current_mode = mode
+    logger.debug("keyring_mode set to %s", mode)
+
+
+def get_keyring_mode() -> str:
+    """Return the active keyring mode."""
+    with _mode_lock:
+        return _current_mode
+
+
+def session_cache() -> SessionDEKCache:
+    """Return the process-singleton :class:`SessionDEKCache` instance.
+
+    Exposed mainly so tests can inspect / clear the cache between cases.
+    Production code should go through :func:`store_secret` / :func:`get_secret`.
+    """
+    return _SESSION_CACHE
 
 
 # ---------------------------------------------------------------------------

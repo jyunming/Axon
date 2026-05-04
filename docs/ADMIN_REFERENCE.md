@@ -165,6 +165,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 | `--store-change-passphrase OLD NEW` | Rotate the sealed-store passphrase (O(1) — project DEKs are not re-encrypted) |
 | `--project-seal NAME` | Encrypt every content file in project NAME at rest, then exit. Requires store to be unlocked first |
 | `--passphrase-generate [--passphrase-words N]` | **v0.4.0 Item 1** — print a Diceware passphrase from the bundled EFF wordlist (CC BY 3.0 US, 7,776 words) and exit. `N` is 4-12 (default 6 ≈ 77 bits of entropy). Use the printed phrase as input to `--store-bootstrap` or `--store-unlock` |
+| `--keyring-mode {persistent\|session\|never}` | **v0.4.0 Item 2** — override `security.keyring_mode` for this invocation. `persistent` (default) = OS keyring; `session` = in-memory only, wiped at exit; `never` = no DEK caching, re-redeem every mount |
 
 ### 2.12 Share Lifecycle
 

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### 🔒 Security — Item 2: Keyring hardening (3 modes)
+
+Per-share DEK and master-key storage now obeys a configurable `security.keyring_mode`:
+
+- **`persistent`** (default, current v0.3.x behaviour) — DEK lives in the OS keyring (DPAPI / Keychain / Secret Service) until revoked, expired, or auto-destroyed.
+- **`session`** — DEK lives only in a process-local `SessionDEKCache` (thread-safe `dict`). OS keyring is never touched. Wiped on process exit. Practical for server / Docker / CI deployments where `persistent` would fail with `KeyringUnavailableError`.
+- **`never`** — DEK is never cached anywhere. Every `get_grantee_dek` returns `None` from cache; callers must re-derive from the share string. Suitable for air-gapped / high-security deployments where any persistent DEK material is unacceptable.
+
+Cross-interface parity:
+- **CLI** — `axon --keyring-mode {persistent|session|never}` (per-invocation override of config)
+- **REPL** — `/store keyring-mode [persistent|session|never]` (read-or-set; shows session cache size)
+- **REST** — `GET /security/status` now returns `keyring_mode` + `session_cache_size`; `POST /security/keyring-mode {mode}` (50th endpoint after Item 1)
+- **MCP** — `set_keyring_mode(mode)` (50th tool)
+- **Config** — `security.keyring_mode` field in YAML + `AxonConfig`
+
+24 tests in `tests/test_keyring_modes.py`: `SessionDEKCache` thread-safety (16 threads × 100 ops), mode dispatch (persistent → OS keyring, session → in-memory, never → silent drop), config round-trip + invalid-mode rejection, REST status + setter contract.
+
 ### 🔒 Security — Item 1: Diceware passphrase generation
 
 - **EFF large wordlist** (CC BY 3.0 US, 7,776 words) bundled under `src/axon/security/data/`. License preserved as `LICENSE-EFF-WORDLIST.txt`.

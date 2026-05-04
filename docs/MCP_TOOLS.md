@@ -479,6 +479,16 @@ Return current sealed-store status (initialized and unlocked flags). Use on star
 
 **Returns:** `{"initialized": false}` or `{"initialized": true, "unlocked": false}` or `{"initialized": true, "unlocked": true}`
 
+### `set_keyring_mode`
+
+**v0.4.0 Item 2.** Change DEK storage mode at runtime. Modes: `persistent` (default — OS keyring), `session` (in-memory only, wiped at process exit), `never` (no DEK caching anywhere; re-redeem every mount). Caveat: previously stored secrets are NOT migrated. For permanent change set `security.keyring_mode` in `config.yaml` and restart.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `mode` | string | required | One of `persistent`, `session`, `never` |
+
+**Returns:** `{"status": "ok", "keyring_mode": "session"}`
+
 ### `suggest_passphrase`
 
 **v0.4.0 Item 1.** Suggest a strong Diceware passphrase from the bundled EFF large wordlist (CC BY 3.0 US, 7,776 words). Pure helper — no auth, no store. Useful before `security_bootstrap` (first-time setup) or as a UX hint when rotating via `security_change_passphrase`.

@@ -274,6 +274,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "mount_refresh_ttl_s",
         "mount_sync_retry_max",
         "mount_sync_retry_backoff_s",
+        "keyring_mode",
     },
 }
 
@@ -855,6 +856,26 @@ class AxonConfig:
     # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
     mount_sync_retry_max: int = 5
     mount_sync_retry_backoff_s: float = 0.5
+    # ── Keyring hardening (v0.4.0 Item 2) ──────────────────────────────────
+    # Where the grantee's per-share DEK is persisted between
+    # ``redeem_share`` and the first ``get_grantee_dek`` (and afterwards
+    # while the share is in use):
+    # "persistent" (default) → DEK lives in the OS keyring (DPAPI / Keychain
+    #               / Secret Service) until the share is revoked, expired,
+    #               or auto-destroyed. Existing v0.3.x behaviour.
+    # "session"   → DEK lives only in a process-local in-memory dict
+    #               (``SessionDEKCache``). Cleared when the Axon process
+    #               exits — next mount requires re-redeem from the share
+    #               string. Keyring is never touched. Practical for
+    #               server deployments where the OS keyring is unavailable
+    #               or shouldn't be trusted with secrets surviving a crash.
+    # "never"     → DEK is never cached anywhere. Every
+    #               ``get_grantee_dek`` requires the caller to pass the
+    #               full share string, from which the DEK is re-derived
+    #               on the fly. Suitable for air-gapped / high-security
+    #               deployments where any persistent DEK material is
+    #               unacceptable. Adds one wrap-decrypt per query.
+    keyring_mode: Literal["persistent", "session", "never"] = "persistent"
     # ── API request size limits (audit A2) ─────────────────────────────────
     # Per-file size cap on multipart uploads to /ingest/upload. Files
     # exceeding this byte count receive HTTP 413. 500 MiB is a generous
@@ -1064,6 +1085,14 @@ class AxonConfig:
                 config_dict["mount_sync_retry_max"] = int(sec["mount_sync_retry_max"])
             if "mount_sync_retry_backoff_s" in sec:
                 config_dict["mount_sync_retry_backoff_s"] = float(sec["mount_sync_retry_backoff_s"])
+            if "keyring_mode" in sec:
+                _km = str(sec["keyring_mode"]).strip()
+                if _km not in ("persistent", "session", "never"):
+                    raise ValueError(
+                        f"security.keyring_mode must be one of "
+                        f"persistent|session|never, got {_km!r}"
+                    )
+                config_dict["keyring_mode"] = _km
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -1193,6 +1222,7 @@ class AxonConfig:
         data["security"] = {
             "mount_refresh_mode": flat["mount_refresh_mode"],
             "mount_refresh_ttl_s": flat["mount_refresh_ttl_s"],
+            "keyring_mode": flat["keyring_mode"],
         }
         if flat.get("axon_store_base"):
             data["store"] = {"base": flat["axon_store_base"]}

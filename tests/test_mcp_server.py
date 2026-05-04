@@ -66,6 +66,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "seal_project",
     # v0.4.0 Item 1 — passphrase suggestion helper
     "suggest_passphrase",
+    # v0.4.0 Item 2 — keyring mode runtime control
+    "set_keyring_mode",
     # Graph
     "graph_status",
     "graph_finalize",
