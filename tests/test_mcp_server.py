@@ -68,6 +68,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "suggest_passphrase",
     # v0.4.0 Item 2 — keyring mode runtime control
     "set_keyring_mode",
+    # v0.4.0 Item 3 — sealed-cache wipe
+    "wipe_sealed_cache",
     # Graph
     "graph_status",
     "graph_finalize",

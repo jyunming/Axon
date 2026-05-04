@@ -479,6 +479,14 @@ Return current sealed-store status (initialized and unlocked flags). Use on star
 
 **Returns:** `{"initialized": false}` or `{"initialized": true, "unlocked": false}` or `{"initialized": true, "unlocked": true}`
 
+### `wipe_sealed_cache`
+
+**v0.4.0 Item 3.** Manually wipe the active sealed-project plaintext cache. No-op when no sealed cache is mounted. Idempotent. Pair with `security.seal_cache_ephemeral=true` for automatic per-query wipes.
+
+No parameters.
+
+**Returns:** `{"wiped": bool}` (false when no active brain or no sealed cache).
+
 ### `set_keyring_mode`
 
 **v0.4.0 Item 2.** Change DEK storage mode at runtime. Modes: `persistent` (default — OS keyring), `session` (in-memory only, wiped at process exit), `never` (no DEK caching anywhere; re-redeem every mount). Caveat: previously stored secrets are NOT migrated. For permanent change set `security.keyring_mode` in `config.yaml` and restart.

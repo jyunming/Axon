@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### 🔒 Security — Item 3: Ephemeral plaintext cache mode
+
+- New `security.seal_cache_ephemeral: bool = false` config (off by default).
+- When ON for a sealed project: every retrieval runs inside a per-query mount/unmount cycle. The plaintext-on-disk window collapses from "entire session" to "one query execution time" (~1s). Cost: re-decrypt per query (vs. once per session today).
+- `_execute_retrieval` in `query_router.py` now wraps the body in `AxonBrain._ephemeral_query_window()` so all three call sites — `search_raw`, `query`, `query_stream` — share the same per-query lifetime. LLM synthesis runs against in-memory chunks **after** the window closes, so the wipe is safe.
+- New manual wipe API for "scrub now" (works regardless of `seal_cache_ephemeral`):
+  - **CLI**: `axon --wipe-sealed-cache` (also `--seal-cache-ephemeral` flag override)
+  - **REPL**: `/store wipe-cache`
+  - **REST**: `POST /security/wipe-sealed-cache` → `{wiped: bool}`
+  - **MCP**: `wipe_sealed_cache` (51st tool)
+- Cache re-materialises on the next query via stored remount args (`_sealed_remount_args`).
+- 13 tests in `tests/test_ephemeral_cache.py`: config round-trip, wipe semantics (3 cases), context-manager behaviour (4 cases — pass-through outside ephemeral, remount+wipe inside, wipe still fires when body raises), REST contract (3 cases including no-brain shape).
+
 ### 🔒 Security — Item 2: Keyring hardening (3 modes)
 
 Per-share DEK and master-key storage now obeys a configurable `security.keyring_mode`:

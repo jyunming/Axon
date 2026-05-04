@@ -646,6 +646,22 @@ def main():
         "config.yaml but takes precedence for this invocation.",
     )
     parser.add_argument(
+        "--seal-cache-ephemeral",
+        action="store_true",
+        help="Force security.seal_cache_ephemeral=true for this process: "
+        "the sealed-project plaintext cache exists only during the body "
+        "of one query/search and is wiped on exit. Adds ~1s/query latency "
+        "(re-decrypt per query) but shrinks the plaintext window from "
+        "session-long to per-query.",
+    )
+    parser.add_argument(
+        "--wipe-sealed-cache",
+        action="store_true",
+        help="Wipe the active sealed-project plaintext cache and exit. "
+        "No-op when no sealed project is mounted. Returns exit 0 in both "
+        "cases. Useful for forcing the next query to re-materialise.",
+    )
+    parser.add_argument(
         "--project-seal",
         metavar="NAME",
         help="Encrypt every content file in project NAME at rest, then exit. "
@@ -830,6 +846,35 @@ def main():
         report = run_doctor(_cfg)
         print(render_report(report))
         sys.exit(0 if report.overall != "error" else 1)
+    if getattr(args, "wipe_sealed_cache", False):
+        # v0.4.0 Item 3 — orphan sweep. Note: this is a fresh process,
+        # so there's no live ``_sealed_cache`` slot to wipe — that path
+        # only matters inside a long-running session (REPL, API server)
+        # via ``/store wipe-cache``, ``POST /security/wipe-sealed-cache``,
+        # or MCP ``wipe_sealed_cache``. What we CAN do here is sweep
+        # any ``axon-sealed-*`` directories left behind by a prior
+        # crashed session (the same boot-time cleanup path AxonBrain
+        # runs, but driven explicitly so the user can force it).
+        try:
+            from axon.security.cache import cleanup_orphans
+        except ImportError:
+            print("  --wipe-sealed-cache requires the [sealed] extra.")
+            print("  Install: pip install axon-rag[sealed]")
+            sys.exit(2)
+        try:
+            wiped = cleanup_orphans()
+        except Exception as exc:
+            print(f"  Orphan-cache cleanup failed: {exc}")
+            sys.exit(1)
+        if wiped:
+            print(f"  Wiped {wiped} orphaned sealed-cache directory(ies).")
+        else:
+            print("  No orphaned sealed-cache directories found.")
+        print(
+            "  Note: an active in-process sealed cache (REPL / API) is "
+            "wiped via /store wipe-cache or POST /security/wipe-sealed-cache."
+        )
+        sys.exit(0)
     if getattr(args, "passphrase_generate", False):
         # Pure function — no config, no store. Lets users mint a strong
         # passphrase on a fresh box before --store-bootstrap.
@@ -855,6 +900,10 @@ def main():
     # security layer.
     if getattr(args, "keyring_mode", None):
         config.keyring_mode = args.keyring_mode
+    # v0.4.0 Item 3: --seal-cache-ephemeral CLI flag forces ephemeral
+    # mode for this invocation regardless of config.yaml.
+    if getattr(args, "seal_cache_ephemeral", False):
+        config.seal_cache_ephemeral = True
     # Configure logging: always write detailed logs to a rotating file under the Axon store base.
     try:
         from datetime import datetime as _dt

@@ -632,6 +632,13 @@ Your primary goal is to help the user by answering questions based on the provid
         # ``share_key_id`` is None for the owner's own sealed projects
         # and a non-empty key_id for sealed mounts (grantee path).
         self._pending_seal_mount: tuple[str, Path, str | None] | None = None
+        # v0.4.0 Item 3 — ephemeral cache mode bookkeeping. When the
+        # active sealed project's cache has been wiped (either by the
+        # per-query teardown of ephemeral mode or by an explicit
+        # ``wipe_sealed_cache`` call), we keep the parameters needed to
+        # re-materialise on the next query. Tuple: (name, project_root,
+        # share_key_id_or_None) — same shape as ``_pending_seal_mount``.
+        self._sealed_remount_args: tuple[str, Path, str | None] | None = None
         # Wipe stale sealed caches from previous crashed sessions. Cheap
         # (just lists temp dir) and only fires when the optional
         # [sealed] extra is installed.
@@ -1150,6 +1157,10 @@ Your primary goal is to help the user by answering questions based on the provid
         else:
             cache = materialize_for_read(project_root, user_dir)
         self._sealed_cache = cache
+        # v0.4.0 Item 3: stash remount args so a per-query teardown
+        # (ephemeral mode) or an explicit wipe can re-materialise without
+        # round-tripping through switch_project.
+        self._sealed_remount_args = (name, project_root, share_key_id)
         logger.info(
             "Sealed project '%s' mounted at %s (key_id=%s)",
             name,
@@ -1157,6 +1168,101 @@ Your primary goal is to help the user by answering questions based on the provid
             share_key_id or "owner",
         )
         return Path(cache.path)
+
+    # ----------------------------------------------------------------------
+    # v0.4.0 Item 3 — ephemeral cache helpers
+    # ----------------------------------------------------------------------
+
+    def wipe_sealed_cache(self) -> bool:
+        """Wipe the active sealed-project plaintext cache.
+
+        Returns ``True`` only when the underlying ``release_cache`` call
+        completed without exception — that is, plaintext is actually
+        gone from disk. ``False`` covers two distinct failure modes:
+
+        - No cache was mounted (nothing to wipe).
+        - ``release_cache`` raised (e.g. a backend still has files open
+          on Windows). The slot is still cleared so callers don't hold
+          a stale handle, but the return signals to REST/REPL that the
+          on-disk plaintext may not have been fully scrubbed and a
+          retry / process restart is warranted.
+
+        Public API — surfaced via CLI ``--wipe-sealed-cache``, REPL
+        ``/store wipe-cache``, REST ``POST /security/wipe-sealed-cache``,
+        and MCP ``wipe_sealed_cache``.
+        """
+        prior = getattr(self, "_sealed_cache", None)
+        if prior is None:
+            return False
+        wipe_ok = True
+        try:
+            from axon.security.mount import release_cache
+
+            release_cache(prior)
+        except Exception as exc:
+            logger.warning(
+                "wipe_sealed_cache: release_cache raised — plaintext may "
+                "still exist on disk: %s",
+                exc,
+            )
+            wipe_ok = False
+        self._sealed_cache = None
+        return wipe_ok
+
+    def _ensure_sealed_cache_mounted(self) -> None:
+        """Re-materialise the sealed cache if it was wiped.
+
+        Called at the start of every query in ephemeral mode. If the
+        active project is sealed and the cache slot is empty, replay the
+        last ``_mount_sealed_project`` invocation via the stored
+        ``_sealed_remount_args``. No-op when the cache is already
+        mounted or when no sealed project is active.
+        """
+        if getattr(self, "_sealed_cache", None) is not None:
+            return
+        args = getattr(self, "_sealed_remount_args", None)
+        if args is None:
+            return
+        name, project_root, share_key_id = args
+        try:
+            self._mount_sealed_project(name, project_root, share_key_id)
+        except Exception as exc:
+            logger.warning(
+                "Sealed cache remount failed for '%s' (key_id=%s): %s",
+                name,
+                share_key_id or "owner",
+                exc,
+            )
+            raise
+
+    def _ephemeral_query_window(self):
+        """Return a context manager that wraps one query in a sealed
+        mount/unmount cycle when ``security.seal_cache_ephemeral`` is
+        on.
+
+        Outside ephemeral mode, the context is a pure pass-through (no
+        cost). Inside ephemeral mode:
+
+        - On entry: re-materialise the sealed cache if it was wiped.
+        - On exit (always): wipe the cache so the plaintext window
+          ends with the query, regardless of whether the query raised.
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            ephemeral = bool(getattr(self.config, "seal_cache_ephemeral", False))
+            has_sealed = getattr(self, "_sealed_remount_args", None) is not None
+            active = ephemeral and has_sealed
+            if active:
+                self._ensure_sealed_cache_mounted()
+            try:
+                yield
+            finally:
+                if active:
+                    self.wipe_sealed_cache()
+
+        return _ctx()
 
     def switch_project(self, name: str) -> None:
         """Switch the active project, reinitializing vector store and BM25.
@@ -1176,6 +1282,12 @@ Your primary goal is to help the user by answering questions based on the provid
         # Clear any stale sealed-mount intent from a previous switch
         # that didn't reach the post-close materialisation block.
         self._pending_seal_mount = None
+        # v0.4.0 Item 3: also drop ephemeral remount args here. The
+        # post-close materialisation block below sets fresh values for
+        # sealed targets via ``_mount_sealed_project``; for plaintext
+        # targets we must clear the slot so a stale sealed remount
+        # doesn't get triggered by the ephemeral query window.
+        self._sealed_remount_args = None
         if getattr(self, "_graph_rag_cache_dirty", False):
             self._save_graph_rag_extraction_cache()
         from axon.projects import (

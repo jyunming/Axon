@@ -275,6 +275,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "mount_sync_retry_max",
         "mount_sync_retry_backoff_s",
         "keyring_mode",
+        "seal_cache_ephemeral",
     },
 }
 
@@ -856,6 +857,16 @@ class AxonConfig:
     # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
     mount_sync_retry_max: int = 5
     mount_sync_retry_backoff_s: float = 0.5
+    # ── Ephemeral plaintext cache (v0.4.0 Item 3) ──────────────────────────
+    # When True, a sealed-project query runs in a per-query mount/unmount
+    # cycle: SealedCache.create at query start, release_cache at query
+    # end. The plaintext-on-disk window shrinks from "entire session"
+    # (current default) to "one query execution time" (~1s) — the same
+    # cache files cannot be copied between queries. Trade-off: higher
+    # per-query latency because the project is re-decrypted from sealed
+    # ciphertext on every retrieval (vs once per session today).
+    # Off by default — opt-in for high-security deployments.
+    seal_cache_ephemeral: bool = False
     # ── Keyring hardening (v0.4.0 Item 2) ──────────────────────────────────
     # Where the grantee's per-share DEK is persisted between
     # ``redeem_share`` and the first ``get_grantee_dek`` (and afterwards
@@ -1093,6 +1104,8 @@ class AxonConfig:
                         f"persistent|session|never, got {_km!r}"
                     )
                 config_dict["keyring_mode"] = _km
+            if "seal_cache_ephemeral" in sec:
+                config_dict["seal_cache_ephemeral"] = bool(sec["seal_cache_ephemeral"])
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -1223,6 +1236,7 @@ class AxonConfig:
             "mount_refresh_mode": flat["mount_refresh_mode"],
             "mount_refresh_ttl_s": flat["mount_refresh_ttl_s"],
             "keyring_mode": flat["keyring_mode"],
+            "seal_cache_ephemeral": flat["seal_cache_ephemeral"],
         }
         if flat.get("axon_store_base"):
             data["store"] = {"base": flat["axon_store_base"]}

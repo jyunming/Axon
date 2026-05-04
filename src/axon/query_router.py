@@ -898,9 +898,42 @@ class QueryRouterMixin:
             self._last_mount_check_ts = time.monotonic()
 
     def _execute_retrieval(self, query: str, filters: dict = None, cfg=None) -> dict:
-        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized)."""
+        """Central retrieval execution logic supporting HyDE, Multi-Query, and Web Search (Parallelized).
+
+        v0.4.0 Item 3: when ``security.seal_cache_ephemeral`` is on
+        AND the active project is sealed, the retrieval body runs
+        inside a per-query mount/unmount cycle via
+        ``AxonBrain._ephemeral_query_window``. The plaintext on-disk
+        window collapses from "entire session" to "one query
+        execution time" (~1s). LLM synthesis happens AFTER this
+        method returns — it works off in-memory chunks and does not
+        need the cache.
+
+        Body invocation goes through the unbound class method so
+        ``MagicMock(spec=QueryRouterMixin)`` stub routers (used by
+        ``test_mount_refresh_modes``) exercise the real pipeline
+        instead of an auto-mocked stand-in.
+        """
         self._check_mount_revocation()
         self._maybe_refresh_mount()
+        _ephemeral_ctx = getattr(self, "_ephemeral_query_window", None)
+        _ephemeral_cm = _ephemeral_ctx() if _ephemeral_ctx is not None else None
+        if _ephemeral_cm is not None:
+            _ephemeral_cm.__enter__()
+        _exc_info: tuple | None = None
+        try:
+            return QueryRouterMixin._execute_retrieval_body(self, query, filters=filters, cfg=cfg)
+        except BaseException as _exc:
+            _exc_info = (type(_exc), _exc, _exc.__traceback__)
+            raise
+        finally:
+            if _ephemeral_cm is not None:
+                if _exc_info is not None:
+                    _ephemeral_cm.__exit__(*_exc_info)
+                else:
+                    _ephemeral_cm.__exit__(None, None, None)
+
+    def _execute_retrieval_body(self, query: str, filters: dict = None, cfg=None) -> dict:
         from axon.rust_bridge import get_rust_bridge
 
         _rust = get_rust_bridge()
@@ -1388,6 +1421,12 @@ class QueryRouterMixin:
         Returns ``(results, diagnostics, trace)`` — useful for benchmark harnesses,
         the ``/search/raw`` API endpoint, and the ``--dry-run`` CLI flag.
         The result list is already sliced to the effective top-k.
+
+        v0.4.0 Item 3: ``_execute_retrieval`` itself wraps the body in
+        the ephemeral mount/unmount window when
+        ``security.seal_cache_ephemeral`` is on, so all three call
+        sites (``search_raw``, ``query``, ``query_stream``) share the
+        same per-query cache lifetime.
         """
         cfg = self._apply_overrides(overrides)
         retrieval = self._execute_retrieval(query, filters=filters, cfg=cfg)

@@ -562,6 +562,19 @@ async def security_status() -> Any:
 
 
 @mcp.tool()
+async def wipe_sealed_cache() -> Any:
+    """Wipe the active sealed-project plaintext cache.
+
+    v0.4.0 Item 3. Manual companion to ``security.seal_cache_ephemeral``.
+    No-op when no sealed cache is mounted. Idempotent.
+
+    Returns ``{"wiped": bool}`` — the cache re-materialises on the next
+    sealed-project query.
+    """
+    return await _post("/security/wipe-sealed-cache", {})
+
+
+@mcp.tool()
 async def set_keyring_mode(mode: str) -> Any:
     """Change the keyring DEK storage mode for the running API server.
 
