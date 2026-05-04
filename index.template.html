@@ -2000,7 +2000,7 @@
 
     <div class="version-tag reveal active">
         <div class="version-dot"></div>
-        v0.4.0 <span class="vt-sep">/</span> <span class="vt-meta">now on PyPI</span>
+        v{{AXON_VERSION}} <span class="vt-sep">/</span> <span class="vt-meta">now on PyPI</span>
     </div>
 
     <h1 class="reveal active">
@@ -2035,7 +2035,7 @@
         <div class="terminal-header">
             <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
             <span class="term-tab">~/research — bash</span>
-            <span class="term-meta">axon · 0.4.0 · python 3.11</span>
+            <span class="term-meta">axon · {{AXON_VERSION}} · python 3.11</span>
         </div>
         <div class="terminal-body">
             <div class="tl">
@@ -2043,7 +2043,7 @@
                 <span class="t$">$</span>
                 <span class="tc">pip install <span class="tp">"axon-rag[starter]"</span></span>
             </div>
-            <div class="to tok">✓ Successfully installed axon-rag-0.4.0</div>
+            <div class="to tok">✓ Successfully installed axon-rag-{{AXON_VERSION}}</div>
             <div class="tl" style="margin-top:12px">
                 <span class="tv">(axon)</span>
                 <span class="t$">$</span>
@@ -2697,7 +2697,7 @@ brain.<span class="cf">ingest_path</span>(<span class="cs">"~/research/papers"</
 
 <span class="co"># Full RAG query — returns the LLM-synthesised answer string</span>
 answer = brain.<span class="cf">query</span>(
-    <span class="cs">"What's new in v0.4.0?"</span>,
+    <span class="cs">"What's new in v{{AXON_VERSION}}?"</span>,
     overrides={"<span class="ck">hyde</span>": <span class="cs">True</span>, "<span class="ck">graph_rag</span>": <span class="cs">True</span>}
 )
 
@@ -2799,7 +2799,7 @@ results, diagnostics, trace = brain.<span class="cf">search_raw</span>(
         </div>
 
         <div class="footer-sig reveal">
-            <span><span class="sig-mark">◆</span> Axon · v0.4.0 · Built local-first</span>
+            <span><span class="sig-mark">◆</span> Axon · v{{AXON_VERSION}} · Built local-first</span>
             <span>Crafted with intent · No tracking</span>
         </div>
     </div>
