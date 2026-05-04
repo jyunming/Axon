@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **48 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **51 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -471,7 +471,7 @@ Trigger an audited graph community rebuild via the governance operator endpoint.
 
 ---
 
-## Sealed-Store Security (5)
+## Sealed-Store Security (8)
 
 ### `security_status`
 
