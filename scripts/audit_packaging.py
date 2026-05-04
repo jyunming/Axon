@@ -82,6 +82,30 @@ def main() -> int:
             f"Cargo.toml has {cargo_version!r}"
         )
 
+    # v0.4.0 PR I — verify index.html matches the rendered template.
+    # If someone hand-edits index.html without updating index.template.html,
+    # the next render will silently revert their change. Catching it here
+    # forces the user to either update the template or regenerate.
+    import subprocess
+    import sys
+
+    render_script = root / "scripts" / "render_index.py"
+    template = root / "index.template.html"
+    rendered_in_sync: bool | None = None
+    if render_script.exists() and template.exists():
+        result = subprocess.run(
+            [sys.executable, str(render_script), "--check"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        rendered_in_sync = result.returncode == 0
+        if not rendered_in_sync:
+            errors.append(
+                "index.html is out of sync with index.template.html — run "
+                "`python scripts/render_index.py` and commit the result"
+            )
+
     duplicate_manifest = root / "src" / "axon" / "axon_rust_Cargo.toml"
     if duplicate_manifest.exists():
         errors.append("duplicate manifest exists: src/axon/axon_rust_Cargo.toml")
@@ -115,6 +139,9 @@ def main() -> int:
     print(f"Website terminal version:  {install_version}")
     print(f"Bundled VSIX file:         {bundled_vsix_name}")
     print(f"Expected VSIX file:        {expected_vsix_name}")
+    if rendered_in_sync is not None:
+        # ASCII-only output: Windows console default codec is cp1252.
+        print(f"index.html vs template:    {'in sync' if rendered_in_sync else 'OUT OF SYNC'}")
     if errors:
         print("Packaging audit FAILED:")
         for e in errors:

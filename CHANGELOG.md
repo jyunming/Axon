@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### 🛠 Tooling — `index.html` version is now single-source
+
+The landing page used to hand-roll five version strings; every release bump chased them with regexes and Copilot caught stragglers twice (PRs #104, #105). PR I closes that loop.
+
+- **`index.template.html`** — the source-of-truth landing page; every release-version slot uses `{{AXON_VERSION}}`. Historical attribution (e.g. "v0.3.2 graph backend changes" educational content) stays verbatim.
+- **`index.html`** — committed rendered output. GitHub Pages serves the repo root with no build step, so we keep the rendered file checked in and let the audit script catch drift.
+- **`scripts/render_index.py`** — reads version from `src/axon/Cargo.toml`, substitutes `{{AXON_VERSION}}`, writes `index.html`. `--check` mode compares without writing (returns 1 on drift).
+- **`scripts/bump_version.py`** — replaces its hand-rolled regex pair with a `render_index.py` subprocess call.
+- **`scripts/audit_packaging.py`** — invokes `render_index.py --check`; reports `index.html vs template: in sync | OUT OF SYNC` and fails the audit on drift.
+- 9 tests in `tests/test_render_index.py`: substitutes-all, version override, count-in-stdout, --check pass + fail + no-write, missing-placeholder error, missing-template error, real-repo drift guard.
+
 ### 🔒 Security — Item 4: Metadata leakage hardening
 
 Two of three sub-items from the plan; **4b deferred to v0.5.0**.

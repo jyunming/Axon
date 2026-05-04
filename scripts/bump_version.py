@@ -95,28 +95,28 @@ def main() -> int:
     ext_data["version"] = version
     extension_package_json.write_text(json.dumps(ext_data, indent=2) + "\n", encoding="utf-8")
 
-    website = root / "index.html"
-    website_text = website.read_text(encoding="utf-8")
-    website_text, n1 = re.subn(
-        r"(v)\d+\.\d+\.\d+(\s+—\s+now on PyPI)",
-        rf"\g<1>{version}\g<2>",
-        website_text,
-        count=1,
-    )
-    website_text, n2 = re.subn(
-        r"(Successfully installed axon-rag-)\d+\.\d+\.\d+",
-        rf"\g<1>{version}",
-        website_text,
-        count=1,
-    )
-    if n1 != 1 or n2 != 1:
-        raise SystemExit("Failed to update version strings in index.html")
-    website.write_text(website_text, encoding="utf-8")
+    # v0.4.0 PR I: index.html is now rendered from index.template.html
+    # via scripts/render_index.py — every release-version slot in the
+    # landing page funnels through the {{AXON_VERSION}} placeholder.
+    # We invoke the renderer as a subprocess to keep this script's
+    # import surface zero (the renderer is standalone-importable).
+    render_script = root / "scripts" / "render_index.py"
+    if render_script.exists():
+        subprocess.run(
+            [sys.executable, str(render_script), "--version", version],
+            check=True,
+            cwd=root,
+        )
+    else:
+        print(
+            f"  WARNING: {render_script.relative_to(root)} missing; "
+            "index.html version slots NOT refreshed."
+        )
 
     print(f"Updated version to {version} in:")
     print(" - src/axon/Cargo.toml")
     print(" - integrations/vscode-axon/package.json")
-    print(" - index.html")
+    print(" - index.html (via render_index.py)")
 
     if not args.skip_vsix:
         _rebuild_and_bundle_vsix(root, version)
