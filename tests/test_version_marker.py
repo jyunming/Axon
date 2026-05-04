@@ -347,11 +347,15 @@ class TestMarkerJsonShape:
         _seed_project(tmp_path)
         bump(tmp_path)
         raw = json.loads((tmp_path / VERSION_MARKER_FILENAME).read_text(encoding="utf-8"))
+        # v0.4.0 Item 4a: owner_node_id added (UUID4 — replaces the
+        # hostname leak); owner_host retained as empty string for
+        # schema continuity with v0.3.x readers.
         assert set(raw.keys()) == {
             "schema_version",
             "seq",
             "generated_at",
             "owner_host",
+            "owner_node_id",
             "hash_algo",
             "artifacts",
         }

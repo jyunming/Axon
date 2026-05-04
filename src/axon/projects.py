@@ -345,6 +345,49 @@ def get_store_id(user_dir: Path) -> str | None:
         return None
 
 
+def get_or_create_node_id(user_dir: Path) -> str:
+    """Return the per-store UUID stored at ``store_meta.json::node_id``.
+
+    v0.4.0 Item 4a. Used by :func:`axon.version_marker.bump` to stamp
+    each ``version.json`` marker with the writer's identity without
+    leaking the OS hostname through the cloud-sync volume.
+
+    Behaviour:
+
+    - Reads ``store_meta.json::node_id`` when present (the common case
+      for stores initialised by v0.4.0+).
+    - For stores migrated from older Axon versions where ``node_id``
+      may be absent, mints a fresh UUID4 in-place and persists it back.
+    - Returns ``""`` (empty string) only when ``store_meta.json`` is
+      entirely missing or malformed; callers can pass that value
+      through to :func:`bump` without crashing the marker write.
+    """
+    import uuid as _uuid
+
+    store_meta = user_dir / "store_meta.json"
+    if not store_meta.exists():
+        return ""
+    try:
+        meta = json.loads(store_meta.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    if not isinstance(meta, dict):
+        return ""
+    nid = meta.get("node_id")
+    if isinstance(nid, str) and nid:
+        return nid
+    # Migration: existing v0.3.x store with no node_id field.
+    new_nid = str(_uuid.uuid4())
+    meta["node_id"] = new_nid
+    try:
+        store_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except OSError:
+        # Persistence failed — return the value anyway so the current
+        # bump can proceed; the next call will retry the write.
+        pass
+    return new_nid
+
+
 def list_descendants(name: str, visited: set[str] | None = None) -> list[str]:
     """Return the full slash-separated names of all descendant projects.
     Uses a recursive DFS that supports up to _MAX_DEPTH levels and includes
@@ -585,12 +628,20 @@ def ensure_user_project(user_dir: Path) -> None:
     # ── Phase 1: store_meta.json ─────────────────────────────────────────────
     store_meta = user_dir / "store_meta.json"
     if not store_meta.exists():
+        import uuid as _uuid
+
         store_meta.write_text(
             json.dumps(
                 {
                     "store_version": 2,
                     "store_scope": "user_scoped",
                     "store_id": build_project_id("store"),
+                    # v0.4.0 Item 4a — random UUID per store. Replaces
+                    # the OS hostname previously written into version.json
+                    # markers; identifies the source of writes for stale-
+                    # ness detection without leaking machine identity to
+                    # anyone watching the synced filesystem.
+                    "node_id": str(_uuid.uuid4()),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 },
                 indent=2,

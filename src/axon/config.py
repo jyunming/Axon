@@ -276,6 +276,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "mount_sync_retry_backoff_s",
         "keyring_mode",
         "seal_cache_ephemeral",
+        "seal_padding_bytes",
     },
 }
 
@@ -857,6 +858,16 @@ class AxonConfig:
     # Each retry waits ``mount_sync_retry_backoff_s * 2 ** attempt`` seconds.
     mount_sync_retry_max: int = 5
     mount_sync_retry_backoff_s: float = 0.5
+    # ── Random padding for sealed files (v0.4.0 Item 4c) ───────────────────
+    # When > 0, every newly-sealed file carries random trailing bytes
+    # whose count is chosen uniformly in ``[0, seal_padding_bytes]``.
+    # Defeats the trivial file-size leak (an observer otherwise infers
+    # plaintext length within ±28 bytes from the on-disk size). Default
+    # 0 = no padding (fully backward-compatible). Tuning: 1024 adds at
+    # most 1 KiB per file — plenty to obscure short payloads (share
+    # wraps, KEK files, expiry sidecars) without meaningfully bloating
+    # vector segments.
+    seal_padding_bytes: int = 0
     # ── Ephemeral plaintext cache (v0.4.0 Item 3) ──────────────────────────
     # When True, a sealed-project query runs in a per-query mount/unmount
     # cycle: SealedCache.create at query start, release_cache at query
@@ -1106,6 +1117,23 @@ class AxonConfig:
                 config_dict["keyring_mode"] = _km
             if "seal_cache_ephemeral" in sec:
                 config_dict["seal_cache_ephemeral"] = bool(sec["seal_cache_ephemeral"])
+            if "seal_padding_bytes" in sec:
+                _spb = int(sec["seal_padding_bytes"])
+                if _spb < 0:
+                    raise ValueError(f"security.seal_padding_bytes must be >= 0, got {_spb}")
+                # Cap matches axon.security.crypto._unpack_header's 1 MiB
+                # sanity bound on padding_length. A larger budget would let
+                # writers emit files this build's reader rejects with
+                # SealedFormatError — silent data loss until the next
+                # release bumps the reader's bound.
+                _SEAL_PADDING_HARD_CAP = 1024 * 1024
+                if _spb > _SEAL_PADDING_HARD_CAP:
+                    raise ValueError(
+                        f"security.seal_padding_bytes must be <= "
+                        f"{_SEAL_PADDING_HARD_CAP} (1 MiB), got {_spb}. "
+                        "Larger values would emit files the reader rejects."
+                    )
+                config_dict["seal_padding_bytes"] = _spb
         # Environment Variable Overrides (High Priority --' wins over config.yaml)
         env_ollama_host = os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL")
         if env_ollama_host:
@@ -1237,6 +1265,7 @@ class AxonConfig:
             "mount_refresh_ttl_s": flat["mount_refresh_ttl_s"],
             "keyring_mode": flat["keyring_mode"],
             "seal_cache_ephemeral": flat["seal_cache_ephemeral"],
+            "seal_padding_bytes": flat["seal_padding_bytes"],
         }
         if flat.get("axon_store_base"):
             data["store"] = {"base": flat["axon_store_base"]}

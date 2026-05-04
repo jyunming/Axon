@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### 🔒 Security — Item 4: Metadata leakage hardening
+
+Two of three sub-items from the plan; **4b deferred to v0.5.0**.
+
+#### 4a — Hostname → store-scoped UUID node_id
+
+`version.json` markers now stamp the writer's identity with a UUID4 (`owner_node_id`) minted once at store-init time and cached in `store_meta.json::node_id`. The legacy `owner_host` field is retained as an empty string for schema continuity with v0.3.x readers; new writers no longer leak `socket.gethostname()` through the synced filesystem volume. `axon.projects.get_or_create_node_id` migrates pre-v0.4.0 stores in-place on first read. `axon.version_marker` no longer imports `socket` at all.
+
+#### 4c — Random padding in AXSL sealed files (`security.seal_padding_bytes`)
+
+New `AxonConfig.seal_padding_bytes: int = 0` (off by default, fully backward-compatible). When `> 0`, every `SealedFile.write` / `write_stream` / `write_stream_from_path` appends a random number of bytes between `0` and `seal_padding_bytes` (inclusive) **after** the GCM tag. Reader slices the padding off via the new `padding_length` field stamped into 4 bytes of the previously-reserved header region (preserves the 16-byte header size). The bound: a 1024-byte budget hides plaintext length to within ±1 KiB; for share wraps and KEK files (~40 bytes) this is enough to mask whether a wrap is "small metadata" or "an unusual share". Plumbed through `project_seal` so the existing seal pipeline picks up the config; share-wrap and KEK callers can opt in incrementally.
+
+#### 4b — Hashed key_id filenames in `.security/shares/` — DEFERRED to v0.5.0
+
+Implementing this cleanly requires an encrypted index file (so owners can still enumerate shares for `list_sealed_shares` and `hard_revoke`), which is a non-trivial design surface. The existing leak (filenames carry plaintext `key_id`s) remains in v0.4.0; documented as known limitation.
+
+#### Tests
+
+`tests/test_metadata_hardening.py` — 17 tests:
+- 4a: `ensure_user_project` writes `node_id`; `get_or_create_node_id` round-trip + legacy migration; missing `store_meta` → empty string; `version_marker.bump` writes `owner_node_id` + empty `owner_host`; defensive regression against `import socket` re-appearing.
+- 4c: round-trip with padding; baseline file size unchanged when `padding_bytes=0`; padding distribution check (200 writes, no length > 30%); streaming write supports padding; negative `padding_bytes` rejected; truncated trailing padding fails cleanly via `SealedFormatError` instead of misaligned `InvalidTag`.
+- Config: `seal_padding_bytes` default 0; YAML round-trip; negative value rejected at load.
+
 ### 🔒 Security — Item 3: Ephemeral plaintext cache mode
 
 - New `security.seal_cache_ephemeral: bool = false` config (off by default).

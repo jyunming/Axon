@@ -848,6 +848,9 @@ YAML section: top-level (or under `rag:`)
 | `mount_refresh_ttl_s` | int | `300` | Seconds before a `switch`-mode mount auto-refreshes during a query |
 | `mount_sync_retry_max` | int | `5` | Max mid-sync retry attempts before raising `MountSyncPendingError` |
 | `mount_sync_retry_backoff_s` | float | `0.5` | Base backoff seconds between sync retries (exponential: `backoff * 2 ** attempt`) |
+| `keyring_mode` | str | `persistent` | **v0.4.0 Item 2** — DEK storage mode. `persistent` = OS keyring; `session` = process-memory only (wiped at exit); `never` = no caching, re-redeem each mount |
+| `seal_cache_ephemeral` | bool | `false` | **v0.4.0 Item 3** — when true, sealed-project plaintext cache is materialised + wiped per query (re-decrypts each call). Trade-off: ~1 s/query latency vs session-long plaintext window |
+| `seal_padding_bytes` | int | `0` | **v0.4.0 Item 4c** — random trailing-byte budget per sealed file (`0..N` uniform). Defeats the file-size leak (observer otherwise infers plaintext length within ±28 bytes). Hard-capped at 1 MiB to match the reader's sanity bound — larger values are rejected at config load |
 
 ### 6.16 Store Settings
 

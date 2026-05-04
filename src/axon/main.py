@@ -3209,10 +3209,18 @@ Your primary goal is to help the user by answering questions based on the provid
         # in-memory handles need to be reopened. Atomic write — if any
         # part of this fails, the previous marker stays intact.
         try:
+            from axon.projects import get_or_create_node_id
             from axon.version_marker import bump as _bump_marker
 
             _project_dir = Path(self.config.bm25_path).parent
-            _bump_marker(_project_dir)
+            # v0.4.0 Item 4a: stamp the marker with the store's UUID
+            # node_id (no hostname leak through synced volumes).
+            _node_id = ""
+            try:
+                _node_id = get_or_create_node_id(Path(self.config.projects_root))
+            except Exception:
+                pass
+            _bump_marker(_project_dir, node_id=_node_id)
         except Exception as _vm_exc:
             logger.debug("version_marker bump failed (non-fatal): %s", _vm_exc)
         # Explicitly release lease (fallback: _WriteLease.__del__ handles it)

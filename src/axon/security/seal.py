@@ -371,8 +371,13 @@ def project_seal(
         plaintext = src.read_bytes()
         aad = make_aad(seal_id, str(rel).replace("\\", "/"))
         tmp = src.with_suffix(src.suffix + ".sealing")
+        # v0.4.0 Item 4c: per-file random padding when configured. Pulled
+        # off the config object passed in by the caller (project_seal sig
+        # accepts ``config``); falls back to 0 when no config was passed
+        # (test paths and legacy callers).
+        _pad = int(getattr(config, "seal_padding_bytes", 0) or 0)
         try:
-            SealedFile.write(tmp, plaintext, dek, aad=aad)
+            SealedFile.write(tmp, plaintext, dek, aad=aad, padding_bytes=_pad)
             os.replace(tmp, src)
         except OSError as exc:
             # Clean up the failed tempfile before propagating.

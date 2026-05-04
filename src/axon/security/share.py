@@ -1674,9 +1674,18 @@ def _hard_revoke(
     # marker was only bumped by ingest, so a quiet rotation could go
     # undetected by mounted grantees).
     try:
+        from axon.projects import get_or_create_node_id
         from axon.version_marker import bump as _vm_bump
 
-        _vm_bump(project_dir)
+        # v0.4.0 Item 4a: stamp the marker with the store-scoped UUID
+        # rather than the hostname (the synced volume must not leak the
+        # owner's machine identity).
+        _node_id = ""
+        try:
+            _node_id = get_or_create_node_id(owner_user_dir)
+        except Exception:
+            pass
+        _vm_bump(project_dir, node_id=_node_id)
     except Exception as _vm_exc:  # pragma: no cover — defensive
         logger.debug("hard_revoke: version_marker bump raised: %s", _vm_exc)
     logger.info(
