@@ -64,6 +64,8 @@ EXPECTED_MCP_TOOL_NAMES = {
     "security_lock",
     "security_change_passphrase",
     "seal_project",
+    # v0.4.0 Item 1 — passphrase suggestion helper
+    "suggest_passphrase",
     # Graph
     "graph_status",
     "graph_finalize",
