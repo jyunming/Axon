@@ -1,6 +1,7 @@
 """Query routing, retrieval, context assembly and response generation (QueryRouterMixin)."""
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import re
@@ -62,11 +63,16 @@ _ROUTE_PROFILES: dict = {
 # Citation metadata helpers
 # ---------------------------------------------------------------------------
 
-# ``[Document N]`` is what _build_context emits and what we tell the LLM to
-# cite with. Some models drop the word "Document" and just write ``[N]``;
-# accept either form. We capture only 1- and 2-digit indices to avoid
-# matching arbitrary bracketed numbers in source-quoted code.
-_CITATION_MARKER_RE = re.compile(r"\[(?:Document\s+)?(\d{1,2})\]")
+# ``[Document N — label]`` is what _build_context emits and what we tell the
+# LLM to cite with. Models may reproduce variations:
+#   - bare digit form: ``[N]`` (Document word dropped)
+#   - full marker as shown in context: ``[Document N — label]``
+#   - system-prompt example form: ``[Document N (ID: ...)]``
+# To match all three, we accept any non-``]`` content after the digit, but
+# only when the ``Document`` prefix is present — the bare ``[N]`` form stays
+# strict to avoid matching unrelated bracketed snippets like ``[1 line]`` in
+# source-quoted code. We capture 1-3 digit indices to cover top_k up to 999.
+_CITATION_MARKER_RE = re.compile(r"\[(?:Document\s+(\d{1,3})(?:[^\]]*)?|(\d{1,3}))\]")
 _CITATION_TEXT_TRUNCATE = 500  # chars per source.text in the response payload
 
 
@@ -126,7 +132,12 @@ def _build_citation_metadata(response: str, citation_results: list[dict]) -> dic
     if not isinstance(response, str) or not response or not sources:
         return {"sources": sources, "citations": citations}
     for match in _CITATION_MARKER_RE.finditer(response):
-        marker_idx_one_based = int(match.group(1))
+        # Two alternative capture groups in the pattern:
+        #   group(1) = ``Document N…`` form
+        #   group(2) = bare ``N`` form
+        # Whichever matched carries the digit; the other is None.
+        digit = match.group(1) or match.group(2)
+        marker_idx_one_based = int(digit)
         # Reject out-of-range markers (LLM hallucinated a citation).
         # Index in the response is 1-based; sources is 0-based.
         if marker_idx_one_based < 1 or marker_idx_one_based > len(sources):
@@ -1516,12 +1527,18 @@ class QueryRouterMixin:
         )
 
     def _apply_overrides(self, overrides: dict | None) -> AxonConfig:
-        """Return a config copy with per-request overrides applied (thread-safe)."""
-        if not overrides:
-            return self.config
-        import copy
+        """Return a shallow copy of ``self.config`` with overrides applied.
 
+        Always returns a fresh copy — even when ``overrides`` is empty — so
+        callers that mutate the returned config (e.g. ``query()`` applying
+        route-profile flags via ``object.__setattr__``) cannot corrupt the
+        brain's shared ``self.config``. This is the contract every caller
+        depends on: per-request flag tweaks must NOT leak into subsequent
+        queries.
+        """
         cfg = copy.copy(self.config)
+        if not overrides:
+            return cfg
         for k, v in overrides.items():
             if v is not None and hasattr(cfg, k):
                 setattr(cfg, k, v)
@@ -1548,8 +1565,9 @@ class QueryRouterMixin:
         # Warn (don't block) if the embedding model has changed — retrieval
         # results will be degraded but the user can still access existing data.
         self._validate_embedding_meta(on_mismatch="warn")
-        # Clear citation metadata so a no-context fallback or cached hit
+        # Clear citation metadata so a no-context fallback or cache miss
         # doesn't leak the previous question's citations into this turn.
+        # On a cache hit the value is restored from the cached entry below.
         self._last_citations = {"sources": [], "citations": []}
         t0 = time.time()
         cfg = self._apply_overrides(overrides)
@@ -1574,11 +1592,22 @@ class QueryRouterMixin:
             with self._cache_lock:
                 cached = self._query_cache.get(cache_key)
                 if cached is not None:
-                    stored_time, stored_response = cached
+                    # Tuple layout: (stored_time, response, citations, provenance).
+                    # Legacy 2-tuples are still accepted for backwards
+                    # compatibility with externally-injected entries (tests).
+                    stored_time, stored_response, *rest = cached
+                    stored_citations = rest[0] if rest else {"sources": [], "citations": []}
+                    stored_provenance = rest[1] if len(rest) > 1 else {}
                     ttl = getattr(cfg, "query_cache_ttl", 1800)
                     if ttl <= 0 or time.monotonic() - stored_time < ttl:
                         logger.info(f"Cache hit for query: {query[:60]}")
                         self._query_cache.move_to_end(cache_key)
+                        # Restore brain-level state so callers reading
+                        # _last_citations / _last_provenance after a cache
+                        # hit see the cached query's data, not stale state
+                        # from a different prior call.
+                        self._last_citations = stored_citations
+                        self._last_provenance = stored_provenance
                         return stored_response
                     else:
                         del self._query_cache[cache_key]
@@ -1734,7 +1763,16 @@ class QueryRouterMixin:
                 # Evict least-recently-used entry when cache is at capacity
                 if len(self._query_cache) >= cfg.query_cache_size and self._query_cache:
                     self._query_cache.popitem(last=False)  # pop LRU (front of OrderedDict)
-                self._query_cache[cache_key] = (time.monotonic(), response)
+                # Store citations + provenance alongside the response so a
+                # subsequent cache hit can restore the brain-level state
+                # callers depend on (REST /query reads _last_citations and
+                # _last_provenance after brain.query() returns).
+                self._query_cache[cache_key] = (
+                    time.monotonic(),
+                    response,
+                    self._last_citations,
+                    self._last_provenance,
+                )
                 self._query_cache.move_to_end(cache_key)  # mark as most-recently-used
         return response
 
@@ -1751,6 +1789,11 @@ class QueryRouterMixin:
         Subsequent items are plain string chunks from the LLM stream.
         """
         self._validate_embedding_meta(on_mismatch="warn")
+        # Clear citation metadata for parity with query(). Streaming callers
+        # can't extract citations from individual tokens, but at minimum the
+        # sources list is populated once retrieval completes so a previous
+        # query's citations don't leak through.
+        self._last_citations = {"sources": [], "citations": []}
         cfg = self._apply_overrides(overrides)
         # --- System-level query router (mirrors query() routing logic) ---
         if cfg.query_router != "off":
@@ -1875,6 +1918,11 @@ class QueryRouterMixin:
             "retrieved_count": len(citation_results),
             "web_count": _web_count,
         }
+        # Populate _last_citations.sources before streaming begins so REST
+        # /query/stream and MCP-tool callers can read sources after the
+        # generator is consumed. The citations array stays empty because we
+        # never see the full response on the streaming path.
+        self._last_citations = _build_citation_metadata("", citation_results)
         # Yield a marker object so UI can optionally reconstruct sources
         yield {"type": "sources", "sources": results}
         yield from self.llm.stream(query, system_prompt, chat_history=chat_history)
