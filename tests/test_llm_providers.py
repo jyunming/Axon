@@ -2854,3 +2854,86 @@ def test_stream_yields_strings_for_provider(provider, extra_kwargs):
     assert len(result) >= 1
 
     assert all(isinstance(tok, str) for tok in result)
+
+
+# ---------------------------------------------------------------------------
+# Audit regression: client cache invalidation on api_key rotation
+# ---------------------------------------------------------------------------
+
+
+class TestOpenAIClientCacheKeyInvalidation:
+    """Regression: ``_get_openai_client`` / ``_get_grok_client`` previously
+    cached only by base_url, so a runtime rotation of the configured API key
+    (e.g. ``POST /config/update``) silently reused the stale client.
+    """
+
+    def test_openai_client_rebuilds_after_api_key_change(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="openai", llm_model="gpt-4o", openai_api_key="sk-old")
+
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.side_effect = lambda **kw: MagicMock(_api_key=kw.get("api_key"))
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            c1 = llm._get_openai_client()
+            assert c1._api_key == "sk-old"
+            # Rotate the key on the live config object — must invalidate cache.
+            llm.config.openai_api_key = "sk-new"
+            c2 = llm._get_openai_client()
+            assert c2._api_key == "sk-new"
+            assert c1 is not c2
+            assert mock_openai.OpenAI.call_count == 2
+
+    def test_openai_client_same_key_is_still_cached(self):
+        """Repeated calls with the same effective key must reuse the client."""
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="openai", llm_model="gpt-4o", openai_api_key="sk-x")
+
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.return_value = MagicMock()
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            c1 = llm._get_openai_client()
+            c2 = llm._get_openai_client()
+            assert c1 is c2
+            assert mock_openai.OpenAI.call_count == 1
+
+    def test_grok_client_rebuilds_after_api_key_change(self):
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="grok", llm_model="grok-2", grok_api_key="xai-old")
+
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.side_effect = lambda **kw: MagicMock(_api_key=kw.get("api_key"))
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            c1 = llm._get_grok_client()
+            assert c1._api_key == "xai-old"
+            llm.config.grok_api_key = "xai-new"
+            c2 = llm._get_grok_client()
+            assert c2._api_key == "xai-new"
+            assert c1 is not c2
+            assert mock_openai.OpenAI.call_count == 2
+
+    def test_openai_client_base_url_and_key_compose_in_cache(self):
+        """Cache must distinguish on base_url AND key independently."""
+        from axon.llm import OpenLLM
+
+        cfg = _make_config(llm_provider="openai", llm_model="gpt-4o", openai_api_key="sk-x")
+
+        mock_openai = MagicMock()
+        mock_openai.OpenAI.side_effect = lambda **kw: MagicMock(_kwargs=kw)
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            llm = OpenLLM(cfg)
+            c1 = llm._get_openai_client(base_url="http://a:1/v1")
+            c2 = llm._get_openai_client(base_url="http://b:1/v1")
+            c3 = llm._get_openai_client(base_url="http://a:1/v1")
+            assert c1 is c3
+            assert c1 is not c2
+            assert mock_openai.OpenAI.call_count == 2

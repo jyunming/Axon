@@ -184,23 +184,33 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
         return getattr(cfg, field, default) if cfg else default
 
     # ── Core input helpers ────────────────────────────────────────────────────
-    def _pick(label: str, field: str, choices: list[str], default: Any) -> None:
+    def _pick(label: str, field: str, choices: list, default: Any) -> None:
         """Display a numbered menu and loop until the user picks a valid item.
         Accepts either the number (1-N) or the value string itself.
-        For boolean choices the value stored in *changes* is a Python bool.
+        *choices* may contain strings, ints, or bools; non-string entries are
+        compared via their stringified form but the original-typed value is
+        stored back into *changes*.
         """
+        # Normalise choices to (display_str, original_value) pairs so that
+        # bool/int choices (e.g. [False, True] or [4, 8]) don't blow up when
+        # the menu calls ``.lower()`` for case-insensitive matching.
+        choice_pairs = [(str(c), c) for c in choices]
+        choice_strs = [s for s, _ in choice_pairs]
         raw = _g(field, default)
-        cur_str = str(raw).lower() if isinstance(raw, bool) else str(raw)
-        # Find which menu item matches the current value
-        cur_idx = next((i for i, c in enumerate(choices) if c.lower() == cur_str.lower()), 0)
+        cur_str = str(raw)
+        # Find which menu item matches the current value (case-insensitive).
+        cur_idx = next(
+            (i for i, s in enumerate(choice_strs) if s.lower() == cur_str.lower()),
+            0,
+        )
         print(f"\n  {label}:")
-        for i, c in enumerate(choices, 1):
+        for i, s in enumerate(choice_strs, 1):
             marker = "  ◀ current" if i - 1 == cur_idx else ""
-            print(f"    {i}) {c}{marker}")
+            print(f"    {i}) {s}{marker}")
         while True:
             try:
                 ans = input(
-                    f"  Select [1–{len(choices)}, Enter = keep '{choices[cur_idx]}']: "
+                    f"  Select [1–{len(choice_strs)}, Enter = keep '{choice_strs[cur_idx]}']: "
                 ).strip()
             except EOFError:
                 print()
@@ -213,28 +223,32 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
             # Try as index number
             try:
                 idx = int(ans)
-                if 1 <= idx <= len(choices):
-                    selected = choices[idx - 1]
+                if 1 <= idx <= len(choice_strs):
+                    selected_str, selected_val = choice_pairs[idx - 1]
                     break
-                _err(f"  ✗ Enter a number between 1 and {len(choices)}.")
+                _err(f"  ✗ Enter a number between 1 and {len(choice_strs)}.")
                 continue
             except ValueError:
                 pass
             # Try as the literal value
-            match = next((c for c in choices if c.lower() == ans.lower()), None)
+            match = next(
+                ((s, v) for s, v in choice_pairs if s.lower() == ans.lower()),
+                None,
+            )
             if match:
-                selected = match
+                selected_str, selected_val = match
                 break
             _err(
                 f"  ✗ '{ans}' is not a valid option. "
-                f"Enter a number (1–{len(choices)}) or the value directly."
+                f"Enter a number (1–{len(choice_strs)}) or the value directly."
             )
-        # Store as Python bool for boolean-style menus
+        # Store as Python bool for boolean-style menus when choices are
+        # presented as the strings "true"/"false" (case-insensitive).
         _bool_choices = {"true", "false"}
-        if {c.lower() for c in choices} == _bool_choices:
-            val: Any = selected.lower() in ("true", "1", "yes")
+        if {s.lower() for s in choice_strs} == _bool_choices and not isinstance(selected_val, bool):
+            val: Any = selected_str.lower() in ("true", "1", "yes")
         else:
-            val = selected
+            val = selected_val
         if val != _g(field, default):
             changes[field] = val
 
