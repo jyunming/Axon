@@ -43,6 +43,10 @@ class OpenReranker:
     def rerank(self, query: str, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Rerank a list of documents based on a query.
+
+        Cross-encoder failures (OOM, model errors, malformed input) are caught
+        and the original document list is returned unchanged, so a transient
+        reranker error never crashes the surrounding query pipeline (audit P1).
         """
         if not self.config.rerank or (not self.model and not self.llm) or not documents:
             return documents
@@ -51,9 +55,13 @@ class OpenReranker:
             return self._llm_rerank(query, documents)
         # Cross-encoder pointwise scoring
         # Prepare pairs: (query, doc_text)
-        pairs = [[query, doc["text"]] for doc in documents]
-        # Get scores
-        scores = self.model.predict(pairs)
+        try:
+            pairs = [[query, doc.get("text", "")] for doc in documents]
+            # Get scores
+            scores = self.model.predict(pairs)
+        except Exception as exc:
+            logger.warning("Cross-encoder reranking failed; returning unranked documents: %s", exc)
+            return documents
         # Add scores to documents and sort
         for doc, score in zip(documents, scores):
             doc["rerank_score"] = float(score)

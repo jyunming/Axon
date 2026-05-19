@@ -168,7 +168,16 @@ def fuse_sparse(
     except Exception as exc:
         logger.warning("sparse retrieval failed, falling back to dense-only: %s", exc)
         return dense_results
-    merged: dict[str, dict] = {r["id"]: dict(r) for r in dense_results}
+
+    # Deep-copy entries (and their metadata sub-dicts) before tagging with
+    # "sparse_score" so the caller's input lists are never mutated.
+    def _copy_entry(src: dict) -> dict:
+        copy = dict(src)
+        md = copy.get("metadata")
+        copy["metadata"] = dict(md) if isinstance(md, dict) else {}
+        return copy
+
+    merged: dict[str, dict] = {r["id"]: _copy_entry(r) for r in dense_results}
     dense_max = max((r["score"] for r in dense_results), default=1.0) or 1.0
     sparse_max = max((r["score"] for r in sparse_hits), default=1.0) or 1.0
     for hit in sparse_hits:
@@ -179,12 +188,10 @@ def fuse_sparse(
             merged[doc_id]["score"] = (
                 1.0 - sparse_weight
             ) * dense_norm + sparse_weight * sparse_norm
-            merged[doc_id]["metadata"] = merged[doc_id].get("metadata", {})
             merged[doc_id]["metadata"]["sparse_score"] = round(sparse_norm, 4)
         else:
-            entry = dict(hit)
+            entry = _copy_entry(hit)
             entry["score"] = sparse_weight * sparse_norm
-            entry.setdefault("metadata", {})
             entry["metadata"]["sparse_score"] = round(sparse_norm, 4)
             merged[doc_id] = entry
     return sorted(merged.values(), key=lambda d: d["score"], reverse=True)[:top_k]

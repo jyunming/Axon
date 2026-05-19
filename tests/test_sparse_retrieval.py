@@ -195,6 +195,33 @@ class TestFuseSparse:
         scores = [r["score"] for r in result]
         assert scores == sorted(scores, reverse=True)
 
+    def test_fuse_does_not_mutate_caller_metadata(self):
+        """Regression for audit/retrieval P2: fuse_sparse used to share the
+        same ``metadata`` dict reference between the caller's dense_results
+        and its merged output, so adding ``sparse_score`` leaked into the
+        original list. The fix deep-copies the metadata sub-dict.
+        """
+        original_meta = {"source": "doc1.txt", "chunk_idx": 0}
+        dense = [
+            {"id": "d1", "text": "text", "score": 0.5, "metadata": original_meta},
+        ]
+        sparse_hit = {"id": "d1", "text": "text", "score": 0.8, "metadata": {}}
+
+        class FixedSparse:
+            def encode_query(self, q):
+                return empty_sparse_vector()
+
+            def search(self, qv, top_k=10, filter_dict=None):
+                return [sparse_hit]
+
+        fuse_sparse(FixedSparse(), "q", dense, top_k=5)
+        # Caller's metadata dict must remain unchanged.
+        assert "sparse_score" not in original_meta
+        assert original_meta == {"source": "doc1.txt", "chunk_idx": 0}
+        # And the original dense entry must not have been mutated.
+        assert dense[0]["metadata"] is original_meta
+        assert dense[0]["score"] == 0.5
+
 
 # ---------------------------------------------------------------------------
 # SpladeSparseRetriever (Phase 1 backend)
