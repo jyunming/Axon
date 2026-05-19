@@ -320,7 +320,7 @@ axon> Compare @report.pdf with @notes.docx
 
 **73 endpoints** across 12 route files. Base URL: `http://localhost:8000` (default).
 
-Interactive docs: `/docs` (Swagger UI), `/redoc`.
+Interactive docs: `/docs` (Swagger UI), `/redoc` — both branded with the Axon favicon. `/favicon.ico` redirects (302) to `/brand/axon-favicon.svg`; `/brand/*` is a static mount of `src/axon/brand/`. These paths (plus `/gui/`, `/health/live`, `/metrics`) bypass the optional `X-API-Key` middleware so browsers can fetch the docs UI without credentials.
 
 ### 4.1 Health
 
@@ -413,7 +413,7 @@ Interactive docs: `/docs` (Swagger UI), `/redoc`.
 | `GET` | `/store/status` | Show sealed-store init/unlock state and cipher suite |
 | `GET` | `/store/whoami` | Return current AxonStore identity and store path |
 | `POST` | `/share/generate` | Generate an HMAC-SHA256 read-only share key |
-| `POST` | `/share/redeem` | Mount a shared project (read-only) |
+| `POST` | `/share/redeem` | Mount a shared project (read-only). `share_string` is capped at 16 KB; oversized payloads return 422 before decode |
 | `POST` | `/share/revoke` | Revoke an outgoing share key |
 | `POST` | `/share/extend` | Extend the expiry of an existing share key |
 | `GET` | `/share/list` | List outgoing and incoming shares with revocation status |
@@ -427,6 +427,8 @@ Interactive docs: `/docs` (Swagger UI), `/redoc`.
 | `POST` | `/security/unlock` | Unlock the sealed-store for sealed-project operations |
 | `POST` | `/security/lock` | Lock the sealed-store (clear in-process key cache) |
 | `POST` | `/security/change-passphrase` | Rotate the sealed-store passphrase |
+
+> **DoS guard.** Every passphrase body field (`/security/bootstrap`, `/security/unlock`, `/security/change-passphrase`) is capped at 4 KB (4096 chars). Oversized inputs return 422 before scrypt runs. `/security/unlock` rate-limits failed attempts per client IP (honours `X-Forwarded-For` behind a reverse proxy).
 
 ### 4.7 Graph
 

@@ -28,34 +28,35 @@ python -m pytest -k test_name --no-cov                # match by name
 
 > VS Code extension e2e tests (`tests/e2e/test_vscode_extension_*.py`) require a live VS Code instance. Exclude them with `-m "not extension"` if running headlessly. The pre-commit hook does this automatically.
 
-#### Pre-commit pytest (testmon-accelerated)
+#### Pre-commit pytest (scope-aware selector)
 
-The pre-commit pytest hook uses [pytest-testmon](https://testmon.org/) to run only tests whose dependent code changed since the last green run. Cache lives in `.testmondata` (gitignored) and is per-developer.
+The pre-commit pytest hook (`scripts/precommit_pytest_scoped.py`, wired in
+`.pre-commit-config.yaml`) maps each staged file to a small, predictable set of
+test files via path-prefix rules — e.g. `axon/security/*` → sealed-share tests,
+`axon/api_routes/*` → API tests. This replaced the prior `pytest-testmon` hook
+in v0.4.0; testmon's transitive-coverage analysis pulled in essentially the
+whole 4500-test suite when foundational modules (e.g. `axon/security/share.py`)
+changed — a 30+ minute commit on every source edit.
 
 | Commit shape | Approx. local hook time |
 |---|---|
-| First commit on a fresh clone (cache empty) | ~45 min — populates the cache |
-| Doc-only commit | ~30 s |
-| Single-source-file edit | ~1–3 min |
-| Edit to a widely-imported module (e.g. `cli.py`, `config.py`) | ~5–10 min |
-| Branch hop / cross-cutting refactor | testmon may rebuild → ~45 min once, then back to fast |
+| Doc / HTML / SVG / Markdown / scripts-only commit | hook skipped entirely (trigger regex excludes them) |
+| Single edit under `axon/security/*` | seconds — runs sealed-share tests only |
+| Single edit under `axon/api_routes/*` | seconds — runs API tests only |
+| Edit to a widely-imported module (e.g. `cli.py`, `config.py`) | ~1–5 min — broader subset |
+| Cross-cutting refactor touching many areas | longer — union of matched subsets |
 
-**Forcing a full run** (when testmon's selection feels wrong):
-
-```bash
-rm .testmondata .testmondata-journal      # nuke the cache
-# next commit's hook does a full rebuild
-```
-
-Or run pytest manually without `--testmon`:
+**Forcing a full run** (when the scoped selector feels too narrow):
 
 ```bash
-python -m pytest tests/ --no-cov
+python -m pytest tests/ --no-cov          # full suite, ignores the hook entirely
 ```
 
-**CI is unaffected** — `.github/workflows/ci.yml` runs the full suite on every push. testmon is purely a local-dev accelerator (fresh runners have no cache).
+The path-prefix mapping is heuristic; CI runs the full suite on every push as
+the safety net, so a too-narrow local subset never lands on `main` unchecked.
 
-**Editable install required.** Pre-commit invokes the host Python's pytest, so `pytest-testmon` must be installed in the same env:
+**Editable install required.** Pre-commit invokes the host Python's pytest, so
+the dev dependencies must be installed in the same env:
 
 ```bash
 pip install -e ".[dev]"
