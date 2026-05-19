@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-19
+
+### ✨ Integrations — `AxonRetriever.aretrieve()` async API
+
+LangChain's `BaseRetriever.ainvoke(input, config, **kwargs)` does not forward extra kwargs to `_aget_relevant_documents`, so async-first callers that want to vary RAG flags per request had to materialise a new retriever via `with_overrides({...}).ainvoke(query)` for every call.
+
+- **`AxonRetriever.aretrieve(query, *, filters=None, **overrides)`** — accepts AxonConfig override flags directly as kwargs (`top_k`, `rerank`, `sentence_window`, `hyde`, `multi_query`, `hybrid_search`, `graph_rag`, etc.) and forwards them to `search_raw` without rebuilding the retriever. Per-call kwargs win over constructor defaults; `self.overrides` / `self.top_k` / `self.filters` are never mutated.
+- Existing sync `invoke()` and LangChain's built-in `ainvoke()` → `_aget_relevant_documents` paths are untouched; the async path was already wired but undocumented.
+- Module + class docstrings now surface all three call patterns (`invoke`, `ainvoke`, `aretrieve`).
+- 6 new tests in `tests/test_v032_integrations.py`: `ainvoke` regression, kwargs-as-overrides, per-call-wins, no-mutation across calls, filters replacement, no-event-loop-blocking under `gather()`.
+
+### 🛠 Tooling — `scripts/bump_version.py` cargo crate name fix
+
+`_refresh_cargo_lock` called `cargo update -p axon` but the crate is named `axon_rust` in `src/axon/Cargo.toml`. Every prior bump silently swallowed the "package ID specification did not match any packages" error and noted "cargo not available", leaving `Cargo.lock` stale. Fixed to `cargo update -p axon_rust`.
+
+## [0.4.0] - 2026-05-04
+
 ### 🛠 Tooling — `index.html` version is now single-source
 
 The landing page used to hand-roll five version strings; every release bump chased them with regexes and Copilot caught stragglers twice (PRs #104, #105). PR I closes that loop.

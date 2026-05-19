@@ -48,7 +48,7 @@ def _rebuild_and_bundle_vsix(root: Path, version: str) -> None:
 def _refresh_cargo_lock(root: Path) -> None:
     try:
         _run(
-            ["cargo", "update", "-p", "axon", "--precise", _cargo_version(root)],
+            ["cargo", "update", "-p", "axon_rust", "--precise", _cargo_version(root)],
             cwd=root / "src" / "axon",
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
