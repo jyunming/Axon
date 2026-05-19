@@ -333,14 +333,19 @@ class OpenLLM:
         return contents
 
     def _get_openai_client(self, base_url: str = None, api_key: str = None):
-        """Return a cached OpenAI client. Pass base_url for vLLM or custom endpoints."""
-        cache_key = base_url or "default"
+        """Return a cached OpenAI client. Pass base_url for vLLM or custom endpoints.
+
+        The cache key includes both ``base_url`` and the resolved API key so that
+        runtime config changes (e.g. ``POST /config/update`` rotating
+        ``openai_api_key``) rebuild the client instead of silently reusing the
+        stale credential.
+        """
+        resolved_key = api_key or self.config.openai_api_key or self.config.api_key or "sk-dummy"
+        base_part = base_url or "default"
+        cache_key = f"{base_part}|{resolved_key}"
         if cache_key not in self._openai_clients:
             from openai import OpenAI
 
-            resolved_key = (
-                api_key or self.config.openai_api_key or self.config.api_key or "sk-dummy"
-            )
             kwargs = {"api_key": resolved_key}
             if base_url:
                 kwargs["base_url"] = base_url
@@ -348,16 +353,20 @@ class OpenLLM:
         return self._openai_clients[cache_key]
 
     def _get_grok_client(self):
-        """Return a cached OpenAI-compatible client for xAI Grok."""
-        cache_key = "_grok"
+        """Return a cached OpenAI-compatible client for xAI Grok.
+
+        The cache key includes the current ``grok_api_key`` so that runtime
+        rotations (e.g. ``POST /config/update``) rebuild the client.
+        """
+        if not self.config.grok_api_key:
+            raise ValueError(
+                "Grok API key not set. "
+                "Export XAI_API_KEY=<key> or set llm.grok_api_key in config.yaml."
+            )
+        cache_key = f"_grok|{self.config.grok_api_key}"
         if cache_key not in self._openai_clients:
             from openai import OpenAI
 
-            if not self.config.grok_api_key:
-                raise ValueError(
-                    "Grok API key not set. "
-                    "Export XAI_API_KEY=<key> or set llm.grok_api_key in config.yaml."
-                )
             self._openai_clients[cache_key] = OpenAI(
                 api_key=self.config.grok_api_key,
                 base_url="https://api.x.ai/v1",
