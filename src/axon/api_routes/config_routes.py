@@ -237,16 +237,23 @@ async def set_config_field(request: ConfigSetRequest):
                 f"Known dot-notation keys: {sorted(_DOT_TO_FLAT.keys())}"
             ),
         )
+    from axon.api_routes.projects import _mask_if_sensitive
+
     old_value = getattr(brain.config, flat_key)
     setattr(brain.config, flat_key, request.value)
     _reinitialize_runtime_components(brain, {flat_key})
     if request.persist:
         brain.config.save()
+    # Mask both old and new values when the field is a secret so the
+    # response cannot be used to exfiltrate API keys (the leaked
+    # ``old_value`` was an information-disclosure bug; ``new_value`` is
+    # an echo of the request body that an attacker controls but masking
+    # both keeps the response shape uniform for client UIs).
     return {
         "status": "success",
         "key": request.key,
         "flat_key": flat_key,
-        "old_value": old_value,
-        "new_value": request.value,
+        "old_value": _mask_if_sensitive(flat_key, old_value),
+        "new_value": _mask_if_sensitive(flat_key, request.value),
         "persisted": request.persist,
     }

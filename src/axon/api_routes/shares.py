@@ -360,6 +360,17 @@ async def share_revoke(request: ShareRevokeRequest, req: Request):
                     "field so the wrap file can be located."
                 ),
             )
+        # Reject project names that would escape the user directory.
+        # ``_resolve_owned_project_dir`` builds ``user_dir / segments[0] /
+        # subs / segments[1] ...`` without validating segments, so a
+        # ``..`` segment would walk outside the user's store. The
+        # ``share/generate`` route already gates on this regex; mirror
+        # that here so revoke can't be coerced into traversing.
+        if not _VALID_PROJECT_NAME_RE.match(request.project):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid project name: '{request.project}'",
+            )
         try:
             result = _security.revoke_sealed_share(
                 owner_user_dir=user_dir,

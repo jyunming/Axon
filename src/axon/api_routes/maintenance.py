@@ -33,9 +33,14 @@ async def copilot_agent_handler(
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     user_query = body.messages[-1].content if body.messages else ""
+    # ``not user_query`` doesn't catch whitespace-only input; split() on
+    # whitespace produces an empty list and ``parts[0]`` IndexErrors out
+    # of the route, leaking a 500 instead of the intended 400. Strip
+    # first so the empty-query check stays robust.
+    user_query = user_query.strip()
     if not user_query:
         return JSONResponse({"error": "Empty query"}, status_code=400)
-    parts = user_query.strip().split(maxsplit=1)
+    parts = user_query.split(maxsplit=1)
     command = parts[0].lower() if parts[0].startswith("/") else None
     args = parts[1] if len(parts) > 1 else ""
 

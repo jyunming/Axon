@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -49,6 +50,8 @@ def _require_local_turboquantdb(brain, action: str = "This action") -> None:
 _SENSITIVE_FIELDS = frozenset(
     {
         "api_key",
+        "openai_api_key",
+        "grok_api_key",
         "gemini_api_key",
         "ollama_cloud_key",
         "copilot_pat",
@@ -56,6 +59,23 @@ _SENSITIVE_FIELDS = frozenset(
         "qdrant_api_key",
     }
 )
+
+# Session IDs are interpolated directly into ``session_<id>.json`` by
+# ``axon.sessions._session_path`` — restrict to a filesystem-safe
+# alphabet to block traversal-style payloads at the route boundary.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def _mask_if_sensitive(flat_key: str, value):
+    """Return ``"***"`` for any known sensitive field with a truthy value.
+
+    Shared with :mod:`axon.api_routes.config_routes` so the masking set
+    stays in lock-step between the ``/config``, ``/config/update`` and
+    ``/config/set`` response shapes.
+    """
+    if flat_key in _SENSITIVE_FIELDS and value:
+        return "***"
+    return value
 
 
 @router.get("/config")
@@ -381,6 +401,13 @@ async def rotate_project_keys(request: ProjectRotateKeysRequest):
     brain = _api.brain
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    # ``resolve_owned_sealed_project_path`` joins segments verbatim under
+    # ``user_dir``; without this check a ``..`` segment would let the
+    # caller probe arbitrary filesystem locations for sealed markers.
+    if not _VALID_PROJECT_NAME_RE.match(request.project_name):
+        raise HTTPException(
+            status_code=422, detail=f"Invalid project name: '{request.project_name}'"
+        )
     user_dir = Path(brain.config.projects_root).expanduser().resolve()
     try:
         project_root = _security.resolve_owned_sealed_project_path(request.project_name, user_dir)
@@ -404,6 +431,12 @@ async def seal_project(request: ProjectSealRequest):
     brain = _api.brain
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    # ``project_seal`` resolves ``request.project_name`` to a directory
+    # inside the user store; reject ``..`` / backslash segments early.
+    if not _VALID_PROJECT_NAME_RE.match(request.project_name):
+        raise HTTPException(
+            status_code=422, detail=f"Invalid project name: '{request.project_name}'"
+        )
     _require_local_turboquantdb(brain, "Sealing a project")
     user_dir = Path(brain.config.projects_root).expanduser().resolve()
     previously_active = getattr(brain, "_active_project", None)
@@ -453,6 +486,8 @@ async def get_session(session_id: str):
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
+    if not _SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=422, detail=f"Invalid session id: '{session_id}'")
     project = getattr(brain, "_active_project", None)
     session = _load_session(session_id, project=project)
     if not session:

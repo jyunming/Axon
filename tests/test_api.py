@@ -4211,3 +4211,148 @@ class TestShareRevoke:
             with patch("axon.shares.revoke_share_key", return_value={"status": "revoked"}):
                 resp = client.post("/share/revoke", json={"key_id": "k1"})
         assert resp.status_code == 200
+
+
+# ===========================================================================
+# audit/api-routes regression tests
+# ===========================================================================
+
+
+class TestPathTraversalGuards:
+    """Inputs that flow into filesystem paths must be regex-validated up front."""
+
+    def test_share_revoke_sealed_rejects_traversal_project(self):
+        """Sealed revoke uses ``request.project`` to locate the wrap file.
+        Without validation, ``..`` segments would let an attacker probe
+        outside the user store."""
+        with patch("axon.api._get_user_dir") as mock_user_dir:
+            mock_user_dir.return_value = MagicMock()
+            resp = client.post(
+                "/share/revoke",
+                json={"key_id": "ssk_abcd1234", "project": "../etc"},
+            )
+        assert resp.status_code == 422
+
+    def test_share_revoke_sealed_accepts_valid_project_name(self):
+        """Well-formed project names continue to reach the security backend."""
+        with patch("axon.api._get_user_dir") as mock_user_dir:
+            mock_user_dir.return_value = MagicMock()
+            with patch(
+                "axon.security.revoke_sealed_share",
+                return_value={"status": "soft_revoked", "key_id": "ssk_abcd1234"},
+            ):
+                resp = client.post(
+                    "/share/revoke",
+                    json={"key_id": "ssk_abcd1234", "project": "research/papers"},
+                )
+        assert resp.status_code == 200
+
+    def test_rotate_project_keys_rejects_traversal_name(self):
+        brain = _make_brain()
+        brain.config.projects_root = "/tmp/x"
+        api_module.brain = brain
+        resp = client.post("/project/rotate-keys", json={"project_name": "../escape"})
+        assert resp.status_code == 422
+
+    def test_seal_project_rejects_traversal_name(self):
+        brain = _make_brain()
+        brain.config.projects_root = "/tmp/x"
+        brain.config.vector_store = "turboquantdb"
+        brain.config.qdrant_url = ""
+        api_module.brain = brain
+        resp = client.post(
+            "/project/seal", json={"project_name": "..\\windows", "migration_mode": "snapshot"}
+        )
+        assert resp.status_code == 422
+
+    def test_get_session_rejects_traversal_id(self):
+        """Path-style session ids would resolve out of the sessions dir
+        and leak any JSON file the API process can read."""
+        brain = _make_brain()
+        api_module.brain = brain
+        # Starlette normalises ``..`` URL segments before dispatch, so the
+        # remaining vector is a single-segment id whose contents include
+        # path-like punctuation (``.`` is interpolated into the on-disk
+        # filename ``session_<id>.json`` verbatim by ``_session_path``).
+        # The new validator rejects any character outside [A-Za-z0-9_-].
+        for sid in ("foo.bar", "session..bar", "...", "abc/def"):
+            # ``abc/def`` doesn't even match the route pattern (slash is
+            # the segment separator) so it 404s — strictly out of scope
+            # for our handler but worth pinning in case Starlette ever
+            # relaxes its router.
+            resp = client.get(f"/session/{sid}")
+            assert resp.status_code in (404, 422), (sid, resp.status_code, resp.json())
+
+    def test_get_session_accepts_valid_id(self):
+        brain = _make_brain()
+        api_module.brain = brain
+        with patch("axon.sessions._load_session", return_value={"id": "abc123", "messages": []}):
+            resp = client.get("/session/abc123")
+        assert resp.status_code == 200
+
+
+class TestCopilotAgentWhitespaceQuery:
+    """audit/api-routes: whitespace-only Copilot queries used to IndexError."""
+
+    def test_whitespace_only_query_returns_400(self):
+        """maintenance.py: ``user_query=" "`` is truthy but ``strip().split()``
+        is empty; ``parts[0]`` IndexErrors. The fix strips before the
+        empty-check so the route returns the documented 400."""
+        brain = _make_brain()
+        api_module.brain = brain
+        body = {
+            "messages": [{"role": "user", "content": "   \t\n  "}],
+            "agent_request_id": "ws-001",
+        }
+        resp = client.post("/copilot/agent", json=body)
+        assert resp.status_code == 400
+
+
+class TestSecurityUnlockXffIp:
+    """audit/api-routes: /security/unlock lockouts must use the same IP
+    extraction as the per-IP rate limiter — otherwise reverse-proxy
+    deployments collapse every real user onto the LB IP and lockouts
+    bleed across tenants."""
+
+    def test_unlock_lockout_keyed_by_xff_first_hop(self):
+        """The lockout counter must increment for the X-Forwarded-For
+        client IP, not for the proxy's connecting IP."""
+        import axon.api_routes.security_routes as sr
+
+        sr._unlock_failures.clear()
+
+        from axon import security as _security
+
+        with patch(
+            "axon.security.unlock_store",
+            side_effect=_security.SecurityError("Wrong passphrase for store"),
+        ):
+            # All four requests are tagged with the same XFF IP but
+            # different connecting IPs. Pre-fix, this would have keyed
+            # off ``req.client.host``; after the fix it keys off XFF.
+            for _ in range(5):
+                resp = client.post(
+                    "/security/unlock",
+                    json={"passphrase": "wrong"},
+                    headers={"X-Forwarded-For": "203.0.113.42"},
+                )
+                assert resp.status_code == 401
+        # The 6th attempt with the same XFF IP must hit the lockout.
+        resp = client.post(
+            "/security/unlock",
+            json={"passphrase": "wrong"},
+            headers={"X-Forwarded-For": "203.0.113.42"},
+        )
+        assert resp.status_code == 429
+        # A different XFF IP is not locked out — bucket isolation holds.
+        with patch(
+            "axon.security.unlock_store",
+            side_effect=_security.SecurityError("Wrong passphrase for store"),
+        ):
+            resp = client.post(
+                "/security/unlock",
+                json={"passphrase": "wrong"},
+                headers={"X-Forwarded-For": "198.51.100.99"},
+            )
+        assert resp.status_code == 401
+        sr._unlock_failures.clear()
