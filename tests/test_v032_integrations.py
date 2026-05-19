@@ -126,6 +126,122 @@ class TestLangChainAdapter:
         assert ov["rerank"] is True
         assert ov["graph_rag"] is False
 
+    # ----- Async retrieval -------------------------------------------------
+
+    async def test_ainvoke_routes_through_async_path(self):
+        """``await retriever.ainvoke(query)`` reaches search_raw without
+        a blocking call (LangChain's BaseRetriever wires ainvoke ->
+        _aget_relevant_documents, which we defer to a thread)."""
+        pytest.importorskip("langchain_core")
+        from langchain_core.documents import Document
+
+        from axon.integrations.langchain import AxonRetriever
+
+        brain = _fake_brain()
+        retriever = AxonRetriever(brain=brain, top_k=5)
+        docs = await retriever.ainvoke("hello")
+        assert len(docs) == 2
+        assert all(isinstance(d, Document) for d in docs)
+        # search_raw was called once with the configured top_k override
+        assert brain.search_raw.call_count == 1
+        assert brain.search_raw.call_args.kwargs["overrides"]["top_k"] == 5
+
+    async def test_aretrieve_passes_kwargs_as_overrides(self):
+        """``aretrieve(q, rerank=True, sentence_window=True)`` forwards the
+        kwargs as the ``overrides`` arg on search_raw."""
+        pytest.importorskip("langchain_core")
+        from axon.integrations.langchain import AxonRetriever
+
+        brain = _fake_brain()
+        retriever = AxonRetriever(brain=brain)
+        await retriever.aretrieve("hello", top_k=8, rerank=True, sentence_window=True, hyde=True)
+        ov = brain.search_raw.call_args.kwargs["overrides"]
+        assert ov["top_k"] == 8
+        assert ov["rerank"] is True
+        assert ov["sentence_window"] is True
+        assert ov["hyde"] is True
+
+    async def test_aretrieve_per_call_overrides_win_over_defaults(self):
+        """Constructor-level ``top_k`` / ``overrides`` are merged in first;
+        per-call kwargs win on conflict."""
+        pytest.importorskip("langchain_core")
+        from axon.integrations.langchain import AxonRetriever
+
+        brain = _fake_brain()
+        retriever = AxonRetriever(brain=brain, top_k=5, overrides={"rerank": False, "hybrid": True})
+        await retriever.aretrieve("hello", top_k=12, rerank=True)
+        ov = brain.search_raw.call_args.kwargs["overrides"]
+        # per-call wins
+        assert ov["top_k"] == 12
+        assert ov["rerank"] is True
+        # constructor default carries through when not overridden
+        assert ov["hybrid"] is True
+
+    async def test_aretrieve_does_not_mutate_self(self):
+        """Per-call overrides on aretrieve must not leak into the next call."""
+        pytest.importorskip("langchain_core")
+        from axon.integrations.langchain import AxonRetriever
+
+        brain = _fake_brain()
+        retriever = AxonRetriever(brain=brain, top_k=5, overrides={"rerank": False})
+        await retriever.aretrieve("first", top_k=99, rerank=True)
+        await retriever.aretrieve("second")
+        # Second call sees the original constructor defaults, not the
+        # first call's per-call overrides.
+        ov = brain.search_raw.call_args.kwargs["overrides"]
+        assert ov["top_k"] == 5
+        assert ov["rerank"] is False
+
+    async def test_aretrieve_filters_kwarg_replaces_default(self):
+        """A ``filters=`` kwarg on aretrieve overrides the constructor's
+        filters for that call only."""
+        pytest.importorskip("langchain_core")
+        from axon.integrations.langchain import AxonRetriever
+
+        brain = _fake_brain()
+        retriever = AxonRetriever(brain=brain, filters={"source": "default"})
+        await retriever.aretrieve("hello", filters={"source": "override"})
+        assert brain.search_raw.call_args.kwargs["filters"] == {"source": "override"}
+        # Constructor filters still intact for next call
+        await retriever.aretrieve("again")
+        assert brain.search_raw.call_args.kwargs["filters"] == {"source": "default"}
+
+    async def test_aretrieve_does_not_block_event_loop(self):
+        """If search_raw blocks, aretrieve must still let other coroutines
+        progress — i.e. the sync call happens on a worker thread."""
+        pytest.importorskip("langchain_core")
+        import asyncio
+        import threading
+        import time
+
+        from axon.integrations.langchain import AxonRetriever
+
+        main_thread_id = threading.get_ident()
+        worker_thread_id: list[int] = []
+
+        def _slow_search(*_args, **_kwargs):
+            worker_thread_id.append(threading.get_ident())
+            time.sleep(0.05)
+            return ([{"id": "x", "text": "hi", "metadata": {}}], MagicMock(), MagicMock())
+
+        brain = MagicMock()
+        brain.search_raw = MagicMock(side_effect=_slow_search)
+        retriever = AxonRetriever(brain=brain)
+
+        # If aretrieve blocked the loop, this gather would serialise to
+        # ~150ms; on the thread pool it runs in parallel (~50ms).
+        start = time.monotonic()
+        await asyncio.gather(
+            retriever.aretrieve("a"),
+            retriever.aretrieve("b"),
+            retriever.aretrieve("c"),
+        )
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.12, f"aretrieve appears to block the event loop ({elapsed:.3f}s)"
+        # search_raw ran off the event-loop thread
+        assert worker_thread_id, "search_raw was not invoked"
+        assert all(tid != main_thread_id for tid in worker_thread_id)
+
 
 # ---------------------------------------------------------------------------
 # LlamaIndex adapter
