@@ -40,7 +40,7 @@ python -m pytest -k test_basic_split --no-cov
 
 > **Note:** VS Code extension e2e tests (`tests/e2e/test_vscode_extension_*.py`) require a live VS Code instance and are excluded from the standard run via `-m "not extension"`. The pre-commit hook runs the full non-extension suite automatically on every commit (black + ruff + pytest).
 
-> **Pre-commit pytest is testmon-accelerated.** The hook uses `pytest-testmon` to skip tests whose dependent code hasn't changed since the last green run. First commit on a fresh clone runs the full suite (~45 min) to populate `.testmondata` (gitignored); subsequent commits typically take ~30 s for doc-only changes and a few minutes for source edits. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#pre-commit-pytest-testmon-accelerated) for cache-recovery commands.
+> **Pre-commit pytest is scope-aware.** The hook (`scripts/precommit_pytest_scoped.py`) maps each staged file to a small, predictable set of test files via path-prefix rules — `axon/security/*` → sealed-share tests, `axon/api_routes/*` → API tests, etc. Doc / HTML / SVG / Markdown / scripts-only commits skip the hook entirely via the trigger regex. CI runs the full suite on every push as the safety net. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#pre-commit-pytest-scope-aware-selector) for details and how to force a full local run.
 
 ### Code Quality
 
@@ -74,18 +74,20 @@ pre-commit run --all-files  # Run manually
 Axon/
 ├── src/
 │   └── axon/          # Main package
-│       ├── main.py         # Core RAG engine
-│       ├── api.py          # FastAPI endpoints
+│       ├── main.py         # Core RAG engine (AxonBrain)
+│       ├── api.py          # FastAPI app factory
+│       ├── api_routes/     # REST route handlers (split by domain)
 │       ├── webapp.py       # Streamlit UI
 │       ├── loaders.py      # Document loaders
 │       ├── retrievers.py   # BM25 and fusion
 │       ├── splitters.py    # Text chunking
-│       └── tools.py        # Agent tool definitions
+│       ├── tools.py        # Agent tool definitions
+│       ├── mcp_server.py   # MCP stdio server
+│       └── security/       # Sealed-store crypto, sharing, signing
 ├── tests/                  # Test suite
 ├── examples/               # Example scripts
-├── pyproject.toml         # Package metadata and tool config
-├── requirements.txt        # Dependencies
-└── setup.py               # Package setup (legacy)
+├── pyproject.toml          # Package metadata + tool config (dynamic version from src/axon/Cargo.toml)
+└── requirements.txt        # Optional pinned dependency list (`pip install -e ".[dev]"` is preferred)
 ```
 
 ## Coding Standards

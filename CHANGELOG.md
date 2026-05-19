@@ -95,10 +95,6 @@ Cross-interface parity:
 - 32 tests in `tests/test_passphrase.py` covering wordlist parse, entropy, format, edge cases, no-duplicate-in-1000-runs, and REST contract.
 - Default separator is space (4 EFF entries are themselves hyphenated, so `-` would be visually ambiguous as a word delimiter). REST endpoint defaults to `-` for URL-friendliness.
 
----
-
-## [0.4.0] - 2026-05-04
-
 ### 🔒 Security — TTL-gated sealed shares with auto-destruction
 
 Closes the v0.3.x security gap where a redeemed sealed-share DEK lived in the grantee's OS keyring **indefinitely**. v0.4.0 adds:
@@ -185,7 +181,7 @@ The dataclass default for the vector store has been `turboquantdb` since v0.2.1,
 
 ### 🛠️ Developer Experience
 
-- **Pre-commit pytest now uses pytest-testmon** — selective test runs based on per-file coverage tracking. Typical local commit drops from ~45 min to ~30 s for doc-only changes; source edits to widely-imported modules still take a few minutes. CI is unaffected (full suite still runs on every push). Cache file `.testmondata` is gitignored. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#pre-commit-pytest-testmon-accelerated) for cache-recovery commands when the selection is wrong.
+- **Pre-commit pytest now uses pytest-testmon** — selective test runs based on per-file coverage tracking. Typical local commit drops from ~45 min to ~30 s for doc-only changes; source edits to widely-imported modules still take a few minutes. CI is unaffected (full suite still runs on every push). Cache file `.testmondata` is gitignored. (Superseded by `scripts/precommit_pytest_scoped.py` in v0.4.0 — see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#pre-commit-pytest-scope-aware-selector).)
 
 ---
 

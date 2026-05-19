@@ -248,7 +248,7 @@ retriever = AxonLlamaRetriever(brain=brain, top_k=5)
 nodes = retriever.retrieve("what does the project do?")  # list[NodeWithScore]
 ```
 
-Per-call overrides (e.g. force HyDE for one question): `retriever.with_overrides({"hyde": True}).invoke(query)`.
+Per-call overrides (e.g. force HyDE for one question): `retriever.with_overrides({"hyde": True}).invoke(query)`. From async code, `await retriever.aretrieve(query, hyde=True, top_k=8)` accepts the same flags as kwargs without rebuilding the retriever (v0.4.1).
 
 ---
 

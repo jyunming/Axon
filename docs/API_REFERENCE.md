@@ -3,7 +3,11 @@
 Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 8000).
 
 For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
-`http://localhost:8000/redoc` after starting the server.
+`http://localhost:8000/redoc` after starting the server. Both pages serve a
+branded favicon and wordmark from `/brand/*` (static mount of
+`src/axon/brand/`); `/favicon.ico` redirects (302) to `/brand/axon-favicon.svg`.
+These auxiliary paths bypass the X-API-Key middleware (`/brand/`, `/gui/`,
+`/health/live`, `/metrics`) and are intentionally excluded from the schema.
 
 > Every endpoint below is also reachable under `/v1/...` (every router is dual-mounted at the root and the `/v1` prefix). The `/v1` mount is the recommended path for clients that pin to a major API version.
 
@@ -422,6 +426,8 @@ Requires the `[sealed]` extra (already bundled in `[starter]`).
 | `POST` | `/security/keyring-mode` | **v0.4.0 Item 2** — change DEK storage mode at runtime. Body `{"mode": "persistent"\|"session"\|"never"}`. 422 on invalid mode. Caveat: previously stored secrets are NOT migrated. For permanent change, set `security.keyring_mode` in config.yaml and restart. `GET /security/status` now also returns `keyring_mode` + `session_cache_size`. |
 | `POST` | `/security/wipe-sealed-cache` | **v0.4.0 Item 3** — manually wipe the active sealed-project plaintext cache. Returns `{wiped: bool}` (false when no cache or no brain). Idempotent. Cache re-materialises on next sealed-project query. Pair with `security.seal_cache_ephemeral` for per-query auto-wipe. |
 
+> **DoS guard:** `/security/bootstrap`, `/security/unlock`, and `/security/change-passphrase` cap each passphrase field at 4 KB (4096 chars). Oversized inputs return 422 before scrypt runs, so a malicious caller cannot trigger gigabyte scrypt work on the wrong-passphrase path. `/security/unlock` rate-limits failed attempts per client IP (honours `X-Forwarded-For` behind a reverse proxy).
+
 > Sealed-mount admin routes (`/project/seal`, `/project/rotate-keys`) live in the **Projects** section but require an unlocked store — call `/security/unlock` first if your shell or process restarted. See [SHARING.md](SHARING.md) for the full owner/grantee flow.
 
 ---
@@ -462,7 +468,9 @@ Response carries `key_id` (`sk_` for plaintext, `ssk_` for sealed), `share_strin
 **`POST /share/redeem` body:**
 ```json
 {
-  "share_string": "axon-share:v1:..."  // required — full share string from /share/generate
+  "share_string": "axon-share:v1:..."  // required — full share string from /share/generate.
+                                       // Capped at 16 KB (16384 chars); larger payloads return 422 before any
+                                       // base64-decode or JSON-parse work happens.
 }
 ```
 
