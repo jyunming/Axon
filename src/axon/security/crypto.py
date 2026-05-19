@@ -178,10 +178,12 @@ def _unpack_header(header: bytes) -> tuple[int, int, int]:
         raise SealedFormatError(
             f"Unsupported cipher_id {cipher_id} (only AES-256-GCM = {CIPHER_AES_256_GCM})"
         )
-    if padding_length < 0 or padding_length > 1024 * 1024:
-        # Sanity bound: 1 MiB cap on padding length keeps a corrupt
-        # header from making us slice past the file's end with nothing
-        # actionable to do.
+    if padding_length < 0 or padding_length > MAX_PADDING_BYTES:
+        # Sanity bound: the same MAX_PADDING_BYTES cap that the writer
+        # enforces via _validate_padding_bytes (see ~line 95). Sourcing
+        # both from the same constant keeps the read- and write-side
+        # bounds from drifting and re-introducing the original
+        # writer-accepts / reader-rejects data-loss mismatch.
         raise SealedFormatError(f"Implausible padding_length in header: {padding_length}")
     return version, cipher_id, padding_length
 
