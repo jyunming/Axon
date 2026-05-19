@@ -10157,13 +10157,22 @@ class TestContextManager:
 
 
 class TestApplyOverrides:
-    def test_none_overrides_returns_config_unchanged(self, brain):
+    def test_none_overrides_returns_unmutated_copy(self, brain):
+        """``_apply_overrides`` always returns a fresh copy — even with no
+        overrides — so downstream route-profile mutations can't reach back
+        and corrupt ``brain.config`` across requests. The returned config
+        is value-equal to the original, just not the same instance."""
         result = brain._apply_overrides(None)
-        assert result is brain.config
+        assert result is not brain.config
+        assert result.top_k == brain.config.top_k
+        assert result.hyde == brain.config.hyde
 
-    def test_empty_overrides_returns_config_unchanged(self, brain):
+    def test_empty_overrides_returns_unmutated_copy(self, brain):
+        """Same contract for the empty-dict case as for ``None``."""
         result = brain._apply_overrides({})
-        assert result is brain.config
+        assert result is not brain.config
+        assert result.top_k == brain.config.top_k
+        assert result.hyde == brain.config.hyde
 
     def test_valid_override_creates_copy(self, brain):
         result = brain._apply_overrides({"top_k": 99})

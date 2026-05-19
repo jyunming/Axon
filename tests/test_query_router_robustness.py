@@ -1564,15 +1564,23 @@ class TestGetMultiQueries:
 
 
 class TestApplyOverrides:
-    def test_none_overrides_returns_self_config(self):
+    def test_none_overrides_returns_distinct_copy(self):
+        """Even with no overrides, the returned config must NOT be the same
+        object as ``self.config`` — otherwise callers that mutate the returned
+        config (route profiles in ``query()``) corrupt the brain's shared
+        config across queries.
+        """
         stub = _make_full_stub()
         cfg = stub._apply_overrides(None)
-        assert cfg is stub.config
+        assert cfg is not stub.config
+        # Fields equal because no overrides applied
+        assert cfg.top_k == stub.config.top_k
 
-    def test_empty_overrides_returns_self_config(self):
+    def test_empty_overrides_returns_distinct_copy(self):
         stub = _make_full_stub()
         cfg = stub._apply_overrides({})
-        assert cfg is stub.config
+        assert cfg is not stub.config
+        assert cfg.top_k == stub.config.top_k
 
     def test_valid_override_applied(self):
         stub = _make_full_stub()
@@ -1590,6 +1598,34 @@ class TestApplyOverrides:
         stub = _make_full_stub(top_k=5)
         cfg = stub._apply_overrides({"top_k": None})
         assert cfg.top_k == 5
+
+    def test_route_profile_does_not_mutate_self_config(self):
+        """Regression: with no overrides, route profile must not leak through
+        to ``self.config``. Before the fix, the factual route flipped
+        ``self.config.hyde`` to False on the first query.
+        """
+        stub = _make_full_stub(
+            query_router="heuristic",
+            hyde=True,
+            similarity_threshold=0.0,
+        )
+        original_hyde = stub.config.hyde
+        # 'What is X?' classifies as factual; factual profile forces hyde=False.
+        stub.query("What is Python?")
+        # ``self.config.hyde`` must remain as the user set it.
+        assert stub.config.hyde == original_hyde
+
+    def test_route_profile_stream_does_not_mutate_self_config(self):
+        """query_stream() must also leave self.config alone."""
+        stub = _make_full_stub(
+            query_router="heuristic",
+            hyde=True,
+            similarity_threshold=0.0,
+        )
+        stub.llm.stream.return_value = iter(["chunk"])
+        original_hyde = stub.config.hyde
+        list(stub.query_stream("What is Python?"))
+        assert stub.config.hyde == original_hyde
 
 
 # ===========================================================================
@@ -1703,3 +1739,173 @@ class TestProfileIntegration:
         stub.query("What is Python?")  # short factual → factual route
         # After factual profile applied, hyde should be False
         assert calls[-1] is False
+
+
+# ===========================================================================
+# 25. Citation regex — extra forms emitted by the LLM
+# ===========================================================================
+
+
+class TestCitationMarkerRegex:
+    """The citation regex must match every form the LLM might emit:
+
+    - bare ``[N]``
+    - ``[Document N]``
+    - ``[Document N — label]`` (the exact marker shown in context)
+    - ``[Document N (ID: ...)]`` (the system-prompt example form)
+
+    It must NOT match unrelated bracketed-digit snippets like ``[1 line]``
+    that may appear in source-quoted code.
+    """
+
+    def _build_citations(self, response: str, n_sources: int):
+        from axon.query_router import _build_citation_metadata
+
+        rows = [
+            {
+                "id": f"doc_{i}",
+                "text": f"content {i}",
+                "score": 0.9,
+                "metadata": {"source": f"src_{i}.txt"},
+            }
+            for i in range(n_sources)
+        ]
+        return _build_citation_metadata(response, rows)
+
+    def test_bare_digit_form_matches(self):
+        meta = self._build_citations("Answer [1] cites first source.", 1)
+        assert len(meta["citations"]) == 1
+        assert meta["citations"][0]["document_index"] == 0
+
+    def test_document_prefix_form_matches(self):
+        meta = self._build_citations("Answer [Document 1] cites first.", 1)
+        assert len(meta["citations"]) == 1
+        assert meta["citations"][0]["document_index"] == 0
+
+    def test_document_form_with_label_matches(self):
+        """Regression: LLM copies the exact marker shown in _build_context."""
+        meta = self._build_citations(
+            "Answer [Document 1 — src_0.txt] cites first.",
+            1,
+        )
+        assert len(meta["citations"]) == 1
+        assert meta["citations"][0]["document_index"] == 0
+
+    def test_document_form_with_id_parens_matches(self):
+        """Regression: LLM follows the SYSTEM_PROMPT exact example form."""
+        meta = self._build_citations(
+            "Answer [Document 1 (ID: doc_0)] cites first.",
+            1,
+        )
+        assert len(meta["citations"]) == 1
+        assert meta["citations"][0]["document_index"] == 0
+
+    def test_bare_digit_strict_does_not_match_code_snippets(self):
+        """Bare ``[N]`` form stays strict — extra content after the digit
+        in the bare form must NOT match (avoids false positives in
+        source-quoted code like ``[1 line]``)."""
+        meta = self._build_citations("See [1 line of code] for example.", 1)
+        assert meta["citations"] == []
+
+    def test_three_digit_index_supported(self):
+        meta = self._build_citations("Answer [Document 100] cites it.", 100)
+        assert len(meta["citations"]) == 1
+        assert meta["citations"][0]["document_index"] == 99
+
+    def test_out_of_range_index_rejected(self):
+        """Index larger than number of sources is discarded."""
+        meta = self._build_citations("Answer [Document 99].", 1)
+        assert meta["citations"] == []
+        assert len(meta["sources"]) == 1
+
+    def test_multiple_citations_in_one_response(self):
+        meta = self._build_citations(
+            "Per [Document 1] and [2], the answer is X. Also [Document 1 — src_0.txt].",
+            2,
+        )
+        assert len(meta["citations"]) == 3
+        assert [c["document_index"] for c in meta["citations"]] == [0, 1, 0]
+
+
+# ===========================================================================
+# 26. Cache hit restores _last_citations and _last_provenance
+# ===========================================================================
+
+
+class TestQueryCacheCitationRestore:
+    """Regression: cache hits must restore _last_citations and
+    _last_provenance so REST /query callers reading those attributes see
+    the cached query's data, not stale state from a previous call.
+    """
+
+    def test_cache_hit_restores_citations(self):
+        stub = _make_full_stub(
+            query_cache=True,
+            query_cache_size=10,
+            similarity_threshold=0.0,
+        )
+        # First call (miss) — response cites Document 1
+        stub.llm.complete.return_value = "Answer [Document 1] explains."
+        stub.query("first query")
+        first_citations = dict(stub._last_citations)
+        first_provenance = dict(stub._last_provenance)
+        assert len(first_citations.get("sources", [])) >= 1
+        assert len(first_citations.get("citations", [])) >= 1
+
+        # Pollute the brain-level state with a different query's data.
+        stub._last_citations = {"sources": [], "citations": []}
+        stub._last_provenance = {"answer_source": "wrong_data"}
+
+        # Second call (hit) — must restore citations + provenance from cache.
+        result = stub.query("first query")
+        assert result == "Answer [Document 1] explains."
+        assert stub._last_citations == first_citations
+        assert stub._last_provenance == first_provenance
+
+    def test_cache_hit_supports_legacy_2tuple(self):
+        """Externally-injected 2-tuple cache entries (response only) must
+        still work — gracefully falls back to empty citations/provenance.
+        """
+        import time as _time
+
+        stub = _make_full_stub(
+            query_cache=True,
+            query_cache_size=10,
+            similarity_threshold=0.0,
+        )
+        cache_key = stub._make_cache_key("legacy query", None, stub.config)
+        # Pre-populate with a 2-tuple (legacy format)
+        stub._query_cache[cache_key] = (_time.monotonic(), "legacy answer")
+        result = stub.query("legacy query")
+        assert result == "legacy answer"
+        assert stub._last_citations == {"sources": [], "citations": []}
+        assert stub._last_provenance == {}
+
+
+# ===========================================================================
+# 27. query_stream populates _last_citations.sources
+# ===========================================================================
+
+
+class TestQueryStreamCitations:
+    def test_stream_resets_last_citations(self):
+        stub = _make_full_stub(similarity_threshold=0.0)
+        # Pre-populate citations to simulate state from a prior query.
+        stub._last_citations = {
+            "sources": [{"index": 0, "id": "stale", "title": "stale"}],
+            "citations": [{"marker": "[1]", "document_index": 0}],
+        }
+        stub.llm.stream.return_value = iter(["token"])
+        list(stub.query_stream("new query"))
+        # After streaming, sources reflect the new retrieval — NOT the stale
+        # prior state.
+        assert all(s["id"] != "stale" for s in stub._last_citations["sources"])
+
+    def test_stream_populates_sources_after_retrieval(self):
+        stub = _make_full_stub(similarity_threshold=0.0)
+        stub.llm.stream.return_value = iter(["token"])
+        list(stub.query_stream("query with retrieval"))
+        # _last_citations.sources is populated even though we can't extract
+        # citation markers from a stream (no full response to scan).
+        assert len(stub._last_citations["sources"]) >= 1
+        assert stub._last_citations["citations"] == []
