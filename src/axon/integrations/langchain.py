@@ -16,11 +16,24 @@ Usage::
     docs = retriever.invoke("what does the project do?")
     # → list[langchain_core.documents.Document]
 
+    # Async path — works with any LangChain async chain:
+    docs = await retriever.ainvoke("what does the project do?")
+
+    # Ergonomic async API with per-call overrides (no need to rebuild the
+    # retriever for each variation):
+    docs = await retriever.aretrieve(
+        "what does the project do?",
+        top_k=8,
+        rerank=True,
+        sentence_window=True,
+    )
+
 The adapter delegates to :meth:`AxonBrain.search_raw`, so all the project's
 retrieval features (hybrid, rerank, HyDE, multi-query, GraphRAG budget,
 sentence-window) apply without extra configuration. Per-call overrides can be
-passed via the ``overrides`` constructor argument or by using
-``AxonRetriever.with_overrides({...}).invoke(query)`` for a one-off override.
+passed via the ``overrides`` constructor argument, the
+``AxonRetriever.with_overrides({...}).invoke(query)`` builder, or the
+async-only :meth:`AxonRetriever.aretrieve` kwargs surface.
 """
 from __future__ import annotations
 
@@ -84,6 +97,11 @@ if _LANGCHAIN_AVAILABLE:
 
     class AxonRetriever(BaseRetriever):
         """LangChain :class:`BaseRetriever` backed by :meth:`AxonBrain.search_raw`.
+
+        Supports the full LangChain retriever surface: ``invoke``,
+        ``ainvoke``, and the LCEL ``|`` operator. Use :meth:`aretrieve` for
+        an async-only path that accepts per-call override kwargs without
+        rebuilding the retriever (see :meth:`aretrieve` for details).
 
         Args:
             brain: A live :class:`AxonBrain` instance.
@@ -154,6 +172,58 @@ if _LANGCHAIN_AVAILABLE:
                     query,
                     filters=self.filters,
                     overrides=self._build_overrides(),
+                )
+                return [_result_to_document(r) for r in results]
+
+            return await asyncio.to_thread(_run)
+
+        async def aretrieve(
+            self,
+            query: str,
+            *,
+            filters: dict[str, Any] | None = None,
+            **overrides: Any,
+        ) -> list[Any]:
+            """Async retrieval with per-call overrides as keyword arguments.
+
+            ``BaseRetriever.ainvoke`` does not forward extra kwargs to
+            :meth:`_aget_relevant_documents`, so callers that want to vary
+            override flags per request would otherwise have to materialise a
+            new retriever via :meth:`with_overrides` for every call. This
+            method skips that allocation: kwargs are merged on top of the
+            retriever's defaults and forwarded straight to
+            :meth:`AxonBrain.search_raw`.
+
+            Per-call kwargs override the retriever's defaults but do NOT
+            mutate them — ``self.overrides`` / ``self.top_k`` /
+            ``self.filters`` are preserved for subsequent calls. Unknown
+            keys are silently dropped by
+            :meth:`AxonBrain._apply_overrides` (it only sets attributes
+            that already exist on :class:`AxonConfig`).
+
+            Args:
+                query: The query string.
+                filters: Optional per-call metadata filter dict. When
+                    provided, replaces ``self.filters`` for this call only.
+                **overrides: Per-call :class:`AxonConfig` overrides
+                    forwarded to ``search_raw`` (e.g. ``top_k``, ``rerank``,
+                    ``sentence_window``, ``hyde``, ``multi_query``,
+                    ``hybrid_search``, ``graph_rag``).
+
+            Returns:
+                A list of LangChain :class:`Document` objects.
+            """
+            import asyncio
+
+            merged: dict[str, Any] = dict(self._build_overrides() or {})
+            merged.update(overrides)
+            call_filters = filters if filters is not None else self.filters
+
+            def _run() -> list[Any]:
+                results, _diag, _trace = self.brain.search_raw(
+                    query,
+                    filters=call_filters,
+                    overrides=merged or None,
                 )
                 return [_result_to_document(r) for r in results]
 
