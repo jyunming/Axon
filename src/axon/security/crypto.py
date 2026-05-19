@@ -57,6 +57,7 @@ __all__ = [
     "TAG_LEN",
     "DEK_LEN",
     "STREAMING_CHUNK_SIZE",
+    "MAX_PADDING_BYTES",
     "SealedFormatError",
     "SealedFile",
     "generate_dek",
@@ -83,6 +84,33 @@ DEK_LEN: int = 32  # 256-bit Data Encryption Key
 # and memory residency (larger chunks = more bytes pinned per worker).
 # Override via the ``chunk_size`` kwarg on :meth:`SealedFile.write_stream`.
 STREAMING_CHUNK_SIZE: int = 1024 * 1024
+
+# Hard cap on the ``padding_bytes`` parameter accepted by the writers.
+# Must stay <= the reader's ``_unpack_header`` sanity bound — otherwise
+# a writer could emit a file whose padding_length field falls above the
+# reader's threshold, producing SealedFormatError on read (silent data
+# loss until a future release bumps the reader bound). The config layer
+# (``AxonConfig.seal_padding_bytes``) enforces the same cap; this check
+# defends direct callers (tests, scripts) that bypass the config path.
+MAX_PADDING_BYTES: int = 1024 * 1024
+
+
+def _validate_padding_bytes(padding_bytes: int) -> None:
+    """Reject padding budgets outside ``[0, MAX_PADDING_BYTES]``.
+
+    Shared by :meth:`SealedFile.write` and :meth:`SealedFile.write_stream`
+    so the upper-bound check stays consistent with the reader's
+    ``_unpack_header`` sanity bound.
+    """
+    if padding_bytes < 0:
+        raise ValueError("padding_bytes must be >= 0")
+    if padding_bytes > MAX_PADDING_BYTES:
+        raise ValueError(
+            f"padding_bytes={padding_bytes} exceeds MAX_PADDING_BYTES "
+            f"({MAX_PADDING_BYTES}); files written with larger padding "
+            "would fail the reader's sanity check on the header field."
+        )
+
 
 # 4-byte magic | 1-byte version | 1-byte cipher_id | 10-byte reserved (zero)
 # Header layout (16 bytes, big-endian):
@@ -227,8 +255,7 @@ class SealedFile:
         """
         if len(key) != 32:
             raise ValueError(f"key must be 32 bytes (AES-256), got {len(key)}")
-        if padding_bytes < 0:
-            raise ValueError("padding_bytes must be >= 0")
+        _validate_padding_bytes(padding_bytes)
         path = Path(path)
         nonce = os.urandom(NONCE_LEN)
         # AESGCM.encrypt returns ciphertext || tag concatenated.
@@ -295,8 +322,7 @@ class SealedFile:
             raise ValueError(f"key must be 32 bytes (AES-256), got {len(key)}")
         if chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-        if padding_bytes < 0:
-            raise ValueError("padding_bytes must be >= 0")
+        _validate_padding_bytes(padding_bytes)
         path = Path(path)
         nonce = os.urandom(NONCE_LEN)
         cipher = Cipher(algorithms.AES(key), modes.GCM(nonce))

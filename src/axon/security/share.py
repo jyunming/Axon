@@ -679,6 +679,23 @@ def generate_sealed_share(
 
         if isinstance(expires_at, datetime):
             expires_at_iso = expires_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        # No TTL requested. Defense-in-depth: scrub any stale sidecar
+        # from a prior incarnation of this key_id so the new share is
+        # not silently TTL-gated by old metadata. (``_soft_revoke`` /
+        # ``_hard_revoke`` also clean up, but older builds may have
+        # left a sidecar behind.)
+        stale_sidecar = share_expiry_path(project_dir, key_id)
+        try:
+            stale_sidecar.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "Could not remove stale expiry sidecar for key_id=%s at %s: %s. "
+                "Grantees may see unexpected TTL enforcement.",
+                key_id,
+                stale_sidecar,
+                exc,
+            )
     logger.info(
         "Generated sealed share key_id=%s project=%s grantee=%s wrapped_path=%s envelope=SEALED2 expires_at=%s",
         key_id,
@@ -1210,9 +1227,17 @@ def revoke_sealed_share(
 
 def _soft_revoke(project_dir: Path, key_id: str) -> dict[str, Any]:
     """Delete the wrap file for *key_id* — fresh redeem will fail.
-    Also deletes the persisted ``.kek`` sidecar (if present) so the
-    revoked share's KEK isn't kept around indefinitely. Best-effort:
-    a missing KEK file is fine.
+    Also deletes the persisted ``.kek`` sidecar and ``.expiry`` sidecar
+    (if present) so the revoked share's metadata isn't kept around
+    indefinitely. Best-effort: a missing sidecar file is fine.
+
+    Why ``.expiry`` cleanup matters: if the owner later re-issues a
+    share with the SAME key_id but WITHOUT a TTL, ``generate_sealed_share``
+    would not write a new sidecar — leaving the stale one in place.
+    Grantees would then see the OLD sidecar's TTL enforced on the NEW
+    share, defeating the owner's "no TTL" intent. Cleaning up here
+    closes that gap (and ``generate_sealed_share`` cleans up too as
+    defense-in-depth).
     """
     wrap = share_wrap_path(project_dir, key_id)
     if not wrap.is_file():
@@ -1231,6 +1256,14 @@ def _soft_revoke(project_dir: Path, key_id: str) -> dict[str, Any]:
             kek_path.unlink()
         except OSError as exc:
             logger.debug("Could not delete share KEK sidecar %s: %s", kek_path, exc)
+    # Best-effort: drop any signed expiry sidecar so a future
+    # re-issuance of the same key_id starts from a clean slate.
+    expiry_path = share_expiry_path(project_dir, key_id)
+    if expiry_path.is_file():
+        try:
+            expiry_path.unlink()
+        except OSError as exc:
+            logger.debug("Could not delete share expiry sidecar %s: %s", expiry_path, exc)
     logger.info("Soft-revoked sealed share key_id=%s under %s", key_id, project_dir)
     return {
         "status": "soft_revoked",
@@ -1633,9 +1666,15 @@ def _hard_revoke(
         delete_keyids.add(key_id)
     if shares_dir.is_dir():
         for delete_kid in delete_keyids:
+            # Delete the wrap, KEK, AND expiry sidecar so a future
+            # re-issuance of the same key_id starts from a clean slate.
+            # A stale expiry sidecar would otherwise be enforced on the
+            # new share if it was minted without an `expires_at` arg —
+            # defeating the owner's "no TTL" intent.
             for path in (
                 share_wrap_path(project_dir, delete_kid),
                 share_kek_path(project_dir, delete_kid),
+                share_expiry_path(project_dir, delete_kid),
             ):
                 if path.is_file():
                     try:

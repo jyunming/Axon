@@ -28,6 +28,7 @@ from axon.security.cache import (  # noqa: E402
     PID_SENTINEL_FILENAME,
     CacheCapacityError,
     SealedCache,
+    SealedFileTamperError,
     _self_check,
     cleanup_orphans,
     is_sealed_file,
@@ -212,6 +213,125 @@ class TestCacheCreateFailures:
         ):
             with pytest.raises(CacheCapacityError, match="bytes free"):
                 SealedCache.create(sealed, dek, key_id="sk_a", cache_root=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Audit regression: tamper detection on must-seal files
+# ---------------------------------------------------------------------------
+
+
+class TestMustSealFileTamperDetection:
+    """Audit (security): SealedCache must refuse to materialise a sealed
+    project where a file in the must-seal set (per ``seal._should_seal``)
+    lacks the AXSL header.
+
+    Threat model: an attacker with write access to the synced filesystem
+    cannot forge new ciphertext (AAD-bound GCM tag), but COULD replace
+    an encrypted file with a plaintext file containing attacker-chosen
+    bytes. Without the tamper check, ``SealedCache.create`` would copy
+    the plaintext as-is and backends would consume it as authoritative —
+    bypassing authenticated encryption for that file. The check enforces
+    "if seal policy says it MUST be sealed, an unsealed copy is a tamper
+    and a hard error".
+    """
+
+    def test_plaintext_meta_json_replacement_rejected(self, tmp_path):
+        """``meta.json`` is in the must-seal root set. An attacker who
+        replaces the sealed copy with plaintext must trip the tamper
+        check, not silently materialise into the cache.
+        """
+        sealed = tmp_path / "proj"
+        dek = generate_dek()
+        _seal_project(sealed, dek, key_id="sk_t1", files={"meta.json": b'{"v":1}'})
+
+        # Tamper: replace the encrypted meta.json with raw plaintext
+        # (i.e. simulate an attacker who can write but cannot encrypt).
+        (sealed / "meta.json").write_bytes(b'{"injected":true}')
+        assert not is_sealed_file(sealed / "meta.json"), "Setup: file is plaintext"
+
+        with pytest.raises(SealedFileTamperError, match="must-seal"):
+            SealedCache.create(sealed, dek, key_id="sk_t1", cache_root=tmp_path)
+
+    def test_plaintext_bm25_index_file_rejected(self, tmp_path):
+        """Files under ``bm25_index/`` are in the must-seal content set."""
+        sealed = tmp_path / "proj"
+        dek = generate_dek()
+        _seal_project(
+            sealed,
+            dek,
+            key_id="sk_t2",
+            files={"bm25_index/.bm25_log.jsonl": b'{"d":"doc1"}\n'},
+        )
+
+        # Tamper a single bm25 file.
+        (sealed / "bm25_index" / ".bm25_log.jsonl").write_bytes(b"plain attacker text")
+
+        with pytest.raises(SealedFileTamperError, match="must-seal"):
+            SealedCache.create(sealed, dek, key_id="sk_t2", cache_root=tmp_path)
+
+    def test_plaintext_vector_store_file_rejected(self, tmp_path):
+        """Files under ``vector_store_data/`` are in the must-seal content set."""
+        sealed = tmp_path / "proj"
+        dek = generate_dek()
+        _seal_project(
+            sealed,
+            dek,
+            key_id="sk_t3",
+            files={"vector_store_data/manifest.json": b'{"dim":768}'},
+        )
+
+        (sealed / "vector_store_data" / "manifest.json").write_bytes(b"plain")
+
+        with pytest.raises(SealedFileTamperError, match="must-seal"):
+            SealedCache.create(sealed, dek, key_id="sk_t3", cache_root=tmp_path)
+
+    def test_passthrough_files_still_allowed_plaintext(self, tmp_path):
+        """Tamper detection must NOT regress against legitimate plaintext
+        files (``version.json``, ``store_meta.json``, etc.) that are
+        deliberately unsealed by policy.
+        """
+        sealed = tmp_path / "proj"
+        dek = generate_dek()
+        _seal_project(sealed, dek, key_id="sk_t4", files={"meta.json": b"{}"})
+        # version.json is in _NEVER_SEAL_NAMES — must remain plaintext
+        # and the cache must accept it.
+        (sealed / "version.json").write_text("{}", encoding="utf-8")
+
+        cache = SealedCache.create(sealed, dek, key_id="sk_t4", cache_root=tmp_path)
+        try:
+            assert (cache.path / "version.json").read_text() == "{}"
+        finally:
+            cache.wipe()
+
+    def test_partial_cache_wiped_on_tamper_detection(self, tmp_path):
+        """The tamper check must use the same partial-wipe path as other
+        materialisation failures — no plaintext leak in the temp dir
+        after a rejected mount."""
+        sealed = tmp_path / "proj"
+        dek = generate_dek()
+        # Two files; one sealed correctly, one tampered. The cache
+        # iteration order is filesystem-dependent so we exercise both
+        # possible orderings by ensuring no axon-sealed-* dir survives.
+        _seal_project(
+            sealed,
+            dek,
+            key_id="sk_t5",
+            files={
+                "meta.json": b'{"a":1}',
+                "vector_store_data/manifest.json": b'{"d":768}',
+            },
+        )
+        (sealed / "meta.json").write_bytes(b"injected")
+
+        before = {p.name for p in tmp_path.iterdir()}
+        with pytest.raises(SealedFileTamperError):
+            SealedCache.create(sealed, dek, key_id="sk_t5", cache_root=tmp_path)
+        after = {p.name for p in tmp_path.iterdir()}
+        new_caches = [n for n in (after - before) if n.startswith(CACHE_PREFIX)]
+        assert new_caches == [], (
+            "Partial cache survived tamper detection — plaintext bytes "
+            "may have leaked to the temp dir."
+        )
 
 
 # ---------------------------------------------------------------------------
