@@ -30,6 +30,7 @@ from axon.agent import (
     _tool_list_knowledge,
     _tool_list_projects,
     _tool_read_file,
+    _tool_refresh_ingest,
     _tool_search_knowledge,
     _tool_switch_project,
     _tool_update_settings,
@@ -368,6 +369,70 @@ class TestToolGetConfig:
         brain.config = _make_config(top_k=10)
         result = _tool_get_config(brain)
         assert "top_k: 10" in result
+
+    def test_get_config_redacts_sensitive_fields(self):
+        """Sensitive credentials must not appear in the LLM-facing output.
+
+        Regression for the agent.py:1091 secret leak — _tool_get_config
+        dumped every AxonConfig field via ``dataclasses.fields`` and
+        fed the result back to the LLM driving the agent loop, exposing
+        every populated API key / PAT to the model provider.
+        """
+        import dataclasses as _dc
+
+        @_dc.dataclass
+        class _CfgWithSecrets:
+            top_k: int = 5
+            openai_api_key: str = "sk-secret-OPENAI"
+            grok_api_key: str = "secret-GROK"
+            gemini_api_key: str = "secret-GEMINI"
+            ollama_cloud_key: str = "secret-OLLAMA"
+            copilot_pat: str = "ghp_secret_pat"
+            brave_api_key: str = "secret-BRAVE"
+            qdrant_api_key: str = "secret-QDRANT"
+            api_key: str = "secret-LEGACY"
+            llm_provider: str = "openai"  # non-sensitive sanity check
+
+        brain = _make_brain()
+        brain.config = _CfgWithSecrets()
+        result = _tool_get_config(brain)
+        # Sensitive values must be redacted...
+        for plaintext in (
+            "sk-secret-OPENAI",
+            "secret-GROK",
+            "secret-GEMINI",
+            "secret-OLLAMA",
+            "ghp_secret_pat",
+            "secret-BRAVE",
+            "secret-QDRANT",
+            "secret-LEGACY",
+        ):
+            assert plaintext not in result, f"leaked secret: {plaintext}"
+        # ...but the field NAMES are still visible so the agent can
+        # reason about whether a key is set.
+        assert "openai_api_key: ***" in result
+        assert "copilot_pat: ***" in result
+        # Non-sensitive fields pass through unchanged.
+        assert "llm_provider: openai" in result
+
+    def test_get_config_unset_secret_renders_as_empty(self):
+        """Empty / unset secret strings stay empty — only populated
+        values get the ``***`` mask so the agent can distinguish
+        "not configured" from "configured but redacted"."""
+        import dataclasses as _dc
+
+        @_dc.dataclass
+        class _CfgEmptySecrets:
+            openai_api_key: str = ""
+            top_k: int = 5
+
+        brain = _make_brain()
+        brain.config = _CfgEmptySecrets()
+        result = _tool_get_config(brain)
+        # Empty string must NOT be masked — the field reports as-is so
+        # the agent can tell "not configured" apart from "redacted".
+        assert "***" not in result
+        assert "openai_api_key: " in result.splitlines()
 
 
 # ---------------------------------------------------------------------------
@@ -772,3 +837,63 @@ class TestDestructiveConfirmMessages:
         assert (
             expected_fragment in captured[0]
         ), f"Expected '{expected_fragment}' in confirm message: {captured[0]!r}"
+
+
+# ---------------------------------------------------------------------------
+# _tool_refresh_ingest — hash-algorithm parity with AxonBrain.ingest()
+# ---------------------------------------------------------------------------
+
+
+class TestToolRefreshIngest:
+    """Refresh must use the same hash algorithm AxonBrain.ingest writes to
+    ``_doc_versions`` (``hashlib.md5``); otherwise every unchanged file is
+    needlessly re-ingested, burning embedding and LLM budget."""
+
+    def test_skips_unchanged_file_when_hash_matches(self, tmp_path):
+        import hashlib
+
+        # Match what AxonBrain.ingest() writes to _doc_versions (md5).
+        src = tmp_path / "doc.md"
+        src.write_text("hello world", encoding="utf-8")
+        expected_hash = hashlib.md5(b"hello world").hexdigest()
+
+        brain = _make_brain()
+        brain._doc_versions = {
+            str(src): {"content_hash": expected_hash, "chunk_count": 1},
+        }
+
+        loader = MagicMock()
+        loader.load.return_value = [{"text": "hello world"}]
+        with patch("axon.loaders.DirectoryLoader") as DL:
+            DL.return_value.loaders = {".md": loader}
+            result = _tool_refresh_ingest(brain, {})
+
+        # The file content matches the stored hash → must be skipped, not
+        # re-ingested. The bug pre-fix used sha256 here, so every file
+        # always fell into the re-ingest branch.
+        brain.ingest.assert_not_called()
+        assert "1 unchanged" in result, result
+
+    def test_reingests_when_content_changes(self, tmp_path):
+        import hashlib
+
+        src = tmp_path / "doc.md"
+        src.write_text("new content", encoding="utf-8")
+        # Stored hash matches an OLDER version of the file.
+        stale_hash = hashlib.md5(b"old content").hexdigest()
+
+        brain = _make_brain()
+        brain._doc_versions = {
+            str(src): {"content_hash": stale_hash, "chunk_count": 1},
+        }
+        brain.list_documents.return_value = []  # no existing chunks to purge
+
+        loader = MagicMock()
+        loader.load.return_value = [{"text": "new content"}]
+        with patch("axon.loaders.DirectoryLoader") as DL:
+            DL.return_value.loaders = {".md": loader}
+            result = _tool_refresh_ingest(brain, {})
+
+        # Hash mismatch → must call brain.ingest exactly once.
+        assert brain.ingest.call_count == 1
+        assert "1 file(s) re-ingested" in result, result

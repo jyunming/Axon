@@ -1088,13 +1088,38 @@ def _tool_create_project(brain, args: dict) -> str:
     return f"Project '{name}' created." + (f" Description: {description}" if description else "")
 
 
+# Config fields that contain credentials / API keys. ``_tool_get_config``
+# feeds its output back to the LLM driving the agent loop, so the raw
+# values must never appear there — even a cloud LLM provider would see
+# them otherwise. Keep this list in sync with the ``str`` fields in
+# :class:`axon.config.AxonConfig` that hold secrets (api_*, *_pat,
+# *_key, etc.).
+_SENSITIVE_CONFIG_FIELDS: frozenset[str] = frozenset(
+    {
+        "api_key",
+        "openai_api_key",
+        "grok_api_key",
+        "gemini_api_key",
+        "ollama_cloud_key",
+        "copilot_pat",
+        "brave_api_key",
+        "qdrant_api_key",
+    }
+)
+
+
 def _tool_get_config(brain) -> str:
     import dataclasses
 
     cfg = brain.config
     lines = [f"active_project: {brain._active_project}"]
     for field in dataclasses.fields(cfg):
-        lines.append(f"{field.name}: {getattr(cfg, field.name)}")
+        value = getattr(cfg, field.name)
+        if field.name in _SENSITIVE_CONFIG_FIELDS and value:
+            # Preserve "set vs unset" semantics so the agent can still
+            # answer "is OpenAI configured?" without seeing the key.
+            value = "***"
+        lines.append(f"{field.name}: {value}")
     return "\n".join(lines)
 
 
@@ -1279,7 +1304,12 @@ def _tool_refresh_ingest(brain, args: dict) -> str:
                 continue
             docs = loader_mgr.loaders[ext].load(source)
             combined = "".join(d.get("text", "") for d in docs)
-            current_hash = hashlib.sha256(combined.encode("utf-8", errors="replace")).hexdigest()
+            # Match the digest written by AxonBrain.ingest() to _doc_versions
+            # (see main.py: ``_hl.md5(...).hexdigest()``). Using SHA-256 here
+            # made the comparison mismatch for every file, so every refresh
+            # re-ingested everything — wasting embedding/LLM budget on
+            # unchanged content.
+            current_hash = hashlib.md5(combined.encode("utf-8", errors="replace")).hexdigest()
             if current_hash == stored_hash:
                 skipped += 1
                 continue
