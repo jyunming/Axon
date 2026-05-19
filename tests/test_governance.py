@@ -267,6 +267,39 @@ class TestAuditStoreJSONL:
             store = AuditStore(tmp_path / "bad.db")
         assert store._use_jsonl
 
+    def test_query_jsonl_skips_malformed_row_not_terminates(self, tmp_path):
+        """A single malformed JSONL row (e.g. a forward-compat column the
+        dataclass doesn't recognise) must not terminate iteration and drop
+        every subsequent valid row."""
+        from dataclasses import asdict
+
+        store = self._jsonl_store(tmp_path)
+        good1 = _event(project="p1", action="ingest_started", target_id="1")
+        good2 = _event(project="p2", action="delete", target_id="2")
+        with store._jsonl_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(asdict(good1)) + "\n")
+            bad = asdict(_event(project="bad", target_id="bogus"))
+            bad["unknown_future_column"] = "x"
+            fh.write(json.dumps(bad) + "\n")
+            fh.write(json.dumps(asdict(good2)) + "\n")
+
+        ids = {r.event_id for r in store.query()}
+        assert good1.event_id in ids, "valid row before bad row was dropped"
+        assert good2.event_id in ids, "valid row after bad row was dropped"
+
+    def test_query_jsonl_skips_row_missing_required_field(self, tmp_path):
+        """A row missing a required AuditEvent field (e.g. action) must be
+        skipped rather than terminating the query."""
+        from dataclasses import asdict
+
+        store = self._jsonl_store(tmp_path)
+        good = _event(project="p1", target_id="ok")
+        with store._jsonl_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"target_type": "file", "project": "x"}) + "\n")
+            fh.write(json.dumps(asdict(good)) + "\n")
+
+        assert any(r.event_id == good.event_id for r in store.query())
+
 
 # ===========================================================================
 # CopilotSessionStore

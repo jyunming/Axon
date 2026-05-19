@@ -1037,3 +1037,140 @@ class TestGovernanceShareExtendedAction:
         assert len(results) == 1
         assert results[0].target_id == "sk_a"
         assert results[0].details["new_expires_at"] == "2099-01-01T00:00:00+00:00"
+
+
+# ===========================================================================
+# Audit-found regressions
+# ===========================================================================
+
+
+class TestValidateReceivedSharesTOCTOU:
+    """Regression: validate_received_shares() read-modify-write must be atomic
+    so a concurrent redeem_share_key() append is not silently dropped."""
+
+    def test_concurrent_redeem_during_validate_not_lost(self, tmp_path, monkeypatch):
+        """A redeem racing with validate's read must not be silently
+        overwritten by validate's later write.
+
+        Without the lock fix, validate reads outside the lock so a worker
+        redeem completes between the read and the write, and the write
+        clobbers the new record. With the fix, validate holds the lock
+        across both ops, so the worker either blocks or the write reflects
+        a consistent snapshot.
+        """
+        import threading
+
+        from axon import shares as _shares_mod
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        grantee_dir = tmp_path / "AxonStore" / "bob"
+        grantee_dir.mkdir(parents=True)
+
+        gen1 = _shares_mod.generate_share_key(owner_dir, "myproject", "bob", ttl_days=30)
+        gen2 = _shares_mod.generate_share_key(owner_dir, "myproject", "bob")
+
+        red1 = _shares_mod.redeem_share_key(grantee_dir, gen1["share_string"])
+        first_mount = red1["mount_name"]
+        _shares_mod.revoke_share_key(owner_dir, gen1["key_id"])
+
+        worker_started = threading.Event()
+        validator_can_write = threading.Event()
+        gate_consumed = threading.Event()
+        original_read = _shares_mod._read_json
+
+        def gated_read_json(path):
+            data = original_read(path)
+            if (
+                str(path).endswith(".share_keys.json")
+                and "AxonStore" in str(path)
+                and "bob" in str(path)
+                and not gate_consumed.is_set()
+            ):
+                gate_consumed.set()
+                worker_started.set()
+                # Hold validate at this point so the worker has a window
+                # to complete its redeem. Timeout caps the test runtime
+                # when the fix is in place (worker blocks on the lock).
+                validator_can_write.wait(timeout=5)
+            return data
+
+        monkeypatch.setattr(_shares_mod, "_read_json", gated_read_json)
+
+        worker_err: list[BaseException] = []
+
+        def worker() -> None:
+            try:
+                worker_started.wait(timeout=5)
+                _shares_mod.redeem_share_key(grantee_dir, gen2["share_string"])
+            except BaseException as exc:  # noqa: BLE001
+                worker_err.append(exc)
+            finally:
+                validator_can_write.set()
+
+        t = threading.Thread(target=worker)
+        t.start()
+        try:
+            removed = _shares_mod.validate_received_shares(grantee_dir)
+        finally:
+            validator_can_write.set()
+            t.join(timeout=10)
+
+        assert not worker_err, worker_err
+        assert first_mount in removed, "revoked first share should be pruned"
+
+        keys = json.loads((grantee_dir / ".shares" / ".share_keys.json").read_text())
+        received_mounts = [r.get("mount_name") for r in keys.get("received", [])]
+        assert any(
+            m and "myproject" in m for m in received_mounts
+        ), f"concurrently-redeemed mount was lost: received={received_mounts}"
+
+    def test_corrupt_received_record_does_not_crash(self, tmp_path):
+        """A record in received[] that's missing 'mount_name' must not crash
+        validate_received_shares with KeyError. Previously the code used
+        record["mount_name"] (no .get()) which crashed the loop and left
+        stale descriptors in place."""
+        from axon import shares
+
+        owner_dir = _make_user_dir(tmp_path, "alice")
+        grantee_dir = tmp_path / "AxonStore" / "bob"
+        grantee_dir.mkdir(parents=True)
+        (grantee_dir / ".shares").mkdir(parents=True, exist_ok=True)
+
+        # Generate then revoke a share so we have a removable record alongside
+        # the corrupted one.
+        gen = shares.generate_share_key(owner_dir, "myproject", "bob", ttl_days=30)
+        red = shares.redeem_share_key(grantee_dir, gen["share_string"])
+        good_mount = red["mount_name"]
+        shares.revoke_share_key(owner_dir, gen["key_id"])
+
+        # Inject a corrupt record (no mount_name) alongside the good one.
+        keys_path = grantee_dir / ".shares" / ".share_keys.json"
+        keys = json.loads(keys_path.read_text())
+        keys.setdefault("received", []).append(
+            {
+                "key_id": "sk_corrupt",
+                "owner": "alice",
+                "owner_manifest_path": str(owner_dir / ".shares" / ".share_manifest.json"),
+                "project": "myproject",
+                # Intentionally missing "mount_name"
+            }
+        )
+        # Also mark the corrupt one as revoked in the owner's manifest so the
+        # validator would *try* to delete the mount and trip the KeyError.
+        manifest_path = owner_dir / ".shares" / ".share_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.setdefault("issued", []).append(
+            {
+                "key_id": "sk_corrupt",
+                "project": "myproject",
+                "grantee": "bob",
+                "revoked": True,
+                "revoked_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        manifest_path.write_text(json.dumps(manifest))
+        keys_path.write_text(json.dumps(keys))
+
+        # Must not crash; valid record should still be pruned.
+        removed = shares.validate_received_shares(grantee_dir)
+        assert good_mount in removed

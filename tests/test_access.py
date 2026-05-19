@@ -90,6 +90,30 @@ class TestCheckWriteAllowed:
         """'default' never has a maintenance state — must not raise."""
         check_write_allowed("ingest", "default", read_only_scope=False, is_mounted=False)
 
+    def test_maintenance_check_failure_is_logged(self, caplog, monkeypatch):
+        """Unexpected errors in the maintenance-state lookup must emit a
+        WARNING (previously silently swallowed by ``except Exception: pass``,
+        hiding access-control bypass)."""
+        import logging
+
+        import axon.access as _access_mod
+        import axon.projects as _proj
+
+        def _boom(_name):
+            raise RuntimeError("simulated dependency failure")
+
+        monkeypatch.setattr(_proj, "get_maintenance_state", _boom)
+        caplog.set_level(logging.WARNING, logger=_access_mod.logger.name)
+
+        # Fail-open behaviour preserved.
+        _access_mod.check_write_allowed(
+            "ingest", "someproj", read_only_scope=False, is_mounted=False
+        )
+
+        assert any(
+            "maintenance-state check failed" in rec.message for rec in caplog.records
+        ), f"expected warning log; got {[r.message for r in caplog.records]}"
+
 
 # ---------------------------------------------------------------------------
 # maintenance module

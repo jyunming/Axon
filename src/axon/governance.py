@@ -316,7 +316,15 @@ class AuditStore:
                         continue
                     if since and d.get("timestamp", "") < since:
                         continue
-                    events.append(AuditEvent(**d))
+                    # Per-row failure must not poison the whole query — a
+                    # forward-compat row with an unknown key raises TypeError
+                    # in the dataclass ctor; previously the outer except
+                    # caught it and terminated iteration.
+                    try:
+                        events.append(AuditEvent(**d))
+                    except TypeError as exc:
+                        logger.debug("Governance JSONL row skipped: %s", exc)
+                        continue
         except Exception as exc:
             logger.debug("Governance JSONL query failed: %s", exc)
         return list(reversed(events))[:limit]
