@@ -155,3 +155,51 @@ def test_rerank_returns_input_unchanged_when_disabled():
     docs = [{"text": "doc", "id": "1"}]
     result = r.rerank("query", docs)
     assert result is docs
+
+
+def test_cross_encoder_predict_failure_returns_unranked_docs():
+    """Regression for audit/retrieval P1: a CrossEncoder predict() exception
+    (OOM, model loading error, malformed input) used to propagate out of
+    rerank() and crash the surrounding query pipeline. The contract is now
+    "best-effort": failures degrade to the unranked input list and the caller
+    still gets a usable result.
+    """
+    from axon.rerank import OpenReranker
+
+    r = OpenReranker.__new__(OpenReranker)
+    r.config = _make_cfg("cross-encoder")
+    r.llm = None
+
+    mock_model = MagicMock()
+    mock_model.predict.side_effect = RuntimeError("CUDA out of memory")
+    r.model = mock_model
+
+    docs = [{"text": "a", "id": "1"}, {"text": "b", "id": "2"}]
+    result = r.rerank("query", docs)
+    # Same number of docs returned, in original order, with no rerank_score.
+    assert len(result) == 2
+    assert [d["id"] for d in result] == ["1", "2"]
+    assert all("rerank_score" not in d for d in result)
+
+
+def test_cross_encoder_tolerates_doc_without_text_key():
+    """Regression: missing ``text`` keys should not blow up the cross-encoder
+    rerank path (audit/retrieval P2). We use ``doc.get("text", "")`` to keep
+    the predict call alive even if one doc was malformed upstream.
+    """
+    from axon.rerank import OpenReranker
+
+    r = OpenReranker.__new__(OpenReranker)
+    r.config = _make_cfg("cross-encoder")
+    r.llm = None
+
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [0.1, 0.9]
+    r.model = mock_model
+
+    docs = [{"text": "good", "id": "g"}, {"id": "no_text"}]  # second doc lacks text
+    result = r.rerank("query", docs)
+    assert len(result) == 2
+    # Predict was called with empty string for the missing-text doc.
+    called_pairs = mock_model.predict.call_args[0][0]
+    assert called_pairs[1] == ["query", ""]

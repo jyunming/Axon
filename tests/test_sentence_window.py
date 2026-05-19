@@ -131,3 +131,24 @@ def test_citation_integrity():
     for r in records:
         assert r.chunk_id == "stable_chunk_id"
         assert r.source == "important.txt"
+
+
+def test_sentence_vector_store_top_k_zero_returns_empty(tmp_path):
+    """Regression for audit/retrieval P1: top_k=0 used to return ALL rows.
+
+    Cause: ``np.argpartition(scores, -0)[-0:]`` is ``scores[0:]`` — i.e. the
+    entire array. The result was the full corpus sorted by descending score,
+    the opposite of what the caller asked for.
+    """
+    vs = SentenceVectorStore(tmp_path)
+    ids = [f"s{i}" for i in range(5)]
+    vecs = [[float(i), 0.0] for i in range(5)]
+    meta = [{"chunk_id": f"c{i}"} for i in range(5)]
+    vs.add(ids, vecs, meta)
+    assert len(vs) == 5
+    # top_k=0 must produce empty — not the entire index.
+    assert vs.search([1.0, 0.0], top_k=0) == []
+    # Negative top_k must also produce empty (defensive).
+    assert vs.search([1.0, 0.0], top_k=-3) == []
+    # Sanity: a positive top_k still works.
+    assert len(vs.search([1.0, 0.0], top_k=2)) == 2

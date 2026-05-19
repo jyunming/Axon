@@ -355,6 +355,11 @@ class SentenceVectorStore:
         normed = self._vecs / norms
         scores: np.ndarray = normed @ q  # shape [N]
         k = min(top_k, len(self._ids))
+        # top_k <= 0 must short-circuit: np.argpartition(scores, -0)[-0:] is
+        # equivalent to scores[0:] and would return ALL rows sorted — the
+        # opposite of what the caller requested. (audit P1)
+        if k <= 0:
+            return []
         # argpartition is O(N) rather than O(N log N) — fast for large N
         top_indices = np.argpartition(scores, -k)[-k:]
         top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
