@@ -16,6 +16,7 @@ backends are queried concurrently via ThreadPoolExecutor(max_workers=2).
 """
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -29,6 +30,7 @@ from axon.graph_backends.base import (
 )
 
 BACKEND_ID = "federated"
+logger = logging.getLogger("Axon")
 
 
 def _weighted_rrf(
@@ -98,9 +100,6 @@ class FederatedGraphBackend:
     BACKEND_ID = BACKEND_ID
 
     def __init__(self, brain: Any) -> None:
-        import logging
-
-        _log = logging.getLogger("Axon")
         from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
         from axon.graph_backends.graphrag_backend import GraphRagBackend
 
@@ -109,7 +108,7 @@ class FederatedGraphBackend:
             try:
                 self._backends.append(cls(brain))
             except Exception as exc:
-                _log.warning("FederatedGraphBackend: skipping %s — %s", cls.__name__, exc)
+                logger.warning("FederatedGraphBackend: skipping %s — %s", cls.__name__, exc)
 
         raw: dict = getattr(getattr(brain, "config", None), "graph_federation_weights", {}) or {}
         self._weights: dict[str, float] = {
@@ -149,11 +148,7 @@ class FederatedGraphBackend:
                 try:
                     per_backend[bid] = future.result()
                 except Exception as exc:
-                    import logging as _logging
-
-                    _logging.getLogger("Axon").warning(
-                        "FederatedGraphBackend: %s retrieve() failed — %s", bid, exc
-                    )
+                    logger.warning("FederatedGraphBackend: %s retrieve() failed — %s", bid, exc)
                     per_backend[bid] = []
         return _weighted_rrf(per_backend, weights)
 
@@ -161,6 +156,8 @@ class FederatedGraphBackend:
     # Ingest / finalize / clear / delete_documents (sequential delegation)
     # ------------------------------------------------------------------
     def ingest(self, chunks: list[dict]) -> IngestResult:
+        # Audit P1: sub-backend failures were previously silent; surface
+        # them so callers see partial-ingest state.
         total = IngestResult(backend_id=BACKEND_ID)
         for b in self._backends:
             try:
@@ -168,8 +165,12 @@ class FederatedGraphBackend:
                 total.entities_added += r.entities_added
                 total.relations_added += r.relations_added
                 total.chunks_processed = max(total.chunks_processed, r.chunks_processed)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "FederatedGraphBackend: %s ingest() failed — %s",
+                    getattr(b, "BACKEND_ID", type(b).__name__),
+                    exc,
+                )
         return total
 
     def finalize(self, force: bool = False) -> FinalizationResult:
@@ -225,18 +226,29 @@ class FederatedGraphBackend:
         return out
 
     def clear(self) -> None:
+        # Audit P1: a silent clear() failure leaves stale state behind.
         for b in self._backends:
             try:
                 b.clear()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "FederatedGraphBackend: %s clear() failed — %s",
+                    getattr(b, "BACKEND_ID", type(b).__name__),
+                    exc,
+                )
 
     def delete_documents(self, chunk_ids: list[str]) -> None:
+        # Audit P1: silent delete_documents() failures leave dangling
+        # entities/facts behind.
         for b in self._backends:
             try:
                 b.delete_documents(chunk_ids)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "FederatedGraphBackend: %s delete_documents() failed — %s",
+                    getattr(b, "BACKEND_ID", type(b).__name__),
+                    exc,
+                )
 
     # ------------------------------------------------------------------
     # Status / graph_data

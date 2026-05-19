@@ -9,6 +9,16 @@ logger = logging.getLogger("Axon")
 
 
 class CodeGraphMixin:
+    # NOTE: ``_load_code_graph`` and ``_save_code_graph`` are ALSO defined on
+    # :class:`axon.graph_rag.GraphRagMixin`. GraphRagMixin appears earlier in
+    # ``AxonBrain``'s MRO and therefore wins at runtime. The methods on this
+    # class exist so unit tests can exercise ``CodeGraphMixin`` in isolation
+    # without pulling in the full GraphRagMixin (~4 kLoC). Production goes
+    # through the GraphRagMixin version, which uses
+    # ``_gr_write_json_if_changed`` (atomic + cloud-sync-safe + skip-write-
+    # when-unchanged digest cache). Keep these two implementations in sync
+    # for shape (return type, defaults); divergence in atomic-write semantics
+    # is acceptable because only the GraphRagMixin path runs in production.
     def _load_code_graph(self) -> dict:
         """Load code graph from disk. Returns empty graph if not found."""
         import json
