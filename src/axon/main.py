@@ -695,12 +695,18 @@ Your primary goal is to help the user by answering questions based on the provid
             except Exception as exc:  # pragma: no cover — defensive
                 logger.debug("Persist executor shutdown raised: %s", exc)
             self._persist_executor_internal = None
-        # Close all unique store objects to avoid double-closure
+        # Close all unique store objects to avoid double-closure. Swallow
+        # per-store failures so a single misbehaving backend cannot abort
+        # the loop and skip the sealed-cache wipe below (which would leave
+        # decrypted plaintext on disk).
         seen_stores: set[int] = set()
         for attr in ("vector_store", "_own_vector_store", "bm25", "_own_bm25"):
             store = getattr(self, attr, None)
             if store and hasattr(store, "close") and id(store) not in seen_stores:
-                store.close()
+                try:
+                    store.close()
+                except Exception as exc:  # pragma: no cover — defensive
+                    logger.debug("Store %s close raised: %s", attr, exc)
                 seen_stores.add(id(store))
         # Force GC so Windows file handles into the sealed cache are
         # released BEFORE we try to overwrite + unlink the cache files.
@@ -875,6 +881,10 @@ Your primary goal is to help the user by answering questions based on the provid
         with self._traversal_cache_lock:
             self._traversal_cache.clear()
         self._ingested_hashes = set()
+        # Read-only scopes don't have a writeable doc-version store of their
+        # own, but leaving the previous project's data in memory would leak
+        # its sources through get_doc_versions(). Clear it here.
+        self._doc_versions = {}
         self._entity_graph = {}
         self._rebuild_entity_token_index()
         self._relation_graph = {}
@@ -1484,6 +1494,12 @@ Your primary goal is to help the user by answering questions based on the provid
         with self._traversal_cache_lock:
             self._traversal_cache.clear()
         self._ingested_hashes = self._load_hash_store()
+        # Doc-version tracking is keyed off the current project's bm25_path;
+        # rebind both the cached path and the in-memory dict so /tracked-docs
+        # and /ingest/refresh reflect the active project rather than the one
+        # active at brain construction time.
+        self._doc_versions_path = os.path.join(self.config.bm25_path, ".doc_versions.json")
+        self._load_doc_versions()
         self._graph_rag_cache = self._load_graph_rag_extraction_cache()
         self._graph_rag_cache_dirty = False
         self._code_graph = self._load_code_graph()
