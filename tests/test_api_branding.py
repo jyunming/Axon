@@ -80,9 +80,26 @@ def test_brand_mount_serves_wordmark_svg():
 
 
 def test_brand_mount_blocks_path_traversal():
-    """The static mount must not serve files outside src/axon/brand/."""
-    # Starlette's StaticFiles normalises and rejects traversal — confirm.
+    """The static mount must not serve files outside src/axon/brand/.
+
+    A permissive assertion ('not 200 OR no `def ` in body') would still pass
+    if a future regression exposed a non-Python file from the parent dir.
+    Tighten this to an explicit safe-status-code check plus a content-type
+    guard — both must hold.
+    """
+    # Starlette's StaticFiles normalises and rejects traversal. We expect
+    # either 404 (the joined path doesn't exist after normalisation) or
+    # 400 (Starlette blocked the request) — never 2xx, never a Python file.
     r = client.get("/brand/../api.py")
-    # Either 404 (not found) or 400 (bad request) — both are safe; what we
-    # care about is that we don't get a 200 with python source.
-    assert r.status_code != 200 or b"def " not in r.content
+    assert r.status_code in {400, 404}, (
+        f"path traversal returned {r.status_code} — must be 400 or 404, "
+        "anything else means the mount is leaking files from outside "
+        "src/axon/brand/"
+    )
+    # Belt-and-suspenders: even on the safe status codes, the body must
+    # not be Python source. (text/x-python or application/octet-stream
+    # on a path-traversal hit would be the smoking gun for a bug.)
+    ctype = r.headers.get("content-type", "")
+    assert not ctype.startswith(
+        "text/x-python"
+    ), f"path traversal returned Python content-type {ctype!r}"
