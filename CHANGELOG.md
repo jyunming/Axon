@@ -41,7 +41,7 @@ A maintenance + audit release. **30 bug fixes** across nine parallel codebase-au
 
 ### ✨ Branding
 
-- **VS Code marketplace tile** ([#126](https://github.com/jyunming/Axon/pull/126)) — `integrations/vscode-axon/package.json` now declares `"icon": "media/axon-icon.png"`. 256×256 RGB PNG rendered from the existing `docs/assets/brand/axon-icon.svg` on the brand-dark background (`#050a14`). VSIX rebuilt: `src/axon/extensions/axon-copilot-0.4.1.vsix` is 502 KB / 23 files (was 482 KB / 22).
+- **VS Code marketplace tile** ([#126](https://github.com/jyunming/Axon/pull/126)) — `integrations/vscode-axon/package.json` now declares `"icon": "media/axon-icon.png"`. 256×256 RGB PNG rendered from the existing `docs/assets/brand/axon-icon.svg` on the brand-dark background (`#050a14`). VSIX rebuilt: `src/axon/extensions/axon-copilot-0.4.2.vsix` is 502 KB / 23 files (was 482 KB / 22 in v0.4.1).
 - **FastAPI auto-generated docs** ([#126](https://github.com/jyunming/Axon/pull/126)) — `GET /docs` (Swagger UI) and `GET /redoc` now render with `rel="shortcut icon"` pointing at `/brand/axon-favicon.svg` instead of `fastapi.tiangolo.com/img/favicon.png`. `GET /favicon.ico` 302-redirects to the same canonical SVG so browsers that hammer `/favicon.ico` unprompted stop 404-spamming logs. `/brand/` is mounted as `StaticFiles` from a new in-package directory `src/axon/brand/` — the SVGs ship inside the wheel/sdist (via `[tool.maturin].include`) so `pip install axon-rag` users get the same behaviour as repo developers. All five surfaces (`/docs`, `/redoc`, `/openapi.json`, `/favicon.ico`, `/brand/*`) added to the X-API-Key middleware bypass list so they work when `RAG_API_KEY` is set.
 
 ### 📚 Documentation
