@@ -4,6 +4,7 @@
   "description": "Connect GitHub Copilot to your local Axon RAG knowledge base",
   "version": "0.4.1",
   "publisher": "axon",
+  "icon": "media/axon-icon.png",
   "engines": {
     "vscode": "^1.93.0"
   },

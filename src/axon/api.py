@@ -206,6 +206,12 @@ app = FastAPI(
     description="REST API for agent orchestration and document retrieval",
     version=__version__,
     lifespan=lifespan,
+    # /docs and /redoc are replaced below with branded variants that
+    # point to the Axon favicon. FastAPI's constructor doesn't expose a
+    # favicon kwarg — the override has to happen at the docs-HTML
+    # helper, so we turn off the defaults here and re-mount them below.
+    docs_url=None,
+    redoc_url=None,
 )
 
 # Apply CORS based on AxonConfig.api_allow_origins. Without this, the
@@ -358,6 +364,47 @@ if gui_dir.exists():
         return RedirectResponse(url="/gui/")
 
     app.mount("/gui/", StaticFiles(directory=str(gui_dir), html=True), name="gui")
+
+# Brand assets — favicon + wordmark + icon. Mounted at /brand/ so the
+# branded /docs and /redoc endpoints (registered below) and any future
+# docs page can pick the canonical mark up from a stable URL. The SVGs
+# ship inside the package (src/axon/brand/) so `pip install axon-rag`
+# users get the same behaviour as repo developers.
+_brand_dir = Path(__file__).parent / "brand"
+if _brand_dir.is_dir():
+    app.mount("/brand/", StaticFiles(directory=str(_brand_dir)), name="brand")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def _favicon() -> RedirectResponse:
+        # Browsers hammer /favicon.ico unprompted; bounce them to the
+        # canonical SVG so the same mark is used everywhere.
+        return RedirectResponse(url="/brand/axon-favicon.svg", status_code=302)
+
+
+# Branded /docs (Swagger UI) and /redoc — point the auto-generated docs
+# at the Axon favicon. The defaults were disabled on the FastAPI()
+# constructor above; we re-register them here.
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html  # noqa: E402
+from fastapi.responses import HTMLResponse  # noqa: E402
+
+
+@app.get("/docs", include_in_schema=False)
+async def _branded_swagger_ui() -> HTMLResponse:
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url or "/openapi.json",
+        title=app.title + " — Swagger UI",
+        swagger_favicon_url="/brand/axon-favicon.svg",
+        oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def _branded_redoc() -> HTMLResponse:
+    return get_redoc_html(
+        openapi_url=app.openapi_url or "/openapi.json",
+        title=app.title + " — ReDoc",
+        redoc_favicon_url="/brand/axon-favicon.svg",
+    )
 
 
 # ---------------------------------------------------------------------------
