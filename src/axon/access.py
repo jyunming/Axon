@@ -6,7 +6,11 @@ that were previously ad-hoc methods on ``AxonBrain``.
 
 from __future__ import annotations
 
+import logging
+
 __all__ = ["check_write_allowed", "is_mounted_share_path"]
+
+logger = logging.getLogger(__name__)
 
 
 def is_mounted_share_path(project_name: str) -> bool:
@@ -56,5 +60,15 @@ def check_write_allowed(
                 )
         except PermissionError:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            # get_maintenance_state already swallows its own JSON/OS errors,
+            # so reaching here means an unexpected failure (broken import,
+            # monkey-patched dep). Surface the fail-open at WARNING so the
+            # bypass is auditable instead of silent.
+            logger.warning(
+                "check_write_allowed: maintenance-state check failed for "
+                "project=%r operation=%r — allowing write (fail-open): %s",
+                active_project,
+                operation,
+                exc,
+            )

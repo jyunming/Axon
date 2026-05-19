@@ -407,35 +407,49 @@ def validate_received_shares(user_dir: Path) -> list[str]:
     """
     from axon.mounts import remove_mount_descriptor
 
-    keys = _read_json(_keys_path(user_dir))
-    received = keys.get("received", [])
-    removed = []
-    updated = False
-    for record in list(received):
-        manifest_path = Path(record.get("owner_manifest_path", ""))
-        if not manifest_path.exists():
-            continue  # Can't check — leave descriptor in place
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        key_id = record.get("key_id")
-        if not key_id:
-            continue  # skip malformed received record
-        manifest_record = next(
-            (r for r in manifest.get("issued", []) if r["key_id"] == key_id), None
-        )
-        if manifest_record and (
-            manifest_record.get("revoked") or _is_expired(manifest_record.get("expires_at"))
-        ):
-            mount_name = record["mount_name"]
-            # Primary: remove descriptor from mounts/
-            remove_mount_descriptor(user_dir, mount_name)
-            removed.append(mount_name)
-            received.remove(record)
-            updated = True
-    if updated:
-        with _lock:
+    # Hold the lock across the whole read-modify-write — otherwise a
+    # concurrent redeem_share_key() that appends a new received record
+    # between our read and write would be silently clobbered by the
+    # write below (lost-update TOCTOU).
+    with _lock:
+        keys = _read_json(_keys_path(user_dir))
+        received = keys.get("received", [])
+        removed: list[str] = []
+        updated = False
+        for record in list(received):
+            manifest_path = Path(record.get("owner_manifest_path", ""))
+            if not manifest_path.exists():
+                continue  # Can't check — leave descriptor in place
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            key_id = record.get("key_id")
+            if not key_id:
+                continue  # skip malformed received record
+            manifest_record = next(
+                (
+                    r
+                    for r in manifest.get("issued", [])
+                    if isinstance(r, dict) and r.get("key_id") == key_id
+                ),
+                None,
+            )
+            if manifest_record and (
+                manifest_record.get("revoked") or _is_expired(manifest_record.get("expires_at"))
+            ):
+                # .get() not [] — a corrupt record missing 'mount_name' must
+                # not crash the loop and abandon stale descriptors in place.
+                mount_name = record.get("mount_name")
+                if not mount_name:
+                    received.remove(record)
+                    updated = True
+                    continue
+                remove_mount_descriptor(user_dir, mount_name)
+                removed.append(mount_name)
+                received.remove(record)
+                updated = True
+        if updated:
             keys["received"] = received
             _write_json(_keys_path(user_dir), keys)
     return removed
