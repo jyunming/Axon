@@ -21,6 +21,17 @@ MAX_TEXT_FIELD_CHARS = (
     10_000_000  # characters — ~10 MB of ASCII text; /ingest/upload enforces a separate byte cap
 )
 MAX_URL_FIELD_CHARS = 2048  # characters — RFC 7230 practical maximum
+# A realistic sealed/open share envelope is a few hundred bytes; even
+# the largest SEALED2 form stays well under 4 KB. Cap at 16 KB so a
+# malformed payload can't trigger megabytes of base64 decode + JSON
+# parse work before the validator rejects it. Bumping the cap is
+# cheap if a future envelope shape needs more.
+MAX_SHARE_STRING_CHARS = 16_384
+# Passphrases feed straight into scrypt; a gigabyte input would burn
+# unbounded CPU even on a 401-Bad-Passphrase path. 4 KB is far above
+# any reasonable user-typed passphrase (~64 chars) but small enough
+# that scrypt's wall-clock stays bounded.
+MAX_PASSPHRASE_CHARS = 4096
 
 # ---------------------------------------------------------------------------
 
@@ -377,7 +388,11 @@ class ShareGenerateRequest(BaseModel):
 
 
 class ShareRedeemRequest(BaseModel):
-    share_string: str = Field(..., description="The base64 share string from the owner.")
+    share_string: str = Field(
+        ...,
+        max_length=MAX_SHARE_STRING_CHARS,
+        description="The base64 share string from the owner.",
+    )
 
 
 class ShareRevokeRequest(BaseModel):
@@ -482,17 +497,27 @@ class SecurityBootstrapRequest(BaseModel):
     # Route handlers must call ``.get_secret_value()`` to retrieve the
     # plain string before passing it to the security backend.
     passphrase: SecretStr = Field(
-        ..., description="Passphrase to bootstrap the security store with."
+        ...,
+        max_length=MAX_PASSPHRASE_CHARS,
+        description="Passphrase to bootstrap the security store with.",
     )
 
 
 class SecurityUnlockRequest(BaseModel):
-    passphrase: SecretStr = Field(..., description="Passphrase to unlock the security store.")
+    passphrase: SecretStr = Field(
+        ...,
+        max_length=MAX_PASSPHRASE_CHARS,
+        description="Passphrase to unlock the security store.",
+    )
 
 
 class SecurityChangePassphraseRequest(BaseModel):
-    old_passphrase: SecretStr = Field(..., description="Current passphrase.")
-    new_passphrase: SecretStr = Field(..., description="New passphrase to set.")
+    old_passphrase: SecretStr = Field(
+        ..., max_length=MAX_PASSPHRASE_CHARS, description="Current passphrase."
+    )
+    new_passphrase: SecretStr = Field(
+        ..., max_length=MAX_PASSPHRASE_CHARS, description="New passphrase to set."
+    )
 
 
 class ProjectRotateKeysRequest(BaseModel):

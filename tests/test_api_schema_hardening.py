@@ -256,3 +256,145 @@ def test_axon_config_exposes_upload_limits():
     field_names = {f.name for f in AxonConfig.__dataclass_fields__.values()}
     assert "max_upload_bytes" in field_names
     assert "max_files_per_request" in field_names
+
+
+# ---------------------------------------------------------------------------
+# audit/api-routes: max_length caps on free-form auth/share inputs
+# ---------------------------------------------------------------------------
+
+
+def test_share_redeem_oversized_share_string_returns_422():
+    """A pathologically large share_string must be rejected by Pydantic
+    before the route triggers base64-decode + JSON-parse work."""
+    from axon.api_schemas import MAX_SHARE_STRING_CHARS
+
+    api_module.brain = _make_brain()
+    payload = {"share_string": "A" * (MAX_SHARE_STRING_CHARS + 1)}
+    resp = client.post("/share/redeem", json=payload)
+    assert resp.status_code == 422
+
+
+def test_share_redeem_share_string_at_limit_passes_validation():
+    """A share_string at exactly the cap must reach the handler — it can
+    still fail downstream parsing, but never with a 422."""
+    from axon.api_schemas import MAX_SHARE_STRING_CHARS
+
+    api_module.brain = _make_brain()
+    payload = {"share_string": "A" * MAX_SHARE_STRING_CHARS}
+    resp = client.post("/share/redeem", json=payload)
+    assert resp.status_code != 422
+
+
+def test_security_bootstrap_oversized_passphrase_returns_422():
+    """An oversized passphrase must trip Pydantic, never feed scrypt."""
+    from axon.api_schemas import MAX_PASSPHRASE_CHARS
+
+    payload = {"passphrase": "x" * (MAX_PASSPHRASE_CHARS + 1)}
+    resp = client.post("/security/bootstrap", json=payload)
+    assert resp.status_code == 422
+
+
+def test_security_unlock_oversized_passphrase_returns_422():
+    from axon.api_schemas import MAX_PASSPHRASE_CHARS
+
+    payload = {"passphrase": "x" * (MAX_PASSPHRASE_CHARS + 1)}
+    resp = client.post("/security/unlock", json=payload)
+    assert resp.status_code == 422
+
+
+def test_security_change_passphrase_oversized_either_field_returns_422():
+    from axon.api_schemas import MAX_PASSPHRASE_CHARS
+
+    payload = {
+        "old_passphrase": "x" * (MAX_PASSPHRASE_CHARS + 1),
+        "new_passphrase": "ok-but-too-short-still-validates",
+    }
+    resp = client.post("/security/change-passphrase", json=payload)
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# audit/api-routes: /config/set sensitive-field masking
+# ---------------------------------------------------------------------------
+
+
+def test_config_set_masks_secret_in_response_old_and_new_value():
+    """``/config/set`` previously echoed the previous secret as ``old_value``
+    and the newly written secret as ``new_value``. Both must be masked
+    when the flat key is a known sensitive field."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeCfg:
+        openai_api_key: str = "prod-secret-do-not-leak"
+        qdrant_api_key: str = ""
+
+        def save(self) -> None:  # pragma: no cover — unused
+            return None
+
+    brain = MagicMock()
+    brain.config = _FakeCfg()
+    api_module.brain = brain
+
+    resp = client.post(
+        "/config/set",
+        json={"key": "llm.openai_api_key", "value": "rotated-secret-xyz", "persist": False},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # The mask must hide both the old and the new value.
+    assert body["old_value"] == "***"
+    assert body["new_value"] == "***"
+    # And the underlying config must actually be updated (mask is response-only).
+    assert brain.config.openai_api_key == "rotated-secret-xyz"
+
+
+def test_config_set_does_not_mask_non_sensitive_fields():
+    """Non-secret fields must continue to roundtrip values verbatim so UIs
+    can show before/after state."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeCfg:
+        hybrid_search: bool = True
+
+        def save(self) -> None:  # pragma: no cover
+            return None
+
+    brain = MagicMock()
+    brain.config = _FakeCfg()
+    api_module.brain = brain
+
+    resp = client.post(
+        "/config/set",
+        json={"key": "rag.hybrid_search", "value": False, "persist": False},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["old_value"] is True
+    assert body["new_value"] is False
+
+
+def test_config_get_masks_openai_and_grok_keys():
+    """``_SENSITIVE_FIELDS`` must include ``openai_api_key`` and
+    ``grok_api_key`` so ``/config`` does not leak them via the
+    asdict-dumped response."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeCfg:
+        openai_api_key: str = "openai-prod-key"
+        grok_api_key: str = "grok-prod-key"
+        gemini_api_key: str = "gemini-prod-key"
+        api_key: str = ""
+
+    brain = MagicMock()
+    brain.config = _FakeCfg()
+    api_module.brain = brain
+
+    resp = client.get("/config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["openai_api_key"] == "***"
+    assert body["grok_api_key"] == "***"
+    assert body["gemini_api_key"] == "***"

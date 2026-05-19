@@ -213,8 +213,13 @@ async def security_bootstrap(request: SecurityBootstrapRequest, req: Request):
 @router.post("/security/unlock")
 async def security_unlock(request: SecurityUnlockRequest, req: Request):
     from axon import security as _security
+    from axon.api_routes._rate_limit import _get_ip
 
-    client_ip = req.client.host if req.client else "unknown"
+    # Use the shared XFF-aware IP helper so the lockout key matches the
+    # client identity the per-IP rate limiter sees. Picking
+    # ``req.client.host`` directly was the proxy IP behind a reverse
+    # proxy, which collapsed every real user onto one shared bucket.
+    client_ip = _get_ip(req)
     now = time.time()
     _evict_stale_unlock_failures(now)
     # Clean up timestamps outside the lockout window
