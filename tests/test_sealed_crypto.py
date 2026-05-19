@@ -26,6 +26,7 @@ from axon.security.crypto import (  # noqa: E402
     DEK_LEN,
     HEADER_LEN,
     MAGIC,
+    MAX_PADDING_BYTES,
     NONCE_LEN,
     SCHEMA_VERSION,
     TAG_LEN,
@@ -334,6 +335,62 @@ class TestInputValidation:
         SealedFile.write(path, b"data", generate_dek())
         with pytest.raises(ValueError, match="32 bytes"):
             SealedFile.read(path, b"short")
+
+
+# ---------------------------------------------------------------------------
+# Audit regression: padding_bytes hard cap at write-time
+# ---------------------------------------------------------------------------
+
+
+class TestPaddingBytesMaxBound:
+    """Audit (security): SealedFile.write/write_stream must reject
+    ``padding_bytes`` above ``MAX_PADDING_BYTES``.
+
+    The reader's ``_unpack_header`` rejects any header whose
+    ``padding_length`` field exceeds 1 MiB (silent data loss otherwise).
+    Without a matching cap at the writer, a direct caller (test, script,
+    out-of-tree code) could mint a file the reader refuses — silent
+    failure mode hidden by the config layer's separate validation.
+    The hard cap defends direct callers that bypass the config path.
+    """
+
+    def test_max_padding_bytes_constant_is_1_mib(self):
+        assert MAX_PADDING_BYTES == 1024 * 1024
+
+    def test_write_rejects_padding_above_cap(self, tmp_path):
+        dek = generate_dek()
+        with pytest.raises(ValueError, match="MAX_PADDING_BYTES"):
+            SealedFile.write(
+                tmp_path / "oversized",
+                b"data",
+                dek,
+                padding_bytes=MAX_PADDING_BYTES + 1,
+            )
+
+    def test_write_accepts_padding_at_cap(self, tmp_path):
+        """Boundary: exactly MAX_PADDING_BYTES must be accepted."""
+        dek = generate_dek()
+        path = tmp_path / "atcap"
+        SealedFile.write(path, b"hello", dek, padding_bytes=MAX_PADDING_BYTES)
+        # File reads back fine — confirms the cap is consistent with
+        # the reader's bound.
+        assert SealedFile.read(path, dek) == b"hello"
+
+    def test_write_stream_rejects_padding_above_cap(self, tmp_path):
+        dek = generate_dek()
+        with pytest.raises(ValueError, match="MAX_PADDING_BYTES"):
+            SealedFile.write_stream(
+                tmp_path / "stream_oversized",
+                iter([b"data"]),
+                dek,
+                padding_bytes=MAX_PADDING_BYTES + 1,
+            )
+
+    def test_write_still_rejects_negative_padding(self, tmp_path):
+        """Pre-existing negative-padding rejection stays in place."""
+        dek = generate_dek()
+        with pytest.raises(ValueError, match="must be >= 0"):
+            SealedFile.write(tmp_path / "neg", b"data", dek, padding_bytes=-1)
 
 
 # ---------------------------------------------------------------------------

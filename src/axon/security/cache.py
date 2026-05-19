@@ -69,6 +69,7 @@ __all__ = [
     "CACHE_HEADROOM_FRACTION",
     "CacheCapacityError",
     "SealedCache",
+    "SealedFileTamperError",
     "cleanup_orphans",
     "is_sealed_file",
 ]
@@ -88,6 +89,24 @@ class CacheCapacityError(RuntimeError):
     Surfaced with concrete numbers (project size, free space, deficit)
     so the user can either free up disk or move ``TMPDIR`` /
     ``TEMP`` to a roomier volume.
+    """
+
+
+class SealedFileTamperError(RuntimeError):
+    """Raised when a file in the seal policy's must-seal set lacks the
+    AXSL header at mount time.
+
+    AAD binding into the GCM tag prevents an attacker from forging
+    new ciphertext, but it does NOT prevent an attacker with write
+    access to the synced filesystem from REPLACING an encrypted file
+    with a plaintext one. Without an explicit check at materialise
+    time, the cache would copy that plaintext to a path the backend
+    later reads as authoritative — bypassing authenticated encryption.
+
+    This error surfaces the tamper to the caller (``materialize_for_read``)
+    which wraps it as :class:`SecurityError`. The partial cache is
+    wiped by the same ``except`` block that catches every other
+    materialisation failure.
     """
 
 
@@ -333,6 +352,11 @@ class SealedCache:
                 "roomier volume."
             )
         cache_dir = Path(tempfile.mkdtemp(prefix=CACHE_PREFIX, dir=str(cache_parent)))
+        # Defer the import of the seal policy to avoid a cache → seal →
+        # cache cycle at module load. The policy is a pure function over
+        # the relative path so calling it inside the loop adds no I/O.
+        from .seal import _should_seal  # noqa: PLC0415
+
         try:
             # PID sentinel — used by cleanup_orphans on next boot.
             (cache_dir / PID_SENTINEL_FILENAME).write_text(str(os.getpid()), encoding="utf-8")
@@ -355,10 +379,27 @@ class SealedCache:
                     plaintext = SealedFile.read(src, dek, aad=aad)
                     dst.write_bytes(plaintext)
                 else:
-                    # Non-sealed file (e.g. version.json which is
-                    # deliberately plaintext). Copy as-is so the
-                    # cache is a faithful materialisation of the
-                    # project view.
+                    # The seal policy decides which files MUST be encrypted;
+                    # anything in the must-seal set that lacks the AXSL
+                    # header here is either tampering or a corrupted seal.
+                    # Refuse rather than silently materialise attacker-
+                    # controlled plaintext into the cache where backends
+                    # would consume it as authoritative — AAD binding
+                    # prevents ciphertext forgery, but does NOT prevent
+                    # an attacker with write access from REPLACING an
+                    # encrypted file with plaintext.
+                    if _should_seal(rel):
+                        raise SealedFileTamperError(
+                            f"Project file {rel} is in the must-seal set but "
+                            "lacks an AXSL header. The sealed project may "
+                            "have been tampered with on the synced filesystem "
+                            "(an attacker may have replaced an encrypted file "
+                            "with plaintext to bypass authenticated encryption). "
+                            "Refusing to materialise."
+                        )
+                    # Plaintext passthrough file (deliberately unsealed —
+                    # version.json, store_meta.json, etc.). Copy as-is so
+                    # the cache is a faithful view of the project.
                     shutil.copy2(src, dst)
         except Exception:
             # On any failure during materialisation, wipe the partial

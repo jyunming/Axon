@@ -538,3 +538,115 @@ class TestRevokeWiredThroughSecurity:
         )
         assert result["status"] == "hard_revoked"
         assert result["files_resealed"] >= 4
+
+
+# ---------------------------------------------------------------------------
+# Audit regression: stale expiry sidecar cleanup on revoke + re-issue
+# ---------------------------------------------------------------------------
+
+
+class TestExpirySidecarCleanupOnRevoke:
+    """Audit (security): the v0.4.0 signed expiry sidecar (``<key_id>.expiry``)
+    must be deleted alongside the wrap on revoke. Otherwise a future re-issuance
+    of the SAME key_id WITHOUT ``expires_at`` would silently inherit the
+    stale sidecar — the grantee would see TTL enforcement the owner did
+    not intend (or worse, a past-expired sidecar denying access entirely).
+    """
+
+    def test_soft_revoke_deletes_expiry_sidecar(self, kr_backend, owner_user_dir):
+        from datetime import datetime, timedelta, timezone
+
+        from axon.security.share import share_expiry_path
+
+        proj = _populate_and_seal(owner_user_dir)
+        future = datetime.now(timezone.utc) + timedelta(days=30)
+        generate_sealed_share(
+            owner_user_dir, "research", "bob", key_id="ssk_exp_soft", expires_at=future
+        )
+        # Sanity: sidecar was written
+        assert share_expiry_path(proj, "ssk_exp_soft").is_file()
+
+        revoke_sealed_share(owner_user_dir, "research", "ssk_exp_soft")
+
+        # The sidecar must be gone — otherwise a re-issuance without
+        # expires_at would inherit the stale TTL.
+        assert not share_expiry_path(proj, "ssk_exp_soft").is_file()
+
+    def test_hard_revoke_deletes_expiry_sidecar(self, kr_backend, owner_user_dir):
+        from datetime import datetime, timedelta, timezone
+
+        from axon.security.share import share_expiry_path
+
+        proj = _populate_and_seal(owner_user_dir)
+        future = datetime.now(timezone.utc) + timedelta(days=30)
+        generate_sealed_share(
+            owner_user_dir, "research", "bob", key_id="ssk_exp_hard", expires_at=future
+        )
+        assert share_expiry_path(proj, "ssk_exp_hard").is_file()
+
+        revoke_sealed_share(owner_user_dir, "research", "ssk_exp_hard", rotate=True)
+        assert not share_expiry_path(proj, "ssk_exp_hard").is_file()
+
+    def test_reissue_without_expiry_does_not_inherit_stale_sidecar(
+        self, kr_backend, owner_user_dir
+    ):
+        """The owner's intent ("no TTL on re-issue") must win.
+
+        Even if a prior incarnation of the same key_id had a TTL, the
+        re-issued share must NOT carry that TTL — generate_sealed_share
+        must delete any stale sidecar when called without expires_at.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from axon.security.share import share_expiry_path
+
+        proj = _populate_and_seal(owner_user_dir)
+        future = datetime.now(timezone.utc) + timedelta(days=30)
+        generate_sealed_share(
+            owner_user_dir, "research", "bob", key_id="ssk_reissue", expires_at=future
+        )
+        sidecar = share_expiry_path(proj, "ssk_reissue")
+        assert sidecar.is_file()
+
+        # Soft revoke (closes a hypothetical bug where revoke leaves the
+        # sidecar, but also exercises the cleanup chain).
+        revoke_sealed_share(owner_user_dir, "research", "ssk_reissue")
+        assert not sidecar.is_file()
+
+        # Now re-issue with the SAME key_id but NO TTL. The fresh share
+        # must not have any sidecar on disk.
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_reissue")
+        assert not sidecar.is_file(), (
+            "Re-issued share without expires_at must not have an expiry sidecar; "
+            "stale sidecar would silently enforce TTL against owner intent."
+        )
+
+    def test_reissue_without_expiry_when_revoke_failed_to_clean_sidecar(
+        self, kr_backend, owner_user_dir
+    ):
+        """Defense-in-depth: even if a prior revoke didn't clean up the
+        sidecar (e.g. older release left it behind), a re-issue without
+        expires_at must scrub it.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from axon.security.share import share_expiry_path
+
+        proj = _populate_and_seal(owner_user_dir)
+        future = datetime.now(timezone.utc) + timedelta(days=30)
+        generate_sealed_share(
+            owner_user_dir, "research", "bob", key_id="ssk_defense", expires_at=future
+        )
+        sidecar = share_expiry_path(proj, "ssk_defense")
+        assert sidecar.is_file()
+
+        # Simulate an older-release soft revoke that deleted only the
+        # wrap, not the sidecar: manually unlink the wrap and KEK.
+        share_wrap_path(proj, "ssk_defense").unlink()
+        share_kek_path(proj, "ssk_defense").unlink()
+        assert sidecar.is_file(), "Setup: sidecar must still be present"
+
+        # Re-issue without TTL. The defense-in-depth cleanup in
+        # generate_sealed_share must scrub the orphan sidecar.
+        generate_sealed_share(owner_user_dir, "research", "bob", key_id="ssk_defense")
+        assert not sidecar.is_file()
