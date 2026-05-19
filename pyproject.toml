@@ -213,6 +213,8 @@ include = [
     { path = "src/axon/extensions/*.vsix", format = "sdist" },
     { path = "src/axon/security/data/*.txt", format = "wheel" },
     { path = "src/axon/security/data/*.txt", format = "sdist" },
+    { path = "src/axon/brand/*.svg", format = "wheel" },
+    { path = "src/axon/brand/*.svg", format = "sdist" },
     { path = "LICENSE", format = "sdist" },
 ]
 exclude = [

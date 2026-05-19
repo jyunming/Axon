@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Axon favicon — simplified for 16x16 / 32x32 rendering.
+  Drops the inner-hex line and shrinks terminal dots so the mark
+  stays legible at extreme small sizes. Identical visual language
+  as axon-icon.svg.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Hex frame -->
+  <polygon
+    points="50,7 87,28 87,72 50,93 13,72 13,28"
+    fill="none"
+    stroke="#00d4b4"
+    stroke-width="6"
+    stroke-linejoin="round"/>
+
+  <!-- Three branches (thicker for small-size punch) -->
+  <g stroke="#00d4b4" stroke-width="6" stroke-linecap="round">
+    <line x1="50" y1="50" x2="50" y2="22"/>
+    <line x1="50" y1="50" x2="74" y2="64"/>
+    <line x1="50" y1="50" x2="26" y2="64"/>
+  </g>
+
+  <!-- Terminals -->
+  <circle cx="50" cy="22" r="6" fill="#00d4b4"/>
+  <circle cx="74" cy="64" r="6" fill="#00d4b4"/>
+  <circle cx="26" cy="64" r="6" fill="#00d4b4"/>
+
+  <!-- Center -->
+  <circle cx="50" cy="50" r="8" fill="#00d4b4"/>
+</svg>

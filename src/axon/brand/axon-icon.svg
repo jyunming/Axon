@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Axon icon — hex-framed neural node with three branching axon terminals.
+  Reads as "graph node" + "branching signal" + "directional flow".
+  Balanced symmetric mark; works at any size from 16px to 1024px.
+
+  Color: #00d4b4 (Axon teal). Drop a CSS `color` on the `<svg>` and
+  every stroke / fill that uses `currentColor` will adopt it; the
+  fallback teal applies otherwise.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="64" height="64" role="img" aria-label="Axon">
+  <title>Axon</title>
+
+  <!-- Outer hex frame: a node in a network. -->
+  <polygon
+    points="50,7 87,28 87,72 50,93 13,72 13,28"
+    fill="none"
+    stroke="#00d4b4"
+    stroke-width="4"
+    stroke-linejoin="round"
+    stroke-linecap="round"/>
+
+  <!-- Subtle inner hex (depth + the "soma" boundary). -->
+  <polygon
+    points="50,25 71,37 71,63 50,75 29,63 29,37"
+    fill="none"
+    stroke="#00d4b4"
+    stroke-width="1"
+    stroke-opacity="0.35"
+    stroke-linejoin="round"/>
+
+  <!-- Three axon branches radiating out from center: signal flowing to terminals. -->
+  <g stroke="#00d4b4" stroke-width="4" stroke-linecap="round" fill="none">
+    <line x1="50" y1="50" x2="50" y2="20"/>
+    <line x1="50" y1="50" x2="76" y2="65"/>
+    <line x1="50" y1="50" x2="24" y2="65"/>
+  </g>
+
+  <!-- Synaptic terminal nodes (signal destinations). -->
+  <circle cx="50" cy="20" r="4.5" fill="#00d4b4"/>
+  <circle cx="76" cy="65" r="4.5" fill="#00d4b4"/>
+  <circle cx="24" cy="65" r="4.5" fill="#00d4b4"/>
+
+  <!-- Center cell body (signal source). -->
+  <circle cx="50" cy="50" r="6.5" fill="#00d4b4"/>
+  <!-- Inner accent for depth — keeps the mark from looking flat. -->
+  <circle cx="50" cy="50" r="2.4" fill="#050a14"/>
+</svg>

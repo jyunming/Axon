@@ -206,6 +206,12 @@ app = FastAPI(
     description="REST API for agent orchestration and document retrieval",
     version=__version__,
     lifespan=lifespan,
+    # /docs and /redoc are replaced below with branded variants that
+    # point to the Axon favicon. FastAPI's constructor doesn't expose a
+    # favicon kwarg — the override has to happen at the docs-HTML
+    # helper, so we turn off the defaults here and re-mount them below.
+    docs_url=None,
+    redoc_url=None,
 )
 
 # Apply CORS based on AxonConfig.api_allow_origins. Without this, the
@@ -323,8 +329,25 @@ async def metrics_middleware(request: Request, call_next):
 # /metrics: standard Prometheus scrapers don't ship secrets; operators who need
 #   metrics auth should use a reverse-proxy (e.g. nginx basic-auth) or a network
 #   firewall — not the application-level X-API-Key.
-_AUTH_BYPASS_EXACT = frozenset({"/health", "/health/live", "/health/ready", "/metrics", "/gui"})
-_AUTH_BYPASS_PREFIX = ("/v1/health", "/v1/metrics", "/gui/")
+# /docs, /redoc, /openapi.json, /favicon.ico, /brand/*: browsers fetch the
+#   auto-generated docs spec, the favicon, and the static brand SVGs without
+#   the X-API-Key header (they don't send custom headers on automatic asset
+#   requests). Without bypass entries the docs pages render but the spec +
+#   favicon + brand SVGs fail to load, generating noisy 401s in server logs.
+_AUTH_BYPASS_EXACT = frozenset(
+    {
+        "/health",
+        "/health/live",
+        "/health/ready",
+        "/metrics",
+        "/gui",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/favicon.ico",
+    }
+)
+_AUTH_BYPASS_PREFIX = ("/v1/health", "/v1/metrics", "/gui/", "/brand/")
 
 
 @app.middleware("http")
@@ -358,6 +381,51 @@ if gui_dir.exists():
         return RedirectResponse(url="/gui/")
 
     app.mount("/gui/", StaticFiles(directory=str(gui_dir), html=True), name="gui")
+
+# Brand assets — favicon + wordmark + icon. Mounted at /brand/ so the
+# branded /docs and /redoc endpoints (registered below) and any future
+# docs page can pick the canonical mark up from a stable URL. The SVGs
+# ship inside the package (src/axon/brand/) so `pip install axon-rag`
+# users get the same behaviour as repo developers.
+_brand_dir = Path(__file__).parent / "brand"
+if _brand_dir.is_dir():
+    app.mount("/brand/", StaticFiles(directory=str(_brand_dir)), name="brand")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def _favicon() -> RedirectResponse:
+        # Browsers hammer /favicon.ico unprompted; bounce them to the
+        # canonical SVG so the same mark is used everywhere.
+        return RedirectResponse(url="/brand/axon-favicon.svg", status_code=302)
+
+
+# Branded /docs (Swagger UI) and /redoc — point the auto-generated docs
+# at the Axon favicon. The defaults were disabled on the FastAPI()
+# constructor above; we re-register them here. We deliberately omit
+# ``oauth2_redirect_url``: Axon does not advertise OAuth2 flows in its
+# OpenAPI schema, so the Swagger UI OAuth2 redirect route is never
+# exercised. Passing the default ``app.swagger_ui_oauth2_redirect_url``
+# would point Swagger at an unregistered URL (404) the moment any
+# OAuth2 flow ever shows up in the spec.
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html  # noqa: E402
+from fastapi.responses import HTMLResponse  # noqa: E402
+
+
+@app.get("/docs", include_in_schema=False)
+async def _branded_swagger_ui() -> HTMLResponse:
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url or "/openapi.json",
+        title=app.title + " — Swagger UI",
+        swagger_favicon_url="/brand/axon-favicon.svg",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def _branded_redoc() -> HTMLResponse:
+    return get_redoc_html(
+        openapi_url=app.openapi_url or "/openapi.json",
+        title=app.title + " — ReDoc",
+        redoc_favicon_url="/brand/axon-favicon.svg",
+    )
 
 
 # ---------------------------------------------------------------------------
