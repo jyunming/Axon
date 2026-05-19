@@ -479,6 +479,82 @@ class TestDynamicGraphShareMountSafety:
         s = grantee.status()
         assert s["entities"] == 0
 
+    @staticmethod
+    def _make_grantee_with_snapshot(tmp_path, snapshot: dict):
+        """Write *snapshot* to bm25_path and return a freshly-built grantee."""
+        import json as _json
+
+        from axon.graph_backends.dynamic_graph_backend import (
+            SNAPSHOT_FILENAME,
+            DynamicGraphBackend,
+        )
+
+        (tmp_path / SNAPSHOT_FILENAME).write_text(_json.dumps(snapshot), encoding="utf-8")
+        grantee_brain = _make_brain(tmp_path)
+        grantee_brain._active_project = "mounts/shared"
+        return DynamicGraphBackend(grantee_brain)
+
+    @staticmethod
+    def _ent(eid: str, name: str, description: str = "") -> dict:
+        return {
+            "entity_id": eid,
+            "canonical_name": name,
+            "entity_type": "PERSON",
+            "description": description,
+            "first_seen_at": "2026-01-01T00:00:00+00:00",
+            "last_seen_at": "2026-01-01T00:00:00+00:00",
+        }
+
+    def test_grantee_refuses_future_snapshot_version(self, tmp_path):
+        """Audit P1: a snapshot from a NEWER Axon (snapshot_version > current)
+        must NOT be silently replayed against the v1 schema. The grantee
+        sees an empty graph instead of partially-populated junk.
+        """
+        from axon.graph_backends.dynamic_graph_backend import SNAPSHOT_VERSION
+
+        grantee = self._make_grantee_with_snapshot(
+            tmp_path,
+            {
+                "snapshot_version": SNAPSHOT_VERSION + 1,
+                "entities": [self._ent("e1", "alice", "future-only field shape")],
+                "facts": [],
+                "v2_only_field": {"some": "thing"},
+            },
+        )
+        s = grantee.status()
+        assert s["entities"] == 0
+        assert s["active_facts"] == 0
+
+    def test_grantee_skips_non_dict_rows_in_snapshot(self, tmp_path):
+        """Audit P1: a snapshot row that isn't a dict must be skipped, not
+        raise AttributeError and leave the DB half-populated.
+        """
+        grantee = self._make_grantee_with_snapshot(
+            tmp_path,
+            {
+                "snapshot_version": 1,
+                "entities": [
+                    self._ent("e1", "alice", "ok"),
+                    "not-a-dict",
+                    self._ent("e2", "bob", "also ok"),
+                ],
+                "facts": [],
+            },
+        )
+        assert grantee.status()["entities"] == 2
+
+    def test_grantee_refuses_non_list_entities(self, tmp_path):
+        """Audit P1: entities/facts that aren't lists are refused before iteration."""
+        grantee = self._make_grantee_with_snapshot(
+            tmp_path,
+            {
+                "snapshot_version": 1,
+                "entities": "not a list",
+                "facts": [],
+            },
+        )
+        assert grantee.status()["entities"] == 0
+
 
 class TestDynamicGraphDbRelocation:
     """When bm25_path is on a cloud-sync / network path, the owner DB is

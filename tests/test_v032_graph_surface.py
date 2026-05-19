@@ -395,6 +395,67 @@ class TestListConflicts:
 
 
 # ---------------------------------------------------------------------------
+# Audit P1: federated sub-backend failures must be logged, not silently
+# swallowed. Otherwise an operator who calls clear() / delete_documents() /
+# ingest() and gets no error believes the operation succeeded fully — but
+# stale state may remain in the backend that raised.
+# ---------------------------------------------------------------------------
+
+
+def _make_failing_backend(backend_id: str, method_name: str):
+    b = MagicMock()
+    b.BACKEND_ID = backend_id
+    getattr(b, method_name).side_effect = RuntimeError(f"{method_name} boom")
+    return b
+
+
+def _make_ok_backend(backend_id: str):
+    from axon.graph_backends.base import IngestResult
+
+    b = MagicMock()
+    b.BACKEND_ID = backend_id
+    b.ingest.return_value = IngestResult(
+        entities_added=1, relations_added=1, chunks_processed=1, backend_id=backend_id
+    )
+    return b
+
+
+class TestFederatedBackendFailureLogging:
+    @pytest.mark.parametrize(
+        "method_name,call",
+        [
+            ("ingest", lambda fed: fed.ingest([])),
+            ("clear", lambda fed: fed.clear()),
+            ("delete_documents", lambda fed: fed.delete_documents(["c1", "c2"])),
+        ],
+    )
+    def test_sub_backend_failure_is_logged(self, tmp_path, caplog, method_name, call):
+        import logging as _logging
+
+        brain = _make_brain(tmp_path, federation_weights={})
+
+        def _patched_init(self, _brain):
+            self._backends = [
+                _make_failing_backend("graphrag", method_name),
+                _make_ok_backend("dynamic_graph"),
+            ]
+            self._weights = {"graphrag": 1.0, "dynamic_graph": 1.0}
+
+        original_init = FederatedGraphBackend.__init__
+        try:
+            FederatedGraphBackend.__init__ = _patched_init  # type: ignore[assignment]
+            fed = FederatedGraphBackend(brain)
+            with caplog.at_level(_logging.WARNING, logger="Axon"):
+                call(fed)
+            expected = f"graphrag {method_name}() failed"
+            assert any(expected in rec.message for rec in caplog.records), [
+                rec.message for rec in caplog.records
+            ]
+        finally:
+            FederatedGraphBackend.__init__ = original_init  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
 # Item (8): point-in-time pass-through (already implemented; cover the
 # config plumbing so a regression in RetrievalConfig is caught early).
 # ---------------------------------------------------------------------------

@@ -13,6 +13,79 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("Axon")
 
+# ---------------------------------------------------------------------------
+# Pickle-cache HMAC helpers (audit P0: prevent untrusted pickle deserialization).
+#
+# The relation-graph pickle cache (.relation_graph.cache.pkl) is an opt-in perf
+# optimization (graph_rag_relation_pickle_cache, default False). pickle.load on
+# attacker-controlled bytes is RCE; when bm25_path is on a shared / cloud-synced
+# directory, an attacker who can write that file gets RCE on every load.
+#
+# Defense: bind the cache to the local machine via an HMAC keyed by a file
+# stored under ~/.axon/.relation_pickle_hmac.key (mode 0600, generated on first
+# use). On load, we verify the HMAC before unpickling; on failure we refuse to
+# load the pickle and fall through to the JSON shard path.
+# ---------------------------------------------------------------------------
+
+# The HMAC is stored in the existing ``.relation_graph.cache.meta.json``
+# sidecar (next to the ``key`` field), not appended to the pickle file, so
+# the pickle shape stays unchanged. The per-machine HMAC key lives under
+# ``~/.axon/`` (created mode 0600 on first use).
+_RELATION_PICKLE_HMAC_KEY_FILE = ".relation_pickle_hmac.key"
+
+
+def _relation_pickle_hmac_key_path():
+    """Return ``~/.axon/.relation_pickle_hmac.key`` as a :class:`pathlib.Path`."""
+    import pathlib as _pathlib
+
+    return _pathlib.Path.home() / ".axon" / _RELATION_PICKLE_HMAC_KEY_FILE
+
+
+def _get_or_create_relation_pickle_hmac_key() -> bytes:
+    """Return the 32-byte HMAC key, creating it (mode 0600) on first use.
+
+    The key lives at ``~/.axon/.relation_pickle_hmac.key`` and is local to the
+    machine; this binds the pickle cache to this host so a synced or attacker-
+    placed pickle file cannot be replayed against another machine.
+    """
+    import os as _os
+    import secrets as _secrets
+
+    key_path = _relation_pickle_hmac_key_path()
+    if key_path.exists():
+        try:
+            data = key_path.read_bytes()
+            if len(data) >= 32:
+                return data
+        except OSError:
+            pass
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    key = _secrets.token_bytes(32)
+    tmp = key_path.with_suffix(key_path.suffix + ".tmp")
+    tmp.write_bytes(key)
+    try:
+        _os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    _os.replace(tmp, key_path)
+    return key
+
+
+def _compute_relation_pickle_hmac(payload: bytes, cache_key: str) -> str:
+    """Return hex-encoded HMAC-SHA256 over *payload* tagged by *cache_key*.
+
+    Tagging by ``cache_key`` (the shard-signature digest) ensures the HMAC
+    cannot be replayed against a different graph state on the same machine.
+    """
+    import hmac as _hmac
+
+    mac = _hmac.new(_get_or_create_relation_pickle_hmac_key(), digestmod="sha256")
+    mac.update(cache_key.encode("utf-8"))
+    mac.update(b"\x00")
+    mac.update(payload)
+    return mac.hexdigest()
+
+
 _GRAPHRAG_REDUCE_SYSTEM_PROMPT = (
     "You are a helpful assistant responding to questions about a dataset by synthesizing the "
     "perspectives from multiple data analysts.\n\n"
@@ -1089,10 +1162,31 @@ class GraphRagMixin:
                         try:
                             _meta = self._gr_json_load_path(shard_cache_meta_path)
                             if isinstance(_meta, dict) and _meta.get("key") == cache_key:
+                                # Audit P0: verify HMAC over the pickle bytes
+                                # BEFORE pickle.load(). pickle.load on attacker-
+                                # controlled bytes is RCE; the HMAC binds the
+                                # cache to this host (key under ~/.axon/, mode
+                                # 0600). On any HMAC failure, refuse and fall
+                                # through to the JSON shard path.
+                                import hmac as _hmac
                                 import pickle as _pickle
 
-                                with open(shard_cache_path, "rb") as _f:
-                                    _cached = _pickle.load(_f)
+                                _expected_mac = _meta.get("hmac")
+                                if not isinstance(_expected_mac, str) or not _expected_mac:
+                                    raise ValueError(
+                                        "relation pickle cache missing HMAC; refusing to load"
+                                    )
+                                _payload = shard_cache_path.read_bytes()
+                                _actual_mac = _compute_relation_pickle_hmac(_payload, cache_key)
+                                if not _hmac.compare_digest(_actual_mac, _expected_mac):
+                                    logger.warning(
+                                        "relation pickle cache HMAC mismatch at %s — "
+                                        "refusing to deserialize (possible tampering or "
+                                        "cache moved between machines)",
+                                        shard_cache_path,
+                                    )
+                                    raise ValueError("relation pickle cache HMAC mismatch")
+                                _cached = _pickle.loads(_payload)
                                 if isinstance(_cached, dict):
                                     return _cached
                         except Exception:
@@ -1182,14 +1276,24 @@ class GraphRagMixin:
                                 or 4
                             )
                             proto = min(max(1, proto), 5)
+                            # Audit P0: compute HMAC over the pickle bytes
+                            # and store it in the meta file so _load can
+                            # verify before unpickling. Without this, a
+                            # tampered pickle on a shared / synced path
+                            # would be RCE on load.
+                            _pickled = _pickle.dumps(merged, protocol=proto)
+                            _mac = _compute_relation_pickle_hmac(_pickled, cache_key)
                             _tmp = shard_cache_path.with_suffix(shard_cache_path.suffix + ".tmp")
                             with open(_tmp, "wb") as _f:
-                                _pickle.dump(merged, _f, protocol=proto)
+                                _f.write(_pickled)
                             _os.replace(_tmp, shard_cache_path)
                             _tmp_meta = shard_cache_meta_path.with_suffix(
                                 shard_cache_meta_path.suffix + ".tmp"
                             )
-                            _tmp_meta.write_text(_json.dumps({"key": cache_key}), encoding="utf-8")
+                            _tmp_meta.write_text(
+                                _json.dumps({"key": cache_key, "hmac": _mac}),
+                                encoding="utf-8",
+                            )
                             _os.replace(_tmp_meta, shard_cache_meta_path)
                         except Exception:
                             pass

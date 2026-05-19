@@ -497,6 +497,11 @@ class DynamicGraphBackend:
         Missing or unreadable snapshot is not an error: the grantee simply
         sees an empty graph and retrieve() returns nothing, which is the
         sensible default when the owner has never ingested.
+
+        Audit P1: validate ``snapshot_version`` and skip non-dict rows. A
+        future-version or attacker-shaped snapshot must not be silently
+        replayed against the (possibly stricter) v1 schema — load nothing
+        rather than partially insert junk that retrieve() then trips on.
         """
         if not self._snapshot_path.exists():
             return
@@ -511,11 +516,32 @@ class DynamicGraphBackend:
             return
         if not isinstance(data, dict):
             return
+        # Refuse snapshots written by a newer Axon that may carry fields the
+        # v1 SQLite schema cannot represent. Missing/non-int version is
+        # treated as v1 (legacy snapshots predating the field).
+        snap_ver = data.get("snapshot_version", 1)
+        if not isinstance(snap_ver, int) or snap_ver > SNAPSHOT_VERSION:
+            logger.warning(
+                "DynamicGraph snapshot at %s has unsupported snapshot_version=%r "
+                "(this build supports up to %d); refusing to load.",
+                self._snapshot_path,
+                snap_ver,
+                SNAPSHOT_VERSION,
+            )
+            return
         entities = data.get("entities") or []
         facts = data.get("facts") or []
+        if not isinstance(entities, list) or not isinstance(facts, list):
+            logger.warning(
+                "DynamicGraph snapshot at %s has non-list entities/facts; " "refusing to load.",
+                self._snapshot_path,
+            )
+            return
         with self._write_lock:
             try:
                 for ent in entities:
+                    if not isinstance(ent, dict):
+                        continue
                     self._conn.execute(
                         "INSERT OR IGNORE INTO entities "
                         "(entity_id, canonical_name, entity_type, description, "
@@ -530,6 +556,8 @@ class DynamicGraphBackend:
                         ),
                     )
                 for f in facts:
+                    if not isinstance(f, dict):
+                        continue
                     self._conn.execute(
                         "INSERT OR IGNORE INTO facts "
                         "(fact_id, subject, relation, object, valid_at, invalid_at, "
