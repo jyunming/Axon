@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import types
+import urllib.error
 from unittest import mock
 
 from axon import server_client as sc
@@ -151,3 +152,40 @@ def test_release_store_lock_leaves_other_pid(tmp_path):
     lock.write_text(_json.dumps({"host": "127.0.0.1", "port": 8000, "pid": 999999}))
     sc.release_store_lock(cfg)  # not our pid → must not delete
     assert lock.exists()
+
+
+def test_find_live_server_treats_503_as_alive(tmp_path, monkeypatch):
+    # A server whose brain is still initializing answers /health/ready with 503.
+    # It is ALIVE, so the lock must NOT be treated as stale (else a 2nd server
+    # could start during the 1st's startup and race on the store).
+    cfg = _cfg(projects_root=str(tmp_path))
+    sc.write_store_lock(cfg, "127.0.0.1", 8000)
+
+    def _busy(*a, **k):
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:8000/health/ready", 503, "initializing", {}, None
+        )
+
+    monkeypatch.setattr(sc.urllib.request, "urlopen", _busy)
+    found = sc.find_live_server_for_store(cfg)
+    assert found is not None and found["port"] == 8000
+
+
+def test_detect_server_sends_api_key_on_config_probe(monkeypatch):
+    # /config is not on the auth-bypass list; the store-match probe must send
+    # X-API-Key or a secured server 401s and routing never engages.
+    seen = {}
+
+    def _open(req, timeout=None):
+        seen[req.full_url] = {k.lower(): v for k, v in req.header_items()}
+        if req.full_url.endswith("/health/ready"):
+            return _Resp(200, json.dumps({"status": "ok", "project": "p"}).encode())
+        if req.full_url.endswith("/config"):
+            return _Resp(200, json.dumps({"projects_root": r"C:\store"}).encode())
+        raise AssertionError(req.full_url)
+
+    monkeypatch.setattr(sc.urllib.request, "urlopen", _open)
+    got = sc.detect_server(_cfg(api_key="secret", projects_root=r"C:\store"))
+    assert got is not None
+    cfg_url = next(u for u in seen if u.endswith("/config"))
+    assert seen[cfg_url].get("x-api-key") == "secret"

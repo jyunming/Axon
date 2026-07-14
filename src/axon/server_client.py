@@ -124,7 +124,13 @@ def detect_server(config: Any, *, timeout: float = _PROBE_TIMEOUT_S) -> dict | N
     my_root = _norm_path(getattr(config, "projects_root", None))
     if isinstance(my_root, str) and my_root:
         try:
-            cfg_req = urllib.request.Request(f"{base}/config", method="GET")
+            # /config is NOT on the API's auth-bypass list, so a secured
+            # deployment (RAG_API_KEY set) 401s an unauthenticated probe. Send
+            # the same headers (incl. X-API-Key) the routed ops use, or
+            # single-instance routing silently never engages.
+            cfg_req = urllib.request.Request(
+                f"{base}/config", method="GET", headers=_headers(config)
+            )
             with urllib.request.urlopen(cfg_req, timeout=timeout) as resp:
                 server_cfg = json.loads(resp.read().decode("utf-8") or "{}")
         except Exception:
@@ -235,14 +241,18 @@ def find_live_server_for_store(config: Any, *, timeout: float = _PROBE_TIMEOUT_S
         return None
     host = info.get("host") or "127.0.0.1"
     probe_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    req = urllib.request.Request(f"http://{probe_host}:{port}/health/ready", method="GET")
     try:
-        req = urllib.request.Request(f"http://{probe_host}:{port}/health/ready", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status == 200:
-                return info
+        with urllib.request.urlopen(req, timeout=timeout):
+            return info  # 2xx → alive
+    except urllib.error.HTTPError:
+        # The server responded with a non-2xx (e.g. 503 while its brain is still
+        # initializing, or 401 if secured). It is ALIVE — not a stale lock — so
+        # a second server must still refuse. Only a connection-level failure
+        # below means the recorded process is actually gone.
+        return info
     except Exception:
         return None
-    return None
 
 
 def write_store_lock(config: Any, host: str, port: int) -> None:
