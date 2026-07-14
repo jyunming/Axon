@@ -201,6 +201,20 @@ command or dependency needed — the GUI ships with the server.
 > future release. It is no longer part of `[starter]` or `[all]`; install it
 > explicitly with `pip install "axon-rag[ui]"` if you still need it.
 
+> **Single-instance routing.** If an `axon-api` server is already running, the
+> `axon` CLI detects it (a quick `/health/ready` probe) and routes store-mutating
+> commands — `--ingest` and project create / delete / switch — *through* that
+> server instead of opening a second in-process copy of the same store. This
+> avoids two processes racing on the vector-store files, skips reloading the
+> embedding model on every CLI call, and keeps a single writer for both the store
+> and the logs. Pass `--local` to force an in-process brain, or point the CLI at a
+> specific server with the `AXON_API_BASE` environment variable (or the
+> `api_host` / `api_port` config fields).
+>
+> Relatedly, `axon-api` itself refuses to start a **second** server on a store
+> another `axon-api` is already serving (one writer per store) — set
+> `AXON_ALLOW_MULTIPLE_SERVERS=1` if you really want two.
+
 ---
 
 ## 🔌 VS Code + GitHub Copilot

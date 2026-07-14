@@ -39,6 +39,60 @@ def _print_project_tree(proj_list: list, active: str, indent: int = 0) -> None:
         _print_project_tree(p.get("children", []), active, indent + 1)
 
 
+def _run_via_server(server: dict, args, config) -> None:
+    """Execute store-mutating CLI commands against a detected axon-api server.
+
+    Mirrors the local ``--project-new``/``--project``/``--project-delete``/
+    ``--ingest`` handling but over HTTP, so the running server (the single owner
+    of the store) does the write. Called from ``main()`` when
+    :func:`axon.server_client.detect_server` finds a live server and the user
+    did not pass ``--local``. Any HTTP failure is surfaced and re-raised so the
+    caller can decide to fall back to local.
+    """
+    from axon import server_client as sc
+
+    base = server["_api_base"]
+    headers = sc._headers(config)
+    active = server.get("project", "default")
+    print(f"  Using running Axon server at {base} (active project '{active}').")
+
+    # Create/switch project (mirror local order: new implies switch).
+    if getattr(args, "project_new", None):
+        name = args.project_new.lower()
+        sc.remote_project_new(base, name, headers)
+        sc.remote_project_switch(base, name, headers)
+        active = name
+        print(f"  Using project '{name}'.")
+    elif getattr(args, "project", None):
+        name = args.project.lower()
+        sc.remote_project_switch(base, name, headers)
+        active = name
+        print(f"  Switched to project '{name}'.")
+
+    if getattr(args, "project_delete", None):
+        name = args.project_delete.lower()
+        sc.remote_project_delete(base, name, headers)
+        print(f"  Deleted project '{name}'.")
+
+    if getattr(args, "ingest", None):
+        print(f"  Ingesting '{args.ingest}' via server (project '{active}')...")
+
+        def _progress(status: dict) -> None:
+            phase = status.get("phase", "")
+            if phase:
+                print(f"    {phase}...")
+
+        result = sc.remote_ingest(base, args.ingest, headers, on_progress=_progress)
+        docs = result.get("documents_ingested")
+        chunks = result.get("chunks_total")
+        print(
+            "  Ingest complete"
+            + (f": {docs} document(s)" if docs is not None else "")
+            + (f", {chunks} chunk(s)" if chunks is not None else "")
+            + "."
+        )
+
+
 def _write_python_discovery() -> None:
     """Write current Python executable path to ~/.axon/.python_path.
     Called once at startup so the VS Code extension can auto-detect the Python
@@ -288,6 +342,16 @@ def main():
         "Combine with --ingest to populate in one step.",
     )
     parser.add_argument("--project-list", action="store_true", help="List all projects and exit")
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help=(
+            "Force a local in-process AxonBrain even if an axon-api server is "
+            "running. By default, store-mutating commands (--ingest, project "
+            "ops) are routed through a detected server to avoid opening the "
+            "same store twice."
+        ),
+    )
     parser.add_argument(
         "--project-delete", metavar="NAME", help="Delete a project and all its data, then exit"
     )
@@ -914,7 +978,24 @@ def main():
         log_base = _Path(config.axon_store_base or _Path.home() / ".axon")
         log_dir = (log_base / "logs").expanduser().resolve()
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}.log"
+        # Per-process log file: include the PID so two concurrent `axon`
+        # processes never share one file. On Windows a RotatingFileHandler
+        # cannot rename a file another process holds open, so a shared file
+        # turns every rollover into a PermissionError that floods the logs and
+        # lets the file grow without bound. A per-PID file is always owned by
+        # exactly one process, so rotation always succeeds.
+        log_file = log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}-{os.getpid()}.log"
+        # Best-effort: prune stale axon logs (per-PID files accumulate over time).
+        try:
+            _cutoff = _dt.now().timestamp() - 7 * 86400
+            for _old in log_dir.glob("axon-*.log*"):
+                try:
+                    if _old.stat().st_mtime < _cutoff:
+                        _old.unlink()
+                except OSError:
+                    pass
+        except Exception:
+            pass
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.DEBUG)
         # File handler (DEBUG+)
@@ -1250,7 +1331,9 @@ def main():
         _log_base = _Path(config.axon_store_base or _Path.home() / ".axon")
         _log_dir = (_log_base / "logs").expanduser().resolve()
         _log_dir.mkdir(parents=True, exist_ok=True)
-        _redir_log = _log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}.log"
+        # Per-process (see the RotatingFileHandler setup above): the stderr
+        # redirect must target the same per-PID file, not a shared daily one.
+        _redir_log = _log_dir / f"axon-{_dt.now().strftime('%Y%m%d')}-{os.getpid()}.log"
         if args.quiet or not sys.stdin.isatty() or not _entering_repl:
             try:
                 _log_fh = open(str(_redir_log), "a", encoding="utf-8")
@@ -1300,6 +1383,29 @@ def main():
         or getattr(args, "list_models", False)
         or getattr(args, "pull", None)
     )
+    # --- Single-instance detection ------------------------------------------
+    # If an axon-api server is already running, route store-mutating commands
+    # (--ingest, --project-new, --project-delete, and any --project switch that
+    # accompanies them) through it instead of opening a second local AxonBrain
+    # on the same store. Two processes racing on the TurboQuantDB files crash,
+    # and each extra CLI re-loads the embedding model and attaches the shared
+    # rotating log. --local opts out and forces a local brain.
+    if not getattr(args, "local", False) and (
+        getattr(args, "ingest", None)
+        or getattr(args, "project_new", None)
+        or getattr(args, "project_delete", None)
+    ):
+        from axon.server_client import ServerRequestError, detect_server
+
+        _server = detect_server(config)
+        if _server is not None:
+            try:
+                _run_via_server(_server, args, config)
+            except ServerRequestError as _e:
+                print(f"  Could not route to the running Axon server: {_e.detail}")
+                print("  (Re-run with --local to run in-process instead.)")
+                sys.exit(1)
+            return
     # Fast-path: handle lightweight, metadata-only commands without creating AxonBrain
     if not need_brain:
         from axon import projects as _proj_mod
@@ -1768,7 +1874,17 @@ def main():
                 os.environ["AXON_DRY_RUN"] = "1"
             except Exception:
                 pass
-        brain = AxonBrain(config)
+        # Single-instance reuse: for the interactive REPL, reuse a running
+        # axon-api server on the same store instead of building a second
+        # in-process brain (which would race on the store files and re-load the
+        # embedding model). One-off store commands keep a local brain so their
+        # un-proxied members never hit a RemoteBrain gap. --local forces local.
+        if _entering_repl and not getattr(args, "local", False):
+            from axon.remote_brain import get_brain
+
+            brain = get_brain(config, allow_remote=True)
+        else:
+            brain = AxonBrain(config)
         if _init_display:
             _init_display.stop()
             for _n in _INIT_LOGGER_NAMES:
@@ -2333,8 +2449,11 @@ def main():
     # No query supplied — enter interactive REPL (streaming on by default)
     _quiet = args.quiet or not sys.stdin.isatty()
     if brain is None:
-        # Ensure a brain instance is available for the interactive REPL
-        brain = AxonBrain(config)
+        # Ensure a brain instance is available for the interactive REPL —
+        # reuse a running same-store axon-api server when present (--local opts out).
+        from axon.remote_brain import get_brain
+
+        brain = get_brain(config, allow_remote=not getattr(args, "local", False))
     try:
         _interactive_repl(brain, stream=True, init_display=_init_display, quiet=_quiet)
     except (KeyboardInterrupt, EOFError):

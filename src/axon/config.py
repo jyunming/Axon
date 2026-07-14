@@ -502,6 +502,14 @@ class AxonConfig:
     # CORS origins allowed by the REST API server (maps from api.allow_origins in config.yaml).
     # Example: ["http://localhost:3000", "https://my.app"]
     api_allow_origins: list = field(default_factory=list)
+    # Host/port where an axon-api server can be reached. Used by CLI/REPL clients
+    # for single-instance detection: if a server is already running here, store-
+    # mutating commands (ingest, project ops) are routed through it instead of
+    # opening a second local AxonBrain on the same store. Server-side, axon-api
+    # still reads AXON_HOST/AXON_PORT env vars; these config fields are the
+    # client-side default (overridden by AXON_API_BASE/RAG_API_BASE env vars).
+    api_host: str = "127.0.0.1"
+    api_port: int = 8000
     openai_api_key: str = ""
     grok_api_key: str = ""
     gemini_api_key: str = ""

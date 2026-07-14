@@ -66,6 +66,10 @@ axon "What is RAG?"
 axon --stream "Summarise my documents"
 # CLI — ingest a directory
 axon --ingest ./documents/
+#   If an axon-api server is already running on the same store, --ingest and
+#   project create/delete/switch are automatically routed through it (one owner
+#   of the store — no crash, no model reload). Add --local to force in-process:
+axon --local --ingest ./documents/
 # CLI — list all ingested documents
 axon --list
 # CLI — switch model at runtime (auto-pulls Ollama model if missing)

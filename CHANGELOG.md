@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+### ⚡ Single-instance behaviour — one brain per store
+
+Multiple Axon surfaces used to each build their own full `AxonBrain` on the same
+store. Two processes writing one TurboQuantDB store race on the native files and
+crash, and each re-loads the embedding model on startup. Axon now coordinates a
+single owner per store:
+
+- **CLI store-mutating commands route through a running server.** If an
+  `axon-api` server is already serving the same store, `axon --ingest` and
+  project create / delete / switch are sent to it over HTTP instead of opening a
+  second in-process store — so the running server stays the single writer. The
+  target store is verified against the server's `projects_root` (via `/config`)
+  so a client never writes to the wrong corpus. `--local` forces an in-process
+  brain; `AXON_API_BASE` (or the new `api_host` / `api_port` config fields) points
+  at a specific server.
+- **`axon-api` refuses a second server on the same store.** A per-store lockfile
+  records the serving process (host / port / pid); a second `axon-api` pointed at
+  that store exits with a clear message instead of opening a competing brain.
+  Stale locks (dead server) are ignored. Override with
+  `AXON_ALLOW_MULTIPLE_SERVERS=1`.
+- **Streamlit UI + CLI REPL reuse a running server.** A new `get_brain(config)`
+  factory returns a lightweight `RemoteBrain` HTTP proxy when a same-store server
+  is live (queries, ingest, project switch, etc. routed over HTTP; the embedding
+  model is never re-loaded), or a local `AxonBrain` otherwise. So `axon-ui` and
+  the interactive `axon` REPL no longer stand up a second full brain alongside a
+  running `axon-api`. `--local` (REPL) forces in-process. `axon-mcp` already
+  worked this way. (Reuse is single-turn against the server; a few REPL slash-
+  commands that need direct store internals fall back with a clear message.)
+- **Per-process CLI log files** (`axon-YYYYMMDD-<pid>.log`). A shared daily log
+  could not be rotated on Windows while another `axon` process held it open —
+  every rollover then raised `PermissionError`, flooding the logs and letting the
+  file grow without bound (observed at 500+ MB). Each process now owns its file,
+  so rotation always succeeds.
+
+### 🐛 Fixes
+
+- **Web GUI chat dropped spaces between words** in streamed answers
+  ("HowcanIhelp"). The client trimmed every SSE frame, stripping the leading
+  space each tokenizer token carries. It now preserves token whitespace and only
+  JSON-parses structured control frames (sources / errors).
+
 ## [0.4.3] - 2026-08-09
 
 Two things at once: the browser UI question is settled — the native web GUI
