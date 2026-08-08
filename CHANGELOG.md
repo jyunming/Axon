@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **`local` LLM provider — point Axon at any OpenAI-compatible server on your machine.**
+  llama.cpp (`llama-server`), vLLM, LM Studio, text-generation-inference, LocalAI:
+  anything exposing `POST /chat/completions` and `GET /models`. Configure with
+  `llm.local_base_url` (default `http://localhost:8080/v1`, also
+  `AXON_LOCAL_LLM_BASE_URL`) and the optional `llm.local_api_key`.
+  Axon **never loads or unloads models** — an unloaded model fails fast instead of
+  stalling behind a 30–90 s hot-swap.
+- **Endpoint ping.** `axon --doctor` gains a "Local LLM endpoint" check that reports
+  reachability and lists served models; `/local-url ping` does the same from the REPL.
+  "Up but serving no models" is reported as a warning, since that is a real state for
+  a router-mode server with nothing resident.
+- **REPL `/local-url [URL|ping]`** to show, set, or ping the endpoint.
+
+### 🐛 Fixes
+
+- **Reasoning models no longer return empty answers.** Gemma 4, GPT-OSS and
+  DeepSeek-R1 derivatives put their chain of thought in a non-standard
+  `reasoning_content` field and leave `content` empty when the token budget runs out
+  mid-thought. Axon read `content` only, so those responses arrived as `""` with no
+  error — silently degrading every internal RAG step that parses model output rather
+  than displaying it (HyDE, multi-query, step-back, decompose, context compression,
+  GraphRAG NER, RAPTOR summaries, LLM rerank). All OpenAI-compatible providers now
+  fall back to `reasoning_content`, `vllm` included.
+
+### ⚠️ Behaviour changes
+
+- **`llm.max_tokens` default raised from 2048 to 8192**, for all providers. 2048
+  truncates reasoning models mid-thought. This raises the per-call output ceiling on
+  paid APIs (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default — set
+  `llm.max_tokens` explicitly to keep the old value.
+
 ## [0.4.2] - 2026-05-19
 
 A maintenance + audit release. **30 bug fixes** across nine parallel codebase-audit units (PRs #122–125, #127–131), plus brand polish on the auto-generated REST docs and the VS Code marketplace tile, plus seven documentation staleness fixes. Several findings were security-relevant — operators on shared / cloud-synced storage should upgrade.

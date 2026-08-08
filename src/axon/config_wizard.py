@@ -436,12 +436,13 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
     # ── 1. LLM  [quick / standard / full] ────────────────────────────────────
     _header("1 / 16  LLM")
     _label("Language model for answer generation and advanced strategies (HyDE, RAPTOR, GraphRAG).")
-    _label("ollama runs locally; openai/gemini/grok/vllm require credentials.")
+    _label("ollama and local run on this machine; openai/gemini/grok need credentials.")
+    _label("Pick 'local' for any OpenAI-compatible server you already run (llama.cpp, LM Studio).")
     if not _section_skip("LLM"):
         _pick(
             "llm.provider — which LLM backend to use",
             "llm_provider",
-            ["ollama", "openai", "gemini", "grok", "vllm", "github_copilot"],
+            ["ollama", "local", "openai", "gemini", "grok", "vllm", "github_copilot"],
             "ollama",
         )
         _label("Model name for the chosen provider (e.g. llama3.1:8b, gpt-4o, gemini-2.0-flash).")
@@ -463,6 +464,9 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
             _ask_int("llm.timeout", "llm_timeout", 60, 1, 600)
             _label("vllm_base_url: only used when provider=vllm.")
             _ask_str("llm.vllm_base_url", "vllm_base_url", "http://localhost:8000/v1")
+            _label("local_base_url: only used when provider=local. Any OpenAI-compatible")
+            _label("server on this machine — llama.cpp (:8080), LM Studio (:1234), TGI, …")
+            _ask_str("llm.local_base_url", "local_base_url", "http://localhost:8080/v1")
     # ── 2. Embedding  [quick / standard / full] ───────────────────────────────
     _header("2 / 16  Embedding")
     _label(

@@ -69,6 +69,7 @@ _SLASH_COMMANDS = [
     "/store ",
     "/theme ",
     "/vllm-url ",
+    "/local-url ",
 ]
 
 _SLASH_CMD_DESC: dict[str, str] = {
@@ -105,6 +106,7 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/store": "AxonStore management (init / status / share)",
     "/theme": "Switch syntax-highlighting theme",
     "/vllm-url": "Set the vLLM server base URL",
+    "/local-url": "Set or ping the local OpenAI-compatible LLM endpoint",
 }
 
 
@@ -2704,6 +2706,8 @@ def _interactive_repl(
                         "    /store [sub]    AxonStore multi-user mode (init, whoami)\n"
                         "    /theme [name]   show or switch markdown code-block highlight theme\n"
                         "    /vllm-url <url> set the vLLM server base URL\n"
+                        "    /local-url [url|ping]  set or ping the local OpenAI-compatible "
+                        "LLM endpoint\n"
                         "\n"
                         "    Shell:   !<cmd>  run a shell command (local-only default)\n"
                         "    Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
@@ -2802,6 +2806,10 @@ def _interactive_repl(
                     print(
                         f"    vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
                     )
+                    print(
+                        f"    Local URL: {brain.config.local_base_url}  "
+                        "(change with /local-url <url>)"
+                    )
                 elif "/" in arg:
                     provider, model = arg.split("/", 1)
                     if provider not in _PROVIDERS:
@@ -2834,6 +2842,25 @@ def _interactive_repl(
                     brain.config.vllm_base_url = arg
                     brain.llm._openai_clients = {}  # invalidate cached client
                     print(f"    vLLM base URL set to {arg}")
+            elif cmd == "/local-url":
+                if not arg:
+                    print(f"    Current local LLM base URL: {brain.config.local_base_url}")
+                    print("    Usage: /local-url http://host:port/v1")
+                    print("           /local-url ping     (check the endpoint is up)")
+                elif arg.strip() == "ping":
+                    result = brain.llm.ping_local()
+                    if result["reachable"]:
+                        models = ", ".join(result["models"]) or "(none loaded)"
+                        print(f"    OK  {result['base_url']}")
+                        print(f"    Models: {models}")
+                    else:
+                        print(f"    UNREACHABLE  {result['base_url']}")
+                        print(f"    {result['error']}")
+                        print("    Axon does not start your LLM server — start it, then retry.")
+                else:
+                    brain.config.local_base_url = arg
+                    brain.llm._openai_clients = {}  # invalidate cached client
+                    print(f"    Local LLM base URL set to {arg}")
             elif cmd == "/embed":
                 _EMBED_PROVIDERS = ("sentence_transformers", "ollama", "fastembed", "openai")
                 if not arg:

@@ -173,6 +173,7 @@ The system supports cloud providers in addition to local Ollama models. Set `llm
 | **xAI Grok** | `grok` | `grok-3`, `grok-3-fast`, `grok-2` | Requires `XAI_API_KEY`; OpenAI-compatible endpoint (`api.x.ai/v1`) |
 | **Ollama Cloud** | `ollama_cloud` | Any Ollama-hosted model | Requires `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` |
 | **vLLM** | `vllm` | Any vLLM-served model | Self-hosted OpenAI-compatible endpoint; set `vllm_base_url` in `config.yaml` |
+| **Local (any OpenAI-compatible)** | `local` | Whatever your server has loaded | llama.cpp (`llama-server`), vLLM, LM Studio, TGI, LocalAI. Set `local_base_url`; verify with `axon --doctor` or `/local-url ping`. Axon never loads or unloads models. |
 | **GitHub Copilot** | `copilot` | Any active Copilot model | VS Code only — routes LLM calls through the Copilot extension bridge; no Ollama required. Enable via `axon.useCopilotLlm: true` in VS Code settings or `provider: copilot` in `config.yaml`. |
 | **GitHub Copilot (OAuth)** | `github_copilot` | `gpt-4o`, `gpt-4.1`, `claude-3.5-sonnet` | Headless server use. Talks to the Copilot API directly using a **GitHub OAuth token obtained via the device-code flow** — run `axon --keys set github_copilot` to enrol once. Stored under env-var `GITHUB_COPILOT_PAT` (the name is legacy; the value is an OAuth access token, not a classic personal access token). Use `copilot` for VS Code integration; `github_copilot` for non-VS-Code workflows (CI, scripts, REST). |
 
@@ -245,6 +246,49 @@ llm:
   vllm_base_url: http://localhost:8000/v1
 
 ```
+
+**Local OpenAI-compatible server (llama.cpp, LM Studio, TGI, LocalAI):**
+
+Use `provider: local` when you already run an LLM server on this machine and just
+want Axon to talk to it. Anything exposing `POST /chat/completions` and
+`GET /models` works.
+
+```yaml
+
+llm:
+
+  provider: local
+
+  model: gemma4-26b            # must match an id the server reports at /models
+
+  local_base_url: http://localhost:8080/v1
+
+```
+
+Common ports: llama.cpp `llama-server` **8080**, LM Studio **1234**, vLLM **8000**,
+TGI **3000**. The default is 8080 — deliberately *not* 8000, which is where
+`axon-api` itself listens.
+
+Check the endpoint before querying:
+
+```bash
+axon --doctor          # includes a "Local LLM endpoint" check listing served models
+```
+```
+axon> /local-url ping
+```
+
+**Axon never loads or unloads models.** Start and stop them with your own tooling
+(`las serve <model>`, `vllm serve <model>`, the LM Studio UI). If the model isn't
+resident, the query fails immediately rather than stalling behind a 30–90 s
+model swap.
+
+> **Reasoning models:** Gemma 4, GPT-OSS and DeepSeek-R1 derivatives emit their
+> chain of thought in a non-standard `reasoning_content` field and can spend
+> thousands of tokens there before producing any `content`. Axon reads that field
+> as a fallback, and `llm.max_tokens` defaults to 8192 so the model isn't cut off
+> mid-thought. If answers come back empty, raise it further before suspecting the
+> retrieval pipeline.
 
 **GitHub Copilot (VS Code bridge):**
 

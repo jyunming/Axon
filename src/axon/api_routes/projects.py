@@ -57,6 +57,9 @@ _SENSITIVE_FIELDS = frozenset(
         "copilot_pat",
         "brave_api_key",
         "qdrant_api_key",
+        # Usually empty (local servers rarely authenticate), but mask it anyway:
+        # these values are echoed back through /config and fed to agent tools.
+        "local_api_key",
     }
 )
 

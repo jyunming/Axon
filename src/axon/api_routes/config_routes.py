@@ -33,6 +33,8 @@ _DOT_TO_FLAT: dict[str, str] = {
     "llm.max_tokens": "llm_max_tokens",
     "llm.timeout": "llm_timeout",
     "llm.vllm_base_url": "vllm_base_url",
+    "llm.local_base_url": "local_base_url",
+    "llm.local_api_key": "local_api_key",
     "llm.openai_api_key": "openai_api_key",
     "llm.grok_api_key": "grok_api_key",
     "llm.gemini_api_key": "gemini_api_key",

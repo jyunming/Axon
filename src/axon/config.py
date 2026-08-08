@@ -156,6 +156,8 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "grok_api_key",
         "gemini_api_key",
         "vllm_base_url",
+        "local_base_url",
+        "local_api_key",
         "temperature",
         "max_tokens",
         "api_key",
@@ -328,11 +330,25 @@ class AxonConfig:
     ollama_models_dir: str = ""
     # LLM
     llm_provider: Literal[
-        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot", "github_copilot", "grok"
+        "ollama",
+        "gemini",
+        "ollama_cloud",
+        "openai",
+        "vllm",
+        "local",
+        "copilot",
+        "github_copilot",
+        "grok",
     ] = "ollama"
     llm_model: str = "llama3.1:8b"
     llm_temperature: float = 0.7
-    llm_max_tokens: int = 2048
+    # 8192, not 2048: reasoning models (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives)
+    # spend the budget on `reasoning_content` before emitting any `content`, and
+    # can burn >4k tokens doing so. At 2048 they hit the ceiling mid-reasoning and
+    # return empty content — which silently degrades every internal RAG call
+    # (HyDE, multi-query, step-back, decompose, compression, GraphRAG NER, RAPTOR,
+    # LLM rerank) because those parse the output rather than display it.
+    llm_max_tokens: int = 8192
     api_key: str = ""  # legacy alias -- prefer openai_api_key
     # CORS origins allowed by the REST API server (maps from api.allow_origins in config.yaml).
     # Example: ["http://localhost:3000", "https://my.app"]
@@ -343,6 +359,18 @@ class AxonConfig:
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
     vllm_base_url: str = "http://localhost:8000/v1"
+    # Generic OpenAI-compatible endpoint served on this machine — llama.cpp
+    # (llama-server), vLLM, LM Studio, text-generation-inference, LocalAI, or
+    # anything else exposing POST /chat/completions and GET /models.
+    #
+    # Defaults to :8080 (llama-server's port) rather than :8000, which is where
+    # `axon-api` itself listens — a shared default there would collide on a
+    # single-machine setup.
+    local_base_url: str = "http://localhost:8080/v1"
+    # Most local servers ignore auth entirely; set this only if yours requires
+    # a key. The OpenAI SDK refuses to construct a client without one, so an
+    # empty value is replaced with a dummy at call time.
+    local_api_key: str = ""
     # GitHub OAuth token for the "github_copilot" provider.
     # Obtained via the OAuth device flow (/keys set github_copilot).
     # Classic PATs are NOT accepted by the Copilot API.
@@ -393,6 +421,12 @@ class AxonConfig:
             env_val = os.getenv("VLLM_BASE_URL")
             if env_val:
                 self.vllm_base_url = env_val
+        if self.local_base_url == "http://localhost:8080/v1":
+            env_local = os.getenv("AXON_LOCAL_LLM_BASE_URL") or os.getenv("LOCAL_LLM_BASE_URL")
+            if env_local:
+                self.local_base_url = env_local
+        if not self.local_api_key:
+            self.local_api_key = os.getenv("LOCAL_LLM_API_KEY", "")
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
         if not self.copilot_pat:
@@ -1065,6 +1099,10 @@ class AxonConfig:
             config_dict["grok_api_key"] = config_dict.pop("llm_grok_api_key")
         if "llm_vllm_base_url" in config_dict:
             config_dict["vllm_base_url"] = config_dict["llm_vllm_base_url"]
+        if "llm_local_base_url" in config_dict:
+            config_dict["local_base_url"] = config_dict["llm_local_base_url"]
+        if "llm_local_api_key" in config_dict:
+            config_dict["local_api_key"] = config_dict.pop("llm_local_api_key")
         if "projects_root" in data:
             config_dict["projects_root"] = data["projects_root"]
         if "max_workers" in data:
@@ -1288,6 +1326,10 @@ class AxonConfig:
             data["llm"]["ollama_cloud_url"] = flat["ollama_cloud_url"]
         if flat["vllm_base_url"]:
             data["llm"]["vllm_base_url"] = flat["vllm_base_url"]
+        if flat["local_base_url"]:
+            data["llm"]["local_base_url"] = flat["local_base_url"]
+        if flat["local_api_key"]:
+            data["llm"]["local_api_key"] = flat["local_api_key"]
         if flat["llm_timeout"]:
             data["llm"]["timeout"] = flat["llm_timeout"]
         import tempfile as _tempfile

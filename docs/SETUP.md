@@ -524,7 +524,7 @@ llm:
   model: phi3:mini
   base_url: http://localhost:11434
   temperature: 0.7
-  max_tokens: 2048
+  max_tokens: 8192
 vector_store:
   provider: turboquantdb   # default; path derived automatically from store.base
 rag:
@@ -549,7 +549,7 @@ llm:
   model: llama3.1:8b
   base_url: http://localhost:11434
   temperature: 0.7
-  max_tokens: 2048
+  max_tokens: 8192
 vector_store:
   provider: turboquantdb   # default; path derived automatically from store.base
 rag:
@@ -578,7 +578,7 @@ llm:
   model: qwen2.5:7b
   base_url: http://localhost:11434
   temperature: 0.7
-  max_tokens: 2048
+  max_tokens: 8192
 vector_store:
   provider: qdrant   # path derived automatically from store.base
 rag:

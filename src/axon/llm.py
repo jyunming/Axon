@@ -246,11 +246,46 @@ def _fetch_copilot_models(llm: "OpenLLM") -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def message_text(message) -> str:
+    """Text of an OpenAI-dialect response message, tolerating reasoning models.
+
+    Reasoning models served locally (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives)
+    put their chain of thought in a non-standard ``reasoning_content`` field and
+    leave ``content`` empty when the token budget runs out mid-thought. Reading
+    ``content`` alone yields ``""`` with no error, which silently degrades every
+    internal RAG step that parses model output rather than displaying it — HyDE,
+    multi-query, step-back, decompose, compression, GraphRAG NER, RAPTOR
+    summaries, LLM rerank.
+
+    Prefer real ``content``; fall back to ``reasoning_content`` so a truncated
+    answer beats no answer. Returns ``""`` when neither carries text.
+    """
+    content = getattr(message, "content", None)
+    if content:
+        return content
+    for attr in ("reasoning_content", "reasoning"):
+        fallback = getattr(message, attr, None)
+        if fallback:
+            return fallback
+    # Some servers only surface the extra field through the raw payload.
+    extra = getattr(message, "model_extra", None) or {}
+    for key in ("reasoning_content", "reasoning"):
+        if extra.get(key):
+            return extra[key]
+    return ""
+
+
 class OpenLLM:
     """Unified LLM client supporting ollama, gemini, ollama_cloud, openai, grok, vllm, and copilot.
     The ``copilot`` provider routes completions through the VS Code extension
     bridge (poll ``GET /llm/copilot/tasks``, submit results via
     ``POST /llm/copilot/result/<task_id>``).
+
+    The ``local`` provider targets any OpenAI-compatible server running on this
+    machine (llama.cpp / vLLM / LM Studio / TGI …) at ``local_base_url``. Axon
+    never loads or unloads models for it — the endpoint is assumed to be serving
+    already, and a request for an unloaded model surfaces as an error rather
+    than a silent 30-90 s stall.
     """
 
     def __init__(self, config: AxonConfig):
@@ -331,6 +366,57 @@ class OpenLLM:
                 user_text = f"{system_prompt}\n\n{prompt}"
             contents.append({"role": "user", "parts": [{"text": user_text}]})
         return contents
+
+    def ping_local(self, base_url: str = None, timeout: float = 5.0) -> dict:
+        """Check that a local OpenAI-compatible endpoint is up, and list its models.
+
+        Deliberately uses ``GET /models`` rather than a chat completion: it is
+        cheap, needs no model loaded, and is the one management endpoint every
+        OpenAI-compatible server implements.
+
+        Returns a dict with ``reachable`` (bool), ``base_url``, ``models`` (list
+        of model ids, possibly empty) and ``error`` (str or None). Never raises —
+        callers are diagnostics (``axon --doctor``, the REST config route) that
+        want to report a failure, not propagate one.
+        """
+        url = (base_url or self.config.local_base_url or "").rstrip("/")
+        result = {"reachable": False, "base_url": url, "models": [], "error": None}
+        if not url:
+            result["error"] = "no base_url configured"
+            return result
+        try:
+            import httpx
+
+            headers = {}
+            if self.config.local_api_key:
+                headers["Authorization"] = f"Bearer {self.config.local_api_key}"
+            response = httpx.get(f"{url}/models", timeout=timeout, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not raise
+            result["error"] = f"{type(exc).__name__}: {exc}"
+            return result
+
+        result["reachable"] = True
+        # OpenAI shape is {"data": [{"id": ...}]}; some servers return a bare list.
+        rows = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if isinstance(rows, list):
+            result["models"] = [
+                str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id") is not None
+            ]
+        return result
+
+    def _local_client(self):
+        """OpenAI SDK client pointed at the configured local endpoint.
+
+        Works with any server speaking the OpenAI REST dialect — llama.cpp's
+        ``llama-server``, vLLM, LM Studio, TGI, LocalAI. Most ignore auth, so an
+        unset ``local_api_key`` falls back to a dummy the SDK will accept.
+        """
+        return self._get_openai_client(
+            base_url=self.config.local_base_url,
+            api_key=self.config.local_api_key or "sk-local",
+        )
 
     def _get_openai_client(self, base_url: str = None, api_key: str = None):
         """Return a cached OpenAI client. Pass base_url for vLLM or custom endpoints.
@@ -484,7 +570,7 @@ class OpenLLM:
                 timeout=self.config.llm_timeout,
             )
             return response.choices[0].message.content
-        elif provider == "vllm":
+        elif provider in ("vllm", "local"):
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
@@ -492,16 +578,19 @@ class OpenLLM:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
             messages.append({"role": "user", "content": prompt})
-            response = self._get_openai_client(
-                base_url=self.config.vllm_base_url
-            ).chat.completions.create(
+            client = (
+                self._local_client()
+                if provider == "local"
+                else self._get_openai_client(base_url=self.config.vllm_base_url)
+            )
+            response = client.chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 timeout=self.config.llm_timeout,
             )
-            return response.choices[0].message.content
+            return message_text(response.choices[0].message)
         elif provider == "github_copilot":
             messages = []
             if system_prompt:
@@ -662,12 +751,13 @@ class OpenLLM:
                 ]
             return msg_obj.get("content", "") or ""
         # ------------------------------------------------------------------ OpenAI-compatible
-        if provider in ("openai", "vllm", "github_copilot", "grok"):
+        if provider in ("openai", "vllm", "local", "github_copilot", "grok"):
             import json as _json
 
             _client = {
                 "openai": lambda: self._get_openai_client(),
                 "vllm": lambda: self._get_openai_client(base_url=self.config.vllm_base_url),
+                "local": lambda: self._local_client(),
                 "github_copilot": lambda: self._get_copilot_client(),
                 "grok": lambda: self._get_grok_client(),
             }[provider]()
@@ -704,7 +794,7 @@ class OpenLLM:
                     )
                     for tc in choice.message.tool_calls
                 ]
-            return choice.message.content or ""
+            return message_text(choice.message)
         # ------------------------------------------------------------------ Fallback
         return self.complete(prompt, system_prompt=system_prompt, chat_history=chat_history)
 
@@ -812,7 +902,7 @@ class OpenLLM:
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
                     yield chunk.choices[0].delta.content
-        elif provider == "vllm":
+        elif provider in ("vllm", "local"):
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
@@ -820,9 +910,12 @@ class OpenLLM:
                 if msg["role"] in ["user", "assistant"]:
                     messages.append({"role": msg["role"], "content": msg["content"]})
             messages.append({"role": "user", "content": prompt})
-            stream = self._get_openai_client(
-                base_url=self.config.vllm_base_url
-            ).chat.completions.create(
+            client = (
+                self._local_client()
+                if provider == "local"
+                else self._get_openai_client(base_url=self.config.vllm_base_url)
+            )
+            stream = client.chat.completions.create(
                 model=self.config.llm_model,
                 messages=messages,
                 temperature=self.config.llm_temperature,
@@ -830,9 +923,15 @@ class OpenLLM:
                 stream=True,
                 timeout=self.config.llm_timeout,
             )
+            # Reasoning deltas are NOT streamed to the user: they are the model's
+            # scratchpad, not its answer. If nothing but reasoning ever arrives,
+            # the non-streaming paths still recover it via message_text().
             for chunk in stream:
-                if chunk.choices[0].delta.content is not None:
-                    yield chunk.choices[0].delta.content
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if getattr(delta, "content", None) is not None:
+                    yield delta.content
         elif provider == "github_copilot":
             messages = []
             if system_prompt:
