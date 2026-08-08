@@ -38,7 +38,11 @@ dependencies = [
     "google-genai>=1.4.0",
     "rank_bm25>=0.2.2",
     "httpx>=0.25.0",
-    "mcp>=1.0.0",
+    # Upper-bounded: mcp 2.0.0 removed `mcp.server.fastmcp`, which mcp_server.py
+    # imports (`from mcp.server.fastmcp import FastMCP`). With the pin open, CI
+    # resolved 2.0.0 and every test job died at collection. Migrating the 48-tool
+    # MCP server to the 2.x API is a separate piece of work; until then, stay on 1.x.
+    "mcp>=1.0.0,<2.0.0",
     "pyyaml>=6.0.0",
     "pandas>=2.0.0",
     "Pillow>=10.0.0",
