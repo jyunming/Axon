@@ -37,6 +37,15 @@ logger = logging.getLogger("Axon")
 # when `llm_timeout` is still the untouched dataclass default, so an explicit
 # setting always wins. (Setting exactly 60 explicitly is indistinguishable from
 # not setting it — pick 59 or 61 if you truly want a hard 60 s cap on `local`.)
+#
+# IMPORTANT — this is a soft bound, not a wall-clock deadline. The OpenAI SDK
+# hands the value to httpx, which applies it per phase (connect/read/write/pool),
+# and the read timeout restarts on every chunk received. A server that trickles
+# output therefore keeps resetting it. Measured: llm_timeout=30 against a slowly
+# generating local model raised APITimeoutError after 96 s, not 30 s. Treat these
+# numbers as "abort if the server goes quiet for this long", not "abort after
+# this long". If you need a true deadline, cap generation length instead
+# (llm_max_tokens) or run a faster model.
 DEFAULT_LLM_TIMEOUT = 60
 DEFAULT_LOCAL_LLM_TIMEOUT = 300
 
@@ -1543,6 +1552,36 @@ class AxonConfig:
                     section="rag",
                     field="sentence_window_size",
                     message=f"sentence_window_size must be >= 1, got {cfg.sentence_window_size}.",
+                )
+            )
+        # Local provider: LLM-based graph extraction runs one call per chunk, and
+        # locally served models are slow enough that this stops being practical.
+        # Measured with llama.cpp serving Gemma 4 26B on an Intel Arc iGPU:
+        # ~4 tokens/s, so a single extraction that reasons up to llm_max_tokens can
+        # run for tens of minutes — and llm.timeout will not reliably cut it short
+        # (see DEFAULT_LOCAL_LLM_TIMEOUT: it is a per-read bound, not a deadline).
+        # Warn rather than block: a fast local model on a real GPU is fine.
+        if (
+            cfg.llm_provider == "local"
+            and cfg.graph_rag
+            and cfg.graph_rag_depth != "light"
+            and cfg.graph_rag_ner_backend == "llm"
+        ):
+            issues.append(
+                ConfigIssue(
+                    level="warn",
+                    section="rag",
+                    field="graph_rag_depth",
+                    message=(
+                        "graph_rag is on with llm.provider 'local' and LLM-based entity "
+                        "extraction. Ingest makes one LLM call per chunk, which can take "
+                        "tens of minutes per chunk on a slow local model."
+                    ),
+                    suggestion=(
+                        "Set rag.graph_rag_depth: light for regex extraction (no LLM calls), "
+                        "or rag.graph_rag_ner_backend: gliner, or point llm.local_base_url at "
+                        "a faster model."
+                    ),
                 )
             )
         # API key warnings

@@ -22,6 +22,12 @@
   model on consumer hardware needs far longer than 60 s per call. An explicit
   `llm.timeout` always wins.
 
+- **Config validation warns on GraphRAG + a local model.** LLM-based graph
+  extraction makes one call per chunk; on a slow local model that is impractical
+  (measured: >10 min for a single extraction, with `llm.timeout` unable to cut it
+  short). The warning points at `rag.graph_rag_depth: light`, which extracted the
+  same entities in 0.6 s with no LLM calls.
+
 ### 🐛 Fixes
 
 - **Reasoning models no longer return empty answers.** Gemma 4, GPT-OSS and

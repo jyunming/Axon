@@ -283,12 +283,26 @@ axon> /local-url ping
 resident, the query fails immediately rather than stalling behind a 30–90 s
 model swap.
 
+> **GraphRAG on a slow local model:** `graph_rag` extraction makes **one LLM call
+> per chunk**. Measured with llama.cpp serving Gemma 4 26B on an Intel Arc iGPU
+> (~4 tokens/s), a single extraction call ran past 10 minutes without finishing —
+> and `llm.timeout` did not cut it short (see the timeout note below). Set
+> `rag.graph_rag_depth: light` to use regex extraction with no LLM calls at all:
+> on the same box that indexed the same entities in **0.6 s**. `axon --setup`
+> config validation now warns when `graph_rag` is on with `provider: local` and
+> LLM-based extraction. Alternatives: `rag.graph_rag_ner_backend: gliner`, or a
+> smaller/faster model.
+
 > **Timeouts:** `llm.timeout` defaults to 60 s, which suits cloud providers but not a
 > 26B model on consumer hardware — measured on an Intel Arc iGPU, a two-character
 > answer took 33 s and a step-back reformulation 75 s. With `provider: local` the
 > effective default is raised to **300 s**, so multi-call strategies (`step_back`,
 > `query_decompose`) don't time out mid-pipeline. Set `llm.timeout` explicitly to
-> override.
+> override. Note that this is a **soft** bound: the OpenAI SDK passes it to httpx,
+> which applies it per read, and every chunk received resets the clock. Measured:
+> `llm.timeout: 30` against a slowly generating local model raised after 96 s, not
+> 30 s. Read it as "abort if the server goes quiet this long", not "abort after
+> this long" — to bound total time, cap `llm.max_tokens` or use a faster model.
 
 > **Reasoning models:** Gemma 4, GPT-OSS and DeepSeek-R1 derivatives emit their
 > chain of thought in a non-standard `reasoning_content` field and can spend

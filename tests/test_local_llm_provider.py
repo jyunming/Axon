@@ -105,6 +105,75 @@ class TestEffectiveTimeout:
         assert client.chat.completions.create.call_args.kwargs["timeout"] == 300
 
 
+class TestGraphRagLocalWarning:
+    """LLM graph extraction is one call per chunk — impractical on a slow local model.
+
+    Measured with llama.cpp serving Gemma 4 26B on an Intel Arc iGPU (~4 tok/s):
+    a single extraction call ran past 10 minutes without completing, and
+    `llm.timeout` did not cut it short because that bound is per-read, not
+    wall-clock. `graph_rag_depth: light` extracts the same entities in 0.6s.
+    """
+
+    def _issues(self, tmp_path, provider="local", **rag):
+        """validate() is a classmethod that reads a file — so write the YAML.
+
+        Deliberately NOT via AxonConfig.save(): that helper does not serialise
+        graph_rag_depth or graph_rag_ner_backend (a pre-existing round-trip gap),
+        so a saved config would always validate against the defaults and this
+        test would pass for the wrong reason.
+        """
+        import yaml
+
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            yaml.safe_dump({"llm": {"provider": provider}, "rag": rag}), encoding="utf-8"
+        )
+        return [i for i in AxonConfig.validate(path=str(path)) if i.field == "graph_rag_depth"]
+
+    def test_warns_on_local_plus_llm_extraction(self, tmp_path):
+        issues = [
+            i
+            for i in self._issues(
+                tmp_path, llm_provider="local", graph_rag=True, graph_rag_depth="standard"
+            )
+            if i.level == "warn"
+        ]
+        assert issues, "expected a warning for local + LLM graph extraction"
+        assert "light" in issues[0].suggestion
+
+    def test_silent_when_depth_is_light(self, tmp_path):
+        assert not self._issues(
+            tmp_path, llm_provider="local", graph_rag=True, graph_rag_depth="light"
+        )
+
+    def test_silent_when_ner_backend_avoids_the_llm(self, tmp_path):
+        assert not self._issues(
+            tmp_path,
+            llm_provider="local",
+            graph_rag=True,
+            graph_rag_depth="standard",
+            graph_rag_ner_backend="gliner",
+        )
+
+    def test_silent_when_graph_rag_is_off(self, tmp_path):
+        assert not self._issues(
+            tmp_path, llm_provider="local", graph_rag=False, graph_rag_depth="standard"
+        )
+
+    def test_silent_for_cloud_providers(self, tmp_path):
+        """A hosted model is fast enough that per-chunk extraction is fine."""
+        assert not self._issues(
+            tmp_path, llm_provider="openai", graph_rag=True, graph_rag_depth="standard"
+        )
+
+    def test_warning_is_not_an_error(self, tmp_path):
+        """Never block the run — a fast local model on a real GPU is fine."""
+        issues = self._issues(
+            tmp_path, llm_provider="local", graph_rag=True, graph_rag_depth="standard"
+        )
+        assert issues and all(i.level != "error" for i in issues)
+
+
 class TestLocalClient:
     def test_uses_configured_base_url(self):
         cfg = AxonConfig(llm_provider="local", local_base_url="http://127.0.0.1:8080/v1")
