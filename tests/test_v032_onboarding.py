@@ -5,6 +5,7 @@ Covers:
 - Aggregate ``run_doctor`` overall-status logic.
 - ``cli._is_first_run`` detection: config absent + store empty → True.
 """
+
 from __future__ import annotations
 
 import os
@@ -140,22 +141,36 @@ class TestStoreWritable:
 
 
 class TestOptionalExtras:
-    def test_ok_when_streamlit_and_keyring_present(self, monkeypatch):
+    def test_ok_when_sealed_sharing_deps_present(self, monkeypatch):
         # Stub both imports so the check sees them as available.
         fake = SimpleNamespace()
-        monkeypatch.setitem(sys.modules, "streamlit", fake)
         monkeypatch.setitem(sys.modules, "cryptography", fake)
         monkeypatch.setitem(sys.modules, "keyring", fake)
         result = check_optional_extras()
         assert result.status == "ok"
 
-    def test_warning_when_streamlit_missing(self, monkeypatch):
-        # Force the streamlit import to fail by removing it from sys.modules
-        # and inserting a None entry so import raises ImportError.
-        monkeypatch.setitem(sys.modules, "streamlit", None)
+    def test_warning_when_keyring_missing(self, monkeypatch):
+        # Force the keyring import to fail by inserting a None entry so
+        # `import keyring` raises ImportError.
+        monkeypatch.setitem(sys.modules, "cryptography", SimpleNamespace())
+        monkeypatch.setitem(sys.modules, "keyring", None)
         result = check_optional_extras()
         assert result.status == "warning"
         assert "axon-rag[starter]" in result.hint
+
+    def test_streamlit_absence_is_not_reported(self, monkeypatch):
+        """streamlit is deprecated and no longer in [starter].
+
+        The doctor must not warn about it — doing so would point users at a
+        bundle that no longer ships it.
+        """
+        fake = SimpleNamespace()
+        monkeypatch.setitem(sys.modules, "cryptography", fake)
+        monkeypatch.setitem(sys.modules, "keyring", fake)
+        monkeypatch.setitem(sys.modules, "streamlit", None)
+        result = check_optional_extras()
+        assert result.status == "ok"
+        assert "streamlit" not in (result.detail or "")
 
 
 # ---------------------------------------------------------------------------

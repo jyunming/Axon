@@ -21,10 +21,11 @@ class TestWebappUI:
         # but AppTest runs in a separate thread/process sometimes.
         # Actually AppTest.from_file loads the module.
 
-        with patch("axon.webapp.AxonBrain") as mock_brain_cls, patch(
-            "axon.webapp.load_sessions", return_value={}
-        ), patch("axon.webapp.list_projects", return_value=[{"name": "default"}]), patch(
-            "axon.webapp.get_active_project", return_value="default"
+        with (
+            patch("axon.webapp.AxonBrain") as mock_brain_cls,
+            patch("axon.webapp.load_sessions", return_value={}),
+            patch("axon.webapp.list_projects", return_value=[{"name": "default"}]),
+            patch("axon.webapp.get_active_project", return_value="default"),
         ):
             mock_brain = mock_brain_cls.return_value
             mock_brain.config = MagicMock()
@@ -95,3 +96,45 @@ class TestWebappUI:
 
         # Verify it updated the config in session state
         assert at.session_state.brain.config.hybrid_search is True
+
+    def test_ui_shows_deprecation_banner(self, app):
+        """The Streamlit UI must tell users it is deprecated and where to go."""
+        at = app.run()
+        assert not at.exception
+        banners = [str(w.value) for w in at.warning]
+        assert any("deprecated" in b.lower() for b in banners), banners
+        assert any("8000/gui/" in b for b in banners), banners
+
+
+class TestMainUiDeprecation:
+    """`axon-ui` still launches, but must announce its deprecation."""
+
+    def _webapp_module(self):
+        with (
+            patch("axon.main.AxonBrain"),
+            patch("axon.projects.list_projects", return_value=[{"name": "default"}]),
+        ):
+            import axon.webapp as webapp
+
+            return webapp
+
+    def test_notice_names_the_replacement(self):
+        webapp = self._webapp_module()
+        notice = webapp.DEPRECATION_NOTICE
+        assert "DEPRECATED" in notice
+        assert "axon-api" in notice
+        assert "http://localhost:8000/gui/" in notice
+
+    def test_main_ui_emits_deprecation_warning(self, capsys):
+        webapp = self._webapp_module()
+        with (
+            patch("subprocess.run") as mock_run,
+            patch.object(webapp, "_STREAMLIT_AVAILABLE", True),
+        ):
+            with pytest.warns(DeprecationWarning, match="axon-ui"):
+                webapp.main_ui()
+        # Still launches — deprecation is a nudge, not a removal.
+        mock_run.assert_called_once()
+        assert "streamlit" in mock_run.call_args[0][0]
+        # And the human-readable notice reaches stderr.
+        assert "DEPRECATED" in capsys.readouterr().err

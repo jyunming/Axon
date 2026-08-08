@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import uuid
+import warnings
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
@@ -392,6 +393,14 @@ with st.sidebar:
     st.markdown(
         '<div style="font-size:1rem;font-weight:700;color:#e4e4e7;margin-bottom:8px;">🧠 Axon</div>',
         unsafe_allow_html=True,
+    )
+    # ── Deprecation notice — this UI is superseded by the native web GUI ──
+    st.warning(
+        "**This UI is deprecated.** Use the native web GUI at "
+        "`http://localhost:8000/gui/` (run `axon-api`). It is the maintained "
+        "surface and exposes the graph explorer, knowledge base and "
+        "governance console.",
+        icon="⚠️",
     )
     # =========================================================================
     # PROJECT HUB
@@ -1265,9 +1274,35 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+DEPRECATION_NOTICE = (
+    "DEPRECATED: the Streamlit UI (axon-ui) is deprecated and will be removed "
+    "in a future release.\n"
+    "Use the native web GUI instead — it is served by the API server:\n"
+    "\n"
+    "    axon-api            # then open http://localhost:8000/gui/\n"
+    "\n"
+    "The native GUI is the maintained surface and exposes more capability "
+    "(graph explorer, governance console, knowledge base).\n"
+)
+
+
 def main_ui():
-    """Entry point for the axon-ui command."""
+    """Entry point for the axon-ui command.
+
+    .. deprecated::
+        The Streamlit UI is superseded by the native web GUI served at
+        ``/gui/`` by ``axon-api``. This entry point still works but emits a
+        deprecation notice and will be removed in a future release.
+    """
     import subprocess
+
+    warnings.warn(
+        "axon-ui (Streamlit) is deprecated; use the native web GUI at "
+        "http://localhost:8000/gui/ served by axon-api.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    print(DEPRECATION_NOTICE, file=sys.stderr)
 
     if not _STREAMLIT_AVAILABLE:
         print(

@@ -37,8 +37,10 @@ class Surface(str, Enum):
     REPL = "repl"
     CLI = "cli"
     VSCODE = "vscode"
-    # Streamlit web UI.  Intentionally a supplemental surface — destructive and
-    # admin-oriented capabilities (graph, sharing, store) are not exposed there.
+    # Streamlit web UI.  DEPRECATED — superseded by the native web GUI served
+    # at /gui/ by `axon-api`.  Kept as a supplemental surface for existing
+    # users; destructive and admin-oriented capabilities (graph, sharing,
+    # store) were never exposed there and no new capability should be added.
     WEBAPP = "webapp"
 
 

@@ -10,6 +10,9 @@ pandas>=2.0.0
 Pillow>=10.0.0
 tqdm>=4.66.0
 rank_bm25>=0.2.2
+# DEPRECATED: only needed by the legacy Streamlit UI (axon-ui), which the
+# docker-compose `axon-ui` service still runs. The maintained web GUI is served
+# by axon-api at /gui/ and needs no extra dependency.
 streamlit>=1.30.0
 httpx>=0.25.0
 mcp>=1.0.0
