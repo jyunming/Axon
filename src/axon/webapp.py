@@ -5,7 +5,6 @@ import os
 import sys
 import time
 import uuid
-import warnings
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
@@ -1274,44 +1273,11 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-DEPRECATION_NOTICE = (
-    "DEPRECATED: the Streamlit UI (axon-ui) is deprecated and will be removed "
-    "in a future release.\n"
-    "Use the native web GUI instead — it is served by the API server:\n"
-    "\n"
-    "    axon-api            # then open http://localhost:8000/gui/\n"
-    "\n"
-    "The native GUI is the maintained surface and exposes more capability "
-    "(graph explorer, governance console, knowledge base).\n"
-)
-
-
-def main_ui():
-    """Entry point for the axon-ui command.
-
-    .. deprecated::
-        The Streamlit UI is superseded by the native web GUI served at
-        ``/gui/`` by ``axon-api``. This entry point still works but emits a
-        deprecation notice and will be removed in a future release.
-    """
-    import subprocess
-
-    warnings.warn(
-        "axon-ui (Streamlit) is deprecated; use the native web GUI at "
-        "http://localhost:8000/gui/ served by axon-api.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    print(DEPRECATION_NOTICE, file=sys.stderr)
-
-    if not _STREAMLIT_AVAILABLE:
-        print(
-            "ERROR: streamlit is not installed.\n" "Install it with:  pip install axon-rag[ui]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    app_path = os.path.abspath(__file__)
-    subprocess.run(["streamlit", "run", app_path])
+# The ``axon-ui`` console script lives in ``axon.webapp_launcher``, NOT here.
+# This module is a Streamlit script — it calls st.set_page_config() and renders
+# at import time — so it cannot be imported when Streamlit is missing. Keeping
+# the launcher separate lets ``axon-ui`` print an install hint instead of a
+# NameError traceback. See webapp_launcher.py.
 
 
 if __name__ == "__main__":
