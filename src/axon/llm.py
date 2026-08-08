@@ -367,6 +367,21 @@ class OpenLLM:
             contents.append({"role": "user", "parts": [{"text": user_text}]})
         return contents
 
+    def _effective_timeout(self) -> int:
+        """Request timeout, raised for the `local` provider unless set explicitly.
+
+        Locally served models are far slower than cloud ones, and advanced RAG
+        issues several sequential internal calls per query — at the 60 s cloud
+        default, `step_back` and `query_decompose` time out against a 26B model
+        on consumer hardware. Only overrides the untouched dataclass default, so
+        an explicit `llm.timeout` always wins. See DEFAULT_LOCAL_LLM_TIMEOUT.
+        """
+        from axon.config import DEFAULT_LLM_TIMEOUT, DEFAULT_LOCAL_LLM_TIMEOUT
+
+        if self.config.llm_provider == "local" and self.config.llm_timeout == DEFAULT_LLM_TIMEOUT:
+            return DEFAULT_LOCAL_LLM_TIMEOUT
+        return self.config.llm_timeout
+
     def ping_local(self, base_url: str = None, timeout: float = 5.0) -> dict:
         """Check that a local OpenAI-compatible endpoint is up, and list its models.
 
@@ -567,7 +582,7 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             return response.choices[0].message.content
         elif provider in ("vllm", "local"):
@@ -588,7 +603,7 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             return message_text(response.choices[0].message)
         elif provider == "github_copilot":
@@ -604,7 +619,7 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             return response.choices[0].message.content
         elif provider == "grok":
@@ -620,7 +635,7 @@ class OpenLLM:
                 messages=messages,
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             return response.choices[0].message.content
         elif provider == "copilot":
@@ -779,7 +794,7 @@ class OpenLLM:
                 "messages": messages,
                 "temperature": self.config.llm_temperature,
                 "max_tokens": self.config.llm_max_tokens,
-                "timeout": self.config.llm_timeout,
+                "timeout": self._effective_timeout(),
             }
             if tools:
                 kwargs["tools"] = tools
@@ -897,7 +912,7 @@ class OpenLLM:
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -921,7 +936,7 @@ class OpenLLM:
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             # Reasoning deltas are NOT streamed to the user: they are the model's
             # scratchpad, not its answer. If nothing but reasoning ever arrives,
@@ -946,7 +961,7 @@ class OpenLLM:
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:
@@ -965,7 +980,7 @@ class OpenLLM:
                 temperature=self.config.llm_temperature,
                 max_tokens=self.config.llm_max_tokens,
                 stream=True,
-                timeout=self.config.llm_timeout,
+                timeout=self._effective_timeout(),
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content is not None:

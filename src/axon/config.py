@@ -21,6 +21,25 @@ import yaml  # type: ignore
 
 logger = logging.getLogger("Axon")
 
+# LLM request timeouts, in seconds.
+#
+# 60 s suits cloud providers: a request that stalls there is almost certainly
+# wedged, and failing fast is better than tying up a worker.
+#
+# Locally served models are an order of magnitude slower, and advanced RAG makes
+# several *sequential* internal calls per query. Measured on an Intel Arc iGPU
+# serving Gemma 4 26B via llama.cpp: a two-character answer took 33 s and a
+# step-back reformulation took 75 s. At 60 s, `step_back` and `query_decompose`
+# time out while `hyde` and `multi_query` scrape through — exactly the kind of
+# partial, silent failure this provider exists to eliminate.
+#
+# So the `local` provider gets a higher effective default. It is applied only
+# when `llm_timeout` is still the untouched dataclass default, so an explicit
+# setting always wins. (Setting exactly 60 explicitly is indistinguishable from
+# not setting it — pick 59 or 61 if you truly want a hard 60 s cap on `local`.)
+DEFAULT_LLM_TIMEOUT = 60
+DEFAULT_LOCAL_LLM_TIMEOUT = 300
+
 
 # XDG-style user config dir --' consistent across Linux / macOS / Windows
 
@@ -847,8 +866,11 @@ class AxonConfig:
     graph_rag_relation_shard_signature_workers: int = 4
     graph_rag_relation_shard_write_workers: int = 4
     graph_rag_community_summary_compact_persist: bool = True
-    # LLM request timeout in seconds (applied where the provider client supports it)
-    llm_timeout: int = 60
+    # LLM request timeout in seconds (applied where the provider client supports it).
+    # Kept at 60 for cloud providers so a stalled request fails fast. Locally served
+    # models are far slower — see DEFAULT_LOCAL_LLM_TIMEOUT in this module for the
+    # `local` provider's higher effective default and why it exists.
+    llm_timeout: int = DEFAULT_LLM_TIMEOUT
     # REPL shell passthrough policy for `!command`.
     # - local_only: allow only in local/default project modes (default)
     # - always: allow in all modes

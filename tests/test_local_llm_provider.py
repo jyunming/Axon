@@ -69,6 +69,42 @@ class TestLocalProviderConfig:
         assert cfg.local_base_url == "http://127.0.0.1:9999/v1"
 
 
+class TestEffectiveTimeout:
+    """The 60s cloud default is too short for locally served models.
+
+    Measured on an Intel Arc iGPU serving Gemma 4 26B via llama.cpp: a
+    two-character answer took 33s and a step-back reformulation took 75s. At 60s
+    `step_back` and `query_decompose` timed out while `hyde` and `multi_query`
+    scraped through — a partial, silent failure.
+    """
+
+    def test_local_gets_the_longer_default(self):
+        assert OpenLLM(AxonConfig(llm_provider="local"))._effective_timeout() == 300
+
+    def test_cloud_providers_still_fail_fast(self):
+        for provider in ("openai", "gemini", "grok", "ollama"):
+            llm = OpenLLM(AxonConfig(llm_provider=provider))
+            assert llm._effective_timeout() == 60, provider
+
+    def test_explicit_setting_wins(self):
+        llm = OpenLLM(AxonConfig(llm_provider="local", llm_timeout=90))
+        assert llm._effective_timeout() == 90
+
+    def test_vllm_is_not_bumped(self):
+        """Only `local` is bumped; vllm keeps prior behaviour."""
+        assert OpenLLM(AxonConfig(llm_provider="vllm"))._effective_timeout() == 60
+
+    def test_completion_uses_the_effective_timeout(self):
+        llm = OpenLLM(AxonConfig(llm_provider="local"))
+        client = MagicMock()
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=_msg(content="ok"))]
+        )
+        with patch.object(llm, "_local_client", return_value=client):
+            llm.complete("hi")
+        assert client.chat.completions.create.call_args.kwargs["timeout"] == 300
+
+
 class TestLocalClient:
     def test_uses_configured_base_url(self):
         cfg = AxonConfig(llm_provider="local", local_base_url="http://127.0.0.1:8080/v1")

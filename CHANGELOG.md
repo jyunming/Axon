@@ -16,6 +16,11 @@
   "Up but serving no models" is reported as a warning, since that is a real state for
   a router-mode server with nothing resident.
 - **REPL `/local-url [URL|ping]`** to show, set, or ping the endpoint.
+- **Longer request timeout for `local`.** `llm.timeout` stays 60 s for cloud
+  providers (a stalled request should fail fast) but resolves to 300 s for the
+  `local` provider, since advanced RAG issues several sequential calls and a 26B
+  model on consumer hardware needs far longer than 60 s per call. An explicit
+  `llm.timeout` always wins.
 
 ### 🐛 Fixes
 

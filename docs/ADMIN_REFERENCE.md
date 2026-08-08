@@ -607,7 +607,7 @@ YAML section: `llm:`
 | `llm.model` | str | `llama3.1:8b` | Model name |
 | `llm.temperature` | float | `0.7` | Generation temperature (`0.0` = deterministic, `2.0` = max creative) |
 | `llm.max_tokens` | int | `8192` | Max tokens in the generated answer. 8192 (not 2048) because reasoning models spend the budget on `reasoning_content` before emitting any `content`. |
-| `llm.timeout` | int | `60` | LLM request timeout in seconds |
+| `llm.timeout` | int | `60` | LLM request timeout in seconds. Raised to `300` automatically when `llm.provider` is `local` (locally served models are far slower); an explicit value always wins. |
 | `llm.base_url` | str | `http://localhost:11434` | Ollama server URL (also: `OLLAMA_HOST` env var) |
 | `llm.models_dir` | str | `""` | Ollama model root directory (also: `OLLAMA_MODELS` env var) |
 | `llm.openai_api_key` | str | `""` | OpenAI API key (also: `OPENAI_API_KEY` env var) |
