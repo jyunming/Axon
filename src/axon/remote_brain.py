@@ -233,7 +233,7 @@ class RemoteBrain:
             logger.debug("RemoteBrain.query: dropping chat_history (server query is single-turn)")
         body = self._build_query_body(query, filters, overrides)
         resp = self._request("POST", "/query", body)
-        return (resp or {}).get("response", "")
+        return str((resp or {}).get("response", ""))
 
     def query_stream(self, query, filters=None, chat_history=None, overrides=None):
         if chat_history:
@@ -307,11 +307,13 @@ class RemoteBrain:
     # ------------------------------------------------------------------ #
     def list_documents(self) -> list[dict[str, Any]]:
         resp = self._request("GET", "/collection")
-        return (resp or {}).get("files", [])
+        files: list[dict[str, Any]] = (resp or {}).get("files", [])
+        return files
 
     def get_doc_versions(self) -> dict:
         resp = self._request("GET", "/tracked-docs")
-        return (resp or {}).get("docs", {})
+        docs: dict = (resp or {}).get("docs", {})
+        return docs
 
     # ------------------------------------------------------------------ #
     # Graph / mount operations that have a clean server endpoint

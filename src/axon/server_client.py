@@ -60,7 +60,7 @@ def _request(
     headers: dict[str, str],
     body: dict | None = None,
     timeout: float = _OP_TIMEOUT_S,
-) -> Any:
+) -> dict:
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
@@ -75,7 +75,8 @@ def _request(
         except Exception:
             pass
         raise ServerRequestError(exc.code, detail or exc.reason) from None
-    return json.loads(raw) if raw else {}
+    parsed: dict = json.loads(raw) if raw else {}
+    return parsed
 
 
 class ServerRequestError(RuntimeError):
@@ -113,7 +114,7 @@ def detect_server(config: Any, *, timeout: float = _PROBE_TIMEOUT_S) -> dict | N
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
                 return None
-            payload = json.loads(resp.read().decode("utf-8") or "{}")
+            payload: dict = json.loads(resp.read().decode("utf-8") or "{}")
     except Exception:
         # Best-effort probe: ANY failure (connection refused, timeout, a
         # malformed api_host/api_port, a mocked config in tests, bad JSON)
@@ -235,8 +236,13 @@ def find_live_server_for_store(config: Any, *, timeout: float = _PROBE_TIMEOUT_S
     if p is None or not p.exists():
         return None
     try:
-        info = json.loads(p.read_text(encoding="utf-8"))
-        port = int(info.get("port"))
+        info: dict = json.loads(p.read_text(encoding="utf-8"))
+        # A lockfile with no port is malformed; treat it as no lock at all
+        # rather than letting int(None) raise into the bare except below.
+        raw_port = info.get("port")
+        if raw_port is None:
+            return None
+        port = int(raw_port)
     except Exception:
         return None
     host = info.get("host") or "127.0.0.1"
