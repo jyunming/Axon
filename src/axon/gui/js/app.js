@@ -2,9 +2,9 @@
  * Axon WebGUI Main Entry Point
  */
 
-import api from './api.js';
+import api from './api.js?v=4';
 import AxonChat from './chat.js';
-import AxonGraph from './graph_explorer.js';
+import AxonGraph from './graph_explorer.js?v=3';
 
 class AxonApp {
     constructor() {

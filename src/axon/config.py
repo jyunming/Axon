@@ -59,7 +59,9 @@ DEFAULT_LOCAL_LLM_TIMEOUT = 300
 _SAVE_EXPLICIT_FIELDS = frozenset(
     {
         "api_allow_origins",
+        "api_host",
         "api_key",
+        "api_port",
         "axon_store_base",
         "bm25_engine",
         "bm25_path",
@@ -409,7 +411,7 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
     "web_search": {"enabled", "brave_api_key", "num_results", "safe_search"},
     "store": {"base"},
     "repl": {"shell_passthrough"},
-    "api": {"key", "allow_origins", "max_upload_bytes", "max_files_per_request"},
+    "api": {"key", "allow_origins", "host", "port", "max_upload_bytes", "max_files_per_request"},
     "bm25": {"path"},
     "query_transformations": {
         "multi_query",
@@ -502,6 +504,14 @@ class AxonConfig:
     # CORS origins allowed by the REST API server (maps from api.allow_origins in config.yaml).
     # Example: ["http://localhost:3000", "https://my.app"]
     api_allow_origins: list = field(default_factory=list)
+    # Host/port where an axon-api server can be reached. Used by CLI/REPL clients
+    # for single-instance detection: if a server is already running here, store-
+    # mutating commands (ingest, project ops) are routed through it instead of
+    # opening a second local AxonBrain on the same store. Server-side, axon-api
+    # still reads AXON_HOST/AXON_PORT env vars; these config fields are the
+    # client-side default (overridden by AXON_API_BASE/RAG_API_BASE env vars).
+    api_host: str = "127.0.0.1"
+    api_port: int = 8000
     openai_api_key: str = ""
     grok_api_key: str = ""
     gemini_api_key: str = ""
@@ -1293,6 +1303,10 @@ class AxonConfig:
                 config_dict["api_key"] = api_section["key"]
             if "allow_origins" in api_section:
                 config_dict["api_allow_origins"] = api_section["allow_origins"] or []
+            if "host" in api_section:
+                config_dict["api_host"] = str(api_section["host"])
+            if "port" in api_section:
+                config_dict["api_port"] = int(api_section["port"])
             if "max_upload_bytes" in api_section:
                 config_dict["max_upload_bytes"] = int(api_section["max_upload_bytes"])
             if "max_files_per_request" in api_section:
@@ -1454,6 +1468,8 @@ class AxonConfig:
             "api": {
                 "key": flat["api_key"],
                 "allow_origins": flat["api_allow_origins"],
+                "host": flat["api_host"],
+                "port": flat["api_port"],
                 "max_upload_bytes": flat["max_upload_bytes"],
                 "max_files_per_request": flat["max_files_per_request"],
             },

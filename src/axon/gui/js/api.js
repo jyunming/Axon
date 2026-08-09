@@ -141,16 +141,27 @@ class AxonAPI {
         const decoder = new TextDecoder();
         let buffer = '';
         const processLine = (line) => {
-            if (!line.trim() || !line.startsWith('data: ')) return;
-            const content = line.substring(6).trim();
-            if (!content) return;
+            if (!line.startsWith('data: ')) return;
+            // Strip ONLY the 6-char "data: " SSE prefix. Do NOT trim the remainder:
+            // streamed tokens carry their own leading space (" Hello", " can", " I"),
+            // so trimming here runs words together ("HowcanIhelp..."). A token that is
+            // just a space must survive too, so only bail on a truly empty payload.
+            const content = line.substring(6);
+            if (content === '') return;
+            // Only structured control frames (sources / diagnostics / error) arrive as
+            // JSON objects. A bare text token is NOT JSON and must pass through verbatim
+            // — never JSON.parse it, or a numeric/boolean token like " 42" would be
+            // coerced to a value and lose its surrounding whitespace.
+            const trimmed = content.trim();
             let data = null;
-            try {
-                data = JSON.parse(content);
-            } catch (_error) {
-                data = null;
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                try {
+                    data = JSON.parse(trimmed);
+                } catch (_error) {
+                    data = null;
+                }
             }
-            if (data) {
+            if (data && typeof data === 'object') {
                 if (data.type === 'sources') {
                     onToken({ type: 'sources', content: data.sources });
                 } else if (data.type === 'diagnostics') {
@@ -158,16 +169,16 @@ class AxonAPI {
                 } else if (data.type === 'error') {
                     throw new Error(data.content || 'Streaming failed');
                 } else if (data.type === 'token') {
-                    onToken({ type: 'token', content: data.content || '' });
+                    onToken({ type: 'token', content: data.content ?? '' });
                 } else {
                     onToken({ type: 'token', content: JSON.stringify(data) });
                 }
                 return;
             }
-            if (content.startsWith('[ERROR]')) {
-                throw new Error(content.replace(/^\[ERROR\]\s*/, ''));
+            if (trimmed.startsWith('[ERROR]')) {
+                throw new Error(trimmed.replace(/^\[ERROR\]\s*/, ''));
             }
-            onToken({ type: 'token', content: content });
+            onToken({ type: 'token', content });
         };
         while (true) {
             const { done, value } = await reader.read();

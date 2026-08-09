@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Axon | Your Knowledge, Answerable.</title>
-    <link rel="stylesheet" href="css/style.css?v=2.1">
+    <link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body class="dark-theme">
     <div id="app" class="app-container">
@@ -118,14 +118,39 @@
             <!-- Graph View -->
             <section id="graph-view" class="view hidden">
                 <div id="graph-container"></div>
+
+                <!-- Entity search / highlight (top-left) -->
+                <div class="graph-search-panel glass">
+                    <div class="graph-search-row">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="graph-search-input" placeholder="Search entity by name…" autocomplete="off" spellcheck="false">
+                        <button id="graph-search-clear" class="btn btn-icon" title="Clear highlight" aria-label="Clear highlight">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div id="graph-search-status" class="graph-search-status"></div>
+                </div>
+
+                <!-- Hop-distance results (below search, hidden until a match) -->
+                <div id="graph-distance-panel" class="graph-distance-panel glass hidden">
+                    <div class="graph-distance-header">
+                        Nearest to <b id="graph-distance-target">—</b>
+                    </div>
+                    <ul id="graph-distance-list" class="graph-distance-list"></ul>
+                </div>
+
                 <div class="graph-overlay">
                     <div class="graph-info-panel glass">
                         <h3>Knowledge Graph</h3>
-                        <p>Visualizing entity relationships across your knowledge base.</p>
+                        <p>Visualizing entity relationships across your knowledge base. Search an entity to highlight it and see how many hops it is from the rest of the graph.</p>
                         <div class="graph-legend">
-                            <div class="legend-item"><span class="node-color chunk"></span> Chunk</div>
-                            <div class="legend-item"><span class="node-color entity"></span> Entity</div>
-                            <div class="legend-item"><span class="node-color community"></span> Community</div>
+                            <div class="legend-item"><span class="node-color person"></span> Person</div>
+                            <div class="legend-item"><span class="node-color organization"></span> Organization</div>
+                            <div class="legend-item"><span class="node-color geo"></span> Geo</div>
+                            <div class="legend-item"><span class="node-color event"></span> Event</div>
+                            <div class="legend-item"><span class="node-color concept"></span> Concept</div>
+                            <div class="legend-item"><span class="node-color product"></span> Product</div>
+                            <div class="legend-item"><span class="node-color unknown"></span> Unknown</div>
                         </div>
                         <button id="refresh-graph" class="btn btn-sm btn-outline">
                             <i class="fas fa-sync"></i> Refresh
@@ -262,6 +287,6 @@
     <!-- Scripts -->
     <script src="js/vendor/three.min.js"></script>
     <script src="js/vendor/3d-force-graph.min.js"></script>
-    <script type="module" src="js/app.js"></script>
+    <script type="module" src="js/app.js?v=4"></script>
 </body>
 </html>

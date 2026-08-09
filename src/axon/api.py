@@ -161,6 +161,23 @@ async def lifespan(app: FastAPI):
     try:
         config_path = os.getenv("AXON_CONFIG_PATH")
         config = AxonConfig.load(config_path)
+        # Single-instance guard: refuse to start a second server on a store
+        # another axon-api already serves (two brains writing one TurboQuantDB
+        # store is the concurrent-access hazard). Override with
+        # AXON_ALLOW_MULTIPLE_SERVERS=1. A stale lock (dead server) is ignored.
+        from axon import server_client as _sc
+
+        _existing = _sc.find_live_server_for_store(config)
+        if _existing and not os.getenv("AXON_ALLOW_MULTIPLE_SERVERS"):
+            raise RuntimeError(
+                "An Axon API server is already serving this store "
+                f"({_existing.get('host')}:{_existing.get('port')}, pid "
+                f"{_existing.get('pid')}). Use it, stop it first, or set "
+                "AXON_ALLOW_MULTIPLE_SERVERS=1 to run a second one anyway."
+            )
+        _sc.write_store_lock(
+            config, os.getenv("AXON_HOST", "0.0.0.0"), int(os.getenv("AXON_PORT", "8000"))
+        )
         # Option A: auto-init store on first run so the user never hits a
         # "store not found" failure on a fresh install.
         _auto_init_store(config)
@@ -174,6 +191,12 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize Axon: {e}")
         raise
     yield
+    try:
+        from axon import server_client as _sc
+
+        _sc.release_store_lock(config)
+    except Exception:
+        pass
     if brain:
         brain.close()
         logger.info("Axon shut down cleanly")

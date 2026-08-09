@@ -19,7 +19,8 @@ except ImportError:
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from axon.main import AxonBrain  # noqa: E402
+from axon.config import AxonConfig  # noqa: E402
+from axon.main import AxonBrain  # noqa: E402,F401
 from axon.projects import (  # noqa: E402
     delete_project,
     ensure_project,
@@ -27,6 +28,7 @@ from axon.projects import (  # noqa: E402
     get_maintenance_state,
     list_projects,
 )
+from axon.remote_brain import get_brain  # noqa: E402
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -352,7 +354,10 @@ if "current_session_id" not in st.session_state:
 if "brain" not in st.session_state:
     try:
         with st.spinner("Initializing Brain…"):
-            st.session_state.brain = AxonBrain()
+            # Reuse a running axon-api server on the same store when one exists
+            # (avoids a second in-process brain that would race on the store
+            # files and re-load the embedding model); otherwise build locally.
+            st.session_state.brain = get_brain(AxonConfig.load())
         # Seed embedding baseline so the hot-swap warning only fires on user changes
         st.session_state["_emb_provider"] = st.session_state.brain.config.embedding_provider
         st.session_state["_emb_model"] = st.session_state.brain.config.embedding_model
