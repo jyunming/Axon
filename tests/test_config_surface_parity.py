@@ -91,3 +91,43 @@ class TestCrossSurfaceParity:
         real = set(_settable_fields())
         broken = {k: v for k, v in _DOT_TO_FLAT.items() if v not in real}
         assert not broken, f"aliases pointing at non-existent fields: {broken}"
+
+
+class TestMcpConfigTools:
+    """MCP was the one surface with no config access at all.
+
+    `surface_contract.py` already declared `config_read` and `config_update` as
+    supported on ALL_SURFACES, so the contract asserted a parity that did not
+    exist — nothing checked that the MCP server actually exposed the tools.
+    """
+
+    EXPECTED = ("get_config", "set_config", "update_config", "validate_config")
+
+    def _tool_names(self):
+        import inspect
+
+        from axon import mcp_server
+
+        src = inspect.getsource(mcp_server)
+        import re
+
+        return set(re.findall(r"@mcp\.tool\(\)\s*\nasync def (\w+)", src))
+
+    @pytest.mark.parametrize("name", EXPECTED)
+    def test_tool_exists(self, name):
+        assert name in self._tool_names()
+
+    def test_tools_are_registered_with_the_mcp_decorator(self):
+        """A plain async def would import fine but never reach an agent."""
+        names = self._tool_names()
+        assert set(self.EXPECTED) <= names
+
+    def test_routes_the_tools_call_exist(self):
+        """Each tool proxies a REST route — a typo would 404 only at runtime."""
+        from axon.api_routes import config_routes, projects
+
+        paths = {
+            r.path for router in (config_routes.router, projects.router) for r in router.routes
+        }
+        for path in ("/config", "/config/set", "/config/update", "/config/validate"):
+            assert path in paths, f"{path} missing; MCP tool would 404"

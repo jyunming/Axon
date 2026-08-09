@@ -1,6 +1,6 @@
 # Axon MCP Tools Reference
 
-Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **51 tools**.
+Axon exposes a Model Context Protocol (MCP) server (`axon-mcp`) with **55 tools**.
 
 > **Which integration should I use?**
 > - **`@axon` chat participant** — install the VS Code extension (VSIX). Gives you a conversational `@axon` inside Copilot Chat. No `.vscode/mcp.json` needed.
@@ -547,6 +547,55 @@ Re-wrap the master key under a new passphrase. Project DEKs are not touched (the
 
 ---
 
+## Configuration (4)
+
+### `get_config`
+
+Return the active configuration. Secrets are masked as `***` by the server, so this tool can never read a credential back out. Use it to discover the exact field names `set_config` accepts.
+
+**Returns:** the full `AxonConfig` as JSON, sensitive fields masked.
+
+---
+
+### `set_config`
+
+Set a single configuration field.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `key` | string | required | Dot-notation alias (`chunk.strategy`, `llm.model`, `rag.top_k`) **or** any `AxonConfig` field name (`graph_rag_depth`, `chunk_size`, `llm_temperature`) |
+| `value` | any | required | New value; coerced to the field's type |
+| `persist` | bool | `true` | Also write to `config.yaml` so it survives a restart |
+
+**Returns:** `{"status": "success", "key": ..., "old_value": ..., "new_value": ..., "persisted": bool}` with secrets masked.
+
+Changing `llm_provider` / `llm_model` / `embedding_*` reinitialises the affected component immediately. Switching the embedding model invalidates existing vectors — re-ingest afterwards.
+
+---
+
+### `update_config`
+
+Update several live retrieval settings at once.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `settings` | dict | required | Field/value pairs from the curated RAG-tuning subset |
+| `persist` | bool | `false` | Write the result to `config.yaml` |
+
+Covers `top_k`, `rerank`, `hyde`, `multi_query`, `step_back`, `graph_rag`, `raptor`, `cite` and similar. Storage paths and credentials are deliberately **not** settable here — use `set_config`.
+
+**Returns:** `{"status": "success", "applied": [...], "ignored": [...], "persisted": bool}`. Any key outside the curated subset appears in `ignored` and was **not** applied.
+
+---
+
+### `validate_config`
+
+Check the on-disk config for errors, unknown keys, and risky combinations.
+
+**Returns:** findings grouped by severity. Includes the warning raised when GraphRAG is enabled with a local LLM and LLM-based entity extraction — one model call per chunk, impractical on a slow local model.
+
+---
+
 ## Usage Notes
 
 - Most ingest, search, and query tools operate on the **active project** and accept an optional `project` parameter validated against it (returns 409 on mismatch). Tools that do **not** accept `project`: `ingest_path`, `list_sessions`, `get_session`, `list_shares`, `graph_backend_status`, `refresh_mount`, `graph_status`, `graph_finalize`, `graph_data`, `graph_conflicts`, `graph_retrieve`. `revoke_share` conditionally accepts `project` and **requires** it for sealed shares (`ssk_` prefix). Global tools (`governance_*`, `security_*`, `init_store`, `share_project`, `redeem_share`, `list_shares`) are not scoped to the active project. Use `switch_project` to change the active project.
@@ -558,6 +607,8 @@ Re-wrap the master key under a new passphrase. Project DEKs are not touched (the
 - Mounted shares (via `redeem_share`) are always **read-only**. Ingest calls against a mount return an error.
 
 - `update_settings` changes are scoped to the current session by default. Pass `persist=True` to write to `config.yaml`.
+
+- `set_config` reaches **every** `AxonConfig` field; `update_config` is limited to the curated live-tuning subset and reports anything else in `ignored` rather than applying it. If a field seems to have no effect, check that list.
 
 - AxonStore tools: `init_store` and `get_store_status` are always available pre-init. `share_project`, `redeem_share`, `list_shares`, and `revoke_share` require an initialised store (`init_store` first if the store hasn't been bootstrapped).
 

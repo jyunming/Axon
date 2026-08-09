@@ -87,6 +87,13 @@ EXPECTED_MCP_TOOL_NAMES = {
     # Streaming + mount (added by parity sweep B1)
     "query_stream",
     "mount_refresh",
+    # Configuration — MCP was the only surface with no config access, even
+    # though surface_contract.py already claimed config_read / config_update
+    # on ALL_SURFACES.
+    "get_config",
+    "set_config",
+    "update_config",
+    "validate_config",
 }
 
 

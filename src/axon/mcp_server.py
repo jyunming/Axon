@@ -945,6 +945,72 @@ async def mount_refresh(project: str | None = None) -> Any:
 
 # ---------------------------------------------------------------------------
 
+# Configuration
+
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_config() -> Any:
+    """Return the active Axon configuration.
+
+    Secrets (API keys, tokens) are masked as ``***`` by the server — this tool
+    can never read a credential back out. Use it to discover the exact field
+    names accepted by set_config().
+    """
+    return await _get("/config")
+
+
+@mcp.tool()
+async def set_config(key: str, value: Any, persist: bool = True) -> Any:
+    """Set a single Axon configuration field.
+
+    ``key`` accepts either a dot-notation alias (``chunk.strategy``,
+    ``llm.model``, ``rag.top_k``) or any ``AxonConfig`` field name directly
+    (``graph_rag_depth``, ``chunk_size``, ``llm_temperature``). Call
+    get_config() to see every available field.
+
+    ``persist=True`` also writes the change to config.yaml so it survives a
+    restart; ``persist=False`` applies it to the running brain only.
+
+    Changing ``llm_provider`` / ``llm_model`` / ``embedding_*`` reinitialises the
+    affected component, so the next query uses the new setting immediately.
+    Switching the embedding model invalidates existing vectors — re-ingest after.
+    """
+    return await _post("/config/set", {"key": key, "value": value, "persist": persist})
+
+
+@mcp.tool()
+async def update_config(settings: dict, persist: bool = False) -> Any:
+    """Update several live retrieval settings in one call.
+
+    Covers the curated RAG-tuning subset — ``top_k``, ``rerank``, ``hyde``,
+    ``multi_query``, ``step_back``, ``graph_rag``, ``raptor``, ``cite`` and
+    similar. Storage paths and credentials are deliberately NOT settable here;
+    use set_config() for those.
+
+    The response carries an ``ignored`` list naming any key outside that subset:
+    those are reported rather than applied, so a typo or an unsupported field
+    cannot look like it succeeded.
+    """
+    body = dict(settings)
+    body["persist"] = persist
+    return await _post("/config/update", body)
+
+
+@mcp.tool()
+async def validate_config() -> Any:
+    """Check the on-disk config for errors, unknown keys, and risky combinations.
+
+    Returns findings by severity. Includes the warning raised when GraphRAG is
+    enabled with a local LLM and LLM-based entity extraction, which makes one
+    model call per chunk and is impractical on a slow local model.
+    """
+    return await _get("/config/validate")
+
+
+# ---------------------------------------------------------------------------
+
 # Entry point
 
 # ---------------------------------------------------------------------------

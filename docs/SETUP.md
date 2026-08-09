@@ -955,7 +955,7 @@ Expected: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}
 
 ### Available MCP tools
 
-For the full list of all 51 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md). v0.3.2 adds `graph_retrieve` (point-in-time), `graph_conflicts`, and capability-flagged `graph_finalize`.
+For the full list of all 55 tools with parameter tables, see [MCP_TOOLS.md](MCP_TOOLS.md). Configuration tools (`get_config`, `set_config`, `update_config`, `validate_config`) close the last parity gap — config was previously readable and writable from every surface except MCP. v0.3.2 adds `graph_retrieve` (point-in-time), `graph_conflicts`, and capability-flagged `graph_finalize`.
 
 > **Tip:** use `search_knowledge` (not `query_knowledge`) in agent mode — the agent's own LLM synthesises the answer from raw chunks, so no Ollama is required.
 
