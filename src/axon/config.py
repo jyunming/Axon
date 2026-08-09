@@ -21,6 +21,155 @@ import yaml  # type: ignore
 
 logger = logging.getLogger("Axon")
 
+# LLM request timeouts, in seconds.
+#
+# 60 s suits cloud providers: a request that stalls there is almost certainly
+# wedged, and failing fast is better than tying up a worker.
+#
+# Locally served models are an order of magnitude slower, and advanced RAG makes
+# several *sequential* internal calls per query. Measured on an Intel Arc iGPU
+# serving Gemma 4 26B via llama.cpp: a two-character answer took 33 s and a
+# step-back reformulation took 75 s. At 60 s, `step_back` and `query_decompose`
+# time out while `hyde` and `multi_query` scrape through — exactly the kind of
+# partial, silent failure this provider exists to eliminate.
+#
+# So the `local` provider gets a higher effective default. It is applied only
+# when `llm_timeout` is still the untouched dataclass default, so an explicit
+# setting always wins. (Setting exactly 60 explicitly is indistinguishable from
+# not setting it — pick 59 or 61 if you truly want a hard 60 s cap on `local`.)
+#
+# IMPORTANT — this is a soft bound, not a wall-clock deadline. The OpenAI SDK
+# hands the value to httpx, which applies it per phase (connect/read/write/pool),
+# and the read timeout restarts on every chunk received. A server that trickles
+# output therefore keeps resetting it. Measured: llm_timeout=30 against a slowly
+# generating local model raised APITimeoutError after 96 s, not 30 s. Treat these
+# numbers as "abort if the server goes quiet for this long", not "abort after
+# this long". If you need a true deadline, cap generation length instead
+# (llm_max_tokens) or run a faster model.
+DEFAULT_LLM_TIMEOUT = 60
+DEFAULT_LOCAL_LLM_TIMEOUT = 300
+
+
+# Flat field names that AxonConfig.save() writes explicitly, under a bespoke
+# YAML name or section (llm_provider -> llm.provider, rerank -> rerank.enabled).
+# Everything NOT listed here is emitted verbatim under `rag:` by the completion
+# pass in save(), because load() slurps that section straight onto field names.
+# Keeping the two in sync is enforced by tests/test_config_roundtrip.py, which
+# fails both on a field that silently reverts AND on a key written twice.
+_SAVE_EXPLICIT_FIELDS = frozenset(
+    {
+        "api_allow_origins",
+        "api_key",
+        "axon_store_base",
+        "bm25_engine",
+        "bm25_path",
+        "brave_api_key",
+        "chunk_overlap",
+        "chunk_size",
+        "chunk_strategy",
+        "compress_context",
+        "compression_strategy",
+        "compression_token_budget",
+        "dedup_on_ingest",
+        "discussion_fallback",
+        "embedding_model",
+        "embedding_models_dir",
+        "embedding_provider",
+        "gemini_api_key",
+        "graph_backend",
+        "graph_federation_weights",
+        "graph_rag",
+        "graph_rag_community",
+        "grok_api_key",
+        "hf_models_dir",
+        "hybrid_search",
+        "hybrid_weight",
+        "hyde",
+        "ingest_engine",
+        "keyring_mode",
+        "llm_max_tokens",
+        "llm_model",
+        "llm_provider",
+        "llm_temperature",
+        "llm_timeout",
+        "local_api_key",
+        "local_assets_only",
+        "local_base_url",
+        "local_models_dir",
+        "max_files_per_request",
+        "max_upload_bytes",
+        "mount_refresh_mode",
+        "mount_refresh_ttl_s",
+        "multi_query",
+        "offline_mode",
+        "ollama_cloud_key",
+        "ollama_cloud_url",
+        "openai_api_key",
+        "parent_chunk_size",
+        "projects_root",
+        "query_decompose",
+        "raptor",
+        "raptor_chunk_group_size",
+        "repl_shell_passthrough",
+        "rerank",
+        "rerank_top_k",
+        "reranker_model",
+        "reranker_provider",
+        "rust_batch_size",
+        "rust_fallback_enabled",
+        "seal_cache_ephemeral",
+        "seal_padding_bytes",
+        "similarity_threshold",
+        "sparse_model",
+        "sparse_retrieval",
+        "sparse_weight",
+        "step_back",
+        "symbol_index_engine",
+        "tokenizer_cache_dir",
+        "top_k",
+        "tqdb_alpha",
+        "tqdb_bits",
+        "tqdb_ef_construction",
+        "tqdb_fast_mode",
+        "tqdb_hybrid",
+        "tqdb_hybrid_weight",
+        "tqdb_max_degree",
+        "tqdb_n_refinements",
+        "tqdb_rerank",
+        "tqdb_rerank_precision",
+        "tqdb_search_list_size",
+        "truth_grounding",
+        "vector_store",
+        "vector_store_path",
+        "vllm_base_url",
+        "web_search_num_results",
+    }
+)
+
+# Recomputed from the AxonStore layout in __post_init__, so persisting them just
+# bakes in a stale absolute path. save() already handles these deliberately.
+_SAVE_DERIVED_FIELDS = frozenset(
+    {"vector_store_path", "bm25_path", "projects_root", "axon_store_base"}
+)
+
+
+def _unsaved_field_names() -> list[str]:
+    """Dataclass fields that save()'s explicit sections do not cover.
+
+    These are written verbatim under `rag:`, which load() maps straight onto
+    field names. Private (leading underscore) and derived path fields are
+    excluded — the former are not config, the latter are recomputed on load.
+    """
+    from dataclasses import fields as _dc_fields
+
+    return [
+        f.name
+        for f in _dc_fields(AxonConfig)
+        if not f.name.startswith("_")
+        and f.name not in _SAVE_EXPLICIT_FIELDS
+        and f.name not in _SAVE_DERIVED_FIELDS
+    ]
+
 
 # XDG-style user config dir --' consistent across Linux / macOS / Windows
 
@@ -156,6 +305,8 @@ _KNOWN_YAML_KEYS: dict[str, set[str]] = {
         "grok_api_key",
         "gemini_api_key",
         "vllm_base_url",
+        "local_base_url",
+        "local_api_key",
         "temperature",
         "max_tokens",
         "api_key",
@@ -328,11 +479,25 @@ class AxonConfig:
     ollama_models_dir: str = ""
     # LLM
     llm_provider: Literal[
-        "ollama", "gemini", "ollama_cloud", "openai", "vllm", "copilot", "github_copilot", "grok"
+        "ollama",
+        "gemini",
+        "ollama_cloud",
+        "openai",
+        "vllm",
+        "local",
+        "copilot",
+        "github_copilot",
+        "grok",
     ] = "ollama"
     llm_model: str = "llama3.1:8b"
     llm_temperature: float = 0.7
-    llm_max_tokens: int = 2048
+    # 8192, not 2048: reasoning models (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives)
+    # spend the budget on `reasoning_content` before emitting any `content`, and
+    # can burn >4k tokens doing so. At 2048 they hit the ceiling mid-reasoning and
+    # return empty content — which silently degrades every internal RAG call
+    # (HyDE, multi-query, step-back, decompose, compression, GraphRAG NER, RAPTOR,
+    # LLM rerank) because those parse the output rather than display it.
+    llm_max_tokens: int = 8192
     api_key: str = ""  # legacy alias -- prefer openai_api_key
     # CORS origins allowed by the REST API server (maps from api.allow_origins in config.yaml).
     # Example: ["http://localhost:3000", "https://my.app"]
@@ -343,6 +508,18 @@ class AxonConfig:
     ollama_cloud_key: str = ""
     ollama_cloud_url: str = ""
     vllm_base_url: str = "http://localhost:8000/v1"
+    # Generic OpenAI-compatible endpoint served on this machine — llama.cpp
+    # (llama-server), vLLM, LM Studio, text-generation-inference, LocalAI, or
+    # anything else exposing POST /chat/completions and GET /models.
+    #
+    # Defaults to :8080 (llama-server's port) rather than :8000, which is where
+    # `axon-api` itself listens — a shared default there would collide on a
+    # single-machine setup.
+    local_base_url: str = "http://localhost:8080/v1"
+    # Most local servers ignore auth entirely; set this only if yours requires
+    # a key. The OpenAI SDK refuses to construct a client without one, so an
+    # empty value is replaced with a dummy at call time.
+    local_api_key: str = ""
     # GitHub OAuth token for the "github_copilot" provider.
     # Obtained via the OAuth device flow (/keys set github_copilot).
     # Classic PATs are NOT accepted by the Copilot API.
@@ -393,6 +570,12 @@ class AxonConfig:
             env_val = os.getenv("VLLM_BASE_URL")
             if env_val:
                 self.vllm_base_url = env_val
+        if self.local_base_url == "http://localhost:8080/v1":
+            env_local = os.getenv("AXON_LOCAL_LLM_BASE_URL") or os.getenv("LOCAL_LLM_BASE_URL")
+            if env_local:
+                self.local_base_url = env_local
+        if not self.local_api_key:
+            self.local_api_key = os.getenv("LOCAL_LLM_API_KEY", "")
         if not self.brave_api_key:
             self.brave_api_key = os.getenv("BRAVE_API_KEY", "")
         if not self.copilot_pat:
@@ -813,8 +996,11 @@ class AxonConfig:
     graph_rag_relation_shard_signature_workers: int = 4
     graph_rag_relation_shard_write_workers: int = 4
     graph_rag_community_summary_compact_persist: bool = True
-    # LLM request timeout in seconds (applied where the provider client supports it)
-    llm_timeout: int = 60
+    # LLM request timeout in seconds (applied where the provider client supports it).
+    # Kept at 60 for cloud providers so a stalled request fails fast. Locally served
+    # models are far slower — see DEFAULT_LOCAL_LLM_TIMEOUT in this module for the
+    # `local` provider's higher effective default and why it exists.
+    llm_timeout: int = DEFAULT_LLM_TIMEOUT
     # REPL shell passthrough policy for `!command`.
     # - local_only: allow only in local/default project modes (default)
     # - always: allow in all modes
@@ -1063,8 +1249,22 @@ class AxonConfig:
         # llm.grok_api_key in YAML -> grok_api_key field
         if "llm_grok_api_key" in config_dict:
             config_dict["grok_api_key"] = config_dict.pop("llm_grok_api_key")
+        # These three had no mapping at all: save() wrote llm.gemini_api_key /
+        # llm.ollama_cloud_key / llm.ollama_cloud_url, load() produced
+        # llm_gemini_api_key etc. — not dataclass field names — and dropped them,
+        # so the credentials reverted to empty on every reload.
+        if "llm_gemini_api_key" in config_dict:
+            config_dict["gemini_api_key"] = config_dict.pop("llm_gemini_api_key")
+        if "llm_ollama_cloud_key" in config_dict:
+            config_dict["ollama_cloud_key"] = config_dict.pop("llm_ollama_cloud_key")
+        if "llm_ollama_cloud_url" in config_dict:
+            config_dict["ollama_cloud_url"] = config_dict.pop("llm_ollama_cloud_url")
         if "llm_vllm_base_url" in config_dict:
             config_dict["vllm_base_url"] = config_dict["llm_vllm_base_url"]
+        if "llm_local_base_url" in config_dict:
+            config_dict["local_base_url"] = config_dict["llm_local_base_url"]
+        if "llm_local_api_key" in config_dict:
+            config_dict["local_api_key"] = config_dict.pop("llm_local_api_key")
         if "projects_root" in data:
             config_dict["projects_root"] = data["projects_root"]
         if "max_workers" in data:
@@ -1278,6 +1478,11 @@ class AxonConfig:
         _openai_key = flat["openai_api_key"] or flat["api_key"]
         if _openai_key:
             data["llm"]["api_key"] = _openai_key
+        # ...but llm.api_key loads back into the legacy `api_key` field, so writing
+        # only that downgraded openai_api_key into api_key on every round-trip.
+        # Emit the canonical name too; load() maps it straight back.
+        if flat["openai_api_key"]:
+            data["llm"]["openai_api_key"] = flat["openai_api_key"]
         if flat["grok_api_key"]:
             data["llm"]["grok_api_key"] = flat["grok_api_key"]
         if flat["gemini_api_key"]:
@@ -1288,8 +1493,31 @@ class AxonConfig:
             data["llm"]["ollama_cloud_url"] = flat["ollama_cloud_url"]
         if flat["vllm_base_url"]:
             data["llm"]["vllm_base_url"] = flat["vllm_base_url"]
+        if flat["local_base_url"]:
+            data["llm"]["local_base_url"] = flat["local_base_url"]
+        if flat["local_api_key"]:
+            data["llm"]["local_api_key"] = flat["local_api_key"]
         if flat["llm_timeout"]:
             data["llm"]["timeout"] = flat["llm_timeout"]
+        # ------------------------------------------------------------------ #
+        # Completion pass — persist every remaining field.                     #
+        #                                                                      #
+        # The sections above are hand-written because they rename fields on the#
+        # way out (llm_provider -> llm.provider, and so on). They covered 85 of#
+        # 241 dataclass fields, so the other 156 silently reverted to their    #
+        # defaults on the next load: `graph_rag_depth: light` came back        #
+        # "standard", a custom `ollama_base_url` came back "localhost", `mmr`  #
+        # came back False. Anything set through `axon --setup`, `/config set`  #
+        # or POST /config/update and then persisted was quietly lost.          #
+        #                                                                      #
+        # `load()` does `config_dict.update(data["rag"])`, taking keys under   #
+        # `rag:` verbatim as dataclass field names — so that section is the    #
+        # correct home for everything without a bespoke mapping. Fields already#
+        # written above keep their canonical location and are skipped here, so #
+        # no key is duplicated in the YAML.                                    #
+        # ------------------------------------------------------------------ #
+        for _name in _unsaved_field_names():
+            data["rag"][_name] = flat[_name]
         import tempfile as _tempfile
 
         _resolved_target = os.path.expanduser(target)
@@ -1479,6 +1707,36 @@ class AxonConfig:
                     section="rag",
                     field="sentence_window_size",
                     message=f"sentence_window_size must be >= 1, got {cfg.sentence_window_size}.",
+                )
+            )
+        # Local provider: LLM-based graph extraction runs one call per chunk, and
+        # locally served models are slow enough that this stops being practical.
+        # Measured with llama.cpp serving Gemma 4 26B on an Intel Arc iGPU:
+        # ~4 tokens/s, so a single extraction that reasons up to llm_max_tokens can
+        # run for tens of minutes — and llm.timeout will not reliably cut it short
+        # (see DEFAULT_LOCAL_LLM_TIMEOUT: it is a per-read bound, not a deadline).
+        # Warn rather than block: a fast local model on a real GPU is fine.
+        if (
+            cfg.llm_provider == "local"
+            and cfg.graph_rag
+            and cfg.graph_rag_depth != "light"
+            and cfg.graph_rag_ner_backend == "llm"
+        ):
+            issues.append(
+                ConfigIssue(
+                    level="warn",
+                    section="rag",
+                    field="graph_rag_depth",
+                    message=(
+                        "graph_rag is on with llm.provider 'local' and LLM-based entity "
+                        "extraction. Ingest makes one LLM call per chunk, which can take "
+                        "tens of minutes per chunk on a slow local model."
+                    ),
+                    suggestion=(
+                        "Set rag.graph_rag_depth: light for regex extraction (no LLM calls), "
+                        "or rag.graph_rag_ner_backend: gliner, or point llm.local_base_url at "
+                        "a faster model."
+                    ),
                 )
             )
         # API key warnings

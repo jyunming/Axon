@@ -2,6 +2,83 @@
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **`local` LLM provider — point Axon at any OpenAI-compatible server on your machine.**
+  llama.cpp (`llama-server`), vLLM, LM Studio, text-generation-inference, LocalAI:
+  anything exposing `POST /chat/completions` and `GET /models`. Configure with
+  `llm.local_base_url` (default `http://localhost:8080/v1`, also
+  `AXON_LOCAL_LLM_BASE_URL`) and the optional `llm.local_api_key`.
+  Axon **never loads or unloads models** — an unloaded model fails fast instead of
+  stalling behind a 30–90 s hot-swap.
+- **Endpoint ping.** `axon --doctor` gains a "Local LLM endpoint" check that reports
+  reachability and lists served models; `/local-url ping` does the same from the REPL.
+  "Up but serving no models" is reported as a warning, since that is a real state for
+  a router-mode server with nothing resident.
+- **REPL `/local-url [URL|ping]`** to show, set, or ping the endpoint.
+- **Config tools on MCP** — `get_config`, `set_config`, `update_config` and
+  `validate_config` (51 -> 55 tools). MCP was the only surface with no config
+  access at all, even though `surface_contract.py` already declared
+  `config_read` / `config_update` as supported on every surface.
+- **Longer request timeout for `local`.** `llm.timeout` stays 60 s for cloud
+  providers (a stalled request should fail fast) but resolves to 300 s for the
+  `local` provider, since advanced RAG issues several sequential calls and a 26B
+  model on consumer hardware needs far longer than 60 s per call. An explicit
+  `llm.timeout` always wins.
+
+- **RAPTOR and GraphRAG verified against a local model.** Both work end to end
+  with llama.cpp serving Gemma 4 26B: RAPTOR built a 2-level summary hierarchy
+  (420 s ingest, 145 s query) and GraphRAG answered a multi-hop question with
+  citations from two documents (0.5 s ingest at `graph_rag_depth: light`,
+  71 s query). MODEL_GUIDE records the settings and the measured costs.
+- **Config validation warns on GraphRAG + a local model.** LLM-based graph
+  extraction makes one call per chunk; on a slow local model that is impractical
+  (measured: >10 min for a single extraction, with `llm.timeout` unable to cut it
+  short). The warning points at `rag.graph_rag_depth: light`, which extracted the
+  same entities in 0.6 s with no LLM calls.
+
+### 🐛 Fixes
+
+- **`AxonConfig.save()` silently dropped 156 of 241 fields.** Only 85 were
+  written, so everything else reverted to its default on the next load —
+  `graph_rag_depth: light` came back `standard`, a custom `ollama_base_url`
+  came back `localhost`, `mmr` came back `False`. Anything set via
+  `axon --setup`, `/config set` or `POST /config/update` with `persist: true`
+  was quietly lost on restart. save() now emits every remaining field under
+  `rag:`, which load() already maps verbatim onto field names.
+- **Three credential fields had no load mapping at all.** save() wrote
+  `llm.gemini_api_key`, `llm.ollama_cloud_key` and `llm.ollama_cloud_url`;
+  load() produced `llm_gemini_api_key` etc., which match no dataclass field,
+  and dropped them. `openai_api_key` was written only under the legacy
+  `llm.api_key`, which loads into the separate `api_key` field, so it degraded
+  on every round-trip.
+- **139 of 240 config fields were unreachable from every API surface.**
+  `POST /config/set` resolved keys through a 101-entry alias table and returned
+  400 for anything else, so `graph_rag_depth`, `chunk_size`, `llm_temperature`
+  and 136 others could only be changed by hand-editing config.yaml — including
+  from the VS Code extension and web GUI, which both call that route. The new
+  `resolve_config_key()` accepts a curated alias, a bare field name, or the
+  last dotted segment, and is shared with REPL `/config set`.
+- **`POST /config/update` silently ignored unmodelled keys.** It declares a
+  curated 32-field subset for live RAG tuning; Pydantic discarded anything else
+  before the route saw it, so the call returned 200 `success` with the field
+  untouched. Unknown keys are now reported in an `ignored` list (and still not
+  applied — use `/config/set` for the rest).
+- **Reasoning models no longer return empty answers.** Gemma 4, GPT-OSS and
+  DeepSeek-R1 derivatives put their chain of thought in a non-standard
+  `reasoning_content` field and leave `content` empty when the token budget runs out
+  mid-thought. Axon read `content` only, so those responses arrived as `""` with no
+  error — silently degrading every internal RAG step that parses model output rather
+  than displaying it (HyDE, multi-query, step-back, decompose, context compression,
+  GraphRAG NER, RAPTOR summaries, LLM rerank). All OpenAI-compatible providers now
+  fall back to `reasoning_content`, `vllm` included.
+
+### ⚠️ Behaviour changes
+
+- **`llm.max_tokens` default raised from 2048 to 8192**, for all providers. 2048
+  truncates reasoning models mid-thought. This raises the per-call output ceiling on
+  paid APIs (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default — set
+  `llm.max_tokens` explicitly to keep the old value.
 ## [0.4.3] - 2026-08-08
 
 A small fix release that settles which browser UI is the supported one. The

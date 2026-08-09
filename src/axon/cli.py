@@ -300,7 +300,7 @@ def main():
     parser.add_argument("--stream", action="store_true", help="Stream the response")
     parser.add_argument(
         "--provider",
-        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm", "github_copilot"],
+        choices=["ollama", "gemini", "ollama_cloud", "openai", "vllm", "local", "github_copilot"],
         help="LLM provider to use (overrides config)",
     )
     parser.add_argument(
@@ -963,7 +963,15 @@ def main():
     if args.provider:
         config.llm_provider = args.provider
     if args.model:
-        _PROVIDERS = ("ollama", "gemini", "openai", "ollama_cloud", "vllm", "github_copilot")
+        _PROVIDERS = (
+            "ollama",
+            "gemini",
+            "openai",
+            "ollama_cloud",
+            "vllm",
+            "local",
+            "github_copilot",
+        )
         if isinstance(args.model, str) and "/" in args.model:
             _prov, _mdl = args.model.split("/", 1)
             if _prov in _PROVIDERS:
@@ -1057,7 +1065,15 @@ def main():
             "  vllm         (local)  — any model served by vLLM (e.g., meta-llama/Llama-3.1-8B-Instruct)"
         )
         print(
-            f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)\n"
+            f"               URL: {config.vllm_base_url}  (set vllm_base_url in config or VLLM_BASE_URL env)"
+        )
+        print(
+            "  local        (local)  — any OpenAI-compatible server on this machine "
+            "(llama.cpp, vLLM, LM Studio, TGI)"
+        )
+        print(
+            f"               URL: {config.local_base_url}  "
+            "(set local_base_url in config or AXON_LOCAL_LLM_BASE_URL env)\n"
         )
         # use module-level os
         if os.getenv("AXON_DRY_RUN"):

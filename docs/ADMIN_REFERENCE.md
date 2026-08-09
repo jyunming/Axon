@@ -96,7 +96,7 @@ If no query string is given, the interactive REPL starts. If a query string is g
 
 | Flag | Description |
 |------|-------------|
-| `--provider PROVIDER` | LLM provider: `ollama`, `openai`, `gemini`, `grok`, `vllm`, `github_copilot`, `ollama_cloud` |
+| `--provider PROVIDER` | LLM provider: `ollama`, `local`, `openai`, `gemini`, `grok`, `vllm`, `github_copilot`, `ollama_cloud` |
 | `--model NAME` | LLM model name (e.g. `gemma:2b`, `gemini-1.5-flash`, `gpt-4o`). Also accepts `provider/model` format |
 | `--embed MODEL` | Embedding model (e.g. `all-MiniLM-L6-v2` or `ollama/nomic-embed-text`). Accepts `provider/model` format |
 | `--list-models` | List supported providers and locally installed Ollama models, then exit |
@@ -256,6 +256,7 @@ All RAG flags can be toggled at runtime without restarting.
 | `/embed [provider/model]` | Switch embedding provider and model | `/embed ollama/nomic-embed-text` |
 | `/pull NAME` | Pull an Ollama model with a progress indicator | `/pull gemma3:12b` |
 | `/vllm-url [URL]` | Show or set the vLLM server base URL | `/vllm-url http://gpu-box:8000/v1` |
+| `/local-url [URL\|ping]` | Show, set, or ping the local OpenAI-compatible endpoint | `/local-url ping` |
 
 ### 3.6 Configuration
 
@@ -607,17 +608,19 @@ YAML section: `llm:`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `llm.provider` | str | `ollama` | LLM provider: `ollama`, `openai`, `gemini`, `grok`, `vllm`, `github_copilot`, `ollama_cloud` |
+| `llm.provider` | str | `ollama` | LLM provider: `ollama`, `local`, `openai`, `gemini`, `grok`, `vllm`, `github_copilot`, `ollama_cloud` |
 | `llm.model` | str | `llama3.1:8b` | Model name |
 | `llm.temperature` | float | `0.7` | Generation temperature (`0.0` = deterministic, `2.0` = max creative) |
-| `llm.max_tokens` | int | `2048` | Max tokens in the generated answer |
-| `llm.timeout` | int | `60` | LLM request timeout in seconds |
+| `llm.max_tokens` | int | `8192` | Max tokens in the generated answer. 8192 (not 2048) because reasoning models spend the budget on `reasoning_content` before emitting any `content`. |
+| `llm.timeout` | int | `60` | LLM request timeout in seconds. Raised to `300` automatically when `llm.provider` is `local` (locally served models are far slower); an explicit value always wins. |
 | `llm.base_url` | str | `http://localhost:11434` | Ollama server URL (also: `OLLAMA_HOST` env var) |
 | `llm.models_dir` | str | `""` | Ollama model root directory (also: `OLLAMA_MODELS` env var) |
 | `llm.openai_api_key` | str | `""` | OpenAI API key (also: `OPENAI_API_KEY` env var) |
 | `llm.gemini_api_key` | str | `""` | Gemini API key (also: `GEMINI_API_KEY` env var) |
 | `llm.grok_api_key` | str | `""` | xAI Grok API key (also: `XAI_API_KEY` env var) |
 | `llm.vllm_base_url` | str | `http://localhost:8000/v1` | vLLM server base URL (also: `VLLM_BASE_URL` env var) |
+| `llm.local_base_url` | str | `http://localhost:8080/v1` | Any OpenAI-compatible server on this machine — llama.cpp, vLLM, LM Studio, TGI (also: `AXON_LOCAL_LLM_BASE_URL` env var) |
+| `llm.local_api_key` | str | `""` | Optional bearer token for that endpoint; most local servers need none (also: `LOCAL_LLM_API_KEY` env var) |
 | `llm.ollama_cloud_url` | str | `https://ollama.com/api` | Remote Ollama endpoint URL (also: `OLLAMA_CLOUD_URL` env var) |
 | `llm.ollama_cloud_key` | str | `""` | Remote Ollama API key (also: `OLLAMA_CLOUD_KEY` env var) |
 
@@ -630,6 +633,7 @@ LLM provider transport table:
 | `grok` | HTTPS to `api.x.ai/v1` | `XAI_API_KEY` / `GROK_API_KEY` or `llm.grok_api_key` |
 | `gemini` | HTTPS to Google AI | `GEMINI_API_KEY` or `llm.gemini_api_key` |
 | `vllm` | HTTP to your vLLM server | `llm.vllm_base_url` |
+| `local` | HTTP to any OpenAI-compatible server on this machine | `llm.local_base_url` |
 | `github_copilot` | HTTPS to Copilot API | `GITHUB_COPILOT_PAT` (OAuth token) |
 | `ollama_cloud` | HTTPS to remote Ollama | `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` |
 

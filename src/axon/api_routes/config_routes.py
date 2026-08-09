@@ -33,6 +33,8 @@ _DOT_TO_FLAT: dict[str, str] = {
     "llm.max_tokens": "llm_max_tokens",
     "llm.timeout": "llm_timeout",
     "llm.vllm_base_url": "vllm_base_url",
+    "llm.local_base_url": "local_base_url",
+    "llm.local_api_key": "local_api_key",
     "llm.openai_api_key": "openai_api_key",
     "llm.grok_api_key": "grok_api_key",
     "llm.gemini_api_key": "gemini_api_key",
@@ -143,6 +145,41 @@ _DOT_TO_FLAT: dict[str, str] = {
 }
 
 
+def resolve_config_key(key: str) -> str | None:
+    """Resolve a caller-supplied config key to an AxonConfig field name.
+
+    ``_DOT_TO_FLAT`` is a curated table of friendly dot-notation aliases, but it
+    covers 101 of 240 fields. Before this resolver existed, `/config/set` — the
+    general "set any config key" endpoint, and the one the VS Code extension and
+    the web GUI both call — returned 400 for the other 139, so knobs like
+    ``graph_rag_depth`` or ``chunk_size`` were unreachable from every surface
+    except hand-editing config.yaml.
+
+    Resolution order, first match wins:
+
+    1. the curated alias (``chunk.strategy`` -> ``chunk_strategy``)
+    2. the bare field name (``graph_rag_depth``)
+    3. the last dotted segment (``rag.graph_rag_depth`` -> ``graph_rag_depth``)
+
+    Returns ``None`` when nothing matches, so callers can 400 with a useful
+    message instead of silently doing nothing.
+    """
+    from dataclasses import fields as _dc_fields
+
+    from axon.config import AxonConfig
+
+    mapped = _DOT_TO_FLAT.get(key)
+    if mapped:
+        return mapped
+    valid = {f.name for f in _dc_fields(AxonConfig) if not f.name.startswith("_")}
+    if key in valid:
+        return key
+    tail = key.rsplit(".", 1)[-1]
+    if tail in valid:
+        return tail
+    return None
+
+
 class ConfigSetRequest(BaseModel):
     key: str  # dot-notation: "chunk.strategy", "llm.model"
     value: Any
@@ -226,15 +263,14 @@ async def set_config_field(request: ConfigSetRequest):
     brain = _api.brain
     if brain is None:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    flat_key = _DOT_TO_FLAT.get(request.key)
-    if flat_key is None:
-        raise HTTPException(status_code=400, detail=f"Unknown config key: {request.key!r}")
-    if not hasattr(brain.config, flat_key):
+    flat_key = resolve_config_key(request.key)
+    if flat_key is None or not hasattr(brain.config, flat_key):
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Unknown config key '{request.key}'. "
-                f"Known dot-notation keys: {sorted(_DOT_TO_FLAT.keys())}"
+                f"Accepts a dot-notation alias {sorted(_DOT_TO_FLAT.keys())} "
+                f"or any AxonConfig field name."
             ),
         )
     from axon.api_routes.projects import _mask_if_sensitive

@@ -53,6 +53,7 @@ _SLASH_COMMANDS = [
     "/keys",
     "/list",
     "/llm ",
+    "/local-url ",
     "/model ",
     "/mount-refresh",
     "/project ",
@@ -89,6 +90,7 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/keys": "Show keyboard shortcuts",
     "/list": "List indexed documents",
     "/llm": "Adjust LLM parameters (e.g. temperature)",
+    "/local-url": "Set or ping the local OpenAI-compatible LLM endpoint",
     "/model": "Switch LLM model",
     "/mount-refresh": "Refresh a sealed mount from the owner's latest version",
     "/project": "Switch or manage project namespaces",
@@ -1855,16 +1857,21 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
             print("    Usage: /config set <key> <value>")
             print("    Example: /config set chunk.strategy markdown")
             return
-        from axon.api_routes.config_routes import _DOT_TO_FLAT
+        from axon.api_routes.config_routes import _DOT_TO_FLAT, resolve_config_key
 
         dot_key = parts[1]
         raw_val: str = parts[2]
-        flat_key = _DOT_TO_FLAT.get(dot_key, dot_key.replace(".", "_"))
+        # Shared with POST /config/set so REPL and REST accept the same keys:
+        # a curated alias, a bare field name, or the last dotted segment. The
+        # old `dot_key.replace(".", "_")` fallback turned `rag.graph_rag_depth`
+        # into `rag_graph_rag_depth`, which matches no field.
+        flat_key = resolve_config_key(dot_key)
         if brain is None:
             print("    Brain not initialised.")
             return
-        if not hasattr(brain.config, flat_key):
+        if flat_key is None or not hasattr(brain.config, flat_key):
             print(f"    Unknown config key '{dot_key}'. Known keys: {sorted(_DOT_TO_FLAT.keys())}")
+            print("    (any AxonConfig field name is also accepted)")
             return
         # Coerce value type based on existing attribute type
         current = getattr(brain.config, flat_key)
@@ -2704,6 +2711,8 @@ def _interactive_repl(
                         "    /store [sub]    AxonStore multi-user mode (init, whoami)\n"
                         "    /theme [name]   show or switch markdown code-block highlight theme\n"
                         "    /vllm-url <url> set the vLLM server base URL\n"
+                        "    /local-url [url|ping]  set or ping the local OpenAI-compatible "
+                        "LLM endpoint\n"
                         "\n"
                         "    Shell:   !<cmd>  run a shell command (local-only default)\n"
                         "    Files:   @<file>  attach file context  ·  @<folder>/  attach all text files\n"
@@ -2802,6 +2811,10 @@ def _interactive_repl(
                     print(
                         f"    vLLM URL:  {brain.config.vllm_base_url}  (change with /vllm-url <url>)"
                     )
+                    print(
+                        f"    Local URL: {brain.config.local_base_url}  "
+                        "(change with /local-url <url>)"
+                    )
                 elif "/" in arg:
                     provider, model = arg.split("/", 1)
                     if provider not in _PROVIDERS:
@@ -2834,6 +2847,25 @@ def _interactive_repl(
                     brain.config.vllm_base_url = arg
                     brain.llm._openai_clients = {}  # invalidate cached client
                     print(f"    vLLM base URL set to {arg}")
+            elif cmd == "/local-url":
+                if not arg:
+                    print(f"    Current local LLM base URL: {brain.config.local_base_url}")
+                    print("    Usage: /local-url http://host:port/v1")
+                    print("           /local-url ping     (check the endpoint is up)")
+                elif arg.strip() == "ping":
+                    result = brain.llm.ping_local()
+                    if result["reachable"]:
+                        models = ", ".join(result["models"]) or "(none loaded)"
+                        print(f"    OK  {result['base_url']}")
+                        print(f"    Models: {models}")
+                    else:
+                        print(f"    UNREACHABLE  {result['base_url']}")
+                        print(f"    {result['error']}")
+                        print("    Axon does not start your LLM server — start it, then retry.")
+                else:
+                    brain.config.local_base_url = arg
+                    brain.llm._openai_clients = {}  # invalidate cached client
+                    print(f"    Local LLM base URL set to {arg}")
             elif cmd == "/embed":
                 _EMBED_PROVIDERS = ("sentence_transformers", "ollama", "fastembed", "openai")
                 if not arg:

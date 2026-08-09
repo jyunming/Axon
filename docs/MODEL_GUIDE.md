@@ -173,6 +173,7 @@ The system supports cloud providers in addition to local Ollama models. Set `llm
 | **xAI Grok** | `grok` | `grok-3`, `grok-3-fast`, `grok-2` | Requires `XAI_API_KEY`; OpenAI-compatible endpoint (`api.x.ai/v1`) |
 | **Ollama Cloud** | `ollama_cloud` | Any Ollama-hosted model | Requires `OLLAMA_CLOUD_URL` + `OLLAMA_CLOUD_KEY` |
 | **vLLM** | `vllm` | Any vLLM-served model | Self-hosted OpenAI-compatible endpoint; set `vllm_base_url` in `config.yaml` |
+| **Local (any OpenAI-compatible)** | `local` | Whatever your server has loaded | llama.cpp (`llama-server`), vLLM, LM Studio, TGI, LocalAI. Set `local_base_url`; verify with `axon --doctor` or `/local-url ping`. Axon never loads or unloads models. |
 | **GitHub Copilot** | `copilot` | Any active Copilot model | VS Code only — routes LLM calls through the Copilot extension bridge; no Ollama required. Enable via `axon.useCopilotLlm: true` in VS Code settings or `provider: copilot` in `config.yaml`. |
 | **GitHub Copilot (OAuth)** | `github_copilot` | `gpt-4o`, `gpt-4.1`, `claude-3.5-sonnet` | Headless server use. Talks to the Copilot API directly using a **GitHub OAuth token obtained via the device-code flow** — run `axon --keys set github_copilot` to enrol once. Stored under env-var `GITHUB_COPILOT_PAT` (the name is legacy; the value is an OAuth access token, not a classic personal access token). Use `copilot` for VS Code integration; `github_copilot` for non-VS-Code workflows (CI, scripts, REST). |
 
@@ -245,6 +246,87 @@ llm:
   vllm_base_url: http://localhost:8000/v1
 
 ```
+
+**Local OpenAI-compatible server (llama.cpp, LM Studio, TGI, LocalAI):**
+
+Use `provider: local` when you already run an LLM server on this machine and just
+want Axon to talk to it. Anything exposing `POST /chat/completions` and
+`GET /models` works.
+
+```yaml
+
+llm:
+
+  provider: local
+
+  model: gemma4-26b            # must match an id the server reports at /models
+
+  local_base_url: http://localhost:8080/v1
+
+```
+
+Common ports: llama.cpp `llama-server` **8080**, LM Studio **1234**, vLLM **8000**,
+TGI **3000**. The default is 8080 — deliberately *not* 8000, which is where
+`axon-api` itself listens.
+
+Check the endpoint before querying:
+
+```bash
+axon --doctor          # includes a "Local LLM endpoint" check listing served models
+```
+```
+axon> /local-url ping
+```
+
+**Axon never loads or unloads models.** Start and stop them with your own tooling
+(`las serve <model>`, `vllm serve <model>`, the LM Studio UI). If the model isn't
+resident, the query fails immediately rather than stalling behind a 30–90 s
+model swap.
+
+> **RAPTOR on a slow local model:** verified working against llama.cpp serving
+> Gemma 4 26B on an Intel Arc iGPU — a 2-level summary hierarchy was built and
+> retrieved, and the answer was correctly grounded. Budget for it though: three
+> short chunks took **420 s to ingest** (summarisation is an LLM call per chunk
+> group) and **145 s to query**. Note also that `rag.raptor_min_source_size_mb`
+> defaults to **5 MB**, so RAPTOR is skipped entirely for smaller sources — it
+> logs `RAPTOR: skipping N small source(s)` at INFO when that happens. Set it to
+> `0` to force RAPTOR on a small corpus.
+
+> **GraphRAG on a slow local model:** works end to end, but the *extraction*
+> setting matters. `rag.graph_rag_depth` ships as `standard`, which makes **one
+> LLM call per chunk**; against llama.cpp serving Gemma 4 26B on an Intel Arc
+> iGPU (~5 tok/s) a single extraction call ran past 10 minutes without
+> finishing, and `llm.timeout` did not cut it short (see the timeout note).
+> With `rag.graph_rag_depth: light` — regex extraction, no LLM calls — the same
+> corpus indexed in **0.5 s** with the same five entities, and a multi-hop query
+> answered correctly in **71 s** with citations from both source documents.
+> Config validation now warns when `graph_rag` is on with `provider: local` and
+> LLM-based extraction. Alternatives: `rag.graph_rag_ner_backend: gliner`, or a
+> smaller/faster model.
+>
+> Keep `rag.graph_rag_community: false` (the shipped default) on local models —
+> community detection adds a map-reduce over community reports, which is many
+> more sequential LLM calls. Note the dataclass default is `True`, so code that
+> builds `AxonConfig()` directly rather than loading config.yaml gets the
+> expensive path.
+
+> **Timeouts:** `llm.timeout` defaults to 60 s, which suits cloud providers but not a
+> 26B model on consumer hardware — measured on an Intel Arc iGPU, a two-character
+> answer took 33 s and a step-back reformulation 75 s. With `provider: local` the
+> effective default is raised to **300 s**, so multi-call strategies (`step_back`,
+> `query_decompose`) don't time out mid-pipeline. Set `llm.timeout` explicitly to
+> override. Note that this is a **soft** bound: the OpenAI SDK passes it to httpx,
+> which applies it per read, and every chunk received resets the clock. Measured:
+> `llm.timeout: 30` against a slowly generating local model raised after 96 s, not
+> 30 s. Read it as "abort if the server goes quiet this long", not "abort after
+> this long" — to bound total time, cap `llm.max_tokens` or use a faster model.
+
+> **Reasoning models:** Gemma 4, GPT-OSS and DeepSeek-R1 derivatives emit their
+> chain of thought in a non-standard `reasoning_content` field and can spend
+> thousands of tokens there before producing any `content`. Axon reads that field
+> as a fallback, and `llm.max_tokens` defaults to 8192 so the model isn't cut off
+> mid-thought. If answers come back empty, raise it further before suspecting the
+> retrieval pipeline.
 
 **GitHub Copilot (VS Code bridge):**
 
