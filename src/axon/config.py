@@ -50,6 +50,127 @@ DEFAULT_LLM_TIMEOUT = 60
 DEFAULT_LOCAL_LLM_TIMEOUT = 300
 
 
+# Flat field names that AxonConfig.save() writes explicitly, under a bespoke
+# YAML name or section (llm_provider -> llm.provider, rerank -> rerank.enabled).
+# Everything NOT listed here is emitted verbatim under `rag:` by the completion
+# pass in save(), because load() slurps that section straight onto field names.
+# Keeping the two in sync is enforced by tests/test_config_roundtrip.py, which
+# fails both on a field that silently reverts AND on a key written twice.
+_SAVE_EXPLICIT_FIELDS = frozenset(
+    {
+        "api_allow_origins",
+        "api_key",
+        "axon_store_base",
+        "bm25_engine",
+        "bm25_path",
+        "brave_api_key",
+        "chunk_overlap",
+        "chunk_size",
+        "chunk_strategy",
+        "compress_context",
+        "compression_strategy",
+        "compression_token_budget",
+        "dedup_on_ingest",
+        "discussion_fallback",
+        "embedding_model",
+        "embedding_models_dir",
+        "embedding_provider",
+        "gemini_api_key",
+        "graph_backend",
+        "graph_federation_weights",
+        "graph_rag",
+        "graph_rag_community",
+        "grok_api_key",
+        "hf_models_dir",
+        "hybrid_search",
+        "hybrid_weight",
+        "hyde",
+        "ingest_engine",
+        "keyring_mode",
+        "llm_max_tokens",
+        "llm_model",
+        "llm_provider",
+        "llm_temperature",
+        "llm_timeout",
+        "local_api_key",
+        "local_assets_only",
+        "local_base_url",
+        "local_models_dir",
+        "max_files_per_request",
+        "max_upload_bytes",
+        "mount_refresh_mode",
+        "mount_refresh_ttl_s",
+        "multi_query",
+        "offline_mode",
+        "ollama_cloud_key",
+        "ollama_cloud_url",
+        "openai_api_key",
+        "parent_chunk_size",
+        "projects_root",
+        "query_decompose",
+        "raptor",
+        "raptor_chunk_group_size",
+        "repl_shell_passthrough",
+        "rerank",
+        "rerank_top_k",
+        "reranker_model",
+        "reranker_provider",
+        "rust_batch_size",
+        "rust_fallback_enabled",
+        "seal_cache_ephemeral",
+        "seal_padding_bytes",
+        "similarity_threshold",
+        "sparse_model",
+        "sparse_retrieval",
+        "sparse_weight",
+        "step_back",
+        "symbol_index_engine",
+        "tokenizer_cache_dir",
+        "top_k",
+        "tqdb_alpha",
+        "tqdb_bits",
+        "tqdb_ef_construction",
+        "tqdb_fast_mode",
+        "tqdb_hybrid",
+        "tqdb_hybrid_weight",
+        "tqdb_max_degree",
+        "tqdb_n_refinements",
+        "tqdb_rerank",
+        "tqdb_rerank_precision",
+        "tqdb_search_list_size",
+        "truth_grounding",
+        "vector_store",
+        "vector_store_path",
+        "vllm_base_url",
+        "web_search_num_results",
+    }
+)
+
+# Recomputed from the AxonStore layout in __post_init__, so persisting them just
+# bakes in a stale absolute path. save() already handles these deliberately.
+_SAVE_DERIVED_FIELDS = frozenset(
+    {"vector_store_path", "bm25_path", "projects_root", "axon_store_base"}
+)
+
+
+def _unsaved_field_names() -> list[str]:
+    """Dataclass fields that save()'s explicit sections do not cover.
+
+    These are written verbatim under `rag:`, which load() maps straight onto
+    field names. Private (leading underscore) and derived path fields are
+    excluded — the former are not config, the latter are recomputed on load.
+    """
+    from dataclasses import fields as _dc_fields
+
+    return [
+        f.name
+        for f in _dc_fields(AxonConfig)
+        if not f.name.startswith("_")
+        and f.name not in _SAVE_EXPLICIT_FIELDS
+        and f.name not in _SAVE_DERIVED_FIELDS
+    ]
+
+
 # XDG-style user config dir --' consistent across Linux / macOS / Windows
 
 
@@ -1128,6 +1249,16 @@ class AxonConfig:
         # llm.grok_api_key in YAML -> grok_api_key field
         if "llm_grok_api_key" in config_dict:
             config_dict["grok_api_key"] = config_dict.pop("llm_grok_api_key")
+        # These three had no mapping at all: save() wrote llm.gemini_api_key /
+        # llm.ollama_cloud_key / llm.ollama_cloud_url, load() produced
+        # llm_gemini_api_key etc. — not dataclass field names — and dropped them,
+        # so the credentials reverted to empty on every reload.
+        if "llm_gemini_api_key" in config_dict:
+            config_dict["gemini_api_key"] = config_dict.pop("llm_gemini_api_key")
+        if "llm_ollama_cloud_key" in config_dict:
+            config_dict["ollama_cloud_key"] = config_dict.pop("llm_ollama_cloud_key")
+        if "llm_ollama_cloud_url" in config_dict:
+            config_dict["ollama_cloud_url"] = config_dict.pop("llm_ollama_cloud_url")
         if "llm_vllm_base_url" in config_dict:
             config_dict["vllm_base_url"] = config_dict["llm_vllm_base_url"]
         if "llm_local_base_url" in config_dict:
@@ -1347,6 +1478,11 @@ class AxonConfig:
         _openai_key = flat["openai_api_key"] or flat["api_key"]
         if _openai_key:
             data["llm"]["api_key"] = _openai_key
+        # ...but llm.api_key loads back into the legacy `api_key` field, so writing
+        # only that downgraded openai_api_key into api_key on every round-trip.
+        # Emit the canonical name too; load() maps it straight back.
+        if flat["openai_api_key"]:
+            data["llm"]["openai_api_key"] = flat["openai_api_key"]
         if flat["grok_api_key"]:
             data["llm"]["grok_api_key"] = flat["grok_api_key"]
         if flat["gemini_api_key"]:
@@ -1363,6 +1499,25 @@ class AxonConfig:
             data["llm"]["local_api_key"] = flat["local_api_key"]
         if flat["llm_timeout"]:
             data["llm"]["timeout"] = flat["llm_timeout"]
+        # ------------------------------------------------------------------ #
+        # Completion pass — persist every remaining field.                     #
+        #                                                                      #
+        # The sections above are hand-written because they rename fields on the#
+        # way out (llm_provider -> llm.provider, and so on). They covered 85 of#
+        # 241 dataclass fields, so the other 156 silently reverted to their    #
+        # defaults on the next load: `graph_rag_depth: light` came back        #
+        # "standard", a custom `ollama_base_url` came back "localhost", `mmr`  #
+        # came back False. Anything set through `axon --setup`, `/config set`  #
+        # or POST /config/update and then persisted was quietly lost.          #
+        #                                                                      #
+        # `load()` does `config_dict.update(data["rag"])`, taking keys under   #
+        # `rag:` verbatim as dataclass field names — so that section is the    #
+        # correct home for everything without a bespoke mapping. Fields already#
+        # written above keep their canonical location and are skipped here, so #
+        # no key is duplicated in the YAML.                                    #
+        # ------------------------------------------------------------------ #
+        for _name in _unsaved_field_names():
+            data["rag"][_name] = flat[_name]
         import tempfile as _tempfile
 
         _resolved_target = os.path.expanduser(target)
