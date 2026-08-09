@@ -114,11 +114,23 @@ async def update_config(request: ConfigUpdateRequest):
     reinit_llm = "llm_provider" in update_data or "llm_model" in update_data
     reinit_embed = "embedding_provider" in update_data or "embedding_model" in update_data
     reinit_rerank = "reranker_model" in update_data
+    # Only keys this endpoint actually models are applied. Extras are accepted by
+    # the schema purely so they can be reported rather than vanishing.
+    _declared = set(ConfigUpdateRequest.model_fields)
     applied_keys = []
+    ignored_keys = []
     for k, v in update_data.items():
-        if hasattr(brain.config, k):
+        if k in _declared and hasattr(brain.config, k):
             setattr(brain.config, k, v)
             applied_keys.append(k)
+        else:
+            ignored_keys.append(k)
+    # ConfigUpdateRequest declares a curated 32-field subset and Pydantic drops
+    # anything else, so a caller sending an unmodelled key (chunk_size, say) used
+    # to get 200 "success" with nothing changed. Report what was skipped instead
+    # of letting it look applied; /config/set takes any AxonConfig field.
+    if ignored_keys:
+        logger.warning("config/update ignored unknown keys: %s", ", ".join(sorted(ignored_keys)))
     if reinit_llm:
         from axon.llm import OpenLLM
 
@@ -148,6 +160,9 @@ async def update_config(request: ConfigUpdateRequest):
         "config": config_data,
         "persisted": persist,
         "applied": applied_keys,
+        # Empty for well-formed calls. Non-empty means the key is not part of
+        # this endpoint's curated set and was NOT applied — use /config/set.
+        "ignored": ignored_keys,
     }
 
 

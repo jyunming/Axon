@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 # Default upper bounds applied to free-form text fields exposed by the REST API.
 # These guard against accidental or malicious oversized payloads before any
@@ -441,6 +441,13 @@ class CopilotAgentRequest(BaseModel):
 
 
 class ConfigUpdateRequest(BaseModel):
+    # Accept unknown keys instead of having Pydantic drop them silently: this
+    # endpoint exposes a curated subset of AxonConfig, and a caller sending
+    # anything outside it used to get 200 "success" with the field untouched.
+    # The route still refuses to apply unmodelled keys — it reports them in the
+    # `ignored` list and points at /config/set, which takes any field.
+    model_config = ConfigDict(extra="allow")
+
     # Model
     llm_provider: str | None = None
     llm_model: str | None = None

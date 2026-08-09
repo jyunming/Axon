@@ -1857,16 +1857,21 @@ def _handle_config_cmd(arg: str, brain, cfg_path: str) -> None:
             print("    Usage: /config set <key> <value>")
             print("    Example: /config set chunk.strategy markdown")
             return
-        from axon.api_routes.config_routes import _DOT_TO_FLAT
+        from axon.api_routes.config_routes import _DOT_TO_FLAT, resolve_config_key
 
         dot_key = parts[1]
         raw_val: str = parts[2]
-        flat_key = _DOT_TO_FLAT.get(dot_key, dot_key.replace(".", "_"))
+        # Shared with POST /config/set so REPL and REST accept the same keys:
+        # a curated alias, a bare field name, or the last dotted segment. The
+        # old `dot_key.replace(".", "_")` fallback turned `rag.graph_rag_depth`
+        # into `rag_graph_rag_depth`, which matches no field.
+        flat_key = resolve_config_key(dot_key)
         if brain is None:
             print("    Brain not initialised.")
             return
-        if not hasattr(brain.config, flat_key):
+        if flat_key is None or not hasattr(brain.config, flat_key):
             print(f"    Unknown config key '{dot_key}'. Known keys: {sorted(_DOT_TO_FLAT.keys())}")
+            print("    (any AxonConfig field name is also accepted)")
             return
         # Coerce value type based on existing attribute type
         current = getattr(brain.config, flat_key)

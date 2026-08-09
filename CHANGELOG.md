@@ -30,6 +30,31 @@
 
 ### 🐛 Fixes
 
+- **`AxonConfig.save()` silently dropped 156 of 241 fields.** Only 85 were
+  written, so everything else reverted to its default on the next load —
+  `graph_rag_depth: light` came back `standard`, a custom `ollama_base_url`
+  came back `localhost`, `mmr` came back `False`. Anything set via
+  `axon --setup`, `/config set` or `POST /config/update` with `persist: true`
+  was quietly lost on restart. save() now emits every remaining field under
+  `rag:`, which load() already maps verbatim onto field names.
+- **Three credential fields had no load mapping at all.** save() wrote
+  `llm.gemini_api_key`, `llm.ollama_cloud_key` and `llm.ollama_cloud_url`;
+  load() produced `llm_gemini_api_key` etc., which match no dataclass field,
+  and dropped them. `openai_api_key` was written only under the legacy
+  `llm.api_key`, which loads into the separate `api_key` field, so it degraded
+  on every round-trip.
+- **139 of 240 config fields were unreachable from every API surface.**
+  `POST /config/set` resolved keys through a 101-entry alias table and returned
+  400 for anything else, so `graph_rag_depth`, `chunk_size`, `llm_temperature`
+  and 136 others could only be changed by hand-editing config.yaml — including
+  from the VS Code extension and web GUI, which both call that route. The new
+  `resolve_config_key()` accepts a curated alias, a bare field name, or the
+  last dotted segment, and is shared with REPL `/config set`.
+- **`POST /config/update` silently ignored unmodelled keys.** It declares a
+  curated 32-field subset for live RAG tuning; Pydantic discarded anything else
+  before the route saw it, so the call returned 200 `success` with the field
+  untouched. Unknown keys are now reported in an `ignored` list (and still not
+  applied — use `/config/set` for the rest).
 - **Reasoning models no longer return empty answers.** Gemma 4, GPT-OSS and
   DeepSeek-R1 derivatives put their chain of thought in a non-standard
   `reasoning_content` field and leave `content` empty when the token budget runs out
