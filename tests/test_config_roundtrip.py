@@ -153,3 +153,45 @@ class TestRegressionsFoundLive:
         cfg = AxonConfig(**{field: value})
         cfg.save(cfg_path)
         assert getattr(AxonConfig.load(cfg_path), field) == value
+
+
+class TestNoDoubleWrite:
+    """A field owned by an explicit section must not also land under `rag:`.
+
+    `_SAVE_EXPLICIT_FIELDS` is a hand-maintained list, so a field added to one of
+    save()'s explicit sections without being added to that set gets written
+    twice — once under its real section, once by the completion pass. Round-trip
+    still works (same value both times), which is exactly why it goes unnoticed.
+    `api_host` / `api_port` did this when the single-instance work landed
+    alongside the completion pass.
+    """
+
+    # (dataclass field, YAML section, key within that section)
+    OWNED = [
+        ("api_host", "api", "host"),
+        ("api_port", "api", "port"),
+        ("api_key", "api", "key"),
+        ("chunk_size", "chunk", "size"),
+        ("llm_model", "llm", "model"),
+        ("rerank", "rerank", "enabled"),
+    ]
+
+    @pytest.mark.parametrize("field,section,key", OWNED)
+    def test_written_once_in_its_own_section(self, field, section, key, cfg_path):
+        AxonConfig().save(cfg_path)
+        raw = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+        assert key in raw.get(section, {}), f"{field} missing from {section}.{key}"
+        assert field not in raw.get("rag", {}), (
+            f"{field} written twice — {section}.{key} AND rag.{field}. "
+            f"Add it to _SAVE_EXPLICIT_FIELDS."
+        )
+
+    @pytest.mark.parametrize("field,section,key", OWNED)
+    def test_still_round_trips(self, field, section, key, cfg_path):
+        """Removing it from the completion pass must not lose it."""
+        default = getattr(AxonConfig(), field)
+        probe = {int: 4321, str: "probe-value", bool: not default}.get(type(default))
+        if probe is None or probe == default:
+            pytest.skip(f"no distinguishing probe for {field}")
+        AxonConfig(**{field: probe}).save(cfg_path)
+        assert getattr(AxonConfig.load(cfg_path), field) == probe

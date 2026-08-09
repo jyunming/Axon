@@ -59,7 +59,9 @@ DEFAULT_LOCAL_LLM_TIMEOUT = 300
 _SAVE_EXPLICIT_FIELDS = frozenset(
     {
         "api_allow_origins",
+        "api_host",
         "api_key",
+        "api_port",
         "axon_store_base",
         "bm25_engine",
         "bm25_path",
