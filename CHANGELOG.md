@@ -46,11 +46,6 @@ patch-level version:
   `validate_config` (51 -> 55 tools). MCP was the only surface with no config
   access at all, even though `surface_contract.py` already declared
   `config_read` / `config_update` as supported on every surface.
-- **Longer request timeout for `local`.** `llm.timeout` stays 60 s for cloud
-  providers (a stalled request should fail fast) but resolves to 300 s for the
-  `local` provider, since advanced RAG issues several sequential calls and a 26B
-  model on consumer hardware needs far longer than 60 s per call. An explicit
-  `llm.timeout` always wins.
 
 - **RAPTOR and GraphRAG verified against a local model.** Both work end to end
   with llama.cpp serving Gemma 4 26B: RAPTOR built a 2-level summary hierarchy
