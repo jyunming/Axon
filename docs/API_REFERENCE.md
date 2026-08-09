@@ -282,15 +282,15 @@ check to prevent accidental writes or reads to the wrong corpus.
 |--------|------|-------------|
 | `GET` | `/config` | Return active RAG flags, model config, and runtime settings (sensitive fields masked as `"***"`: `api_key`, `gemini_api_key`, `ollama_cloud_key`, `copilot_pat`, `brave_api_key`, `qdrant_api_key`) |
 | `GET` | `/config/validate` | Validate the current `config.yaml` — returns `{"valid": bool, "issue_count": int, "issues": [...]}` |
-| `POST` | `/config/update` | Update LLM/embedding provider or RAG flags without restart |
-| `POST` | `/config/set` | Set a single config field using dot-notation (e.g. `chunk.strategy`) — accepts `{"key": "rag.top_k", "value": 20, "persist": false}` |
+| `POST` | `/config/update` | Update LLM/embedding provider or RAG flags without restart. Covers a curated live-tuning subset; any key outside it comes back in the response's `ignored` list and is **not** applied — use `/config/set` for those |
+| `POST` | `/config/set` | Set a single config field. `key` accepts a dot-notation alias (`chunk.strategy`), a bare `AxonConfig` field name (`graph_rag_depth`), or the last dotted segment (`rag.graph_rag_depth`) — every field is reachable. Accepts `{"key": "rag.top_k", "value": 20, "persist": false}` |
 | `POST` | `/config/reset` | Reset `config.yaml` to built-in defaults — returns `{"written_to": "<path>"}`. Running brain is not reloaded; call `POST /config/update` to apply |
 
 **`POST /config/update` body (all fields optional):**
 ```json
 {
   "llm_model": null,           // LLM model name (default: null — no change)
-  "llm_provider": null,        // LLM provider: ollama | openai | gemini | grok | vllm | copilot | github_copilot | ollama_cloud (default: null — no change)
+  "llm_provider": null,        // LLM provider: ollama | local | openai | gemini | grok | vllm | copilot | github_copilot | ollama_cloud (default: null — no change)
   "embedding_provider": null,  // Embedding provider (default: null — no change)
   "hyde": null,                // Override HyDE flag (default: null — no change)
   "rerank": null,              // Override rerank flag (default: null — no change)

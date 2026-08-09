@@ -127,7 +127,7 @@ Files are ciphertext on disk — cloud providers see only encrypted bytes.
 ## ⚡ Quick Start
 
 ```bash
-pip install "axon-rag[starter]"   # Python 3.10+. Includes UI, sealed sharing, extra loaders.
+pip install "axon-rag[starter]"   # Python 3.10+. Sealed sharing + extra loaders. Web GUI ships with axon-api.
 axon                              # First run auto-launches the setup wizard, then drops into the REPL.
 ```
 

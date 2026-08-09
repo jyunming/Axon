@@ -48,7 +48,7 @@ vector_store:
 
 | Layer | Compatible | Incompatible |
 |-------|-----------|-------------|
-| **LLM** | `ollama`, `vllm` | `openai`, `gemini`, `grok`, `github_copilot`, `ollama_cloud` |
+| **LLM** | `ollama`, `local`, `vllm` | `openai`, `gemini`, `grok`, `github_copilot`, `ollama_cloud` |
 | **Embedding** | `sentence_transformers`, `fastembed`, `ollama` | `openai` |
 | **Vector store** | `turboquantdb` (default), `lancedb`, `chroma` | `qdrant` (remote) |
 | **Web search** | — | Brave (disabled automatically) |

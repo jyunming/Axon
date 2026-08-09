@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-09
+
+Two things at once: the browser UI question is settled — the native web GUI
+served by `axon-api` at `/gui/` is now the maintained surface and the Streamlit
+UI is deprecated — and Axon gains a `local` LLM provider for any
+OpenAI-compatible server you already run, plus the config fixes that verifying
+it against a real local model turned up.
+
+0.4.2 is the previous published release, so everything below lands in one step.
+
+### ⚠️ Read this first
+
+Upgrading from 0.4.2, two changes alter existing behaviour despite the
+patch-level version:
+
+- **`llm.max_tokens` now defaults to 8192, up from 2048 — for every provider.**
+  Reasoning models (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives) spend the budget
+  on `reasoning_content` before emitting any `content`, and 2048 truncates them
+  mid-thought. This also raises the per-call output ceiling on paid APIs
+  (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default. Set
+  `llm.max_tokens` explicitly to keep the old value.
+- **`streamlit` is no longer in the `[starter]` or `[all]` extras.**
+  `pip install "axon-rag[all]" && axon-ui` now fails until you add `[ui]`. The
+  browser UI that ships with `axon-api` at `/gui/` needs no extra dependency and
+  is the maintained surface.
+
 ### ✨ Features
 
 - **`local` LLM provider — point Axon at any OpenAI-compatible server on your machine.**
@@ -20,11 +46,6 @@
   `validate_config` (51 -> 55 tools). MCP was the only surface with no config
   access at all, even though `surface_contract.py` already declared
   `config_read` / `config_update` as supported on every surface.
-- **Longer request timeout for `local`.** `llm.timeout` stays 60 s for cloud
-  providers (a stalled request should fail fast) but resolves to 300 s for the
-  `local` provider, since advanced RAG issues several sequential calls and a 26B
-  model on consumer hardware needs far longer than 60 s per call. An explicit
-  `llm.timeout` always wins.
 
 - **RAPTOR and GraphRAG verified against a local model.** Both work end to end
   with llama.cpp serving Gemma 4 26B: RAPTOR built a 2-level summary hierarchy
@@ -36,6 +57,22 @@
   (measured: >10 min for a single extraction, with `llm.timeout` unable to cut it
   short). The warning points at `rag.graph_rag_depth: light`, which extracted the
   same entities in 0.6 s with no LLM calls.
+
+### ⚠️ Deprecations
+
+- **`axon-ui` (Streamlit) is deprecated** and will be removed in a future
+  release. `main_ui()` emits a `DeprecationWarning` plus a stderr notice, and
+  the app renders an in-sidebar banner pointing at `http://localhost:8000/gui/`.
+  `Surface.WEBAPP` in `surface_contract.py` is marked deprecated — no new
+  capability should be exposed there.
+
+### 📦 Packaging
+
+- **`streamlit` dropped from the `[starter]` and `[all]` extras.** The web GUI
+  ships with the API server and needs no extra dependency. Users who still want
+  the Streamlit UI must install it explicitly: `pip install "axon-rag[ui]"`.
+  The `[ui]` extra is unchanged. The `docker-compose` `axon-ui` service keeps
+  working — `requirements.txt` still pins `streamlit` for that image.
 
 ### 🐛 Fixes
 
@@ -72,44 +109,18 @@
   than displaying it (HyDE, multi-query, step-back, decompose, context compression,
   GraphRAG NER, RAPTOR summaries, LLM rerank). All OpenAI-compatible providers now
   fall back to `reasoning_content`, `vllm` included.
-
-### ⚠️ Behaviour changes
-
-- **`llm.max_tokens` default raised from 2048 to 8192**, for all providers. 2048
-  truncates reasoning models mid-thought. This raises the per-call output ceiling on
-  paid APIs (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default — set
-  `llm.max_tokens` explicitly to keep the old value.
-## [0.4.3] - 2026-08-08
-
-A small fix release that settles which browser UI is the supported one. The
-native web GUI — static assets served by `axon-api` at `/gui/` — is now the
-maintained surface, and the older Streamlit UI (`axon-ui`) is deprecated.
-
-Nothing is removed: `axon-ui` still launches. It now announces its deprecation
-and is no longer installed by default.
-
-### ⚠️ Deprecations
-
-- **`axon-ui` (Streamlit) is deprecated** and will be removed in a future
-  release. `main_ui()` emits a `DeprecationWarning` plus a stderr notice, and
-  the app renders an in-sidebar banner pointing at `http://localhost:8000/gui/`.
-  `Surface.WEBAPP` in `surface_contract.py` is marked deprecated — no new
-  capability should be exposed there.
-
-### 📦 Packaging
-
-- **`streamlit` dropped from the `[starter]` and `[all]` extras.** The web GUI
-  ships with the API server and needs no extra dependency. Users who still want
-  the Streamlit UI must install it explicitly: `pip install "axon-rag[ui]"`.
-  The `[ui]` extra is unchanged. The `docker-compose` `axon-ui` service keeps
-  working — `requirements.txt` still pins `streamlit` for that image.
-
-### 🐛 Fixes
-
 - **`--doctor` no longer warns about a missing `streamlit`.** The check told
   users to install `[starter]`, which no longer ships it — so the hint pointed
   at a bundle that could not resolve the warning. `check_optional_extras()` now
   covers only `cryptography` + `keyring` (sealed sharing).
+
+### ⚠️ Other behaviour changes
+
+- **`llm.timeout` resolves to 300 s when `llm.provider` is `local`** (60 s
+  elsewhere, unchanged). Locally served models are slow enough that the cloud
+  default broke `step_back` and `query_decompose` outright. An explicit
+  `llm.timeout` always wins. Note this bound is per-read, not wall-clock — see
+  MODEL_GUIDE.
 
 ### 📚 Documentation
 

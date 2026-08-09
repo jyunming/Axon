@@ -117,6 +117,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/embed [provider/model]` | Switch embedding provider and model |
 | `/pull <name>` | Pull an Ollama model with progress indicator |
 | `/vllm-url [url]` | Show or set the vLLM server base URL at runtime (e.g. `http://localhost:8000/v1`) |
+| `/local-url [url\|ping]` | Show or set the local OpenAI-compatible endpoint (llama.cpp, LM Studio, TGI); `ping` checks it is up and lists served models |
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
 | `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match; answers in fallback mode are prefixed with a note that no grounded documents were found) |
 | `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `sentence-window`, `crag-lite`, `cite`, `raptor`, `graph-rag` |

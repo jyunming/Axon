@@ -577,6 +577,61 @@ openai.NotFoundError: 404 The model `mistral-7b-instruct` was not found
 
 ---
 
+## Local LLM (`provider: local`): empty answers, timeouts, or "unreachable"
+
+Covers any OpenAI-compatible server you run yourself — llama.cpp's
+`llama-server`, LM Studio, text-generation-inference, LocalAI.
+
+**First, check the endpoint.** Axon never starts or loads models for you:
+
+```bash
+axon --doctor          # includes a "Local LLM endpoint" check
+```
+```
+axon> /local-url ping
+```
+
+`reachable but no models` is a real state, not a bug — a router-mode
+`llama-server` answers `/models` before any model is resident. Load one with
+your own tooling, then retry.
+
+**Symptom: answers come back empty, or advanced RAG silently degrades.**
+Reasoning models (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives) emit their chain of
+thought in a non-standard `reasoning_content` field and can spend thousands of
+tokens there before producing any `content`. Axon falls back to that field, and
+`llm.max_tokens` defaults to 8192 so the model is not cut off mid-thought. If
+answers are still empty, raise it further before suspecting retrieval.
+
+**Symptom: `APITimeoutError` on `step_back` or `query_decompose`.**
+Those strategies make several sequential LLM calls. `llm.timeout` resolves to
+300 s for `provider: local` (60 s elsewhere), but a slow model can still exceed
+it. Raise `llm.timeout`, or use a faster model.
+
+Note the timeout is a **soft** bound, not a wall-clock deadline: it is applied
+per read and every chunk received resets it. Measured, `llm.timeout: 30` against
+a slowly generating local model raised after 96 s. To bound total time, cap
+`llm.max_tokens` instead.
+
+**Symptom: ingest hangs for many minutes with `graph_rag: true`.**
+`graph_rag_depth` ships as `standard`, which makes **one LLM call per chunk**. On
+a slow local model a single call can run past ten minutes. Use regex extraction
+instead — same entities, no LLM calls:
+
+```yaml
+rag:
+  graph_rag_depth: light
+```
+
+`axon --doctor` warns about this combination. Keep `graph_rag_community: false`
+(the shipped default) too — community detection adds a map-reduce over community
+reports, which is many more sequential calls.
+
+**Symptom: port conflict.** `local_base_url` defaults to `:8080`, deliberately
+not `:8000` — that is where `axon-api` itself listens. If you moved your LLM
+server to 8000, move the API instead (`AXON_PORT`).
+
+---
+
 ## Gemini: `API key not valid` or `RESOURCE_EXHAUSTED`
 
 **Error:**
