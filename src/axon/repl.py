@@ -53,6 +53,7 @@ _SLASH_COMMANDS = [
     "/keys",
     "/list",
     "/llm ",
+    "/local-url ",
     "/model ",
     "/mount-refresh",
     "/project ",
@@ -69,7 +70,6 @@ _SLASH_COMMANDS = [
     "/store ",
     "/theme ",
     "/vllm-url ",
-    "/local-url ",
 ]
 
 _SLASH_CMD_DESC: dict[str, str] = {
@@ -90,6 +90,7 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/keys": "Show keyboard shortcuts",
     "/list": "List indexed documents",
     "/llm": "Adjust LLM parameters (e.g. temperature)",
+    "/local-url": "Set or ping the local OpenAI-compatible LLM endpoint",
     "/model": "Switch LLM model",
     "/mount-refresh": "Refresh a sealed mount from the owner's latest version",
     "/project": "Switch or manage project namespaces",
@@ -106,7 +107,6 @@ _SLASH_CMD_DESC: dict[str, str] = {
     "/store": "AxonStore management (init / status / share)",
     "/theme": "Switch syntax-highlighting theme",
     "/vllm-url": "Set the vLLM server base URL",
-    "/local-url": "Set or ping the local OpenAI-compatible LLM endpoint",
 }
 
 
