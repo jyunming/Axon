@@ -946,6 +946,26 @@ llm:
 #   vllm_base_url: http://localhost:8000/v1
 
 
+# --- Local OpenAI-compatible server (llama.cpp, LM Studio, TGI, LocalAI) -------
+# Use provider: local when you already run an LLM server on this machine.
+# Anything exposing POST /chat/completions and GET /models works.
+#
+# The default port is 8080 (llama.cpp's llama-server) and deliberately NOT 8000,
+# which is where axon-api itself listens.
+#
+# Axon never loads or unloads models — start the model with your own tooling.
+# Check the endpoint with `axon --doctor` or REPL `/local-url ping`.
+#
+#   provider: local
+#   model: gemma4-26b                 # must match an id the server reports at /models
+#   local_base_url: http://localhost:8080/v1   # env: AXON_LOCAL_LLM_BASE_URL
+#   local_api_key: ""                 # optional; most local servers ignore auth
+#
+# Slow local models: llm.timeout resolves to 300 s for provider: local (60 s
+# elsewhere). GraphRAG with graph_rag_depth: standard makes one LLM call per
+# chunk and is impractical on a slow model — use graph_rag_depth: light.
+
+
 
 
 

@@ -2,16 +2,20 @@
 
 ## [Unreleased]
 
-## [0.4.4] - 2026-08-09
+## [0.4.3] - 2026-08-09
 
-Adds a `local` LLM provider for any OpenAI-compatible server you already run
-(llama.cpp, vLLM, LM Studio, TGI, LocalAI), closes the last MCP surface-parity
-gap with four configuration tools, and fixes a set of config bugs found while
-verifying the above against a real local model.
+Two things at once: the browser UI question is settled — the native web GUI
+served by `axon-api` at `/gui/` is now the maintained surface and the Streamlit
+UI is deprecated — and Axon gains a `local` LLM provider for any
+OpenAI-compatible server you already run, plus the config fixes that verifying
+it against a real local model turned up.
+
+0.4.2 is the previous published release, so everything below lands in one step.
 
 ### ⚠️ Read this first
 
-Two changes alter existing behaviour despite the patch-level version:
+Upgrading from 0.4.2, two changes alter existing behaviour despite the
+patch-level version:
 
 - **`llm.max_tokens` now defaults to 8192, up from 2048 — for every provider.**
   Reasoning models (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives) spend the budget
@@ -19,7 +23,7 @@ Two changes alter existing behaviour despite the patch-level version:
   mid-thought. This also raises the per-call output ceiling on paid APIs
   (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default. Set
   `llm.max_tokens` explicitly to keep the old value.
-- **`streamlit` is no longer in the `[starter]` or `[all]` extras** (from 0.4.3).
+- **`streamlit` is no longer in the `[starter]` or `[all]` extras.**
   `pip install "axon-rag[all]" && axon-ui` now fails until you add `[ui]`. The
   browser UI that ships with `axon-api` at `/gui/` needs no extra dependency and
   is the maintained surface.
@@ -59,6 +63,22 @@ Two changes alter existing behaviour despite the patch-level version:
   short). The warning points at `rag.graph_rag_depth: light`, which extracted the
   same entities in 0.6 s with no LLM calls.
 
+### ⚠️ Deprecations
+
+- **`axon-ui` (Streamlit) is deprecated** and will be removed in a future
+  release. `main_ui()` emits a `DeprecationWarning` plus a stderr notice, and
+  the app renders an in-sidebar banner pointing at `http://localhost:8000/gui/`.
+  `Surface.WEBAPP` in `surface_contract.py` is marked deprecated — no new
+  capability should be exposed there.
+
+### 📦 Packaging
+
+- **`streamlit` dropped from the `[starter]` and `[all]` extras.** The web GUI
+  ships with the API server and needs no extra dependency. Users who still want
+  the Streamlit UI must install it explicitly: `pip install "axon-rag[ui]"`.
+  The `[ui]` extra is unchanged. The `docker-compose` `axon-ui` service keeps
+  working — `requirements.txt` still pins `streamlit` for that image.
+
 ### 🐛 Fixes
 
 - **`AxonConfig.save()` silently dropped 156 of 241 fields.** Only 85 were
@@ -94,6 +114,10 @@ Two changes alter existing behaviour despite the patch-level version:
   than displaying it (HyDE, multi-query, step-back, decompose, context compression,
   GraphRAG NER, RAPTOR summaries, LLM rerank). All OpenAI-compatible providers now
   fall back to `reasoning_content`, `vllm` included.
+- **`--doctor` no longer warns about a missing `streamlit`.** The check told
+  users to install `[starter]`, which no longer ships it — so the hint pointed
+  at a bundle that could not resolve the warning. `check_optional_extras()` now
+  covers only `cryptography` + `keyring` (sealed sharing).
 
 ### ⚠️ Other behaviour changes
 
@@ -102,38 +126,6 @@ Two changes alter existing behaviour despite the patch-level version:
   default broke `step_back` and `query_decompose` outright. An explicit
   `llm.timeout` always wins. Note this bound is per-read, not wall-clock — see
   MODEL_GUIDE.
-
-## [0.4.3] - 2026-08-08
-
-A small fix release that settles which browser UI is the supported one. The
-native web GUI — static assets served by `axon-api` at `/gui/` — is now the
-maintained surface, and the older Streamlit UI (`axon-ui`) is deprecated.
-
-Nothing is removed: `axon-ui` still launches. It now announces its deprecation
-and is no longer installed by default.
-
-### ⚠️ Deprecations
-
-- **`axon-ui` (Streamlit) is deprecated** and will be removed in a future
-  release. `main_ui()` emits a `DeprecationWarning` plus a stderr notice, and
-  the app renders an in-sidebar banner pointing at `http://localhost:8000/gui/`.
-  `Surface.WEBAPP` in `surface_contract.py` is marked deprecated — no new
-  capability should be exposed there.
-
-### 📦 Packaging
-
-- **`streamlit` dropped from the `[starter]` and `[all]` extras.** The web GUI
-  ships with the API server and needs no extra dependency. Users who still want
-  the Streamlit UI must install it explicitly: `pip install "axon-rag[ui]"`.
-  The `[ui]` extra is unchanged. The `docker-compose` `axon-ui` service keeps
-  working — `requirements.txt` still pins `streamlit` for that image.
-
-### 🐛 Fixes
-
-- **`--doctor` no longer warns about a missing `streamlit`.** The check told
-  users to install `[starter]`, which no longer ships it — so the hint pointed
-  at a bundle that could not resolve the warning. `check_optional_extras()` now
-  covers only `cryptography` + `keyring` (sealed sharing).
 
 ### 📚 Documentation
 
