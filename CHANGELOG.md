@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-09
+
+Adds a `local` LLM provider for any OpenAI-compatible server you already run
+(llama.cpp, vLLM, LM Studio, TGI, LocalAI), closes the last MCP surface-parity
+gap with four configuration tools, and fixes a set of config bugs found while
+verifying the above against a real local model.
+
+### ⚠️ Read this first
+
+Two changes alter existing behaviour despite the patch-level version:
+
+- **`llm.max_tokens` now defaults to 8192, up from 2048 — for every provider.**
+  Reasoning models (Gemma 4, GPT-OSS, DeepSeek-R1 derivatives) spend the budget
+  on `reasoning_content` before emitting any `content`, and 2048 truncates them
+  mid-thought. This also raises the per-call output ceiling on paid APIs
+  (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default. Set
+  `llm.max_tokens` explicitly to keep the old value.
+- **`streamlit` is no longer in the `[starter]` or `[all]` extras** (from 0.4.3).
+  `pip install "axon-rag[all]" && axon-ui` now fails until you add `[ui]`. The
+  browser UI that ships with `axon-api` at `/gui/` needs no extra dependency and
+  is the maintained surface.
+
 ### ✨ Features
 
 - **`local` LLM provider — point Axon at any OpenAI-compatible server on your machine.**
@@ -73,12 +95,14 @@
   GraphRAG NER, RAPTOR summaries, LLM rerank). All OpenAI-compatible providers now
   fall back to `reasoning_content`, `vllm` included.
 
-### ⚠️ Behaviour changes
+### ⚠️ Other behaviour changes
 
-- **`llm.max_tokens` default raised from 2048 to 8192**, for all providers. 2048
-  truncates reasoning models mid-thought. This raises the per-call output ceiling on
-  paid APIs (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default — set
-  `llm.max_tokens` explicitly to keep the old value.
+- **`llm.timeout` resolves to 300 s when `llm.provider` is `local`** (60 s
+  elsewhere, unchanged). Locally served models are slow enough that the cloud
+  default broke `step_back` and `query_decompose` outright. An explicit
+  `llm.timeout` always wins. Note this bound is per-read, not wall-clock — see
+  MODEL_GUIDE.
+
 ## [0.4.3] - 2026-08-08
 
 A small fix release that settles which browser UI is the supported one. The
