@@ -26,6 +26,11 @@
   model on consumer hardware needs far longer than 60 s per call. An explicit
   `llm.timeout` always wins.
 
+- **RAPTOR and GraphRAG verified against a local model.** Both work end to end
+  with llama.cpp serving Gemma 4 26B: RAPTOR built a 2-level summary hierarchy
+  (420 s ingest, 145 s query) and GraphRAG answered a multi-hop question with
+  citations from two documents (0.5 s ingest at `graph_rag_depth: light`,
+  71 s query). MODEL_GUIDE records the settings and the measured costs.
 - **Config validation warns on GraphRAG + a local model.** LLM-based graph
   extraction makes one call per chunk; on a slow local model that is impractical
   (measured: >10 min for a single extraction, with `llm.timeout` unable to cut it

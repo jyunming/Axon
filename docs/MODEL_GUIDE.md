@@ -283,15 +283,32 @@ axon> /local-url ping
 resident, the query fails immediately rather than stalling behind a 30–90 s
 model swap.
 
-> **GraphRAG on a slow local model:** `graph_rag` extraction makes **one LLM call
-> per chunk**. Measured with llama.cpp serving Gemma 4 26B on an Intel Arc iGPU
-> (~4 tokens/s), a single extraction call ran past 10 minutes without finishing —
-> and `llm.timeout` did not cut it short (see the timeout note below). Set
-> `rag.graph_rag_depth: light` to use regex extraction with no LLM calls at all:
-> on the same box that indexed the same entities in **0.6 s**. `axon --setup`
-> config validation now warns when `graph_rag` is on with `provider: local` and
+> **RAPTOR on a slow local model:** verified working against llama.cpp serving
+> Gemma 4 26B on an Intel Arc iGPU — a 2-level summary hierarchy was built and
+> retrieved, and the answer was correctly grounded. Budget for it though: three
+> short chunks took **420 s to ingest** (summarisation is an LLM call per chunk
+> group) and **145 s to query**. Note also that `rag.raptor_min_source_size_mb`
+> defaults to **5 MB**, so RAPTOR is skipped entirely for smaller sources — it
+> logs `RAPTOR: skipping N small source(s)` at INFO when that happens. Set it to
+> `0` to force RAPTOR on a small corpus.
+
+> **GraphRAG on a slow local model:** works end to end, but the *extraction*
+> setting matters. `rag.graph_rag_depth` ships as `standard`, which makes **one
+> LLM call per chunk**; against llama.cpp serving Gemma 4 26B on an Intel Arc
+> iGPU (~5 tok/s) a single extraction call ran past 10 minutes without
+> finishing, and `llm.timeout` did not cut it short (see the timeout note).
+> With `rag.graph_rag_depth: light` — regex extraction, no LLM calls — the same
+> corpus indexed in **0.5 s** with the same five entities, and a multi-hop query
+> answered correctly in **71 s** with citations from both source documents.
+> Config validation now warns when `graph_rag` is on with `provider: local` and
 > LLM-based extraction. Alternatives: `rag.graph_rag_ner_backend: gliner`, or a
 > smaller/faster model.
+>
+> Keep `rag.graph_rag_community: false` (the shipped default) on local models —
+> community detection adds a map-reduce over community reports, which is many
+> more sequential LLM calls. Note the dataclass default is `True`, so code that
+> builds `AxonConfig()` directly rather than loading config.yaml gets the
+> expensive path.
 
 > **Timeouts:** `llm.timeout` defaults to 60 s, which suits cloud providers but not a
 > 26B model on consumer hardware — measured on an Intel Arc iGPU, a two-character
