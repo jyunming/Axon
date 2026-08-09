@@ -217,11 +217,18 @@ def check_optional_extras() -> Check:
 # ---------------------------------------------------------------------------
 
 
-def check_local_llm_reachable(provider: str | None, base_url: str | None) -> Check:
+def check_local_llm_reachable(
+    provider: str | None, base_url: str | None, api_key: str | None = None
+) -> Check:
     """Ping the configured local OpenAI-compatible endpoint and list its models.
 
     Only meaningful when ``llm_provider == "local"``; skipped (as "ok") otherwise
     so the doctor stays quiet for people not using it.
+
+    ``api_key`` mirrors ``llm.local_api_key``. Most local servers ignore auth, but
+    a gated one (LM Studio with a key set, a reverse proxy) would 401 an
+    unauthenticated probe and the doctor would report "unreachable" for an
+    endpoint that is actually fine — so send the same header the real client does.
 
     Axon never loads models itself, so "reachable but serving nothing" is a real
     and common state — llama-server in router mode answers ``/models`` before any
@@ -245,7 +252,8 @@ def check_local_llm_reachable(provider: str | None, base_url: str | None) -> Che
     try:
         import httpx
 
-        response = httpx.get(f"{url}/models", timeout=5.0)
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        response = httpx.get(f"{url}/models", timeout=5.0, headers=headers)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:  # noqa: BLE001 - the doctor reports, never raises
@@ -296,6 +304,7 @@ def run_doctor(config: Any | None = None) -> DoctorReport:
     store_base: str | None = None
     llm_provider: str | None = None
     local_base_url: str | None = None
+    local_api_key: str | None = None
     if config is not None:
         # AxonConfig is a flat dataclass: llm_provider / llm_model / ollama_base_url
         # / axon_store_base. We also tolerate nested-attribute fixtures (e.g.
@@ -320,6 +329,9 @@ def run_doctor(config: Any | None = None) -> DoctorReport:
         local_base_url = getattr(config, "local_base_url", None) or getattr(
             getattr(config, "llm", None), "local_base_url", None
         )
+        local_api_key = getattr(config, "local_api_key", None) or getattr(
+            getattr(config, "llm", None), "local_api_key", None
+        )
 
     checks: list[Check] = []
     for fn in _CHECK_FUNCS:
@@ -330,7 +342,7 @@ def run_doctor(config: Any | None = None) -> DoctorReport:
         elif fn is check_store_writable:
             checks.append(fn(store_base))
         elif fn is check_local_llm_reachable:
-            checks.append(fn(llm_provider, local_base_url))
+            checks.append(fn(llm_provider, local_base_url, local_api_key))
         else:
             checks.append(fn())
     if any(c.status == "error" for c in checks):

@@ -584,7 +584,7 @@ class OpenLLM:
                 max_tokens=self.config.llm_max_tokens,
                 timeout=self._effective_timeout(),
             )
-            return response.choices[0].message.content
+            return message_text(response.choices[0].message)
         elif provider in ("vllm", "local"):
             messages = []
             if system_prompt:
@@ -621,7 +621,7 @@ class OpenLLM:
                 max_tokens=self.config.llm_max_tokens,
                 timeout=self._effective_timeout(),
             )
-            return response.choices[0].message.content
+            return message_text(response.choices[0].message)
         elif provider == "grok":
             messages = []
             if system_prompt:
@@ -637,7 +637,7 @@ class OpenLLM:
                 max_tokens=self.config.llm_max_tokens,
                 timeout=self._effective_timeout(),
             )
-            return response.choices[0].message.content
+            return message_text(response.choices[0].message)
         elif provider == "copilot":
             task_id = f"task_{uuid.uuid4().hex[:12]}"
             event = threading.Event()

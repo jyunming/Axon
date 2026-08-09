@@ -8,6 +8,8 @@ ask "is my local LLM actually up?".
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from axon.config import AxonConfig
 from axon.doctor import check_local_llm_reachable
 from axon.llm import OpenLLM, message_text
@@ -114,21 +116,35 @@ class TestGraphRagLocalWarning:
     wall-clock. `graph_rag_depth: light` extracts the same entities in 0.6s.
     """
 
-    def _issues(self, tmp_path, provider="local", **rag):
+    def _issues(self, tmp_path, llm_provider, **rag):
         """validate() is a classmethod that reads a file — so write the YAML.
 
+        `llm_provider` is written to `llm.provider`, the key users actually put
+        in config.yaml. An earlier version accepted it via **rag and it landed
+        in the `rag:` block instead; the tests still passed, but only because
+        load() applies `rag:` after `llm:` and `rag.llm_provider` happened to
+        overwrite the real one — exercising a config shape nobody writes.
+
         Deliberately NOT via AxonConfig.save(): that helper does not serialise
-        graph_rag_depth or graph_rag_ner_backend (a pre-existing round-trip gap),
-        so a saved config would always validate against the defaults and this
-        test would pass for the wrong reason.
+        graph_rag_depth or graph_rag_ner_backend, so a saved config would always
+        validate against the defaults and pass for the wrong reason.
         """
         import yaml
 
         path = tmp_path / "config.yaml"
         path.write_text(
-            yaml.safe_dump({"llm": {"provider": provider}, "rag": rag}), encoding="utf-8"
+            yaml.safe_dump({"llm": {"provider": llm_provider}, "rag": rag}), encoding="utf-8"
         )
         return [i for i in AxonConfig.validate(path=str(path)) if i.field == "graph_rag_depth"]
+
+    def test_helper_sets_the_real_llm_provider(self, tmp_path):
+        """Guard the fixture itself: the provider must reach llm.provider."""
+        import yaml
+
+        self._issues(tmp_path, llm_provider="openai", graph_rag=True)
+        raw = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+        assert raw["llm"]["provider"] == "openai"
+        assert "llm_provider" not in raw["rag"]
 
     def test_warns_on_local_plus_llm_extraction(self, tmp_path):
         issues = [
@@ -358,3 +374,88 @@ class TestLocalStreaming:
         client.chat.completions.create.return_value = iter(chunks)
         with patch.object(llm, "_local_client", return_value=client):
             assert "".join(llm.stream("hi")) == "ok"
+
+
+class TestReasoningFallbackAcrossProviders:
+    """The reasoning_content fallback must cover every OpenAI-dialect provider.
+
+    It was originally applied only to the `local` / `vllm` branch of complete()
+    and to complete_with_tools, so `openai`, `grok` and `github_copilot` still
+    returned message.content directly. Anyone pointing those providers at a
+    reasoning model — a self-hosted OpenAI-compatible gateway, or a hosted model
+    that emits reasoning_content — got "" back with no error.
+    """
+
+    PROVIDERS = ("openai", "grok", "github_copilot", "vllm", "local")
+
+    def _client_returning(self, message):
+        client = MagicMock()
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=message)]
+        )
+        return client
+
+    @pytest.mark.parametrize("provider", PROVIDERS)
+    def test_reasoning_only_response_is_recovered(self, provider):
+        llm = OpenLLM(AxonConfig(llm_provider=provider, llm_model="m"))
+        client = self._client_returning(_msg(content=None, reasoning_content="thought"))
+        with (
+            patch.object(llm, "_get_openai_client", return_value=client),
+            patch.object(llm, "_local_client", return_value=client),
+            patch.object(llm, "_get_grok_client", return_value=client),
+            patch.object(llm, "_get_copilot_client", return_value=client),
+        ):
+            assert llm.complete("hi") == "thought", provider
+
+    @pytest.mark.parametrize("provider", PROVIDERS)
+    def test_real_content_still_wins(self, provider):
+        llm = OpenLLM(AxonConfig(llm_provider=provider, llm_model="m"))
+        client = self._client_returning(_msg(content="answer", reasoning_content="thought"))
+        with (
+            patch.object(llm, "_get_openai_client", return_value=client),
+            patch.object(llm, "_local_client", return_value=client),
+            patch.object(llm, "_get_grok_client", return_value=client),
+            patch.object(llm, "_get_copilot_client", return_value=client),
+        ):
+            assert llm.complete("hi") == "answer", provider
+
+
+class TestDoctorSendsAuth:
+    """A gated local endpoint would 401 an unauthenticated probe.
+
+    The doctor would then report "unreachable" for an endpoint that is fine —
+    it must send the same Authorization header the real client uses.
+    """
+
+    def _captured_headers(self, api_key):
+        response = MagicMock()
+        response.json.return_value = {"data": [{"id": "m1"}]}
+        with patch("httpx.get", return_value=response) as mock_get:
+            check_local_llm_reachable("local", "http://x:8080/v1", api_key)
+        return mock_get.call_args.kwargs.get("headers") or {}
+
+    def test_bearer_header_sent_when_key_set(self):
+        assert self._captured_headers("secret")["Authorization"] == "Bearer secret"
+
+    def test_no_auth_header_when_key_absent(self):
+        assert "Authorization" not in self._captured_headers("")
+
+    def test_key_is_threaded_from_config(self):
+        """run_doctor must pass local_api_key through, not drop it."""
+        from axon.doctor import run_doctor
+
+        cfg = AxonConfig(
+            llm_provider="local",
+            local_base_url="http://x:8080/v1",
+            local_api_key="from-config",
+        )
+        response = MagicMock()
+        response.json.return_value = {"data": [{"id": "m1"}]}
+        with patch("httpx.get", return_value=response) as mock_get:
+            run_doctor(cfg)
+        auth = [
+            c.kwargs.get("headers", {}).get("Authorization")
+            for c in mock_get.call_args_list
+            if c.kwargs.get("headers")
+        ]
+        assert "Bearer from-config" in auth
