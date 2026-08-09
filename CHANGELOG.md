@@ -79,6 +79,52 @@
   truncates reasoning models mid-thought. This raises the per-call output ceiling on
   paid APIs (OpenAI, Gemini, Grok, Copilot) for anyone relying on the default — set
   `llm.max_tokens` explicitly to keep the old value.
+## [0.4.3] - 2026-08-08
+
+A small fix release that settles which browser UI is the supported one. The
+native web GUI — static assets served by `axon-api` at `/gui/` — is now the
+maintained surface, and the older Streamlit UI (`axon-ui`) is deprecated.
+
+Nothing is removed: `axon-ui` still launches. It now announces its deprecation
+and is no longer installed by default.
+
+### ⚠️ Deprecations
+
+- **`axon-ui` (Streamlit) is deprecated** and will be removed in a future
+  release. `main_ui()` emits a `DeprecationWarning` plus a stderr notice, and
+  the app renders an in-sidebar banner pointing at `http://localhost:8000/gui/`.
+  `Surface.WEBAPP` in `surface_contract.py` is marked deprecated — no new
+  capability should be exposed there.
+
+### 📦 Packaging
+
+- **`streamlit` dropped from the `[starter]` and `[all]` extras.** The web GUI
+  ships with the API server and needs no extra dependency. Users who still want
+  the Streamlit UI must install it explicitly: `pip install "axon-rag[ui]"`.
+  The `[ui]` extra is unchanged. The `docker-compose` `axon-ui` service keeps
+  working — `requirements.txt` still pins `streamlit` for that image.
+
+### 🐛 Fixes
+
+- **`--doctor` no longer warns about a missing `streamlit`.** The check told
+  users to install `[starter]`, which no longer ships it — so the hint pointed
+  at a bundle that could not resolve the warning. `check_optional_extras()` now
+  covers only `cryptography` + `keyring` (sealed sharing).
+
+### 📚 Documentation
+
+- README and `SETUP.md` now document the built-in web GUI as *the* browser
+  surface, with the launch line (`axon-api` → `http://localhost:8000/gui/`).
+- `axon-ui` marked deprecated across README, `SETUP.md`, `GETTING_STARTED.md`,
+  `QUICKREF.md`, `ADMIN_REFERENCE.md`, `DEVELOPMENT.md`, `TROUBLESHOOTING.md`
+  and the entry-points diagram. `Makefile` and `docker-compose.yml` annotated.
+
+### 🧪 Tests
+
+- Deprecation banner renders in the Streamlit sidebar; `main_ui()` emits the
+  `DeprecationWarning` and stderr notice while still launching.
+- Onboarding extras tests updated for the doctor change, including a regression
+  test asserting a missing `streamlit` is *not* reported.
 
 ## [0.4.2] - 2026-05-19
 

@@ -16,7 +16,7 @@ Axon has five different ways to use it — terminal chat, VS Code extension, RES
 pip install "axon-rag[starter]"
 ```
 
-That installs Axon plus the recommended bundle (Streamlit UI, sealed-mount sharing, extra document loaders for EPUB/RTF/.msg). Power users who want only the bare retrieval engine can `pip install axon-rag` without the extra and add specific extras (`[chroma]`, `[qdrant]`, `[graphrag]`, `[gliner]`, `[langchain]`, `[llama-index]`) à la carte.
+That installs Axon plus the recommended bundle (sealed-mount sharing, extra document loaders for EPUB/RTF/.msg). The web GUI needs no extra — `axon-api` serves it at `/gui/`. Power users who want only the bare retrieval engine can `pip install axon-rag` without the extra and add specific extras (`[chroma]`, `[qdrant]`, `[graphrag]`, `[gliner]`, `[langchain]`, `[llama-index]`) à la carte.
 
 > **Tip:** Use a virtual environment so Axon's deps don't collide with other projects. See [SETUP.md § 2](SETUP.md#2-install-the-package) for step-by-step instructions.
 
@@ -298,39 +298,33 @@ curl -X POST http://localhost:8000/search \
 
 ## Entry Point 4 — Browser UI
 
-Two browser interfaces are available depending on your preference.
-
-### Option A — Built-in WebGUI (recommended)
+### Built-in WebGUI
 
 Served by `axon-api` at no extra cost. If the API is running, just open:
 
 **[http://localhost:8000/gui/](http://localhost:8000/gui/)**
 
-Features: chat, document ingest, graph explorer, project switcher, settings panel.
+Features: chat, document ingest, graph explorer, knowledge base, governance
+console, project switcher, settings panel.
 
-### Option B — Streamlit UI
+**Ingest:** the paperclip / upload button.
 
-Full-featured alternative with an advanced settings panel.
+**Query:** type in the chat input at the bottom → press Enter.
 
-**Launch:**
+**Settings:** left sidebar → **Settings** → toggle hybrid search, reranking, HyDE, RAPTOR, and GraphRAG. Leave these off for now — they are advanced search techniques explained in the [RAPTOR + GraphRAG](#raptor--graphrag--getting-the-most-out-of-axon) section below.
+
+<details>
+<summary>Legacy Streamlit UI (deprecated)</summary>
+
+> **Deprecated.** `axon-ui` is superseded by the WebGUI above and will be removed
+> in a future release. It is no longer part of `[starter]`, so install it first:
 
 ```bash
+pip install "axon-rag[ui]"
 axon-ui   # opens automatically at http://localhost:8501
 ```
 
-Open `http://localhost:8501` in your browser if it doesn't open automatically.
-
-**Ingest (both UIs):**
-
-- Sidebar → **Knowledge Hub** (Streamlit) or the paperclip/upload button (WebGUI)
-
-**Query (both UIs):**
-
-- Type in the chat input at the bottom → press Enter
-
-**Settings (Streamlit):**
-
-- Left sidebar → **Model & Settings** → toggle hybrid search, reranking, HyDE, RAPTOR, and GraphRAG. Leave these off for now — they are advanced search techniques explained in the [RAPTOR + GraphRAG](#raptor--graphrag--getting-the-most-out-of-axon) section below.
+</details>
 
 ---
 

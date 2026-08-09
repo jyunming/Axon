@@ -185,12 +185,14 @@ def check_optional_extras() -> Check:
 
     Always non-fatal — Axon works without them; the doctor just nudges
     new users toward ``[starter]`` so they don't hit ImportErrors later.
+
+    ``streamlit`` is deliberately NOT checked here: the Streamlit UI is
+    deprecated and was dropped from ``[starter]``, so warning about it would
+    point users at a bundle that no longer ships it. The maintained browser
+    surface is the web GUI served by ``axon-api`` at ``/gui/``, which needs no
+    extra dependency.
     """
     missing: list[str] = []
-    try:
-        import streamlit  # noqa: F401
-    except ImportError:
-        missing.append("streamlit (axon-ui)")
     try:
         import cryptography  # noqa: F401
         import keyring  # noqa: F401
@@ -200,7 +202,7 @@ def check_optional_extras() -> Check:
         return Check(
             "Recommended extras",
             "ok",
-            detail="streamlit, cryptography, keyring all available",
+            detail="cryptography, keyring all available",
         )
     return Check(
         "Recommended extras",

@@ -15,10 +15,15 @@ For interactive API docs, start `axon-api` and open `http://localhost:8000/docs`
 | `axon` | Interactive REPL | — | Day-to-day exploration, power users |
 | `axon-api` | FastAPI REST server + WebGUI | `8000` | Agents, scripts, CI pipelines, browser UI |
 | `axon-mcp` | MCP stdio server | — | GitHub Copilot agent mode, Claude Code |
-| `axon-ui` | Streamlit web UI | `8501` | Alternative browser-based exploration |
+| `axon-ui` | Streamlit web UI — **deprecated** | `8501` | Superseded by the built-in WebGUI; removal planned |
 | `axon-ext` | Install VS Code extension | — | Registers the bundled VSIX in VS Code |
 
 When `axon-api` is running, the built-in WebGUI is at `http://localhost:8000/gui/`.
+
+> **Deprecation:** `axon-ui` (Streamlit) is deprecated and will be removed in a
+> future release. It is no longer bundled by the `[starter]` or `[all]` extras —
+> install it explicitly with `pip install "axon-rag[ui]"`. The built-in WebGUI is
+> the maintained browser surface.
 
 Start flags for the API server:
 

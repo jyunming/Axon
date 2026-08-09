@@ -21,10 +21,11 @@ class TestWebappUI:
         # but AppTest runs in a separate thread/process sometimes.
         # Actually AppTest.from_file loads the module.
 
-        with patch("axon.webapp.AxonBrain") as mock_brain_cls, patch(
-            "axon.webapp.load_sessions", return_value={}
-        ), patch("axon.webapp.list_projects", return_value=[{"name": "default"}]), patch(
-            "axon.webapp.get_active_project", return_value="default"
+        with (
+            patch("axon.webapp.AxonBrain") as mock_brain_cls,
+            patch("axon.webapp.load_sessions", return_value={}),
+            patch("axon.webapp.list_projects", return_value=[{"name": "default"}]),
+            patch("axon.webapp.get_active_project", return_value="default"),
         ):
             mock_brain = mock_brain_cls.return_value
             mock_brain.config = MagicMock()
@@ -95,3 +96,11 @@ class TestWebappUI:
 
         # Verify it updated the config in session state
         assert at.session_state.brain.config.hybrid_search is True
+
+    def test_ui_shows_deprecation_banner(self, app):
+        """The Streamlit UI must tell users it is deprecated and where to go."""
+        at = app.run()
+        assert not at.exception
+        banners = [str(w.value) for w in at.warning]
+        assert any("deprecated" in b.lower() for b in banners), banners
+        assert any("8000/gui/" in b for b in banners), banners

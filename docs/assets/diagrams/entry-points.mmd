@@ -2,13 +2,15 @@ flowchart TB
     KB["🧠 Axon Knowledge Base\n(Vector Index + BM25)"]
 
     REPL["💻 CLI / REPL\n`axon`"]
-    UI["🖥️ Web UI\n`axon-ui`"]
-    API["🔌 REST API\n`axon-api`"]
+    UI["🖥️ Streamlit UI (deprecated)\n`axon-ui`"]
+    API["🔌 REST API + Web GUI\n`axon-api`"]
+    GUI["🖥️ Web GUI\n:8000/gui/"]
     MCP["🤖 MCP Server\n`axon-mcp`"]
     EXT["🧩 VS Code Extension\naxon-copilot.vsix"]
 
     REPL <-->|direct| KB
     UI <-->|direct| KB
     API <-->|HTTP :8000| KB
+    GUI <-->|HTTP :8000| API
     MCP <-->|stdio → HTTP| API
     EXT <-->|HTTP :8000| API

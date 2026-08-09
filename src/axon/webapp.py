@@ -393,6 +393,14 @@ with st.sidebar:
         '<div style="font-size:1rem;font-weight:700;color:#e4e4e7;margin-bottom:8px;">🧠 Axon</div>',
         unsafe_allow_html=True,
     )
+    # ── Deprecation notice — this UI is superseded by the native web GUI ──
+    st.warning(
+        "**This UI is deprecated.** Use the native web GUI at "
+        "`http://localhost:8000/gui/` (run `axon-api`). It is the maintained "
+        "surface and exposes the graph explorer, knowledge base and "
+        "governance console.",
+        icon="⚠️",
+    )
     # =========================================================================
     # PROJECT HUB
     # =========================================================================
@@ -1265,18 +1273,11 @@ st.markdown(
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-def main_ui():
-    """Entry point for the axon-ui command."""
-    import subprocess
-
-    if not _STREAMLIT_AVAILABLE:
-        print(
-            "ERROR: streamlit is not installed.\n" "Install it with:  pip install axon-rag[ui]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    app_path = os.path.abspath(__file__)
-    subprocess.run(["streamlit", "run", app_path])
+# The ``axon-ui`` console script lives in ``axon.webapp_launcher``, NOT here.
+# This module is a Streamlit script — it calls st.set_page_config() and renders
+# at import time — so it cannot be imported when Streamlit is missing. Keeping
+# the launcher separate lets ``axon-ui`` print an install hint instead of a
+# NameError traceback. See webapp_launcher.py.
 
 
 if __name__ == "__main__":

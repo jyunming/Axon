@@ -91,7 +91,7 @@ TypeError: SentenceTransformer.encode() got an unexpected keyword argument 'conv
 
 ---
 
-## Docker: File Changes Not Reflected in Web UI
+## Docker: File Changes Not Reflected in Streamlit UI (deprecated UI)
 
 **Symptom:** You edited source files but the Streamlit UI still runs old code.
 
