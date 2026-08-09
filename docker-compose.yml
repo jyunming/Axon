@@ -20,6 +20,9 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  # DEPRECATED: the Streamlit UI is superseded by the web GUI that the axon-api
+  # service already serves at http://localhost:8000/gui/. This service is kept
+  # for existing users and will be removed alongside axon-ui.
   axon-ui:
     build: .
     ports:

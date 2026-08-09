@@ -52,10 +52,10 @@ pytest -v -s  # Verbose with output
 
 ### Running Services
 ```bash
-# API Server
+# API Server — also serves the web GUI at http://localhost:8000/gui/
 make run-api
 axon-api
-# Streamlit UI
+# Streamlit UI (DEPRECATED — superseded by the web GUI above)
 make run-ui
 axon-ui
 # CLI — interactive REPL (default when no args)
@@ -623,7 +623,7 @@ chunk:
 - **FastAPI:** https://fastapi.tiangolo.com/
 - **Streamlit:** https://streamlit.io/
 
-## Keyboard Shortcuts (Streamlit UI)
+## Keyboard Shortcuts (Streamlit UI — deprecated)
 
 - `Ctrl + K` - Focus chat input
 - `Ctrl + L` - Clear chat

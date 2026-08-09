@@ -7,6 +7,11 @@ import sys
 # unfixable. Never add entries to hide regressions in our own code.
 # ---------------------------------------------------------------------------
 _MYPY_ALLOWED_ERRORS: list[tuple[str, str]] = [
+    # Third-party stub drift: recent numpy ships stubs using PEP 695 `type`
+    # statements, which mypy (configured for python_version=3.10) rejects with
+    # "Type statement is only supported in Python 3.12 and greater". Not our
+    # code — numpy's own .pyi. Scoped to that specific error in numpy files.
+    ("numpy/", "Type statement is only supported"),
     # webapp.py — Streamlit API differences between versions; excluded from tests.
     ("webapp.py", ""),
     # main.py — all errors here are pre-existing tech debt in the REPL/CLI layer.
