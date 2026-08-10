@@ -1484,6 +1484,26 @@ class TestFirstRunConfigCreation:
 
         assert cfg.graph_rag_community is False
 
+    def test_first_run_max_tokens_matches_dataclass_default(self, tmp_path, monkeypatch):
+        """First-run config must not truncate reasoning models.
+
+        Regression: _DEFAULT_CONFIG_YAML hardcoded ``max_tokens: 2048`` while the
+        dataclass default is 8192 (bumped in 0.4.3 specifically because 2048
+        truncates reasoning models mid-thought). Unlike raptor/graph_rag above,
+        this one is a values-must-MATCH check, not a values-must-DIFFER check --
+        the file is the single source of truth on first run either way, so a
+        stale literal in the template silently regresses a shipped fix. Every
+        fresh install and every ``/config reset`` hit this.
+        """
+
+        from axon.config import AxonConfig
+
+        self._patch_config_path(monkeypatch, tmp_path)
+
+        cfg = AxonConfig.load()
+
+        assert cfg.llm_max_tokens == AxonConfig().llm_max_tokens == 8192
+
     def test_first_run_creates_the_file(self, tmp_path, monkeypatch):
         """load() creates the config file on first run."""
 
