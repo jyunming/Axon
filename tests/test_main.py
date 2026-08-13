@@ -10928,6 +10928,12 @@ class TestSwitchProject:
         ), patch(
             "axon.projects.list_descendants", return_value=[]
         ), patch(
+            # switch_project() now resyncs config.graph_backend for the
+            # newly-active project via this call; without mocking it too,
+            # json.loads() chokes on the MagicMock meta_file below.
+            "axon.projects.get_project_graph_backend",
+            return_value="graphrag",
+        ), patch(
             "axon.main.OpenVectorStore"
         ) as mock_vs_cls, patch(
             "axon.retrievers.BM25Retriever"
@@ -10952,6 +10958,144 @@ class TestSwitchProject:
 
         assert brain._active_project == "myproject"
         assert brain._active_project_kind == "local"
+
+
+# ===========================================================================
+# Class 16.5: Graph backend wiring end-to-end (real AxonBrain, isolated store)
+#
+# Unlike the `brain` fixture above, axon.projects.ensure_project is NOT
+# mocked here -- these tests want real meta.json files under an isolated
+# projects_root so brain._graph_backend / config.graph_backend resync
+# against real on-disk state exactly as production does. axon_store_base is
+# pinned under tmp_path so nothing touches the real AxonStore.
+# ===========================================================================
+
+
+def _make_wired_brain(tmp_path, **cfg_kwargs):
+    """Real AxonBrain with heavy I/O mocked but project/graph-backend
+    plumbing live, rooted at an isolated store under tmp_path."""
+    from axon.config import AxonConfig
+    from axon.main import AxonBrain
+
+    defaults = {
+        "axon_store_base": str(tmp_path / "store"),
+        "bm25_path": str(tmp_path / "bm25"),
+        "vector_store_path": str(tmp_path / "vs"),
+        "query_router": "off",
+        "query_cache": False,
+        "raptor": False,
+        "graph_rag": False,
+        "rerank": False,
+        "hybrid_search": False,
+        "truth_grounding": False,
+        "compress_context": False,
+        "contextual_retrieval": False,
+        "mmr": False,
+        "discussion_fallback": False,
+        "similarity_threshold": 0.0,
+    }
+    defaults.update(cfg_kwargs)
+    cfg = AxonConfig(**defaults)
+    assert "store" in cfg.projects_root and str(tmp_path) in cfg.projects_root, (
+        "isolation guard: projects_root must resolve under tmp_path, got " f"{cfg.projects_root!r}"
+    )
+
+    with patch("axon.main.OpenVectorStore"), patch("axon.main.OpenEmbedding"), patch(
+        "axon.main.OpenLLM"
+    ), patch("axon.main.OpenReranker"), patch("axon.retrievers.BM25Retriever"):
+        with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
+            AxonBrain, "_load_doc_versions", return_value=None
+        ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+            AxonBrain, "_load_code_graph", return_value={}
+        ), patch.object(
+            AxonBrain, "_load_relation_graph", return_value={}
+        ), patch.object(
+            AxonBrain, "_load_community_levels", return_value={}
+        ), patch.object(
+            AxonBrain, "_load_community_summaries", return_value={}
+        ), patch.object(
+            AxonBrain, "_load_entity_embeddings", return_value={}
+        ), patch.object(
+            AxonBrain, "_load_claims_graph", return_value={}
+        ), patch.object(
+            AxonBrain, "_load_community_hierarchy", return_value={}
+        ), patch.object(
+            AxonBrain, "_log_startup_summary", return_value=None
+        ), patch.object(
+            AxonBrain, "_preflight_model_audit", return_value=None
+        ):
+            brain = AxonBrain(cfg)
+    return brain
+
+
+class TestGraphBackendWiring:
+    def test_default_project_uses_graphrag_backend(self, tmp_path):
+        from axon.graph_backends.graphrag_backend import GraphRagBackend
+
+        brain = _make_wired_brain(tmp_path)
+        assert isinstance(brain._graph_backend, GraphRagBackend)
+        assert brain.config.graph_backend == "graphrag"
+
+    def test_switch_into_dynamic_graph_project(self, tmp_path):
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+        from axon.projects import ensure_project
+
+        brain = _make_wired_brain(tmp_path)
+        with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.runtime.get_registry"
+        ):
+            ensure_project("dgproj", graph_backend="dynamic_graph")
+            brain.switch_project("dgproj")
+        assert isinstance(brain._graph_backend, DynamicGraphBackend)
+        assert brain.config.graph_backend == "dynamic_graph"
+
+    def test_switch_back_to_default_reverts_backend(self, tmp_path):
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+        from axon.graph_backends.graphrag_backend import GraphRagBackend
+        from axon.projects import ensure_project
+
+        brain = _make_wired_brain(tmp_path)
+        with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.runtime.get_registry"
+        ):
+            ensure_project("dgproj2", graph_backend="dynamic_graph")
+            brain.switch_project("dgproj2")
+            assert isinstance(brain._graph_backend, DynamicGraphBackend)
+            brain.switch_project("default")
+        assert isinstance(brain._graph_backend, GraphRagBackend)
+        assert brain.config.graph_backend == "graphrag"
+
+    def test_switch_to_projects_scope_uses_graphrag_with_empty_status(self, tmp_path):
+        from axon.graph_backends.graphrag_backend import GraphRagBackend
+        from axon.projects import ensure_project
+
+        brain = _make_wired_brain(tmp_path)
+        with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.runtime.get_registry"
+        ):
+            # A dynamic_graph project so the store isn't empty when scanned.
+            ensure_project("dgproj3", graph_backend="dynamic_graph")
+            brain.switch_project("dgproj3")
+            brain.switch_project("@projects")
+        assert brain._active_project_kind == "scope"
+        assert isinstance(brain._graph_backend, GraphRagBackend)
+        status = brain._graph_backend.status()
+        assert status["entities"] == 0
+        assert status["relations"] == 0
+
+    def test_federated_config_not_overridden_by_project_switch(self, tmp_path):
+        from axon.graph_backends.federated_backend import FederatedGraphBackend
+        from axon.projects import ensure_project
+
+        brain = _make_wired_brain(tmp_path, graph_federation_weights={})
+        brain.config.graph_backend = "federated"
+        with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.runtime.get_registry"
+        ):
+            ensure_project("dgproj4", graph_backend="dynamic_graph")
+            brain.switch_project("dgproj4")
+        assert brain.config.graph_backend == "federated"
+        assert isinstance(brain._graph_backend, FederatedGraphBackend)
 
 
 # ===========================================================================

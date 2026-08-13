@@ -8,6 +8,9 @@ Usage::
 The backend type is determined by ``brain.config.graph_backend``:
   - ``"graphrag"`` (default) → :class:`GraphRagBackend`
   - ``"dynamic_graph"`` → :class:`DynamicGraphBackend` (SQLite, DELETE journal mode, v0.3)
+  - ``"none"`` → :class:`NoneGraphBackend` (tracks no graph state; every method is a no-op)
+  - ``"federated"`` → :class:`FederatedGraphBackend` (RRF over graphrag + dynamic_graph;
+    config.yaml-only — not a valid project-creation value, see ``projects.ensure_project``)
 
 Adding a new backend type: register it in ``_BACKEND_REGISTRY`` below.
 """
@@ -31,11 +34,13 @@ def _registry() -> dict[str, type]:
         from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
         from axon.graph_backends.federated_backend import FederatedGraphBackend
         from axon.graph_backends.graphrag_backend import GraphRagBackend
+        from axon.graph_backends.none_backend import NoneGraphBackend
 
         _BACKEND_REGISTRY = {
             "graphrag": GraphRagBackend,
             "dynamic_graph": DynamicGraphBackend,
             "federated": FederatedGraphBackend,
+            "none": NoneGraphBackend,
         }
     return _BACKEND_REGISTRY
 

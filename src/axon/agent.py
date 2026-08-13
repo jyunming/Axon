@@ -263,6 +263,14 @@ REPL_TOOLS: list[dict] = [
                         "type": "string",
                         "description": "Optional human-readable description for the project.",
                     },
+                    "graph_backend": {
+                        "type": "string",
+                        "enum": ["graphrag", "dynamic_graph", "none"],
+                        "description": (
+                            "Graph backend for this project (default: graphrag). "
+                            "Immutable once set."
+                        ),
+                    },
                 },
                 "required": ["name"],
             },
@@ -1083,7 +1091,8 @@ def _tool_create_project(brain, args: dict) -> str:
     if not name:
         return "No project name provided."
     description = args.get("description", "").strip()
-    ensure_project(name, description=description)
+    graph_backend = args.get("graph_backend") or None
+    ensure_project(name, description=description, graph_backend=graph_backend)
     brain.switch_project(name)
     return f"Project '{name}' created." + (f" Description: {description}" if description else "")
 

@@ -7,7 +7,7 @@ import hashlib
 import os
 import pathlib
 import re
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -350,6 +350,15 @@ class ProjectCreateRequest(BaseModel):
     security_mode: str | None = Field(
         None,
         description="Optional security mode for the project (e.g. 'sealed_v1')",
+    )
+    graph_backend: Literal["graphrag", "dynamic_graph", "none"] | None = Field(
+        None,
+        description=(
+            "Graph backend for this project. Omit for the default 'graphrag'. "
+            "Immutable once set — creating the same project again with a "
+            "different value raises an error. 'federated' is not settable "
+            "here; it is a config.yaml-only override."
+        ),
     )
 
 

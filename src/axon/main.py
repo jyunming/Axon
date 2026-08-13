@@ -562,6 +562,19 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
         self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
         self._rebuild_entity_token_index()
+        # Attach the pluggable graph backend for this project. "federated" is a
+        # config.yaml-only override and always wins; otherwise resolve from the
+        # active project's own stored (immutable) value. For "default" this
+        # always resolves to "graphrag" -- GraphRagBackend is a thin pass-through
+        # adapter over the same GraphRagMixin state already loaded above, so
+        # this is a no-op behaviour change for every existing install.
+        if self.config.graph_backend != "federated":
+            from axon.projects import get_project_graph_backend
+
+            self.config.graph_backend = get_project_graph_backend(self._active_project)
+        from axon.graph_backends.factory import get_graph_backend
+
+        self._graph_backend = get_graph_backend(self)
         # Persisted GraphRAG extraction cache (entities/relations keyed by chunk hash)
         self._graph_rag_cache: dict = self._load_graph_rag_extraction_cache()
         self._graph_rag_cache_dirty: bool = False
@@ -708,6 +721,15 @@ Your primary goal is to help the user by answering questions based on the provid
                 except Exception as exc:  # pragma: no cover — defensive
                     logger.debug("Store %s close raised: %s", attr, exc)
                 seen_stores.add(id(store))
+        # DynamicGraphBackend holds a real SQLite connection; without this it
+        # leaks a file handle on every switch away from a dynamic_graph
+        # project (a real risk on Windows, per the file-handle comments below).
+        graph_backend = getattr(self, "_graph_backend", None)
+        if graph_backend is not None and hasattr(graph_backend, "close"):
+            try:
+                graph_backend.close()
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.debug("Graph backend close raised: %s", exc)
         # Force GC so Windows file handles into the sealed cache are
         # released BEFORE we try to overwrite + unlink the cache files.
         # Without this, wipe() may fail on Windows with PermissionError.
@@ -904,6 +926,25 @@ Your primary goal is to help the user by answering questions based on the provid
         self._read_only_scope = True
         self._active_project_kind = "scope"
         self._active_mount_descriptor = None
+        # A scope merges read-only views across many projects with no single
+        # meta.json to consult; without this, /graph/* would keep silently
+        # serving whichever backend was attached to the previously-active
+        # project. Force "graphrag", matching the freshly-emptied
+        # _entity_graph/_relation_graph above (unless "federated" is an
+        # explicit config.yaml override, which always wins).
+        if self.config.graph_backend != "federated":
+            self.config.graph_backend = "graphrag"
+        from axon.graph_backends.factory import get_graph_backend
+
+        _old_graph_backend = getattr(self, "_graph_backend", None)
+        self._graph_backend = get_graph_backend(self)
+        if _old_graph_backend is not None and hasattr(_old_graph_backend, "close"):
+            # self.close() above already closed the previous backend; see the
+            # matching comment in switch_project() for why this is kept anyway.
+            try:
+                _old_graph_backend.close()
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.debug("Graph backend close raised during scope switch: %s", exc)
         logger.info(
             "Switched to %s scope  |  %d store(s) merged  |  read-only",
             scope,
@@ -1301,6 +1342,7 @@ Your primary goal is to help the user by answering questions based on the provid
         if getattr(self, "_graph_rag_cache_dirty", False):
             self._save_graph_rag_extraction_cache()
         from axon.projects import (
+            get_project_graph_backend,
             is_reserved_top_level_name,
             list_descendants,
             project_bm25_path,
@@ -1696,6 +1738,36 @@ Your primary goal is to help the user by answering questions based on the provid
             self._active_project_kind = "local"
             self._active_mount_descriptor = None
             set_active_project(name)
+        # Resync the active graph backend for the newly-switched project.
+        # "federated" is a config.yaml-only override and always wins; otherwise
+        # resolve from wherever the new project's own backend choice lives:
+        # the mount descriptor for a mounted share, meta.json for a local
+        # project, "graphrag" for "default" (which the mount/@-scope branches
+        # above already treat as non-mounted/non-local, so "default" is the
+        # correct fallback for both).
+        if self.config.graph_backend != "federated":
+            if self._active_project_kind == "mounted":
+                _desc = self._active_mount_descriptor or {}
+                self.config.graph_backend = _desc.get("graph_backend", "graphrag")
+            elif self._active_project_kind == "local":
+                self.config.graph_backend = get_project_graph_backend(name)
+            else:  # "default" (and the unreachable "scope" case — see _switch_to_scope)
+                self.config.graph_backend = "graphrag"
+        from axon.graph_backends.factory import get_graph_backend
+
+        _old_graph_backend = getattr(self, "_graph_backend", None)
+        self._graph_backend = get_graph_backend(self)
+        if _old_graph_backend is not None and hasattr(_old_graph_backend, "close"):
+            # self.close() above (called unconditionally earlier in this
+            # method) already closed the previous backend, so this is a
+            # defensive no-op in the normal case (sqlite3.Connection.close()
+            # is itself idempotent). Kept so this block's correctness doesn't
+            # depend on switch_project always calling self.close() first --
+            # a coupling that's true today but not guaranteed by this code.
+            try:
+                _old_graph_backend.close()
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.debug("Graph backend close raised during switch: %s", exc)
         logger.info(f"Switched to project '{name}'")
         # Bump epoch on the old project to fence any stale in-flight writers.
         if _prev_project != "default" and not _prev_project.startswith("@"):

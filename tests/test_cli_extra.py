@@ -527,7 +527,7 @@ class TestMainIngestWithProjectNew:
             patch("asyncio.run"),
         ):
             run_cli("--project-new", "myproject", "--ingest", str(tmp_path))
-        _ensure.assert_called_once_with("myproject")
+        _ensure.assert_called_once_with("myproject", graph_backend=None)
         brain.switch_project.assert_called_with("myproject")
 
     def test_project_new_prints_project_path(self, brain, tmp_path, capsys):
@@ -547,7 +547,27 @@ class TestMainIngestWithProjectNew:
             patch("axon.projects.project_dir", return_value=str(tmp_path)),
         ):
             run_cli("--project-new", "MyNewProject", "test query")
-        _ensure.assert_called_once_with("mynewproject")
+        _ensure.assert_called_once_with("mynewproject", graph_backend=None)
+
+    def test_project_new_forwards_graph_backend(self, brain, tmp_path):
+        with (
+            patch("axon.projects.ensure_project") as _ensure,
+            patch("axon.projects.project_dir", return_value=str(tmp_path)),
+        ):
+            run_cli(
+                "--project-new",
+                "dgproject",
+                "--graph-backend",
+                "dynamic_graph",
+                "test query",
+            )
+        _ensure.assert_called_once_with("dgproject", graph_backend="dynamic_graph")
+
+    def test_graph_backend_rejects_invalid_choice(self, brain, capsys):
+        code = run_cli("--project-new", "dgproject", "--graph-backend", "neo4j", "test query")
+        assert code != 0
+        err = capsys.readouterr().err
+        assert "invalid choice" in err
 
 
 # ---------------------------------------------------------------------------

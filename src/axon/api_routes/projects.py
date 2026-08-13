@@ -263,10 +263,13 @@ async def create_project(request: ProjectCreateRequest):
             request.name,
             description=request.description,
             security_mode=request.security_mode,
+            graph_backend=request.graph_backend,
         )
         result: dict = {"status": "success", "project": request.name}
         if request.security_mode is not None:
             result["security_mode"] = request.security_mode
+        if request.graph_backend is not None:
+            result["graph_backend"] = request.graph_backend
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -250,6 +250,24 @@ class FederatedGraphBackend:
                     exc,
                 )
 
+    def close(self) -> None:
+        """Close every sub-backend that has one (e.g. DynamicGraphBackend's
+        SQLite connection). One raising sub-backend must not prevent the
+        others from being closed — mirrors clear()/delete_documents() above.
+        """
+        for b in self._backends:
+            fn = getattr(b, "close", None)
+            if not callable(fn):
+                continue
+            try:
+                fn()
+            except Exception as exc:
+                logger.warning(
+                    "FederatedGraphBackend: %s close() failed — %s",
+                    getattr(b, "BACKEND_ID", type(b).__name__),
+                    exc,
+                )
+
     # ------------------------------------------------------------------
     # Status / graph_data
     # ------------------------------------------------------------------

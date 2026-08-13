@@ -96,6 +96,7 @@ axon --code-graph --ingest ./src/           # build structural code-symbol graph
 # CLI — project management
 axon --project myproject "Your question"    # use a named project
 axon --project-new myproject                # create project + ingest
+axon --project-new myproject --graph-backend dynamic_graph  # pick a graph backend (immutable once set)
 axon --project-list                         # list all projects
 axon --project-delete myproject             # delete a project
 ```
@@ -125,7 +126,7 @@ Supported: `.txt`, `.md`, `.py`, `.json`, `.csv`, `.html`, `.docx`, `.pdf`, imag
 | `/search` | Toggle Brave web search fallback (truth_grounding) |
 | `/discuss` | Toggle discussion_fallback mode (allow general knowledge answers when no documents match; answers in fallback mode are prefixed with a note that no grounded documents were found) |
 | `/rag [option]` | Show or modify RAG settings — try `/rag` with: `topk <n>`, `threshold <0-1>`, `hybrid`, `rerank`, `rerank-model <model>`, `hyde`, `multi`, `step-back`, `decompose`, `compress`, `sentence-window`, `crag-lite`, `cite`, `raptor`, `graph-rag` |
-| `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases |
+| `/project [list\|new\|switch\|delete\|folder]` | Manage named projects with isolated knowledge bases; `/project new <name> --backend graphrag\|dynamic_graph\|none` picks the graph backend (immutable once set) |
 | `/keys [set provider]` | Show API key status for all providers; `/keys set <provider>` saves a key interactively |
 | `/compact` | Summarize entire chat history via LLM to free context window space |
 | `/context` | Display token usage bar, model info, RAG settings, chat history, and last retrieved sources |

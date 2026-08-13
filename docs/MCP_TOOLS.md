@@ -174,7 +174,7 @@ List active write-lease counts per project. Use to check whether it is safe to p
 
 List all local projects and mounted shares. No parameters.
 
-**Returns:** `[{"name": "...", "path": "...", "chunk_count": N}]`
+**Returns:** `[{"name": "...", "path": "...", "chunk_count": N, "graph_backend": "graphrag"|"dynamic_graph"|"none"}]`
 
 ### `switch_project`
 
@@ -194,6 +194,7 @@ Create a new named project with an isolated knowledge base.
 |-----------|------|---------|-------------|
 | `name` | string | required | Project name (max 5 slash-separated segments) |
 | `description` | string | `""` | Optional human-readable description |
+| `graph_backend` | string | `"graphrag"` | Graph backend: `graphrag`, `dynamic_graph`, or `none`. Immutable once set — omit to accept the default. |
 
 **Returns:** `{"name": "..."}`
 

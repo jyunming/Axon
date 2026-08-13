@@ -94,6 +94,14 @@ _MAX_DEPTH: int = 5
 _RESERVED_NAMES: set = {"projects", "mounts", "sharemount", "_default", ".shares"}
 
 
+# Valid values for ensure_project()'s graph_backend parameter. Deliberately
+# excludes "federated" -- that value is config.yaml-only (an override that
+# always wins over whatever a project's own meta.json stores) and is never a
+# project's own immutable, stored backend. See AxonConfig.graph_backend and
+# axon.graph_backends.factory for the full four-value enum used elsewhere.
+_VALID_PROJECT_GRAPH_BACKENDS: frozenset[str] = frozenset({"graphrag", "dynamic_graph", "none"})
+
+
 def is_reserved_top_level_name(name: str) -> bool:
     """Return True when *name* targets a reserved top-level AxonStore root."""
     segments = [seg for seg in name.split("/") if seg]
@@ -231,16 +239,37 @@ def project_sessions_path(name: str) -> str:
     return str(project_dir(name) / "sessions")
 
 
-def ensure_project(name: str, description: str = "", security_mode: str | None = None) -> Path:
+def ensure_project(
+    name: str,
+    description: str = "",
+    security_mode: str | None = None,
+    graph_backend: str | None = None,
+) -> Path:
     """Create project directory structure and meta.json if they don't exist.
     For sub-projects, all ancestor projects are also created automatically
-    (with empty descriptions) so the hierarchy is always consistent.
+    (with empty descriptions) so the hierarchy is always consistent. Ancestors
+    always get the default "graphrag" backend -- creating "research/papers"
+    with a non-default backend does not force a backend choice on "research".
     Args:
         name: Project name, optionally slash-separated (e.g. 'research/papers').
         description: Optional human-readable description for the target project.
+        graph_backend: Graph backend for the target project -- "graphrag"
+            (default), "dynamic_graph", or "none". Immutable once set: calling
+            this again for an existing project with a different value raises
+            ValueError. "federated" is not accepted here -- it is a
+            config.yaml-only override (see AxonConfig.graph_backend), not a
+            project's own stored value.
     Returns:
         Path to the target project root directory.
+    Raises:
+        ValueError: If *graph_backend* is set and not one of the valid project
+            values, or conflicts with an already-stored value for *name*.
     """
+    if graph_backend is not None and graph_backend not in _VALID_PROJECT_GRAPH_BACKENDS:
+        raise ValueError(
+            f"Invalid graph_backend '{graph_backend}'. Must be one of: "
+            f"{', '.join(sorted(_VALID_PROJECT_GRAPH_BACKENDS))}."
+        )
     # _parse_name validates and returns segments in one call — no double-parse.
     segments = _parse_name(name)
     if name != "default":
@@ -248,7 +277,7 @@ def ensure_project(name: str, description: str = "", security_mode: str | None =
         for depth in range(1, len(segments)):
             ancestor_name = "/".join(segments[:depth])
             _ensure_single_project(ancestor_name, description="")
-    _ensure_single_project(name, description=description)
+    _ensure_single_project(name, description=description, graph_backend=graph_backend or "graphrag")
     return project_dir(name)
 
 
@@ -457,6 +486,7 @@ def _list_sub_projects(parent_dir: Path, parent_name: str) -> list[dict]:
                 "created_at": meta.get("created_at", ""),
                 "path": str(entry),
                 "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
+                "graph_backend": meta.get("graph_backend", "graphrag"),
                 "children": _list_sub_projects(entry, full_name),
             }
         )
@@ -518,8 +548,9 @@ def set_maintenance_state(name: str, state: str) -> None:
 
 def list_projects() -> list[dict]:
     """Return all top-level projects sorted by creation time (newest first).
-    Each dict contains: name, description, created_at, path, maintenance_state, children.
-    The 'children' list recursively contains sub-project dicts in the same format.
+    Each dict contains: name, description, created_at, path, maintenance_state,
+    graph_backend, children. The 'children' list recursively contains
+    sub-project dicts in the same format.
     """
     if not PROJECTS_ROOT.exists():
         return []
@@ -544,6 +575,7 @@ def list_projects() -> list[dict]:
                 "created_at": meta.get("created_at", ""),
                 "path": str(entry),
                 "maintenance_state": state if state in _VALID_MAINTENANCE_STATES else "normal",
+                "graph_backend": meta.get("graph_backend", "graphrag"),
                 "children": _list_sub_projects(entry, entry.name),
             }
         )

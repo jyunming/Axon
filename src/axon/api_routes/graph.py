@@ -190,6 +190,29 @@ async def graph_retrieve(request: Request):
     }
 
 
+def _resolve_graph_payload(brain) -> dict:
+    """Prefer the active graph backend's own ``graph_data()``; fall back to
+    the legacy ``build_graph_payload()`` when the backend doesn't supply one.
+    Mirrors the precedence already used by ``GET /graph/data``."""
+    backend = getattr(brain, "_graph_backend", None)
+    if backend is not None and callable(getattr(backend, "graph_data", None)):
+        try:
+            payload = backend.graph_data()
+        except Exception:
+            return {"nodes": [], "links": []}
+        if hasattr(payload, "to_dict"):
+            result = payload.to_dict()
+            return result if isinstance(result, dict) else {"nodes": [], "links": []}
+        if isinstance(payload, dict):
+            return payload
+        return {"nodes": [], "links": []}
+    if callable(getattr(brain, "build_graph_payload", None)):
+        payload = brain.build_graph_payload()
+        if isinstance(payload, dict):
+            return payload
+    return {"nodes": [], "links": []}
+
+
 def _serialise_context(ctx) -> dict:
     """Convert a GraphContext dataclass to a JSON-friendly dict."""
     return {
@@ -249,7 +272,7 @@ async def query_visualize(request: QueryVisualizeRequest):
         result = await asyncio.to_thread(brain.query, query, overrides=overrides)
         answer: str = result.get("response", "") if isinstance(result, dict) else str(result)
         sources: list = result.get("sources", []) if isinstance(result, dict) else []
-        kg = brain.build_graph_payload()
+        kg = _resolve_graph_payload(brain)
         cg = brain.build_code_graph_payload()
         html = brain.render_query_graph_html(query, answer, sources, kg, cg)
         return HTMLResponse(content=html)
@@ -299,7 +322,7 @@ async def search_visualize(request: SearchVisualizeRequest):
             answer = "\n".join(lines)
         else:
             answer = "*No chunks matched the query.*"
-        kg = brain.build_graph_payload()
+        kg = _resolve_graph_payload(brain)
         cg = brain.build_code_graph_payload()
         html = brain.render_query_graph_html(query, answer, results, kg, cg)
         return HTMLResponse(content=html)
@@ -352,24 +375,7 @@ async def graph_data(project: str | None = Query(None, description="Expected act
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_project(project, brain)
-    backend = getattr(brain, "_graph_backend", None)
-    if backend is not None and callable(getattr(backend, "graph_data", None)):
-        try:
-            payload = backend.graph_data()
-        except Exception:
-            return {"nodes": [], "links": []}
-        if hasattr(payload, "to_dict"):
-            result = payload.to_dict()
-            return result if isinstance(result, dict) else {"nodes": [], "links": []}
-        if isinstance(payload, dict):
-            return payload
-        return {"nodes": [], "links": []}
-    # Fall back to the legacy build_graph_payload() on AxonBrain
-    if callable(getattr(brain, "build_graph_payload", None)):
-        payload = brain.build_graph_payload()
-        if isinstance(payload, dict):
-            return payload
-    return {"nodes": [], "links": []}
+    return _resolve_graph_payload(brain)
 
 
 @router.get("/code-graph/data", tags=["graph"])

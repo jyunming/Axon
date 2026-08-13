@@ -3187,6 +3187,72 @@ class TestGraphBackendStatus:
         assert data["relations"] == 14
         assert data["communities"] == 2
 
+    def test_dynamic_graph_backend_not_reported_as_none(self, tmp_path):
+        """A real DynamicGraphBackend attached to brain._graph_backend must
+        report its own id — not the pre-wiring "none" fallback."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        cfg = SimpleNamespace(bm25_path=str(tmp_path), graph_backend="dynamic_graph")
+        llm = MagicMock()
+        llm.complete.return_value = ""
+        fake_brain = SimpleNamespace(config=cfg, llm=llm)
+        brain = _make_brain()
+        brain._graph_backend = DynamicGraphBackend(fake_brain)
+        api_module.brain = brain
+        resp = client.get("/graph/backend/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["backend"] == "dynamic_graph"
+
+
+class TestGraphRetrieve:
+    def test_503_when_no_brain(self):
+        api_module.brain = None
+        resp = client.post("/graph/retrieve", json={"query": "hello"})
+        assert resp.status_code == 503
+
+    def test_no_backend_returns_none_and_empty_contexts(self):
+        brain = _make_brain()
+        brain._graph_backend = None
+        api_module.brain = brain
+        resp = client.post("/graph/retrieve", json={"query": "hello"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {"backend": "none", "contexts": []}
+
+    def test_dynamic_graph_backend_not_reported_as_none(self, tmp_path):
+        """A real DynamicGraphBackend attached to brain._graph_backend must
+        actually run retrieve() and report its own id."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
+
+        cfg = SimpleNamespace(bm25_path=str(tmp_path), graph_backend="dynamic_graph")
+        llm = MagicMock()
+        llm.complete.return_value = ""
+        fake_brain = SimpleNamespace(config=cfg, llm=llm)
+        brain = _make_brain()
+        brain._graph_backend = DynamicGraphBackend(fake_brain)
+        api_module.brain = brain
+        resp = client.post("/graph/retrieve", json={"query": "hello", "top_k": 5})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["backend"] == "dynamic_graph"
+        assert data["contexts"] == []  # empty DB, but backend actually ran
+
+    def test_invalid_point_in_time_returns_422(self):
+        brain = _make_brain()
+        api_module.brain = brain
+        resp = client.post(
+            "/graph/retrieve",
+            json={"query": "hello", "point_in_time": "not-a-date"},
+        )
+        assert resp.status_code == 422
+
 
 class TestCodeGraphData:
     def test_503_when_no_brain(self):
@@ -3745,6 +3811,45 @@ class TestCreateProject:
         with patch("axon.projects.ensure_project", side_effect=RuntimeError("disk full")):
             resp = client.post("/project/new", json={"name": "new-project"})
         assert resp.status_code == 500
+
+    def test_graph_backend_forwarded_and_echoed(self):
+        with patch("axon.projects.ensure_project", return_value=None) as mock_ensure:
+            resp = client.post(
+                "/project/new",
+                json={"name": "dg-project", "graph_backend": "dynamic_graph"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["graph_backend"] == "dynamic_graph"
+        assert mock_ensure.call_args.kwargs.get("graph_backend") == "dynamic_graph"
+
+    def test_graph_backend_omitted_not_in_response(self):
+        with patch("axon.projects.ensure_project", return_value=None) as mock_ensure:
+            resp = client.post("/project/new", json={"name": "plain-project"})
+        assert resp.status_code == 200
+        assert "graph_backend" not in resp.json()
+        assert mock_ensure.call_args.kwargs.get("graph_backend") is None
+
+    def test_invalid_graph_backend_returns_422(self):
+        """Pydantic Literal validation rejects an out-of-enum value before
+        ensure_project() is ever called."""
+        resp = client.post(
+            "/project/new",
+            json={"name": "bad-project", "graph_backend": "neo4j"},
+        )
+        assert resp.status_code == 422
+
+    def test_graph_backend_immutability_returns_400(self):
+        """ensure_project()'s ValueError (e.g. immutable backend conflict)
+        surfaces as 400, same as any other ValueError from this endpoint."""
+        with patch(
+            "axon.projects.ensure_project",
+            side_effect=ValueError("graph_backend is immutable"),
+        ):
+            resp = client.post(
+                "/project/new",
+                json={"name": "existing", "graph_backend": "none"},
+            )
+        assert resp.status_code == 400
 
 
 class TestSwitchProject:

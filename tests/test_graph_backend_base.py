@@ -24,6 +24,7 @@ from axon.graph_backends.base import (
 )
 from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
 from axon.graph_backends.graphrag_backend import GraphRagBackend
+from axon.graph_backends.none_backend import NoneGraphBackend
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,6 +51,10 @@ def _make_graphrag_backend() -> GraphRagBackend:
     brain.build_graph_payload.return_value = {"nodes": [], "links": []}
     brain._expand_with_entity_graph.return_value = ([], [])
     return GraphRagBackend(brain)
+
+
+def _make_none_backend() -> NoneGraphBackend:
+    return NoneGraphBackend(MagicMock())
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +190,67 @@ class TestDynamicGraphBackendProtocol:
         backend = _make_dynamic_backend(tmp_path)
         payload = backend.graph_data()
         assert isinstance(payload, GraphPayload)
+
+
+# ---------------------------------------------------------------------------
+# NoneGraphBackend satisfies Protocol
+# ---------------------------------------------------------------------------
+
+
+class TestNoneGraphBackendProtocol:
+    def test_isinstance_graphbackend(self):
+        backend = _make_none_backend()
+        assert isinstance(backend, GraphBackend)
+
+    def test_has_all_required_methods(self):
+        backend = _make_none_backend()
+        for method in _REQUIRED_METHODS:
+            assert hasattr(backend, method), f"Missing method: {method}"
+            assert callable(getattr(backend, method)), f"Not callable: {method}"
+
+    def test_ingest_returns_ingest_result(self):
+        backend = _make_none_backend()
+        result = backend.ingest([{"id": "c1", "text": "hello"}, {"id": "c2", "text": "world"}])
+        assert isinstance(result, IngestResult)
+        assert result.chunks_processed == 2
+        assert result.backend_id == "none"
+
+    def test_retrieve_returns_empty_list(self):
+        backend = _make_none_backend()
+        result = backend.retrieve("query")
+        assert result == []
+
+    def test_finalize_returns_not_applicable(self):
+        backend = _make_none_backend()
+        result = backend.finalize()
+        assert isinstance(result, FinalizationResult)
+        assert result.backend_id == "none"
+        assert result.status == "not_applicable"
+        assert result.detail
+
+    def test_clear_does_not_raise(self):
+        _make_none_backend().clear()
+
+    def test_delete_documents_does_not_raise(self):
+        _make_none_backend().delete_documents(["c1"])
+
+    def test_status_returns_dict(self):
+        s = _make_none_backend().status()
+        assert isinstance(s, dict)
+        assert s["backend"] == "none"
+        assert s["enabled"] is False
+
+    def test_graph_data_returns_empty_graph_payload(self):
+        payload = _make_none_backend().graph_data()
+        assert isinstance(payload, GraphPayload)
+        assert payload.nodes == []
+        assert payload.links == []
+
+    def test_no_list_conflicts(self):
+        # Matches GraphRagBackend — no conflict tracking, capability probes
+        # (hasattr checks in api_routes/graph.py, repl.py) must treat this
+        # as "unsupported" rather than crashing.
+        assert not hasattr(_make_none_backend(), "list_conflicts")
 
 
 # ---------------------------------------------------------------------------

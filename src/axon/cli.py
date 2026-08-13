@@ -59,7 +59,9 @@ def _run_via_server(server: dict, args, config) -> None:
     # Create/switch project (mirror local order: new implies switch).
     if getattr(args, "project_new", None):
         name = args.project_new.lower()
-        sc.remote_project_new(base, name, headers)
+        sc.remote_project_new(
+            base, name, headers, graph_backend=getattr(args, "graph_backend", None)
+        )
         sc.remote_project_switch(base, name, headers)
         active = name
         print(f"  Using project '{name}'.")
@@ -340,6 +342,13 @@ def main():
         metavar="NAME",
         help="Create a new project (if it does not exist) and use it. "
         "Combine with --ingest to populate in one step.",
+    )
+    parser.add_argument(
+        "--graph-backend",
+        metavar="BACKEND",
+        choices=["graphrag", "dynamic_graph", "none"],
+        help="Graph backend for a project created with --project-new "
+        "(default: graphrag). Immutable once set. Ignored without --project-new.",
     )
     parser.add_argument("--project-list", action="store_true", help="List all projects and exit")
     parser.add_argument(
@@ -1436,7 +1445,13 @@ def main():
             return
         if args.project_new:
             proj_name = args.project_new.lower()
-            _proj_mod.ensure_project(proj_name)
+            try:
+                _proj_mod.ensure_project(
+                    proj_name, graph_backend=getattr(args, "graph_backend", None)
+                )
+            except ValueError as e:
+                print(f"  {e}")
+                sys.exit(1)
             _proj_mod.set_active_project(proj_name)
             print(f"  Using project '{proj_name}'  ({_proj_mod.project_dir(proj_name)})")
             return
@@ -1937,7 +1952,11 @@ def main():
     # Create (if needed) and switch to new project
     if args.project_new:
         proj_name = args.project_new.lower()
-        ensure_project(proj_name)
+        try:
+            ensure_project(proj_name, graph_backend=getattr(args, "graph_backend", None))
+        except ValueError as e:
+            print(f"  {e}")
+            sys.exit(1)
         brain.switch_project(proj_name)
         print(f"  Using project '{proj_name}'  ({project_dir(proj_name)})")
     if args.ingest:

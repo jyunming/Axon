@@ -591,6 +591,24 @@ if (graphData.nodes && graphData.nodes.length > 0) {{
 
 </script></body></html>"""
 
+    def _resolve_graph_payload(self) -> dict:
+        """Prefer the active graph backend's own ``graph_data()``; fall back
+        to :meth:`build_graph_payload` when the backend doesn't supply one.
+        Mirrors the precedence used by the ``GET /graph/data`` REST route."""
+        backend = getattr(self, "_graph_backend", None)
+        if backend is not None and callable(getattr(backend, "graph_data", None)):
+            try:
+                payload = backend.graph_data()
+            except Exception:
+                return {"nodes": [], "links": []}
+            if hasattr(payload, "to_dict"):
+                result = payload.to_dict()
+                return result if isinstance(result, dict) else {"nodes": [], "links": []}
+            if isinstance(payload, dict):
+                return payload
+            return {"nodes": [], "links": []}
+        return self.build_graph_payload()
+
     def export_graph_html(
         self,
         path: str | None = None,
@@ -611,7 +629,7 @@ if (graphData.nodes && graphData.nodes.length > 0) {{
         """
         import json as _json
 
-        graph = self.build_graph_payload()
+        graph = self._resolve_graph_payload()
         html = self._render_graph_html(graph)
         if json_path:
             pathlib.Path(json_path).write_text(

@@ -140,6 +140,68 @@ class TestCapabilityFlags:
 
 
 # ---------------------------------------------------------------------------
+# close() cascade — needed by main.py's switch_project()/close() wiring.
+# ---------------------------------------------------------------------------
+
+
+class TestFederatedBackendClose:
+    def test_close_cascades_to_all_sub_backends(self, tmp_path):
+        brain = _make_brain(tmp_path, federation_weights={})
+
+        def _patched_init(self, _brain):
+            self._backends = [MagicMock(), MagicMock()]
+            self._weights = {"graphrag": 1.0, "dynamic_graph": 1.0}
+
+        original = FederatedGraphBackend.__init__
+        try:
+            FederatedGraphBackend.__init__ = _patched_init  # type: ignore[assignment]
+            fed = FederatedGraphBackend(brain)
+            fed.close()
+            for b in fed._backends:
+                b.close.assert_called_once()
+        finally:
+            FederatedGraphBackend.__init__ = original  # type: ignore[assignment]
+
+    def test_close_skips_sub_backend_without_close(self, tmp_path):
+        """A sub-backend with no close() (e.g. a minimal hand-rolled Protocol
+        implementer) must not raise AttributeError."""
+        brain = _make_brain(tmp_path, federation_weights={})
+
+        def _patched_init(self, _brain):
+            no_close = MagicMock(spec=[])  # no attributes at all, incl. close
+            self._backends = [no_close]
+            self._weights = {"graphrag": 1.0}
+
+        original = FederatedGraphBackend.__init__
+        try:
+            FederatedGraphBackend.__init__ = _patched_init  # type: ignore[assignment]
+            fed = FederatedGraphBackend(brain)
+            fed.close()  # should not raise
+        finally:
+            FederatedGraphBackend.__init__ = original  # type: ignore[assignment]
+
+    def test_one_raising_sub_backend_does_not_block_others(self, tmp_path):
+        brain = _make_brain(tmp_path, federation_weights={})
+
+        def _patched_init(self, _brain):
+            failing = MagicMock()
+            failing.close = MagicMock(side_effect=RuntimeError("sqlite busy"))
+            ok = MagicMock()
+            self._backends = [failing, ok]
+            self._weights = {"graphrag": 1.0, "dynamic_graph": 1.0}
+
+        original = FederatedGraphBackend.__init__
+        try:
+            FederatedGraphBackend.__init__ = _patched_init  # type: ignore[assignment]
+            fed = FederatedGraphBackend(brain)
+            fed.close()  # must not propagate the sub-backend's exception
+            fed._backends[0].close.assert_called_once()
+            fed._backends[1].close.assert_called_once()
+        finally:
+            FederatedGraphBackend.__init__ = original  # type: ignore[assignment]
+
+
+# ---------------------------------------------------------------------------
 # Item (5): Federated weight per-query override
 # ---------------------------------------------------------------------------
 

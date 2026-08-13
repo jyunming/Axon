@@ -1372,6 +1372,35 @@ class TestReplProjectSubcommands:
             output = _run_repl_with_commands(["/project new bad/name/here/x/y/z"], brain=brain)
         assert isinstance(output, str)
 
+    def test_project_new_forwards_backend_flag(self):
+        brain = _make_mock_brain()
+        with patch("axon.projects.ensure_project") as mock_ensure:
+            brain.switch_project = MagicMock()
+            with patch("axon.projects.project_dir") as mock_dir:
+                mock_dir.return_value = MagicMock(__str__=lambda s: "/tmp/dgproj")
+                _run_repl_with_commands(
+                    ["/project new dgproj my description --backend dynamic_graph"], brain=brain
+                )
+        assert mock_ensure.call_args.args[0] == "dgproj"
+        assert mock_ensure.call_args.args[1] == "my description"
+        assert mock_ensure.call_args.kwargs.get("graph_backend") == "dynamic_graph"
+
+    def test_project_new_without_backend_flag_forwards_none(self):
+        brain = _make_mock_brain()
+        with patch("axon.projects.ensure_project") as mock_ensure:
+            brain.switch_project = MagicMock()
+            with patch("axon.projects.project_dir") as mock_dir:
+                mock_dir.return_value = MagicMock(__str__=lambda s: "/tmp/plainproj")
+                _run_repl_with_commands(["/project new plainproj"], brain=brain)
+        assert mock_ensure.call_args.kwargs.get("graph_backend") is None
+
+    def test_project_new_invalid_backend_rejected(self):
+        brain = _make_mock_brain()
+        with patch("axon.projects.ensure_project") as mock_ensure:
+            output = _run_repl_with_commands(["/project new dgproj --backend bogus"], brain=brain)
+        assert not mock_ensure.called
+        assert "Invalid --backend" in output
+
     def test_project_switch_no_arg(self):
         brain = _make_mock_brain()
         output = _run_repl_with_commands(["/project switch"], brain=brain)

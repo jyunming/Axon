@@ -20,6 +20,19 @@ backend — **Dynamic Graph** — for projects with evolving, timestamped knowle
 | Code graph orthogonality | `code_graph.py` (AST) is a separate axis; not part of this enum |
 | Mixed-backend scope | Federation at retrieval/answer layer only; no unified graph model |
 
+> **Addendum (post-v0.3.2):** the "Backend enum" row above locks the *project*
+> enum (`meta.json`'s `graph_backend`, immutable per project) to exactly
+> `graphrag | dynamic_graph | none`. That constraint still holds — it is
+> enforced by `ensure_project()` and by every project-creation surface (REST,
+> CLI, REPL, MCP, agent tool). A fourth value, `federated`, shipped in
+> v0.3.2 as the "Mixed-backend scope" row above always intended, but it is
+> **not** a project-enum value: it is a `config.yaml`-only override on
+> `AxonConfig.graph_backend` (RRF over `graphrag` + `dynamic_graph`) that,
+> when set, always wins over whatever backend the active project has stored.
+> It is never written to a project's `meta.json` and is explicitly rejected
+> by every project-creation surface. See `rag.graph_backend` in
+> `docs/ADMIN_REFERENCE.md` §6.8 for the full precedence rules.
+
 ### Explicitly out of scope for v1
 
 - Fuzzy entity deduplication / alias resolution (exact canonical name only)

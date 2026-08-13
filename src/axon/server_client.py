@@ -148,8 +148,13 @@ def detect_server(config: Any, *, timeout: float = _PROBE_TIMEOUT_S) -> dict | N
 # --- routed operations ---------------------------------------------------
 
 
-def remote_project_new(base: str, name: str, headers: dict[str, str]) -> Any:
-    return _request("POST", f"{base}/project/new", headers, {"name": name})
+def remote_project_new(
+    base: str, name: str, headers: dict[str, str], graph_backend: str | None = None
+) -> Any:
+    body: dict = {"name": name}
+    if graph_backend is not None:
+        body["graph_backend"] = graph_backend
+    return _request("POST", f"{base}/project/new", headers, body)
 
 
 def remote_project_switch(base: str, name: str, headers: dict[str, str]) -> Any:
