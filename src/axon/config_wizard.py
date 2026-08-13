@@ -458,7 +458,7 @@ def run_wizard(brain: Any = None, config_path: str = "") -> dict[str, Any]:
             _label("temperature: 0.0 = deterministic, 1.0 = creative. Recommended 0.3–0.8.")
             _ask_float("llm.temperature", "llm_temperature", 0.7, 0.0, 2.0)
             _label("max_tokens: maximum tokens in the LLM response. Recommended 1024–8192.")
-            _ask_int("llm.max_tokens", "llm_max_tokens", 2048, 1, 65536)
+            _ask_int("llm.max_tokens", "llm_max_tokens", 8192, 1, 65536)
         if _in("full"):
             _label("timeout: seconds before giving up on an LLM call. Recommended 30–120.")
             _ask_int("llm.timeout", "llm_timeout", 60, 1, 600)

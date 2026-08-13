@@ -213,7 +213,10 @@ llm:
   provider: ollama
   model: llama3.1:8b
   temperature: 0.7                   # 0.0 = deterministic  1.0 = creative
-  max_tokens: 2048                   # Max tokens in the generated answer
+  # 8192, not 2048: reasoning models (Gemma, DeepSeek-R1, GPT-OSS) spend the
+  # budget on internal reasoning before emitting the answer, and 2048 can
+  # truncate that mid-thought. Keep this in sync with AxonConfig.llm_max_tokens.
+  max_tokens: 8192                   # Max tokens in the generated answer
 
 
 vector_store:
