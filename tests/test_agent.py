@@ -57,6 +57,14 @@ def _make_brain(**kwargs):
     brain._doc_versions = {}
     brain._own_bm25 = MagicMock()
     brain._own_vector_store = MagicMock()
+    brain._graph_backend = MagicMock()
+    brain._graph_backend.status.return_value = {
+        "backend": "graphrag",
+        "entities": 0,
+        "relations": 0,
+        "communities": 0,
+        "community_summaries": 0,
+    }
     for k, v in kwargs.items():
         setattr(brain, k, v)
     return brain
@@ -517,8 +525,11 @@ class TestToolGraphStatus:
 
     def test_graph_status_with_data(self):
         brain = _make_brain()
-        brain._entity_graph = {"EntityA": {}, "EntityB": {}}
-        brain._relation_count = 5
+        brain._graph_backend.status.return_value = {
+            "entities": 2,
+            "relations": 5,
+            "community_summaries": 0,
+        }
         result = _tool_graph_status(brain)
         assert "entities: 2" in result
 

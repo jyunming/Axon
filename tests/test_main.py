@@ -11089,6 +11089,29 @@ class TestGraphBackendWiring:
         assert status["entities"] == 0
         assert status["relations"] == 0
 
+    def test_switch_to_scope_clears_stale_graph_state_from_previous_project(self, tmp_path):
+        """Regression: entering a scope must clear graph state left over from
+        whatever project (and whatever backend type) was active before, not
+        just leave an already-empty graph looking empty."""
+        from axon.graph_backends.graphrag_backend import GraphRagBackend
+        from axon.projects import ensure_project
+
+        brain = _make_wired_brain(tmp_path)
+        with patch("axon.main.OpenVectorStore"), patch("axon.retrievers.BM25Retriever"), patch(
+            "axon.runtime.get_registry"
+        ):
+            ensure_project("dgproj5", graph_backend="dynamic_graph")
+            brain.switch_project("dgproj5")
+            # Populate leftover GraphRAG-shaped state that a prior graphrag
+            # project might have left in memory (dynamic_graph doesn't use
+            # these dicts, but nothing should assume that).
+            brain._entity_graph = {"alice": {"chunk_ids": ["c1"]}}
+            brain._claims_graph = {"c1": [{"subject": "alice"}]}
+            brain.switch_project("@projects")
+        assert isinstance(brain._graph_backend, GraphRagBackend)
+        assert brain._entity_graph == {}
+        assert brain._claims_graph == {}
+
     def test_federated_config_not_overridden_by_project_switch(self, tmp_path):
         from axon.graph_backends.federated_backend import FederatedGraphBackend
         from axon.projects import ensure_project

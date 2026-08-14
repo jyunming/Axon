@@ -170,6 +170,33 @@ class GraphRagMixin:
                 if not bucket:
                     del idx[token]
 
+    def _reset_graph_state(self) -> None:
+        """Reset all in-memory GraphRAG state to empty, without touching disk.
+
+        Single source of truth for "wipe graph state and start clean" —
+        used both by ``GraphRagBackend.clear()`` and by ``_switch_to_scope``
+        when entering a merged read-only scope. Held under ``_graph_lock``
+        so concurrent ``/graph/data`` readers can't observe a half-cleared
+        graph (matches the locking already used by ``clear()``/
+        ``delete_documents()``/``_prune_entity_graph``).
+        """
+        with self._graph_lock:
+            self._entity_graph = {}
+            self._rebuild_entity_token_index()
+            self._relation_graph = {}
+            self._community_levels = {}
+            self._community_summaries = {}
+            self._entity_embeddings = {}
+            self._entity_description_buffer = {}
+            self._claims_graph = {}
+            self._community_graph_dirty = False
+            self._community_hierarchy = {}
+            self._community_children = {}
+            self._relation_description_buffer = {}
+            self._text_unit_entity_map = {}
+            self._text_unit_relation_map = {}
+            self._raptor_summary_cache = {}
+
     def _track_persist_future(self, future: concurrent.futures.Future) -> None:
         """Append *future* to the pending list, pruning already-done entries."""
         if not hasattr(self, "_pending_persist_futures_internal"):

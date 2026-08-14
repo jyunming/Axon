@@ -2054,9 +2054,11 @@ def main():
                 print(f"  {age:>6.1f}d  {src}")
         return
     if getattr(args, "graph_status", False):
-        entity_count = len(getattr(brain, "_entity_graph", {}) or {})
+        _backend = getattr(brain, "_graph_backend", None)
+        _status = _backend.status() if _backend is not None else {}
+        entity_count = _status.get("entities", 0)
         code_node_count = len((getattr(brain, "_code_graph", {}) or {}).get("nodes", {}))
-        summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+        summary_count = _status.get("community_summaries", 0)
         in_progress = getattr(brain, "_community_build_in_progress", False)
         graph_ready = entity_count > 0 or code_node_count > 0
         print("\n  Graph Status")
@@ -2070,7 +2072,8 @@ def main():
         print("  Finalizing graph (community rebuild)...")
         try:
             brain.finalize_graph(True)
-            summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+            _backend = getattr(brain, "_graph_backend", None)
+            summary_count = _backend.status().get("community_summaries", 0) if _backend else 0
             print(f"  Done. {summary_count} community summaries generated.")
         except Exception as exc:
             print(f"  Error: {exc}")

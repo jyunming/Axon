@@ -676,6 +676,19 @@ class TestReplGraph:
         output = _run_repl_with_commands(["/graph finalize"], brain=brain)
         assert isinstance(output, str)
 
+    def test_graph_finalize_via_backend_reports_communities_built(self):
+        """The backend-protocol success path reads communities_built off the
+        FinalizationResult instead of re-reading brain._community_summaries."""
+        from axon.graph_backends.base import FinalizationResult
+
+        brain = _make_mock_brain()
+        brain.config.graph_rag = True
+        brain._graph_backend.finalize = MagicMock(
+            return_value=FinalizationResult(communities_built=3, backend_id="graphrag")
+        )
+        output = _run_repl_with_commands(["/graph finalize"], brain=brain)
+        assert "3 community summaries generated" in output
+
     def test_graph_viz_via_graph(self):
         brain = _make_mock_brain()
         brain.export_graph_html = MagicMock()

@@ -907,31 +907,14 @@ Your primary goal is to help the user by answering questions based on the provid
         # own, but leaving the previous project's data in memory would leak
         # its sources through get_doc_versions(). Clear it here.
         self._doc_versions = {}
-        self._entity_graph = {}
-        self._rebuild_entity_token_index()
-        self._relation_graph = {}
-        self._community_levels = {}
-        self._community_summaries = {}
-        self._entity_embeddings = {}
-        self._entity_description_buffer = {}
-        self._claims_graph = {}
-        self._community_graph_dirty = False
-        self._community_hierarchy = {}
-        self._community_children = {}
-        self._relation_description_buffer = {}
-        self._text_unit_entity_map = {}
-        self._text_unit_relation_map = {}
-        self._raptor_summary_cache = {}
-        self._active_project = scope
-        self._read_only_scope = True
-        self._active_project_kind = "scope"
-        self._active_mount_descriptor = None
         # A scope merges read-only views across many projects with no single
         # meta.json to consult; without this, /graph/* would keep silently
         # serving whichever backend was attached to the previously-active
-        # project. Force "graphrag", matching the freshly-emptied
-        # _entity_graph/_relation_graph above (unless "federated" is an
-        # explicit config.yaml override, which always wins).
+        # project. Force "graphrag" (unless "federated" is an explicit
+        # config.yaml override, which always wins) and reconstruct the
+        # backend for it *before* clearing graph state below, so the clear
+        # lands on the newly-attached backend rather than whatever backend
+        # (e.g. dynamic_graph) the previous project happened to use.
         if self.config.graph_backend != "federated":
             self.config.graph_backend = "graphrag"
         from axon.graph_backends.factory import get_graph_backend
@@ -945,6 +928,11 @@ Your primary goal is to help the user by answering questions based on the provid
                 _old_graph_backend.close()
             except Exception as exc:  # pragma: no cover — defensive
                 logger.debug("Graph backend close raised during scope switch: %s", exc)
+        self._graph_backend.clear()
+        self._active_project = scope
+        self._read_only_scope = True
+        self._active_project_kind = "scope"
+        self._active_mount_descriptor = None
         logger.info(
             "Switched to %s scope  |  %d store(s) merged  |  read-only",
             scope,

@@ -1680,6 +1680,70 @@ class TestPruneEntityGraph:
 
 
 # ---------------------------------------------------------------------------
+# _reset_graph_state
+# ---------------------------------------------------------------------------
+
+
+class TestResetGraphState:
+    def test_resets_all_graph_state_fields(self, tmp_path):
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._entity_graph = {"alice": {"chunk_ids": ["c1"]}}
+        brain._relation_graph = {"alice": [{"target": "bob"}]}
+        brain._community_levels = {0: {"alice": 0}}
+        brain._community_summaries = {0: "summary"}
+        brain._entity_embeddings = {"alice": [0.1, 0.2]}
+        brain._entity_description_buffer = {"alice": "desc"}
+        brain._claims_graph = {"c1": [{"subject": "alice"}]}
+        brain._community_graph_dirty = True
+        brain._community_hierarchy = {0: 1}
+        brain._community_children = {1: [0]}
+        brain._relation_description_buffer = {"alice-bob": "desc"}
+        brain._text_unit_entity_map = {"c1": ["alice"]}
+        brain._text_unit_relation_map = {"c1": ["alice-bob"]}
+        brain._raptor_summary_cache = {"c1": "summary"}
+
+        brain._reset_graph_state()
+
+        assert brain._entity_graph == {}
+        assert brain._relation_graph == {}
+        assert brain._community_levels == {}
+        assert brain._community_summaries == {}
+        assert brain._entity_embeddings == {}
+        assert brain._entity_description_buffer == {}
+        assert brain._claims_graph == {}
+        assert brain._community_graph_dirty is False
+        assert brain._community_hierarchy == {}
+        assert brain._community_children == {}
+        assert brain._relation_description_buffer == {}
+        assert brain._text_unit_entity_map == {}
+        assert brain._text_unit_relation_map == {}
+        assert brain._raptor_summary_cache == {}
+
+    def test_rebuilds_token_index(self, tmp_path):
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._entity_token_index_internal = {"alice": {"alice"}}
+        brain._entity_graph = {"alice": {"chunk_ids": ["c1"]}}
+        brain._reset_graph_state()
+        assert brain._entity_token_index == {}
+
+    def test_does_not_touch_disk(self, tmp_path):
+        """_reset_graph_state() is memory-only -- it's used by read-only
+        scope switching, which must never write project data to disk."""
+        cfg = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
+        brain = _make_brain(config=cfg)
+        brain._entity_graph = {"alice": {"chunk_ids": ["c1"]}}
+        brain._save_entity_graph = MagicMock()
+        brain._save_relation_graph = MagicMock()
+        brain._save_claims_graph = MagicMock()
+        brain._reset_graph_state()
+        brain._save_entity_graph.assert_not_called()
+        brain._save_relation_graph.assert_not_called()
+        brain._save_claims_graph.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _get_incoming_relations
 # ---------------------------------------------------------------------------
 

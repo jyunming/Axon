@@ -4227,9 +4227,8 @@ def _interactive_repl(
                                         f"    Backend has no finalize step — {_det or 'no community detection on this backend'}."
                                     )
                                 else:
-                                    summaries = getattr(brain, "_community_summaries", {}) or {}
                                     print(
-                                        f"    Done. {len(summaries)} community summaries generated.\n"
+                                        f"    Done. {_r.communities_built} community summaries generated.\n"
                                     )
                             else:
                                 brain.finalize_graph()

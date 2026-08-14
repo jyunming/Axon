@@ -234,43 +234,26 @@ class TestRetrieveParity:
 
 
 class TestMutationParity:
-    def test_clear_empties_entity_graph(self):
-        brain = _make_brain(
-            entity_graph={"alice": {"chunk_ids": ["c1"]}},
-            relation_graph={"alice": [{"target": "bob"}]},
-            community_levels={0: {"alice": 0}},
-            community_summaries={0: "summary"},
-        )
+    """clear()/delete_documents() now delegate to the real GraphRagMixin
+    methods (_reset_graph_state()/_prune_entity_graph()) instead of
+    reimplementing a partial version of their behavior — see
+    GRAPH_BACKEND_NEXT_STEPS.md Phase 1. Full-behavior coverage (relation/
+    claims pruning, persistence, token-index cleanup) lives with those
+    methods' own tests in test_main.py / test_graph_rag.py; these tests only
+    verify the adapter delegates with the right arguments.
+    """
+
+    def test_clear_delegates_to_reset_graph_state(self):
+        brain = _make_brain()
         backend = GraphRagBackend(brain)
         backend.clear()
-        assert brain._entity_graph == {}
-        assert brain._relation_graph == {}
-        assert brain._community_levels == {}
-        assert brain._community_summaries == {}
+        brain._reset_graph_state.assert_called_once_with()
 
-    def test_delete_documents_removes_chunk_from_entity(self):
-        brain = _make_brain(entity_graph={"alice": {"chunk_ids": ["c1", "c2"]}})
+    def test_delete_documents_delegates_to_prune_entity_graph(self):
+        brain = _make_brain()
         backend = GraphRagBackend(brain)
-        backend.delete_documents(["c1"])
-        assert brain._entity_graph["alice"]["chunk_ids"] == ["c2"]
-
-    def test_delete_documents_removes_entity_when_all_chunks_gone(self):
-        brain = _make_brain(entity_graph={"alice": {"chunk_ids": ["c1"]}})
-        backend = GraphRagBackend(brain)
-        backend.delete_documents(["c1"])
-        assert "alice" not in brain._entity_graph
-
-    def test_delete_documents_leaves_unrelated_entities(self):
-        brain = _make_brain(
-            entity_graph={
-                "alice": {"chunk_ids": ["c1"]},
-                "bob": {"chunk_ids": ["c2"]},
-            }
-        )
-        backend = GraphRagBackend(brain)
-        backend.delete_documents(["c1"])
-        assert "alice" not in brain._entity_graph
-        assert "bob" in brain._entity_graph
+        backend.delete_documents(["c1", "c2"])
+        brain._prune_entity_graph.assert_called_once_with({"c1", "c2"})
 
 
 # ---------------------------------------------------------------------------

@@ -27,8 +27,10 @@ async def get_graph_status():
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     in_progress = getattr(brain, "_community_build_in_progress", False)
-    summary_count = len(getattr(brain, "_community_summaries", {}) or {})
-    entity_count = len(getattr(brain, "_entity_graph", {}) or {})
+    backend = getattr(brain, "_graph_backend", None)
+    status = backend.status() if backend is not None else {}
+    summary_count = status.get("community_summaries", 0)
+    entity_count = status.get("entities", 0)
     code_node_count = len((getattr(brain, "_code_graph", {}) or {}).get("nodes", {}))
     graph_ready = entity_count > 0 or code_node_count > 0
     return {
@@ -65,14 +67,21 @@ async def finalize_graph(request: Request):
         finalize_status = "ok"
         finalize_detail = ""
         backend_id = ""
+        summary_count = 0
         if backend is not None and callable(getattr(backend, "finalize", None)):
             result = await asyncio.to_thread(backend.finalize, True)
             finalize_status = getattr(result, "status", "ok")
             finalize_detail = getattr(result, "detail", "")
             backend_id = getattr(result, "backend_id", "")
+            summary_count = getattr(result, "communities_built", 0)
         else:
             await asyncio.to_thread(brain.finalize_graph, True)
-        summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+            if backend is not None:
+                summary_count = backend.status().get("community_summaries", 0)
+            else:
+                # No backend attached at all (not just one without finalize()) —
+                # nothing to delegate to, so fall back to the raw attribute.
+                summary_count = len(getattr(brain, "_community_summaries", {}) or {})
         gov.emit(
             "graph_finalize",
             "graph",

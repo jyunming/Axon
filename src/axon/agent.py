@@ -951,8 +951,7 @@ def _tool_purge_source(brain, args: dict) -> str:
                 brain._own_vector_store.delete_by_ids(ids_to_delete)
                 if brain._own_bm25 is not None:
                     brain._own_bm25.delete_documents(ids_to_delete)
-                if brain._entity_graph:
-                    brain._prune_entity_graph(set(ids_to_delete))
+                brain._graph_backend.delete_documents(ids_to_delete)
                 removed_vectors = len(ids_to_delete)
     # Step 2: Recompute chunk hashes from the source file and remove from hash store
     import os
@@ -1021,8 +1020,7 @@ def _tool_delete_documents(brain, args: dict) -> str:
     if brain._own_bm25 is not None:
         brain._own_bm25.delete_documents(ids_to_delete)
     # Prune entity graph (no-op if graph is empty)
-    if brain._entity_graph:
-        brain._prune_entity_graph(set(ids_to_delete))
+    brain._graph_backend.delete_documents(ids_to_delete)
     # Purge content hashes so the source can be re-ingested without force=true.
     # The hashes are keyed by chunk content, not by ID, so we retrieve the chunk
     # texts from the doc index metadata if available, else use the stored IDs as
@@ -1261,9 +1259,11 @@ def _tool_delete_project(brain, args: dict) -> str:
 
 
 def _tool_graph_status(brain) -> str:
-    entity_count = len(getattr(brain, "_entity_graph", {}) or {})
-    relation_count = len(getattr(brain, "_relation_graph", {}) or {})
-    community_count = len(getattr(brain, "_community_summaries", {}) or {})
+    backend = getattr(brain, "_graph_backend", None)
+    status = backend.status() if backend is not None else {}
+    entity_count = status.get("entities", 0)
+    relation_count = status.get("relations", 0)
+    community_count = status.get("community_summaries", 0)
     in_progress = getattr(brain, "_community_build_in_progress", False)
     dirty = getattr(brain, "_community_graph_dirty", False)
     lines = [
@@ -1281,7 +1281,8 @@ def _tool_graph_finalize(brain) -> str:
         brain.finalize_ingest()
     except Exception as exc:
         return f"Graph finalize failed: {exc}"
-    community_count = len(getattr(brain, "_community_summaries", {}) or {})
+    backend = getattr(brain, "_graph_backend", None)
+    community_count = backend.status().get("community_summaries", 0) if backend is not None else 0
     return f"Graph finalize complete. Community summaries: {community_count}."
 
 

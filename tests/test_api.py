@@ -259,6 +259,17 @@ def test_delete_calls_delete_by_ids_not_collection_delete():
     api_module.brain.vector_store.collection.delete.assert_not_called()
 
 
+def test_delete_prunes_entity_graph_via_backend():
+    """Deleting chunks must prune graph state through _graph_backend.delete_documents()
+    (which fully delegates to _prune_entity_graph — relation/claims pruning,
+    token index, persistence) instead of touching _entity_graph directly."""
+    api_module.brain = _make_brain()
+    api_module.brain.vector_store.get_by_ids.return_value = [{"id": "id1", "text": "t"}]
+    resp = client.post("/delete", json={"doc_ids": ["id1"]})
+    assert resp.status_code == 200
+    api_module.brain._graph_backend.delete_documents.assert_called_once_with(["id1"])
+
+
 # ---------------------------------------------------------------------------
 # /clear
 # ---------------------------------------------------------------------------
@@ -2985,6 +2996,28 @@ def _make_brain(provider="chroma"):
         "communities": 0,
         "community_summaries": 0,
     }
+
+    def _reset_graph_fields(*_args, **_kwargs):
+        # Mirrors GraphRagMixin._reset_graph_state() for tests that assert
+        # /clear (collection_ops.clear_active_project) actually empties graph
+        # state — brain is a MagicMock, not a real GraphRagMixin, so
+        # _graph_backend.clear() needs an explicit side effect to do that.
+        brain._entity_graph = {}
+        brain._relation_graph = {}
+        brain._community_levels = {}
+        brain._community_summaries = {}
+        brain._entity_embeddings = {}
+        brain._entity_description_buffer = {}
+        brain._claims_graph = {}
+        brain._community_graph_dirty = False
+        brain._community_hierarchy = {}
+        brain._community_children = {}
+        brain._relation_description_buffer = {}
+        brain._text_unit_entity_map = {}
+        brain._text_unit_relation_map = {}
+        brain._raptor_summary_cache = {}
+
+    brain._graph_backend.clear.side_effect = _reset_graph_fields
     return brain
 
 
@@ -3014,7 +3047,13 @@ class TestGraphStatus:
     def test_returns_status_with_brain(self):
         brain = _make_brain()
         brain._community_build_in_progress = True
-        brain._community_summaries = {"a": 1, "b": 2}
+        brain._graph_backend.status.return_value = {
+            "backend": "graphrag",
+            "entities": 0,
+            "relations": 0,
+            "communities": 0,
+            "community_summaries": 2,
+        }
         api_module.brain = brain
         resp = client.get("/graph/status")
         assert resp.status_code == 200
