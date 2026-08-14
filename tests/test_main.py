@@ -8533,12 +8533,18 @@ class TestLocalModelPaths:
         loaded = AxonConfig.load(str(cfg_file))
         assert loaded.embedding_model_path == "/srv/models/minilm"
 
-    def test_ollama_models_dir_loaded_from_yaml(self, tmp_path):
+    def test_ollama_models_dir_loaded_from_yaml(self, tmp_path, monkeypatch):
         """llm.models_dir in YAML is mapped to ollama_models_dir."""
         import yaml
 
         from axon.main import AxonConfig
 
+        # OLLAMA_MODELS has "High Priority -- wins over config.yaml" (see
+        # AxonConfig.load()) precisely so test_ollama_models_env_var_wins_over_yaml
+        # below can pass — but that means this test (the opposite case: no env
+        # var, YAML should win) is only deterministic if OLLAMA_MODELS is unset,
+        # which isn't guaranteed on a real dev machine with Ollama installed.
+        monkeypatch.delenv("OLLAMA_MODELS", raising=False)
         cfg_data = {
             "embedding": {"provider": "sentence_transformers", "model": "all-MiniLM-L6-v2"},
             "llm": {"provider": "ollama", "model": "gemma", "models_dir": "D:/ollama-models"},
