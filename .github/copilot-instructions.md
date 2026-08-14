@@ -9,7 +9,7 @@ every session.
 ## What Axon Is
 
 Axon is a local RAG (Retrieval-Augmented Generation) system exposed as a
-REST API (`localhost:8000`) and as an MCP stdio server. It stores embeddings
+REST API (`localhost:8420`) and as an MCP stdio server. It stores embeddings
 in a local vector store (ChromaDB by default) and a BM25 index. All storage
 is free and local; only the LLM call (if using Ollama) runs locally too.
 

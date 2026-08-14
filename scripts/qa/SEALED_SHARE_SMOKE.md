@@ -94,7 +94,7 @@ Watch the OneDrive system-tray icon until everything is uploaded. **Do not skip 
 # OWNER machine
 axon --project-seal research   # (no-op — already sealed)
 # Generate via REST since the sealed-share generate is auto-detected:
-curl -X POST http://localhost:8000/share/generate \
+curl -X POST http://localhost:8420/share/generate \
      -H "Content-Type: application/json" \
      -d '{"project":"research","grantee":"bob"}'
 ```
@@ -153,7 +153,7 @@ ls "$env:LOCALAPPDATA\Temp\axon-sealed-*"
 
 ```bash
 # OWNER machine
-curl -X POST http://localhost:8000/share/revoke \
+curl -X POST http://localhost:8420/share/revoke \
      -H "Content-Type: application/json" \
      -d '{"key_id":"ssk_xxx","project":"research"}'
 ```
@@ -180,7 +180,7 @@ axon --project mounts/alice_research "another question?"
 
 ```bash
 # OWNER — hard revoke rotates the project DEK + invalidates ALL shares
-curl -X POST http://localhost:8000/share/revoke \
+curl -X POST http://localhost:8420/share/revoke \
      -H "Content-Type: application/json" \
      -d '{"key_id":"ssk_xxx","project":"research","rotate":true}'
 ```
@@ -312,7 +312,7 @@ axon --share-generate research bob
 Or via the REST API (auto-detects sealed):
 
 ```bash
-curl -X POST http://localhost:8000/share/generate \
+curl -X POST http://localhost:8420/share/generate \
      -H "Content-Type: application/json" \
      -d '{"project":"research","grantee":"bob"}'
 ```

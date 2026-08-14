@@ -36,13 +36,13 @@ def resolve_api_base(config: Any) -> str:
     """Return the base URL of the axon-api server a client should talk to.
 
     Precedence: ``AXON_API_BASE`` / ``RAG_API_BASE`` env vars, then the
-    ``api_host``/``api_port`` config fields (default ``127.0.0.1:8000``).
+    ``api_host``/``api_port`` config fields (default ``127.0.0.1:8420``).
     """
     env = os.getenv("AXON_API_BASE") or os.getenv("RAG_API_BASE")
     if env:
         return env.rstrip("/")
     host = getattr(config, "api_host", None) or "127.0.0.1"
-    port = getattr(config, "api_port", None) or 8000
+    port = getattr(config, "api_port", None) or 8420
     return f"http://{host}:{port}"
 
 
@@ -206,7 +206,7 @@ def remote_ingest(
 
 # --- server store lock (singleton guard) ---------------------------------
 # A per-store lockfile records which axon-api process currently serves a
-# store. A second axon-api on the SAME store (e.g. :8000 and :8010 both
+# store. A second axon-api on the SAME store (e.g. :8420 and :9100 both
 # pointing at one AxonStore) means two full brains writing the same
 # TurboQuantDB files — the exact concurrent-access hazard the CLI routing
 # avoids. On startup axon-api checks this lock and refuses (unless

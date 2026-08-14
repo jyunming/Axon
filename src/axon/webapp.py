@@ -401,7 +401,7 @@ with st.sidebar:
     # ── Deprecation notice — this UI is superseded by the native web GUI ──
     st.warning(
         "**This UI is deprecated.** Use the native web GUI at "
-        "`http://localhost:8000/gui/` (run `axon-api`). It is the maintained "
+        "`http://localhost:8420/gui/` (run `axon-api`). It is the maintained "
         "surface and exposes the graph explorer, knowledge base and "
         "governance console.",
         icon="⚠️",

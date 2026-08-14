@@ -22,7 +22,7 @@ Environment variables
 ---------------------
 
 
-RAG_API_BASE  : Base URL of the running Axon API  (default: http://localhost:8000)
+RAG_API_BASE  : Base URL of the running Axon API  (default: http://localhost:8420)
 
 
 RAG_API_KEY   : API key for X-API-Key header      (default: empty — auth disabled)
@@ -58,7 +58,7 @@ from mcp.server.fastmcp import FastMCP
 # ---------------------------------------------------------------------------
 
 
-API_BASE: str = os.getenv("RAG_API_BASE", "http://localhost:8000").rstrip("/")
+API_BASE: str = os.getenv("RAG_API_BASE", "http://localhost:8420").rstrip("/")
 
 
 API_KEY: str | None = os.getenv("RAG_API_KEY") or None

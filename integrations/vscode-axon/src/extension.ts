@@ -72,7 +72,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   state.outputChannel = vscode.window.createOutputChannel('Axon');
   context.subscriptions.push(state.outputChannel);
   const config = vscode.workspace.getConfiguration('axon');
-  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+  const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
   const autoStart = config.get<boolean>('autoStart', true);
   state.outputChannel.appendLine(`Axon extension activating. API base: ${apiBase}`);
   if (autoStart) {
@@ -124,7 +124,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('axon.showGovernancePanel', () => showGovernancePanel(context)),
     vscode.commands.registerCommand('axon.configSetup', async () => {
       const cfg = vscode.workspace.getConfiguration('axon');
-      const apiBase = cfg.get<string>('apiBase', 'http://127.0.0.1:8000');
+      const apiBase = cfg.get<string>('apiBase', 'http://127.0.0.1:8420');
       const apiKey = cfg.get<string>('apiKey', '');
       await runConfigSetupWizard(apiBase, apiKey);
     }),

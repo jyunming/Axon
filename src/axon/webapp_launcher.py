@@ -31,7 +31,7 @@ DEPRECATION_NOTICE = (
     "in a future release.\n"
     "Use the native web GUI instead — it is served by the API server:\n"
     "\n"
-    "    axon-api            # then open http://localhost:8000/gui/\n"
+    "    axon-api            # then open http://localhost:8420/gui/\n"
     "\n"
     "The native GUI is the maintained surface and exposes more capability "
     "(graph explorer, governance console, knowledge base).\n"
@@ -44,7 +44,7 @@ MISSING_STREAMLIT_NOTICE = (
     "\n"
     "Preferred — use the native web GUI, which needs no extra dependency:\n"
     "\n"
-    "    axon-api            # then open http://localhost:8000/gui/\n"
+    "    axon-api            # then open http://localhost:8420/gui/\n"
     "\n"
     "Or install the deprecated UI explicitly:\n"
     "\n"
@@ -80,7 +80,7 @@ def main_ui() -> None:
     """
     warnings.warn(
         "axon-ui (Streamlit) is deprecated; use the native web GUI at "
-        "http://localhost:8000/gui/ served by axon-api.",
+        "http://localhost:8420/gui/ served by axon-api.",
         DeprecationWarning,
         stacklevel=2,
     )

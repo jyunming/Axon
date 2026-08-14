@@ -1,9 +1,9 @@
 # Axon REST API Reference
 
-Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 8000).
+Full endpoint reference for the Axon FastAPI server (`axon-api`, default port 8420).
 
-For interactive exploration, open `http://localhost:8000/docs` (Swagger UI) or
-`http://localhost:8000/redoc` after starting the server. Both pages serve a
+For interactive exploration, open `http://localhost:8420/docs` (Swagger UI) or
+`http://localhost:8420/redoc` after starting the server. Both pages serve a
 branded favicon and wordmark from `/brand/*` (static mount of
 `src/axon/brand/`); `/favicon.ico` redirects (302) to `/brand/axon-favicon.svg`.
 These auxiliary paths bypass the X-API-Key middleware (`/brand/`, `/gui/`,

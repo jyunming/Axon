@@ -98,7 +98,7 @@ export async function discoverPythonPath(): Promise<string> {
 
 export async function ensureServerRunning(apiBase: string, context: vscode.ExtensionContext): Promise<void> {
   const portMatch = apiBase.match(/:(\d+)/);
-  const port = portMatch ? parseInt(portMatch[1], 10) : 8000;
+  const port = portMatch ? parseInt(portMatch[1], 10) : 8420;
   if (await isAxonRunning(apiBase)) {
     state.outputChannel.appendLine('Axon API already running.');
     // Capture PID so we can stop it on deactivate even if we didn't spawn it

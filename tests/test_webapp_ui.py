@@ -103,4 +103,4 @@ class TestWebappUI:
         assert not at.exception
         banners = [str(w.value) for w in at.warning]
         assert any("deprecated" in b.lower() for b in banners), banners
-        assert any("8000/gui/" in b for b in banners), banners
+        assert any("8420/gui/" in b for b in banners), banners

@@ -22,7 +22,7 @@ export class AxonSearchTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const { query, top_k: topK = 5, threshold, filters, project } = options.input;
     try {
@@ -67,7 +67,7 @@ export class AxonQueryTool implements vscode.LanguageModelTool<any> {
   }
   async invoke(options: vscode.LanguageModelToolInvocationOptions<any>, _token: vscode.CancellationToken) {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     const { query, top_k, filters, project } = options.input;
     try {
@@ -102,7 +102,7 @@ export function makeChatHandler(extensionContext: vscode.ExtensionContext) {
     _token: vscode.CancellationToken,
   ): Promise<void> {
     const config = vscode.workspace.getConfiguration('axon');
-    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8000');
+    const apiBase = config.get<string>('apiBase', 'http://127.0.0.1:8420');
     const apiKey = config.get<string>('apiKey', '');
     try {
       const result = await httpPost(`${apiBase}/query`, { query: request.prompt, discuss: false, raptor: false, graph_rag: false }, apiKey, 20_000, 'vscode_chat_participant');

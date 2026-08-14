@@ -12,7 +12,7 @@ AxonStore is always active. By default your data lives at `~/.axon/AxonStore/<us
 
 ```bash
 # REST
-curl http://localhost:8000/store/status
+curl http://localhost:8420/store/status
 # MCP tool
 get_store_status()
 # Returns: {"initialized": true, "path": "~/.axon/...", "store_version": 2, ...}
@@ -49,7 +49,7 @@ By default Axon uses `~/.axon` as the store base. To move your data to a shared 
 **REST API:**
 
 ```bash
-curl -X POST http://localhost:8000/store/init \
+curl -X POST http://localhost:8420/store/init \
   -H "Content-Type: application/json" \
   -d '{"base_path": "/data/axon-store", "persist": true}'
 ```
@@ -89,7 +89,7 @@ Check your current store identity and which path is active.
 **REST API:**
 
 ```bash
-curl http://localhost:8000/store/whoami
+curl http://localhost:8420/store/whoami
 # Response: {"username": "alice", "store_path": "/data/axon-store/AxonStore", "user_dir": "/data/axon-store/AxonStore/alice"}
 ```
 
@@ -126,14 +126,14 @@ Two share modes ship in v0.4.0:
 
 ```bash
 # Plaintext share (project not sealed)
-curl -X POST http://localhost:8000/share/generate \
+curl -X POST http://localhost:8420/share/generate \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "grantee": "bob"}'
 # Response: {"share_string": "eyJ...", "key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "owner": "<your-username>", "expires_at": null}
 
 # Sealed share (project sealed) — same call, sealed envelope returned.
 # v0.4.0: ttl_days is honoured for sealed shares via signed expiry sidecar.
-curl -X POST http://localhost:8000/share/generate \
+curl -X POST http://localhost:8420/share/generate \
   -H "Content-Type: application/json" \
   -d '{"project": "research", "grantee": "alice", "ttl_days": 30}'
 # Response: {"share_string": "U0VBTEVE...", "key_id": "ssk_a4f9c1d2", "project": "research", "grantee": "alice", "owner": "<your-username>", "security_mode": "sealed_v1", "expires_at": "2026-06-03T01:00:00Z"}
@@ -216,7 +216,7 @@ The grantee redeems the share string to mount the sharer's project locally.
 **REST API:**
 
 ```bash
-curl -X POST http://localhost:8000/share/redeem \
+curl -X POST http://localhost:8420/share/redeem \
   -H "Content-Type: application/json" \
   -d '{"share_string": "eyJ..."}'
 # Response: {"mount_name": "alice_my-project", "owner": "alice", "project": "my-project", "descriptor": {...}}
@@ -258,12 +258,12 @@ Two revoke flavors:
 
 ```bash
 # Soft revoke a plaintext share
-curl -X POST http://localhost:8000/share/revoke \
+curl -X POST http://localhost:8420/share/revoke \
   -H "Content-Type: application/json" \
   -d '{"key_id": "sk_a1b2c3d4"}'
 
 # Hard revoke a sealed share — rotate DEK + invalidate cache
-curl -X POST http://localhost:8000/share/revoke \
+curl -X POST http://localhost:8420/share/revoke \
   -H "Content-Type: application/json" \
   -d '{"key_id": "ssk_a4f9c1d2", "project": "research", "rotate": true}'
 ```
@@ -289,7 +289,7 @@ View all outgoing shares (grants you created) and incoming mounts (shares you re
 **REST API:**
 
 ```bash
-curl http://localhost:8000/share/list
+curl http://localhost:8420/share/list
 # Response:
 # {
 #   "sharing": [{"key_id": "sk_a1b2c3d4", "project": "my-project", "grantee": "bob", "revoked": false, "created_at": "..."}],

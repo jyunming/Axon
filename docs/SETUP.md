@@ -650,7 +650,7 @@ OLLAMA_EMBED_MODEL=nomic-embed-text
 # API server settings
 # Bind to localhost by default for local setups. For Docker/Compose deployments, set AXON_HOST=0.0.0.0 so the API is reachable from the host/other containers (only do this behind proper network/auth controls).
 AXON_HOST=127.0.0.1
-AXON_PORT=8000
+AXON_PORT=8420
 # Vector store storage (Chroma-only — ignored for the default TurboQuantDB and other providers)
 # Where ChromaDB stores its data when `vector_store.provider: chroma`
 CHROMA_DATA_PATH=./chroma_data
@@ -687,13 +687,13 @@ You should see:
 INFO:     Started server process [12345]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Uvicorn running on http://0.0.0.0:8420
 ```
 
 ### Step 2: Check health
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8420/health
 ```
 
 Expected:
@@ -714,7 +714,7 @@ echo "The capital of France is Paris. Paris is known for the Eiffel Tower." > ./
 
 Ingest it (replace the path with the absolute path to the file you just created):
 ```bash
-curl -X POST http://localhost:8000/ingest \
+curl -X POST http://localhost:8420/ingest \
   -H "Content-Type: application/json" \
   -d '{"path": "/absolute/path/to/test_doc.txt"}'
 ```
@@ -727,7 +727,7 @@ Expected:
 ### Step 4: Run a test query
 
 ```bash
-curl -X POST http://localhost:8000/query \
+curl -X POST http://localhost:8420/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What is the capital of France?"}'
 ```
@@ -738,7 +738,7 @@ Expected response includes the answer "Paris" synthesized from the ingested docu
 
 **Built-in WebGUI** — served by `axon-api` (already running from Step 4):
 
-Open [http://localhost:8000/gui/](http://localhost:8000/gui/) in your browser. No extra command needed.
+Open [http://localhost:8420/gui/](http://localhost:8420/gui/) in your browser. No extra command needed.
 
 This is the maintained browser surface: chat, Graph Explorer, Knowledge Base,
 Governance console and Settings.
@@ -783,7 +783,7 @@ The two env vars are the same for every client:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `RAG_API_BASE` | `http://localhost:8000` | Where `axon-api` is running |
+| `RAG_API_BASE` | `http://localhost:8420` | Where `axon-api` is running |
 | `RAG_API_KEY` | *(empty)* | API key — leave blank unless you enabled auth |
 
 ---
@@ -800,7 +800,7 @@ The two env vars are the same for every client:
       "command": "axon-mcp",
       "args": [],
       "env": {
-        "RAG_API_BASE": "http://localhost:8000",
+        "RAG_API_BASE": "http://localhost:8420",
         "RAG_API_KEY": ""
       }
     }
@@ -824,7 +824,7 @@ The two env vars are the same for every client:
 | Linux / macOS (venv) | `/home/<you>/Axon/venv/bin/axon-mcp` |
 | WSL | Use `"command": "/home/<you>/Axon/venv/bin/python"` with `"args": ["-m", "axon.mcp_server"]` |
 
-**Shared team setup:** run `axon-api` on a shared server, then set `RAG_API_BASE` to `http://<server-ip>:8000` in each user's config. The owner ingests; everyone else queries.
+**Shared team setup:** run `axon-api` on a shared server, then set `RAG_API_BASE` to `http://<server-ip>:8420` in each user's config. The owner ingests; everyone else queries.
 
 ---
 
@@ -832,7 +832,7 @@ The two env vars are the same for every client:
 
 ```bash
 # One-liner (adds axon to your global Claude Code MCP config)
-claude mcp add axon axon-mcp --env RAG_API_BASE=http://localhost:8000
+claude mcp add axon axon-mcp --env RAG_API_BASE=http://localhost:8420
 ```
 
 Or edit `~/.claude/settings.json` directly:
@@ -842,7 +842,7 @@ Or edit `~/.claude/settings.json` directly:
   "mcpServers": {
     "axon": {
       "command": "axon-mcp",
-      "env": { "RAG_API_BASE": "http://localhost:8000" }
+      "env": { "RAG_API_BASE": "http://localhost:8420" }
     }
   }
 }
@@ -863,7 +863,7 @@ Create `.cursor/mcp.json` in your project root:
   "mcpServers": {
     "axon": {
       "command": "axon-mcp",
-      "env": { "RAG_API_BASE": "http://localhost:8000" }
+      "env": { "RAG_API_BASE": "http://localhost:8420" }
     }
   }
 }
@@ -882,7 +882,7 @@ Codex uses TOML format. Add a block to `~/.codex/config.toml`:
 command = "axon-mcp"
 args = []
 [mcp_servers.axon.env]
-RAG_API_BASE = "http://localhost:8000"
+RAG_API_BASE = "http://localhost:8420"
 ```
 
 Codex launches the server automatically when a session starts. If `axon-mcp` is not on PATH, replace `"axon-mcp"` with the full binary path (see platform notes under VS Code above).
@@ -901,7 +901,7 @@ Add an `mcpServers` block to `~/.gemini/settings.json` (create the file if it do
     "axon": {
       "command": "axon-mcp",
       "env": {
-        "RAG_API_BASE": "http://localhost:8000"
+        "RAG_API_BASE": "http://localhost:8420"
       }
     }
   }
@@ -924,7 +924,7 @@ Edit (or create) `~/Library/Application Support/Claude/claude_desktop_config.jso
     "axon": {
       "command": "axon-mcp",
       "env": {
-        "RAG_API_BASE": "http://localhost:8000"
+        "RAG_API_BASE": "http://localhost:8420"
       }
     }
   }
@@ -940,7 +940,7 @@ Restart Claude Desktop. Axon tools appear in the tool picker automatically.
 Open Codex Desktop → Settings → MCP Servers → Add new → choose **stdio** transport:
 
 - **Command:** `axon-mcp`
-- **Environment:** `RAG_API_BASE=http://localhost:8000` (add `RAG_API_KEY=<your-key>` if you set one in config.yaml)
+- **Environment:** `RAG_API_BASE=http://localhost:8420` (add `RAG_API_KEY=<your-key>` if you set one in config.yaml)
 
 Save and restart. All Axon tools will be listed in the agent tool picker.
 
@@ -987,7 +987,7 @@ The Axon VS Code extension (`axon-copilot`) gives GitHub Copilot direct access t
 
 - **VS Code** 1.93 or later
 - **GitHub Copilot** extension installed and signed in (free tier works; Copilot Chat required for tool use)
-- **Axon API** running (`axon-api`) — the extension connects to it at `http://localhost:8000` by default
+- **Axon API** running (`axon-api`) — the extension connects to it at `http://localhost:8420` by default
 
 ### 1. Install the VSIX
 
@@ -1045,7 +1045,7 @@ Open VS Code Settings (Ctrl+,) and search for `axon`:
 
 | Setting | Default | Description |
 |---|---|---|
-| `axon.apiBase` | `http://localhost:8000` | URL of your running `axon-api` server |
+| `axon.apiBase` | `http://localhost:8420` | URL of your running `axon-api` server |
 | `axon.apiKey` | *(empty)* | API key if `RAG_API_KEY` is set on the server |
 | `axon.topK` | `5` | Default number of chunks returned per query |
 | `axon.autoStart` | `true` | Auto-start `axon-api` on extension activate (Linux/macOS only) |
@@ -1059,7 +1059,7 @@ Or edit `settings.json` directly:
 
 ```json
 {
-  "axon.apiBase": "http://localhost:8000",
+  "axon.apiBase": "http://localhost:8420",
   "axon.topK": 10,
   "axon.autoStart": true
 }
@@ -1227,11 +1227,11 @@ The Axon extension also registers a `@axon` chat participant. It is a **conversa
 **Copilot says it cannot find Axon tools**
 - Ensure the VSIX is installed and VS Code has been reloaded after install
 - Check the extension is enabled (Extensions panel → search "Axon Copilot")
-- Confirm `axon-api` is running: `curl http://localhost:8000/health`
+- Confirm `axon-api` is running: `curl http://localhost:8420/health`
 
 **Tools appear but requests fail with connection errors**
 - Verify `axon.apiBase` matches where `axon-api` is listening
-- On Windows, `axon-api` may bind to `127.0.0.1` — make sure `axon.apiBase` uses `http://localhost:8000` (not `http://0.0.0.0:8000`)
+- On Windows, `axon-api` may bind to `127.0.0.1` — make sure `axon.apiBase` uses `http://localhost:8420` (not `http://0.0.0.0:8420`)
 
 **`autoStart` does not work (Linux/macOS)**
 - Check `axon.pythonPath` is set correctly, or run `axon` once from the terminal to write `~/.axon/.python_path`
@@ -1302,9 +1302,9 @@ For common errors and step-by-step fixes, see [TROUBLESHOOTING.md](TROUBLESHOOTI
 | Pull vision model | `ollama pull llava` |
 | List pulled models | `ollama list` |
 | Start API | `axon-api` or `make run-api` |
-| Open WebGUI | `http://localhost:8000/gui/` (when `axon-api` is running) |
+| Open WebGUI | `http://localhost:8420/gui/` (when `axon-api` is running) |
 | Start Streamlit UI (deprecated) | `axon-ui` or `make run-ui` |
-| Health check | `curl http://localhost:8000/health` |
+| Health check | `curl http://localhost:8420/health` |
 | Ingest a file | `axon --ingest ./path/to/file` |
 | Run a query | `axon "your question"` |
 

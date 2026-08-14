@@ -57,14 +57,14 @@ clean:  ## Clean build artifacts and caches
 run-cli:  ## Run the interactive REPL CLI (local, no Docker needed)
 	axon
 
-run-api:  ## Run the FastAPI server (also serves the web GUI at :8000/gui/)
+run-api:  ## Run the FastAPI server (also serves the web GUI at :8420/gui/)
 	axon-api
 
-run-ui:  ## Run the Streamlit UI (DEPRECATED — use the web GUI at :8000/gui/)
+run-ui:  ## Run the Streamlit UI (DEPRECATED — use the web GUI at :8420/gui/)
 	axon-ui
 
 run-all:  ## Run API + UI together (local, no Docker)
-	@echo "Starting API on :8000 and UI on :8501 ..."
+	@echo "Starting API on :8420 and UI on :8501 ..."
 	axon-api & axon-ui
 
 docker-build:  ## Build Docker image
