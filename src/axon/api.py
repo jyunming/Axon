@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import argparse
+import errno
 import hmac
 import logging
 import os
+import sys
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -176,7 +180,7 @@ async def lifespan(app: FastAPI):
                 "AXON_ALLOW_MULTIPLE_SERVERS=1 to run a second one anyway."
             )
         _sc.write_store_lock(
-            config, os.getenv("AXON_HOST", "0.0.0.0"), int(os.getenv("AXON_PORT", "8000"))
+            config, os.getenv("AXON_HOST", "0.0.0.0"), int(os.getenv("AXON_PORT", "8420"))
         )
         # Option A: auto-init store on first run so the user never hits a
         # "store not found" failure on a fresh install.
@@ -520,11 +524,89 @@ from axon.api_schemas import (  # noqa: E402,F401
 )
 
 
-def main():
-    """Main entry point for axon-api command."""
-    host = os.getenv("AXON_HOST", "0.0.0.0")
-    port = int(os.getenv("AXON_PORT", "8000"))
-    uvicorn.run("axon.api:app", host=host, port=port)
+def _resolve_bind_address(
+    args: argparse.Namespace, env: Mapping[str, str] | None = None
+) -> tuple[str, int]:
+    """Resolve the (host, port) axon-api should bind to.
+
+    Host precedence: --host > AXON_HOST > "0.0.0.0". Deliberately does NOT
+    fall through to config.yaml's ``api_host`` — that field's 127.0.0.1
+    default is a *client's* "where should I look" assumption, not a
+    server bind-interface choice; using it here would silently narrow the
+    server from all-interfaces to localhost-only for anyone relying on the
+    old default.
+
+    Port precedence: --port > AXON_PORT > config.yaml's ``api.port`` (via
+    ``AxonConfig.load()``, which itself already carries the hardcoded
+    default when nothing sets it — so this single call covers both "config
+    sets it explicitly" and "nothing sets it, use the default").
+    ``AxonConfig.load()`` is only invoked when actually needed (port not
+    given via flag/env), so a fully-specified invocation never touches
+    config.yaml at all.
+    """
+    if env is None:
+        env = os.environ
+    host = args.host or env.get("AXON_HOST") or "0.0.0.0"
+
+    port = args.port
+    if port is None:
+        port_env = env.get("AXON_PORT")
+        port = int(port_env) if port_env else None
+    if port is None:
+        config_path = args.config or env.get("AXON_CONFIG_PATH")
+        port = AxonConfig.load(config_path).api_port
+
+    if not (1 <= port <= 65535):
+        raise ValueError(f"Invalid port {port}: must be between 1 and 65535.")
+    return host, port
+
+
+def main(argv: list | None = None):
+    """Main entry point for axon-api command.
+
+    ``argv`` defaults to ``None``, which makes ``argparse`` read
+    ``sys.argv[1:]`` as usual — the parameter exists so tests can pass an
+    explicit list instead of depending on (or fighting with) the real
+    process argv.
+    """
+    parser = argparse.ArgumentParser(prog="axon-api", description="Run the Axon REST API server.")
+    parser.add_argument("--host", default=None, help="Bind host (default: AXON_HOST, or 0.0.0.0).")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Bind port (default: AXON_PORT, config.yaml's api.port, or 8420).",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to config.yaml (default: AXON_CONFIG_PATH, or the default user config location).",
+    )
+    args = parser.parse_args(argv)
+
+    host, port = _resolve_bind_address(args)
+    # Propagate the resolved values so lifespan()'s independent env-var read
+    # (used to write the single-instance lock file, see server_client.py)
+    # records the address actually bound to, regardless of whether it came
+    # from --port, an env var, or config.yaml. Keeps the single-instance
+    # guard's discovery mechanism accurate through a flexible port.
+    os.environ["AXON_HOST"] = host
+    os.environ["AXON_PORT"] = str(port)
+    if args.config:
+        os.environ["AXON_CONFIG_PATH"] = args.config
+
+    try:
+        uvicorn.run("axon.api:app", host=host, port=port)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            print(
+                f"\nCould not bind {host}:{port} — the port is already in use "
+                f"(by another process, or a stray axon-api instance). Try "
+                f"`axon-api --port <other>` or free up {port} first.\n",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
+        raise
 
 
 if __name__ == "__main__":
