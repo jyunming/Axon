@@ -5,3 +5,4 @@ For user-facing guides, see the [docs/](../) directory.
 
 - [SEALED_SHARING_DESIGN.md](SEALED_SHARING_DESIGN.md) — AES-256-GCM encrypted sharing design, threat model, key hierarchy, phase plan
 - [DYNAMIC_GRAPH_ROADMAP.md](DYNAMIC_GRAPH_ROADMAP.md) — Dynamic graph backend implementation roadmap
+- [GRAPH_BACKEND_NEXT_STEPS.md](GRAPH_BACKEND_NEXT_STEPS.md) — prioritized task list for remaining graph-backend roadmap work, written as a session handoff
