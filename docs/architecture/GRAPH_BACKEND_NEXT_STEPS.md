@@ -8,16 +8,17 @@ so a fresh Claude Code conversation can pick this up with zero prior context
 ## Where things stand
 
 Branch `feat/wire-graph-backend-to-production` (off `main`, currently at
-`main`'s `d08fb1a`) has one commit, `0f8c9c1`, **not yet pushed, no PR
-opened** — waiting on explicit user approval to push per this repo's
-standing workflow rule (see `CLAUDE.md` "Branch Workflow" and the user's
-saved feedback memory on PR approval).
+`main`'s `d08fb1a`) has the wiring commit (`0f8c9c1`) plus the M2 Phase 1
+commit(s) described below — **not yet pushed, no PR opened** — waiting on
+explicit user approval to push per this repo's standing workflow rule (see
+`CLAUDE.md` "Branch Workflow" and the user's saved feedback memory on PR
+approval).
 
-That commit closed the headline finding from a 4-agent codebase audit: the
-`GraphBackend` abstraction (`src/axon/graph_backends/`) was real,
-well-tested code that was never reachable — `get_graph_backend()` was never
-called from `main.py`, so `brain._graph_backend` was always `None` and every
-`/graph/*` surface silently reported `"none"`. That commit:
+The wiring commit (`0f8c9c1`) closed the headline finding from a 4-agent
+codebase audit: the `GraphBackend` abstraction (`src/axon/graph_backends/`)
+was real, well-tested code that was never reachable — `get_graph_backend()`
+was never called from `main.py`, so `brain._graph_backend` was always `None`
+and every `/graph/*` surface silently reported `"none"`. That commit:
 
 - Added `NoneGraphBackend`
 - Attached + resynced `brain._graph_backend` in `__init__`/`switch_project()`/
@@ -40,6 +41,10 @@ A second, smaller finding from the same audit — fresh installs getting
 `max_tokens=2048` instead of the dataclass default `8192` — was fixed
 separately and already merged (PR #138, `d08fb1a`).
 
+**M2 Phase 1 (mechanical redirects + backend fixes) has since landed** on
+this same branch — see the updated "Priority 1" section below for what
+shipped and what's still open (Phases 2-4).
+
 ## Priority 1 — M2: Backend Boundary Refactor (the big one)
 
 **Goal:** `AxonBrain` stops inheriting `GraphRagMixin`; every graph
@@ -47,46 +52,118 @@ operation is routed through `self._graph_backend.*` instead. This is the
 prerequisite for the rest of v0.4 (routing the main `/query` pipeline
 through the backend abstraction) and for v1.0 hardening.
 
-**Current state, verified:**
-- `src/axon/main.py:170-171` — `class AxonBrain(..., GraphRagMixin, ...)`
-  still directly inherits the mixin.
-- `tests/test_graph_backend_base.py::TestPhase2ShimRemoval::test_axon_brain_does_not_inherit_graphragmixin`
-  is the canary — currently `@pytest.mark.xfail(strict=False)`. When M2 is
-  done, flip it to `strict=True` (or just remove the xfail decorator) so it
-  becomes a hard gate against regression.
+The M2 exit criteria is "no direct access of `_entity_graph` /
+`_relation_graph` / `_community_summaries` / `_claims_graph` outside the
+adapter [`GraphRagBackend`]." A pre-work audit (3 Explore agents mapping
+every occurrence of those four attribute names outside
+`src/axon/graph_rag.py`/`src/axon/graph_backends/graphrag_backend.py`, plus
+reading the `GraphBackend` Protocol, all four concrete backends, and the
+test infra) found ~176 occurrences across 12 files, of very different risk —
+so M2 is being landed in phases rather than one sweep. **`AxonBrain` still
+inherits `GraphRagMixin`** (`src/axon/main.py` class declaration) and the
+`test_graph_backend_base.py::TestPhase2ShimRemoval::test_axon_brain_does_not_inherit_graphragmixin`
+canary stays `@pytest.mark.xfail(strict=False)` until Phase 4 below lands —
+don't flip it early.
 
-**How to scope the work:** the roadmap's own M2 exit criteria is "no direct
-access of `_entity_graph` / `_relation_graph` / `_community_summaries` /
-`_claims_graph` outside the adapter [`GraphRagBackend`]." Start by grepping
-for those four attribute names across `src/axon/` outside
-`src/axon/graph_rag.py` and `src/axon/graph_backends/graphrag_backend.py` —
-every hit outside those two files is a call site that needs to route through
-`brain._graph_backend` instead. Likely touches `query_router.py` (core
-retrieval), `api_routes/graph.py`, `graph_render.py` (partially already
-fixed — `_resolve_graph_payload()` now prefers `backend.graph_data()`, but
-check for other direct reads), `repl.py`, `mcp_server.py`, `agent.py`.
+### Phase 1 — SHIPPED (this branch)
 
-**Also required for the M2 exit criteria (already-written, not-yet-passing test):**
-`tests/test_architecture.py` is described in the roadmap doc (M1 section) as
-using Python's `ast` module to enforce zero direct attribute access, but
-**this file does not exist yet** — it needs to be written as part of this
-work, not just discovered failing.
+Mechanical redirects + two real correctness bugs fixed along the way:
 
-**Watch out for:** `tests/test_graphrag_parity.py` (the M1 regression
-harness) must stay green throughout — it's the thing that proves GraphRAG's
-externally-visible behavior doesn't drift during the refactor. Per the
-audit: this suite currently uses `MagicMock` for its LLM boundary and
-**never actually consumes** the real fixture corpus at
-`tests/fixtures/graphrag_parity/*` (6 scenarios exist on disk: basic_entity,
-multi_entity, relations, community, empty_doc, unicode_stress) — worth
-wiring the real fixtures in before or during M2 so the parity check is
-actually meaningful, not just decorative.
+- **`GraphRagBackend.delete_documents()`** (`graph_backends/graphrag_backend.py`)
+  now delegates to `AxonBrain._prune_entity_graph()` instead of a
+  reimplementation that silently skipped relation-graph pruning, claims-graph
+  pruning, token-index cleanup, frequency recompute, and disk persistence.
+- **`GraphRagBackend.clear()`** now delegates to a new
+  `GraphRagMixin._reset_graph_state()` (`graph_rag.py`) — the single source
+  of truth for "reset all in-memory graph state," covering all 14 fields
+  instead of the 4 it used to hand-clear. Memory-only by design (no
+  persistence) — it's also used by read-only scope switching, which must
+  never write project data to disk.
+- **`main.py::_switch_to_scope`** now constructs/forces the right backend
+  *before* clearing (previously cleared 14 attributes directly, then
+  reconstructed the backend after — meaning a stale non-GraphRAG backend,
+  e.g. `dynamic_graph`, was never actually asked to clear anything). Fixed
+  as part of the redirect; see `TestGraphBackendWiring::test_switch_to_scope_clears_stale_graph_state_from_previous_project`
+  in `tests/test_main.py` for the regression test.
+- **`collection_ops.py::clear_active_project`** now calls
+  `brain._graph_backend.clear()` for the in-memory reset (correctly clears
+  non-GraphRAG backends too — a gap before) while keeping its own
+  `_save_*()` calls for on-disk persistence.
+- **Mechanical consumer redirects** to `brain._graph_backend.status()` /
+  `.delete_documents()` / `FinalizationResult.communities_built`, fully
+  cleaning `agent.py`, `cli.py`, `collection_ops.py`, `api_routes/ingest.py`.
+  `repl.py`, `api_routes/graph.py`, `api_routes/governance.py` each keep
+  exactly one documented, intentional direct-read fallback (used only when
+  no backend is attached at all, or `backend.status()` itself raises) —
+  matching the graceful-degradation pattern already established in
+  `repl.py`'s `/graph status` before this phase.
+- **`api_routes/governance.py::governance_graph_rebuild`** also had an
+  unguarded `len(brain._community_summaries)` (no `getattr` fallback) — a
+  real crash-on-refactor risk, fixed by routing through
+  `brain._graph_backend.finalize()` like `/graph/finalize` already does.
+- **`tests/test_architecture.py`** written (was named but never created by
+  M1) — AST-based (not grep), three tiers: `TestPhase1FilesHaveNoDirectAccess`
+  (strict, zero violations, the regression gate for this phase's cleaned
+  files), `TestKnownFallbackFilesHaveNotGrown` (pinned count for the
+  documented fallback sites above), `TestFullComplianceTarget` (xfail,
+  tracks `main.py`/`query_router.py` — the remaining work below).
 
-**Once M2 lands**, the other half of v0.4 becomes unblocked: plumb
-`_graph_backend.retrieve()` into the main `/query` pipeline in
-`query_router.py` (today only `POST /graph/retrieve` uses the backend
-directly; the main query path doesn't). See the "v0.4" section of
-`docs/architecture/DYNAMIC_GRAPH_ROADMAP.md` for the full deliverable list.
+**Explicitly out of scope for Phase 1** (left for later phases, see below):
+`main.py`'s `__init__`/load paths, the descendant-project graph-merge block
+in `switch_project`, and all of `main.py::ingest()`; all of `query_router.py`;
+`graph_render.py::build_graph_payload()`.
+
+### Phase 2 — next up
+
+- Move `graph_render.py::build_graph_payload()`'s body (reads
+  `_entity_graph`/`_relation_graph` directly to build the nodes/links list)
+  into `graph_rag.py` or `graphrag_backend.py` — it's called by
+  `GraphRagBackend.graph_data()` but currently lives outside the whitelist.
+- Wire the real fixtures at `tests/fixtures/graphrag_parity/*` (6 scenarios:
+  basic_entity, multi_entity, relations, community, empty_doc,
+  unicode_stress) into `tests/test_graphrag_parity.py` — that suite is
+  currently pure `MagicMock` adapter-contract testing and never actually
+  exercises real ingest → extraction → community-build → query → render
+  end to end, despite the roadmap's M1 section describing exactly that.
+
+### Phase 3 — `query_router.py`'s retrieval path (20 occurrences)
+
+- `_expand_with_entity_graph()` (`query_router.py:251`) is the *real
+  implementation* `GraphRagBackend.retrieve()` already delegates to, but it
+  physically lives outside the whitelist. Decide: move its body into
+  `graphrag_backend.py`/`graph_rag.py`, or treat it as an explicit,
+  documented whitelist exception.
+- `query()`/`query_stream()`/`_execute_retrieval_body()` use
+  `_entity_graph`/`_community_summaries` as truthy guards before calling
+  `_local_search_context()`/`_generate_community_summaries()`/
+  `_global_search_map_reduce()`/`_expand_with_entity_graph()` — these are
+  the most mechanically-redirectable sites (e.g. a new
+  `has_local_context()`/`has_community_summaries()` Protocol method), but
+  the guarded bodies still call mixin methods directly until those, too,
+  get pulled behind the backend.
+- This is also where the other half of v0.4 unblocks: plumb
+  `_graph_backend.retrieve()` into the main `/query` pipeline for real
+  (today only `POST /graph/retrieve` uses the backend directly — verified
+  zero production call sites for `.retrieve()` otherwise). See the "v0.4"
+  section of `docs/architecture/DYNAMIC_GRAPH_ROADMAP.md`.
+
+### Phase 4 — `main.py`'s load/init/switch paths + `ingest()` (biggest, riskiest)
+
+- `__init__`'s load block, `switch_project`'s reload-from-disk block, and
+  the ~140-line descendant-project graph-merge block in `switch_project`
+  (reads raw msgpack/JSON off disk and hand-merges into all four graph
+  dicts) — none of these have a backend method to redirect to yet; need new
+  `GraphBackend` Protocol methods (e.g. `load()`, `merge_descendants()`).
+- `main.py::ingest()`'s ~370-line entity/relation/claims extraction and
+  merge pipeline — `GraphRagBackend.ingest()` today is a confirmed no-op
+  (bookkeeping only; real extraction happens entirely inside
+  `AxonBrain.ingest()`). Closing this out means designing new Protocol
+  methods (e.g. `add_entities`/`add_relations`/`add_claims`) *and* moving
+  the extraction logic behind them — not a mechanical redirect.
+- Only once this phase lands: flip
+  `test_axon_brain_does_not_inherit_graphragmixin` to `strict=True` (or
+  remove the xfail decorator) and actually drop `GraphRagMixin` from
+  `AxonBrain`'s base classes.
 
 ## Priority 2 — v1.0 hardening test debt
 
@@ -141,8 +218,8 @@ pick any subset, they don't block anything.
   roadmap's "SQLite only, no external graph DB" lock (see "V1 constraints"
   table in the roadmap doc) — confirm with the user before closing those
   specifically, since abandoning a tracked initiative is a judgment call,
-  not pure cleanup. Item #15 on the board duplicates the missing
-  `test_architecture.py` file noted in Priority 1.
+  not pure cleanup. Item #15 on the board duplicated the `test_architecture.py`
+  gap — that file now exists (Priority 1, Phase 1) and can be closed.
 - `pyproject.toml:43-44` — comment says "the 48-tool MCP server," actual
   count is 55 (confirmed via `grep -c "@mcp.tool()" src/axon/mcp_server.py`,
   matches `CLAUDE.md`'s stated count). One-line comment fix, no code change.
