@@ -233,9 +233,18 @@ class TestDetectInstallMethod:
         assert update_check.detect_install_method() == "pip"
 
     def test_upgrade_command_pip(self):
+        import sys
+
         from axon.update_check import upgrade_command_for
 
-        assert upgrade_command_for("pip") == ["pip", "install", "-U", "axon-rag"]
+        assert upgrade_command_for("pip") == [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-U",
+            "axon-rag",
+        ]
 
     def test_upgrade_command_pipx(self):
         from axon.update_check import upgrade_command_for

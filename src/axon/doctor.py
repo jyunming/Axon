@@ -285,10 +285,11 @@ def check_update_available(offline: bool = False) -> Check:
     """Query PyPI (rate-limited, cached) for a newer axon-rag release.
 
     Always non-fatal — an update being available, or the check itself
-    failing, is informational only. Silent (``ok``, no detail) when
-    offline_mode is on, matching this check's other network-dependent
-    siblings' behavior of staying quiet rather than nagging about
-    something the user has explicitly opted out of.
+    failing, is informational only. Reports ``ok`` (not ``warning``) when
+    offline_mode is on or the check fails, matching this check's other
+    network-dependent siblings' behavior of staying non-alarming rather
+    than nagging about something the user has explicitly opted out of —
+    the ``detail`` field still says why, just at ``ok`` severity.
     """
     from axon.update_check import check_for_update
 

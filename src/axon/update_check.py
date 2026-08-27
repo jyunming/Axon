@@ -205,7 +205,10 @@ def upgrade_command_for(method: str) -> list[str]:
         return ["pipx", "upgrade", PACKAGE_NAME]
     if method == "conda":
         return ["conda", "update", "-y", PACKAGE_NAME]
-    return ["pip", "install", "-U", PACKAGE_NAME]
+    # sys.executable -m pip, not a bare "pip" off PATH — a bare pip can
+    # resolve to a different interpreter/environment than the one running
+    # this process, silently upgrading the wrong venv.
+    return [sys.executable, "-m", "pip", "install", "-U", PACKAGE_NAME]
 
 
 # ---------------------------------------------------------------------------
@@ -231,20 +234,10 @@ def run_update(
     confirmation prompt/-y gate — this function assumes it's already been
     granted and just executes.
     """
-    offline = bool(getattr(config, "offline_mode", False))
-    check = check_for_update(offline=offline, force=force_check)
-    if check.skipped_reason == "offline_mode":
-        return UpdateRunResult("refused", "offline_mode is on — skipping the network check.")
-    if check.skipped_reason == "error" or not check.latest:
-        return UpdateRunResult("failed", "Could not reach PyPI to check the latest version.")
-    if not check.update_available:
-        return UpdateRunResult(
-            "already_current",
-            f"Already on the latest version ({check.current}).",
-            package_before=check.current,
-            package_after=check.current,
-        )
-
+    # Refuse outright before any network/cache activity — these are the
+    # unconditional-refusal cases the docstring promises "no partial action"
+    # for, so check them before check_for_update() has a chance to hit
+    # PyPI or write the on-disk cache.
     if is_running_in_docker():
         return UpdateRunResult(
             "refused",
@@ -265,6 +258,20 @@ def run_update(
                 "Stop it first — upgrading its package out from under a running "
                 "server risks corrupting in-flight requests.",
             )
+
+    offline = bool(getattr(config, "offline_mode", False))
+    check = check_for_update(offline=offline, force=force_check)
+    if check.skipped_reason == "offline_mode":
+        return UpdateRunResult("refused", "offline_mode is on — skipping the network check.")
+    if check.skipped_reason == "error" or not check.latest:
+        return UpdateRunResult("failed", "Could not reach PyPI to check the latest version.")
+    if not check.update_available:
+        return UpdateRunResult(
+            "already_current",
+            f"Already on the latest version ({check.current}).",
+            package_before=check.current,
+            package_after=check.current,
+        )
 
     import subprocess
 
