@@ -2990,10 +2990,14 @@ def test_clear_active_project():
 
 
 def test_clear_active_project_delegates_graph_reset_to_backend():
-    """The in-memory graph reset goes through _graph_backend.clear() (the
-    single source of truth — also correctly clears non-GraphRAG backends
-    like dynamic_graph), while the GraphRAG-specific _save_* calls still run
-    so the project's on-disk graph files actually get wiped too."""
+    """The in-memory reset AND persistence of the now-empty state both go
+    through _graph_backend.clear(persist=True) — the single source of
+    truth for "wipe graph state" (also correctly clears non-GraphRAG
+    backends like dynamic_graph, which direct brain._save_* calls never
+    touched regardless of which backend was actually active). collection_ops
+    no longer calls any brain._save_* method directly — persisting the 7
+    GraphRAG files is now GraphRagBackend.clear(persist=True)'s own
+    responsibility, exercised separately in test_graph_backend_base.py."""
     brain = MagicMock()
     brain._active_project = "myproj"
     brain.vector_store = MagicMock()
@@ -3001,12 +3005,5 @@ def test_clear_active_project_delegates_graph_reset_to_backend():
 
     clear_active_project(brain)
 
-    brain._graph_backend.clear.assert_called_once_with()
-    brain._save_entity_graph.assert_called_once_with()
-    brain._save_relation_graph.assert_called_once_with()
-    brain._save_community_levels.assert_called_once_with()
-    brain._save_community_summaries.assert_called_once_with()
-    brain._save_community_hierarchy.assert_called_once_with()
-    brain._save_claims_graph.assert_called_once_with()
-    brain._save_entity_embeddings.assert_called_once_with()
+    brain._graph_backend.clear.assert_called_once_with(persist=True)
     assert brain._community_build_in_progress is False

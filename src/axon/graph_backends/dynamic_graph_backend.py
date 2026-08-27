@@ -1076,8 +1076,13 @@ class DynamicGraphBackend:
             )
         return out
 
-    def clear(self) -> None:
-        """Delete all rows from all tables."""
+    def clear(self, *, persist: bool = False) -> None:
+        """Delete all rows from all tables.
+
+        *persist* is unused here — SQL DELETE + commit is inherently
+        persistent, there is no separate in-memory-only reset for this
+        backend. Accepted only to satisfy the widened GraphBackend Protocol.
+        """
         with self._write_lock:
             self._conn.executescript(
                 "DELETE FROM fact_evidence; DELETE FROM facts; DELETE FROM entities; DELETE FROM episodes;"

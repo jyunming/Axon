@@ -47,7 +47,7 @@ class NoneGraphBackend:
             detail="graph_backend is 'none' — no graph state is tracked for this project.",
         )
 
-    def clear(self) -> None:
+    def clear(self, *, persist: bool = False) -> None:
         pass
 
     def delete_documents(self, chunk_ids: list[str]) -> None:

@@ -307,16 +307,17 @@ def test_clear_resets_bm25_and_hashes():
     brain._ingested_hashes = {"abc123"}
     brain._entity_graph = {"entity": {"description": "", "chunk_ids": ["neighbor"]}}
 
-    with patch.object(brain, "_save_hash_store") as mock_save_hash, patch.object(
-        brain, "_save_entity_graph"
-    ) as mock_save_graph:
+    with patch.object(brain, "_save_hash_store") as mock_save_hash:
         resp = client.post("/clear")
 
     assert resp.status_code == 200
     assert brain._ingested_hashes == set()
     assert brain._entity_graph == {}
     mock_save_hash.assert_called_once()
-    mock_save_graph.assert_called_once()
+    # _save_entity_graph is no longer called directly by collection_ops.py —
+    # persisting the cleared GraphRAG state is now
+    # GraphRagBackend.clear(persist=True)'s own responsibility.
+    brain._graph_backend.clear.assert_called_once_with(persist=True)
     brain.bm25.save.assert_called_once()
 
 
@@ -390,12 +391,13 @@ def test_clear_resets_graph_state_and_api_dedup_cache():
     assert "default" not in api_module._source_hashes
     assert "_global" not in api_module._source_hashes
     brain._save_doc_versions.assert_called_once()
-    brain._save_relation_graph.assert_called_once()
-    brain._save_community_levels.assert_called_once()
-    brain._save_community_summaries.assert_called_once()
-    brain._save_community_hierarchy.assert_called_once()
-    brain._save_claims_graph.assert_called_once()
-    brain._save_entity_embeddings.assert_called_once()
+    # The 7 GraphRAG _save_* methods are no longer called directly by
+    # collection_ops.py — persisting the cleared GraphRAG state is now
+    # GraphRagBackend.clear(persist=True)'s own responsibility (exercised
+    # for real in test_graph_backend_base.py's TestGraphRagBackendClearPersist).
+    # brain._graph_backend here is a MagicMock, so only the delegation call
+    # itself is observable from this test.
+    brain._graph_backend.clear.assert_called_once_with(persist=True)
     brain._save_code_graph.assert_called_once()
 
 

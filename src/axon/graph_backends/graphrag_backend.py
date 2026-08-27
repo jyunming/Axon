@@ -110,7 +110,17 @@ class GraphRagBackend:
         n_communities = len(getattr(self._brain, "_community_summaries", {}))
         return FinalizationResult(communities_built=n_communities, backend_id=BACKEND_ID)
 
-    def clear(self) -> None:
+    _PERSISTABLE_SAVE_METHODS = (
+        "_save_entity_graph",
+        "_save_relation_graph",
+        "_save_community_levels",
+        "_save_community_summaries",
+        "_save_community_hierarchy",
+        "_save_claims_graph",
+        "_save_entity_embeddings",
+    )
+
+    def clear(self, *, persist: bool = False) -> None:
         """Clear all GraphRAG state from the attached brain.
 
         Delegates to ``AxonBrain._reset_graph_state()``, the single source
@@ -118,8 +128,18 @@ class GraphRagBackend:
         field (not just the four core dicts) and holds ``_graph_lock``
         internally (audit P1: previously unlocked, would crash readers
         with ``RuntimeError: dictionary changed size during iteration``).
+
+        ``_reset_graph_state()`` is memory-only by design (also used by
+        read-only scope switching, which must never write project data to
+        disk) — when *persist* is True, additionally call the 7 ``_save_*``
+        methods so the now-empty state is actually written to disk.
         """
         self._brain._reset_graph_state()
+        if persist:
+            for method_name in self._PERSISTABLE_SAVE_METHODS:
+                method = getattr(self._brain, method_name, None)
+                if callable(method):
+                    method()
 
     def delete_documents(self, chunk_ids: list[str]) -> None:
         """Remove chunk IDs from entity/relation/claims graph state.

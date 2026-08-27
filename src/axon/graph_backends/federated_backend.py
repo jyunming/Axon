@@ -225,11 +225,11 @@ class FederatedGraphBackend:
             remaining -= len(rows)
         return out
 
-    def clear(self) -> None:
+    def clear(self, *, persist: bool = False) -> None:
         # Audit P1: a silent clear() failure leaves stale state behind.
         for b in self._backends:
             try:
-                b.clear()
+                b.clear(persist=persist)
             except Exception as exc:
                 logger.warning(
                     "FederatedGraphBackend: %s clear() failed — %s",

@@ -43,24 +43,17 @@ def clear_active_project(brain: Any) -> None:
     _call_optional(brain, "_save_hash_store")
     brain._doc_versions = {}
     _call_optional(brain, "_save_doc_versions")
-    # In-memory reset goes through the graph backend (single source of
-    # truth for "wipe graph state"; also correctly clears non-GraphRAG
-    # backends like dynamic_graph, which the old field-by-field reset here
-    # never touched). Persistence is separate — _reset_graph_state() is
-    # memory-only by design (it's also used by read-only scope switching,
-    # which must never write project data to disk), so the _save_* calls
-    # below are still required to actually wipe this project's graph files.
+    # Clear + persist go through the graph backend (single source of truth
+    # for "wipe graph state"; also correctly clears non-GraphRAG backends
+    # like dynamic_graph, which the old field-by-field _save_* calls here
+    # never touched — they always wrote GraphRagMixin's own state
+    # regardless of which backend was actually active). persist=True asks
+    # the backend to also write its now-empty state to disk, not just
+    # reset in memory.
     graph_backend = getattr(brain, "_graph_backend", None)
     if graph_backend is not None and callable(getattr(graph_backend, "clear", None)):
-        graph_backend.clear()
-    _call_optional(brain, "_save_entity_graph")
-    _call_optional(brain, "_save_relation_graph")
-    _call_optional(brain, "_save_community_levels")
-    _call_optional(brain, "_save_community_summaries")
-    _call_optional(brain, "_save_community_hierarchy")
+        graph_backend.clear(persist=True)
     brain._community_build_in_progress = False
-    _call_optional(brain, "_save_claims_graph")
-    _call_optional(brain, "_save_entity_embeddings")
     brain._code_graph = {"nodes": {}, "edges": []}
     _call_optional(brain, "_save_code_graph")
     meta_path = getattr(brain, "_embedding_meta_path", None)

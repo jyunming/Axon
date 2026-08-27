@@ -26,6 +26,7 @@ from axon.graph_backends.dynamic_graph_backend import DynamicGraphBackend
 from axon.graph_backends.federated_backend import FederatedGraphBackend
 from axon.graph_backends.graphrag_backend import GraphRagBackend
 from axon.graph_backends.none_backend import NoneGraphBackend
+from axon.graph_rag import GraphRagMixin
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -157,6 +158,90 @@ class TestGraphRagBackendProtocol:
         backend = _make_graphrag_backend()
         backend._brain._community_summaries = {"0_0": {"full_content": "summary"}}
         assert backend.has_community_summaries() is True
+
+
+# ---------------------------------------------------------------------------
+# GraphRagBackend.clear(persist=True) actually rewrites on-disk state
+# ---------------------------------------------------------------------------
+
+
+class TestGraphRagBackendClearPersist:
+    """Regression test: clear(persist=True) must write the now-empty state
+    to disk, not just reset it in memory. Before this, collection_ops.py
+    called the 7 brain._save_* methods directly and unconditionally — which
+    meant non-GraphRAG backends (dynamic_graph, none) never got their
+    on-disk state cleared at all, since those direct calls always hit
+    GraphRagMixin's own _save_* methods regardless of the active backend.
+    Now the backend owns persistence of its own clear.
+    """
+
+    @staticmethod
+    def _make_real_graphrag_brain(tmp_path):
+        from types import SimpleNamespace
+
+        class _RealFakeBrain(GraphRagMixin):
+            pass
+
+        brain = _RealFakeBrain()
+        brain.config = SimpleNamespace(bm25_path=str(tmp_path))
+        brain._entity_graph = {"alice": {"type": "PERSON", "chunk_ids": ["c1"], "degree": 1}}
+        brain._relation_graph = {
+            "alice": [{"target": "bob", "relation": "knows", "chunk_id": "c1"}]
+        }
+        brain._community_levels = {0: {"alice": 0}}
+        brain._community_hierarchy = {}
+        brain._community_summaries = {"0_0": {"full_content": "a summary"}}
+        brain._claims_graph = {"c1": [{"subject": "a", "object": "b", "type": "t"}]}
+        brain._entity_embeddings = {"alice": [0.1, 0.2]}
+        brain._own_vector_store = MagicMock()
+        return brain
+
+    def test_clear_persist_true_rewrites_files_empty(self, tmp_path):
+        """Reads back through brain._load_entity_graph()/_load_relation_graph()
+        rather than hand-parsing a specific on-disk file — persistence may
+        take the msgpack fast path (writing .entity_graph.msgpack and
+        deleting any stale .entity_graph.json) or the JSON fallback
+        depending on rust-bridge availability; the load path handles both
+        transparently, which is what actually matters here.
+        """
+        brain = self._make_real_graphrag_brain(tmp_path)
+        backend = GraphRagBackend(brain)
+
+        # Write real, non-empty state to disk first — proves clear()
+        # actually rewrites persisted state rather than it just never
+        # having existed.
+        for method_name in GraphRagBackend._PERSISTABLE_SAVE_METHODS:
+            getattr(brain, method_name)()
+        brain._flush_pending_saves()
+
+        assert brain._load_entity_graph()
+        assert brain._load_relation_graph()
+
+        backend.clear(persist=True)
+        brain._flush_pending_saves()
+
+        assert brain._load_entity_graph() == {}
+        assert brain._load_relation_graph() == {}
+
+    def test_clear_persist_false_leaves_disk_state_untouched(self, tmp_path):
+        """persist=False (the default) resets in-memory state only — matches
+        the read-only-scope-switching requirement that switching scope must
+        never write project data to disk.
+        """
+        brain = self._make_real_graphrag_brain(tmp_path)
+        backend = GraphRagBackend(brain)
+        for method_name in GraphRagBackend._PERSISTABLE_SAVE_METHODS:
+            getattr(brain, method_name)()
+        brain._flush_pending_saves()
+
+        assert brain._load_entity_graph()  # non-empty on disk before clear
+
+        backend.clear()  # persist defaults to False
+        brain._flush_pending_saves()
+
+        assert brain._entity_graph == {}
+        # On-disk state must be untouched — still the pre-clear content.
+        assert brain._load_entity_graph()
 
 
 # ---------------------------------------------------------------------------

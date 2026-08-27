@@ -172,8 +172,15 @@ class GraphBackend(Protocol):
         """
         ...
 
-    def clear(self) -> None:
-        """Remove all graph state (entities, relations, communities, facts)."""
+    def clear(self, *, persist: bool = False) -> None:
+        """Remove all graph state (entities, relations, communities, facts).
+
+        Always clears in-memory state. When *persist* is True, also writes
+        the (now-empty) state to disk — callers that only need a fast
+        in-memory reset (e.g. read-only scope switching, which must never
+        write project data to disk) can omit it; callers doing a real
+        "wipe this project's graph data" pass True.
+        """
         ...
 
     def delete_documents(self, chunk_ids: list[str]) -> None:
