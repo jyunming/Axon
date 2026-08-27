@@ -277,16 +277,21 @@ def ensure_project(
         for depth in range(1, len(segments)):
             ancestor_name = "/".join(segments[:depth])
             _ensure_single_project(ancestor_name, description="")
-    _ensure_single_project(name, description=description, graph_backend=graph_backend or "graphrag")
+    _ensure_single_project(name, description=description, graph_backend=graph_backend)
     return project_dir(name)
 
 
-def _ensure_single_project(name: str, description: str, graph_backend: str = "graphrag") -> Path:
+def _ensure_single_project(name: str, description: str, graph_backend: str | None = None) -> Path:
     """Create directories and meta.json for exactly one project node.
     If ``meta.json`` already exists but is missing ``project_id``,
     a new one is assigned and the file is updated in-place (migration path).
     ``graph_backend`` is written to meta.json and is immutable once set —
-    attempting to change it raises ``ValueError``.
+    attempting to change it raises ``ValueError``. ``graph_backend=None``
+    means "caller doesn't care": new projects still default to "graphrag",
+    but an *existing* project's stored value is left untouched and the
+    immutability check is skipped — keeps this safe to call as a plain
+    idempotent "ensure this project exists" (the ancestor-creation loop in
+    ``ensure_project``, or any caller not specifying a backend).
     """
     root = project_dir(name)
     (root / "vector_store_data").mkdir(parents=True, exist_ok=True)
@@ -301,7 +306,7 @@ def _ensure_single_project(name: str, description: str, graph_backend: str = "gr
                     "description": description,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "project_id": build_project_id("proj"),
-                    "graph_backend": graph_backend,
+                    "graph_backend": graph_backend or "graphrag",
                 },
                 indent=2,
             ),
@@ -314,11 +319,13 @@ def _ensure_single_project(name: str, description: str, graph_backend: str = "gr
         if "project_id" not in meta:
             meta["project_id"] = build_project_id("proj")
             changed = True
-        # Backfill or enforce graph_backend immutability
+        # Backfill or enforce graph_backend immutability — only when the
+        # caller actually specified one; graph_backend=None never touches
+        # or compares against an existing stored value.
         if "graph_backend" not in meta:
-            meta["graph_backend"] = graph_backend
+            meta["graph_backend"] = graph_backend or "graphrag"
             changed = True
-        elif meta["graph_backend"] != graph_backend:
+        elif graph_backend is not None and meta["graph_backend"] != graph_backend:
             raise ValueError(
                 f"graph_backend for project '{name}' is immutable: "
                 f"stored='{meta['graph_backend']}', requested='{graph_backend}'"
