@@ -3174,6 +3174,7 @@ def _make_brain(provider="chroma"):
         brain._relation_description_buffer = {}
         brain._text_unit_entity_map = {}
         brain._text_unit_relation_map = {}
+        brain._community_build_in_progress = False
         brain._raptor_summary_cache = {}
 
     brain._graph_backend.clear.side_effect = _reset_graph_fields
@@ -3205,13 +3206,13 @@ class TestGraphStatus:
 
     def test_returns_status_with_brain(self):
         brain = _make_brain()
-        brain._community_build_in_progress = True
         brain._graph_backend.status.return_value = {
             "backend": "graphrag",
             "entities": 0,
             "relations": 0,
             "communities": 0,
             "community_summaries": 2,
+            "community_build_in_progress": True,
         }
         api_module.brain = brain
         resp = client.get("/graph/status")
@@ -3239,11 +3240,13 @@ class TestGraphFinalize:
         assert resp.status_code == 503
 
     def test_success(self):
-        """graph.py — finalize runs ok via legacy brain.finalize_graph fallback."""
+        """graph.py — finalize runs ok through the graph backend."""
+        from axon.graph_backends.base import FinalizationResult
+
         brain = _make_brain()
-        brain._graph_backend = None  # exercise legacy fallback
-        brain._community_summaries = {"c1": "summary"}
-        brain.finalize_graph.return_value = None
+        brain._graph_backend.finalize.return_value = FinalizationResult(
+            backend_id="graphrag", status="ok", communities_built=1
+        )
         api_module.brain = brain
         resp = client.post("/graph/finalize")
         assert resp.status_code == 200
@@ -3252,22 +3255,28 @@ class TestGraphFinalize:
         assert data["community_summary_count"] == 1
 
     def test_permission_error_returns_403(self):
-        """graph.py — PermissionError → 403 (via legacy fallback)."""
+        """graph.py — PermissionError from the backend → 403."""
         brain = _make_brain()
-        brain._graph_backend = None
-        brain.finalize_graph.side_effect = PermissionError("read-only mode")
+        brain._graph_backend.finalize.side_effect = PermissionError("read-only mode")
         api_module.brain = brain
         resp = client.post("/graph/finalize")
         assert resp.status_code == 403
 
     def test_generic_exception_returns_500(self):
-        """graph.py — generic Exception → 500 (via legacy fallback)."""
+        """graph.py — generic Exception from the backend → 500."""
         brain = _make_brain()
-        brain._graph_backend = None
-        brain.finalize_graph.side_effect = RuntimeError("graph build failed")
+        brain._graph_backend.finalize.side_effect = RuntimeError("graph build failed")
         api_module.brain = brain
         resp = client.post("/graph/finalize")
         assert resp.status_code == 500
+
+    def test_no_graph_backend_returns_503(self):
+        """graph.py — no graph backend attached → 503, not a silent no-op."""
+        brain = _make_brain()
+        brain._graph_backend = None
+        api_module.brain = brain
+        resp = client.post("/graph/finalize")
+        assert resp.status_code == 503
 
     def test_backend_protocol_path_surfaces_status(self):
         """When backend.finalize() returns status='not_applicable' the route

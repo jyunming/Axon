@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from axon.graph_backends.graphrag_engine import GraphRagEngine
 from axon.main import AxonBrain, AxonConfig
 
 
@@ -22,20 +23,20 @@ class TestBrainLifecycle:
         # Ensure we don't try to load real files
         with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
             AxonBrain, "_load_doc_versions"
-        ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+        ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ):
             brain = AxonBrain(config)
 
@@ -43,7 +44,7 @@ class TestBrainLifecycle:
             assert hasattr(brain, "bm25")
             assert hasattr(brain, "llm")
             assert hasattr(brain, "embedding")
-            assert brain._entity_graph == {}
+            assert brain._graph_backend._engine._entity_graph == {}
 
             brain.close()
 
@@ -51,20 +52,20 @@ class TestBrainLifecycle:
         config = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
             AxonBrain, "_load_doc_versions"
-        ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+        ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ):
             brain = AxonBrain(config)
 
@@ -85,20 +86,20 @@ class TestBrainLifecycle:
 
         with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
             AxonBrain, "_load_doc_versions"
-        ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+        ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ):
             with AxonBrain(config) as brain:
                 assert hasattr(brain, "vector_store")
@@ -123,20 +124,20 @@ class TestBrainLifecycle:
         config = AxonConfig(bm25_path=str(tmp_path), vector_store_path=str(tmp_path))
         with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
             AxonBrain, "_load_doc_versions"
-        ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+        ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
             AxonBrain, "_load_code_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ):
             brain = AxonBrain(config)
             # Distinct objects so the close loop visits both arms.
@@ -195,19 +196,19 @@ class TestBrainLifecycle:
             vector_store_path=str(tmp_path / "proj_a" / "vs"),
         )
         with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
-            AxonBrain, "_load_entity_graph", return_value={}
+            GraphRagEngine, "_load_entity_graph", return_value={}
         ), patch.object(AxonBrain, "_load_code_graph", return_value={}), patch.object(
-            AxonBrain, "_load_relation_graph", return_value={}
+            GraphRagEngine, "_load_relation_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_levels", return_value={}
+            GraphRagEngine, "_load_community_levels", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_summaries", return_value={}
+            GraphRagEngine, "_load_community_summaries", return_value={}
         ), patch.object(
-            AxonBrain, "_load_entity_embeddings", return_value={}
+            GraphRagEngine, "_load_entity_embeddings", return_value={}
         ), patch.object(
-            AxonBrain, "_load_claims_graph", return_value={}
+            GraphRagEngine, "_load_claims_graph", return_value={}
         ), patch.object(
-            AxonBrain, "_load_community_hierarchy", return_value={}
+            GraphRagEngine, "_load_community_hierarchy", return_value={}
         ):
             brain = AxonBrain(config)
             # After construction, doc-versions came from project A.

@@ -213,7 +213,9 @@ class TestExpandWithEntityGraph:
     """Integration-level tests for the multi-hop expansion in query_router."""
 
     def _make_router(self, entity_graph, relation_graph, config_overrides=None):
-        from axon.query_router import QueryRouterMixin
+        from types import SimpleNamespace
+
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         cfg = MagicMock()
         cfg.top_k = 5
@@ -227,16 +229,17 @@ class TestExpandWithEntityGraph:
             for k, v in config_overrides.items():
                 setattr(cfg, k, v)
 
-        router = QueryRouterMixin.__new__(QueryRouterMixin)
-        router.config = cfg
+        router = GraphRagEngine.__new__(GraphRagEngine)
+        # config/vector_store/llm are read-only @property proxies onto
+        # router._brain — supply a fake brain namespace instead of setting
+        # them directly.
+        router._brain = SimpleNamespace(config=cfg, vector_store=MagicMock(), llm=MagicMock())
         router._entity_graph = entity_graph
         router._relation_graph = relation_graph
         router._entity_embeddings = {}
         router._nx_graph = None
         router._nx_graph_dirty = True
         router._build_nx_graph = lambda: _build_nx_graph_for(router)
-        router.vector_store = MagicMock()
-        router.llm = MagicMock()
 
         # Simple Jaccard-like entity matcher (mirrors GraphRagMixin._entity_matches)
         def _entity_matches(q: str, g: str) -> float:
@@ -268,7 +271,7 @@ class TestExpandWithEntityGraph:
             ]
         )
 
-        results, matched = router._expand_with_entity_graph("alice", [])
+        results, matched = router.expand_with_entity_graph("alice", [])
         score_map = {r["id"]: r["score"] for r in results}
 
         assert "chunk_bob" in score_map
@@ -295,7 +298,7 @@ class TestExpandWithEntityGraph:
             side_effect=lambda ids: [all_chunks[i] for i in ids if i in all_chunks]
         )
 
-        results, _ = router._expand_with_entity_graph("alice", [])
+        results, _ = router.expand_with_entity_graph("alice", [])
         result_ids = {r["id"] for r in results}
         # chunk_alice is the direct entity match; chunk_bob should NOT be included (0 hops)
         assert "chunk_bob" not in result_ids
@@ -319,7 +322,7 @@ class TestExpandWithEntityGraph:
             return [{"id": i, "text": "t", "score": 0.0} for i in ids]
 
         router.vector_store.get_by_ids = mock_get
-        router._expand_with_entity_graph("a", [])
+        router.expand_with_entity_graph("a", [])
 
         # chunk_b should be fetched (1-hop); chunk_c should NOT be (2-hop)
         assert "chunk_b" in fetched_ids
@@ -626,7 +629,9 @@ class TestPerformanceGuard:
 
     def _make_large_router(self, entity_count, seed="seed", chain_depth=2, config_max_hops=3):
         """Build a router with a large flat entity graph plus a small chain from seed."""
-        from axon.query_router import QueryRouterMixin
+        from types import SimpleNamespace
+
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         # Large graph: lots of unconnected entities
         eg = {
@@ -652,16 +657,17 @@ class TestPerformanceGuard:
         cfg.graph_rag_distance_weighted = True
         cfg.graph_rag_large_graph_threshold = 50000
 
-        router = QueryRouterMixin.__new__(QueryRouterMixin)
-        router.config = cfg
+        router = GraphRagEngine.__new__(GraphRagEngine)
+        # config/vector_store/llm are read-only @property proxies onto
+        # router._brain — supply a fake brain namespace instead of setting
+        # them directly.
+        router._brain = SimpleNamespace(config=cfg, vector_store=MagicMock(), llm=MagicMock())
         router._entity_graph = eg
         router._relation_graph = rg
         router._entity_embeddings = {}
         router._nx_graph = None
         router._nx_graph_dirty = True
         router._build_nx_graph = lambda: _build_nx_graph_for(router)
-        router.vector_store = MagicMock()
-        router.llm = MagicMock()
         router._extract_entities = MagicMock(
             return_value=[{"name": "seed", "type": "CONCEPT", "description": ""}]
         )
@@ -688,7 +694,7 @@ class TestPerformanceGuard:
         so total = entity_count + 3.  To exceed 50,000 total: entity_count = 49_998.
         """
         router = self._make_large_router(entity_count=49_998, config_max_hops=3)
-        router._expand_with_entity_graph("seed", [])
+        router.expand_with_entity_graph("seed", [])
         fetched = router._fetched_ids
         # hop1 should be fetched (1-hop), hop2 should NOT (2-hop, capped)
         assert "chunk_hop1" in fetched, "1-hop chunk should be fetched even with large graph"
@@ -700,7 +706,7 @@ class TestPerformanceGuard:
         entity_count = 49_996 → total = 49_999 < 50_000 → guard does not fire.
         """
         router = self._make_large_router(entity_count=49_996, config_max_hops=2)
-        router._expand_with_entity_graph("seed", [])
+        router.expand_with_entity_graph("seed", [])
         fetched = router._fetched_ids
         assert "chunk_hop2" in fetched, "2-hop chunk should be reachable under the threshold"
 

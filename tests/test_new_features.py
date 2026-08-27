@@ -1054,6 +1054,7 @@ class TestGLiNERConfigModel:
         """_ensure_gliner loads the model path from config, not a hardcoded string."""
         from unittest.mock import MagicMock, patch
 
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
         from axon.main import AxonBrain
 
         _reset_graphrag_model_caches()
@@ -1064,7 +1065,7 @@ class TestGLiNERConfigModel:
 
         with patch("gliner.GLiNER.from_pretrained") as mock_fp:
             mock_fp.return_value = MagicMock()
-            AxonBrain._ensure_gliner(brain)
+            GraphRagEngine._ensure_gliner(brain)
 
         mock_fp.assert_called_once_with("local/path", local_files_only=False)
 
@@ -1110,7 +1111,7 @@ class TestREBELZeroEdgeWarning:
 @pytest.mark.skipif(importlib.util.find_spec("gliner") is None, reason="gliner not installed")
 def test_gliner_local_files_only_when_local_path(tmp_path):
     """_ensure_gliner passes local_files_only=True when model path is absolute."""
-    from axon.main import AxonBrain
+    from axon.graph_backends.graphrag_engine import GraphRagEngine
 
     _reset_graphrag_model_caches()
     model_dir = tmp_path / "gliner_model"
@@ -1123,12 +1124,13 @@ def test_gliner_local_files_only_when_local_path(tmp_path):
 
     with patch("gliner.GLiNER.from_pretrained") as mock_gliner:
         mock_gliner.return_value = MagicMock()
-        AxonBrain._ensure_gliner(brain)
+        GraphRagEngine._ensure_gliner(brain)
         mock_gliner.assert_called_once_with(str(model_dir), local_files_only=True)
 
 
 def test_rebel_local_path_does_not_forward_local_files_only(tmp_path):
     """_ensure_rebel should load local artifacts explicitly and not leak local_files_only into generate()."""
+    from axon.graph_backends.graphrag_engine import GraphRagEngine
     from axon.main import AxonBrain
 
     _reset_graphrag_model_caches()
@@ -1151,7 +1153,7 @@ def test_rebel_local_path_does_not_forward_local_files_only(tmp_path):
     ) as mock_tok, patch(
         "transformers.pipelines.pipeline", return_value=pipeline_obj
     ) as mock_pipe:
-        result = AxonBrain._ensure_rebel(brain)
+        result = GraphRagEngine._ensure_rebel(brain)
 
     assert result is pipeline_obj
     mock_model.assert_called_once_with(str(model_dir), local_files_only=True)
@@ -1164,6 +1166,7 @@ def test_rebel_local_path_does_not_forward_local_files_only(tmp_path):
 
 def test_extract_relations_rebel_decodes_generated_token_ids_like_tensor(tmp_path):
     """_extract_relations_rebel should handle pipeline outputs that expose generated_token_ids as tensors."""
+    from axon.graph_backends.graphrag_engine import GraphRagEngine
     from axon.main import AxonBrain, AxonConfig
 
     class _FakeTensorIds:
@@ -1187,8 +1190,15 @@ def test_extract_relations_rebel_decodes_generated_token_ids_like_tensor(tmp_pat
     brain._rebel_pipeline.tokenizer.batch_decode.return_value = [
         "<triplet> Apple <subj> Microsoft <obj> competes with"
     ]
+    # _extract_relations_rebel's body calls self._ensure_rebel() and
+    # self._parse_rebel_output(...) internally — bind them directly
+    # (self=brain). _ensure_rebel is a cache-hit-only path here
+    # (brain._rebel_pipeline is already set); _parse_rebel_output is a
+    # staticmethod, so the raw function works as a plain instance attribute.
+    brain._ensure_rebel = GraphRagEngine._ensure_rebel.__get__(brain, GraphRagEngine)
+    brain._parse_rebel_output = GraphRagEngine._parse_rebel_output
 
-    rels = AxonBrain._extract_relations_rebel(brain, "Apple competes with Microsoft.")
+    rels = GraphRagEngine._extract_relations_rebel(brain, "Apple competes with Microsoft.")
 
     assert len(rels) == 1
     assert rels[0]["subject"] == "Apple"
@@ -1199,6 +1209,7 @@ def test_extract_relations_rebel_decodes_generated_token_ids_like_tensor(tmp_pat
 @pytest.mark.skipif(importlib.util.find_spec("gliner") is None, reason="gliner not installed")
 def test_gliner_shared_cache_loads_once_across_threads():
     """Concurrent _ensure_gliner calls should load a shared model only once."""
+    from axon.graph_backends.graphrag_engine import GraphRagEngine
     from axon.main import AxonBrain
 
     _reset_graphrag_model_caches()
@@ -1223,7 +1234,7 @@ def test_gliner_shared_cache_loads_once_across_threads():
         return sentinel
 
     def _worker(idx, brain):
-        results[idx] = AxonBrain._ensure_gliner(brain)
+        results[idx] = GraphRagEngine._ensure_gliner(brain)
 
     with patch("gliner.GLiNER.from_pretrained", side_effect=_fake_load) as mock_gliner:
         threads = [
@@ -1243,7 +1254,7 @@ def test_gliner_shared_cache_loads_once_across_threads():
 @pytest.mark.skipif(importlib.util.find_spec("llmlingua") is None, reason="llmlingua not installed")
 def test_llmlingua_uses_config_model(tmp_path):
     """_ensure_llmlingua reads graph_rag_llmlingua_model from config."""
-    from axon.main import AxonBrain
+    from axon.graph_backends.graphrag_engine import GraphRagEngine
 
     model_dir = tmp_path / "llmlingua"
     model_dir.mkdir()
@@ -1255,7 +1266,7 @@ def test_llmlingua_uses_config_model(tmp_path):
 
     with patch("llmlingua.PromptCompressor") as mock_compressor:
         mock_compressor.return_value = MagicMock()
-        AxonBrain._ensure_llmlingua(brain)
+        GraphRagEngine._ensure_llmlingua(brain)
         mock_compressor.assert_called_once()
         call_kwargs = mock_compressor.call_args
         assert call_kwargs.kwargs.get("model_name") == str(model_dir) or call_kwargs.args[0] == str(

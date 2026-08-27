@@ -53,8 +53,8 @@ def test_graphrag_endpoints_build_payload_and_html(api_client, make_brain, monke
             )
         return relations
 
-    monkeypatch.setattr(brain, "_extract_entities", fake_extract_entities)
-    monkeypatch.setattr(brain, "_extract_relations", fake_extract_relations)
+    monkeypatch.setattr(brain._graph_backend._engine, "_extract_entities", fake_extract_entities)
+    monkeypatch.setattr(brain._graph_backend._engine, "_extract_relations", fake_extract_relations)
 
     batch = api_client.post(
         "/add_texts",

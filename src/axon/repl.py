@@ -4190,6 +4190,7 @@ def _interactive_repl(
                         _relations = _bs.get("relations", 0)
                         _summaries = _bs.get("community_summaries", 0)
                         _communities = _bs.get("communities", 0)
+                        in_progress = _bs.get("community_build_in_progress", False)
                     except Exception:
                         # Graceful fallback for legacy or stub backends.
                         _backend_name = "graphrag"
@@ -4199,7 +4200,7 @@ def _interactive_repl(
                         )
                         _summaries = len(getattr(brain, "_community_summaries", {}) or {})
                         _communities = 0
-                    in_progress = getattr(brain, "_community_build_in_progress", False)
+                        in_progress = getattr(brain, "_community_build_in_progress", False)
                     print("\n    GraphRAG status:")
                     print(f"      Backend:               {_backend_name}")
                     print(f"      Entities:              {_entities}")
@@ -4218,7 +4219,9 @@ def _interactive_repl(
                         print("    Finalizing graph communities… (this may take a moment)")
                         try:
                             backend = getattr(brain, "_graph_backend", None)
-                            if backend is not None and callable(getattr(backend, "finalize", None)):
+                            if backend is None:
+                                print("    No graph backend attached.")
+                            else:
                                 _r = backend.finalize(force=True)
                                 _stat = getattr(_r, "status", "ok")
                                 _det = getattr(_r, "detail", "")
@@ -4230,12 +4233,6 @@ def _interactive_repl(
                                     print(
                                         f"    Done. {_r.communities_built} community summaries generated.\n"
                                     )
-                            else:
-                                brain.finalize_graph()
-                                summaries = getattr(brain, "_community_summaries", {}) or {}
-                                print(
-                                    f"    Done. {len(summaries)} community summaries generated.\n"
-                                )
                         except Exception as e:
                             print(f"    Finalize failed: {e}")
                 elif sub == "conflicts":

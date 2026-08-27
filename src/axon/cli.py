@@ -2059,7 +2059,7 @@ def main():
         entity_count = _status.get("entities", 0)
         code_node_count = len((getattr(brain, "_code_graph", {}) or {}).get("nodes", {}))
         summary_count = _status.get("community_summaries", 0)
-        in_progress = getattr(brain, "_community_build_in_progress", False)
+        in_progress = _status.get("community_build_in_progress", False)
         graph_ready = entity_count > 0 or code_node_count > 0
         print("\n  Graph Status")
         print(f"  Ready              : {'yes' if graph_ready else 'no'}")
@@ -2071,8 +2071,9 @@ def main():
     if getattr(args, "graph_finalize", False):
         print("  Finalizing graph (community rebuild)...")
         try:
-            brain.finalize_graph(True)
             _backend = getattr(brain, "_graph_backend", None)
+            if _backend is not None:
+                _backend.finalize(True)
             summary_count = _backend.status().get("community_summaries", 0) if _backend else 0
             print(f"  Done. {summary_count} community summaries generated.")
         except Exception as exc:

@@ -465,9 +465,15 @@ if (graphData.nodes && graphData.nodes.length > 0) {{
 </script></body></html>"""
 
     def _resolve_graph_payload(self) -> dict:
-        """Prefer the active graph backend's own ``graph_data()``; fall back
-        to :meth:`build_graph_payload` when the backend doesn't supply one.
-        Mirrors the precedence used by the ``GET /graph/data`` REST route."""
+        """Return the active graph backend's ``graph_data()`` payload.
+        Mirrors the precedence used by the ``GET /graph/data`` REST route.
+        ``_graph_backend`` is unconditionally attached in ``__init__`` and
+        every reconstruction point, and ``graph_data()`` is a required
+        ``GraphBackend`` Protocol method — the empty-payload return below is
+        a defensive fallback for a backend-less/misbehaving edge case, not
+        the common path (there is no ``build_graph_payload()`` on the brain
+        to fall back to any more; that logic now lives on ``GraphRagEngine``,
+        reachable only through the backend)."""
         backend = getattr(self, "_graph_backend", None)
         if backend is not None and callable(getattr(backend, "graph_data", None)):
             try:
@@ -480,7 +486,7 @@ if (graphData.nodes && graphData.nodes.length > 0) {{
             if isinstance(payload, dict):
                 return payload
             return {"nodes": [], "links": []}
-        return self.build_graph_payload()
+        return {"nodes": [], "links": []}
 
     def export_graph_html(
         self,

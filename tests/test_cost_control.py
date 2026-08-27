@@ -8,6 +8,8 @@ Covers:
 """
 from unittest.mock import MagicMock, patch
 
+from tests._graphrag_engine_test_utils import _bare_graphrag_engine
+
 
 def _make_brain(tmp_path, **cfg_kwargs):
     from axon.main import AxonBrain, AxonConfig
@@ -134,7 +136,7 @@ class TestP2EntityFrequencyPruning:
             "payment-service": {"frequency": 2, "description": "svc", "type": "ORGANIZATION"},
             "rare-entity": {"frequency": 1, "description": "rare", "type": "CONCEPT"},
         }
-        G = brain._build_networkx_graph()
+        G = _bare_graphrag_engine(brain)._build_networkx_graph()
         assert "kafka" in G.nodes
         assert "payment-service" in G.nodes
         assert "rare-entity" not in G.nodes
@@ -153,7 +155,7 @@ class TestP2EntityFrequencyPruning:
             "singleton": {"frequency": 1, "description": "", "type": "CONCEPT"},
             "common": {"frequency": 10, "description": "", "type": "CONCEPT"},
         }
-        G = brain._build_networkx_graph()
+        G = _bare_graphrag_engine(brain)._build_networkx_graph()
         assert "singleton" in G.nodes
         assert "common" in G.nodes
 
@@ -170,7 +172,7 @@ class TestP2EntityFrequencyPruning:
         brain._entity_graph = {
             "legacy-entity": ["chunk1", "chunk2"],  # legacy list format
         }
-        G = brain._build_networkx_graph()
+        G = _bare_graphrag_engine(brain)._build_networkx_graph()
         assert "legacy-entity" in G.nodes
 
 
@@ -236,7 +238,7 @@ class TestP4QueryGuidedLazySummarization:
         brain._executor.map = MagicMock(return_value=iter([]))
         brain._save_community_summaries = MagicMock()
 
-        brain._generate_community_summaries(query_hint="kafka lag")
+        _bare_graphrag_engine(brain)._generate_community_summaries(query_hint="kafka lag")
         brain._save_community_summaries.assert_called_once()
 
     def test_query_hint_tightens_max_total_to_top_communities(self):
@@ -282,7 +284,7 @@ class TestP4QueryGuidedLazySummarization:
 
         # Without query_hint — should not log the "lazy mode" message
         with patch("axon.main.logger") as mock_log:
-            brain._generate_community_summaries()
+            _bare_graphrag_engine(brain)._generate_community_summaries()
             calls = [str(c) for c in mock_log.info.call_args_list]
             assert not any("lazy mode" in c for c in calls)
 
@@ -317,7 +319,7 @@ class TestGraphVisualization:
             },
         }
         brain._relation_graph = {}
-        payload = brain.build_graph_payload()
+        payload = _bare_graphrag_engine(brain).build_graph_payload()
         assert "nodes" in payload
         assert "links" in payload
 
@@ -333,7 +335,7 @@ class TestGraphVisualization:
             }
         }
         brain._relation_graph = {}
-        payload = brain.build_graph_payload()
+        payload = _bare_graphrag_engine(brain).build_graph_payload()
         node = payload["nodes"][0]
         for field in ("id", "name", "label", "type", "color", "val", "tooltip"):
             assert field in node, f"missing field: {field}"
@@ -348,7 +350,7 @@ class TestGraphVisualization:
         }
         brain._relation_graph = {}
         brain._community_levels = {0: {"kafka": 7}}  # entity -> community_id
-        payload = brain.build_graph_payload()
+        payload = _bare_graphrag_engine(brain).build_graph_payload()
         assert payload["nodes"][0]["community"] == 7
 
     def test_build_graph_payload_edge_uses_target_field(self, tmp_path):
@@ -361,7 +363,7 @@ class TestGraphVisualization:
         brain._relation_graph = {
             "kafka": [{"target": "inventory", "relation": "delays", "description": "", "weight": 5}]
         }
-        payload = brain.build_graph_payload()
+        payload = _bare_graphrag_engine(brain).build_graph_payload()
         assert len(payload["links"]) == 1
         link = payload["links"][0]
         assert link["source"] == "kafka"
@@ -380,7 +382,7 @@ class TestGraphVisualization:
                 {"target": "b", "relation": "links", "description": "", "weight": 3},  # duplicate
             ]
         }
-        payload = brain.build_graph_payload()
+        payload = _bare_graphrag_engine(brain).build_graph_payload()
         assert len(payload["links"]) == 1
 
     def test_build_graph_payload_skips_unknown_targets(self, tmp_path):
@@ -394,8 +396,22 @@ class TestGraphVisualization:
                 {"target": "ghost-entity", "relation": "points-to", "description": "", "weight": 1}
             ]
         }
-        payload = brain.build_graph_payload()
+        payload = _bare_graphrag_engine(brain).build_graph_payload()
         assert len(payload["links"]) == 0
+
+    @staticmethod
+    def _wire_graph_backend(brain):
+        """export_graph_html resolves graph data via brain._graph_backend.graph_data()
+        (graph_render.py's _resolve_graph_payload) — wire a backend stub whose
+        graph_data() runs the real build_graph_payload() logic against brain's
+        hand-set _entity_graph/_relation_graph via the bare-engine wrapper."""
+        from axon.graph_backends.base import GraphPayload
+
+        backend = MagicMock()
+        backend.graph_data.side_effect = lambda *a, **kw: GraphPayload(
+            **_bare_graphrag_engine(brain).build_graph_payload()
+        )
+        brain._graph_backend = backend
 
     def test_export_graph_html_writes_file(self, tmp_path):
         """export_graph_html writes a valid HTML file when path is provided."""
@@ -404,6 +420,7 @@ class TestGraphVisualization:
             "kafka": {"type": "PRODUCT", "description": "msg bus", "chunk_ids": ["c1"], "degree": 1}
         }
         brain._relation_graph = {}
+        self._wire_graph_backend(brain)
         html_path = str(tmp_path / "graph.html")
         html = brain.export_graph_html(path=html_path, open_browser=False)
         assert "ForceGraph3D" in html
@@ -435,6 +452,7 @@ class TestGraphVisualization:
             }
         }
         brain._relation_graph = {}
+        self._wire_graph_backend(brain)
         html_path = str(tmp_path / "graph.html")
         json_path = str(tmp_path / "graph.json")
         brain.export_graph_html(path=html_path, json_path=json_path, open_browser=False)

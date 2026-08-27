@@ -26,9 +26,9 @@ async def get_graph_status():
     brain = _api.brain
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
-    in_progress = getattr(brain, "_community_build_in_progress", False)
     backend = getattr(brain, "_graph_backend", None)
     status = backend.status() if backend is not None else {}
+    in_progress = status.get("community_build_in_progress", False)
     summary_count = status.get("community_summaries", 0)
     entity_count = status.get("entities", 0)
     code_node_count = len((getattr(brain, "_code_graph", {}) or {}).get("nodes", {}))
@@ -59,29 +59,18 @@ async def finalize_graph(request: Request):
     if not brain:
         raise HTTPException(status_code=503, detail="Brain not initialized")
     _enforce_write_access(brain, "finalize_graph")
+    backend = getattr(brain, "_graph_backend", None)
+    if backend is None:
+        raise HTTPException(status_code=503, detail="No graph backend attached")
     rid = getattr(request.state, "request_id", "")
     surface = getattr(request.state, "surface", "api")
     project = getattr(brain, "_active_project", "default")
     try:
-        backend = getattr(brain, "_graph_backend", None)
-        finalize_status = "ok"
-        finalize_detail = ""
-        backend_id = ""
-        summary_count = 0
-        if backend is not None and callable(getattr(backend, "finalize", None)):
-            result = await asyncio.to_thread(backend.finalize, True)
-            finalize_status = getattr(result, "status", "ok")
-            finalize_detail = getattr(result, "detail", "")
-            backend_id = getattr(result, "backend_id", "")
-            summary_count = getattr(result, "communities_built", 0)
-        else:
-            await asyncio.to_thread(brain.finalize_graph, True)
-            if backend is not None:
-                summary_count = backend.status().get("community_summaries", 0)
-            else:
-                # No backend attached at all (not just one without finalize()) —
-                # nothing to delegate to, so fall back to the raw attribute.
-                summary_count = len(getattr(brain, "_community_summaries", {}) or {})
+        result = await asyncio.to_thread(backend.finalize, True)
+        finalize_status = getattr(result, "status", "ok")
+        finalize_detail = getattr(result, "detail", "")
+        backend_id = getattr(result, "backend_id", "")
+        summary_count = getattr(result, "communities_built", 0)
         gov.emit(
             "graph_finalize",
             "graph",
@@ -200,9 +189,12 @@ async def graph_retrieve(request: Request):
 
 
 def _resolve_graph_payload(brain) -> dict:
-    """Prefer the active graph backend's own ``graph_data()``; fall back to
-    the legacy ``build_graph_payload()`` when the backend doesn't supply one.
-    Mirrors the precedence already used by ``GET /graph/data``."""
+    """Return the active graph backend's ``graph_data()`` payload.
+    Mirrors the precedence already used by ``GET /graph/data``. ``_graph_backend``
+    is unconditionally attached and ``graph_data()`` is a required Protocol
+    method — the empty-payload return below is a defensive fallback, not the
+    common path (there is no brain-level ``build_graph_payload()`` to fall
+    back to any more; that logic now lives on ``GraphRagEngine``)."""
     backend = getattr(brain, "_graph_backend", None)
     if backend is not None and callable(getattr(backend, "graph_data", None)):
         try:
@@ -215,10 +207,6 @@ def _resolve_graph_payload(brain) -> dict:
         if isinstance(payload, dict):
             return payload
         return {"nodes": [], "links": []}
-    if callable(getattr(brain, "build_graph_payload", None)):
-        payload = brain.build_graph_payload()
-        if isinstance(payload, dict):
-            return payload
     return {"nodes": [], "links": []}
 
 

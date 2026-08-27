@@ -53,9 +53,13 @@ def clear_active_project(brain: Any) -> None:
     graph_backend = getattr(brain, "_graph_backend", None)
     if graph_backend is not None and callable(getattr(graph_backend, "clear", None)):
         graph_backend.clear(persist=True)
-    brain._community_build_in_progress = False
     brain._code_graph = {"nodes": {}, "edges": []}
     _call_optional(brain, "_save_code_graph")
+    # In-memory only, brain-owned (not GraphRAG state — see
+    # GraphRagEngine._reset_graph_state()'s docstring for why it no longer
+    # resets this). Clearing here keeps "wipe this project's data" complete.
+    if hasattr(brain, "_raptor_summary_cache"):
+        brain._raptor_summary_cache = {}
     meta_path = getattr(brain, "_embedding_meta_path", None)
     if isinstance(meta_path, str | os.PathLike):
         path = pathlib.Path(meta_path)

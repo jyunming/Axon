@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
+from axon.graph_backends.graphrag_engine import GraphRagEngine
 from axon.main import AxonBrain, AxonConfig
 
 
@@ -41,20 +42,20 @@ class TestStressNew:
 
             with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
                 AxonBrain, "_load_doc_versions"
-            ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+            ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
                 AxonBrain, "_load_code_graph", return_value={}
             ), patch.object(
-                AxonBrain, "_load_relation_graph", return_value={}
+                GraphRagEngine, "_load_relation_graph", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_levels", return_value={}
+                GraphRagEngine, "_load_community_levels", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_summaries", return_value={}
+                GraphRagEngine, "_load_community_summaries", return_value={}
             ), patch.object(
-                AxonBrain, "_load_entity_embeddings", return_value={}
+                GraphRagEngine, "_load_entity_embeddings", return_value={}
             ), patch.object(
-                AxonBrain, "_load_claims_graph", return_value={}
+                GraphRagEngine, "_load_claims_graph", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_hierarchy", return_value={}
+                GraphRagEngine, "_load_community_hierarchy", return_value={}
             ):
                 brain = AxonBrain(config)
                 yield brain
@@ -70,9 +71,9 @@ class TestStressNew:
             futures = [executor.submit(mock_brain.ingest, [doc]) for _ in range(num_threads)]
             concurrent.futures.wait(futures)
 
-        assert "entityx" in mock_brain._entity_graph
+        assert "entityx" in mock_brain._graph_backend._engine._entity_graph
 
-        count = len(mock_brain._entity_graph["entityx"]["chunk_ids"])
+        count = len(mock_brain._graph_backend._engine._entity_graph["entityx"]["chunk_ids"])
         print(f"DEBUG: entityx chunk_ids count={count}")
 
         # If thread-safe, count should be 1 because of 'if doc_id not in ...' check.

@@ -7,7 +7,6 @@ import os
 import re
 import threading
 import time
-from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -195,6 +194,59 @@ class QueryRouterMixin:
     def _rebuild_entity_token_index(self) -> None:
         """No-op fallback; GraphRagMixin provides the real implementation."""
 
+    # ── keyword sets for multi-class router ───────────────────────────────────
+    _SYNTHESIS_KEYWORDS: frozenset = frozenset(
+        {
+            "summarize",
+            "overview",
+            "compare",
+            "contrast",
+            "explain",
+            "discuss",
+            "survey",
+            "themes",
+            "analysis",
+        }
+    )
+    _TABLE_KEYWORDS: frozenset = frozenset(
+        {
+            "table",
+            "row",
+            "column",
+            "value",
+            "count",
+            "average",
+            "maximum",
+            "minimum",
+            "statistic",
+            "how many",
+            "list all",
+        }
+    )
+    _ENTITY_KEYWORDS: frozenset = frozenset(
+        {
+            "relationship",
+            "related to",
+            "who",
+            "works with",
+            "connected",
+            "linked",
+            "colleague",
+            "dependency",
+            "relate",
+        }
+    )
+    _CORPUS_KEYWORDS: frozenset = frozenset(
+        {
+            "all documents",
+            "entire corpus",
+            "everything",
+            "main topics",
+            "key themes",
+            "across all",
+        }
+    )
+
     def _classify_query_route(self, query: str, cfg: AxonConfig) -> str:
         """Return one of: factual | synthesis | table_lookup | entity_relation | corpus_exploration."""
         if cfg.query_router == "llm":
@@ -247,175 +299,6 @@ class QueryRouterMixin:
         except Exception:
             pass
         return "factual"
-
-    def _expand_with_entity_graph(
-        self, query: str, results: list[dict], cfg=None
-    ) -> tuple[list[dict], list[str]]:
-        """Expand retrieval results using GraphRAG entity linkage.
-        1. Extract entities from the query.
-        2. Match query entities against the entity graph using Jaccard similarity.
-        3. Perform 1-hop traversal via the relation graph (when enabled).
-        4. Fetch any chunks not already in results, tag with _graph_expanded.
-        5. Return the expanded list (top_k slicing is deferred to the caller).
-        """
-        # Item 5: Union LLM-extracted entities with embedding-based matches.
-        # LLM extraction captures exact textual mentions; embedding matching adds semantic neighbors.
-        query_entities = self._extract_entities(query)
-        if (
-            getattr(self.config, "graph_rag_entity_embedding_match", True)
-            and self._entity_embeddings
-        ):
-            matched_keys = self._match_entities_by_embedding(query)
-            seen_names = {e.get("name", "").lower() for e in query_entities}
-            for k in matched_keys:
-                if k.lower() not in seen_names:
-                    query_entities.append({"name": k, "type": "UNKNOWN", "description": ""})
-        if not query_entities:
-            return results, []
-        active_top_k = (
-            cfg.top_k if (cfg is not None and cfg.top_k is not None) else self.config.top_k
-        )
-        active_cfg = cfg if cfg is not None else self.config
-        existing_ids = {r["id"] for r in results}
-        # {doc_id: best_score} so we don't lower a score if the same ID matches again
-        extra_id_scores: dict[str, float] = {}
-        matched_entities: set[str] = set()
-        with self._graph_lock:
-            for query_entity in query_entities:
-                # Support both new dict-node format and legacy list format
-                q_name = (
-                    query_entity if isinstance(query_entity, str) else query_entity.get("name", "")
-                )
-                if not q_name:
-                    continue
-                # Token-index candidate lookup: gather entities that share at least
-                # one token with the query entity, then score only that candidate set
-                # (typically 10-200 nodes) instead of all |V| entities.
-                # Falls back to full scan when index is empty (e.g. direct attribute
-                # assignment in tests without calling _rebuild_entity_token_index).
-                q_lower = q_name.lower().strip()
-                q_tokens = q_lower.split()
-                token_idx = self._entity_token_index
-                if token_idx:
-                    candidates: set[str] = set()
-                    for tok in q_tokens:
-                        bucket = token_idx.get(tok)
-                        if bucket:
-                            candidates.update(bucket)
-                    candidate_iter = [(eid, self._entity_graph.get(eid)) for eid in candidates]
-                else:
-                    # Fallback: index not populated yet
-                    candidate_iter = list(self._entity_graph.items())
-                for eid, node in candidate_iter:
-                    if node is None:
-                        continue
-                    score = self._entity_matches(q_name, eid)
-                    if score <= 0.0:
-                        continue
-                    matched_entities.add(eid)
-                    # Scale matched score into [0.5, 0.8) range so it is clearly below
-                    # a direct vector-match score but still meaningfully ranked.
-                    doc_score = 0.5 + score * 0.3
-                    doc_ids = node.get("chunk_ids", [])
-                    for did in doc_ids:
-                        if did not in existing_ids:
-                            if extra_id_scores.get(did, 0.0) < doc_score:
-                                extra_id_scores[did] = doc_score
-
-            # Multi-hop traversal via relation graph
-            def _cfg_get(name, default):
-                return getattr(active_cfg, name, default)
-
-            max_hops = _cfg_get("graph_rag_max_hops", 1)
-            hop_decay = _cfg_get("graph_rag_hop_decay", 0.7)
-            # Performance guard for large graphs (Epic 1/4)
-            large_threshold = _cfg_get("graph_rag_large_graph_threshold", 50000)
-            if len(self._entity_graph) > large_threshold and max_hops > 1:
-                logger.info(
-                    f"   GraphRAG: large graph detected ({len(self._entity_graph)} nodes); "
-                    f"capping max_hops at 1 for performance."
-                )
-                max_hops = 1
-            use_relations = (
-                getattr(active_cfg, "graph_rag_relations", True)
-                and self._relation_graph
-                and max_hops > 0
-            )
-            if use_relations and matched_entities:
-                # Check traversal cache before running BFS.
-                # Cache key covers entity set + hop params so different configs
-                # don't collide.
-                _cache_key = (frozenset(matched_entities), max_hops, hop_decay)
-                _now = time.monotonic()
-                _bfs_scores: dict[str, float] | None = None
-                _tc: OrderedDict | None = getattr(self, "_traversal_cache", None)
-                _tc_ttl: float = getattr(self, "_traversal_cache_ttl", 900.0)
-                if _tc is not None:
-                    with self._traversal_cache_lock:
-                        _cached = _tc.get(_cache_key)
-                        if _cached is not None:
-                            _stored_time, _stored_scores = _cached
-                            if _now - _stored_time < _tc_ttl:
-                                _tc.move_to_end(_cache_key)
-                                _bfs_scores = _stored_scores
-                            else:
-                                del _tc[_cache_key]
-                if _bfs_scores is None:
-                    # BFS for multi-hop traversal
-                    _bfs_scores = {}
-                    current_hop_entities = set(matched_entities)
-                    visited_entities = set(matched_entities)
-                    for hop in range(1, max_hops + 1):
-                        next_hop_entities = set()
-                        # Score for this hop decays from base 0.8
-                        # Hop 1: 0.8 * 0.7 = 0.56
-                        # Hop 2: 0.56 * 0.7 = 0.392
-                        hop_score = 0.8 * (hop_decay**hop)
-                        for src_entity in current_hop_entities:
-                            for entry in self._relation_graph.get(src_entity, []):
-                                target = entry.get("target", "").lower()
-                                if not target or target in visited_entities:
-                                    continue
-                                visited_entities.add(target)
-                                next_hop_entities.add(target)
-                                target_node = self._entity_graph.get(target, {})
-                                target_chunk_ids = target_node.get("chunk_ids", [])
-                                for did in target_chunk_ids:
-                                    if _bfs_scores.get(did, 0.0) < hop_score:
-                                        _bfs_scores[did] = hop_score
-                        if not next_hop_entities:
-                            break
-                        current_hop_entities = next_hop_entities
-                    # Store BFS result in traversal cache
-                    if _tc is not None:
-                        _tc_maxsize: int = getattr(self, "_traversal_cache_maxsize", 512)
-                        with self._traversal_cache_lock:
-                            if len(_tc) >= _tc_maxsize:
-                                _tc.popitem(last=False)  # evict LRU
-                            _tc[_cache_key] = (time.monotonic(), dict(_bfs_scores))
-                # Merge BFS scores into extra_id_scores (skip IDs already in results)
-                for did, hop_score in _bfs_scores.items():
-                    if did not in existing_ids:
-                        if extra_id_scores.get(did, 0.0) < hop_score:
-                            extra_id_scores[did] = hop_score
-        if not extra_id_scores:
-            return results, list(matched_entities)
-        # Fetch the extra chunks from the vector store (capped to avoid huge fetches)
-        extra_ids = list(extra_id_scores.keys())[:active_top_k]
-        try:
-            extra_results = self.vector_store.get_by_ids(extra_ids)
-            if extra_results:
-                logger.info(
-                    f"   GraphRAG: expanded results by {len(extra_results)} entity-linked doc(s)"
-                )
-                for r in extra_results:
-                    # Use a very low fallback if somehow missing from map
-                    r["score"] = extra_id_scores.get(r["id"], 0.01)
-                    r["_graph_expanded"] = True
-                results = list(results) + extra_results
-        except Exception as e:
-            logger.debug(f"GraphRAG expansion failed: {e}")
-        return results, list(matched_entities)
 
     def _doc_hash(self, doc: dict) -> str:
         """Return an MD5 hex digest of the document's text content."""
@@ -1359,8 +1242,14 @@ class QueryRouterMixin:
         base_count = len(results)
         # GraphRAG: expand results with entity-linked documents
         _matched_entities: list = []
-        if cfg.graph_rag and self._graph_backend.has_entities():
-            results, _matched_entities = self._expand_with_entity_graph(query, results, cfg=cfg)
+        if (
+            cfg.graph_rag
+            and self._graph_backend.has_entities()
+            and hasattr(self._graph_backend, "expand_with_entity_graph")
+        ):
+            results, _matched_entities = self._graph_backend.expand_with_entity_graph(
+                query, results, cfg
+            )
         # Code graph expansion (structural, independent of prose GraphRAG)
         if getattr(cfg, "code_graph", False) and self._code_graph.get("nodes"):
             results, _matched_code_syms = self._expand_with_code_graph(query, results, cfg=cfg)
@@ -1579,9 +1468,15 @@ class QueryRouterMixin:
                 if hasattr(cfg, k):
                     object.__setattr__(cfg, k, v)
             logger.debug("query_router: route=%s overrides=%s", route, profile_overrides)
-        elif cfg.graph_rag_auto_route != "off" and cfg.graph_rag:
+        elif (
+            cfg.graph_rag_auto_route != "off"
+            and cfg.graph_rag
+            and hasattr(self._graph_backend, "classify_query_needs_graphrag")
+        ):
             # legacy binary classifier fallback
-            _needs_grag = self._classify_query_needs_graphrag(query, cfg.graph_rag_auto_route)
+            _needs_grag = self._graph_backend.classify_query_needs_graphrag(
+                query, cfg.graph_rag_auto_route
+            )
             if not _needs_grag:
                 cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
                 logger.debug("Auto-route: GraphRAG bypassed for query '%s...'", query[:60])
@@ -1678,8 +1573,9 @@ class QueryRouterMixin:
             and (
                 self._graph_backend.has_entities() or self._graph_backend.has_community_summaries()
             )
+            and hasattr(self._graph_backend, "local_search_context")
         ):
-            _local_ctx = self._local_search_context(query, _matched_entities, cfg)
+            _local_ctx = self._graph_backend.local_search_context(query, _matched_entities, cfg)
         else:
             _local_ctx = ""
         if cfg.compress_context:
@@ -1715,21 +1611,19 @@ class QueryRouterMixin:
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
-            and not self._graph_backend.has_community_summaries()
-            and self._community_levels
             and getattr(cfg, "graph_rag_community_lazy", False)
+            and hasattr(self._graph_backend, "ensure_community_summaries")
         ):
-            with self._community_rebuild_lock:
-                if not self._graph_backend.has_community_summaries():
-                    self._generate_community_summaries(query_hint=query)
-                    if getattr(cfg, "graph_rag_index_community_reports", True):
-                        self._index_community_reports_in_vector_store()
+            self._graph_backend.ensure_community_summaries(
+                query, getattr(cfg, "graph_rag_index_community_reports", True)
+            )
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
             and self._graph_backend.has_community_summaries()
+            and hasattr(self._graph_backend, "global_search_map_reduce")
         ):
-            _global_ctx = self._global_search_map_reduce(query, cfg)
+            _global_ctx = self._graph_backend.global_search_map_reduce(query, cfg)
             if _global_ctx:
                 if graph_mode == "global":
                     context = f"**Knowledge Graph Community Reports:**\n{_global_ctx}"
@@ -1824,8 +1718,14 @@ class QueryRouterMixin:
                 if hasattr(cfg, k):
                     object.__setattr__(cfg, k, v)
             logger.debug("query_router(stream): route=%s overrides=%s", route, profile_overrides)
-        elif cfg.graph_rag_auto_route != "off" and cfg.graph_rag:
-            _needs_grag = self._classify_query_needs_graphrag(query, cfg.graph_rag_auto_route)
+        elif (
+            cfg.graph_rag_auto_route != "off"
+            and cfg.graph_rag
+            and hasattr(self._graph_backend, "classify_query_needs_graphrag")
+        ):
+            _needs_grag = self._graph_backend.classify_query_needs_graphrag(
+                query, cfg.graph_rag_auto_route
+            )
             if not _needs_grag:
                 cfg = self._apply_overrides({**(overrides or {}), "graph_rag": False})
                 logger.debug("Auto-route(stream): GraphRAG bypassed for query '%s...'", query[:60])
@@ -1879,8 +1779,9 @@ class QueryRouterMixin:
             and (
                 self._graph_backend.has_entities() or self._graph_backend.has_community_summaries()
             )
+            and hasattr(self._graph_backend, "local_search_context")
         ):
-            _local_ctx = self._local_search_context(query, _matched_entities, cfg)
+            _local_ctx = self._graph_backend.local_search_context(query, _matched_entities, cfg)
         else:
             _local_ctx = ""
         if cfg.compress_context:
@@ -1905,21 +1806,19 @@ class QueryRouterMixin:
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
-            and not self._graph_backend.has_community_summaries()
-            and self._community_levels
             and getattr(cfg, "graph_rag_community_lazy", False)
+            and hasattr(self._graph_backend, "ensure_community_summaries")
         ):
-            with self._community_rebuild_lock:
-                if not self._graph_backend.has_community_summaries():
-                    self._generate_community_summaries(query_hint=query)
-                    if getattr(cfg, "graph_rag_index_community_reports", True):
-                        self._index_community_reports_in_vector_store()
+            self._graph_backend.ensure_community_summaries(
+                query, getattr(cfg, "graph_rag_index_community_reports", True)
+            )
         if (
             cfg.graph_rag
             and graph_mode in ("global", "hybrid")
             and self._graph_backend.has_community_summaries()
+            and hasattr(self._graph_backend, "global_search_map_reduce")
         ):
-            _global_ctx = self._global_search_map_reduce(query, cfg)
+            _global_ctx = self._graph_backend.global_search_map_reduce(query, cfg)
             if _global_ctx:
                 if graph_mode == "global":
                     context = f"**Knowledge Graph Community Reports:**\n{_global_ctx}"
