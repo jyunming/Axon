@@ -22,24 +22,41 @@ from axon.main import AxonBrain, AxonConfig
 # ---------------------------------------------------------------------------
 
 
-def _make_brain(
+def _make_backend(
     entity_graph: dict | None = None,
     relation_graph: dict | None = None,
     community_levels: dict | None = None,
     community_summaries: dict | None = None,
     graph_payload: dict | None = None,
     expand_return: tuple | None = None,
-) -> MagicMock:
-    brain = MagicMock()
-    brain._entity_graph = entity_graph or {}
-    brain._relation_graph = relation_graph or {}
-    brain._community_levels = community_levels or {}
-    brain._community_summaries = community_summaries or {}
+) -> GraphRagBackend:
+    """Build a GraphRagBackend whose composed engine is a bare MagicMock.
+
+    GraphRagBackend.__init__ now constructs a real GraphRagEngine and calls
+    its load(), which does real disk I/O keyed off self.config.bm25_path —
+    incompatible with a MagicMock "brain" that has no real config. These
+    adapter-contract tests only care about delegation (does the backend read/
+    call through to its engine correctly), not real loading, so bypass
+    __init__ entirely and inject a MagicMock engine directly — same spirit as
+    test_graph_backend_base.py's tmp_path/SimpleNamespace pattern, adapted
+    for a MagicMock-based engine double.
+    """
+    engine = MagicMock()
+    engine._entity_graph = entity_graph or {}
+    engine._relation_graph = relation_graph or {}
+    engine._community_levels = community_levels or {}
+    engine._community_summaries = community_summaries or {}
+    engine._community_build_in_progress = False
+    engine._community_graph_dirty = False
 
     _payload = graph_payload or {"nodes": [], "links": []}
-    brain.build_graph_payload.return_value = _payload
-    brain._expand_with_entity_graph.return_value = expand_return or ([], [])
-    return brain
+    engine.build_graph_payload.return_value = _payload
+    engine.expand_with_entity_graph.return_value = expand_return or ([], [])
+
+    backend = GraphRagBackend.__new__(GraphRagBackend)
+    backend._brain = MagicMock()
+    backend._engine = engine
+    return backend
 
 
 # ---------------------------------------------------------------------------
@@ -49,17 +66,16 @@ def _make_brain(
 
 class TestGraphDataParity:
     def test_empty_graph_matches_brain(self):
-        brain = _make_brain()
-        backend = GraphRagBackend(brain)
+        backend = _make_backend()
 
-        raw = brain.build_graph_payload()
+        raw = backend._engine.build_graph_payload()
         payload = backend.graph_data()
 
         assert payload.nodes == raw["nodes"]
         assert payload.links == raw["links"]
 
     def test_graph_payload_matches_brain_nodes_and_links(self):
-        brain = _make_brain(
+        backend = _make_backend(
             graph_payload={
                 "nodes": [
                     {"id": "alice", "name": "Alice", "type": "PERSON", "degree": 3},
@@ -70,7 +86,6 @@ class TestGraphDataParity:
                 ],
             }
         )
-        backend = GraphRagBackend(brain)
         payload = backend.graph_data()
 
         assert len(payload.nodes) == 2
@@ -84,14 +99,13 @@ class TestGraphDataParity:
             "nodes": [{"id": "x", "name": "X", "type": "CONCEPT", "degree": 0}],
             "links": [],
         }
-        brain = _make_brain(graph_payload=raw)
-        backend = GraphRagBackend(brain)
+        backend = _make_backend(graph_payload=raw)
         d = backend.graph_data().to_dict()
 
         assert d == raw
 
     def test_graph_data_entity_type_filter(self):
-        brain = _make_brain(
+        backend = _make_backend(
             graph_payload={
                 "nodes": [
                     {"id": "alice", "type": "PERSON", "degree": 2},
@@ -100,13 +114,12 @@ class TestGraphDataParity:
                 "links": [],
             }
         )
-        backend = GraphRagBackend(brain)
         payload = backend.graph_data(GraphDataFilters(entity_types=["PERSON"]))
         assert len(payload.nodes) == 1
         assert payload.nodes[0]["id"] == "alice"
 
     def test_graph_data_min_degree_filter(self):
-        brain = _make_brain(
+        backend = _make_backend(
             graph_payload={
                 "nodes": [
                     {"id": "hub", "type": "CONCEPT", "degree": 5},
@@ -115,19 +128,17 @@ class TestGraphDataParity:
                 "links": [],
             }
         )
-        backend = GraphRagBackend(brain)
         payload = backend.graph_data(GraphDataFilters(min_degree=1))
         assert len(payload.nodes) == 1
         assert payload.nodes[0]["id"] == "hub"
 
     def test_graph_data_limit_filter(self):
-        brain = _make_brain(
+        backend = _make_backend(
             graph_payload={
                 "nodes": [{"id": str(i), "type": "X", "degree": 0} for i in range(10)],
                 "links": [],
             }
         )
-        backend = GraphRagBackend(brain)
         payload = backend.graph_data(GraphDataFilters(limit=3))
         assert len(payload.nodes) == 3
 
@@ -139,27 +150,24 @@ class TestGraphDataParity:
 
 class TestStatusParity:
     def test_status_entity_count_matches_entity_graph(self):
-        brain = _make_brain(
+        backend = _make_backend(
             entity_graph={"alice": {"chunk_ids": ["c1"]}, "bob": {"chunk_ids": ["c2"]}}
         )
-        backend = GraphRagBackend(brain)
         s = backend.status()
         assert s["entities"] == 2
 
     def test_status_relation_count_matches_relation_graph(self):
-        brain = _make_brain(relation_graph={"alice": [{"target": "bob", "relation": "KNOWS"}]})
-        backend = GraphRagBackend(brain)
+        backend = _make_backend(relation_graph={"alice": [{"target": "bob", "relation": "KNOWS"}]})
         s = backend.status()
         assert s["relations"] == 1
 
     def test_status_community_count_matches_community_levels(self):
-        brain = _make_brain(community_levels={0: {"alice": 0, "bob": 0, "carol": 1}})
-        backend = GraphRagBackend(brain)
+        backend = _make_backend(community_levels={0: {"alice": 0, "bob": 0, "carol": 1}})
         s = backend.status()
         assert s["communities"] == 3
 
     def test_status_backend_id(self):
-        backend = GraphRagBackend(_make_brain())
+        backend = _make_backend()
         assert backend.status()["backend"] == "graphrag"
 
 
@@ -170,15 +178,16 @@ class TestStatusParity:
 
 class TestRetrieveParity:
     def test_retrieve_delegates_to_expand_with_entity_graph(self):
-        brain = _make_brain()
-        brain._expand_with_entity_graph.return_value = (
+        backend = _make_backend()
+        backend._engine.expand_with_entity_graph.return_value = (
             [{"id": "c1", "text": "Alice works at ACME", "score": 0.75, "metadata": {}}],
             ["alice"],
         )
-        backend = GraphRagBackend(brain)
         results = backend.retrieve("Who works at ACME?")
 
-        brain._expand_with_entity_graph.assert_called_once_with("Who works at ACME?", [], None)
+        backend._engine.expand_with_entity_graph.assert_called_once_with(
+            "Who works at ACME?", [], None
+        )
         assert len(results) == 1
         assert results[0].context_id == "c1"
         assert results[0].score == 0.75
@@ -186,38 +195,35 @@ class TestRetrieveParity:
         assert results[0].rank == 0
 
     def test_retrieve_populates_matched_entity_names(self):
-        brain = _make_brain()
-        brain._expand_with_entity_graph.return_value = (
+        backend = _make_backend()
+        backend._engine.expand_with_entity_graph.return_value = (
             [{"id": "c1", "text": "text", "score": 0.7, "metadata": {}}],
             ["alice", "bob"],
         )
-        backend = GraphRagBackend(brain)
         results = backend.retrieve("query")
         assert results[0].matched_entity_names == ["alice", "bob"]
 
     def test_retrieve_deduplicates_existing_results(self):
         existing = [{"id": "c1", "text": "existing", "score": 0.9, "metadata": {}}]
-        brain = _make_brain()
-        # _expand_with_entity_graph returns existing + new chunk
-        brain._expand_with_entity_graph.return_value = (
+        backend = _make_backend()
+        # expand_with_entity_graph returns existing + new chunk
+        backend._engine.expand_with_entity_graph.return_value = (
             [
                 {"id": "c1", "text": "existing", "score": 0.9, "metadata": {}},
                 {"id": "c2", "text": "new", "score": 0.7, "metadata": {}},
             ],
             ["alice"],
         )
-        backend = GraphRagBackend(brain)
         results = backend.retrieve("query", existing_results=existing)
         # Only the new chunk should be returned
         assert len(results) == 1
         assert results[0].context_id == "c2"
         # existing_results are passed to the underlying expand call
-        brain._expand_with_entity_graph.assert_called_once_with("query", existing, None)
+        backend._engine.expand_with_entity_graph.assert_called_once_with("query", existing, None)
 
     def test_retrieve_empty_when_no_entities_match(self):
-        brain = _make_brain()
-        brain._expand_with_entity_graph.return_value = ([], [])
-        backend = GraphRagBackend(brain)
+        backend = _make_backend()
+        backend._engine.expand_with_entity_graph.return_value = ([], [])
         results = backend.retrieve("unknown query")
         assert results == []
 
@@ -226,9 +232,8 @@ class TestRetrieveParity:
             {"id": f"c{i}", "text": f"text {i}", "score": 1.0 - i * 0.1, "metadata": {}}
             for i in range(5)
         ]
-        brain = _make_brain()
-        brain._expand_with_entity_graph.return_value = (chunks, [])
-        backend = GraphRagBackend(brain)
+        backend = _make_backend()
+        backend._engine.expand_with_entity_graph.return_value = (chunks, [])
         results = backend.retrieve("query")
         ranks = [r.rank for r in results]
         assert ranks == list(range(5))
@@ -250,36 +255,44 @@ class TestMutationParity:
     """
 
     def test_clear_delegates_to_reset_graph_state(self):
-        brain = _make_brain()
-        backend = GraphRagBackend(brain)
+        backend = _make_backend()
         backend.clear()
-        brain._reset_graph_state.assert_called_once_with()
+        backend._engine._reset_graph_state.assert_called_once_with()
 
     def test_delete_documents_delegates_to_prune_entity_graph(self):
-        brain = _make_brain()
-        backend = GraphRagBackend(brain)
+        backend = _make_backend()
         backend.delete_documents(["c1", "c2"])
-        brain._prune_entity_graph.assert_called_once_with({"c1", "c2"})
+        backend._engine._prune_entity_graph.assert_called_once_with({"c1", "c2"})
 
 
 # ---------------------------------------------------------------------------
-# ingest no-op
+# ingest delegates to the engine
 # ---------------------------------------------------------------------------
 
 
-class TestIngestNoOp:
-    def test_ingest_does_not_call_brain_extraction(self):
-        brain = _make_brain()
-        backend = GraphRagBackend(brain)
-        result = backend.ingest([{"id": "c1", "text": "hello"}])
-        assert isinstance(result, IngestResult)
-        assert result.chunks_processed == 1
-        # Extraction happens inside AxonBrain.ingest(), not here
-        brain._extract_entities.assert_not_called()
-        brain._extract_relations.assert_not_called()
+class TestIngestDelegatesToEngine:
+    """ingest() used to be a confirmed no-op with zero production callers;
+    it's now real — AxonBrain.ingest() calls it, and it delegates to
+    GraphRagEngine.ingest_chunks(), which absorbs the extraction/merge logic
+    that previously lived inline in AxonBrain.ingest(). These tests verify
+    the delegation itself; ingest_chunks()'s own behavior is covered by
+    TestGraphRagParityFixtures below (real extraction) and test_main.py.
+    """
+
+    def test_ingest_delegates_to_engine_ingest_chunks(self):
+        backend = _make_backend()
+        expected = IngestResult(entities_added=2, relations_added=1, chunks_processed=1)
+        backend._engine.ingest_chunks.return_value = expected
+        chunks = [{"id": "c1", "text": "hello"}]
+
+        result = backend.ingest(chunks)
+
+        backend._engine.ingest_chunks.assert_called_once_with(chunks)
+        assert result is expected
 
     def test_ingest_empty_chunks(self):
-        backend = GraphRagBackend(_make_brain())
+        backend = _make_backend()
+        backend._engine.ingest_chunks.return_value = IngestResult(chunks_processed=0)
         result = backend.ingest([])
         assert result.chunks_processed == 0
 
@@ -387,25 +400,38 @@ class TestGraphRagParityFixtures:
 
             expected = fixture["expected"]
             entity_keys = {k.lower() for k in expected["expected_entity_keys"]}
-            got_keys = set(brain._entity_graph.keys())
+            # Assert through the backend surface (graph_data()/status()), not
+            # brain._entity_graph/_relation_graph directly — those attributes
+            # left AxonBrain in the M2 ownership-inversion (Phase 4); they now
+            # live on GraphRagBackend._engine, reachable only through the
+            # backend. This keeps the parity suite — the drift detector for
+            # Phase 3/4 — actually exercising the post-refactor surface.
+            payload = brain._graph_backend.graph_data()
+            nodes_by_id = {n["id"]: n for n in payload.nodes}
+            got_keys = set(nodes_by_id.keys())
             missing = entity_keys - got_keys
             assert not missing, f"{scenario}: missing entities {missing} in {sorted(got_keys)}"
 
             for name, expected_type in expected.get("expected_entity_types", {}).items():
-                node = brain._entity_graph.get(name.lower())
+                node = nodes_by_id.get(name.lower())
                 assert node is not None, f"{scenario}: {name} missing from entity graph"
                 assert node["type"] == expected_type, (
                     f"{scenario}: {name} type {node['type']!r} != " f"expected {expected_type!r}"
                 )
 
+            relation_pairs = {(link.get("source"), link.get("target")) for link in payload.links}
             for subject, obj in expected.get("expected_relation_pairs", []):
                 subj_l, obj_l = subject.lower(), obj.lower()
-                rels = brain._relation_graph.get(subj_l, [])
-                targets = {r.get("target") for r in rels}
-                assert obj_l in targets, (
-                    f"{scenario}: relation {subject}->{obj} not found; "
-                    f"{subj_l} has targets {targets}"
+                assert (subj_l, obj_l) in relation_pairs, (
+                    f"{scenario}: relation {subject}->{obj} not found in "
+                    f"rendered links {sorted(relation_pairs)}"
                 )
+
+            status_before_finalize = brain._graph_backend.status()
+            assert status_before_finalize["entities"] >= len(entity_keys), (
+                f"{scenario}: status() entity count "
+                f"{status_before_finalize['entities']} < {len(entity_keys)} expected"
+            )
 
             # Close the loop: finalize (community build) + render, both
             # asserted through the backend surface — not the mixin methods

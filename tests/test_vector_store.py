@@ -3006,4 +3006,3 @@ def test_clear_active_project_delegates_graph_reset_to_backend():
     clear_active_project(brain)
 
     brain._graph_backend.clear.assert_called_once_with(persist=True)
-    assert brain._community_build_in_progress is False

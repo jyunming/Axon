@@ -1264,8 +1264,8 @@ def _tool_graph_status(brain) -> str:
     entity_count = status.get("entities", 0)
     relation_count = status.get("relations", 0)
     community_count = status.get("community_summaries", 0)
-    in_progress = getattr(brain, "_community_build_in_progress", False)
-    dirty = getattr(brain, "_community_graph_dirty", False)
+    in_progress = status.get("community_build_in_progress", False)
+    dirty = status.get("community_graph_dirty", False)
     lines = [
         f"entities: {entity_count}",
         f"relations: {relation_count}",

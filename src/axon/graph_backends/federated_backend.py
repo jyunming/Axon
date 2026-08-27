@@ -319,3 +319,45 @@ class FederatedGraphBackend:
             except Exception:
                 pass
         return False
+
+    # ------------------------------------------------------------------
+    # GraphRAG-specific bridge delegation. query_router.py's main query
+    # path calls these directly on self._graph_backend (bypassing the
+    # Protocol-typed retrieve(), see graph_backends/base.py's RetrievalConfig
+    # docstring), hasattr-guarded so backends that don't support them are
+    # skipped gracefully. The wrapped GraphRagBackend shares this brain and
+    # gets populated during ingest() regardless of which graph_backend is
+    # selected (see has_entities()) — delegating to it here, rather than
+    # omitting these methods entirely, avoids silently disabling local/
+    # global GraphRAG context injection for federated-configured projects.
+    # ------------------------------------------------------------------
+    def _graphrag_sub_backend(self):
+        for b in self._backends:
+            if getattr(b, "BACKEND_ID", None) == "graphrag":
+                return b
+        return None
+
+    def expand_with_entity_graph(self, query: str, results: list[dict], cfg: Any = None):
+        sub = self._graphrag_sub_backend()
+        if sub is None:
+            return results, []
+        return sub.expand_with_entity_graph(query, results, cfg)
+
+    def local_search_context(self, query: str, matched_entities: list[str], cfg: Any) -> str:
+        sub = self._graphrag_sub_backend()
+        return sub.local_search_context(query, matched_entities, cfg) if sub is not None else ""
+
+    def global_search_map_reduce(self, query: str, cfg: Any) -> str:
+        sub = self._graphrag_sub_backend()
+        return sub.global_search_map_reduce(query, cfg) if sub is not None else ""
+
+    def classify_query_needs_graphrag(self, query: str, auto_route: bool) -> bool:
+        sub = self._graphrag_sub_backend()
+        return sub.classify_query_needs_graphrag(query, auto_route) if sub is not None else True
+
+    def ensure_community_summaries(
+        self, query_hint: str, index_community_reports: bool = True
+    ) -> None:
+        sub = self._graphrag_sub_backend()
+        if sub is not None:
+            sub.ensure_community_summaries(query_hint, index_community_reports)

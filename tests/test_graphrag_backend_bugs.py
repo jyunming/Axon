@@ -117,6 +117,7 @@ class TestCommunityBackendLogging:
     def _run_community_detection(self, backend: str):
         """Call _run_hierarchical_community_detection using entity/relation graph dicts."""
         from axon.main import AxonBrain, AxonConfig
+        from tests._graphrag_engine_test_utils import _bare_graphrag_engine
 
         entity_graph, relation_graph = self._make_entity_relation_graphs()
 
@@ -129,7 +130,7 @@ class TestCommunityBackendLogging:
         brain.config = cfg
         brain._entity_graph = entity_graph
         brain._relation_graph = relation_graph
-        return brain._run_hierarchical_community_detection()
+        return _bare_graphrag_engine(brain)._run_hierarchical_community_detection()
 
     # The logger in graph_rag.py is ``logging.getLogger("Axon")`` — use that name.
     _LOGGER = "Axon"
@@ -246,6 +247,7 @@ class TestRebelObservability:
 
     def _make_rebel_brain(self, pipeline_output, decoded_output="no triplets here"):
         """Wire a brain whose REBEL pipeline returns a controlled output."""
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
         from axon.main import AxonBrain, AxonConfig
 
         cfg = AxonConfig(
@@ -261,11 +263,19 @@ class TestRebelObservability:
         mock_pipe.tokenizer = MagicMock()
         mock_pipe.tokenizer.batch_decode.return_value = [decoded_output]
         brain._rebel_pipeline = mock_pipe
+        # _extract_relations_rebel's body calls self._ensure_rebel() and
+        # self._parse_rebel_output(...) internally — bind them directly
+        # (self=brain, not a real GraphRagEngine). _ensure_rebel is a
+        # cache-hit-only path here (brain._rebel_pipeline is already set);
+        # _parse_rebel_output is a staticmethod, so the raw function works
+        # as a plain instance attribute with no rebinding needed.
+        brain._ensure_rebel = GraphRagEngine._ensure_rebel.__get__(brain, GraphRagEngine)
+        brain._parse_rebel_output = GraphRagEngine._parse_rebel_output
         return brain
 
     def test_zero_triplets_emits_warning(self, caplog):
         """BUG-REBEL-4 — When tokens are decoded but parser returns no triplets, a WARNING is logged."""
-        from axon.main import AxonBrain
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         # Pipeline returns non-empty token_ids, but decoded text has no REBEL triplet markers
         brain = self._make_rebel_brain(
@@ -274,7 +284,7 @@ class TestRebelObservability:
         )
 
         with caplog.at_level(logging.WARNING, logger=self._LOGGER):
-            result = AxonBrain._extract_relations_rebel(brain, "Apple and Microsoft compete.")
+            result = GraphRagEngine._extract_relations_rebel(brain, "Apple and Microsoft compete.")
 
         assert result == []
 
@@ -291,7 +301,7 @@ class TestRebelObservability:
 
     def test_zero_triplets_warning_contains_token_count(self, caplog):
         """BUG-REBEL-4 — The zero-triplet warning must mention the decoded token count."""
-        from axon.main import AxonBrain
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         brain = self._make_rebel_brain(
             pipeline_output=[{"generated_token_ids": [10, 20, 30]}],
@@ -299,7 +309,7 @@ class TestRebelObservability:
         )
 
         with caplog.at_level(logging.WARNING, logger=self._LOGGER):
-            AxonBrain._extract_relations_rebel(brain, "Some text.")
+            GraphRagEngine._extract_relations_rebel(brain, "Some text.")
 
         warning_msgs = [
             r.message
@@ -313,7 +323,7 @@ class TestRebelObservability:
 
     def test_zero_triplets_no_warning_for_whitespace_only_input(self, caplog):
         """BUG-REBEL-4 — Whitespace-only input must NOT trigger the zero-triplet warning."""
-        from axon.main import AxonBrain
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         brain = self._make_rebel_brain(
             pipeline_output=[{"generated_token_ids": [1]}],
@@ -321,7 +331,7 @@ class TestRebelObservability:
         )
 
         with caplog.at_level(logging.WARNING, logger=self._LOGGER):
-            result = AxonBrain._extract_relations_rebel(brain, "   ")  # whitespace only
+            result = GraphRagEngine._extract_relations_rebel(brain, "   ")  # whitespace only
 
         # Result should be empty but no noisy warning for trivial empty input
         assert result == []
@@ -336,7 +346,7 @@ class TestRebelObservability:
 
     def test_empty_token_ids_emits_debug_not_warning(self, caplog):
         """BUG-REBEL-5 — Empty token_ids must log at DEBUG, not WARNING."""
-        from axon.main import AxonBrain
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         brain = self._make_rebel_brain(
             pipeline_output=[{"generated_token_ids": []}],
@@ -344,7 +354,7 @@ class TestRebelObservability:
         )
 
         with caplog.at_level(logging.DEBUG, logger=self._LOGGER):
-            result = AxonBrain._extract_relations_rebel(brain, "Some text.")
+            result = GraphRagEngine._extract_relations_rebel(brain, "Some text.")
 
         assert result == []
 
@@ -372,7 +382,7 @@ class TestRebelObservability:
 
     def test_rebel_debug_log_for_decoded_output(self, caplog):
         """P1 observability — decoded output (first 200 chars) must appear in DEBUG log."""
-        from axon.main import AxonBrain
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         decoded = "<triplet> Apple <subj> Microsoft <obj> partners with"
         brain = self._make_rebel_brain(
@@ -381,7 +391,7 @@ class TestRebelObservability:
         )
 
         with caplog.at_level(logging.DEBUG, logger=self._LOGGER):
-            AxonBrain._extract_relations_rebel(brain, "Apple and Microsoft are partners.")
+            GraphRagEngine._extract_relations_rebel(brain, "Apple and Microsoft are partners.")
 
         debug_msgs = [
             r.message
@@ -392,7 +402,7 @@ class TestRebelObservability:
 
     def test_successful_rebel_extraction_emits_no_warning(self, caplog):
         """When REBEL successfully extracts relations, no zero-triplet WARNING should fire."""
-        from axon.main import AxonBrain
+        from axon.graph_backends.graphrag_engine import GraphRagEngine
 
         decoded = "<triplet> Apple <subj> Microsoft <obj> partners with"
         brain = self._make_rebel_brain(
@@ -401,7 +411,9 @@ class TestRebelObservability:
         )
 
         with caplog.at_level(logging.WARNING, logger=self._LOGGER):
-            result = AxonBrain._extract_relations_rebel(brain, "Apple and Microsoft are partners.")
+            result = GraphRagEngine._extract_relations_rebel(
+                brain, "Apple and Microsoft are partners."
+            )
 
         assert len(result) >= 1
         spurious = [

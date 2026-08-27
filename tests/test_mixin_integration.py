@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from axon.graph_backends.graphrag_engine import GraphRagEngine
 from axon.main import AxonBrain, AxonConfig
 
 
@@ -62,20 +63,20 @@ class TestMixinIntegration:
             # Patch all load methods to avoid reading non-existent files
             with patch.object(AxonBrain, "_load_hash_store", return_value=set()), patch.object(
                 AxonBrain, "_load_doc_versions"
-            ), patch.object(AxonBrain, "_load_entity_graph", return_value={}), patch.object(
+            ), patch.object(GraphRagEngine, "_load_entity_graph", return_value={}), patch.object(
                 AxonBrain, "_load_code_graph", return_value={}
             ), patch.object(
-                AxonBrain, "_load_relation_graph", return_value={}
+                GraphRagEngine, "_load_relation_graph", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_levels", return_value={}
+                GraphRagEngine, "_load_community_levels", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_summaries", return_value={}
+                GraphRagEngine, "_load_community_summaries", return_value={}
             ), patch.object(
-                AxonBrain, "_load_entity_embeddings", return_value={}
+                GraphRagEngine, "_load_entity_embeddings", return_value={}
             ), patch.object(
-                AxonBrain, "_load_claims_graph", return_value={}
+                GraphRagEngine, "_load_claims_graph", return_value={}
             ), patch.object(
-                AxonBrain, "_load_community_hierarchy", return_value={}
+                GraphRagEngine, "_load_community_hierarchy", return_value={}
             ):
                 brain = AxonBrain(config)
                 yield brain
@@ -86,9 +87,10 @@ class TestMixinIntegration:
         mock_brain.ingest(docs)
 
         # Keys are lowercased and stripped
-        assert "axon" in mock_brain._entity_graph
-        assert "axon" in mock_brain._relation_graph
-        assert mock_brain._relation_graph["axon"][0]["target"] == "llm"
+        engine = mock_brain._graph_backend._engine
+        assert "axon" in engine._entity_graph
+        assert "axon" in engine._relation_graph
+        assert engine._relation_graph["axon"][0]["target"] == "llm"
 
     def test_query_routing_to_graph_rag(self, mock_brain):
         # 1. Ingest first to populate the graph
@@ -99,7 +101,9 @@ class TestMixinIntegration:
         with patch.object(mock_brain, "_classify_query_route", return_value="entity_relation"):
             # Mock the actual local search context method
             with patch.object(
-                mock_brain, "_local_search_context", return_value="Some graph context"
+                mock_brain._graph_backend._engine,
+                "_local_search_context",
+                return_value="Some graph context",
             ) as mock_graph_retrieval:
                 mock_brain.query("Who is Axon?")
                 # Should have been called because we have a populated graph and matched entities

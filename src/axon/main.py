@@ -30,7 +30,6 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
 
-import concurrent.futures  # noqa: E402
 import hashlib  # noqa: E402
 import logging  # noqa: E402
 import math  # noqa: E402
@@ -168,7 +167,6 @@ class _BloomHashStore:
 
 
 class AxonBrain(
-    GraphRagMixin,
     CodeGraphMixin,
     CodeRetrievalMixin,
     GraphRenderMixin,
@@ -533,35 +531,6 @@ Your primary goal is to help the user by answering questions based on the provid
 
         self._query_cache: OrderedDict[str, str] = OrderedDict()
         self._cache_lock = threading.Lock()
-        # Eagerly initialise mixin state that would otherwise be created lazily
-        # via @property getters. Lazy init in those getters has a TOCTOU race
-        # under concurrent first-access (two threads both pass the hasattr
-        # check, both create a new lock, one overwrites the other — leaving
-        # threads holding "different" locks for the same critical section).
-        # Doing it once here, single-threaded in __init__, removes the race.
-        self._graph_lock_internal: threading.RLock = threading.RLock()
-        # Dedicated leaf lock for the GraphRAG LLM/extraction cache
-        # (_gr_cache_get/_gr_cache_put). Deliberately NOT _graph_lock: those
-        # cache helpers are called from worker threads dispatched by
-        # self._executor.map/.submit (community summarization, claim
-        # extraction, description canonicalization) while the calling thread
-        # may already hold _graph_lock — an RLock only reenters for the
-        # *same* thread, so a worker thread blocks forever waiting on a lock
-        # the dispatching thread still holds. Keeping the cache lock separate
-        # and strictly leaf-level (never acquired while holding _graph_lock
-        # or _traversal_cache_lock) avoids that deadlock class entirely.
-        self._gr_cache_lock_internal: threading.Lock = threading.Lock()
-        self._traversal_cache_lock_internal: threading.Lock = threading.Lock()
-        self._entity_token_index_internal: dict[str, set[str]] = {}
-        self._pending_persist_futures_internal: list[concurrent.futures.Future] = []
-        self._persist_executor_internal: concurrent.futures.ThreadPoolExecutor | None = None
-        # BFS traversal cache for GraphRAG multi-hop expansion (LRU + TTL).
-        # Keyed by (frozenset(matched_entities), max_hops, hop_decay); stores
-        # {chunk_id: hop_score} dicts discovered by BFS.  Invalidated whenever
-        # _entity_graph or _relation_graph are mutated.
-        self._traversal_cache: OrderedDict = OrderedDict()
-        self._traversal_cache_maxsize: int = 512
-        self._traversal_cache_ttl: float = 900.0  # 15 minutes
         self._last_diagnostics: CodeRetrievalDiagnostics = CodeRetrievalDiagnostics()
         self._last_provenance: dict = {}
         # Content hash store for ingest deduplication
@@ -570,15 +539,24 @@ Your primary goal is to help the user by answering questions based on the provid
         self._doc_versions: dict = {}
         self._doc_versions_path = os.path.join(self.config.bm25_path, ".doc_versions.json")
         self._load_doc_versions()
-        # GraphRAG entity → doc_id mapping (entity name -> list of chunk IDs)
-        self._entity_graph: dict[str, list[str]] = self._load_entity_graph()
-        self._rebuild_entity_token_index()
+        # Structural code graph: {nodes: {node_id: {...}}, edges: [{source, target, edge_type, chunk_id}]}
+        self._code_graph: dict = self._load_code_graph()
+        # In-memory RAPTOR summary cache {cache_key: summary_text}. RAPTOR
+        # summarisation is brain-owned (see _generate_raptor_summaries), not
+        # GraphRAG-owned, despite living alongside GraphRAG state in the
+        # pre-M2 load block this was ported from.
+        self._raptor_summary_cache: dict[str, str] = {}
+        # GAP 6: Rebuild lock to prevent concurrent community rebuilds. Must be
+        # created before get_graph_backend() below: GraphRagEngine proxies
+        # this lock back onto the brain, so it needs to already exist by the
+        # time the backend (and its composed engine) is constructed.
+        self._community_rebuild_lock: threading.Lock = threading.Lock()
         # Attach the pluggable graph backend for this project. "federated" is a
         # config.yaml-only override and always wins; otherwise resolve from the
         # active project's own stored (immutable) value. For "default" this
-        # always resolves to "graphrag" -- GraphRagBackend is a thin pass-through
-        # adapter over the same GraphRagMixin state already loaded above, so
-        # this is a no-op behaviour change for every existing install.
+        # always resolves to "graphrag". Constructing a GraphRagBackend loads
+        # all GraphRAG entity/relation/community/claims/embeddings state as a
+        # side effect — see GraphRagBackend.__init__ / GraphRagEngine.load().
         if self.config.graph_backend != "federated":
             from axon.projects import get_project_graph_backend
 
@@ -586,48 +564,6 @@ Your primary goal is to help the user by answering questions based on the provid
         from axon.graph_backends.factory import get_graph_backend
 
         self._graph_backend = get_graph_backend(self)
-        # Persisted GraphRAG extraction cache (entities/relations keyed by chunk hash)
-        self._graph_rag_cache: dict = self._load_graph_rag_extraction_cache()
-        self._graph_rag_cache_dirty: bool = False
-        # Structural code graph: {nodes: {node_id: {...}}, edges: [{source, target, edge_type, chunk_id}]}
-        self._code_graph: dict = self._load_code_graph()
-        # GraphRAG relation graph: {source_entity_lower: [{target, relation, chunk_id, description}]}
-        self._relation_graph: dict = self._load_relation_graph()
-        # GraphRAG community detection state
-        self._community_levels: dict = self._load_community_levels()
-        self._community_summaries: dict = self._load_community_summaries()
-        self._community_graph_dirty: bool = False
-        self._community_build_in_progress: bool = False
-        self._last_matched_entities: list = []
-        # GraphRAG entity embeddings (for embedding-based entity matching at query time)
-        self._entity_embeddings: dict = self._load_entity_embeddings()
-        # GraphRAG entity description buffer (transient, not persisted)
-        self._entity_description_buffer: dict = {}
-        # In-memory RAPTOR summary cache {cache_key: summary_text}
-        self._raptor_summary_cache: dict[str, str] = {}
-        # GraphRAG claims graph
-        self._claims_graph: dict = self._load_claims_graph()
-        # GAP 2: Hierarchical community parent/child structure
-        self._community_hierarchy: dict[int, int] = self._load_community_hierarchy()
-        self._community_children: dict[int, list[int]] = {}
-        # Rebuild children from hierarchy on load
-        for child_cid, parent_cid in self._community_hierarchy.items():
-            if parent_cid is not None:
-                if parent_cid not in self._community_children:
-                    self._community_children[parent_cid] = []
-                if child_cid not in self._community_children[parent_cid]:
-                    self._community_children[parent_cid].append(child_cid)
-        # GAP 3b: Relation description buffer (transient, not persisted)
-        self._relation_description_buffer: dict = (
-            {}
-        )  # (subject_lower, object_lower) -> [descriptions]
-        # GAP 6: Rebuild lock to prevent concurrent community rebuilds
-        self._community_rebuild_lock: threading.Lock = threading.Lock()
-        # GAP 9: TextUnit reverse maps (in-memory only, rebuilt during ingest)
-        self._text_unit_entity_map: dict[str, list[str]] = {}  # chunk_id -> [entity_names]
-        self._text_unit_relation_map: dict[
-            str, list[tuple[str, str]]
-        ] = {}  # chunk_id -> [(src, tgt)]
         # Sentence-Window Retrieval secondary index (Epic 1, Stories 1.1–1.2)
         from axon.sentence_window import SentenceVectorStore, SentenceWindowIndex
 
@@ -689,17 +625,6 @@ Your primary goal is to help the user by answering questions based on the provid
 
     def close(self):
         """Explicitly release all resources (connections, file handles)."""
-        if getattr(self, "_graph_rag_cache_dirty", False):
-            try:
-                self._save_graph_rag_extraction_cache()
-            except Exception as e:
-                logger.debug("Could not flush graph_rag extraction cache on close: %s", e)
-        # Flush any in-flight background graph persist operations before shutting
-        # down the executor so that data is not silently dropped on close.
-        try:
-            self._flush_pending_saves()
-        except Exception as e:
-            logger.debug("Could not flush pending graph saves on close: %s", e)
         # Wait briefly for in-flight tasks instead of abandoning futures.
         # Long-running tasks (>30s) will still be cancelled when the process
         # exits, but the common case (single-second persists, embedding flushes)
@@ -710,15 +635,6 @@ Your primary goal is to help the user by answering questions based on the provid
                 self._executor.shutdown(wait=True, cancel_futures=True)
             except Exception as exc:  # pragma: no cover — defensive
                 logger.debug("Shared executor shutdown raised: %s", exc)
-        # Shut down the dedicated graph-persist executor too. Without this it
-        # leaks one thread per switch_project / brain instance.
-        persist_exec = getattr(self, "_persist_executor_internal", None)
-        if persist_exec is not None:
-            try:
-                persist_exec.shutdown(wait=True, cancel_futures=False)
-            except Exception as exc:  # pragma: no cover — defensive
-                logger.debug("Persist executor shutdown raised: %s", exc)
-            self._persist_executor_internal = None
         # Close all unique store objects to avoid double-closure. Swallow
         # per-store failures so a single misbehaving backend cannot abort
         # the loop and skip the sealed-cache wipe below (which would leave
@@ -911,8 +827,6 @@ Your primary goal is to help the user by answering questions based on the provid
 
         with self._cache_lock:
             self._query_cache = OrderedDict()
-        with self._traversal_cache_lock:
-            self._traversal_cache.clear()
         self._ingested_hashes = set()
         # Read-only scopes don't have a writeable doc-version store of their
         # own, but leaving the previous project's data in memory would leak
@@ -923,9 +837,11 @@ Your primary goal is to help the user by answering questions based on the provid
         # serving whichever backend was attached to the previously-active
         # project. Force "graphrag" (unless "federated" is an explicit
         # config.yaml override, which always wins) and reconstruct the
-        # backend for it *before* clearing graph state below, so the clear
-        # lands on the newly-attached backend rather than whatever backend
-        # (e.g. dynamic_graph) the previous project happened to use.
+        # backend for it *before* clearing graph state below (which also
+        # clears the traversal cache — see GraphRagMixin._reset_graph_state),
+        # so the clear lands on the newly-attached backend rather than
+        # whatever backend (e.g. dynamic_graph) the previous project
+        # happened to use.
         if self.config.graph_backend != "federated":
             self.config.graph_backend = "graphrag"
         from axon.graph_backends.factory import get_graph_backend
@@ -1338,8 +1254,11 @@ Your primary goal is to help the user by answering questions based on the provid
         # targets we must clear the slot so a stale sealed remount
         # doesn't get triggered by the ephemeral query window.
         self._sealed_remount_args = None
-        if getattr(self, "_graph_rag_cache_dirty", False):
-            self._save_graph_rag_extraction_cache()
+        _old_graph_backend_for_flush = getattr(self, "_graph_backend", None)
+        if _old_graph_backend_for_flush is not None and hasattr(
+            _old_graph_backend_for_flush, "flush"
+        ):
+            _old_graph_backend_for_flush.flush()
         from axon.projects import (
             get_project_graph_backend,
             is_reserved_top_level_name,
@@ -1528,12 +1447,16 @@ Your primary goal is to help the user by answering questions based on the provid
             self.bm25 = own_bm25
         # Reload project-scoped state so dedup/GraphRAG use the new project's data
         # and cached answers from the previous project cannot bleed across.
+        # GraphRAG entity/relation/community/claims/embeddings state and the
+        # descendant-graph merge below are reloaded as a side effect of
+        # reconstructing self._graph_backend further down this method (see
+        # GraphRagBackend.__init__ / GraphRagEngine.load(), and the
+        # merge_descendants() call right after backend reconstruction) —
+        # nothing between here and there depends on that graph state.
         from collections import OrderedDict
 
         with self._cache_lock:
             self._query_cache = OrderedDict()
-        with self._traversal_cache_lock:
-            self._traversal_cache.clear()
         self._ingested_hashes = self._load_hash_store()
         # Doc-version tracking is keyed off the current project's bm25_path;
         # rebind both the cached path and the in-memory dict so /tracked-docs
@@ -1541,177 +1464,8 @@ Your primary goal is to help the user by answering questions based on the provid
         # active at brain construction time.
         self._doc_versions_path = os.path.join(self.config.bm25_path, ".doc_versions.json")
         self._load_doc_versions()
-        self._graph_rag_cache = self._load_graph_rag_extraction_cache()
-        self._graph_rag_cache_dirty = False
         self._code_graph = self._load_code_graph()
-        self._entity_graph = self._load_entity_graph()
-        self._rebuild_entity_token_index()
-        self._relation_graph = self._load_relation_graph()
-        self._community_levels = self._load_community_levels()
-        self._community_summaries = self._load_community_summaries()
-        self._entity_embeddings = self._load_entity_embeddings()
-        self._entity_description_buffer = {}
-        self._claims_graph = self._load_claims_graph()
-        self._community_graph_dirty = False
-        # GAP 2: reload hierarchy
-        self._community_hierarchy = self._load_community_hierarchy()
-        self._community_children = {}
-        for child_cid, parent_cid in self._community_hierarchy.items():
-            if parent_cid is not None:
-                if parent_cid not in self._community_children:
-                    self._community_children[parent_cid] = []
-                if child_cid not in self._community_children[parent_cid]:
-                    self._community_children[parent_cid].append(child_cid)
-        # GAP 3b, 9: reset transient maps
-        self._relation_description_buffer = {}
-        self._text_unit_entity_map = {}
-        self._text_unit_relation_map = {}
         self._raptor_summary_cache = {}
-        # Merge entity graphs and relation graphs from all descendant projects so
-        # that GraphRAG expansion is coherent when querying from a parent project.
-        if descendants:
-            import pathlib
-
-            from axon.rust_bridge import get_rust_bridge
-
-            bridge = get_rust_bridge()
-            import json as _json
-
-            with self._graph_lock:
-                for desc in descendants:
-                    desc_bm25_path = project_bm25_path(desc)
-                    desc_base = pathlib.Path(desc_bm25_path)
-                    # --- entity graph ---
-                    desc_graph_path = desc_base / ".entity_graph.json"
-                    desc_mp_path = desc_base / ".entity_graph.msgpack"
-                    raw = None
-                    if desc_mp_path.exists() and bridge.can_entity_graph_codec():
-                        try:
-                            raw = bridge.decode_entity_graph(desc_mp_path.read_bytes())
-                        except Exception:
-                            raw = None
-                    if raw is None and desc_graph_path.exists():
-                        try:
-                            raw = _json.loads(desc_graph_path.read_text(encoding="utf-8"))
-                        except Exception:
-                            raw = None
-                    if isinstance(raw, dict):
-                        for entity, node in raw.items():
-                            if not isinstance(entity, str):
-                                continue
-                            if not isinstance(node, dict):
-                                continue
-                            doc_ids = node.get("chunk_ids", [])
-                            if not doc_ids:
-                                continue
-                            existing = self._entity_graph.get(entity)
-                            if existing is None:
-                                self._entity_graph[entity] = {
-                                    "description": node.get("description", ""),
-                                    "type": node.get("type", "UNKNOWN"),
-                                    "chunk_ids": [d for d in doc_ids if isinstance(d, str)],
-                                    "frequency": len([d for d in doc_ids if isinstance(d, str)]),
-                                    "degree": node.get("degree", 0),
-                                }
-                                self._token_index_add(entity)
-                            elif isinstance(existing, dict):
-                                existing_ids = set(existing.get("chunk_ids", []))
-                                new_ids = [
-                                    d
-                                    for d in doc_ids
-                                    if isinstance(d, str) and d not in existing_ids
-                                ]
-                                if new_ids:
-                                    existing.setdefault("chunk_ids", []).extend(new_ids)
-                                    existing["frequency"] = len(existing["chunk_ids"])
-                    # --- relation graph ---
-                    desc_rel_path = desc_base / ".relation_graph.json"
-                    desc_rel_mp_path = desc_base / ".relation_graph.msgpack"
-                    raw_rel = None
-                    if desc_rel_mp_path.exists() and bridge.can_relation_graph_codec():
-                        try:
-                            raw_rel = bridge.decode_relation_graph(desc_rel_mp_path.read_bytes())
-                        except Exception:
-                            raw_rel = None
-                    if raw_rel is None and desc_rel_path.exists():
-                        try:
-                            raw_rel = _json.loads(desc_rel_path.read_text(encoding="utf-8"))
-                        except Exception:
-                            raw_rel = None
-                    if isinstance(raw_rel, dict):
-                        for src, entries in raw_rel.items():
-                            if isinstance(src, str) and isinstance(entries, list):
-                                if src not in self._relation_graph:
-                                    self._relation_graph[src] = []
-                                existing_keys = {
-                                    (e.get("target"), e.get("relation"), e.get("chunk_id"))
-                                    for e in self._relation_graph[src]
-                                }
-                                for entry in entries:
-                                    if isinstance(entry, dict):
-                                        key = (
-                                            entry.get("target"),
-                                            entry.get("relation"),
-                                            entry.get("chunk_id"),
-                                        )
-                                        if key not in existing_keys:
-                                            self._relation_graph[src].append(entry)
-                                            existing_keys.add(key)
-                    # --- entity embeddings ---
-                    desc_emb_path = desc_base / ".entity_embeddings.json"
-                    if desc_emb_path.exists():
-                        try:
-                            raw = _json.loads(desc_emb_path.read_text(encoding="utf-8"))
-                            if isinstance(raw, dict):
-                                for entity_key, embedding in raw.items():
-                                    if (
-                                        isinstance(entity_key, str)
-                                        and entity_key not in self._entity_embeddings
-                                    ):
-                                        self._entity_embeddings[entity_key] = embedding
-                        except Exception as e:
-                            logger.warning(f"Could not merge entity embeddings for '{desc}': {e}")
-                    # --- claims ---
-                    desc_claims_path = desc_base / ".claims_graph.json"
-                    if desc_claims_path.exists():
-                        try:
-                            raw = _json.loads(desc_claims_path.read_text(encoding="utf-8"))
-                            if isinstance(raw, dict):
-                                for chunk_id, claims in raw.items():
-                                    if isinstance(chunk_id, str) and isinstance(claims, list):
-                                        if chunk_id not in self._claims_graph:
-                                            self._claims_graph[chunk_id] = []
-                                        existing_claim_keys = {
-                                            (c.get("subject"), c.get("object"), c.get("type"))
-                                            for c in self._claims_graph[chunk_id]
-                                        }
-                                        for claim in claims:
-                                            if isinstance(claim, dict):
-                                                key = (
-                                                    claim.get("subject"),
-                                                    claim.get("object"),
-                                                    claim.get("type"),
-                                                )
-                                                if key not in existing_claim_keys:
-                                                    self._claims_graph[chunk_id].append(claim)
-                                                    existing_claim_keys.add(key)
-                        except Exception as e:
-                            logger.warning(f"Could not merge claims for '{desc}': {e}")
-                    # --- community summaries (namespaced to avoid community-ID collision) ---
-                    desc_summ_path = desc_base / ".community_summaries.json"
-                    if desc_summ_path.exists():
-                        try:
-                            raw = _json.loads(desc_summ_path.read_text(encoding="utf-8"))
-                            if isinstance(raw, dict):
-                                for summ_key, summary in raw.items():
-                                    if isinstance(summ_key, str) and isinstance(summary, dict):
-                                        namespaced_key = f"desc_{desc}_{summ_key}"
-                                        if namespaced_key not in self._community_summaries:
-                                            self._community_summaries[namespaced_key] = dict(
-                                                summary
-                                            )
-                        except Exception as e:
-                            logger.warning(f"Could not merge community summaries for '{desc}': {e}")
         self._active_project = name
         self._read_only_scope = False
         # Resolve kind from switch operation — descriptor-based, not string-pattern
@@ -1756,6 +1510,18 @@ Your primary goal is to help the user by answering questions based on the provid
 
         _old_graph_backend = getattr(self, "_graph_backend", None)
         self._graph_backend = get_graph_backend(self)
+        # Merge entity/relation/embedding/claims/community-summary graphs from
+        # all descendant projects so GraphRAG expansion is coherent when
+        # querying from a parent project. Must run AFTER backend
+        # reconstruction above: the fresh GraphRagBackend/GraphRagEngine just
+        # (re)loaded this project's own graph state from disk as a side
+        # effect of construction, and merge_descendants() merges descendant
+        # data on top of that in-memory state. GraphRAG-specific optional
+        # capability (not on the shared Protocol) — hasattr-guarded like the
+        # existing list_conflicts precedent, since dynamic_graph/none/
+        # federated backends don't implement it.
+        if descendants and hasattr(self._graph_backend, "merge_descendants"):
+            self._graph_backend.merge_descendants(descendants)
         if _old_graph_backend is not None and hasattr(_old_graph_backend, "close"):
             # self.close() above (called unconditionally earlier in this
             # method) already closed the previous backend, so this is a
@@ -1924,7 +1690,7 @@ Your primary goal is to help the user by answering questions based on the provid
         """Flush all deferred saves and trigger community rebuild.
         Call once after the last ``ingest()`` when ``ingest_batch_mode=True``.
         Flushes BM25, entity/relation/claims graphs, then delegates to
-        ``finalize_graph()`` for community rebuild.
+        ``self._graph_backend.finalize()`` for community rebuild.
         Safe to call when ``ingest_batch_mode=False`` (flush is a no-op; community
         rebuild still runs as normal).
         """
@@ -1936,17 +1702,12 @@ Your primary goal is to help the user by answering questions based on the provid
             if getattr(self, "_sparse_retriever", None) is not None:
                 self._sparse_retriever.save()
                 logger.info("finalize_ingest: sparse index flushed.")
-            self._save_entity_graph()
-            self._save_relation_graph()
-            if getattr(self, "_claims_graph", None):
-                self._save_claims_graph()
-            logger.info("finalize_ingest: entity/relation/claims graphs saved.")
             if self._code_graph.get("nodes"):
                 self._save_code_graph()
                 logger.info("finalize_ingest: code graph saved.")
-        if getattr(self, "_graph_rag_cache_dirty", False):
-            self._save_graph_rag_extraction_cache()
-        self.finalize_graph()
+        if hasattr(self._graph_backend, "flush_ingest_saves"):
+            self._graph_backend.flush_ingest_saves()
+        self._graph_backend.finalize()
 
     def _raptor_group_by_structure(self, chunks: list[dict], n: int) -> list[list[dict]]:
         """Group chunks for RAPTOR summarization using section/heading boundaries.
@@ -2798,458 +2559,7 @@ Your primary goal is to help the user by answering questions based on the provid
         # GraphRAG: extract entities from new chunks (second pass — after vector store commit)
         _progress("graph_build", chunks_total=len(documents))
         if self.config.graph_rag:
-            updated = False
-            # Only extract entities from actual document chunks (optionally include RAPTOR level-1)
-            _include_raptor = getattr(self.config, "graph_rag_include_raptor_summaries", False)
-            # Skip GraphRAG entity extraction for large sources when raptor=True.
-            # Sources with >= raptor_graphrag_leaf_skip_threshold leaf chunks bypass
-            # extraction; their RAPTOR summaries still enter GraphRAG if the include flag is set.
-            _skip_threshold = getattr(self.config, "raptor_graphrag_leaf_skip_threshold", 20)
-            _leaf_count_by_source: dict = {}
-            for _doc in documents:
-                if not _doc.get("metadata", {}).get("raptor_level"):
-                    _src = _doc.get("metadata", {}).get("source", _doc["id"])
-                    _leaf_count_by_source[_src] = _leaf_count_by_source.get(_src, 0) + 1
-            _large_sources: set = set()
-            if self.config.raptor and _skip_threshold > 0:
-                _large_sources = {
-                    src for src, cnt in _leaf_count_by_source.items() if cnt >= _skip_threshold
-                }
-                if _large_sources:
-                    logger.info(
-                        f"   GraphRAG: skipping leaf-chunk entity extraction for "
-                        f"{len(_large_sources)} large source(s) (>= {_skip_threshold} leaf chunks)"
-                    )
-            chunks_to_process = []
-            for _doc in documents:
-                _lvl = _doc.get("metadata", {}).get("raptor_level")
-                _src = _doc.get("metadata", {}).get("source", _doc["id"])
-                if not _lvl:  # leaf chunk
-                    if _src not in _large_sources:
-                        chunks_to_process.append(_doc)
-                    # else: leaf from large source → skip; RAPTOR summary will cover it
-                elif _lvl == 1:  # RAPTOR level-1 summary
-                    # Auto-include for large sources when RAPTOR is on (regardless of include flag)
-                    _auto_raptor = self.config.raptor and _src in _large_sources
-                    if _include_raptor or _auto_raptor:
-                        chunks_to_process.append(_doc)
-            if _policy_on:
-                _grag_ok_list: list = []
-                _grag_pol_skipped: set = set()
-                for _d in chunks_to_process:
-                    _dtype = _d.get("metadata", {}).get("dataset_type", "doc")
-                    _, _g_ok = self._SOURCE_POLICY.get(_dtype, self._SOURCE_POLICY_DEFAULT)
-                    if _g_ok:
-                        _grag_ok_list.append(_d)
-                    else:
-                        _grag_pol_skipped.add(_d.get("metadata", {}).get("source", _d["id"]))
-                if _grag_pol_skipped:
-                    logger.info(
-                        "   GraphRAG: source_policy skipped %d source(s)",
-                        len(_grag_pol_skipped),
-                    )
-                chunks_to_process = _grag_ok_list
-            # Skip chunks already present in the entity graph (cross-restart dedup)
-            _already_extracted = self._build_extracted_chunk_ids()
-            if _already_extracted:
-                _before = len(chunks_to_process)
-                chunks_to_process = [
-                    c for c in chunks_to_process if c["id"] not in _already_extracted
-                ]
-                _skipped = _before - len(chunks_to_process)
-                if _skipped:
-                    logger.info("   GraphRAG: skipping %d already-extracted chunk(s).", _skipped)
-            if not chunks_to_process:
-                logger.info("   GraphRAG: all chunks already extracted — nothing to do.")
-            else:
-                logger.info(
-                    f"   GraphRAG: Extracting entities from {len(chunks_to_process)} chunks..."
-                )
-            _relations_enabled = bool(self.config.graph_rag_relations)
-            _min_ent = getattr(self.config, "graph_rag_min_entities_for_relations", 3)
-            _rel_budget = getattr(self.config, "graph_rag_relation_budget", 0)
-            (
-                results,
-                rel_results,
-                _rel_chunks,
-                _relations_pipelined,
-            ) = self._extract_graph_llm_batches(
-                chunks_to_process,
-                relations_enabled=_relations_enabled,
-                min_entities_for_relations=_min_ent,
-                relation_budget=_rel_budget,
-            )
-            # Track entity keys extracted this run for embedding (Item 5)
-            from axon.rust_bridge import get_rust_bridge
-
-            _rust_bridge = get_rust_bridge()
-            with self._graph_lock:
-                entities_extracted_this_run: list = []
-                total_entities = 0
-                _touched_entity_keys: set[str] = set()
-                # Build a lookup from doc_id to doc for metadata writing (Item 7)
-                doc_by_id = {doc["id"]: doc for doc in chunks_to_process}
-                _entity_graph_changed = False
-                _use_rust_entity_merge = (
-                    bool(results)
-                    and bool(getattr(self.config, "graph_rag_rust_merge_entities", False))
-                    and _rust_bridge.can_merge_entities_into_graph()
-                )
-                for doc_id, entities in results:
-                    total_entities += len(entities)
-                    for ent in entities:
-                        if not isinstance(ent, dict) or not ent.get("name"):
-                            continue
-                        entities_extracted_this_run.append(ent)
-                        key = ent["name"].lower().strip()
-                        if not key:
-                            continue
-                        _touched_entity_keys.add(key)
-                        existing = self._entity_graph.get(key)
-                        if existing is None:
-                            _entity_graph_changed = True
-                        elif isinstance(existing, dict):
-                            chunk_ids = existing.get("chunk_ids", [])
-                            if doc_id not in chunk_ids:
-                                _entity_graph_changed = True
-                        else:
-                            _use_rust_entity_merge = False
-                            if doc_id not in existing:
-                                _entity_graph_changed = True
-                _merged_entities_in_rust = False
-                if _use_rust_entity_merge:
-                    _merged_entities_in_rust = (
-                        _rust_bridge.merge_entities_into_graph(self._entity_graph, results)
-                        is not None
-                    )
-                if _merged_entities_in_rust and _entity_graph_changed:
-                    updated = True
-                    self._community_graph_dirty = True
-                for doc_id, entities in results:
-                    for (
-                        ent
-                    ) in entities:  # ent is now {"name": ..., "type": ..., "description": ...}
-                        key = ent["name"].lower().strip() if isinstance(ent, dict) else ent.lower()
-                        if not key:
-                            continue
-                        if not _merged_entities_in_rust:
-                            if key not in self._entity_graph:
-                                desc = ent.get("description", "") if isinstance(ent, dict) else ""
-                                ent_type = (
-                                    ent.get("type", "UNKNOWN")
-                                    if isinstance(ent, dict)
-                                    else "UNKNOWN"
-                                )
-                                self._entity_graph[key] = {
-                                    "description": desc,
-                                    "type": ent_type,
-                                    "chunk_ids": [],
-                                    "frequency": 0,
-                                    "degree": 0,
-                                }
-                                self._token_index_add(key)
-                            elif isinstance(self._entity_graph[key], dict):
-                                # Update type if not yet set
-                                if (
-                                    not self._entity_graph[key].get("type")
-                                    or self._entity_graph[key].get("type") == "UNKNOWN"
-                                ):
-                                    new_type = (
-                                        ent.get("type", "UNKNOWN")
-                                        if isinstance(ent, dict)
-                                        else "UNKNOWN"
-                                    )
-                                    if new_type and new_type != "UNKNOWN":
-                                        self._entity_graph[key]["type"] = new_type
-                            if isinstance(self._entity_graph[key], dict):
-                                self._entity_graph[key].setdefault("chunk_ids", [])
-                                if doc_id not in self._entity_graph[key]["chunk_ids"]:
-                                    self._entity_graph[key]["chunk_ids"].append(doc_id)
-                                    updated = True
-                                    self._community_graph_dirty = True
-                            else:
-                                # Legacy list format — migrate on the fly
-                                if doc_id not in self._entity_graph[key]:
-                                    self._entity_graph[key].append(doc_id)
-                                    updated = True
-                                    self._community_graph_dirty = True
-                        if isinstance(self._entity_graph.get(key), dict):
-                            # Item 10: collect descriptions for canonicalization
-                            if isinstance(ent, dict) and ent.get("description"):
-                                desc_buf = self._entity_description_buffer.setdefault(key, [])
-                                desc_buf.append(ent["description"])
-                            if (
-                                not self._entity_graph[key].get("description")
-                                and isinstance(ent, dict)
-                                and ent.get("description")
-                            ):
-                                self._entity_graph[key]["description"] = ent["description"]
-                    # Item 7: Write entity IDs back into chunk metadata for text-unit linkage
-                    doc = doc_by_id.get(doc_id)
-                    if doc is not None and entities and doc.get("metadata") is not None:
-                        doc["metadata"]["entity_ids"] = [
-                            e["name"].lower()
-                            for e in entities
-                            if isinstance(e, dict) and e.get("name")
-                        ]
-                    # GAP 9: Update text_unit_entity_map
-                    self._text_unit_entity_map[doc_id] = [
-                        e["name"] for e in entities if isinstance(e, dict) and e.get("name")
-                    ]
-            # Item 2: Update frequency only for entities touched in this ingest run
-            # (avoids O(|V|) scan of the full entity graph on every ingest batch)
-            for entity_key in _touched_entity_keys:
-                node = self._entity_graph.get(entity_key)
-                if isinstance(node, dict):
-                    node["frequency"] = len(node.get("chunk_ids", []))
-            if updated and not _defer_saves:
-                self._save_entity_graph()
-            if total_entities == 0:
-                logger.warning(
-                    "GraphRAG: entity extraction returned 0 entities across all chunks. "
-                    "This may be caused by an LLM that is too small or refused to extract entities. "
-                    "GraphRAG relationship expansion will have no effect for this ingestion."
-                )
-            # Relation extraction: build SUBJECT | RELATION | OBJECT triples
-            if _relations_enabled:
-                _entity_count_by_doc = {doc_id: len(ents) for doc_id, ents in results}
-                _rel_candidate_count = sum(
-                    1
-                    for doc in chunks_to_process
-                    if _entity_count_by_doc.get(doc["id"], 0) >= _min_ent
-                )
-                if _relations_pipelined:
-                    logger.info(
-                        f"   GraphRAG: Pipelined relation extraction for {len(_rel_chunks)} chunks "
-                        f"(skipped {len(chunks_to_process) - len(_rel_chunks)} below "
-                        f"{_min_ent}-entity threshold)..."
-                    )
-                elif _rel_budget > 0 and _rel_candidate_count > _rel_budget:
-                    logger.info(
-                        f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
-                        f"(budget cap; {len(chunks_to_process) - len(_rel_chunks)} skipped)..."
-                    )
-                else:
-                    logger.info(
-                        f"   GraphRAG: Extracting relations from {len(_rel_chunks)} chunks "
-                        f"(skipped {len(chunks_to_process) - len(_rel_chunks)} below "
-                        f"{_min_ent}-entity threshold)..."
-                    )
-                rg_updated = False
-                # Rust fast-path for relation graph merge
-                if rel_results and _rust_bridge.can_relation_merge():
-                    _added = _rust_bridge.merge_relations_into_graph(
-                        self._relation_graph, rel_results
-                    )
-                    if _added > 0:
-                        rg_updated = True
-                        self._community_graph_dirty = True
-                    # Still run Python loop for _relation_description_buffer (side-effect only)
-                    for _doc_id, triples in rel_results:
-                        for triple in triples:
-                            if not isinstance(triple, dict):
-                                continue
-                            description = triple.get("description", "")
-                            if not description:
-                                continue
-                            src_lower = triple.get("subject", "").lower().strip()
-                            tgt_lower = triple.get("object", "").lower().strip()
-                            if src_lower:
-                                pair = (src_lower, tgt_lower)
-                                if pair not in self._relation_description_buffer:
-                                    self._relation_description_buffer[pair] = []
-                                self._relation_description_buffer[pair].append(description)
-                else:
-                    for doc_id, triples in rel_results:
-                        for triple in triples:
-                            # triple is now a dict: {subject, relation, object, description}
-                            if isinstance(triple, dict):
-                                subject = triple.get("subject", "")
-                                relation = triple.get("relation", "")
-                                obj = triple.get("object", "")
-                                description = triple.get("description", "")
-                            else:
-                                # Legacy tuple format fallback
-                                subject, relation, obj = triple
-                                description = ""
-                            src_lower = subject.lower().strip()
-                            if not src_lower:
-                                continue
-                            entry = {
-                                "target": obj.lower().strip(),
-                                "relation": relation.strip(),
-                                "chunk_id": doc_id,
-                                "description": description,
-                                "strength": triple.get("strength", 5)
-                                if isinstance(triple, dict)
-                                else 5,
-                                "support_count": 1,
-                            }
-                            if src_lower not in self._relation_graph:
-                                self._relation_graph[src_lower] = []
-                            # Item 8: weight tracking — increment weight for same (target, relation) pair
-                            rel_tgt = entry["target"]
-                            rel_relation = entry["relation"]
-                            existing_entry = next(
-                                (
-                                    e
-                                    for e in self._relation_graph[src_lower]
-                                    if e.get("target") == rel_tgt
-                                    and e.get("relation") == rel_relation
-                                ),
-                                None,
-                            )
-                            if existing_entry:
-                                # Accumulate strength-based weight (sum of LM-derived strengths)
-                                existing_entry["weight"] = existing_entry.get(
-                                    "weight", 1
-                                ) + entry.get("strength", 1)
-                                existing_entry["support_count"] = (
-                                    existing_entry.get("support_count", 1) + 1
-                                )
-                                # GAP 7: accumulate text_unit_ids
-                                if "text_unit_ids" not in existing_entry:
-                                    existing_entry["text_unit_ids"] = [
-                                        existing_entry.get("chunk_id", "")
-                                    ]
-                                if doc_id not in existing_entry["text_unit_ids"]:
-                                    existing_entry["text_unit_ids"].append(doc_id)
-                                rg_updated = True
-                            else:
-                                entry["weight"] = entry.get("strength", 1)
-                                entry["text_unit_ids"] = [doc_id]
-                                self._relation_graph[src_lower].append(entry)
-                                rg_updated = True
-                            # GAP 3b: update relation description buffer
-                            if description:
-                                pair = (src_lower, rel_tgt)
-                                if pair not in self._relation_description_buffer:
-                                    self._relation_description_buffer[pair] = []
-                                self._relation_description_buffer[pair].append(description)
-                if rg_updated and not _defer_saves:
-                    self._save_relation_graph()
-                if getattr(self.config, "graph_rag_relation_backend", "llm") == "rebel":
-                    _rg_edge_count = sum(len(v) for v in self._relation_graph.values())
-                    if _rg_edge_count == 0 and len(_rel_chunks) > 0:
-                        logger.warning(
-                            "GraphRAG REBEL: processed %d chunks but produced 0 relation edges. "
-                            "If using a local model path, verify the checkpoint contains pretrained weights "
-                            "(a 'newly initialized weights' warning from transformers indicates an invalid checkpoint).",
-                            len(_rel_chunks),
-                        )
-                    else:
-                        logger.info(
-                            "GraphRAG REBEL: %d relation edges from %d chunks.",
-                            _rg_edge_count,
-                            len(_rel_chunks),
-                        )
-                # Normalize relation targets into entity graph so traversal never KeyErrors
-                if rg_updated or updated:
-                    _stub_added = False
-                    for _src, _entries in self._relation_graph.items():
-                        for _entry in _entries:
-                            _tgt = _entry.get("target", "").lower().strip()
-                            if not _tgt:
-                                continue
-                            if _tgt not in self._entity_graph:
-                                self._entity_graph[_tgt] = {
-                                    "description": "",
-                                    "type": "UNKNOWN",
-                                    "chunk_ids": [],
-                                    "frequency": 0,
-                                    "degree": 0,
-                                }
-                                self._token_index_add(_tgt)
-                                _stub_added = True
-                            # Ensure the relation's source chunk is in the target's chunk_ids
-                            _cid = _entry.get("chunk_id", "")
-                            if _cid:
-                                _tgt_node = self._entity_graph[_tgt]
-                                if isinstance(_tgt_node, dict):
-                                    _tgt_node.setdefault("chunk_ids", [])
-                                    if _cid not in _tgt_node["chunk_ids"]:
-                                        _tgt_node["chunk_ids"].append(_cid)
-                                        _tgt_node["frequency"] = len(_tgt_node["chunk_ids"])
-                                        _stub_added = True
-                    if _stub_added and not _defer_saves:
-                        self._save_entity_graph()
-                # GAP 9: Update text_unit_relation_map
-                for doc_id, triples in rel_results:
-                    self._text_unit_relation_map[doc_id] = [
-                        (t.get("subject", ""), t.get("object", ""))
-                        if isinstance(t, dict)
-                        else (t[0], t[2])
-                        for t in triples
-                    ]
-            if getattr(self, "_graph_rag_cache_dirty", False) and not _defer_saves:
-                self._save_graph_rag_extraction_cache()
-            # Item 2: Recompute degree for entities touched by this ingest's relations only
-            # (avoids O(|V|) scan of the full entity graph on every ingest batch)
-            for entity_key in _touched_entity_keys:
-                if isinstance(self._entity_graph.get(entity_key), dict):
-                    self._entity_graph[entity_key]["degree"] = len(
-                        self._relation_graph.get(entity_key, [])
-                    )
-            # Item 5: Embed entity descriptions for query-time matching
-            if getattr(self.config, "graph_rag_entity_embedding_match", True):
-                entity_keys_this_batch = list(
-                    {ent["name"].lower() for ent in entities_extracted_this_run if ent.get("name")}
-                )
-                self._embed_entities(entity_keys_this_batch)
-            # Item 10: Canonicalize entity descriptions
-            # A3: also run for "deep" tier
-            _depth = getattr(self.config, "graph_rag_depth", "standard")
-            if self.config.graph_rag and (
-                getattr(self.config, "graph_rag_canonicalize", False) or _depth == "deep"
-            ):
-                self._canonicalize_entity_descriptions()
-            if self.config.graph_rag and getattr(
-                self.config, "graph_rag_canonicalize_relations", False
-            ):
-                self._canonicalize_relation_descriptions()
-            # Item 11: Extract claims
-            # A3: also run for "deep" tier
-            claims_changed = False
-            if getattr(self.config, "graph_rag_claims", False) or _depth == "deep":
-                logger.info(
-                    f"   GraphRAG: Extracting claims from {len(chunks_to_process)} chunks..."
-                )
-
-                def _proc_claims(doc):
-                    return doc["id"], self._extract_claims(doc["text"])
-
-                claim_results = list(self._executor.map(_proc_claims, chunks_to_process))
-                with self._graph_lock:
-                    for doc_id, claims in claim_results:
-                        if claims:
-                            # GAP 5: set text_unit_id on each claim
-                            for claim in claims:
-                                if isinstance(claim, dict):
-                                    claim["text_unit_id"] = doc_id
-                            self._claims_graph[doc_id] = claims
-                            claims_changed = True
-                    if claims_changed and not _defer_saves:
-                        self._save_claims_graph()
-            if self.config.graph_rag_community and self._community_graph_dirty:
-                if getattr(self.config, "graph_rag_community_defer", True):
-                    pass  # leave dirty; caller must invoke finalize_graph()
-                else:
-                    self._community_graph_dirty = False
-                    if self.config.graph_rag_community_async:
-
-                        def _debounced_rebuild():
-                            import time as _time
-
-                            self._community_build_in_progress = True
-                            try:
-                                _time.sleep(self.config.graph_rag_community_rebuild_debounce_s)
-                                self._rebuild_communities()
-                            finally:
-                                self._community_build_in_progress = False
-
-                        self._executor.submit(_debounced_rebuild)
-                    else:
-                        self._rebuild_communities()
+            self._graph_backend.ingest(documents)
         # Flush deferred sidecar writes (e.g., TurboQuantDB doc index) at ingest end.
         try:
             if hasattr(self._own_vector_store, "flush_pending_writes"):
@@ -3257,6 +2567,7 @@ Your primary goal is to help the user by answering questions based on the provid
         except Exception:
             pass
         _progress("finalizing", chunks_total=n_chunks)
+        _graph_status = self._graph_backend.status() if self._graph_backend is not None else {}
         logger.info(
             {
                 "event": "ingest_complete",
@@ -3264,8 +2575,8 @@ Your primary goal is to help the user by answering questions based on the provid
                 "embed_ms": round(embed_ms, 1),
                 "store_ms": round(store_ms, 1),
                 "total_ms": round((time.time() - t0) * 1000, 1),
-                "entity_count": len(self._entity_graph),
-                "relation_edge_count": sum(len(v) for v in self._relation_graph.values()),
+                "entity_count": _graph_status.get("entities", 0),
+                "relation_edge_count": _graph_status.get("relations", 0),
                 "fallback_chunks": _ingest_fallback_count,
             }
         )

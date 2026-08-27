@@ -440,6 +440,43 @@ def _make_full_stub(**config_kwargs) -> RouterStubV2:
     stub._graph_backend.has_community_summaries.side_effect = lambda: bool(
         stub._community_summaries
     )
+    # Bridge methods query_router.py now calls on self._graph_backend instead
+    # of directly on self (Phase 4 ownership inversion moved their real homes
+    # off QueryRouterMixin). RouterStubV2 already provides trivial dummy
+    # implementations of the underlying methods (_local_search_context,
+    # _global_search_map_reduce, _classify_query_needs_graphrag,
+    # _generate_community_summaries, _index_community_reports_in_vector_store)
+    # for exactly this purpose — delegate through to those at call time (not
+    # a static return_value) so tests that reassign e.g.
+    # stub._local_search_context = MagicMock(...) after this fixture runs
+    # keep working unchanged.
+    stub._graph_backend.local_search_context.side_effect = (
+        lambda query, matched_entities, cfg: stub._local_search_context(
+            query, matched_entities, cfg
+        )
+    )
+    stub._graph_backend.global_search_map_reduce.side_effect = (
+        lambda query, cfg: stub._global_search_map_reduce(query, cfg)
+    )
+    stub._graph_backend.classify_query_needs_graphrag.side_effect = (
+        lambda query, mode: stub._classify_query_needs_graphrag(query, mode)
+    )
+
+    def _ensure_community_summaries_stub(query_hint, index_community_reports=True):
+        if not stub._community_levels or bool(stub._community_summaries):
+            return
+        stub._generate_community_summaries(query_hint=query_hint)
+        if index_community_reports:
+            stub._index_community_reports_in_vector_store()
+
+    stub._graph_backend.ensure_community_summaries.side_effect = _ensure_community_summaries_stub
+    # No stub dummy pre-existed for this one (it's a genuinely new capability
+    # moved off QueryRouterMixin, not previously resolved via self.X) — a
+    # safe pass-through default; tests exercising real expansion override it.
+    stub._graph_backend.expand_with_entity_graph.side_effect = lambda query, results, cfg=None: (
+        results,
+        [],
+    )
     return stub
 
 
@@ -593,6 +630,32 @@ class TestClassifyQueryRouteLLM:
 # ===========================================================================
 
 
+def _make_engine_from_stub(stub):
+    """expand_with_entity_graph() now lives on GraphRagEngine (moved off
+    QueryRouterMixin in the M2 ownership-inversion, since it depends so
+    heavily on GraphRAG-owned state) — build a bare engine reusing the
+    stub's config/vector_store/llm and hand-set entity/relation state so
+    these unit tests keep exercising the same algorithm.
+    """
+    from types import SimpleNamespace
+
+    from axon.graph_backends.graphrag_engine import GraphRagEngine
+
+    engine = GraphRagEngine.__new__(GraphRagEngine)
+    engine._brain = SimpleNamespace(
+        config=stub.config, vector_store=stub.vector_store, llm=stub.llm
+    )
+    engine._entity_graph = stub._entity_graph
+    engine._relation_graph = getattr(stub, "_relation_graph", {})
+    engine._entity_embeddings = getattr(stub, "_entity_embeddings", {})
+    if "_extract_entities" in stub.__dict__:
+        engine._extract_entities = stub._extract_entities
+    if "_entity_matches" in stub.__dict__:
+        engine._entity_matches = stub._entity_matches
+    engine._rebuild_entity_token_index()
+    return engine
+
+
 class TestExpandWithEntityGraph:
     def _make_stub_with_entity_graph(self):
         stub = _make_full_stub()
@@ -608,9 +671,9 @@ class TestExpandWithEntityGraph:
     def test_empty_entities_returns_original_results(self):
         stub = _make_full_stub()
         stub._entity_graph = {"foo": {"chunk_ids": ["c1"]}}
-        stub._rebuild_entity_token_index()
         results = [{"id": "x", "text": "hello", "score": 0.8, "metadata": {}}]
-        out, matched = stub._expand_with_entity_graph("unrelated query", results)
+        engine = _make_engine_from_stub(stub)
+        out, matched = engine.expand_with_entity_graph("unrelated query", results)
         # no entities extracted → returns unchanged
         assert out == results
         assert matched == []
@@ -619,12 +682,12 @@ class TestExpandWithEntityGraph:
         """Line 155: q_name empty → continue."""
         stub = _make_full_stub()
         stub._entity_graph = {"": {"chunk_ids": ["c1"]}}
-        stub._rebuild_entity_token_index()
         stub._extract_entities = MagicMock(
             return_value=[{"name": "", "type": "UNKNOWN", "description": ""}]
         )
         results = []
-        out, matched = stub._expand_with_entity_graph("some query", results)
+        engine = _make_engine_from_stub(stub)
+        out, matched = engine.expand_with_entity_graph("some query", results)
         assert out == []
 
     def test_relation_graph_hop_target_empty_skipped(self):
@@ -633,7 +696,6 @@ class TestExpandWithEntityGraph:
         stub._entity_graph = {
             "python": {"chunk_ids": ["c1"]},
         }
-        stub._rebuild_entity_token_index()
         stub._relation_graph = {
             "python": [{"target": "", "relation": "uses"}],
         }
@@ -642,7 +704,8 @@ class TestExpandWithEntityGraph:
         )
         stub._entity_matches = MagicMock(return_value=0.9)
         results = [{"id": "c1", "text": "some text", "score": 0.85, "metadata": {}}]
-        out, matched = stub._expand_with_entity_graph("python query", results)
+        engine = _make_engine_from_stub(stub)
+        out, matched = engine.expand_with_entity_graph("python query", results)
         # c1 already in results, no extra ids, empty target skipped
         assert any(r["id"] == "c1" for r in out)
 
@@ -652,14 +715,14 @@ class TestExpandWithEntityGraph:
         stub._entity_graph = {
             "python": {"chunk_ids": ["new_doc"]},
         }
-        stub._rebuild_entity_token_index()
         stub._extract_entities = MagicMock(
             return_value=[{"name": "python", "type": "TECH", "description": ""}]
         )
         stub._entity_matches = MagicMock(return_value=0.9)
         stub.vector_store.get_by_ids.side_effect = RuntimeError("store error")
         results = []
-        out, matched = stub._expand_with_entity_graph("python query", results)
+        engine = _make_engine_from_stub(stub)
+        out, matched = engine.expand_with_entity_graph("python query", results)
         # Should still return original results (empty) without raising
         assert isinstance(out, list)
 
