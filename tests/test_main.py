@@ -11489,6 +11489,24 @@ class TestFinalizeIngest:
         brain._graph_backend._engine._save_entity_graph.assert_called_once()
         brain._graph_backend._engine._save_relation_graph.assert_called_once()
 
+    def test_finalize_flushes_dirty_extraction_cache_in_batch_mode(self, brain):
+        """Regression: GraphRagEngine.ingest_chunks() defers the extraction
+        cache save during batch-mode ingest (_defer_saves=True); finalize_ingest()
+        must flush a dirty cache, or the changes are silently lost until some
+        later close()/flush() happens to run."""
+        brain._assert_write_allowed = MagicMock()
+        brain.config.ingest_batch_mode = True
+        brain._own_bm25 = MagicMock()
+        brain._graph_backend._engine._save_entity_graph = MagicMock()
+        brain._graph_backend._engine._save_relation_graph = MagicMock()
+        brain._graph_backend._engine._graph_rag_cache_dirty = True
+        brain._graph_backend._engine._save_graph_rag_extraction_cache = MagicMock()
+        brain.finalize_graph = MagicMock()
+
+        brain.finalize_ingest()
+
+        brain._graph_backend._engine._save_graph_rag_extraction_cache.assert_called_once()
+
     def test_finalize_noop_when_not_batch_mode(self, brain):
         brain._assert_write_allowed = MagicMock()
         brain.config.ingest_batch_mode = False

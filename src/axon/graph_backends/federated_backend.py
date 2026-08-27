@@ -351,9 +351,9 @@ class FederatedGraphBackend:
         sub = self._graphrag_sub_backend()
         return sub.global_search_map_reduce(query, cfg) if sub is not None else ""
 
-    def classify_query_needs_graphrag(self, query: str, auto_route: bool) -> bool:
+    def classify_query_needs_graphrag(self, query: str, mode: str) -> bool:
         sub = self._graphrag_sub_backend()
-        return sub.classify_query_needs_graphrag(query, auto_route) if sub is not None else True
+        return sub.classify_query_needs_graphrag(query, mode) if sub is not None else True
 
     def ensure_community_summaries(
         self, query_hint: str, index_community_reports: bool = True
